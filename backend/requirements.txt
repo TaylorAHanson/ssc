@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+python-statemachine
+pydantic
+pydantic-settings
+python-multipart
+python-dotenv
+sqlalchemy
+alembic
+httpx
+psycopg2-binary
+databricks-sdk
+tenacity

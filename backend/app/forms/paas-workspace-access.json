@@ -1,0 +1,67 @@
+{
+  "title": "Get Workspace Access",
+  "description": "Request access to a workspace",
+  "pages": [
+    {
+      "name": "page1",
+      "elements": [
+        {
+          "type": "html",
+          "name": "sla_info",
+          "html": "<div style='background-color: #FFFFFF; border: 1px solid #BFDBFE; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem;'><div style='display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;'><svg style='width: 1rem; height: 1rem; color: #2563EB;' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'></path></svg><strong style='color: #111827;'>SLA:</strong></div><p style='color: #374151; margin-left: 1.5rem; margin: 0; font-size: 0.875rem;'>Standard workspace access requests are typically processed within <strong>2-3 business days</strong>. Admin-level access requires additional security review and may take up to <strong>5 business days</strong>. Requests submitted on Fridays or before holidays may experience slight delays.</p></div>"
+        },
+        {
+          "type": "html",
+          "name": "important_notes",
+          "html": "<div style='background-color: #FFFFFF; border: 1px solid #BFDBFE; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem;'><div style='display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;'><svg style='width: 1rem; height: 1rem; color: #2563EB;' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'></path></svg><strong style='color: #111827;'>Important Notes:</strong></div><ul style='list-style-type: disc; list-style-position: inside; color: #374151; margin-left: 1.5rem; margin: 0; padding-left: 0.5rem; font-size: 0.875rem;'><li style='margin: 0.25rem 0;'>Make sure you know the <strong>exact workspace name</strong> - misspellings will delay your request</li><li style='margin: 0.25rem 0;'>If requesting for a team, include all team member email addresses in the justification field</li><li style='margin: 0.25rem 0;'>Read-only access is usually approved faster than write/admin access</li><li style='margin: 0.25rem 0;'>You must have completed Fundamentals training before admin access will be granted</li><li style='margin: 0.25rem 0;'>Workspace access is tied to your corporate email - make sure you're using the correct account</li></ul></div>"
+        },
+        {
+          "type": "radiogroup",
+          "name": "scope",
+          "title": "Is this just for you, or for a team?",
+          "isRequired": true,
+          "choices": [
+            {"value": "individual", "text": "Just for me"},
+            {"value": "team", "text": "For my team"},
+            {"value": "multiple", "text": "For multiple teams"}
+          ]
+        },
+        {
+          "type": "text",
+          "name": "workspace_name",
+          "title": "Workspace Name",
+          "isRequired": true,
+          "description": "Which workspace do you need access to?",
+          "placeholder": "Enter workspace name"
+        },
+        {
+          "type": "dropdown",
+          "name": "access_level",
+          "title": "Access Level Required",
+          "isRequired": true,
+          "choices": [
+            {"value": "read", "text": "Read Only"},
+            {"value": "read_write", "text": "Read & Write"},
+            {"value": "admin", "text": "Admin"}
+          ]
+        },
+        {
+          "type": "comment",
+          "name": "justification",
+          "title": "Business Justification",
+          "isRequired": true,
+          "description": "Please provide a detailed business justification for this workspace access request",
+          "rows": 4
+        },
+        {
+          "type": "text",
+          "name": "project_name",
+          "title": "Associated Project Name",
+          "description": "What project or initiative is this request associated with?",
+          "placeholder": "Enter project name"
+        }
+      ]
+    }
+  ]
+}
+

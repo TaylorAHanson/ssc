@@ -1,0 +1,1 @@
+Check the README.md and ARCHITECTURE.md files for project details
