@@ -228,3 +228,69 @@ export async function getContentVersions(filename: string): Promise<ContentVersi
   }
   return response.json();
 }
+
+/**
+ * Workspace Feature Management API
+ */
+export interface WorkspaceInfo {
+  id: string;
+  name: string;
+  url?: string;
+}
+
+export interface FeatureInfo {
+  id: string;
+  name: string;
+  description: string;
+  category: 'beta' | 'public_preview';
+  enabled: boolean;
+}
+
+export interface WorkspaceFeaturesResponse {
+  workspace_id: string;
+  features: FeatureInfo[];
+}
+
+/**
+ * List all available workspaces.
+ */
+export async function listWorkspaces(): Promise<WorkspaceInfo[]> {
+  const response = await fetch(`${API_BASE_URL}/admin/workspaces`);
+  if (!response.ok) {
+    throw new Error(`Failed to list workspaces: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Get feature states for a specific workspace.
+ */
+export async function getWorkspaceFeatures(workspaceId: string): Promise<WorkspaceFeaturesResponse> {
+  const response = await fetch(`${API_BASE_URL}/admin/workspaces/${workspaceId}/features`);
+  if (!response.ok) {
+    throw new Error(`Failed to get workspace features: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Update a feature state for a specific workspace.
+ */
+export async function updateWorkspaceFeature(
+  workspaceId: string,
+  featureId: string,
+  enabled: boolean
+): Promise<FeatureInfo> {
+  const response = await fetch(`${API_BASE_URL}/admin/workspaces/${workspaceId}/features/${featureId}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to update workspace feature: ${response.statusText}`);
+  }
+  return response.json();
+}

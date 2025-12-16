@@ -3,24 +3,27 @@ import { useRequestStore } from '../stores/requestStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
+import { Input } from '../components/ui/input';
 import { 
   Settings, Save, Loader2, Clock, RotateCcw, FileText, 
-  Activity, CheckCircle2, FileStack, TrendingUp 
+  Activity, CheckCircle2, FileStack, TrendingUp, ToggleLeft, Search
 } from 'lucide-react';
 import { format, subDays, isAfter } from 'date-fns';
 import { SurveyCreator, SurveyCreatorComponent } from 'survey-creator-react';
 import { 
   listForms, getForm, saveForm, getFormVersions,
-  listContent, getContent, saveContent, getContentVersions
+  listContent, getContent, saveContent, getContentVersions,
+  listWorkspaces, getWorkspaceFeatures, updateWorkspaceFeature
 } from '../services/api';
-import type { FormInfo, FormVersionInfo, ContentInfo, ContentVersionInfo } from '../services/api';
+import type { FormInfo, FormVersionInfo, ContentInfo, ContentVersionInfo, WorkspaceInfo, FeatureInfo } from '../services/api';
+import { Switch } from '../components/ui/switch';
 import 'survey-core/survey-core.min.css';
 import 'survey-creator-core/survey-creator-core.min.css';
 
 export function Admin() {
   const requests = useRequestStore((state) => state.requests);
   const getPendingApprovalsCount = useRequestStore((state) => state.getPendingApprovalsCount);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'form-designer' | 'content-manager'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'form-designer' | 'content-manager' | 'feature-management'>('dashboard');
   const [surveyCreator, setSurveyCreator] = useState<SurveyCreator | null>(null);
   const creatorRef = useRef<SurveyCreator | null>(null);
   
@@ -43,6 +46,15 @@ export function Admin() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [loadingVersions, setLoadingVersions] = useState<Set<string>>(new Set());
+  
+  // Feature management state
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
+  const [selectedWorkspace, setSelectedWorkspace] = useState<string | null>(null);
+  const [workspaceFeatures, setWorkspaceFeatures] = useState<FeatureInfo[]>([]);
+  const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(false);
+  const [isLoadingFeatures, setIsLoadingFeatures] = useState(false);
+  const [updatingFeatures, setUpdatingFeatures] = useState<Set<string>>(new Set());
+  const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState('');
 
   // Load forms list on mount and when form-designer tab is active
   useEffect(() => {
@@ -50,8 +62,17 @@ export function Admin() {
       loadForms();
     } else if (activeTab === 'content-manager') {
       loadContentFiles();
+    } else if (activeTab === 'feature-management') {
+      loadWorkspaces();
     }
   }, [activeTab]);
+
+  // Load features when workspace is selected
+  useEffect(() => {
+    if (selectedWorkspace && activeTab === 'feature-management') {
+      loadWorkspaceFeatures(selectedWorkspace);
+    }
+  }, [selectedWorkspace, activeTab]);
 
   // Initialize SurveyJS Creator
   useEffect(() => {
@@ -365,6 +386,69 @@ export function Admin() {
     }
   };
 
+  // Feature Management Handlers
+  const loadWorkspaces = async () => {
+    setIsLoadingWorkspaces(true);
+    try {
+      const wsList = await listWorkspaces();
+      setWorkspaces(wsList);
+      if (wsList.length > 0 && !selectedWorkspace) {
+        setSelectedWorkspace(wsList[0].id);
+      }
+    } catch (error) {
+      console.error('Failed to load workspaces:', error);
+      setSaveMessage({ type: 'error', text: `Failed to load workspaces: ${error instanceof Error ? error.message : 'Unknown error'}` });
+    } finally {
+      setIsLoadingWorkspaces(false);
+    }
+  };
+
+  const loadWorkspaceFeatures = async (workspaceId: string) => {
+    setIsLoadingFeatures(true);
+    try {
+      const response = await getWorkspaceFeatures(workspaceId);
+      setWorkspaceFeatures(response.features);
+      setSaveMessage(null);
+    } catch (error) {
+      console.error('Failed to load workspace features:', error);
+      setSaveMessage({ type: 'error', text: `Failed to load features: ${error instanceof Error ? error.message : 'Unknown error'}` });
+    } finally {
+      setIsLoadingFeatures(false);
+    }
+  };
+
+  const handleFeatureToggle = async (featureId: string, enabled: boolean) => {
+    if (!selectedWorkspace) return;
+
+    setUpdatingFeatures(prev => new Set(prev).add(featureId));
+    try {
+      await updateWorkspaceFeature(selectedWorkspace, featureId, enabled);
+      // Update local state
+      setWorkspaceFeatures(prev => 
+        prev.map(f => f.id === featureId ? { ...f, enabled } : f)
+      );
+      setSaveMessage({ type: 'success', text: 'Feature updated successfully!' });
+      setTimeout(() => setSaveMessage(null), 3000);
+    } catch (error) {
+      console.error('Failed to update feature:', error);
+      setSaveMessage({ type: 'error', text: `Failed to update feature: ${error instanceof Error ? error.message : 'Unknown error'}` });
+      // Revert the toggle on error
+      setWorkspaceFeatures(prev => 
+        prev.map(f => f.id === featureId ? { ...f, enabled: !enabled } : f)
+      );
+    } finally {
+      setUpdatingFeatures(prev => {
+        const next = new Set(prev);
+        next.delete(featureId);
+        return next;
+      });
+    }
+  };
+
+  const handleWorkspaceSelect = (workspaceId: string) => {
+    setSelectedWorkspace(workspaceId);
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -405,6 +489,17 @@ export function Admin() {
         >
           <FileText className="w-4 h-4 inline mr-2" />
           Content Manager
+        </button>
+        <button
+          onClick={() => setActiveTab('feature-management')}
+          className={`px-4 py-2 font-medium text-sm transition-colors ${
+            activeTab === 'feature-management'
+              ? 'border-b-2 border-primary text-primary'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          <ToggleLeft className="w-4 h-4 inline mr-2" />
+          Feature Management
         </button>
       </div>
 
@@ -913,6 +1008,185 @@ export function Admin() {
                       />
                     </div>
                   </>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'feature-management' && (
+        <div className="flex gap-6 h-[calc(100vh-200px)]">
+          {/* Workspaces List Sidebar */}
+          <div className="w-64 flex-shrink-0">
+            <Card className="h-full flex flex-col">
+              <CardHeader>
+                <CardTitle className="text-lg">Workspaces</CardTitle>
+              </CardHeader>
+              <CardContent className="flex-1 overflow-hidden flex flex-col">
+                {/* Search Input */}
+                <div className="relative mb-4 flex-shrink-0">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                  <Input
+                    type="text"
+                    placeholder="Search workspaces..."
+                    value={workspaceSearchQuery}
+                    onChange={(e) => setWorkspaceSearchQuery(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+                
+                {/* Workspaces List */}
+                <div className="flex-1 overflow-y-auto">
+                  {isLoadingWorkspaces ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+                    </div>
+                  ) : (() => {
+                    const filteredWorkspaces = workspaces.filter(ws =>
+                      ws.name.toLowerCase().includes(workspaceSearchQuery.toLowerCase()) ||
+                      ws.id.toLowerCase().includes(workspaceSearchQuery.toLowerCase())
+                    );
+                    
+                    if (filteredWorkspaces.length === 0) {
+                      return <p className="text-sm text-gray-500 text-center py-4">No workspaces found</p>;
+                    }
+                    
+                    return (
+                      <div className="space-y-1">
+                        {filteredWorkspaces.map((workspace) => (
+                          <button
+                            key={workspace.id}
+                            onClick={() => handleWorkspaceSelect(workspace.id)}
+                            title={workspace.url || undefined}
+                            className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
+                              selectedWorkspace === workspace.id
+                                ? 'bg-primary text-white'
+                                : 'hover:bg-gray-100 text-gray-700'
+                            }`}
+                          >
+                            <div className="font-medium truncate">{workspace.name}</div>
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Features Management */}
+          <div className="flex-1 min-w-0">
+            <Card className="h-full flex flex-col">
+              <CardHeader>
+                <CardTitle>
+                  {selectedWorkspace 
+                    ? workspaces.find(w => w.id === selectedWorkspace)?.name || 'Feature Management'
+                    : 'Feature Management'}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex-1 overflow-y-auto">
+                {saveMessage && (
+                  <div className={`mb-4 p-3 rounded-md ${
+                    saveMessage.type === 'success'
+                      ? 'bg-green-50 border border-green-200 text-green-800'
+                      : 'bg-red-50 border border-red-200 text-red-800'
+                  }`}>
+                    <p className="text-sm">{saveMessage.text}</p>
+                  </div>
+                )}
+                
+                {!selectedWorkspace ? (
+                  <div className="py-12 text-center">
+                    <p className="text-gray-500">Select a workspace from the sidebar to manage features</p>
+                  </div>
+                ) : isLoadingFeatures ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {/* Beta Features */}
+                    <div>
+                      <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                        <span className="px-2 py-1 bg-orange-100 text-orange-800 rounded text-xs font-medium">BETA</span>
+                        Beta Features
+                      </h3>
+                      <div className="space-y-4">
+                        {workspaceFeatures
+                          .filter(f => f.category === 'beta')
+                          .map((feature) => (
+                            <div
+                              key={feature.id}
+                              className="p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors"
+                            >
+                              <div className="flex items-start justify-between">
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <h4 className="font-semibold text-gray-900">{feature.name}</h4>
+                                  </div>
+                                  <p className="text-sm text-gray-600">{feature.description}</p>
+                                </div>
+                                <div className="ml-4 flex items-center">
+                                  {updatingFeatures.has(feature.id) ? (
+                                    <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+                                  ) : (
+                                    <Switch
+                                      checked={feature.enabled}
+                                      onCheckedChange={(checked) => handleFeatureToggle(feature.id, checked)}
+                                    />
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        {workspaceFeatures.filter(f => f.category === 'beta').length === 0 && (
+                          <p className="text-sm text-gray-500 py-4">No beta features available</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Public Preview Features */}
+                    <div>
+                      <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                        <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium">PUBLIC PREVIEW</span>
+                        Public Preview Features
+                      </h3>
+                      <div className="space-y-4">
+                        {workspaceFeatures
+                          .filter(f => f.category === 'public_preview')
+                          .map((feature) => (
+                            <div
+                              key={feature.id}
+                              className="p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors"
+                            >
+                              <div className="flex items-start justify-between">
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <h4 className="font-semibold text-gray-900">{feature.name}</h4>
+                                  </div>
+                                  <p className="text-sm text-gray-600">{feature.description}</p>
+                                </div>
+                                <div className="ml-4 flex items-center">
+                                  {updatingFeatures.has(feature.id) ? (
+                                    <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+                                  ) : (
+                                    <Switch
+                                      checked={feature.enabled}
+                                      onCheckedChange={(checked) => handleFeatureToggle(feature.id, checked)}
+                                    />
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        {workspaceFeatures.filter(f => f.category === 'public_preview').length === 0 && (
+                          <p className="text-sm text-gray-500 py-4">No public preview features available</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 )}
               </CardContent>
             </Card>
