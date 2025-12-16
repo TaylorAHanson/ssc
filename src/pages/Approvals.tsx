@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRequestStore } from '../stores/requestStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -9,6 +9,7 @@ import type { Approval, ApprovalAction } from '../types';
 
 export function Approvals() {
   const approvals = useRequestStore((state) => state.approvals);
+  const fetchApprovals = useRequestStore((state) => state.fetchApprovals);
   const processApproval = useRequestStore((state) => state.processApproval);
   const [selectedApproval, setSelectedApproval] = useState<Approval | null>(null);
   const [actionType, setActionType] = useState<'approve' | 'reject' | 'delegate' | null>(null);
@@ -16,17 +17,22 @@ export function Approvals() {
   const [delegateEmail, setDelegateEmail] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
 
+  useEffect(() => {
+    fetchApprovals();
+  }, [fetchApprovals]);
+
   // User roles
-  const userRoles = ['platform_admin', 'data_owner'];
+  const userRoles = ['platform_admin', 'data_owner', 'manager'];
   const roleLabels: Record<string, string> = {
     platform_admin: 'Platform Admin',
     data_owner: 'Data Owner',
+    manager: 'Manager',
   };
 
   // Filter approvals by user's roles
-  const relevantApprovals = approvals.filter((a) => 
-    userRoles.includes(a.approvalType) && a.status === 'pending'
-  );
+  const relevantApprovals = approvals.filter((a) => {
+    return userRoles.includes(a.approvalType) && a.status === 'pending';
+  });
   const pendingApprovals = relevantApprovals;
   const completedApprovals = approvals.filter((a) => a.status !== 'pending');
 
@@ -81,6 +87,10 @@ export function Approvals() {
       'Catalog/schema/table creation in platform_catalog',
       'Data sharing requests for platform_catalog',
     ],
+    manager: [
+      'Workspace provisioning requests (Budget)',
+      'Training requirements'
+    ]
   };
 
   return (
@@ -99,14 +109,16 @@ export function Approvals() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {userRoles.map((role) => (
               <div key={role} className="border border-gray-200 rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-3">
                   {role === 'platform_admin' ? (
                     <Shield className="w-5 h-5 text-primary" />
-                  ) : (
+                  ) : role === 'data_owner' ? (
                     <Database className="w-5 h-5 text-primary" />
+                  ) : (
+                    <UserPlus className="w-5 h-5 text-primary" />
                   )}
                   <h3 className="font-semibold text-gray-900">{roleLabels[role]}</h3>
                 </div>
@@ -114,7 +126,7 @@ export function Approvals() {
                   <p className="text-sm text-gray-600 mb-2">Data Owner for: <strong>platform_catalog</strong></p>
                 )}
                 <ul className="space-y-1 text-sm text-gray-600">
-                  {approvalCapabilities[role as keyof typeof approvalCapabilities].map((capability, idx) => (
+                  {approvalCapabilities[role as keyof typeof approvalCapabilities]?.map((capability, idx) => (
                     <li key={idx} className="flex items-start gap-2">
                       <span className="text-primary mt-1">•</span>
                       <span>{capability}</span>
@@ -331,4 +343,3 @@ export function Approvals() {
     </div>
   );
 }
-

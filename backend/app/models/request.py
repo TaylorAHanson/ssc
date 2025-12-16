@@ -38,6 +38,14 @@ class Environment(str, Enum):
     PROD = "prod"
 
 
+class ApprovalType(str, Enum):
+    """Approval type enumeration."""
+    MANAGER = "manager"
+    DATA_OWNER = "data_owner"
+    PLATFORM_ADMIN = "platform_admin"
+    SECURITY = "security"
+
+
 class PathStateStatus(str, Enum):
     """Path state status enumeration."""
     PENDING = "pending"
@@ -67,6 +75,23 @@ class StateMachineState(BaseModel):
     parallelPaths: List[ParallelPath]
     completedStates: List[str]
     activeStates: List[str]
+
+
+class Approval(BaseModel):
+    """Approval model."""
+    id: str
+    requestId: str
+    requestTitle: str
+    requestType: RequestType
+    approvalType: str
+    requestedBy: str
+    requestedByEmail: str
+    status: str
+    createdAt: datetime
+    updatedAt: datetime
+    rejectionNote: Optional[str] = None
+    delegatedTo: Optional[str] = None
+    delegatedToEmail: Optional[str] = None
 
 
 class Request(BaseModel):

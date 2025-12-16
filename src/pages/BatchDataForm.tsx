@@ -69,7 +69,7 @@ export function BatchDataForm() {
       const data = survey.data;
       const title = `Batch Data Access: ${data.data_source}`;
       
-      await addRequest('batch_data_access', title);
+      await addRequest('batch_data_access', title, undefined, data);
       navigate('/requests');
     };
 

@@ -51,7 +51,7 @@ export function WorkspaceAccessForm() {
       const data = survey.data;
       const title = `Workspace Access: ${data.workspace_name} (${data.access_level})`;
       
-      await addRequest('workspace_access', title);
+      await addRequest('workspace_access', title, undefined, data);
       navigate('/requests');
     };
 

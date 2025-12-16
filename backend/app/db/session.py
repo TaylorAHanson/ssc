@@ -1,23 +1,24 @@
 """
-Database session management for Lakebase (PostgreSQL).
+Database session management for Lakebase (PostgreSQL) and SQLite (Dev).
 """
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import NullPool, StaticPool
 from app.core.config import settings
 from typing import Generator, Optional
+import os
 
 # Lazy initialization - only create engine when needed
 _engine = None
 _SessionLocal = None
 
 
-def get_database_url() -> Optional[str]:
+def get_database_url() -> str:
     """Get database URL, constructing it if needed."""
     if settings.DATABASE_URL:
         return settings.DATABASE_URL
     
-    # Only construct URL if all required parts are present
+    # Check for Postgres config
     if (settings.DATABASE_HOST and 
         settings.DATABASE_USER and 
         settings.DATABASE_PASSWORD and 
@@ -27,7 +28,10 @@ def get_database_url() -> Optional[str]:
             f"@{settings.DATABASE_HOST}:{settings.DATABASE_PORT}/{settings.DATABASE_NAME}"
         )
     
-    return None
+    # Fallback to SQLite
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    db_path = os.path.join(base_dir, "edas_hub.db")
+    return f"sqlite:///{db_path}"
 
 
 def get_engine():
@@ -35,16 +39,20 @@ def get_engine():
     global _engine
     if _engine is None:
         database_url = get_database_url()
-        if not database_url:
-            raise ValueError(
-                "Database not configured. Please set DATABASE_URL or "
-                "DATABASE_HOST, DATABASE_USER, DATABASE_PASSWORD, and DATABASE_NAME"
+        
+        if database_url.startswith("sqlite"):
+            _engine = create_engine(
+                database_url,
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+                echo=False
             )
-        _engine = create_engine(
-            database_url,
-            poolclass=NullPool,  # Use NullPool for serverless/connection-per-request
-            echo=False,  # Set to True for SQL query logging
-        )
+        else:
+            _engine = create_engine(
+                database_url,
+                poolclass=NullPool,  # Use NullPool for serverless/connection-per-request
+                echo=False,
+            )
     return _engine
 
 
@@ -84,4 +92,3 @@ def get_lakebase_session() -> Session:
     """
     SessionLocal = get_session_local()
     return SessionLocal()
-

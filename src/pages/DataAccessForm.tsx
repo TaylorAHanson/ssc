@@ -60,7 +60,7 @@ export function DataAccessForm() {
       const data = survey.data;
       const title = `Data Access: ${data.catalog_name} - ${data.schema_name}${data.table_names ? ` (${data.table_names})` : ''}`;
       
-      await addRequest('catalog_schema_table_access', title);
+      await addRequest('catalog_schema_table_access', title, undefined, data);
       navigate('/requests');
     };
 

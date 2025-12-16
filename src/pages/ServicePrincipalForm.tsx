@@ -55,7 +55,7 @@ export function ServicePrincipalForm() {
       const permissions = Array.isArray(data.permissions) ? data.permissions.join(', ') : data.permissions;
       const title = `Service Principal: ${data.application_name} - ${permissions}`;
       
-      await addRequest('service_principal', title);
+      await addRequest('service_principal', title, undefined, data);
       navigate('/requests');
     };
 

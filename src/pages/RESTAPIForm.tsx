@@ -68,7 +68,7 @@ export function RESTAPIForm() {
       const data = survey.data;
       const title = `REST API Access: ${data.api_type} - ${data.endpoint}`;
       
-      await addRequest('rest_api_access', title);
+      await addRequest('rest_api_access', title, undefined, data);
       navigate('/requests');
     };
 

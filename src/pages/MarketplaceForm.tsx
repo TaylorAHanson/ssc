@@ -53,7 +53,7 @@ export function MarketplaceForm() {
       const data = survey.data;
       const title = `Marketplace Certification: ${data.asset_name}`;
       
-      await addRequest('marketplace_certification', title);
+      await addRequest('marketplace_certification', title, undefined, data);
       navigate('/requests');
     };
 

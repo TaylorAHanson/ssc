@@ -1,16 +1,25 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRequestStore } from '../stores/requestStore';
 import { RequestStatusFlow } from '../components/RequestStatusFlow';
 import { TrainingBlocker } from '../components/TrainingBlocker';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { format } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
 import { Eye, X } from 'lucide-react';
 import type { Request } from '../types';
 
+const formatDate = (dateString: string) => {
+  return formatInTimeZone(new Date(dateString), 'America/Los_Angeles', 'MMM d, yyyy h:mm a zzz');
+};
+
 export function Requests() {
   const requests = useRequestStore((state) => state.requests);
+  const fetchRequests = useRequestStore((state) => state.fetchRequests);
   const [selectedRequest, setSelectedRequest] = useState<Request | null>(null);
+
+  useEffect(() => {
+    fetchRequests();
+  }, [fetchRequests]);
 
   if (requests.length === 0) {
     return (
@@ -66,10 +75,10 @@ export function Requests() {
                       </span>
                     </td>
                     <td className="py-3 px-4 text-sm text-gray-600">
-                      {format(new Date(request.createdAt), 'MMM d, yyyy')}
+                      {formatDate(request.createdAt)}
                     </td>
                     <td className="py-3 px-4 text-sm text-gray-600">
-                      {format(new Date(request.updatedAt), 'MMM d, yyyy')}
+                      {formatDate(request.updatedAt)}
                     </td>
                     <td className="py-3 px-4">
                       <Button
@@ -99,7 +108,7 @@ export function Requests() {
                 <div>
                   <CardTitle>{selectedRequest.title}</CardTitle>
                   <p className="text-sm text-gray-500 mt-1">
-                    Created {format(new Date(selectedRequest.createdAt), 'PPp')}
+                    Created {formatDate(selectedRequest.createdAt)}
                   </p>
                 </div>
                 <Button

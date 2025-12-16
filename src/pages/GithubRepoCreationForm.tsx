@@ -55,7 +55,7 @@ export function GithubRepoCreationForm() {
       const data = survey.data;
       const title = `GitHub Repository: ${data.repository_name} - ${data.visibility || 'Private'}`;
       
-      await addRequest('github_repo_creation', title);
+      await addRequest('github_repo_creation', title, undefined, data);
       navigate('/requests');
     };
 

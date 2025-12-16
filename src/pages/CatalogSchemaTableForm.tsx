@@ -53,7 +53,7 @@ export function CatalogSchemaTableForm() {
       const data = survey.data;
       const title = `New Catalog/Schema/Table: ${data.catalog_name}.${data.schema_name}${data.table_name ? `.${data.table_name}` : ''}`;
       
-      await addRequest('catalog_schema_table', title);
+      await addRequest('catalog_schema_table', title, undefined, data);
       navigate('/requests');
     };
 

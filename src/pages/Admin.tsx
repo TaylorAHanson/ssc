@@ -23,6 +23,14 @@ import 'survey-creator-core/survey-creator-core.min.css';
 export function Admin() {
   const requests = useRequestStore((state) => state.requests);
   const getPendingApprovalsCount = useRequestStore((state) => state.getPendingApprovalsCount);
+  const fetchRequests = useRequestStore((state) => state.fetchRequests);
+  const fetchApprovals = useRequestStore((state) => state.fetchApprovals);
+  
+  useEffect(() => {
+    fetchRequests();
+    fetchApprovals();
+  }, [fetchRequests, fetchApprovals]);
+  
   const [activeTab, setActiveTab] = useState<'dashboard' | 'form-designer' | 'content-manager' | 'feature-management'>('dashboard');
   const [surveyCreator, setSurveyCreator] = useState<SurveyCreator | null>(null);
   const creatorRef = useRef<SurveyCreator | null>(null);

@@ -71,7 +71,7 @@ export function ProvisionWorkspaceForm() {
                   data.environment === 'stage' ? 'stage' : 'prod';
       const title = `New Workspace: ${data.workspace_name} - ${data.environment || 'Dev'}`;
       
-      await addRequest('workspace_provision', title, env as any);
+      await addRequest('workspace_provision', title, env as any, data);
       navigate('/requests');
     };
 
