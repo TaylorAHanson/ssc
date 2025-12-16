@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/layout/Layout';
 import { Home } from './pages/Home';
@@ -16,8 +17,15 @@ import { CatalogSchemaTableForm } from './pages/CatalogSchemaTableForm';
 import { RESTAPIForm } from './pages/RESTAPIForm';
 import { BatchDataForm } from './pages/BatchDataForm';
 import { MarketplaceForm } from './pages/MarketplaceForm';
+import { useRequestStore } from './stores/requestStore';
 
 function App() {
+  const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
+
+  useEffect(() => {
+    fetchBannerMessage();
+  }, [fetchBannerMessage]);
+
   return (
     <BrowserRouter>
       <Layout>

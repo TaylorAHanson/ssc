@@ -1,11 +1,19 @@
 import { create } from 'zustand';
 import type { Request, RequestType, Environment, Approval, ApprovalAction, ApprovalType, StateMachineState } from '../types';
 import { mockApi } from '../services/mockApi';
+import { getContent } from '../services/api';
+
+interface BannerData {
+  message: string;
+  active: boolean;
+  type?: 'info' | 'alert' | 'warning' | 'success';
+}
 
 interface RequestStore {
   requests: Request[];
   approvals: Approval[];
   bannerMessage: string | null;
+  bannerData: BannerData | null;
   addRequest: (type: RequestType, title: string, environment?: Environment) => Promise<void>;
   updateRequest: (id: string, updates: Partial<Request>) => Promise<void>;
   setBannerMessage: (message: string | null) => void;
@@ -13,6 +21,7 @@ interface RequestStore {
   fetchApprovals: () => Promise<void>;
   processApproval: (action: ApprovalAction) => Promise<void>;
   getPendingApprovalsCount: () => number;
+  fetchBannerMessage: () => Promise<void>;
 }
 
 // Mock requests data
@@ -298,6 +307,7 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
   requests: mockRequests,
   approvals: mockApprovals,
   bannerMessage: null,
+  bannerData: null,
 
   addRequest: async (type, title, environment) => {
     const request = await mockApi.createRequest(type, title, environment);
@@ -387,6 +397,24 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
 
   getPendingApprovalsCount: () => {
     return get().approvals.filter((a) => a.status === 'pending').length;
+  },
+
+  fetchBannerMessage: async () => {
+    try {
+      const bannerData = await getContent('system-banner') as BannerData;
+      if (bannerData && bannerData.active && bannerData.message) {
+        set({ 
+          bannerMessage: bannerData.message,
+          bannerData: bannerData
+        });
+      } else {
+        set({ bannerMessage: null, bannerData: null });
+      }
+    } catch (error) {
+      console.error('Failed to fetch banner message:', error);
+      // Fallback or leave as is
+      set({ bannerMessage: null, bannerData: null });
+    }
   },
 }));
 

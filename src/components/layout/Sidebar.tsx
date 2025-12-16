@@ -51,7 +51,7 @@ const navItems: NavItem[] = [
   { title: 'Community Links', icon: <MessageSquare className="w-5 h-5" />, path: '/community/links', group: 'Community' },
   
   // Admin
-  { title: 'Admin Dashboard', icon: <Settings className="w-5 h-5" />, path: '/admin', group: 'Admin' },
+  { title: 'Admin', icon: <Settings className="w-5 h-5" />, path: '/admin', group: 'Admin' },
   { title: 'Pending Approvals', icon: <CheckCircle2 className="w-5 h-5" />, path: '/admin/approvals', group: 'Admin' },
 ];
 

@@ -312,12 +312,36 @@ CRITICAL: When generating the JSON instructions, you MUST:
 4. Only include fields that exist in the schema
 5. For optional fields, only include them if the user provided values
 """
+
+    # Load dynamic content
+    content_section = ""
+    try:
+        from app.agents.content_registry import list_content, get_content
+        import json
+        
+        content_items = list_content()
+        if content_items:
+            content_section = "\n## Community Resources & Content\n"
+            content_section += "The following resources are available to help users. Use this information to answer questions about training, events, reusable assets, and community links:\n\n"
+            
+            for item in content_items:
+                filename = item['filename']
+                title = item['title']
+                data = get_content(filename)
+                content_section += f"### {title}\n"
+                content_section += f"```json\n{json.dumps(data, indent=2)}\n```\n\n"
+    except Exception as e:
+        # Log error but continue without content
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to load content for prompt: {e}")
     
     return f"""{SYSTEM_PROMPT}
 
 {AGENT_INSTRUCTIONS}
 {tools_section}
 {form_schema_section}
+{content_section}
 ## System Context
 {_format_context(SYSTEM_CONTEXT)}
 """

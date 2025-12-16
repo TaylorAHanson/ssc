@@ -1,0 +1,131 @@
+[
+  {
+    "persona": "Business User",
+    "fundamentals": [
+      { "id": "fundamentals", "name": "Databricks Fundamentals", "duration": "1 hr", "type": "eLearning" }
+    ],
+    "associate": [],
+    "professional": []
+  },
+  {
+    "persona": "Data Analyst",
+    "fundamentals": [
+      { "id": "fundamentals", "name": "Databricks Fundamentals", "duration": "1 hr", "type": "eLearning" },
+      { "id": "accred-1", "name": "Accreditation", "type": "Accreditation" },
+      { "id": "sql-bi", "name": "Get Started with SQL Analytics and BI", "duration": "3 hrs", "type": "SelfPaced" }
+    ],
+    "associate": [
+      { "id": "sql-analytics", "name": "SQL Analytics on Databricks", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "ai-bi", "name": "AI/BI for Data Analysts", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "cert-1", "name": "Cert - 90m", "type": "Certification", "unlocks": "Request advanced data access and build custom dashboards" }
+    ],
+    "professional": []
+  },
+  {
+    "persona": "Data Engineer",
+    "fundamentals": [
+      { "id": "fundamentals", "name": "Databricks Fundamentals", "duration": "1 hr", "type": "eLearning" },
+      { "id": "accred-1", "name": "Accreditation", "type": "Accreditation" },
+      { "id": "get-started-de", "name": "Get Started with Databricks for Data Engineering", "duration": "3 hrs", "type": "SelfPaced" }
+    ],
+    "optionalLanguages": [
+      { "id": "python-intro", "name": "Introduction to Python for Data Science and Data Engineering", "duration": "12 hrs", "type": "SelfPaced" },
+      { "id": "spark-prog", "name": "Apache Spark™ Programming with Databricks", "duration": "12 hrs", "type": "SelfPaced" }
+    ],
+    "associate": [
+      { "id": "data-ingestion", "name": "Data Ingestion with Lakeflow Connect", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "lakeflow-jobs", "name": "Deploy Workloads w/ Lakeflow Jobs", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "spark-pipelines", "name": "Build Data Pipelines w/ Lakeflow Spark Declarative Pipelines", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "unity-catalog", "name": "Data Management and Governance with Unity Catalog", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "cert-1", "name": "Cert - 90m", "type": "Certification", "unlocks": "Create and manage data pipelines and catalogs" }
+    ],
+    "professional": [
+      { "id": "streaming", "name": "Databricks Streaming and Lakeflow Declarative Pipelines", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "data-privacy", "name": "Databricks Data Privacy", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "performance", "name": "Databricks Performance Optimization", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "asset-bundles", "name": "Automated Deployment with Databricks Asset Bundles", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "cert-2", "name": "Cert - 2 hrs", "type": "Certification", "unlocks": "Provision workspaces and manage advanced data engineering workflows" }
+    ]
+  },
+  {
+    "persona": "Data Science & ML",
+    "fundamentals": [
+      { "id": "fundamentals", "name": "Databricks Fundamentals", "duration": "1 hr", "type": "eLearning" },
+      { "id": "accred-1", "name": "Accreditation", "type": "Accreditation" },
+      { "id": "get-started-ml", "name": "Get Started with Databricks for Machine Learning", "duration": "3 hrs", "type": "SelfPaced" }
+    ],
+    "optionalLanguages": [
+      { "id": "python-intro", "name": "Introduction to Python for Data Science and Data Engineering", "duration": "12 hrs", "type": "SelfPaced" }
+    ],
+    "associate": [
+      { "id": "data-prep", "name": "Data Preparation for Machine Learning", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "model-dev", "name": "Machine Learning Model Development", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "model-deploy", "name": "Machine Learning Model Deployment", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "mlops", "name": "Machine Learning Operations", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "cert-1", "name": "Cert - 90m", "type": "Certification", "unlocks": "Deploy ML models and access ML platform features" }
+    ],
+    "professional": [
+      { "id": "ml-scale", "name": "Machine Learning at Scale", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "advanced-mlops", "name": "Advanced Machine Learning Operations", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "cert-2", "name": "Cert - 2 hrs", "type": "Certification", "unlocks": "Manage production ML workflows and model registry" }
+    ]
+  },
+  {
+    "persona": "Generative AI",
+    "fundamentals": [
+      { "id": "fundamentals", "name": "Databricks Fundamentals", "duration": "1 hr", "type": "eLearning" },
+      { "id": "gen-ai-fund", "name": "Generative AI Fundamentals", "duration": "2 hrs", "type": "eLearning" },
+      { "id": "accred-1", "name": "Accred.", "type": "Accreditation" },
+      { "id": "accred-2", "name": "Accred.", "type": "Accreditation" },
+      { "id": "get-started-genai", "name": "Get Started with Databricks for Gen AI", "duration": "3 hrs", "type": "SelfPaced" }
+    ],
+    "associate": [
+      { "id": "gen-ai-solution", "name": "Generative AI Solution Development", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "gen-ai-app-dev", "name": "Gen AI Application Development", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "gen-ai-eval", "name": "Gen AI Application Evaluation and Governance", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "gen-ai-deploy", "name": "Gen AI Application Deployment and Monitoring", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "cert-1", "name": "Cert - 90m", "type": "Certification", "unlocks": "Build and deploy LLM-powered applications" }
+    ],
+    "professional": []
+  },
+  {
+    "persona": "Platform Admin",
+    "fundamentals": [
+      { "id": "fundamentals", "name": "Databricks Fundamentals", "duration": "1 hr", "type": "eLearning" },
+      { "id": "accred-1", "name": "Accreditation", "type": "Accreditation" },
+      { "id": "get-started-admin", "name": "Get Started with Databricks Platform Admin", "duration": "3 hrs", "type": "SelfPaced" }
+    ],
+    "associate": [
+      { "id": "platform-admin-plan", "name": "Platform Administrator Learning Plan", "duration": "8 hrs", "type": "SelfPaced" },
+      { "id": "accred-2", "name": "Accreditation", "type": "Accreditation" }
+    ],
+    "professional": []
+  },
+  {
+    "persona": "Data Warehousing",
+    "fundamentals": [
+      { "id": "fundamentals", "name": "Databricks Fundamentals", "duration": "1 hr", "type": "eLearning" },
+      { "id": "accred-1", "name": "Accreditation", "type": "Accreditation" },
+      { "id": "get-started-dw", "name": "Get Started with Data Warehousing", "duration": "3 hrs", "type": "SelfPaced" }
+    ],
+    "associate": [
+      { "id": "data-warehousing", "name": "Data Warehousing with Databricks", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "sql-procedural", "name": "SQL Programming and Procedural Logic", "duration": "3 hrs", "type": "SelfPaced" },
+      { "id": "data-modeling", "name": "Data Modeling Strategies", "duration": "3 hrs", "type": "SelfPaced" }
+    ],
+    "professional": []
+  },
+  {
+    "persona": "Data Architect",
+    "fundamentals": [
+      { "id": "fundamentals", "name": "Databricks Fundamentals", "duration": "1 hr", "type": "eLearning" },
+      { "id": "accred-1", "name": "Accreditation", "type": "Accreditation" },
+      { "id": "get-started-arch", "name": "Get Started with Lakehouse Architecture", "duration": "2 hrs", "type": "SelfPaced" }
+    ],
+    "associate": [
+      { "id": "data-modeling", "name": "Data Modeling Strategies", "duration": "3 hrs", "type": "SelfPaced" }
+    ],
+    "professional": []
+  }
+]
+

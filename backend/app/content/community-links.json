@@ -1,0 +1,95 @@
+{
+  "categories": [
+    {
+      "id": "documentation",
+      "name": "Documentation & Knowledge",
+      "description": "Internal and external documentation resources",
+      "icon": "BookOpen"
+    },
+    {
+      "id": "training",
+      "name": "Training & Learning",
+      "description": "Educational resources and certification programs",
+      "icon": "GraduationCap"
+    },
+    {
+      "id": "development",
+      "name": "Development & Code",
+      "description": "Source control, CI/CD, and development tools",
+      "icon": "Code"
+    },
+    {
+      "id": "monitoring",
+      "name": "Monitoring & Observability",
+      "description": "Platform monitoring, data observability, and cost management tools",
+      "icon": "Eye"
+    }
+  ],
+  "links": [
+    {
+      "id": "confluence",
+      "title": "Confluence",
+      "description": "Internal documentation, wikis, and knowledge base",
+      "url": "https://confluence.example.com",
+      "category": "documentation",
+      "icon": "FileText"
+    },
+    {
+      "id": "databricks-docs",
+      "title": "Databricks Documentation",
+      "description": "Official Databricks documentation and guides",
+      "url": "https://docs.databricks.com",
+      "category": "documentation",
+      "icon": "BookOpen"
+    },
+    {
+      "id": "databricks-academy",
+      "title": "Databricks Academy",
+      "description": "Training courses, certifications, and learning resources",
+      "url": "https://academy.databricks.com",
+      "category": "training",
+      "icon": "GraduationCap"
+    },
+    {
+      "id": "github",
+      "title": "GitHub",
+      "description": "Source code repositories and version control",
+      "url": "https://github.com/example",
+      "category": "development",
+      "icon": "Github"
+    },
+    {
+      "id": "jenkins",
+      "title": "Jenkins",
+      "description": "CI/CD pipeline management and automation",
+      "url": "https://jenkins.example.com",
+      "category": "development",
+      "icon": "Settings"
+    },
+    {
+      "id": "datadog",
+      "title": "Datadog UI",
+      "description": "Application performance monitoring and observability",
+      "url": "https://datadog.example.com",
+      "category": "monitoring",
+      "icon": "Activity"
+    },
+    {
+      "id": "acceldata",
+      "title": "Acceldata UI",
+      "description": "Data observability and quality monitoring platform",
+      "url": "https://acceldata.example.com",
+      "category": "monitoring",
+      "icon": "BarChart3"
+    },
+    {
+      "id": "finout",
+      "title": "Finout UI",
+      "description": "Cloud cost management and optimization",
+      "url": "https://finout.example.com",
+      "category": "monitoring",
+      "icon": "DollarSign"
+    }
+  ]
+}
+

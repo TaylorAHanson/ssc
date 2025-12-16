@@ -156,3 +156,10 @@ body {
   color: #3253DC !important;
   box-shadow: none !important;
 }
+
+/* Widen SurveyJS form pages */
+.sd-page,
+.sd-body__page {
+  max-width: 1200px !important;
+  width: 100% !important;
+}

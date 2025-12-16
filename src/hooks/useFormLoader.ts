@@ -21,6 +21,9 @@ export function useFormLoader(formPath: string) {
         const formData = await getForm(formPath);
         if (isMounted) {
           const model = new Model(formData.schema);
+          // Set wider width for forms
+          model.width = '100%';
+          model.widthMode = 'responsive';
           setSurvey(model);
         }
       } catch (err) {
