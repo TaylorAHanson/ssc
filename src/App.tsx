@@ -17,6 +17,7 @@ import { CatalogSchemaTableForm } from './pages/CatalogSchemaTableForm';
 import { RESTAPIForm } from './pages/RESTAPIForm';
 import { BatchDataForm } from './pages/BatchDataForm';
 import { MarketplaceForm } from './pages/MarketplaceForm';
+import { GithubRepoCreationForm } from './pages/GithubRepoCreationForm';
 import { useRequestStore } from './stores/requestStore';
 
 function App() {
@@ -45,6 +46,7 @@ function App() {
           <Route path="/paas/provision-workspace" element={<ProvisionWorkspaceForm />} />
           <Route path="/paas/service-principal" element={<ServicePrincipalForm />} />
           <Route path="/paas/marketplace" element={<MarketplaceForm />} />
+          <Route path="/paas/github-repo-creation" element={<GithubRepoCreationForm />} />
           {/* DAAS Routes - All go to SurveyJS forms */}
           <Route path="/daas/rest-api" element={<RESTAPIForm />} />
           <Route path="/daas/batch-data" element={<BatchDataForm />} />

@@ -35,6 +35,7 @@ def _map_request_type_to_route(request_type: str, route: str) -> Optional[Dict[s
         "workspace_provision": {"path": "/paas/provision-workspace", "title": "Provision New Workspace"},
         "service_principal": {"path": "/paas/service-principal", "title": "Provision Service Principal"},
         "marketplace_certification": {"path": "/paas/marketplace", "title": "Marketplace Certification"},
+        "github_repo_creation": {"path": "/paas/github-repo-creation", "title": "GitHub Repository Creation"},
         "rest_api_access": {"path": "/daas/rest-api", "title": "Request REST API Access"},
         "batch_data_access": {"path": "/daas/batch-data", "title": "Request Batch Data Access"},
     }
@@ -129,6 +130,11 @@ def _infer_route_from_conversation(query: str, conversation_history: Optional[Li
     # Check for service principal
     if "service principal" in query_lower:
         return {"path": "/paas/service-principal", "title": "Provision Service Principal"}
+    
+    # Check for GitHub repository
+    if any(word in query_lower for word in ["github", "repo", "repository", "git"]):
+        if any(word in query_lower for word in ["create", "new", "provision", "set up"]):
+            return {"path": "/paas/github-repo-creation", "title": "GitHub Repository Creation"}
     
     # Check for API access
     if any(word in query_lower for word in ["api", "rest", "endpoint"]):

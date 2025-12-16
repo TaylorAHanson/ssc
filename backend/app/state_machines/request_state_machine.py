@@ -178,6 +178,48 @@ class RequestStateMachine(StateMachine):
             )
             
             self.parallel_paths = {"approval": approval_path}
+        
+        elif self.request_type == RequestType.GITHUB_REPO_CREATION:
+            # Platform admin approval path
+            approval_path = ParallelPath(
+                id="approval",
+                name="Approval Path",
+                required=True,
+                states=[
+                    PathState(
+                        id="platform_admin_approval",
+                        name="Platform Admin Approval",
+                        status=PathStateStatus.PENDING,
+                        order=1
+                    ),
+                ]
+            )
+            
+            # Provisioning path
+            provisioning_path = ParallelPath(
+                id="provisioning",
+                name="Provisioning Path",
+                required=True,
+                states=[
+                    PathState(
+                        id="provisioning",
+                        name="Repository Creation",
+                        status=PathStateStatus.PENDING,
+                        order=1
+                    ),
+                    PathState(
+                        id="permissions_setup",
+                        name="Permissions Setup",
+                        status=PathStateStatus.PENDING,
+                        order=2
+                    ),
+                ]
+            )
+            
+            self.parallel_paths = {
+                "approval": approval_path,
+                "provisioning": provisioning_path,
+            }
     
     def update_state_in_path(self, path_id: str, state_id: str, status: PathStateStatus):
         """Update the status of a state within a parallel path."""

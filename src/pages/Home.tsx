@@ -380,7 +380,7 @@ export function Home() {
                     >
                       {message.type === 'agent' ? (
                         <div 
-                          className="text-sm leading-relaxed prose prose-sm max-w-none"
+                          className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
                           dangerouslySetInnerHTML={{ __html: message.content }}
                         />
                       ) : (

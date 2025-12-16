@@ -102,6 +102,28 @@ body {
   padding-left: 0.5rem;
 }
 
+/* Style links in agent messages */
+.prose a,
+.prose-sm a {
+  color: #2563eb;
+  text-decoration: underline;
+  text-decoration-color: #2563eb;
+  text-underline-offset: 2px;
+  transition: color 0.2s ease;
+}
+
+.prose a:hover,
+.prose-sm a:hover {
+  color: #1d4ed8;
+  text-decoration-color: #1d4ed8;
+}
+
+.prose a:visited,
+.prose-sm a:visited {
+  color: #7c3aed;
+  text-decoration-color: #7c3aed;
+}
+
 /* Also style lists outside of prose class */
 .text-sm ul {
   list-style-type: disc;

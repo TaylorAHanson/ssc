@@ -16,7 +16,8 @@ import {
   List,
   CheckCircle2,
   GraduationCap,
-  Calendar
+  Calendar,
+  Code
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -39,6 +40,7 @@ const navItems: NavItem[] = [
   { title: 'Provision New Workspace', icon: <Cloud className="w-5 h-5" />, path: '/paas/provision-workspace', group: 'PaaS' },
   { title: 'Provision Service Principal', icon: <Key className="w-5 h-5" />, path: '/paas/service-principal', group: 'PaaS' },
   { title: 'Marketplace Certification', icon: <ShoppingCart className="w-5 h-5" />, path: '/paas/marketplace', group: 'PaaS' },
+  { title: 'GitHub Repository Creation', icon: <Code className="w-5 h-5" />, path: '/paas/github-repo-creation', group: 'PaaS' },
   
   // DaaS
   { title: 'Request REST API Access', icon: <Globe className="w-5 h-5" />, path: '/daas/rest-api', group: 'DaaS' },
