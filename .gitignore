@@ -33,3 +33,9 @@ dist-ssr
 # Ignore compiled Python files
 *.pyc
 *.pyo
+
+# Terraform
+*.tfvars
+*.tfstate
+*.tfstate.backup
+.terraform/
