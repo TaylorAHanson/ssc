@@ -5,7 +5,7 @@ import { TrainingBlocker } from '../components/TrainingBlocker';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { formatInTimeZone } from 'date-fns-tz';
-import { Eye, X } from 'lucide-react';
+import { Eye, X, Trash2 } from 'lucide-react';
 import type { Request } from '../types';
 
 const formatDate = (dateString: string) => {
@@ -15,11 +15,28 @@ const formatDate = (dateString: string) => {
 export function Requests() {
   const requests = useRequestStore((state) => state.requests);
   const fetchRequests = useRequestStore((state) => state.fetchRequests);
-  const [selectedRequest, setSelectedRequest] = useState<Request | null>(null);
+  const deleteRequest = useRequestStore((state) => state.deleteRequest);
+  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
+
+  // Derived state: get the full object from the store's list
+  const selectedRequest = requests.find(r => r.id === selectedRequestId) || null;
 
   useEffect(() => {
     fetchRequests();
   }, [fetchRequests]);
+
+  const handleDelete = async (requestId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm('Are you sure you want to delete this request? This action cannot be undone.')) {
+      setIsDeleting(requestId);
+      try {
+        await deleteRequest(requestId);
+      } finally {
+        setIsDeleting(null);
+      }
+    }
+  };
 
   if (requests.length === 0) {
     return (
@@ -81,15 +98,27 @@ export function Requests() {
                       {formatDate(request.updatedAt)}
                     </td>
                     <td className="py-3 px-4">
-                      <Button
-                        onClick={() => setSelectedRequest(request)}
-                        variant="outline"
-                        size="sm"
-                        className="flex items-center gap-2"
-                      >
-                        <Eye className="w-4 h-4" />
-                        View Flow
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          onClick={() => setSelectedRequestId(request.id)}
+                          variant="outline"
+                          size="sm"
+                          className="flex items-center gap-2"
+                        >
+                          <Eye className="w-4 h-4" />
+                          View Flow
+                        </Button>
+                        <Button
+                          onClick={(e) => handleDelete(request.id, e)}
+                          variant="outline"
+                          size="sm"
+                          className="flex items-center gap-2 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                          disabled={isDeleting === request.id}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          {isDeleting === request.id ? '...' : 'Delete'}
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -114,7 +143,7 @@ export function Requests() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setSelectedRequest(null)}
+                  onClick={() => setSelectedRequestId(null)}
                   className="flex items-center gap-2"
                 >
                   <X className="w-4 h-4" />

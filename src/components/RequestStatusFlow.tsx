@@ -29,7 +29,7 @@ export function RequestStatusFlow({ stateMachine, requestStatus }: RequestStatus
       data: {
         label: (
           <div className="flex flex-col items-center gap-2">
-            <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center">
+            <div className="w-12 h-12 rounded-full bg-green-500 flex items-center justify-center">
               <CheckCircle2 className="w-6 h-6 text-white" />
             </div>
             <span className="text-sm font-medium text-center max-w-[120px]">
@@ -62,7 +62,7 @@ export function RequestStatusFlow({ stateMachine, requestStatus }: RequestStatus
               <div className="flex flex-col items-center gap-2">
                 <div 
                   className={`w-12 h-12 rounded-full flex items-center justify-center ${
-                    isCompleted ? 'bg-green-500' : isActive ? 'bg-primary animate-pulse' : 'bg-gray-300'
+                    isCompleted ? 'bg-green-500' : isActive ? 'bg-blue-600 animate-pulse' : 'bg-gray-300'
                   }`}
                 >
                   {isCompleted ? (
@@ -137,7 +137,7 @@ export function RequestStatusFlow({ stateMachine, requestStatus }: RequestStatus
               <div className="flex flex-col items-center gap-2">
                 <div 
                   className={`w-12 h-12 rounded-full flex items-center justify-center ${
-                    isCompleted ? 'bg-green-500' : isActive ? 'bg-primary animate-pulse' : 'bg-gray-300'
+                    isCompleted ? 'bg-green-500' : isActive ? 'bg-blue-600 animate-pulse' : 'bg-gray-300'
                   }`}
                 >
                   {isCompleted ? (
@@ -214,9 +214,9 @@ export function RequestStatusFlow({ stateMachine, requestStatus }: RequestStatus
                 <div className="flex flex-col items-center gap-2">
                   <div 
                     className={`w-12 h-12 rounded-full flex items-center justify-center ${
-                      isCompleted ? 'bg-green-500' : isActive ? 'bg-primary animate-pulse' : 'bg-gray-300'
+                      isCompleted ? 'bg-green-500' : isActive ? 'bg-blue-600 animate-pulse' : 'bg-gray-300'
                     }`}
-                    style={isActive ? { backgroundColor: '#3253DC' } : undefined}
+                    style={isActive ? { backgroundColor: '#2563eb' } : undefined}
                   >
                     {isCompleted ? (
                       <CheckCircle2 className="w-6 h-6 text-white" />
@@ -278,9 +278,9 @@ export function RequestStatusFlow({ stateMachine, requestStatus }: RequestStatus
 
       // Always show convergence point (even if not all paths complete)
       const convergenceCompleted = allRequiredPathsComplete;
-      const convergenceActive = !convergenceCompleted && stateMachine.parallelPaths.some(path =>
-        path.states.some(state => state.status === 'active')
-      );
+      // Convergence point should only be active if it's actually completed (milestone reached)
+      // It shouldn't be active just because dependent paths are active
+      const convergenceActive = false;
 
       flowNodes.push({
         id: 'convergence',
@@ -354,7 +354,7 @@ export function RequestStatusFlow({ stateMachine, requestStatus }: RequestStatus
               <div className="flex flex-col items-center gap-2">
                 <div 
                   className={`w-12 h-12 rounded-full flex items-center justify-center ${
-                    isCompleted ? 'bg-green-500' : isActive ? 'bg-primary animate-pulse' : 'bg-gray-300'
+                    isCompleted ? 'bg-green-500' : isActive ? 'bg-blue-600 animate-pulse' : 'bg-gray-300'
                   }`}
                 >
                   {isCompleted ? (

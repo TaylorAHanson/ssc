@@ -2,7 +2,7 @@ import { AlertCircle, BookOpen, CheckCircle2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { useRequestStore } from '../stores/requestStore';
-import { mockApi } from '../services/mockApi';
+import { useState } from 'react';
 
 interface TrainingBlockerProps {
   requestId: string;
@@ -15,18 +15,25 @@ export function TrainingBlocker({
   requiresTraining,
   trainingCompleted,
 }: TrainingBlockerProps) {
-  const updateRequest = useRequestStore((state) => state.updateRequest);
+  const completeTraining = useRequestStore((state) => state.completeTraining);
+  const fetchRequests = useRequestStore((state) => state.fetchRequests);
+  const [isLoading, setIsLoading] = useState(false);
 
   if (!requiresTraining) {
     return null;
   }
 
   const handleCompleteTraining = async () => {
-    const updated = await mockApi.completeTraining(requestId);
-    await updateRequest(requestId, {
-      trainingCompleted: true,
-      stateMachine: updated.stateMachine,
-    });
+    setIsLoading(true);
+    try {
+      await completeTraining(requestId);
+      // Force an extra refresh to ensure UI is in sync
+      await fetchRequests();
+    } catch (error) {
+      console.error('Failed to complete training:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   if (trainingCompleted) {
@@ -71,9 +78,10 @@ export function TrainingBlocker({
         <div className="pt-2 border-t border-yellow-200">
           <Button
             onClick={handleCompleteTraining}
+            disabled={isLoading}
             className="bg-yellow-600 hover:bg-yellow-700 text-white"
           >
-            Mark Training as Complete
+            {isLoading ? 'Updating...' : 'Mark Training as Complete'}
           </Button>
           <p className="text-xs text-yellow-600 mt-2">
             Note: In production, this would redirect to the training portal.

@@ -382,11 +382,31 @@ export async function getApprovals(status?: string): Promise<Approval[]> {
   return response.json();
 }
 
+export async function deleteRequest(requestId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/requests/${requestId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to delete request: ${response.statusText}`);
+  }
+}
+
+export async function completeTraining(requestId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/requests/${requestId}/complete-training`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to complete training: ${response.statusText}`);
+  }
+}
+
 export const api = {
   createRequest,
   getRequests,
   getRequest,
   approveRequest,
   rejectRequest,
-  getApprovals
+  deleteRequest,
+  getApprovals,
+  completeTraining
 };

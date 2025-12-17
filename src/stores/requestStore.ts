@@ -14,6 +14,7 @@ interface RequestStore {
   bannerMessage: string | null;
   bannerData: BannerData | null;
   addRequest: (type: RequestType, title: string, environment?: Environment, metadata?: Record<string, any>) => Promise<void>;
+  deleteRequest: (id: string) => Promise<void>;
   updateRequest: (id: string, updates: Partial<Request>) => Promise<void>;
   setBannerMessage: (message: string | null) => void;
   fetchRequests: () => Promise<void>;
@@ -21,6 +22,7 @@ interface RequestStore {
   processApproval: (action: ApprovalAction) => Promise<void>;
   getPendingApprovalsCount: () => number;
   fetchBannerMessage: () => Promise<void>;
+  completeTraining: (requestId: string) => Promise<void>;
 }
 
 export const useRequestStore = create<RequestStore>((set, get) => ({
@@ -36,6 +38,21 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
       await get().fetchRequests();
     } catch (error) {
       console.error('Failed to create request:', error);
+      throw error;
+    }
+  },
+
+  deleteRequest: async (id) => {
+    try {
+      await api.deleteRequest(id);
+      // Optimistically update UI
+      set((state) => ({
+        requests: state.requests.filter(req => req.id !== id)
+      }));
+      // Also fetch to be sure
+      await get().fetchRequests();
+    } catch (error) {
+      console.error('Failed to delete request:', error);
       throw error;
     }
   },
@@ -74,13 +91,6 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
   processApproval: async (action) => {
     try {
       if (action.action === 'approve') {
-        await api.approveRequest(action.approvalId); // Wait, approvalId is an approval ID, but api expects request ID?
-        // The API I wrote: api.approveRequest(requestId)
-        // The store currently passes approvalId.
-        // I need to map approvalId to requestId or change the API to accept approvalId.
-        // But wait, the backend endpoint is /requests/{request_id}/approve.
-        // So I need to find the request ID from the approval.
-        
         const approval = get().approvals.find(a => a.id === action.approvalId);
         if (!approval) throw new Error('Approval not found');
         
@@ -123,6 +133,22 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
       console.error('Failed to fetch banner message:', error);
       // Fallback or leave as is
       set({ bannerMessage: null, bannerData: null });
+    }
+  },
+
+  completeTraining: async (requestId: string) => {
+    try {
+      await api.completeTraining(requestId);
+      // Wait a moment for the backend poller to pick up the change and update status
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      // Refresh requests to update UI with completed status
+      await get().fetchRequests();
+      // Force update of selected request in UI if it exists
+      // This is a bit tricky with the current architecture where Requests component holds selected state locally.
+      // But fetchRequests updates the global store which the component subscribes to.
+    } catch (error) {
+      console.error('Failed to complete training:', error);
+      throw error;
     }
   },
 }));

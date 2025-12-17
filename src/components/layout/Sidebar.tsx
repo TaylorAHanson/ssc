@@ -32,6 +32,7 @@ const navItems: NavItem[] = [
   // Main
   { title: 'Home', icon: <Home className="w-5 h-5" />, path: '/', group: 'Main' },
   { title: 'My Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Main' },
+  { title: 'Pending Approvals', icon: <CheckCircle2 className="w-5 h-5" />, path: '/approvals', group: 'Main' },
   
   // PaaS
   { title: 'Get Workspace Access', icon: <Database className="w-5 h-5" />, path: '/paas/workspace-access', group: 'PaaS' },
@@ -54,7 +55,6 @@ const navItems: NavItem[] = [
   
   // Admin
   { title: 'Admin', icon: <Settings className="w-5 h-5" />, path: '/admin', group: 'Admin' },
-  { title: 'Pending Approvals', icon: <CheckCircle2 className="w-5 h-5" />, path: '/admin/approvals', group: 'Admin' },
 ];
 
 export function Sidebar() {

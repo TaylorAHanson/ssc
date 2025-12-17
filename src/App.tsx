@@ -33,8 +33,8 @@ function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/requests" element={<Requests />} />
+          <Route path="/approvals" element={<Approvals />} />
           <Route path="/admin" element={<Admin />} />
-          <Route path="/admin/approvals" element={<Approvals />} />
           <Route path="/community/training" element={<Training />} />
           <Route path="/community/events" element={<Events />} />
           <Route path="/community/assets" element={<ReusableAssets />} />
