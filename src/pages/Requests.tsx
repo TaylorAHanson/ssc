@@ -1,16 +1,188 @@
 import { useState, useEffect } from 'react';
 import { useRequestStore } from '../stores/requestStore';
 import { RequestStatusFlow } from '../components/RequestStatusFlow';
-import { TrainingBlocker } from '../components/TrainingBlocker';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { formatInTimeZone } from 'date-fns-tz';
-import { Eye, X, Trash2 } from 'lucide-react';
+import { Eye, X, Trash2, CheckCircle2, Circle, Loader2, AlertCircle } from 'lucide-react';
 import type { Request } from '../types';
 
-const formatDate = (dateString: string) => {
-  return formatInTimeZone(new Date(dateString), 'America/Los_Angeles', 'MMM d, yyyy h:mm a zzz');
+import { formatDistanceToNow, differenceInHours } from 'date-fns';
+
+const parseUtcDate = (dateString: string) => {
+  if (!dateString) return new Date();
+  // If string doesn't end with Z and doesn't have timezone offset, assume UTC and append Z
+  if (!dateString.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(dateString)) {
+    return new Date(dateString + 'Z');
+  }
+  return new Date(dateString);
 };
+
+const formatDate = (dateString: string) => {
+  if (!dateString) return '';
+  return formatInTimeZone(parseUtcDate(dateString), 'America/Los_Angeles', 'MMM d, yyyy h:mm a zzz');
+};
+
+const formatDuration = (startDate: string) => {
+  if (!startDate) return '';
+  const start = parseUtcDate(startDate);
+  const now = new Date();
+  const hours = differenceInHours(now, start);
+  
+  if (hours < 1) {
+    return formatDistanceToNow(start, { addSuffix: true });
+  }
+  return `${hours} hours ago`;
+};
+
+function TrainingAction({ requestId }: { requestId: string }) {
+  const completeTraining = useRequestStore((state) => state.completeTraining);
+  const fetchRequests = useRequestStore((state) => state.fetchRequests);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleCompleteTraining = async () => {
+    setIsLoading(true);
+    try {
+      await completeTraining(requestId);
+      await fetchRequests();
+    } catch (error) {
+      console.error('Failed to complete training:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <Button 
+      size="sm" 
+      onClick={handleCompleteTraining} 
+      disabled={isLoading}
+      className="bg-yellow-600 hover:bg-yellow-700 text-white h-8 text-xs"
+    >
+      {isLoading ? 'Updating...' : 'Mark Complete (Debug)'}
+    </Button>
+  );
+}
+
+function RequestStateList({ request }: { request: Request }) {
+  const approvals = useRequestStore((state) => state.approvals);
+  const fetchApprovals = useRequestStore((state) => state.fetchApprovals);
+
+  useEffect(() => {
+    fetchApprovals();
+  }, [fetchApprovals]);
+
+  // Collect all states to display
+  let steps: { id: string; name: string; status: string; type?: string; order: number; completedAt?: string }[] = [];
+
+  // Always add "User Request" as the first step
+  steps.push({
+    id: 'user_request',
+    name: 'User Request',
+    status: 'completed',
+    type: 'Initialization',
+    order: 0,
+    completedAt: request.createdAt
+  });
+
+  if (request.stateMachine.parallelPaths.length > 0) {
+    const pathSteps = request.stateMachine.parallelPaths.flatMap(path => 
+      path.states.map(state => {
+        let completedAt = undefined;
+        // Try to find matching approval timestamp
+        if (state.id.includes('approval') || state.status === 'completed') {
+           // Look for an approved approval for this request
+           const relevantApproval = approvals.find(a => 
+             a.requestId === request.id && 
+             a.status === 'approved' &&
+             (
+               state.id.toLowerCase().includes(a.approvalType.toLowerCase()) || 
+               state.name.toLowerCase().includes(a.approvalType.toLowerCase())
+             )
+           );
+           if (relevantApproval) {
+             completedAt = relevantApproval.updatedAt;
+           }
+        }
+
+        return {
+          id: state.id,
+          name: state.name,
+          status: state.status,
+          type: path.name,
+          order: state.order,
+          completedAt
+        };
+      })
+    );
+    steps = [...steps, ...pathSteps];
+  } else {
+    // Fallback for linear flows
+    const allStates = ['pending', ...request.stateMachine.activeStates, ...request.stateMachine.completedStates];
+    const uniqueStates = Array.from(new Set(allStates));
+    const linearSteps = uniqueStates.map((id, index) => ({
+      id,
+      name: id.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+      status: request.stateMachine.completedStates.includes(id) ? 'completed' : 
+              request.stateMachine.activeStates.includes(id) ? 'active' : 'pending',
+      order: index + 1
+    }));
+    steps = [...steps, ...linearSteps];
+  }
+
+  return (
+    <div className="mb-6 space-y-4">
+      <div className="bg-gray-50 rounded-lg border border-gray-200 divide-y divide-gray-200">
+        {steps.map((step, idx) => {
+          let isCompleted = step.status === 'completed';
+          const isActive = step.status === 'active';
+          const isTraining = step.id === 'training_pending';
+          const isUserRequest = step.id === 'user_request';
+
+          return (
+            <div key={`${step.id}-${idx}`} className="p-3 flex items-center justify-between bg-white first:rounded-t-lg last:rounded-b-lg">
+              <div className="flex items-center gap-3">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                  isCompleted ? 'bg-green-100 text-green-600' : 
+                  isActive ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-400'
+                }`}>
+                  {isCompleted ? <CheckCircle2 className="w-5 h-5" /> : 
+                   isActive ? <Loader2 className="w-5 h-5 animate-spin" /> : 
+                   <Circle className="w-5 h-5" />}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-gray-900">{step.name}</p>
+                    {step.type && <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">{step.type}</span>}
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <span className="capitalize">Status: {step.status}</span>
+                    {(isUserRequest || (isCompleted && step.completedAt)) && (
+                      <>
+                        <span>•</span>
+                        <span>{formatDate(step.completedAt || request.createdAt)} ({formatDuration(step.completedAt || request.createdAt)})</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {isTraining && isActive && !isCompleted && (
+                <div className="flex items-center gap-2">
+                   <div className="text-xs text-yellow-700 bg-yellow-50 px-2 py-1 rounded border border-yellow-200 flex items-center gap-1">
+                     <AlertCircle className="w-3 h-3" />
+                     Action Required
+                   </div>
+                   <TrainingAction requestId={request.id} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export function Requests() {
   const requests = useRequestStore((state) => state.requests);
@@ -152,18 +324,9 @@ export function Requests() {
               </div>
             </CardHeader>
             <CardContent className="flex-1 overflow-y-auto space-y-6 p-6">
-              {selectedRequest.requiresTraining && (
-                <TrainingBlocker
-                  requestId={selectedRequest.id}
-                  requiresTraining={selectedRequest.requiresTraining}
-                  trainingCompleted={selectedRequest.trainingCompleted || false}
-                />
-              )}
+              <RequestStateList request={selectedRequest} />
               
               <div>
-                <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                  Request Status Flow
-                </h3>
                 <RequestStatusFlow 
                   stateMachine={selectedRequest.stateMachine} 
                   requestStatus={selectedRequest.status}
@@ -176,4 +339,3 @@ export function Requests() {
     </div>
   );
 }
-
