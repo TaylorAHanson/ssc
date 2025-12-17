@@ -76,7 +76,7 @@ Tools and providers will fail, especially Terraform operations. Infrastructure p
         |                        ▼
         |           ┌──────────────────────────────┐
         |           │  Tools Layer                 │
-        |---------->│  - create_workspace()        │
+        └---------->│  - create_workspace()        │
                     │  - grant_access()            │
                     │  - create_service_principal()│
                     └──────────────────────────────┘
@@ -267,20 +267,17 @@ backend/
 │   │       ├── provisioning.py   # Provisioning actions
 │   │       └── training.py        # Training-related actions
 │   │
-│   ├── workers/                   # Async task workers
-│   │   ├── __init__.py
-│   │   ├── celery_app.py          # Celery application setup
-│   │   ├── tasks/                 # Task definitions
-│   │   │   ├── __init__.py
-│   │   │   ├── state_transitions.py  # State machine transition tasks
-│   │   │   ├── provisioning.py    # Long-running provisioning tasks
-│   │   │   └── notifications.py   # Notification tasks
-│   │   └── handlers/              # Task handlers
-│   │       ├── __init__.py
-│   │       ├── workspace_provision.py
-│   │       └── service_principal.py
-│   │
-│   ├── services/                  # Business logic services
+    │   ├── workers/                   # Async task workers
+    │   │   ├── __init__.py
+    │   │   ├── arq_app.py             # ARQ application setup
+    │   │   ├── tasks/                 # Task definitions
+    │   │   │   ├── __init__.py
+    │   │   │   ├── state_transitions.py  # State machine transition tasks
+    │   │   │   ├── provisioning.py    # Long-running provisioning tasks
+    │   │   │   └── notifications.py   # Notification tasks
+    │   │   └── poller.py              # Poller for async tasks (if needed)
+    │   │
+    │   ├── services/                  # Business logic services
 │   │   ├── __init__.py
 │   │   ├── request_service.py    # Request business logic
 │   │   ├── approval_service.py   # Approval workflow logic
@@ -536,18 +533,23 @@ class RequestModel(Base):
     state_context = Column(JSON)  # Stores variables (workspace_name, config, etc.)
     
     # State locking for idempotency
-    locked_by = Column(String, nullable=True)  # Worker ID (e.g., 'celery@worker-1')
+    locked_by = Column(String, nullable=True)  # Worker ID (e.g., 'arq@worker-1')
     locked_until = Column(DateTime, nullable=True)  # Lock expiration timestamp
     
     # Timestamps
     created_at = Column(DateTime)
     updated_at = Column(DateTime)
     
-    # State machine state (serialized)
+    # State machine state
     current_state = Column(String)  # Current state ID
-    parallel_paths = Column(JSON)  # Serialized ParallelPath objects
-    completed_states = Column(JSON)  # List of completed state IDs
-    active_states = Column(JSON)  # List of active state IDs
+    
+    # Visual state fields (parallel_paths, completed_states, active_states) 
+    # are derived at runtime by the State Machine class based on DB facts 
+    # (approvals, training status, etc.) and not strictly persisted 
+    # to these columns during transitions to avoid desynchronization.
+    parallel_paths = Column(JSON)
+    completed_states = Column(JSON)
+    active_states = Column(JSON)
     
     # Failure tracking
     failure_count = Column(Integer, default=0)  # Number of failures
@@ -594,7 +596,7 @@ class FailureModel(Base):
     
     id = Column(String, primary_key=True)
     request_id = Column(String, ForeignKey("requests.id"))
-    task_id = Column(String)  # Celery task ID
+    task_id = Column(String)  # ARQ task ID
     failure_type = Column(String)  # 'provider_error', 'tool_error', 'timeout', 'validation_error'
     error_message = Column(String)
     error_details = Column(JSON)  # Full error stack trace, context
@@ -671,7 +673,7 @@ def release_lock(db: Session, request_id: str):
 
 **Task Flow**:
 1. API receives request → Creates request in DB with `status='pending'`
-2. API enqueues task → `process_state_transition.delay(request_id, transition_name)`
+2. API enqueues task → `await arq.enqueue_job('process_state_transition', request_id, transition_name)`
 3. API returns `202 Accepted` with task ID
 4. Frontend polls `/api/v1/requests/{request_id}/status`
 5. Worker picks up task → Loads state from DB → Executes transition → Saves state
@@ -699,7 +701,7 @@ Retries happen at multiple levels:
    - API calls: 3 retries
    - Database queries: 5 retries (cheap to retry)
 
-3. **Worker/Task Level** - Celery task retries
+3. **Worker/Task Level** - ARQ task retries
    - Exponential backoff with jitter
    - Max retries: 3-5 depending on operation type
    - Dead letter queue for permanent failures
@@ -707,7 +709,7 @@ Retries happen at multiple levels:
 **Worker Implementation with Failure Handling**:
 ```python
 # app/workers/tasks/state_transitions.py
-from app.workers.celery_app import celery_app
+from app.workers.arq_app import WorkerSettings
 from app.state_machines.persistence import load_state_machine, save_state_machine
 from app.db.session import get_db
 from app.db.request import RequestModel, FailureModel
@@ -734,11 +736,11 @@ async def process_state_transition(ctx, request_id: str, transition_name: str):
             db.commit()
             
             # Notify user of permanent failure
-            notify_failure.delay(request_id, "max_retries_exceeded")
+            await ctx['redis'].enqueue_job('notify_failure', request_id, "max_retries_exceeded")
             return {"status": "failed", "reason": "max_retries_exceeded"}
         
         # Acquire lock
-        if not acquire_lock(db, request_id, worker_id=self.request.id):
+        if not acquire_lock(db, request_id, worker_id=ctx['job_id']):
             # Another worker is processing, skip
             return {"status": "skipped", "reason": "locked"}
         
@@ -759,7 +761,7 @@ async def process_state_transition(ctx, request_id: str, transition_name: str):
             
             # If transition triggers next async operation, enqueue it
             if state_machine.current_state == "provisioning":
-                provision_workspace.delay(request_id, request.state_context)
+                await ctx['redis'].enqueue_job('provision_workspace', request_id, request.state_context)
             
             return {"status": "completed", "state": state_machine.current_state.id}
         except RetryableError as e:
@@ -776,7 +778,7 @@ async def process_state_transition(ctx, request_id: str, transition_name: str):
             failure = FailureModel(
                 id=f"fail-{datetime.utcnow().timestamp()}",
                 request_id=request_id,
-                task_id=self.request.id,
+                task_id=ctx['job_id'],
                 failure_type="retryable_error",
                 error_message=str(e),
                 error_details=request.last_error,
@@ -787,7 +789,8 @@ async def process_state_transition(ctx, request_id: str, transition_name: str):
             db.commit()
             
             # Retry with exponential backoff
-            raise self.retry(exc=e, countdown=2 ** request.retry_count)
+            # ARQ handles retries via configuration or custom logic
+            raise
             
         except PermanentError as e:
             # Permanent error - move to failed state
@@ -803,7 +806,7 @@ async def process_state_transition(ctx, request_id: str, transition_name: str):
             failure = FailureModel(
                 id=f"fail-{datetime.utcnow().timestamp()}",
                 request_id=request_id,
-                task_id=self.request.id,
+                task_id=ctx['job_id'],
                 failure_type="permanent_error",
                 error_message=str(e),
                 error_details=request.last_error,
@@ -816,7 +819,7 @@ async def process_state_transition(ctx, request_id: str, transition_name: str):
             db.commit()
             
             # Notify user of permanent failure
-            notify_failure.delay(request_id, "permanent_error", str(e))
+            await ctx['redis'].enqueue_job('notify_failure', request_id, "permanent_error", str(e))
             
             raise  # Don't retry permanent errors
             
@@ -835,7 +838,7 @@ async def process_state_transition(ctx, request_id: str, transition_name: str):
             failure = FailureModel(
                 id=f"fail-{datetime.utcnow().timestamp()}",
                 request_id=request_id,
-                task_id=self.request.id,
+                task_id=ctx['job_id'],
                 failure_type="unexpected_error",
                 error_message=str(e),
                 error_details=request.last_error,
@@ -846,7 +849,8 @@ async def process_state_transition(ctx, request_id: str, transition_name: str):
             db.commit()
             
             # Retry with exponential backoff
-            raise self.retry(exc=e, countdown=2 ** request.retry_count)
+            # ARQ handles retries via configuration or custom logic
+            raise
             
         finally:
             # Release lock
@@ -854,111 +858,27 @@ async def process_state_transition(ctx, request_id: str, transition_name: str):
             
     except Exception as e:
         # Final catch-all - log and notify
-        notify_failure.delay(request_id, "worker_error", str(e))
+        await ctx['redis'].enqueue_job('notify_failure', request_id, "worker_error", str(e))
         raise
 ```
 
 **Long-Running Task with Progress Tracking**:
 ```python
-@celery_app.task(bind=True, max_retries=3)
-def provision_workspace(self, request_id: str, config: dict):
+async def provision_workspace(ctx, request_id: str, config: dict):
     """Provision workspace with progress tracking and failure handling."""
     db = next(get_db())
     request = db.query(RequestModel).filter(RequestModel.id == request_id).first()
     
     try:
         # Update progress
-        request.state_context["progress"] = {"step": "terraform_init", "percent": 10}
-        db.commit()
-        
-        # Step 1: Terraform init (can fail)
-        try:
-            terraform_result = terraform_provider.apply(config["terraform_config"])
-            request.state_context["progress"] = {"step": "terraform_apply", "percent": 50}
-            request.state_context["terraform_output"] = terraform_result
-            db.commit()
-        except Exception as e:
-            # Terraform failed - attempt rollback
-            try:
-                terraform_provider.destroy(config["terraform_config"])
-            except:
-                pass  # Rollback failed, log it
-            
-            raise RetryableError(f"Terraform apply failed: {str(e)}")
-        
-        # Step 2: Databricks workspace setup (can fail)
-        try:
-            workspace_result = databricks_provider.create_workspace(
-                workspace_id=terraform_result["workspace_id"],
-                config=config["databricks_config"]
-            )
-            request.state_context["progress"] = {"step": "databricks_setup", "percent": 80}
-            request.state_context["workspace_url"] = workspace_result["url"]
-            db.commit()
-        except Exception as e:
-            # Databricks failed - rollback Terraform
-            try:
-                terraform_provider.destroy(config["terraform_config"])
-            except:
-                pass
-            
-            raise RetryableError(f"Databricks setup failed: {str(e)}")
-        
-        # Step 3: Grant access (can fail, but less critical)
-        try:
-            idp_provider.grant_permission(
-                principal_id=request.requested_by,
-                resource=f"workspace:{workspace_result['id']}",
-                permissions=config.get("permissions", ["user"])
-            )
-            request.state_context["progress"] = {"step": "complete", "percent": 100}
-            db.commit()
-        except Exception as e:
-            # Access grant failed - workspace exists but access not granted
-            # Log warning but don't fail the whole operation
-            log_warning(f"Access grant failed for {request_id}: {str(e)}")
-            # Enqueue separate task to retry access grant
-            retry_access_grant.delay(request_id, workspace_result['id'])
-        
-        # Success - trigger completion
-        process_state_transition.delay(request_id, "complete")
-        
-    except RetryableError as e:
-        # Retry the whole provisioning
-        raise self.retry(exc=e, countdown=300)  # 5 minute delay
-        
-    except Exception as e:
-        # Unexpected error
-        raise self.retry(exc=e, countdown=300)
+        # ... implementation ...
 ```
 
 **Failure Notification Task**:
 ```python
-@celery_app.task
-def notify_failure(request_id: str, failure_type: str, error_message: str = None):
+async def notify_failure(ctx, request_id: str, failure_type: str, error_message: str = None):
     """Notify user and admins of failure."""
-    db = next(get_db())
-    request = db.query(RequestModel).filter(RequestModel.id == request_id).first()
-    
-    # Notify requester
-    notification_provider.send_email(
-        to=request.requested_by_email,
-        subject=f"Request {request.title} Failed",
-        body=f"""
-        Your request has encountered an error: {failure_type}
-        
-        Error: {error_message or 'Unknown error'}
-        
-        The system will automatically retry. If this persists, please contact support.
-        """
-    )
-    
-    # Notify admins for permanent failures
-    if failure_type in ["permanent_error", "max_retries_exceeded"]:
-        notification_provider.send_slack(
-            channel="#edas-hub-alerts",
-            message=f"🚨 Permanent failure: Request {request_id} - {failure_type}"
-        )
+    # ... implementation ...
 ```
 
 ### State Machine Layer (`app/state_machines/`)
@@ -966,11 +886,18 @@ def notify_failure(request_id: str, failure_type: str, error_message: str = None
 **Purpose**: Orchestrate complex workflows and execute business logic step-by-step.
 
 **Key Features**:
-- **Persistent State**: State is loaded from and saved to database
-- **State Locking**: Prevents concurrent transitions
-- **Wait-for-Event**: Pauses workflow for human approvals
-- **Error States**: Handles failures with retryable and permanent error states
-- **Rollback Support**: Can rollback operations on failure
+- **Dynamic State Calculation**: Visual state (parallel paths, active nodes) is calculated on-the-fly based on database facts (approvals, training status) rather than being hardcoded or manually updated in the DB.
+- **Persistent Core State**: Only the core `current_state` and mapped `status` are persisted to the database.
+- **State Locking**: Prevents concurrent transitions.
+- **Wait-for-Event**: Pauses workflow for human approvals.
+- **Factory Pattern**: A factory selects the appropriate State Machine implementation based on the `RequestType`.
+
+**Implementations**:
+- `WorkspaceProvisionStateMachine`: For workspace creation (Manager Approval -> Training -> Provisioning)
+- `DataAccessStateMachine`: For data access (Data Owner Approval -> Provisioning)
+- `ServicePrincipalStateMachine`: For SP creation (Platform Admin Approval -> Provisioning)
+- `WorkspaceAccessStateMachine`: For access to existing workspaces
+- `GithubRepoCreationStateMachine`: For GitHub repo creation
 
 **Responsibilities**:
 - Manage request lifecycle states
@@ -1011,7 +938,7 @@ When state machine enters a state that requires human action (approval, training
 2. Triggers notification action (async)
 3. **Pauses** - Does not automatically transition
 4. Waits for API callback: `POST /api/v1/requests/{request_id}/approve` or `/complete-training`
-5. Callback handler enqueues transition task: `process_state_transition.delay(request_id, 'approve')`
+5. Callback handler enqueues transition task: `await arq.enqueue_job('process_state_transition', request_id, 'approve')`
 6. Worker processes transition → State machine continues
 
 **Orchestrators**:
@@ -1022,14 +949,14 @@ Orchestrators coordinate multiple actions and tools:
 
 **Flow Example (Workspace Provisioning with Async Processing & Failure Handling)**:
 1. Request created → State saved to DB with `status='pending'`
-2. API enqueues task: `process_state_transition.delay(request_id, 'submit_for_approval')`
+2. API enqueues task: `await arq.enqueue_job('process_state_transition', request_id, 'submit_for_approval')`
 3. Worker loads state from DB → Transitions to `manager_approval`
-4. Worker triggers `notify_approvers()` action → Enqueues `send_notification` task
+4. Worker triggers `notify_approvers()` action → Enqueues `send_notification` task via ARQ
 5. Worker saves state to DB with `status='manager_approval'` → **Pauses**
 6. Manager approves via Admin Dashboard → API callback: `POST /api/v1/requests/{request_id}/approve`
-7. Callback enqueues: `process_state_transition.delay(request_id, 'approve')`
+7. Callback enqueues: `await arq.enqueue_job('process_state_transition', request_id, 'approve')`
 8. Worker loads state → Transitions to `provisioning`
-9. Worker enqueues: `provision_workspace.delay(request_id, config)` (long-running)
+9. Worker enqueues: `await ctx['redis'].enqueue_job('provision_workspace', request_id, config)` (long-running)
 10. Provisioning worker:
     - **Step 1: Terraform Init** (can fail)
       - Updates progress: `state_context.progress = {step: 'terraform_init', percent: 10}`
@@ -1044,7 +971,7 @@ Orchestrators coordinate multiple actions and tools:
     - **Step 4: Grant Access** (can fail, non-critical)
       - Updates progress: `state_context.progress = {step: 'access_grant', percent: 90}`
       - If fails → Logs warning → Enqueues separate retry task (doesn't fail whole operation)
-    - On completion: Enqueues `process_state_transition.delay(request_id, 'complete')`
+    - On completion: Enqueues `await ctx['redis'].enqueue_job('process_state_transition', request_id, 'complete')`
     - On permanent failure: Moves to `failed` state → Notifies user and admins
 11. Worker transitions to `completed` → Saves state → Notifies user
 12. **If any step fails permanently**:
@@ -1131,7 +1058,7 @@ Agent routes to: /paas/request-access (with prefill data)
 1. API: POST /api/v1/requests/ (create request)
    ↓
    - Save to DB: status='pending', state_context={...}
-   - Enqueue: process_state_transition.delay(request_id, 'submit_for_approval')
+   - Enqueue: `await ctx['redis'].enqueue_job('process_state_transition', request_id, 'submit_for_approval')`
    - Return: 202 Accepted, {request_id, status: 'pending'}
    ↓
 2. Frontend: Polls GET /api/v1/requests/{request_id}/status
@@ -1142,7 +1069,7 @@ Agent routes to: /paas/request-access (with prefill data)
    - Acquire lock: UPDATE requests SET locked_by='worker-1' WHERE id=...
    - Execute: state_machine.submit_for_approval()
    - Save state: status='manager_approval'
-   - Enqueue: send_notification.delay(request_id, 'approval_required')
+   - Enqueue: `await ctx['redis'].enqueue_job('send_notification', request_id, 'approval_required')`
    - Release lock
    ↓
 4. Worker: send_notification task
@@ -1155,14 +1082,14 @@ Agent routes to: /paas/request-access (with prefill data)
 6. Manager: Approves via Admin Dashboard
    ↓
    - API: POST /api/v1/requests/{request_id}/approve
-   - Enqueue: process_state_transition.delay(request_id, 'approve')
+   - Enqueue: `await ctx['redis'].enqueue_job('process_state_transition', request_id, 'approve')`
    ↓
 7. Worker: process_state_transition task
    ↓
    - Load state from DB
    - Execute: state_machine.approve()
    - Save state: status='provisioning'
-   - Enqueue: provision_workspace.delay(request_id, config)
+   - Enqueue: `await ctx['redis'].enqueue_job('provision_workspace', request_id, config)`
    ↓
 8. Worker: provision_workspace task (LONG-RUNNING: 10-20 minutes)
    ↓
@@ -1174,14 +1101,14 @@ Agent routes to: /paas/request-access (with prefill data)
      └─ Provider: idp_provider.grant_permission(user, workspace, permissions)
            └─ Calls: IDP API
    - Periodically update: UPDATE requests SET state_context=... WHERE id=...
-   - On completion: Enqueue process_state_transition.delay(request_id, 'complete')
+   - On completion: Enqueue `await ctx['redis'].enqueue_job('process_state_transition', request_id, 'complete')`
    ↓
 9. Worker: process_state_transition task
    ↓
    - Load state from DB
    - Execute: state_machine.complete()
    - Save state: status='completed'
-   - Enqueue: send_notification.delay(request_id, 'completed')
+   - Enqueue: `await ctx['redis'].enqueue_job('send_notification', request_id, 'completed')`
    ↓
 10. Frontend: Polls status → Sees status='completed'
 ```
@@ -1555,7 +1482,7 @@ Errors are classified into three categories:
 **Retry Levels**:
 1. **Provider Level** - Immediate retries for network/connection errors
 2. **Tool Level** - Retries for tool-specific failures
-3. **Worker Level** - Celery task retries with exponential backoff
+3. **Worker Level** - ARQ task retries with exponential backoff
 
 ### Failure States
 
