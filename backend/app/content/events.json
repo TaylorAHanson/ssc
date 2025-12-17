@@ -9,7 +9,8 @@
     "location": "Building Q, Room 201",
     "type": "Workshop",
     "attendees": 12,
-    "maxAttendees": 20
+    "maxAttendees": 20,
+    "teamsLink": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_0000000049%40thread.v2/0?context=%7b%22Tid%22%3a%22fake-tenant-id%22%2c%22Oid%22%3a%22fake-object-id%22%7d"
   },
   {
     "id": "2",
@@ -21,7 +22,8 @@
     "location": "Virtual (Teams)",
     "type": "Webinar",
     "attendees": 45,
-    "maxAttendees": 100
+    "maxAttendees": 100,
+    "teamsLink": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_0000000050%40thread.v2/0?context=%7b%22Tid%22%3a%22fake-tenant-id%22%2c%22Oid%22%3a%22fake-object-id%22%7d"
   },
   {
     "id": "3",
@@ -32,7 +34,8 @@
     "duration": "1 hour",
     "location": "Virtual (Teams)",
     "type": "Office Hours",
-    "attendees": 8
+    "attendees": 8,
+    "teamsLink": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_0000000051%40thread.v2/0?context=%7b%22Tid%22%3a%22fake-tenant-id%22%2c%22Oid%22%3a%22fake-object-id%22%7d"
   },
   {
     "id": "4",
@@ -44,7 +47,8 @@
     "location": "Building Q, Conference Room A",
     "type": "Community Meetup",
     "attendees": 25,
-    "maxAttendees": 40
+    "maxAttendees": 40,
+    "teamsLink": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_0000000052%40thread.v2/0?context=%7b%22Tid%22%3a%22fake-tenant-id%22%2c%22Oid%22%3a%22fake-object-id%22%7d"
   },
   {
     "id": "5",
@@ -56,7 +60,8 @@
     "location": "Building Q, Room 301",
     "type": "Workshop",
     "attendees": 0,
-    "maxAttendees": 15
+    "maxAttendees": 15,
+    "teamsLink": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_0000000053%40thread.v2/0?context=%7b%22Tid%22%3a%22fake-tenant-id%22%2c%22Oid%22%3a%22fake-object-id%22%7d"
   },
   {
     "id": "6",
@@ -68,7 +73,8 @@
     "location": "Virtual (Teams)",
     "type": "Workshop",
     "attendees": 18,
-    "maxAttendees": 30
+    "maxAttendees": 30,
+    "teamsLink": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_0000000054%40thread.v2/0?context=%7b%22Tid%22%3a%22fake-tenant-id%22%2c%22Oid%22%3a%22fake-object-id%22%7d"
   },
   {
     "id": "7",
@@ -80,7 +86,8 @@
     "location": "Virtual (Teams)",
     "type": "Workshop",
     "attendees": 15,
-    "maxAttendees": 25
+    "maxAttendees": 25,
+    "teamsLink": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_0000000055%40thread.v2/0?context=%7b%22Tid%22%3a%22fake-tenant-id%22%2c%22Oid%22%3a%22fake-object-id%22%7d"
   },
   {
     "id": "8",
@@ -92,7 +99,8 @@
     "location": "Building Q, Room 202",
     "type": "Webinar",
     "attendees": 32,
-    "maxAttendees": 50
+    "maxAttendees": 50,
+    "teamsLink": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_0000000056%40thread.v2/0?context=%7b%22Tid%22%3a%22fake-tenant-id%22%2c%22Oid%22%3a%22fake-object-id%22%7d"
   },
   {
     "id": "9",
@@ -103,7 +111,8 @@
     "duration": "1 hour",
     "location": "Virtual (Teams)",
     "type": "Office Hours",
-    "attendees": 12
+    "attendees": 12,
+    "teamsLink": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_0000000057%40thread.v2/0?context=%7b%22Tid%22%3a%22fake-tenant-id%22%2c%22Oid%22%3a%22fake-object-id%22%7d"
   },
   {
     "id": "10",
@@ -115,7 +124,7 @@
     "location": "Building Q, Conference Room B",
     "type": "Community Meetup",
     "attendees": 18,
-    "maxAttendees": 30
+    "maxAttendees": 30,
+    "teamsLink": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_0000001567%40thread.v2/0?context=%7b%22Tid%22%3a%22fake-tenant-id%22%2c%22Oid%22%3a%22fake-object-id%22%7d"
   }
 ]
-

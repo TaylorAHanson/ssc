@@ -1,8 +1,9 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { Calendar, Clock, MapPin, Users, Mail, ChevronLeft, ChevronRight } from 'lucide-react';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, addMonths, subMonths } from 'date-fns';
+import { Calendar, Clock, MapPin, Users, Mail, ChevronLeft, ChevronRight, Link2, CalendarPlus } from 'lucide-react';
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, addMonths, subMonths, addMinutes } from 'date-fns';
+import { getContent } from '../services/api';
 
 interface Event {
   id: string;
@@ -15,14 +16,23 @@ interface Event {
   type: 'Workshop' | 'Webinar' | 'Office Hours' | 'Community Meetup';
   attendees: number;
   maxAttendees?: number;
+  teamsLink?: string;
 }
 
-// Helper function to create dates relative to today
+// Helper function to create dates relative to today (for mock events fallback)
 const getDate = (daysFromToday: number, hours: number = 9, minutes: number = 0) => {
   const date = new Date();
   date.setDate(date.getDate() + daysFromToday);
   date.setHours(hours, minutes, 0, 0);
   return date;
+};
+
+// Helper function to convert API event data to Event interface
+const convertApiEventToEvent = (apiEvent: any): Event => {
+  return {
+    ...apiEvent,
+    date: new Date(apiEvent.date),
+  };
 };
 
 const mockEvents: Event[] = [
@@ -153,24 +163,180 @@ const eventTypeColors = {
   'Community Meetup': 'bg-purple-100 text-purple-800',
 };
 
+// Parse duration string (e.g., "4 hours", "1.5 hours", "30 minutes") to minutes
+const parseDuration = (duration: string): number => {
+  const hoursMatch = duration.match(/([\d.]+)\s*hours?/i);
+  const minutesMatch = duration.match(/([\d.]+)\s*minutes?/i);
+  
+  let totalMinutes = 0;
+  if (hoursMatch) {
+    totalMinutes += parseFloat(hoursMatch[1]) * 60;
+  }
+  if (minutesMatch) {
+    totalMinutes += parseFloat(minutesMatch[1]);
+  }
+  
+  return totalMinutes || 60; // Default to 60 minutes if parsing fails
+};
+
+// Generate .ics file content for a single event
+const generateICS = (event: Event): string => {
+  const startDate = event.date;
+  const durationMinutes = parseDuration(event.duration);
+  const endDate = addMinutes(startDate, durationMinutes);
+  
+  const teamsLink = event.teamsLink || '';
+  
+  // Format dates in ICS format (YYYYMMDDTHHMMSSZ)
+  const formatICSDate = (date: Date): string => {
+    return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  };
+  
+  // Escape text for ICS format
+  const escapeICS = (text: string): string => {
+    return text.replace(/\\/g, '\\\\')
+               .replace(/;/g, '\\;')
+               .replace(/,/g, '\\,')
+               .replace(/\n/g, '\\n');
+  };
+  
+  const icsContent = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Databricks Self-Service//Events//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:REQUEST',
+    'BEGIN:VEVENT',
+    `UID:${event.id}@databricks-selfservice`,
+    `DTSTAMP:${formatICSDate(new Date())}`,
+    `DTSTART:${formatICSDate(startDate)}`,
+    `DTEND:${formatICSDate(endDate)}`,
+    `SUMMARY:${escapeICS(event.title)}`,
+    `DESCRIPTION:${escapeICS(event.description)}\\n\\nMicrosoft Teams Meeting:\\n${teamsLink}`,
+    `LOCATION:${escapeICS(event.location)}`,
+    `URL:${teamsLink}`,
+    'STATUS:CONFIRMED',
+    'SEQUENCE:0',
+    'BEGIN:VALARM',
+    'TRIGGER:-PT15M',
+    'ACTION:DISPLAY',
+    `DESCRIPTION:Reminder: ${escapeICS(event.title)}`,
+    'END:VALARM',
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ].join('\r\n');
+  
+  return icsContent;
+};
+
+// Generate .ics file content for all events (calendar subscription)
+const generateCalendarICS = (events: Event[]): string => {
+  const eventsICS = events
+    .filter(event => event.date >= new Date())
+    .map(event => {
+      const startDate = event.date;
+      const durationMinutes = parseDuration(event.duration);
+      const endDate = addMinutes(startDate, durationMinutes);
+      
+      const teamsLink = event.teamsLink || '';
+      
+      const formatICSDate = (date: Date): string => {
+        return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      };
+      
+      const escapeICS = (text: string): string => {
+        return text.replace(/\\/g, '\\\\')
+                   .replace(/;/g, '\\;')
+                   .replace(/,/g, '\\,')
+                   .replace(/\n/g, '\\n');
+      };
+      
+      return [
+        'BEGIN:VEVENT',
+        `UID:${event.id}@databricks-selfservice`,
+        `DTSTAMP:${formatICSDate(new Date())}`,
+        `DTSTART:${formatICSDate(startDate)}`,
+        `DTEND:${formatICSDate(endDate)}`,
+        `SUMMARY:${escapeICS(event.title)}`,
+        `DESCRIPTION:${escapeICS(event.description)}\\n\\nMicrosoft Teams Meeting:\\n${teamsLink}`,
+        `LOCATION:${escapeICS(event.location)}`,
+        `URL:${teamsLink}`,
+        'STATUS:CONFIRMED',
+        'SEQUENCE:0',
+        'END:VEVENT'
+      ].join('\r\n');
+    });
+  
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Databricks Self-Service//Events//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'X-WR-CALNAME:Databricks Events',
+    'X-WR-CALDESC:Upcoming Databricks training sessions and community events',
+    ...eventsICS,
+    'END:VCALENDAR'
+  ].join('\r\n');
+};
+
+// Download .ics file
+const downloadICS = (icsContent: string, filename: string) => {
+  const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(link.href);
+};
+
 export function Events() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [highlightedEventId, setHighlightedEventId] = useState<string | null>(null);
   const [selectedFilter, setSelectedFilter] = useState<Event['type'] | 'All'>('All');
+  const [events, setEvents] = useState<Event[]>([]);
+  const [loading, setLoading] = useState(true);
   const eventRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+
+  useEffect(() => {
+    const loadEvents = async () => {
+      try {
+        setLoading(true);
+        const apiEvents = await getContent('events.json') as any[];
+        const convertedEvents = apiEvents.map(convertApiEventToEvent);
+        setEvents(convertedEvents);
+      } catch (error) {
+        console.error('Failed to load events:', error);
+        // Fallback to mock events if API fails
+        setEvents(mockEvents);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadEvents();
+  }, []);
 
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(currentDate);
   const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd });
 
   const getEventsForDate = (date: Date) => {
-    return mockEvents.filter((event) => isSameDay(event.date, date));
+    return events.filter((event) => isSameDay(event.date, date));
   };
 
-  const handleInviteMe = () => {
-    // Mock: In real app, this would send an invitation
-    alert('Invitation sent! You will receive a calendar invite shortly.');
+  const handleInviteMe = (event: Event) => {
+    const icsContent = generateICS(event);
+    const filename = `${event.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.ics`;
+    downloadICS(icsContent, filename);
+  };
+
+  const handleSubscribeToCalendar = () => {
+    const icsContent = generateCalendarICS(events);
+    downloadICS(icsContent, 'databricks-events.ics');
   };
 
   const handleDateClick = (date: Date) => {
@@ -197,7 +363,7 @@ export function Events() {
   const nextMonth = () => setCurrentDate(addMonths(currentDate, 1));
   const prevMonth = () => setCurrentDate(subMonths(currentDate, 1));
 
-  const upcomingEvents = mockEvents
+  const upcomingEvents = events
     .filter((event) => event.date >= new Date())
     .filter((event) => selectedFilter === 'All' || event.type === selectedFilter)
     .sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -205,8 +371,19 @@ export function Events() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Upcoming Events</h1>
-        <p className="text-gray-600 mb-4">Browse and register for upcoming Databricks training sessions and community events</p>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Upcoming Events</h1>
+            <p className="text-gray-600">Browse and register for upcoming Databricks training sessions and community events</p>
+          </div>
+          <Button
+            onClick={handleSubscribeToCalendar}
+            className="flex items-center gap-2 bg-primary text-white hover:bg-primary/90 font-semibold px-6 py-2"
+          >
+            <CalendarPlus className="w-5 h-5" />
+            Subscribe to Calendar
+          </Button>
+        </div>
         
         {/* Filter Chips */}
         <div className="flex flex-wrap gap-2">
@@ -312,13 +489,19 @@ export function Events() {
 
         {/* Events List */}
         <div className="lg:col-span-2 space-y-4 overflow-y-auto max-h-[calc(100vh-250px)] pr-2">
-          <h2 className="text-xl font-semibold text-gray-900 sticky top-0 bg-white pb-2 z-10">
+          <h2 className="text-xl font-semibold text-gray-900 sticky top-0 pb-2 z-10">
             {selectedFilter === 'All' ? 'All Upcoming Events' : `${selectedFilter} Events`}
             {upcomingEvents.length > 0 && (
               <span className="text-sm font-normal text-gray-500 ml-2">({upcomingEvents.length})</span>
             )}
           </h2>
-          {upcomingEvents.length === 0 ? (
+          {loading ? (
+            <Card>
+              <CardContent className="py-12 text-center">
+                <p className="text-gray-600">Loading events...</p>
+              </CardContent>
+            </Card>
+          ) : upcomingEvents.length === 0 ? (
             <Card>
               <CardContent className="py-12 text-center">
                 <p className="text-gray-600">No {selectedFilter === 'All' ? '' : selectedFilter.toLowerCase()} events found.</p>
@@ -374,12 +557,25 @@ export function Events() {
                     </span>
                   </div>
                 </div>
+                {event.teamsLink && (
+                  <div className="mb-4">
+                    <a
+                      href={event.teamsLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 underline"
+                    >
+                      <Link2 className="w-4 h-4" />
+                      Join Microsoft Teams Meeting
+                    </a>
+                  </div>
+                )}
                 <Button
-                  onClick={handleInviteMe}
+                  onClick={() => handleInviteMe(event)}
                   className="w-full"
                 >
                   <Mail className="w-4 h-4 mr-2" />
-                  Invite Me
+                  Add to Calendar
                 </Button>
               </CardContent>
             </Card>

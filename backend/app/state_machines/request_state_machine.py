@@ -330,29 +330,176 @@ class ServicePrincipalStateMachine(BaseRequestStateMachine):
         # These are purely state-based for now as we don't have separate fact tables for them yet
         if state_id == "provisioning":
             if self.current_state.id in ["provisioning", "completed"]:
-                # If we are in provisioning, assume active until completed?
-                # Or if we have sub-states?
-                # For now: if completed -> COMPLETED, else if in provisioning -> ACTIVE
                 if self.current_state.id == "completed":
                     return PathStateStatus.COMPLETED
                 return PathStateStatus.ACTIVE
-            # If admin approval is done, this should probably be active
             if self._calculate_node_status("approval", "platform_admin_approval") == PathStateStatus.COMPLETED:
                 return PathStateStatus.ACTIVE
 
         if state_id == "permissions_setup":
-            # Dependent on previous step
             if self.current_state.id == "completed":
                 return PathStateStatus.COMPLETED
-            # If provisioning is done (mocked here by assuming if we are in provisioning state, first step is done?)
-            # Simplified: just follow main state
             if self.current_state.id == "provisioning":
-                return PathStateStatus.PENDING # Wait for step 1
+                return PathStateStatus.PENDING 
                 
         return PathStateStatus.PENDING
 
     def on_enter_platform_admin_approval(self):
         self.create_approval_task("platform_admin")
+
+
+class WorkspaceAccessStateMachine(BaseRequestStateMachine):
+    
+    pending = State("pending", initial=True)
+    manager_approval = State("manager_approval")
+    provisioning = State("provisioning")
+    completed = State("completed")
+    rejected = State("rejected")
+
+    submit = pending.to(manager_approval)
+    approve_manager = manager_approval.to(provisioning)
+    finish_provisioning = provisioning.to(completed)
+    reject = pending.to(rejected) | manager_approval.to(rejected)
+
+    def get_mapped_status(self) -> RequestStatus:
+        mapping = {
+            "pending": RequestStatus.PENDING,
+            "manager_approval": RequestStatus.MANAGER_APPROVAL,
+            "provisioning": RequestStatus.PROVISIONING,
+            "completed": RequestStatus.COMPLETED,
+            "rejected": RequestStatus.REJECTED
+        }
+        return mapping.get(self.current_state.id, RequestStatus.PENDING)
+
+    def _get_path_definitions(self) -> List[ParallelPath]:
+        return [
+            ParallelPath(
+                id="approval", name="Approval Path", required=True,
+                states=[
+                    PathState(id="manager_approval", name="Manager Approval", status=PathStateStatus.PENDING, order=1),
+                ]
+            )
+        ]
+
+    def _calculate_node_status(self, path_id: str, state_id: str) -> PathStateStatus:
+        if state_id == "manager_approval":
+            approval = self.db.query(ApprovalModel).filter(
+                ApprovalModel.request_id == self.request.id,
+                ApprovalModel.approval_type == "manager"
+            ).order_by(ApprovalModel.updated_at.desc()).first()
+            
+            if approval and approval.status == "approved":
+                return PathStateStatus.COMPLETED
+            if self.current_state.id != "pending":
+                return PathStateStatus.ACTIVE
+                
+        return PathStateStatus.PENDING
+
+    def on_enter_manager_approval(self):
+        self.create_approval_task("manager")
+
+
+class SimplePlatformAdminStateMachine(BaseRequestStateMachine):
+    """Generic state machine for requests requiring only Platform Admin approval."""
+    
+    pending = State("pending", initial=True)
+    platform_admin_approval = State("platform_admin_approval")
+    provisioning = State("provisioning")
+    completed = State("completed")
+    rejected = State("rejected")
+
+    submit = pending.to(platform_admin_approval)
+    approve_admin = platform_admin_approval.to(provisioning)
+    finish_provisioning = provisioning.to(completed)
+    reject = pending.to(rejected) | platform_admin_approval.to(rejected)
+
+    def get_mapped_status(self) -> RequestStatus:
+        mapping = {
+            "pending": RequestStatus.PENDING,
+            "platform_admin_approval": RequestStatus.MANAGER_APPROVAL, 
+            "provisioning": RequestStatus.PROVISIONING,
+            "completed": RequestStatus.COMPLETED,
+            "rejected": RequestStatus.REJECTED
+        }
+        return mapping.get(self.current_state.id, RequestStatus.PENDING)
+
+    def _get_path_definitions(self) -> List[ParallelPath]:
+        return [
+            ParallelPath(
+                id="approval", name="Approval Path", required=True,
+                states=[
+                    PathState(id="platform_admin_approval", name="Platform Admin Approval", status=PathStateStatus.PENDING, order=1),
+                ]
+            )
+        ]
+
+    def _calculate_node_status(self, path_id: str, state_id: str) -> PathStateStatus:
+        if state_id == "platform_admin_approval":
+            approval = self.db.query(ApprovalModel).filter(
+                ApprovalModel.request_id == self.request.id,
+                ApprovalModel.approval_type == "platform_admin"
+            ).order_by(ApprovalModel.updated_at.desc()).first()
+            
+            if approval and approval.status == "approved":
+                return PathStateStatus.COMPLETED
+            if self.current_state.id != "pending":
+                return PathStateStatus.ACTIVE
+                
+        return PathStateStatus.PENDING
+
+    def on_enter_platform_admin_approval(self):
+        self.create_approval_task("platform_admin")
+
+
+class GithubRepoCreationStateMachine(BaseRequestStateMachine):
+    
+    pending = State("pending", initial=True)
+    manager_approval = State("manager_approval")
+    provisioning = State("provisioning")
+    completed = State("completed")
+    rejected = State("rejected")
+
+    submit = pending.to(manager_approval)
+    approve_manager = manager_approval.to(provisioning)
+    finish_provisioning = provisioning.to(completed)
+    reject = pending.to(rejected) | manager_approval.to(rejected)
+
+    def get_mapped_status(self) -> RequestStatus:
+        mapping = {
+            "pending": RequestStatus.PENDING,
+            "manager_approval": RequestStatus.MANAGER_APPROVAL,
+            "provisioning": RequestStatus.PROVISIONING,
+            "completed": RequestStatus.COMPLETED,
+            "rejected": RequestStatus.REJECTED
+        }
+        return mapping.get(self.current_state.id, RequestStatus.PENDING)
+
+    def _get_path_definitions(self) -> List[ParallelPath]:
+        return [
+            ParallelPath(
+                id="approval", name="Approval Path", required=True,
+                states=[
+                    PathState(id="manager_approval", name="Manager Approval", status=PathStateStatus.PENDING, order=1),
+                ]
+            )
+        ]
+
+    def _calculate_node_status(self, path_id: str, state_id: str) -> PathStateStatus:
+        if state_id == "manager_approval":
+            approval = self.db.query(ApprovalModel).filter(
+                ApprovalModel.request_id == self.request.id,
+                ApprovalModel.approval_type == "manager"
+            ).order_by(ApprovalModel.updated_at.desc()).first()
+            
+            if approval and approval.status == "approved":
+                return PathStateStatus.COMPLETED
+            if self.current_state.id != "pending":
+                return PathStateStatus.ACTIVE
+                
+        return PathStateStatus.PENDING
+
+    def on_enter_manager_approval(self):
+        self.create_approval_task("manager")
 
 
 # Factory to get correct machine
@@ -373,6 +520,16 @@ def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMac
         
     elif r_type == RequestType.SERVICE_PRINCIPAL:
         return ServicePrincipalStateMachine(request, db)
+
+    elif r_type == RequestType.WORKSPACE_ACCESS:
+        return WorkspaceAccessStateMachine(request, db)
+
+    elif r_type == RequestType.GITHUB_REPO_CREATION:
+        return GithubRepoCreationStateMachine(request, db)
+
+    elif r_type in [RequestType.CATALOG_SCHEMA_TABLE, RequestType.MARKETPLACE_CERTIFICATION, RequestType.REST_API_ACCESS]:
+        # Use SimplePlatformAdminStateMachine for these for now
+        return SimplePlatformAdminStateMachine(request, db)
     
     # Fallback / Default for others (implement specific ones as needed)
     return WorkspaceProvisionStateMachine(request, db)
