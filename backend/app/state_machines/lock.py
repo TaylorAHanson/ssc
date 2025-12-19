@@ -61,3 +61,38 @@ def release_lock(db: Session, request_id: str):
         request.locked_until = None
         db.commit()
 
+
+def heartbeat_lock(db: Session, request_id: str, worker_id: str, timeout_minutes: int) -> bool:
+    """
+    Extend lock expiration time (heartbeat) for a request.
+    Only extends if the lock is still held by the same worker.
+    
+    Args:
+        db: Database session
+        request_id: Request ID to heartbeat
+        worker_id: Worker ID that should hold the lock
+        timeout_minutes: New timeout in minutes from now
+        
+    Returns:
+        True if heartbeat successful, False if lock not held by this worker
+    """
+    request = db.query(RequestModel).filter(RequestModel.id == request_id).first()
+    if not request:
+        return False
+    
+    # Only extend if we still hold the lock
+    if request.locked_by != worker_id:
+        return False
+    
+    # Extend the lock timeout
+    from datetime import datetime, timedelta
+    rows_updated = db.query(RequestModel).filter(
+        RequestModel.id == request_id,
+        RequestModel.locked_by == worker_id
+    ).update({
+        RequestModel.locked_until: datetime.utcnow() + timedelta(minutes=timeout_minutes)
+    })
+    
+    db.commit()
+    return rows_updated > 0
+

@@ -1,18 +1,31 @@
 """
 Application configuration settings.
+
+All secrets and sensitive configuration should be set in the .env file.
+See .env.example for required variables.
+
+The Settings class uses pydantic-settings which automatically loads from:
+1. Environment variables
+2. .env file (if present)
+3. Default values (if provided)
 """
 from pydantic_settings import BaseSettings
 from typing import List
 
 
 class Settings(BaseSettings):
-    """Application settings."""
+    """
+    Application settings.
+    
+    IMPORTANT: All secrets should be set in .env file, not hardcoded here.
+    Copy .env.example to .env and fill in your values.
+    """
     
     # API Settings
     API_V1_PREFIX: str = "/api/v1"
     PROJECT_NAME: str = "EDAS Hub API"
     
-    # CORS
+    # CORS (can be overridden in .env as comma-separated or space-separated)
     CORS_ORIGINS: List[str] = [
         "http://localhost:5173",
         "http://localhost:3000",
@@ -20,28 +33,33 @@ class Settings(BaseSettings):
     ]
     
     # Database (Lakebase - PostgreSQL)
-    DATABASE_URL: str = ""  # Lakebase connection string
-    DATABASE_HOST: str = ""
+    # SECRET: Set in .env file
+    DATABASE_URL: str = ""  # Full connection string (alternative to individual components below)
+    DATABASE_HOST: str = ""  # SECRET: Set in .env
     DATABASE_PORT: int = 5432
     DATABASE_NAME: str = "edas_hub"
-    DATABASE_USER: str = ""
-    DATABASE_PASSWORD: str = ""
+    DATABASE_USER: str = ""  # SECRET: Set in .env
+    DATABASE_PASSWORD: str = ""  # SECRET: Set in .env
     
     # Databricks Settings
+    # SECRET: Set in .env file
     DATABRICKS_HOST: str = ""
-    DATABRICKS_TOKEN: str = ""
+    DATABRICKS_TOKEN: str = ""  # SECRET: Set in .env
     DATABRICKS_WORKSPACE_URL: str = ""
     
     # Model Serving (Databricks)
+    # SECRET: Set in .env file
     MODEL_SERVING_AGENT_LLM_ENDPOINT: str = ""
     MODEL_SERVING_CLASSIFIER_ENDPOINT: str = ""
-    MODEL_SERVING_API_KEY: str = ""
+    MODEL_SERVING_API_KEY: str = ""  # SECRET: Set in .env
     
-    # ARQ/Redis Settings
-    REDIS_HOST: str = "localhost"
-    REDIS_PORT: int = 6379
-    REDIS_DB: int = 0
-    REDIS_PASSWORD: str = ""
+    # Poller Settings
+    POLLER_INTERVAL_SECONDS: int = 5  # How often to poll for new requests
+    POLLER_BATCH_SIZE: int = 50  # Max requests to process per poll cycle
+    POLLER_MAX_CONCURRENT: int = 10  # Max parallel request processing
+    POLLER_LOCK_TIMEOUT_MINUTES: int = 5  # Lock timeout for normal operations
+    POLLER_LOCK_TIMEOUT_LONG_RUNNING_MINUTES: int = 30  # Lock timeout for provisioning
+    POLLER_HEARTBEAT_INTERVAL_SECONDS: int = 300  # How often to heartbeat locks (5 minutes)
     
     # Agent Settings
     AGENT_ENABLED: bool = True

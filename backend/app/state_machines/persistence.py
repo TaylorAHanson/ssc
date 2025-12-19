@@ -4,7 +4,8 @@ State machine persistence to database.
 from typing import Optional
 from sqlalchemy.orm import Session
 from app.db.request import RequestModel
-from app.state_machines.request_state_machine import BaseRequestStateMachine, get_state_machine
+from app.state_machines.base import BaseRequestStateMachine
+from app.state_machines.factory import get_state_machine
 import logging
 
 logger = logging.getLogger(__name__)

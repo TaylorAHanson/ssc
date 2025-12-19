@@ -1,17 +1,36 @@
+"""
+Polling worker for processing request state machine transitions.
+
+This worker polls the database for pending requests and processes them
+in parallel with proper locking, error handling, and retry logic.
+"""
 import asyncio
 import logging
-from datetime import datetime
+import os
+import socket
+from datetime import datetime, timedelta
+from typing import Optional
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
 from app.db.session import get_lakebase_session, get_engine
 from app.db.base import Base
-from app.db.request import RequestModel, ApprovalModel
+from app.db.request import RequestModel, FailureModel
 from app.state_machines.persistence import load_state_machine, save_state_machine
-from app.models.request import RequestStatus, PathStateStatus
+from app.state_machines.lock import acquire_lock, release_lock, heartbeat_lock
+from app.models.request import RequestStatus
+from app.core.config import settings
+from app.core.exceptions import RetryableError, PermanentError
+import traceback
 
 logger = logging.getLogger(__name__)
 
+# Generate unique worker ID
+_worker_id = f"poll-worker-{socket.gethostname()}-{os.getpid()}"
+
+
 async def start_poller():
     """Start the background poller."""
-    logger.info("Starting background poller...")
+    logger.info(f"Starting background poller (worker_id: {_worker_id})...")
     
     # Ensure tables exist (for SQLite dev)
     try:
@@ -21,107 +40,295 @@ async def start_poller():
     except Exception as e:
         logger.error(f"Failed to verify database tables: {e}")
     
+    # Get polling interval from config (default 5 seconds)
+    poll_interval = getattr(settings, 'POLLER_INTERVAL_SECONDS', 5)
+    
     while True:
         try:
             await process_open_requests()
         except Exception as e:
             logger.error(f"Error in poller loop: {e}", exc_info=True)
         
-        await asyncio.sleep(2)  # Run every 2 seconds
+        await asyncio.sleep(poll_interval)
+
 
 async def process_open_requests():
-    """Find and process all open requests."""
+    """Find and process all open requests in parallel."""
     db = get_lakebase_session()
     try:
+        # Find requests that need processing (not completed/rejected/failed)
+        # and are not locked (or lock has expired)
+        now = datetime.utcnow()
         requests = db.query(RequestModel).filter(
             RequestModel.status.notin_([
                 RequestStatus.COMPLETED.value, 
                 RequestStatus.REJECTED.value,
                 "failed"
-            ])
-        ).all()
+            ]),
+            # Only process requests that are not locked or have expired locks
+            or_(
+                RequestModel.locked_by.is_(None),
+                RequestModel.locked_until < now
+            )
+        ).limit(settings.POLLER_BATCH_SIZE).all()
         
-        for request in requests:
-            try:
-                await process_single_request(db, request)
-            except Exception as e:
-                logger.error(f"Error processing request {request.id}: {e}", exc_info=True)
+        if not requests:
+            return  # No work to do
+        
+        logger.debug(f"Found {len(requests)} requests to process")
+        
+        # Process in parallel with concurrency limit
+        semaphore = asyncio.Semaphore(settings.POLLER_MAX_CONCURRENT)
+        
+        tasks = [
+            process_single_request(semaphore, request.id)
+            for request in requests
+        ]
+        
+        # Wait for all tasks to complete, allowing exceptions
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Log any exceptions that occurred
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(
+                    f"Error processing request {requests[i].id}: {result}",
+                    exc_info=result
+                )
                 
     finally:
         db.close()
 
-async def process_single_request(db, request: RequestModel):
-    """Process a single request using its specific state machine."""
-    try:
-        # Load the polymorphic state machine
-        sm = load_state_machine(request, db)
-        
-        # Track changes
-        changed = False
-        
-        # We don't need healing anymore as visual state is calculated on the fly
-        # if sm.ensure_visual_consistency():
-        #    changed = True
-        
-    except Exception as e:
-        logger.error(f"Failed to load state machine for request {request.id}: {e}")
-        return
 
-    # 1. Check for Pending -> Start
-    if sm.current_state.id == "pending":
-        logger.info(f"Starting request {request.id}")
-        if hasattr(sm, 'submit'):
-            sm.submit()
-            changed = True
+async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
+    """Process a single request with locking and error handling."""
+    async with semaphore:  # Limit concurrent processing
+        db = get_lakebase_session()
+        heartbeat_task = None
+        try:
+            # Load request from database
+            request = db.query(RequestModel).filter(RequestModel.id == request_id).first()
+            if not request:
+                logger.warning(f"Request {request_id} not found")
+                return
             
-    # 2. Check Triggers / Transitions
-    # The Poller is now "dumb". It just checks for external facts (Approvals, Training)
-    # and tells the State Machine to advance if allowed.
+            # Check if max retries exceeded
+            if request.retry_count >= request.max_retries:
+                logger.warning(
+                    f"Request {request_id} exceeded max retries ({request.max_retries}), "
+                    "marking as failed"
+                )
+                request.status = "failed"
+                request.current_state = "failed"
+                db.commit()
+                return
+            
+            # Determine if this is a long-running operation that needs heartbeat
+            is_long_running = request.status == RequestStatus.PROVISIONING.value
+            lock_timeout = (
+                settings.POLLER_LOCK_TIMEOUT_LONG_RUNNING_MINUTES
+                if is_long_running
+                else settings.POLLER_LOCK_TIMEOUT_MINUTES
+            )
+            
+            if not acquire_lock(db, request_id, worker_id=_worker_id, timeout_minutes=lock_timeout):
+                # Another worker is processing this request, skip it
+                logger.debug(f"Request {request_id} is locked by another worker, skipping")
+                return
+            
+            # Start heartbeat task for long-running operations
+            if is_long_running:
+                heartbeat_task = asyncio.create_task(
+                    _heartbeat_lock_loop(request_id, lock_timeout)
+                )
+                logger.debug(f"Started heartbeat for long-running request {request_id}")
+            
+            try:
+                # Process the request
+                await _process_request_state_machine(db, request)
+                
+                # Reset retry count on success
+                request.retry_count = 0
+                request.last_error = None
+                db.commit()
+                
+            except RetryableError as e:
+                # Retryable error - increment retry count
+                await _handle_retryable_error(db, request, e, _worker_id)
+                # Don't raise - let it be retried on next poll cycle
+                
+            except PermanentError as e:
+                # Permanent error - mark as failed
+                await _handle_permanent_error(db, request, e, _worker_id)
+                
+            except Exception as e:
+                # Unexpected error - treat as retryable
+                logger.error(
+                    f"Unexpected error processing request {request_id}: {e}",
+                    exc_info=True
+                )
+                await _handle_retryable_error(
+                    db, request, RetryableError(str(e)), _worker_id
+                )
+                
+            finally:
+                # Stop heartbeat if running
+                if heartbeat_task:
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
+                    logger.debug(f"Stopped heartbeat for request {request_id}")
+                
+                # Always release lock
+                release_lock(db, request_id)
+                
+        except Exception as e:
+            logger.error(
+                f"Critical error processing request {request_id}: {e}",
+                exc_info=True
+            )
+        finally:
+            db.close()
+
+
+async def _heartbeat_lock_loop(request_id: str, timeout_minutes: int):
+    """
+    Background task to periodically extend lock expiration (heartbeat).
+    Runs until cancelled.
     
-    # -- Check Approvals --
-    latest_approval = db.query(ApprovalModel).filter(
-        ApprovalModel.request_id == request.id
-    ).order_by(ApprovalModel.updated_at.desc()).first()
+    Args:
+        request_id: Request ID to heartbeat
+        timeout_minutes: Lock timeout to extend to
+    """
+    heartbeat_interval = getattr(settings, 'POLLER_HEARTBEAT_INTERVAL_SECONDS', 300)
+    
+    try:
+        while True:
+            await asyncio.sleep(heartbeat_interval)
+            
+            # Extend the lock
+            db = get_lakebase_session()
+            try:
+                success = heartbeat_lock(
+                    db, request_id, _worker_id, timeout_minutes
+                )
+                if success:
+                    logger.debug(f"Heartbeat successful for request {request_id}")
+                else:
+                    logger.warning(
+                        f"Heartbeat failed for request {request_id} - lock may have been released"
+                    )
+                    # If heartbeat fails, we've lost the lock - stop heartbeating
+                    break
+            except Exception as e:
+                logger.error(
+                    f"Error during heartbeat for request {request_id}: {e}",
+                    exc_info=True
+                )
+            finally:
+                db.close()
+                
+    except asyncio.CancelledError:
+        logger.debug(f"Heartbeat cancelled for request {request_id}")
+        raise
 
-    if latest_approval:
-        if latest_approval.status == "approved":
-            # Determine logic based on current state
-            if sm.current_state.id == "manager_approval":
-                if hasattr(sm, "approve_manager"):
-                    logger.info(f"Manager approved request {request.id}, advancing...")
-                    sm.approve_manager()
-                    changed = True
-            elif sm.current_state.id == "data_owner_approval":
-                 if hasattr(sm, "approve_owner"):
-                    logger.info(f"Owner approved request {request.id}, advancing...")
-                    sm.approve_owner()
-                    changed = True
-            elif sm.current_state.id == "platform_admin_approval":
-                 if hasattr(sm, "approve_admin"):
-                    logger.info(f"Admin approved request {request.id}, advancing...")
-                    sm.approve_admin()
-                    changed = True
-                    
-        elif latest_approval.status == "rejected":
-             if hasattr(sm, "reject"):
-                 sm.reject()
-                 changed = True
 
-    # -- Check Training --
-    if request.requires_training and request.training_completed:
-        # If training is done, try to advance
-        if sm.current_state.id == "training_pending":
-            if hasattr(sm, "complete_training"):
-                logger.info(f"Training completed for {request.id}, advancing...")
-                sm.complete_training()
-                changed = True
-
-    # -- Check Provisioning --
-    if sm.current_state.id == "provisioning":
-        # Placeholder for actual provisioning logic
-        pass
-
-    # Save changes
+async def _process_request_state_machine(db, request: RequestModel):
+    """
+    Process state machine - delegate all logic to the state machine.
+    
+    The poller is completely ignorant of business logic.
+    It just loads the state machine and calls tick().
+    """
+    # Load the polymorphic state machine
+    sm = load_state_machine(request, db)
+    
+    # Let the state machine handle all logic
+    changed = sm.tick()
+    
+    # Save if state changed
     if changed:
         save_state_machine(db, request, sm)
         db.commit()
+        logger.debug(f"State machine processed for request {request.id}: {sm.current_state.id}")
+
+
+async def _handle_retryable_error(
+    db: Session, 
+    request: RequestModel, 
+    error: RetryableError, 
+    worker_id: str
+):
+    """Handle a retryable error by incrementing retry count and logging."""
+    request.retry_count += 1
+    request.last_failure = datetime.utcnow()
+    request.last_error = {
+        "error": str(error),
+        "traceback": traceback.format_exc(),
+        "retry_count": request.retry_count,
+        "worker_id": worker_id
+    }
+    
+    # Log failure to failures table
+    failure = FailureModel(
+        id=f"fail-{datetime.utcnow().timestamp()}",
+        request_id=request.id,
+        task_id=worker_id,
+        failure_type="retryable_error",
+        error_message=str(error),
+        error_details=request.last_error,
+        retry_count=request.retry_count,
+        occurred_at=datetime.utcnow()
+    )
+    db.add(failure)
+    db.commit()
+    
+    logger.warning(
+        f"Retryable error for request {request.id} (attempt {request.retry_count}/{request.max_retries}): {error}"
+    )
+
+
+async def _handle_permanent_error(
+    db: Session, 
+    request: RequestModel, 
+    error: PermanentError, 
+    worker_id: str
+):
+    """Handle a permanent error by marking request as failed."""
+    request.status = "failed"
+    request.current_state = "failed"
+    request.last_error = {
+        "error": str(error),
+        "traceback": traceback.format_exc(),
+        "permanent": True,
+        "worker_id": worker_id
+    }
+    
+    # Log permanent failure
+    failure = FailureModel(
+        id=f"fail-{datetime.utcnow().timestamp()}",
+        request_id=request.id,
+        task_id=worker_id,
+        failure_type="permanent_error",
+        error_message=str(error),
+        error_details=request.last_error,
+        retry_count=request.retry_count,
+        occurred_at=datetime.utcnow(),
+        resolved=False
+    )
+    db.add(failure)
+    
+    # Save state machine (mark as failed)
+    try:
+        sm = load_state_machine(request, db)
+        save_state_machine(db, request, sm)
+    except Exception as e:
+        logger.error(f"Failed to save state machine for failed request {request.id}: {e}")
+    
+    db.commit()
+    
+    logger.error(
+        f"Permanent error for request {request.id}, marked as failed: {error}"
+    )

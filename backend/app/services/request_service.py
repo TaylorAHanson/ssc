@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.request import RequestModel
 from app.models.request import RequestType, RequestCreate, Request
 from app.state_machines.persistence import save_state_machine
-from app.state_machines.request_state_machine import get_state_machine
+from app.state_machines.factory import get_state_machine
 from datetime import datetime
 import uuid
 

@@ -18,7 +18,7 @@ class RequestModel(Base):
     state_context = Column(JSON)  # Stores variables (workspace_name, config, etc.)
     
     # State locking for idempotency
-    locked_by = Column(String, nullable=True)  # Worker ID (e.g., 'arq@worker-1')
+    locked_by = Column(String, nullable=True)  # Worker ID (e.g., 'poll-worker-hostname-12345')
     locked_until = Column(DateTime, nullable=True)  # Lock expiration timestamp
     
     # Timestamps
@@ -91,7 +91,7 @@ class FailureModel(Base):
     
     id = Column(String, primary_key=True)
     request_id = Column(String, ForeignKey("requests.id"), nullable=False)
-    task_id = Column(String)  # ARQ task ID
+    task_id = Column(String)  # Worker/task ID
     failure_type = Column(String)  # 'provider_error', 'tool_error', 'timeout', 'validation_error'
     error_message = Column(String)
     error_details = Column(JSON)  # Full error stack trace, context

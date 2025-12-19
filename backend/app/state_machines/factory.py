@@ -1,0 +1,49 @@
+"""
+Factory for creating state machine instances based on request type.
+"""
+from app.models.request import RequestType
+from app.db.request import RequestModel
+from sqlalchemy.orm import Session
+from app.state_machines.base import BaseRequestStateMachine
+from app.state_machines.workspace_provision import WorkspaceProvisionStateMachine
+from app.state_machines.data_access import DataAccessStateMachine
+from app.state_machines.service_principal import ServicePrincipalStateMachine
+from app.state_machines.workspace_access import WorkspaceAccessStateMachine
+from app.state_machines.simple_platform_admin import SimplePlatformAdminStateMachine
+from app.state_machines.github_repo_creation import GithubRepoCreationStateMachine
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMachine:
+    """Factory to return the appropriate state machine instance."""
+    try:
+        # Ensure we have a valid enum
+        r_type = RequestType(request.type)
+    except ValueError:
+        logger.warning(f"Invalid request type '{request.type}' for request {request.id}. Defaulting to WORKSPACE_PROVISION.")
+        r_type = RequestType.WORKSPACE_PROVISION
+    
+    if r_type == RequestType.WORKSPACE_PROVISION:
+        return WorkspaceProvisionStateMachine(request, db)
+    
+    elif r_type in [RequestType.CATALOG_SCHEMA_TABLE_ACCESS, RequestType.BATCH_DATA_ACCESS]:
+        return DataAccessStateMachine(request, db)
+        
+    elif r_type == RequestType.SERVICE_PRINCIPAL:
+        return ServicePrincipalStateMachine(request, db)
+
+    elif r_type == RequestType.WORKSPACE_ACCESS:
+        return WorkspaceAccessStateMachine(request, db)
+
+    elif r_type == RequestType.GITHUB_REPO_CREATION:
+        return GithubRepoCreationStateMachine(request, db)
+
+    elif r_type in [RequestType.CATALOG_SCHEMA_TABLE, RequestType.MARKETPLACE_CERTIFICATION, RequestType.REST_API_ACCESS]:
+        # Use SimplePlatformAdminStateMachine for these for now
+        return SimplePlatformAdminStateMachine(request, db)
+    
+    # Fallback / Default for others (implement specific ones as needed)
+    return WorkspaceProvisionStateMachine(request, db)
+

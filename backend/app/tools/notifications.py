@@ -26,11 +26,6 @@ class SendNotificationTool(BaseTool):
                 subject=kwargs.get("subject", "Notification"),
                 body=message
             )
-        elif notification_type == "slack":
-            return await self.notifications.send_slack(
-                channel=kwargs.get("channel", "#general"),
-                message=message
-            )
         elif notification_type == "teams":
             return await self.notifications.send_teams(
                 webhook=kwargs.get("webhook"),

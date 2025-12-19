@@ -30,7 +30,7 @@ All layers share:
 ### 1. Async Processing
 Infrastructure operations (Terraform, Databricks) can take 5-20 minutes. **State machine transitions cannot happen in blocking HTTP requests.**
 
-**Solution**: Task queue (ARQ) with async workers running on Databricks.
+**Solution**: Polling worker that checks the database every 5 seconds and processes pending requests in parallel with proper locking. 
 
 ### 2. State Persistence
 State machines must persist to database. If container restarts during a Terraform apply, state must be recoverable.
@@ -52,7 +52,7 @@ Tools and providers will fail, especially Terraform operations. Infrastructure p
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  API Layer (REST Endpoints)                             │
-│  - Returns 202 Accepted for async operations            │
+│  - Returns 202 (Accepted) for async operations          │  
 │  - Polling endpoints for status                         │
 │  - Callback endpoints for approvals                     │
 └────────────────────┬────────────────────────────────────┘
@@ -68,7 +68,7 @@ Tools and providers will fail, especially Terraform operations. Infrastructure p
         |                           ▼
         |           ┌──────────────────────────────┐
         |           │  Workers Layer (Async)       │
-        |           │  - ARQ Tasks                 │
+        |           │  - Polling Worker            │
         |           │  - Process state transitions │
         |           │  - Execute long-running ops  │
         |           └──────────────────────────────┘
@@ -119,13 +119,12 @@ By abstracting these into **Providers**, we:
 - Keep tools system-agnostic
 - Enable easy swapping of underlying systems (e.g., Terraform → Pulumi)
 - Make tools testable with mock providers
-- Centralize authentication and connection management
 
 ## Architecture Principles
 
 ### Separation of Concerns
 
-- **Agents** focus on understanding user intent, gathering information, and routing users to appropriate forms
+- **Agents** focus on understanding user intent, gathering information, and routing users to appropriate forms.
 - **State Machines** handle the orchestration of complex workflows, calling tools in sequence to complete tasks
 - **API Endpoints** provide CRUD operations and serve the frontend UI
 - **Tools** are business operations that use providers to accomplish tasks
@@ -147,7 +146,7 @@ Providers encapsulate all interaction with external systems:
 - Only use REST API calls when the SDK doesn't support a specific feature
 - The SDK handles authentication, connection pooling, and rate limiting automatically
 
-### Tool Sharing
+### Tool Sharing Across Layers
 
 Tools are designed to be stateless, reusable business operations that:
 - Use providers to interact with external systems
@@ -253,7 +252,14 @@ backend/
 │   │
 │   ├── state_machines/            # State machine orchestration
 │   │   ├── __init__.py
-│   │   ├── request_state_machine.py  # Request state machine definition
+│   │   ├── base.py  # BaseRequestStateMachine base class
+│   │   ├── factory.py  # get_state_machine() factory function
+│   │   ├── workspace_provision.py  # WorkspaceProvisionStateMachine
+│   │   ├── data_access.py  # DataAccessStateMachine
+│   │   ├── service_principal.py  # ServicePrincipalStateMachine
+│   │   ├── workspace_access.py  # WorkspaceAccessStateMachine
+│   │   ├── simple_platform_admin.py  # SimplePlatformAdminStateMachine
+│   │   └── github_repo_creation.py  # GithubRepoCreationStateMachine
 │   │   ├── persistence.py        # State persistence to database
 │   │   ├── lock.py               # State locking mechanism
 │   │   ├── orchestrators/         # State machine orchestrators
@@ -269,13 +275,7 @@ backend/
 │   │
     │   ├── workers/                   # Async task workers
     │   │   ├── __init__.py
-    │   │   ├── arq_app.py             # ARQ application setup
-    │   │   ├── tasks/                 # Task definitions
-    │   │   │   ├── __init__.py
-    │   │   │   ├── state_transitions.py  # State machine transition tasks
-    │   │   │   ├── provisioning.py    # Long-running provisioning tasks
-    │   │   │   └── notifications.py   # Notification tasks
-    │   │   └── poller.py              # Poller for async tasks (if needed)
+    │   │   └── poller.py              # Polling worker for state transitions
     │   │
     │   ├── services/                  # Business logic services
 │   │   ├── __init__.py
@@ -426,7 +426,6 @@ class ConnectionError(RetryableError):
 
 **Notification Provider** (`providers/notifications/`):
 - `send_email(to: str, subject: str, body: str) -> bool` - Send email
-- `send_slack(channel: str, message: str) -> bool` - Send Slack message
 - `send_teams(webhook: str, message: dict) -> bool` - Send Teams message
 
 ### Tools Layer (`app/tools/`)
@@ -651,12 +650,31 @@ def release_lock(db: Session, request_id: str):
         request.locked_by = None
         request.locked_until = None
         db.commit()
+
+def heartbeat_lock(db: Session, request_id: str, worker_id: str, timeout_minutes: int) -> bool:
+    """Extend lock expiration time (heartbeat) for a request.
+    Only extends if the lock is still held by the same worker."""
+    request = db.query(RequestModel).filter(RequestModel.id == request_id).first()
+    if not request or request.locked_by != worker_id:
+        return False
+    
+    # Extend the lock timeout
+    rows_updated = db.query(RequestModel).filter(
+        RequestModel.id == request_id,
+        RequestModel.locked_by == worker_id
+    ).update({
+        RequestModel.locked_until: datetime.utcnow() + timedelta(minutes=timeout_minutes)
+    })
+    
+    db.commit()
+    return rows_updated > 0
 ```
 
 **State Locking Mechanism**:
 - Before transitioning, worker acquires lock: `UPDATE requests SET locked_by='worker-1', locked_until=NOW()+INTERVAL '5 minutes' WHERE id='req-123' AND locked_by IS NULL`
 - If lock acquisition fails, another worker is processing → skip
 - Lock expires after timeout (prevents deadlocks)
+- **Lock Heartbeat**: For long-running operations (provisioning), worker starts a background heartbeat task that periodically extends the lock expiration (every 5 minutes by default). This prevents locks from expiring during 20-minute Terraform applies.
 - State is persisted after each transition
 
 ### Workers Layer (`app/workers/`)
@@ -669,22 +687,48 @@ def release_lock(db: Session, request_id: str):
 - HTTP requests timeout after 30-60 seconds
 - **State machine transitions cannot happen in blocking HTTP requests**
 
-**Solution**: Task queue (ARQ) with Redis backend, workers run as Databricks tasks/jobs.
+**Solution**: Polling worker that runs continuously, checking the database every 5 seconds for pending requests and processing them in parallel with proper locking.
 
-**Task Flow**:
+**Worker Flow**:
 1. API receives request → Creates request in DB with `status='pending'`
-2. API enqueues task → `await arq.enqueue_job('process_state_transition', request_id, transition_name)`
-3. API returns `202 Accepted` with task ID
-4. Frontend polls `/api/v1/requests/{request_id}/status`
-5. Worker picks up task → Loads state from DB → Executes transition → Saves state
+2. API returns `201 Created` with request ID
+3. Frontend polls `/api/v1/requests/{request_id}/status`
+4. Polling worker (runs every 5 seconds):
+   - Queries database for pending requests (not completed/rejected/failed)
+   - Filters out locked requests (unless lock expired)
+   - Processes requests in parallel (max 10 concurrent)
+   - For each request:
+     - Acquires lock (5 min timeout for normal, 30 min for provisioning)
+     - Loads state machine from DB
+     - **Calls `state_machine.tick()`** - State machine handles ALL logic
+     - Saves state back to DB if changed
+     - Releases lock
+   - On error: Handles retryable vs permanent errors, logs failures
 
-**Task Examples**:
-- `process_state_transition(request_id, transition)` - Process state machine transition
-- `provision_workspace(request_id, config)` - Long-running workspace provisioning
-- `create_service_principal(request_id, config)` - Service principal creation
-- `send_notification(request_id, notification_type)` - Async notifications
-- `handle_failure(request_id, error, retry_count)` - Failure handling and retry logic
-- `rollback_operation(request_id, operation_type)` - Rollback failed operations
+**Key Principle**: The poller is completely ignorant of business logic. It only:
+- Finds requests to process
+- Acquires/releases locks
+- Calls `state_machine.tick()`
+- Saves state if changed
+
+All business logic (reconciliation, transitions, fact conversion, state processing) lives in the state machine.
+
+**Key Features**:
+- **State Locking**: Prevents concurrent processing of same request
+- **Lock Heartbeat**: For long-running operations (e.g., Terraform), worker periodically extends lock expiration to prevent premature expiration
+- **Parallel Processing**: Processes multiple requests concurrently (configurable limit)
+- **Error Handling**: Distinguishes retryable vs permanent errors
+- **Retry Logic**: Tracks retry count, exponential backoff on next poll cycle
+- **Long-Running Tasks**: Extended lock timeout (30 min) + heartbeat for provisioning operations
+- **Self-Healing**: Expired locks allow recovery from stuck workers
+
+**Configuration** (in `app/core/config.py`):
+- `POLLER_INTERVAL_SECONDS`: How often to poll (default: 5 seconds)
+- `POLLER_BATCH_SIZE`: Max requests to process per cycle (default: 50)
+- `POLLER_MAX_CONCURRENT`: Max parallel processing (default: 10)
+- `POLLER_LOCK_TIMEOUT_MINUTES`: Lock timeout for normal ops (default: 5 minutes)
+- `POLLER_LOCK_TIMEOUT_LONG_RUNNING_MINUTES`: Lock timeout for provisioning (default: 30 minutes)
+- `POLLER_HEARTBEAT_INTERVAL_SECONDS`: How often to heartbeat locks for long-running ops (default: 300 seconds / 5 minutes)
 
 **Retry Strategies**:
 
@@ -701,196 +745,120 @@ Retries happen at multiple levels:
    - API calls: 3 retries
    - Database queries: 5 retries (cheap to retry)
 
-3. **Worker/Task Level** - ARQ task retries
-   - Exponential backoff with jitter
-   - Max retries: 3-5 depending on operation type
-   - Dead letter queue for permanent failures
+3. **Worker Level** - Polling worker retries
+   - Retryable errors: Increment retry count, will be retried on next poll cycle
+   - Permanent errors: Mark request as failed immediately
+   - Max retries: Configurable per request (default: 3)
+   - Exponential backoff: Implemented by poller interval (5 seconds) + retry count tracking
 
-**Worker Implementation with Failure Handling**:
+**Worker Implementation**:
 ```python
-# app/workers/tasks/state_transitions.py
-from app.workers.arq_app import WorkerSettings
-from app.state_machines.persistence import load_state_machine, save_state_machine
-from app.db.session import get_db
-from app.db.request import RequestModel, FailureModel
-from app.core.exceptions import RetryableError, PermanentError
-import traceback
-from datetime import datetime
-
-async def process_state_transition(ctx, request_id: str, transition_name: str):
-    """Process state machine transition asynchronously with retry logic."""
-    db = get_lakebase_session()
-    
-    try:
-        # Load state from database
-        request = db.query(RequestModel).filter(RequestModel.id == request_id).first()
-        if not request:
-            raise PermanentError(f"Request {request_id} not found")
-        
-        # Check if max retries exceeded
-        if request.retry_count >= request.max_retries:
-            # Move to failed state
-            request.status = 'failed'
-            request.current_state = 'failed'
-            save_state_machine(db, request, None)
-            db.commit()
-            
-            # Notify user of permanent failure
-            await ctx['redis'].enqueue_job('notify_failure', request_id, "max_retries_exceeded")
-            return {"status": "failed", "reason": "max_retries_exceeded"}
-        
+# app/workers/poller.py
+async def process_single_request(semaphore, request_id):
+    """Process a single request with locking and error handling."""
+    async with semaphore:
         # Acquire lock
-        if not acquire_lock(db, request_id, worker_id=ctx['job_id']):
-            # Another worker is processing, skip
-            return {"status": "skipped", "reason": "locked"}
+        if not acquire_lock(db, request_id, worker_id, lock_timeout):
+            return  # Another worker is processing
         
         try:
-            # Load state machine from persisted state
-            state_machine = load_state_machine(request)
+            # Load state machine
+            sm = load_state_machine(request, db)
             
-            # Execute transition
-            getattr(state_machine, transition_name)()
+            # Let state machine handle ALL logic
+            changed = sm.tick()
             
-            # Save state back to database
-            save_state_machine(db, request, state_machine)
-            
-            # Reset retry count on success
-            request.retry_count = 0
-            request.last_error = None
-            db.commit()
-            
-            # If transition triggers next async operation, enqueue it
-            if state_machine.current_state == "provisioning":
-                await ctx['redis'].enqueue_job('provision_workspace', request_id, request.state_context)
-            
-            return {"status": "completed", "state": state_machine.current_state.id}
+            # Save if state changed
+            if changed:
+                save_state_machine(db, request, sm)
+                db.commit()
         except RetryableError as e:
-            # Retryable error - increment retry count and retry
-            request.retry_count += 1
-            request.last_failure = datetime.utcnow()
-            request.last_error = {
-                "error": str(e),
-                "traceback": traceback.format_exc(),
-                "retry_count": request.retry_count
-            }
-            
-            # Log failure
-            failure = FailureModel(
-                id=f"fail-{datetime.utcnow().timestamp()}",
-                request_id=request_id,
-                task_id=ctx['job_id'],
-                failure_type="retryable_error",
-                error_message=str(e),
-                error_details=request.last_error,
-                retry_count=request.retry_count,
-                occurred_at=datetime.utcnow()
-            )
-            db.add(failure)
-            db.commit()
-            
-            # Retry with exponential backoff
-            # ARQ handles retries via configuration or custom logic
-            raise
-            
+            # Handle retryable errors
+            await _handle_retryable_error(db, request, e, worker_id)
         except PermanentError as e:
-            # Permanent error - move to failed state
-            request.status = 'failed'
-            request.current_state = 'failed'
-            request.last_error = {
-                "error": str(e),
-                "traceback": traceback.format_exc(),
-                "permanent": True
-            }
-            
-            # Log permanent failure
-            failure = FailureModel(
-                id=f"fail-{datetime.utcnow().timestamp()}",
-                request_id=request_id,
-                task_id=ctx['job_id'],
-                failure_type="permanent_error",
-                error_message=str(e),
-                error_details=request.last_error,
-                retry_count=request.retry_count,
-                occurred_at=datetime.utcnow(),
-                resolved=False
-            )
-            db.add(failure)
-            save_state_machine(db, request, None)
-            db.commit()
-            
-            # Notify user of permanent failure
-            await ctx['redis'].enqueue_job('notify_failure', request_id, "permanent_error", str(e))
-            
-            raise  # Don't retry permanent errors
-            
-        except Exception as e:
-            # Unexpected error - treat as retryable
-            request.retry_count += 1
-            request.last_failure = datetime.utcnow()
-            request.last_error = {
-                "error": str(e),
-                "traceback": traceback.format_exc(),
-                "retry_count": request.retry_count,
-                "unexpected": True
-            }
-            
-            # Log failure
-            failure = FailureModel(
-                id=f"fail-{datetime.utcnow().timestamp()}",
-                request_id=request_id,
-                task_id=ctx['job_id'],
-                failure_type="unexpected_error",
-                error_message=str(e),
-                error_details=request.last_error,
-                retry_count=request.retry_count,
-                occurred_at=datetime.utcnow()
-            )
-            db.add(failure)
-            db.commit()
-            
-            # Retry with exponential backoff
-            # ARQ handles retries via configuration or custom logic
-            raise
-            
+            # Handle permanent errors
+            await _handle_permanent_error(db, request, e, worker_id)
         finally:
-            # Release lock
             release_lock(db, request_id)
-            
-    except Exception as e:
-        # Final catch-all - log and notify
-        await ctx['redis'].enqueue_job('notify_failure', request_id, "worker_error", str(e))
-        raise
+
+# app/state_machines/base.py
+class BaseRequestStateMachine(StateMachine):
+    def tick(self) -> bool:
+        """Process one tick - handles all business logic."""
+        # 1. Reconcile state from facts
+        target_state = self.reconcile()
+        if target_state:
+            self._transition_to_state(target_state)
+        
+        # 2. Process current state
+        self._process_current_state()
+        
+        # 3. Re-reconcile after processing (in case facts changed)
+        target_state = self.reconcile()
+        if target_state:
+            self._transition_to_state(target_state)
+        
+        return changed
 ```
 
-**Long-Running Task with Progress Tracking**:
-```python
-async def provision_workspace(ctx, request_id: str, config: dict):
-    """Provision workspace with progress tracking and failure handling."""
-    db = next(get_db())
-    request = db.query(RequestModel).filter(RequestModel.id == request_id).first()
-    
-    try:
-        # Update progress
-        # ... implementation ...
-```
+**Separation of Concerns**:
+- **Poller**: Finds requests, acquires locks, calls `tick()`, saves state, handles errors
+- **State Machine**: All business logic - reconciliation, fact conversion, transitions, state processing
 
-**Failure Notification Task**:
-```python
-async def notify_failure(ctx, request_id: str, failure_type: str, error_message: str = None):
-    """Notify user and admins of failure."""
-    # ... implementation ...
-```
+**Benefits of Polling Approach**:
+- **Simpler**: No Redis/ARQ dependency, fewer moving parts
+- **Self-Healing**: Expired locks automatically recover from stuck workers
+- **Observable**: All state in database, easy to debug
+- **Sufficient**: Works well for low-to-moderate volume
+- **Database-Centric**: Single source of truth (database)
 
 ### State Machine Layer (`app/state_machines/`)
 
 **Purpose**: Orchestrate complex workflows and execute business logic step-by-step.
 
 **Key Features**:
+- **Fact-Based State Calculation**: State is calculated from immutable facts (events) rather than stored directly. This makes the system self-healing - if a process crashes, the next poll reconciles state from facts.
+- **Hybrid Approach**: Facts are the source of truth, but state is memoized (cached) in the database for performance. The `reconcile()` method snaps state to match facts.
 - **Dynamic State Calculation**: Visual state (parallel paths, active nodes) is calculated on-the-fly based on database facts (approvals, training status) rather than being hardcoded or manually updated in the DB.
-- **Persistent Core State**: Only the core `current_state` and mapped `status` are persisted to the database.
+- **Persistent Core State**: Only the core `current_state` and mapped `status` are persisted to the database as a cache/memoization.
 - **State Locking**: Prevents concurrent transitions.
 - **Wait-for-Event**: Pauses workflow for human approvals.
 - **Factory Pattern**: A factory selects the appropriate State Machine implementation based on the `RequestType`.
+
+**Fact-Based Architecture**:
+
+The system uses a **Hybrid Fact-Based Approach** that combines the benefits of both stored state and fact-based calculation:
+
+1. **Facts as Source of Truth**: Immutable events (facts) stored in the `events` table represent what has actually happened:
+   - `request_submitted` - Request was submitted
+   - `approval_received` - Approval was received (with approval_type, approved_by)
+   - `training_completed` - Training was completed
+   - `workspace_created` - Workspace was created (with workspace_id, workspace_url)
+   - `provisioning_started` - Provisioning began
+   - `provisioning_completed` - Provisioning finished
+   - `request_rejected` - Request was rejected
+
+2. **State as Memoized Cache**: The `status` and `current_state` columns are cached values for performance:
+   - Updated by `reconcile()` method based on facts
+   - Used for filtering queries (e.g., "find all pending requests")
+   - Can be out of sync temporarily (will be corrected on next reconcile)
+
+3. **Reconcile Pattern**: Every poll cycle:
+   - Calls `reconcile()` which checks facts and determines target state
+   - If target state differs from current state, transitions to match
+   - This makes the system self-healing - if Terraform succeeds but DB update fails, next poll sees `workspace_created` fact and skips ahead
+
+4. **Idempotency Guards**: Tools check facts before executing:
+   - `create_workspace()` checks for `workspace_created` fact
+   - If fact exists, skips creation and returns existing workspace
+   - This prevents duplicate operations and handles partial failures
+
+**Benefits**:
+- **Self-Healing**: If a process crashes mid-operation, next poll reconciles from facts
+- **Audit Trail**: Complete history of what happened (facts are immutable)
+- **Reduced Race Conditions**: No "Read-Modify-Write" on status column - just append facts
+- **Idempotent Operations**: Tools check facts before executing
+- **Performance**: State column used for filtering, facts used for truth
 
 **Implementations**:
 - `WorkspaceProvisionStateMachine`: For workspace creation (Manager Approval -> Training -> Provisioning)
@@ -938,7 +906,7 @@ When state machine enters a state that requires human action (approval, training
 2. Triggers notification action (async)
 3. **Pauses** - Does not automatically transition
 4. Waits for API callback: `POST /api/v1/requests/{request_id}/approve` or `/complete-training`
-5. Callback handler enqueues transition task: `await arq.enqueue_job('process_state_transition', request_id, 'approve')`
+5. Polling worker (next cycle) detects approval → Processes transition automatically
 6. Worker processes transition → State machine continues
 
 **Orchestrators**:
@@ -947,39 +915,50 @@ Orchestrators coordinate multiple actions and tools:
 - `data_access.py` - Orchestrates data access request workflow
 - `service_principal.py` - Orchestrates service principal creation workflow
 
-**Flow Example (Workspace Provisioning with Async Processing & Failure Handling)**:
-1. Request created → State saved to DB with `status='pending'`
-2. API enqueues task: `await arq.enqueue_job('process_state_transition', request_id, 'submit_for_approval')`
-3. Worker loads state from DB → Transitions to `manager_approval`
-4. Worker triggers `notify_approvers()` action → Enqueues `send_notification` task via ARQ
-5. Worker saves state to DB with `status='manager_approval'` → **Pauses**
-6. Manager approves via Admin Dashboard → API callback: `POST /api/v1/requests/{request_id}/approve`
-7. Callback enqueues: `await arq.enqueue_job('process_state_transition', request_id, 'approve')`
-8. Worker loads state → Transitions to `provisioning`
-9. Worker enqueues: `await ctx['redis'].enqueue_job('provision_workspace', request_id, config)` (long-running)
-10. Provisioning worker:
-    - **Step 1: Terraform Init** (can fail)
-      - Updates progress: `state_context.progress = {step: 'terraform_init', percent: 10}`
-      - If fails → RetryableError → Retries with exponential backoff
-    - **Step 2: Terraform Apply** (can fail, takes 5-15 min)
-      - Updates progress: `state_context.progress = {step: 'terraform_apply', percent: 50}`
-      - If fails → Attempts rollback → Logs failure → Retries
-      - On success: Saves Terraform output
-    - **Step 3: Databricks Setup** (can fail)
-      - Updates progress: `state_context.progress = {step: 'databricks_setup', percent: 80}`
-      - If fails → Rolls back Terraform → Retries
-    - **Step 4: Grant Access** (can fail, non-critical)
-      - Updates progress: `state_context.progress = {step: 'access_grant', percent: 90}`
-      - If fails → Logs warning → Enqueues separate retry task (doesn't fail whole operation)
-    - On completion: Enqueues `await ctx['redis'].enqueue_job('process_state_transition', request_id, 'complete')`
-    - On permanent failure: Moves to `failed` state → Notifies user and admins
-11. Worker transitions to `completed` → Saves state → Notifies user
-12. **If any step fails permanently**:
-    - State moves to `failed`
-    - Failure logged to `failures` table
-    - User notified via email
-    - Admins notified via Slack
-    - Rollback attempted for infrastructure
+**Flow Example (Workspace Provisioning with Fact-Based Approach)**:
+1. Request created → State saved to DB with `status='pending'` (memoized cache)
+2. Polling worker (runs every 5 seconds) finds pending request
+3. Worker acquires lock → Loads state machine → Calls `reconcile()`
+   - `reconcile()` checks facts: No facts yet → stays in `pending`
+   - Records fact: `request_submitted` → Transitions to `manager_approval`
+   - Saves state to DB (memoized cache): `status='manager_approval'`
+4. Worker releases lock → **Pauses** (waiting for approval fact)
+5. Manager approves via Admin Dashboard → API: `POST /api/v1/requests/{request_id}/approve`
+   - Records fact: `approval_received` with `{approval_type: 'manager', approved_by: 'manager_123'}`
+   - **Records fact**: `approval_received` with `{approval_type: 'manager', approved_by: 'manager_123'}`
+   - Returns: "Approval recorded. State will be updated by poller."
+6. Polling worker (next cycle, ~5 seconds later):
+   - Acquires lock → Loads state machine → Calls `reconcile()`
+   - `reconcile()` checks facts: Sees `approval_received` fact
+   - Calculates target state: `training_pending` (if training required) or `provisioning`
+   - Transitions to target state → Saves state (memoized cache)
+7. If training required:
+   - User completes training → API: `POST /api/v1/requests/{request_id}/complete-training`
+   - Records fact: `training_completed`
+   - Next poll cycle: `reconcile()` sees fact → Transitions to `provisioning`
+8. Worker processes provisioning (long-running, lock held for 30 minutes):
+   - Calls `create_workspace()` tool
+   - **Idempotency Guard**: Tool checks facts - `has_fact('workspace_created')?`
+     - If yes: Returns existing workspace (self-healing - workspace already exists)
+     - If no: Proceeds with creation
+   - Records fact: `provisioning_started`
+   - **Step 1: Terraform Apply** (takes 5-15 min)
+     - If succeeds: Records fact: `workspace_created` with `{workspace_id, workspace_url}`
+     - If fails: Records fact: `provisioning_failed` with `{error}`
+   - **Step 2: Databricks Setup**
+     - If workspace already exists (fact check), skips
+   - Records fact: `provisioning_completed`
+   - Releases lock
+9. Next poll cycle:
+   - `reconcile()` checks facts: Sees `workspace_created` and `provisioning_completed`
+   - Calculates target state: `completed`
+   - Transitions to `completed` → Saves state (memoized cache)
+10. **Self-Healing Example**: If Terraform succeeds but worker crashes before recording fact:
+    - Next poll: `reconcile()` doesn't see `workspace_created` fact
+    - Tool checks cloud provider: Workspace exists!
+    - Tool records fact: `workspace_created` (with workspace details)
+    - Next poll: `reconcile()` sees fact → Transitions to `completed`
+    - **No duplicate creation** - tool's idempotency guard prevents it
 
 ### API Layer (`app/api/`)
 
@@ -1058,40 +1037,50 @@ Agent routes to: /paas/request-access (with prefill data)
 1. API: POST /api/v1/requests/ (create request)
    ↓
    - Save to DB: status='pending', state_context={...}
-   - Enqueue: `await ctx['redis'].enqueue_job('process_state_transition', request_id, 'submit_for_approval')`
-   - Return: 202 Accepted, {request_id, status: 'pending'}
+   - Return: 201 Created, {request_id, status: 'pending'}
    ↓
 2. Frontend: Polls GET /api/v1/requests/{request_id}/status
    ↓
-3. Worker: process_state_transition task
+3. Polling Worker: (runs every 5 seconds)
    ↓
-   - Load state from DB
-   - Acquire lock: UPDATE requests SET locked_by='worker-1' WHERE id=...
-   - Execute: state_machine.submit_for_approval()
-   - Save state: status='manager_approval'
-   - Enqueue: `await ctx['redis'].enqueue_job('send_notification', request_id, 'approval_required')`
-   - Release lock
+   - Queries DB for pending requests
+   - Finds request with status='pending'
+   - Acquires lock: UPDATE requests SET locked_by='poll-worker-1' WHERE id=...
+   - Loads state machine from DB
+   - Executes: state_machine.submit() (transitions to 'manager_approval')
+   - Saves state: status='manager_approval'
+   - Releases lock
    ↓
-4. Worker: send_notification task
+4. State Machine: PAUSED at 'manager_approval' (waiting for approval)
    ↓
-   - Tool: send_notification(approver_email, "Approval required")
-   - Provider: notification_provider.send_email(...)
-   ↓
-5. State Machine: PAUSED at 'manager_approval' (waiting for event)
-   ↓
-6. Manager: Approves via Admin Dashboard
+5. Manager: Approves via Admin Dashboard
    ↓
    - API: POST /api/v1/requests/{request_id}/approve
-   - Enqueue: `await ctx['redis'].enqueue_job('process_state_transition', request_id, 'approve')`
+   - Updates approval record in DB: status='approved'
    ↓
-7. Worker: process_state_transition task
+6. Polling Worker: (next poll cycle, ~5 seconds later)
    ↓
-   - Load state from DB
-   - Execute: state_machine.approve()
-   - Save state: status='provisioning'
-   - Enqueue: `await ctx['redis'].enqueue_job('provision_workspace', request_id, config)`
+   - Queries DB, finds request with approved approval
+   - Acquires lock
+   - Loads state machine
+   - Executes: state_machine.approve_manager() (transitions to 'training_pending')
+   - Saves state: status='training_pending'
+   - Releases lock
    ↓
-8. Worker: provision_workspace task (LONG-RUNNING: 10-20 minutes)
+7. User: Completes training
+   ↓
+   - API: POST /api/v1/requests/{request_id}/complete-training
+   - Updates request: training_completed=True
+   ↓
+8. Polling Worker: (next poll cycle)
+   ↓
+   - Finds request with training_completed=True
+   - Acquires lock (with extended 30-min timeout for provisioning)
+   - Executes: state_machine.complete_training() (transitions to 'provisioning')
+   - Saves state: status='provisioning'
+   - Starts provisioning (long-running, lock held for 30 minutes)
+   ↓
+9. Provisioning (LONG-RUNNING: 10-20 minutes, lock held)
    ↓
    - Tool: create_workspace(name, config)
      ├─ Provider: terraform_provider.apply(workspace_config)
@@ -1100,15 +1089,10 @@ Agent routes to: /paas/request-access (with prefill data)
      │     └─ Uses: Databricks Python SDK (WorkspaceClient) (2-5 minutes)
      └─ Provider: idp_provider.grant_permission(user, workspace, permissions)
            └─ Calls: IDP API
-   - Periodically update: UPDATE requests SET state_context=... WHERE id=...
-   - On completion: Enqueue `await ctx['redis'].enqueue_job('process_state_transition', request_id, 'complete')`
-   ↓
-9. Worker: process_state_transition task
-   ↓
-   - Load state from DB
-   - Execute: state_machine.complete()
-   - Save state: status='completed'
-   - Enqueue: `await ctx['redis'].enqueue_job('send_notification', request_id, 'completed')`
+   - Periodically updates: state_context.progress = {...}
+   - On completion: state_machine.finish_provisioning() (transitions to 'completed')
+   - Saves state: status='completed'
+   - Releases lock
    ↓
 10. Frontend: Polls status → Sees status='completed'
 ```
@@ -1534,8 +1518,6 @@ State machine includes failure states:
 ### Required Dependencies
 
 Add to `requirements.txt`:
-- `arq` - Task queue framework (Redis-based, async)
-- `redis` - Message broker for task queue
 - `databricks-sdk` - Databricks Python SDK (preferred over REST API for all Databricks operations)
 - `sqlalchemy` - ORM for database operations
 - `alembic` - Database migrations
@@ -1548,8 +1530,7 @@ Add to `requirements.txt`:
    - PostgreSQL-based database provided by Databricks
    - Standard PostgreSQL features (ACID transactions, JSON support)
    - Access via SQLAlchemy ORM
-2. **Redis** - For ARQ message broker
-3. **Database Migrations** - Schema managed via Alembic
+2. **Database Migrations** - Schema managed via Alembic
    - Tables created via Alembic migrations
    - Schema evolution handled by Alembic
 
@@ -1563,11 +1544,20 @@ Add to `requirements.txt`:
 
 ### Worker Setup
 
-1. **ARQ Worker Process** - Runs async tasks
-   - Runs as separate Databricks job or task
-   - Can run on Databricks compute clusters
-2. **Separate from API** - Workers run in separate Databricks tasks/jobs
-3. **Databricks Jobs** - Can schedule periodic tasks via Databricks Jobs
+1. **Polling Worker Process** - Runs continuously as background task
+   - Started automatically with FastAPI application (via `startup_event`)
+   - Runs in same process as API (can be separated if needed)
+   - Polls database every 5 seconds (configurable)
+   - Processes requests in parallel with concurrency limits
+2. **State Locking** - Prevents concurrent processing
+   - Uses database-level locking (PostgreSQL ACID guarantees)
+   - Lock timeout: 5 minutes (normal), 30 minutes (provisioning)
+   - **Lock Heartbeat**: For provisioning operations, worker periodically extends lock expiration (every 5 minutes) to prevent expiration during long-running Terraform applies
+   - Expired locks allow recovery from stuck workers
+3. **Error Handling** - Built into worker loop
+   - Retryable errors: Increment retry count, retry on next poll
+   - Permanent errors: Mark as failed immediately
+   - All failures logged to `failures` table
 
 ### Databricks App Deployment
 

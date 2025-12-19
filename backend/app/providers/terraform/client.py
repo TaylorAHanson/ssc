@@ -8,6 +8,12 @@ from app.core.retry import retry_on_retryable
 import subprocess
 import asyncio
 import json
+import os
+import shutil
+import pathlib
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class TerraformProvider(BaseProvider):
@@ -72,6 +78,13 @@ class TerraformProvider(BaseProvider):
     async def plan(self, config: Dict[str, Any], variables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Plan infrastructure changes."""
         try:
+            # Write Terraform files first
+            self._write_tf_files(config)
+            
+            # Run terraform init
+            await self._run_command(["terraform", "init"])
+            
+            # Run terraform plan
             cmd = ["terraform", "plan", "-json"]
             if variables:
                 for key, value in variables.items():
@@ -112,14 +125,164 @@ class TerraformProvider(BaseProvider):
             raise RetryableError(f"Command execution failed: {str(e)}")
     
     def _write_tf_files(self, config: Dict[str, Any]):
-        """Write Terraform configuration files."""
-        # TODO: Implement Terraform file writing
-        pass
+        """
+        Write Terraform configuration files.
+        
+        Copies template files from terrarform_temp/ to workspace directory
+        and writes terraform.tfvars from config.
+        
+        Args:
+            config: Dictionary containing:
+                - terraform_template_dir: Path to template directory (optional, defaults to terrarform_temp)
+                - terraform_tfvars: Dictionary of Terraform variables to write to terraform.tfvars
+        """
+        import pathlib
+        
+        # Get template directory (default to terrarform_temp relative to project root)
+        template_dir = config.get("terraform_template_dir")
+        if not template_dir:
+            # Default to terrarform_temp in project root
+            # __file__ is: backend/app/providers/terraform/client.py
+            # Go up 4 levels to get to backend/, then up 1 more to project root
+            project_root = pathlib.Path(__file__).parent.parent.parent.parent.parent
+            template_dir = str(project_root / "terrarform_temp")
+        
+        if not os.path.exists(template_dir):
+            raise PermanentError(f"Terraform template directory not found: {template_dir}")
+        
+        # Create workspace directory if it doesn't exist
+        os.makedirs(self.workspace_dir, exist_ok=True)
+        
+        # Files to copy from template
+        template_files = ["main.tf", "variables.tf"]
+        
+        # Copy template files
+        for file_name in template_files:
+            src_path = os.path.join(template_dir, file_name)
+            dst_path = os.path.join(self.workspace_dir, file_name)
+            
+            if os.path.exists(src_path):
+                shutil.copy2(src_path, dst_path)
+                logger.info(f"Copied {file_name} to {self.workspace_dir}")
+            else:
+                logger.warning(f"Template file not found: {src_path}")
+        
+        # Write terraform.tfvars from config
+        tfvars = config.get("terraform_tfvars", {})
+        if tfvars:
+            tfvars_path = os.path.join(self.workspace_dir, "terraform.tfvars")
+            with open(tfvars_path, "w") as f:
+                # Write as HCL format
+                for key, value in tfvars.items():
+                    if isinstance(value, dict):
+                        # Handle nested dictionaries (like tags)
+                        f.write(f"{key} = {{\n")
+                        for nested_key, nested_value in value.items():
+                            if isinstance(nested_value, str):
+                                f.write(f'  {nested_key} = "{nested_value}"\n')
+                            else:
+                                f.write(f"  {nested_key} = {nested_value}\n")
+                        f.write("}\n")
+                    elif isinstance(value, str):
+                        f.write(f'{key} = "{value}"\n')
+                    elif isinstance(value, (int, float, bool)):
+                        f.write(f"{key} = {value}\n")
+                    elif isinstance(value, list):
+                        # Handle lists
+                        f.write(f"{key} = [\n")
+                        for item in value:
+                            if isinstance(item, str):
+                                f.write(f'  "{item}",\n')
+                            else:
+                                f.write(f"  {item},\n")
+                        f.write("]\n")
+                    else:
+                        f.write(f'{key} = "{value}"\n')
+            
+            logger.info(f"Wrote terraform.tfvars to {tfvars_path}")
+        
+        logger.info(f"Terraform files written to {self.workspace_dir}")
     
     def _parse_output(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """Parse Terraform output."""
-        # TODO: Implement output parsing
-        return {"success": result["returncode"] == 0}
+        """
+        Parse Terraform JSON output to extract workspace information.
+        
+        Terraform outputs JSON lines when using -json flag. Each line is a JSON object
+        with a "type" field. We're looking for:
+        - "outputs" type: Contains the output values
+        - "apply_complete" type: Indicates successful completion
+        
+        Args:
+            result: Dictionary with stdout, stderr, returncode
+            
+        Returns:
+            Dictionary with:
+                - success: bool
+                - workspace_url: str (from databricks_host output)
+                - workspace_id: str (extracted from URL or output)
+                - workspace_token: str (from databricks_token output, if available)
+        """
+        if result["returncode"] != 0:
+            return {
+                "success": False,
+                "error": result.get("stderr", "Unknown error")
+            }
+        
+        outputs = {}
+        apply_complete = False
+        
+        # Parse JSON lines from stdout
+        for line in result["stdout"].split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            
+            try:
+                event = json.loads(line)
+                event_type = event.get("type")
+                
+                if event_type == "outputs":
+                    # Extract output values
+                    output_changes = event.get("outputs", {})
+                    for output_name, output_data in output_changes.items():
+                        if "value" in output_data:
+                            outputs[output_name] = output_data["value"]
+                
+                elif event_type == "apply_complete":
+                    apply_complete = True
+                    
+            except json.JSONDecodeError:
+                # Skip non-JSON lines (like warnings or other output)
+                continue
+            except Exception as e:
+                logger.warning(f"Error parsing Terraform output line: {e}")
+                continue
+        
+        # Extract workspace information from outputs
+        workspace_url = outputs.get("databricks_host", "")
+        workspace_token = outputs.get("databricks_token", "")
+        
+        # Extract workspace_id from URL if available
+        # Format: https://<workspace-id>.cloud.databricks.com
+        workspace_id = None
+        if workspace_url:
+            try:
+                # Parse URL to extract workspace ID
+                # URL format: https://<workspace-id>.cloud.databricks.com
+                if "//" in workspace_url:
+                    hostname = workspace_url.split("//")[1].split("/")[0]
+                    if "." in hostname:
+                        workspace_id = hostname.split(".")[0]
+            except Exception as e:
+                logger.warning(f"Could not extract workspace_id from URL: {e}")
+        
+        return {
+            "success": apply_complete and result["returncode"] == 0,
+            "workspace_url": workspace_url,
+            "workspace_id": workspace_id,
+            "workspace_token": workspace_token,
+            "outputs": outputs
+        }
     
     def _classify_error(self, error_msg: str):
         """Classify Terraform error as retryable or permanent."""

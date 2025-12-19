@@ -46,35 +46,10 @@ class ApprovalType(str, Enum):
     SECURITY = "security"
 
 
-class PathStateStatus(str, Enum):
-    """Path state status enumeration."""
-    PENDING = "pending"
-    ACTIVE = "active"
-    COMPLETED = "completed"
-
-
-class PathState(BaseModel):
-    """Individual state within a parallel path."""
-    id: str
-    name: str
-    status: PathStateStatus
-    order: int
-
-
-class ParallelPath(BaseModel):
-    """Parallel execution path in state machine."""
-    id: str
-    name: str
-    states: List[PathState]
-    required: bool
-
-
 class StateMachineState(BaseModel):
-    """State machine state representation."""
+    """State machine state representation - linear flow from python-statemachine."""
     currentState: str
-    parallelPaths: List[ParallelPath]
-    completedStates: List[str]
-    activeStates: List[str]
+    states: List[Dict[str, Any]]  # List of {id, name, isActive, isCompleted, isInitial, isFinal}
 
 
 class Approval(BaseModel):
