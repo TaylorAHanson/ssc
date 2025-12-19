@@ -98,6 +98,7 @@ class CreateWorkspaceTool(BaseTool):
             "workspace_name": name,
             "environment": environment
         }, actor="system")
+        self.report_progress(db, request_id, "Initializing infrastructure provisioning...", 10)
         
         try:
             # Step 1: Provision infrastructure via Terraform
@@ -112,7 +113,10 @@ class CreateWorkspaceTool(BaseTool):
             self.terraform.workspace_dir = workspace_dir
             
             try:
+                self.report_progress(db, request_id, "Preparing Terraform configuration...", 20)
                 tf_config = self._build_terraform_config(name, environment, config)
+                
+                self.report_progress(db, request_id, "Applying infrastructure changes (this may take 5-10 minutes)...", 40)
                 tf_result = await self.terraform.apply(tf_config, variables=config)
             finally:
                 # Restore original workspace_dir (for potential reuse, though typically new instance per request)
@@ -124,6 +128,8 @@ class CreateWorkspaceTool(BaseTool):
             
             if not workspace_url:
                 raise ValueError("Terraform did not return workspace_url")
+            
+            self.report_progress(db, request_id, "Infrastructure provisioned. Configuring workspace...", 70)
             
             # Extract workspace_id from URL if not provided
             if not workspace_id and workspace_url:
@@ -140,6 +146,7 @@ class CreateWorkspaceTool(BaseTool):
             db_result = {}
             if self.databricks:
                 try:
+                    self.report_progress(db, request_id, "Setting up Databricks objects...", 80)
                     db_result = await self.databricks.create_workspace(
                         name=name,
                         config=config.get("databricks_config", {})
@@ -156,6 +163,7 @@ class CreateWorkspaceTool(BaseTool):
             
             # Step 3: Grant access to requester (if IDP provider is configured)
             try:
+                self.report_progress(db, request_id, "Granting user permissions...", 90)
                 await self.idp.grant_permission(
                     principal_id=requested_by,
                     resource=f"workspace:{workspace_id or name}",
@@ -164,6 +172,8 @@ class CreateWorkspaceTool(BaseTool):
             except Exception as e:
                 # IDP provider might not be fully implemented - log and continue
                 logger.warning(f"Could not grant IDP permissions: {e}")
+            
+            self.report_progress(db, request_id, "Finalizing setup...", 95)
             
             # Step 4: Record fact that workspace was created (source of truth)
             add_fact(db, request_id, "workspace_created", {
@@ -177,6 +187,8 @@ class CreateWorkspaceTool(BaseTool):
             add_fact(db, request_id, "provisioning_completed", {
                 "workspace_id": workspace_id
             }, actor="system")
+            
+            self.report_progress(db, request_id, "Workspace provisioned successfully!", 100)
             
             # Step 6: Notify user
             try:

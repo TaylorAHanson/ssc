@@ -33,9 +33,16 @@ export interface Request {
   environment?: Environment;
 }
 
+export interface ProgressInfo {
+  message: string;
+  percent: number;
+  timestamp: string;
+}
+
 export interface StateMachineState {
   currentState: string;
   states: State[];
+  currentProgress?: ProgressInfo;
 }
 
 export interface State {

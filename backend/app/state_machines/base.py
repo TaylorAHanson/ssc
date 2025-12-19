@@ -59,9 +59,21 @@ class BaseRequestStateMachine(StateMachine):
                 "isFinal": state.final
             })
         
+        # Get latest progress if available
+        current_progress = None
+        progress_fact = get_latest_fact(self.db, self.request.id, "provisioning_progress")
+        if progress_fact and progress_fact.event_data:
+            data = progress_fact.event_data
+            current_progress = {
+                "message": data.get("message", ""),
+                "percent": data.get("percent", 0),
+                "timestamp": progress_fact.created_at
+            }
+        
         return StateMachineState(
             currentState=self.current_state.id,
-            states=states_list
+            states=states_list,
+            currentProgress=current_progress
         )
     
     def _is_state_completed(self, state_id: str) -> bool:

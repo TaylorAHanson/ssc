@@ -34,10 +34,11 @@ async def get_requests(
             sm_state = sm.to_state_machine_state()
         except Exception as e:
             # Fallback for corrupted/legacy data
-            print(f"ERROR loading SM for {req.id}: {e}")
+            logger.error(f"ERROR loading SM for {req.id}: {e}", exc_info=True)
             sm_state = StateMachineState(
                 currentState=req.current_state or "unknown",
-                states=[]
+                states=[],
+                currentProgress=None
             )
 
         # Handle invalid status values gracefully
@@ -79,9 +80,11 @@ async def get_request(
         sm = load_state_machine(request_model, db)
         sm_state = sm.to_state_machine_state()
     except Exception as e:
+        logger.error(f"ERROR loading SM for {request_id}: {e}", exc_info=True)
         sm_state = StateMachineState(
             currentState=request_model.current_state or "unknown",
-            states=[]
+            states=[],
+            currentProgress=None
         )
     
     # Handle invalid status values gracefully

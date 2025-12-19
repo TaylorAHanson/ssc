@@ -63,6 +63,26 @@ function TrainingAction({ requestId }: { requestId: string }) {
   );
 }
 
+function ProvisioningProgress({ progress }: { progress: NonNullable<Request['stateMachine']['currentProgress']> }) {
+  return (
+    <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm font-medium text-blue-900">{progress.message}</span>
+        <span className="text-sm font-bold text-blue-900">{progress.percent}%</span>
+      </div>
+      <div className="w-full bg-blue-200 rounded-full h-2.5">
+        <div 
+          className="bg-blue-600 h-2.5 rounded-full transition-all duration-500 ease-out" 
+          style={{ width: `${progress.percent}%` }}
+        ></div>
+      </div>
+      <p className="text-[10px] text-blue-700 mt-2 text-right italic">
+        Last updated: {formatDate(progress.timestamp)}
+      </p>
+    </div>
+  );
+}
+
 function RequestStateList({ request }: { request: Request }) {
   const approvals = useRequestStore((state) => state.approvals);
   const fetchApprovals = useRequestStore((state) => state.fetchApprovals);
@@ -201,6 +221,9 @@ function RequestStateList({ request }: { request: Request }) {
                       </>
                     )}
                   </div>
+                  {isActive && step.id === 'provisioning' && request.stateMachine.currentProgress && (
+                    <ProvisioningProgress progress={request.stateMachine.currentProgress} />
+                  )}
                 </div>
               </div>
 
