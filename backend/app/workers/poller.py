@@ -241,18 +241,102 @@ async def _process_request_state_machine(db, request: RequestModel):
     
     The poller is completely ignorant of business logic.
     It just loads the state machine and calls tick().
+    Also handles async tool execution for provisioning states.
     """
+    from app.state_machines.facts import has_fact
+    
     # Load the polymorphic state machine
     sm = load_state_machine(request, db)
     
     # Let the state machine handle all logic
     changed = sm.tick()
     
+    # Handle async tool execution for provisioning
+    # Check if we're in provisioning state and need to start provisioning
+    if sm.current_state.id == "provisioning":
+        if not has_fact(db, request.id, "provisioning_started") and not has_fact(db, request.id, "workspace_created"):
+            # Start provisioning asynchronously
+            logger.info(f"Starting async workspace provisioning for request {request.id}")
+            try:
+                await _execute_provisioning_tool(db, request, sm)
+                # Reload state machine after tool execution to pick up new facts
+                sm = load_state_machine(request, db)
+                sm.tick()  # Process any new transitions based on workspace_created fact
+                changed = True  # State may have changed
+            except Exception as e:
+                logger.error(f"Error executing provisioning tool for request {request.id}: {e}", exc_info=True)
+                raise
+    
     # Save if state changed
     if changed:
         save_state_machine(db, request, sm)
         db.commit()
         logger.debug(f"State machine processed for request {request.id}: {sm.current_state.id}")
+
+
+async def _execute_provisioning_tool(db, request: RequestModel, sm):
+    """
+    Execute the provisioning tool for workspace creation.
+    
+    This is called by the poller when a request enters provisioning state.
+    """
+    from app.tools.workspace import CreateWorkspaceTool
+    
+    # Extract configuration from request
+    state_context = request.state_context or {}
+    
+    # Get workspace name and environment
+    workspace_name = state_context.get("workspace_name")
+    if not workspace_name:
+        # Try to extract from title
+        if ":" in request.title:
+            workspace_name = request.title.split(":")[-1].strip()
+        else:
+            workspace_name = request.title
+    
+    environment = request.environment or "dev"
+    
+    # Build config for tool
+    config = {
+        "databricks_account_id": state_context.get("databricks_account_id"),
+        "client_id": state_context.get("client_id"),
+        "client_secret": state_context.get("client_secret"),
+        "region": state_context.get("region", "eu-west-1"),
+        "cidr_block": state_context.get("cidr_block", "10.4.0.0/16"),
+        "tags": state_context.get("tags", {}),
+        **state_context  # Include any other config
+    }
+    
+    # Validate required config
+    if not config.get("databricks_account_id"):
+        raise ValueError("databricks_account_id is required in request state_context")
+    if not config.get("client_id"):
+        raise ValueError("client_id is required in request state_context")
+    if not config.get("client_secret"):
+        raise ValueError("client_secret is required in request state_context")
+    
+    # Get requested_by from request
+    requested_by = state_context.get("requested_by") or "system"
+    
+    # Create and execute tool
+    tool = CreateWorkspaceTool()
+    
+    # Allow patching tool providers for testing
+    # In tests, providers can be mocked and injected here
+    if hasattr(tool, '_test_providers'):
+        for provider_name, provider_instance in tool._test_providers.items():
+            setattr(tool, provider_name, provider_instance)
+    
+    result = await tool.execute(
+        request_id=request.id,
+        name=workspace_name,
+        environment=environment,
+        config=config,
+        requested_by=requested_by,
+        db=db
+    )
+    
+    logger.info(f"Workspace provisioning completed for request {request.id}: {result}")
 
 
 async def _handle_retryable_error(

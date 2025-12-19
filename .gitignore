@@ -33,6 +33,14 @@ dist-ssr
 # Ignore compiled Python files
 *.pyc
 *.pyo
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Test files
+*.db
+test.db
 
 # Terraform
 *.tfvars

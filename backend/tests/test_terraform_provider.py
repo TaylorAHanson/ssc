@@ -18,8 +18,8 @@ import tempfile
 import shutil
 from pathlib import Path
 
-# Add backend to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add backend to path (tests are in backend/tests/, need to go up one level)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.providers.terraform.client import TerraformProvider
 from app.core.exceptions import PermanentError, RetryableError
