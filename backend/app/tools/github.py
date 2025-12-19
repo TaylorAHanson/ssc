@@ -11,9 +11,10 @@ class ScaffoldGitHubRepoTool(BaseTool):
     """Scaffold GitHub repository from template."""
     
     def __init__(self):
+        """Initialize providers from settings."""
         self.github = GitHubProvider(
-            token="",  # TODO: Add to settings
-            org=""  # TODO: Add to settings
+            token=settings.GITHUB_TOKEN or "",
+            org=settings.GITHUB_ORG or ""
         )
     
     async def execute(

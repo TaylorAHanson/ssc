@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { useRequestStore } from '../stores/requestStore';
-import { RequestStatusFlow } from '../components/RequestStatusFlow';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { formatInTimeZone } from 'date-fns-tz';
@@ -85,92 +84,130 @@ function RequestStateList({ request }: { request: Request }) {
     completedAt: request.createdAt
   });
 
-  if (request.stateMachine.parallelPaths.length > 0) {
-    const pathSteps = request.stateMachine.parallelPaths.flatMap(path => 
-      path.states.map(state => {
-        let completedAt = undefined;
-        // Try to find matching approval timestamp
-        if (state.id.includes('approval') || state.status === 'completed') {
-           // Look for an approved approval for this request
-           const relevantApproval = approvals.find(a => 
-             a.requestId === request.id && 
-             a.status === 'approved' &&
-             (
-               state.id.toLowerCase().includes(a.approvalType.toLowerCase()) || 
-               state.name.toLowerCase().includes(a.approvalType.toLowerCase())
-             )
-           );
-           if (relevantApproval) {
-             completedAt = relevantApproval.updatedAt;
-           }
+  // Use the new linear states structure
+  if (request.stateMachine.states && request.stateMachine.states.length > 0) {
+    const stateSteps = request.stateMachine.states.map((state, index) => {
+      let completedAt = undefined;
+      
+      // Determine status - ensure rejected and completed are mutually exclusive
+      let status: 'pending' | 'active' | 'completed' | 'rejected' = 'pending';
+      if (state.isCompleted) {
+        // Check if this is a rejected state
+        if (state.id === 'rejected' || state.name.toLowerCase().includes('rejected')) {
+          status = 'rejected';
+        } else {
+          status = 'completed';
         }
+      } else if (state.isActive) {
+        status = 'active';
+      }
+      
+      // Try to find matching approval timestamp
+      if (state.id.includes('approval') || state.isCompleted) {
+         // Look for an approved approval for this request
+         const relevantApproval = approvals.find(a => 
+           a.requestId === request.id && 
+           a.status === 'approved' &&
+           (
+             state.id.toLowerCase().includes(a.approvalType.toLowerCase()) || 
+             state.name.toLowerCase().includes(a.approvalType.toLowerCase())
+           )
+         );
+         if (relevantApproval) {
+           completedAt = relevantApproval.updatedAt;
+         }
+      }
 
-        return {
-          id: state.id,
-          name: state.name,
-          status: state.status,
-          type: path.name,
-          order: state.order,
-          completedAt
-        };
-      })
-    );
-    steps = [...steps, ...pathSteps];
+      return {
+        id: state.id,
+        name: state.name,
+        status,
+        order: index + 1,
+        completedAt
+      };
+    });
+    steps = [...steps, ...stateSteps];
   } else {
-    // Fallback for linear flows
-    const allStates = ['pending', ...request.stateMachine.activeStates, ...request.stateMachine.completedStates];
-    const uniqueStates = Array.from(new Set(allStates));
-    const linearSteps = uniqueStates.map((id, index) => ({
-      id,
-      name: id.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-      status: request.stateMachine.completedStates.includes(id) ? 'completed' : 
-              request.stateMachine.activeStates.includes(id) ? 'active' : 'pending',
-      order: index + 1
-    }));
-    steps = [...steps, ...linearSteps];
+    // Fallback: if states array is empty or missing, show current state only
+    const currentState = request.stateMachine.currentState || 'unknown';
+    const isRejected = request.status === 'rejected' || currentState === 'rejected';
+    steps.push({
+      id: currentState,
+      name: currentState.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+      status: isRejected ? 'rejected' : 'active',
+      order: 1
+    });
   }
 
   return (
-    <div className="mb-6 space-y-4">
-      <div className="bg-gray-50 rounded-lg border border-gray-200 divide-y divide-gray-200">
+    <div className="space-y-4">
+      <div className="bg-white rounded-lg border border-gray-200 shadow-sm divide-y divide-gray-200">
         {steps.map((step, idx) => {
-          let isCompleted = step.status === 'completed';
+          const isCompleted = step.status === 'completed';
+          const isRejected = step.status === 'rejected';
           const isActive = step.status === 'active';
           const isTraining = step.id === 'training_pending';
           const isUserRequest = step.id === 'user_request';
 
           return (
-            <div key={`${step.id}-${idx}`} className="p-3 flex items-center justify-between bg-white first:rounded-t-lg last:rounded-b-lg">
-              <div className="flex items-center gap-3">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                  isCompleted ? 'bg-green-100 text-green-600' : 
-                  isActive ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-400'
+            <div 
+              key={`${step.id}-${idx}`} 
+              className={`p-4 flex items-center justify-between transition-colors ${
+                isActive ? 'bg-blue-50 border-l-4 border-l-blue-500' :
+                isCompleted ? 'bg-green-50 border-l-4 border-l-green-500' :
+                isRejected ? 'bg-red-50 border-l-4 border-l-red-500' :
+                'bg-white border-l-4 border-l-gray-200'
+              } first:rounded-t-lg last:rounded-b-lg hover:bg-opacity-80`}
+            >
+              <div className="flex items-center gap-4 flex-1">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
+                  isCompleted ? 'bg-green-500 text-white' : 
+                  isRejected ? 'bg-red-500 text-white' :
+                  isActive ? 'bg-blue-500 text-white' : 
+                  'bg-gray-300 text-gray-600'
                 }`}>
-                  {isCompleted ? <CheckCircle2 className="w-5 h-5" /> : 
-                   isActive ? <Loader2 className="w-5 h-5 animate-spin" /> : 
-                   <Circle className="w-5 h-5" />}
+                  {isCompleted ? <CheckCircle2 className="w-6 h-6" /> : 
+                   isRejected ? <X className="w-6 h-6" /> :
+                   isActive ? <Loader2 className="w-6 h-6 animate-spin" /> : 
+                   <Circle className="w-6 h-6" />}
                 </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-medium text-gray-900">{step.name}</p>
-                    {step.type && <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">{step.type}</span>}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-base font-semibold text-gray-900">{step.name}</p>
+                    {step.type && (
+                      <span className="text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">
+                        {step.type}
+                      </span>
+                    )}
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-gray-500">
-                    <span className="capitalize">Status: {step.status}</span>
-                    {(isUserRequest || (isCompleted && step.completedAt)) && (
+                  <div className="flex items-center gap-3 text-sm text-gray-600">
+                    <span className={`font-medium ${
+                      isCompleted ? 'text-green-700' :
+                      isRejected ? 'text-red-700' :
+                      isActive ? 'text-blue-700' :
+                      'text-gray-500'
+                    }`}>
+                      {isCompleted ? 'Completed' :
+                       isRejected ? 'Rejected' :
+                       isActive ? 'In Progress' :
+                       'Pending'}
+                    </span>
+                    {(isUserRequest || (isCompleted && step.completedAt) || (isRejected && step.completedAt)) && (
                       <>
-                        <span>•</span>
-                        <span>{formatDate(step.completedAt || request.createdAt)} ({formatDuration(step.completedAt || request.createdAt)})</span>
+                        <span className="text-gray-400">•</span>
+                        <span className="text-gray-500">
+                          {formatDate(step.completedAt || request.createdAt)} ({formatDuration(step.completedAt || request.createdAt)})
+                        </span>
                       </>
                     )}
                   </div>
                 </div>
               </div>
 
-              {isTraining && isActive && !isCompleted && (
-                <div className="flex items-center gap-2">
-                   <div className="text-xs text-yellow-700 bg-yellow-50 px-2 py-1 rounded border border-yellow-200 flex items-center gap-1">
-                     <AlertCircle className="w-3 h-3" />
+              {isTraining && isActive && !isCompleted && !isRejected && (
+                <div className="flex items-center gap-3 ml-4">
+                   <div className="text-sm text-yellow-800 bg-yellow-100 px-3 py-2 rounded-lg border border-yellow-300 flex items-center gap-2">
+                     <AlertCircle className="w-4 h-4" />
                      Action Required
                    </div>
                    <TrainingAction requestId={request.id} />
@@ -324,13 +361,9 @@ export function Requests() {
               </div>
             </CardHeader>
             <CardContent className="flex-1 overflow-y-auto space-y-6 p-6">
-              <RequestStateList request={selectedRequest} />
-              
               <div>
-                <RequestStatusFlow 
-                  stateMachine={selectedRequest.stateMachine} 
-                  requestStatus={selectedRequest.status}
-                />
+                <h2 className="text-xl font-semibold text-gray-900 mb-4">Request Status</h2>
+                <RequestStateList request={selectedRequest} />
               </div>
             </CardContent>
           </Card>

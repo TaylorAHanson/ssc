@@ -154,7 +154,7 @@ export function Admin() {
     
     try {
       const formData = await getForm(formPath);
-      surveyCreator.JSON = formData.schema;
+      surveyCreator.JSON = formData.form_schema || formData.schema; // Use form_schema, fallback for compatibility
       setSaveMessage(null);
     } catch (error) {
       console.error('Failed to load form:', error);
@@ -244,7 +244,7 @@ export function Admin() {
     
     try {
       const formData = await getForm(formPath, versionFilename);
-      surveyCreator.JSON = formData.schema;
+      surveyCreator.JSON = formData.form_schema || formData.schema; // Use form_schema, fallback for compatibility
       setSelectedForm(formPath);
       setSaveMessage({ type: 'success', text: 'Version loaded. Click Save to make it active.' });
     } catch (error) {
@@ -259,12 +259,13 @@ export function Admin() {
     try {
       // Load the version
       const formData = await getForm(formPath, versionFilename);
+      const schema = formData.form_schema || formData.schema; // Use form_schema, fallback for compatibility
       
       // Save it as the active version (this will create a new backup of current)
-      await saveForm(formPath, formData.schema, true);
+      await saveForm(formPath, schema, true);
       
       // Update the creator
-      surveyCreator.JSON = formData.schema;
+      surveyCreator.JSON = schema;
       setSelectedForm(formPath);
       
       // Reload versions to show updated list

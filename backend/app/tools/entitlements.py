@@ -12,13 +12,14 @@ class SearchUserEntitlementsTool(BaseTool):
     """Search user entitlements."""
     
     def __init__(self):
+        """Initialize providers from settings."""
         self.databricks = DatabricksProvider(
             host=settings.DATABRICKS_HOST,
             token=settings.DATABRICKS_TOKEN
         )
         self.idp = IDPProvider(
-            base_url="",  # TODO: Add to settings
-            api_key=""  # TODO: Add to settings
+            base_url=settings.IDP_BASE_URL or "",
+            api_key=settings.IDP_API_KEY or ""
         )
     
     async def execute(

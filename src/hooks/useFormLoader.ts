@@ -20,7 +20,12 @@ export function useFormLoader(formPath: string) {
       try {
         const formData = await getForm(formPath);
         if (isMounted) {
-          const model = new Model(formData.schema);
+          // Use form_schema to match backend field name
+          const schema = formData.form_schema || formData.schema; // Fallback for compatibility
+          if (!schema || (typeof schema === 'object' && Object.keys(schema).length === 0)) {
+            throw new Error('Form schema is empty or invalid');
+          }
+          const model = new Model(schema);
           // Set wider width for forms
           model.width = '100%';
           model.widthMode = 'responsive';

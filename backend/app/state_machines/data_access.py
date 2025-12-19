@@ -10,8 +10,8 @@ class DataAccessStateMachine(BaseRequestStateMachine):
     pending = State("pending", initial=True)
     data_owner_approval = State("data_owner_approval")
     provisioning = State("provisioning")
-    completed = State("completed")
-    rejected = State("rejected")
+    completed = State("completed", final=True)
+    rejected = State("rejected", final=True)
 
     submit = pending.to(data_owner_approval, cond="has_request_submitted")
     approve_owner = data_owner_approval.to(provisioning, cond="has_data_owner_approval")

@@ -23,7 +23,14 @@ class BaseRequestStateMachine(StateMachine):
         self.db = db
         # We no longer store visual state in the DB.
         # We calculate it on the fly.
-        super().__init__(start_value=request.current_state, **kwargs)
+        # Handle legacy "failed" state - default to a valid state
+        start_state = request.current_state
+        if start_state == "failed":
+            # For failed requests, default to "provisioning" as the most common failure point
+            # This allows the state machine to load and display the failure state
+            # The actual status="failed" will be shown in the UI
+            start_state = "provisioning"
+        super().__init__(start_value=start_state, **kwargs)
 
     def to_state_machine_state(self) -> StateMachineState:
         """
@@ -172,12 +179,16 @@ class BaseRequestStateMachine(StateMachine):
     @property
     def has_manager_approval(self) -> bool:
         """Check if manager approval has been received."""
-        return has_fact(self.db, self.request.id, "approval_received", approval_type="manager")
+        result = has_fact(self.db, self.request.id, "approval_received", approval_type="manager")
+        logger.debug(f"[{self.request.id}] has_manager_approval check: {result}")
+        return result
     
     @property
     def has_training_completed(self) -> bool:
         """Check if training has been completed."""
-        return has_fact(self.db, self.request.id, "training_completed")
+        result = has_fact(self.db, self.request.id, "training_completed")
+        logger.debug(f"[{self.request.id}] has_training_completed check: {result}")
+        return result
     
     @property
     def has_workspace_created(self) -> bool:
@@ -187,7 +198,9 @@ class BaseRequestStateMachine(StateMachine):
     @property
     def requires_training(self) -> bool:
         """Check if request requires training."""
-        return self.request.requires_training if hasattr(self.request, 'requires_training') else False
+        result = self.request.requires_training if hasattr(self.request, 'requires_training') else False
+        logger.debug(f"[{self.request.id}] requires_training check: {result}")
+        return result
     
     # Additional approval type properties (override in subclasses as needed)
     @property
@@ -213,15 +226,25 @@ class BaseRequestStateMachine(StateMachine):
             True if state was changed, False otherwise
         """
         initial_state = self.current_state.id
+        logger.info(f"[{self.request.id}] State machine tick() - Starting from state: {initial_state}")
         
         # Step 1: Process current state (record facts if needed)
+        logger.debug(f"[{self.request.id}] Processing current state: {initial_state}")
         self._process_current_state()
         
         # Step 2: Try to trigger transitions based on facts
         # The conditional transitions will evaluate their guards and execute
         # if conditions are met. If conditions aren't met, the transition
         # simply won't occur (no exception raised).
+        logger.debug(f"[{self.request.id}] Attempting transitions from state: {initial_state}")
         self._try_transitions()
+        
+        # Step 3: If state changed, call on_enter hooks
+        if self.current_state.id != initial_state:
+            logger.info(f"[{self.request.id}] State transition occurred: {initial_state} -> {self.current_state.id}")
+            self._call_on_enter_hooks(initial_state, self.current_state.id)
+        else:
+            logger.debug(f"[{self.request.id}] No state transition (still in {initial_state})")
         
         # Check if state changed
         return self.current_state.id != initial_state
@@ -255,15 +278,53 @@ class BaseRequestStateMachine(StateMachine):
         if hasattr(self, 'finish_provisioning'):
             transitions_to_try.append(('finish_provisioning', lambda: self.finish_provisioning()))
         
+        logger.info(f"[{self.request.id}] Trying {len(transitions_to_try)} transition(s) from state '{self.current_state.id}': {[t[0] for t in transitions_to_try]}")
+        
         # Try each transition - conditional guards will prevent invalid transitions
         for name, transition_func in transitions_to_try:
+            state_before = self.current_state.id
             try:
+                logger.debug(f"[{self.request.id}] Attempting transition '{name}' from state '{state_before}'...")
                 transition_func()
+                state_after = self.current_state.id
                 # If we get here, the transition occurred (condition was met)
-                logger.debug(f"Transition '{name}' executed for request {self.request.id}")
+                if state_before != state_after:
+                    logger.info(f"[{self.request.id}] ✓ Transition '{name}' SUCCEEDED: {state_before} -> {state_after}")
+                else:
+                    logger.info(f"[{self.request.id}] ✗ Transition '{name}' attempted but no state change (guard condition not met or transition not available from this state)")
             except Exception as e:
                 # Transition condition not met or not available from current state
                 # This is expected - just continue to next transition
+                logger.info(f"[{self.request.id}] ✗ Transition '{name}' failed: {type(e).__name__} - {str(e)[:100]}")
+                pass
+    
+    def _call_on_enter_hooks(self, previous_state: str, new_state: str):
+        """
+        Call on_enter hooks when entering a new state.
+        
+        This explicitly calls on_enter_* hooks that may have been auto-generated
+        via __getattr__ for approval states.
+        """
+        # Check if there's an on_enter hook for the new state
+        hook_name = f"on_enter_{new_state}"
+        if hasattr(self, hook_name):
+            try:
+                hook = getattr(self, hook_name)
+                if callable(hook):
+                    hook()
+                    logger.debug(f"Called {hook_name} hook for request {self.request.id}")
+            except AttributeError:
+                # Hook doesn't exist or wasn't auto-generated - that's okay
+                pass
+        elif new_state.endswith("_approval"):
+            # Try to auto-generate and call the hook
+            try:
+                hook = getattr(self, hook_name)
+                if callable(hook):
+                    hook()
+                    logger.debug(f"Auto-generated and called {hook_name} hook for request {self.request.id}")
+            except AttributeError:
+                # Can't generate hook - that's okay
                 pass
 
 
@@ -294,6 +355,15 @@ class BaseRequestStateMachine(StateMachine):
                 self.reject()
                 changed = True
         
+        # Handle approval states - ensure approval record exists
+        if self.current_state.id.endswith("_approval"):
+            # Check if this state is in APPROVAL_NODES
+            if hasattr(self, 'APPROVAL_NODES') and self.current_state.id in self.APPROVAL_NODES:
+                approval_type = self.APPROVAL_NODES[self.current_state.id].get("approval_type")
+                if approval_type:
+                    # Create approval if it doesn't exist
+                    self.create_approval_task(approval_type)
+        
         # Handle provisioning state - check if workspace already exists
         if self.current_state.id == "provisioning":
             if has_fact(self.db, self.request.id, "workspace_created"):
@@ -314,20 +384,25 @@ class BaseRequestStateMachine(StateMachine):
         ).first()
         
         if not exists:
-            # Check if already approved/rejected recently? 
-            # For now, just create if no pending one.
+            # Get requested_by from state_context if available
+            state_context = self.request.state_context or {}
+            requested_by = state_context.get("requested_by", "system")
+            requested_by_email = state_context.get("requested_by_email", "")
+            
             approval_id = f"app-{datetime.utcnow().timestamp()}"
             new_approval = ApprovalModel(
                 id=approval_id,
                 request_id=self.request.id,
                 approval_type=approval_type,
-                requested_by="system",
+                requested_by=requested_by,
+                requested_by_email=requested_by_email,
                 status="pending",
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
             )
             self.db.add(new_approval)
-            logger.info(f"Created pending approval {approval_id} ({approval_type}) for request {self.request.id}")
+            self.db.commit()  # Commit immediately so approval is available
+            logger.info(f"Created pending approval {approval_id} ({approval_type}) for request {self.request.id} (requested_by: {requested_by})")
     
     def __getattr__(self, name: str):
         """

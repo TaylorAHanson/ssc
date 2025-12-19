@@ -4,7 +4,8 @@ export type RequestStatus =
   | 'training_pending'
   | 'provisioning'
   | 'completed'
-  | 'rejected';
+  | 'rejected'
+  | 'failed';
 
 export type RequestType = 
   | 'workspace_access'
@@ -34,11 +35,19 @@ export interface Request {
 
 export interface StateMachineState {
   currentState: string;
-  parallelPaths: ParallelPath[];
-  completedStates: string[];
-  activeStates: string[];
+  states: State[];
 }
 
+export interface State {
+  id: string;
+  name: string;
+  isActive: boolean;
+  isCompleted: boolean;
+  isInitial: boolean;
+  isFinal: boolean;
+}
+
+// Legacy types kept for backwards compatibility (not used in new structure)
 export interface ParallelPath {
   id: string;
   name: string;

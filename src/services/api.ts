@@ -94,7 +94,8 @@ export interface FormVersionInfo {
 
 export interface FormSchemaResponse {
   path: string;
-  schema: Record<string, any>;
+  form_schema: Record<string, any>;  // Updated to match backend field name
+  schema?: Record<string, any>;  // Legacy field for backward compatibility
 }
 
 /**
@@ -137,7 +138,7 @@ export async function saveForm(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      schema,
+      form_schema: schema,  // Updated to match backend field name
       create_version: createVersion,
     }),
   });

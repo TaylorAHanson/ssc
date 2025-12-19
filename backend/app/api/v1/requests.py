@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.responses import JSONResponse
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from app.models.request import Request, RequestCreate, RequestUpdate, StateMachineState
+from app.models.request import Request, RequestCreate, RequestUpdate, StateMachineState, RequestStatus
 from app.services.request_service import RequestService
 from app.db.session import get_db
 from app.db.request import ApprovalModel, RequestModel
@@ -40,11 +40,19 @@ async def get_requests(
                 states=[]
             )
 
+        # Handle invalid status values gracefully
+        try:
+            request_status = RequestStatus(req.status)
+        except ValueError:
+            # If status is not in enum (e.g., "failed" from old code), default to pending
+            # This handles legacy data or unexpected status values
+            request_status = RequestStatus.PENDING
+        
         response_list.append(Request(
             id=req.id,
             type=req.type,
             title=req.title,
-            status=req.status,
+            status=request_status,
             createdAt=req.created_at,
             updatedAt=req.updated_at,
             stateMachine=sm_state,
@@ -75,20 +83,27 @@ async def get_request(
             currentState=request_model.current_state or "unknown",
             states=[]
         )
-        
+    
+    # Handle invalid status values gracefully
+    try:
+        request_status = RequestStatus(request_model.status)
+    except ValueError:
+        # If status is not in enum (e.g., "failed" from old code), default to pending
+        request_status = RequestStatus.PENDING
+    
     return Request(
-        id=request_model.id,
-        type=request_model.type,
-        title=request_model.title,
-        status=request_model.status,
-        createdAt=request_model.created_at,
-        updatedAt=request_model.updated_at,
-        stateMachine=sm_state,
-        requiresTraining=request_model.requires_training,
-        trainingCompleted=request_model.training_completed,
-        environment=request_model.environment,
-        metadata=request_model.state_context or {}
-    )
+            id=request_model.id,
+            type=request_model.type,
+            title=request_model.title,
+            status=request_status,
+            createdAt=request_model.created_at,
+            updatedAt=request_model.updated_at,
+            stateMachine=sm_state,
+            requiresTraining=request_model.requires_training,
+            trainingCompleted=request_model.training_completed,
+            environment=request_model.environment,
+            metadata=request_model.state_context or {}
+        )
 
 
 @router.get("/{request_id}/status")
@@ -144,6 +159,11 @@ async def approve_request(
     
     approved_by = "api_user"  # TODO: Get from auth context
     
+    # Update approval status immediately
+    approval.status = "approved"
+    approval.approved_by = approved_by
+    approval.approved_at = datetime.utcnow()
+    
     # Record fact (this is the source of truth)
     add_fact(
         db, request_id, "approval_received",
@@ -183,6 +203,12 @@ async def reject_request(
     
     rejected_by = "api_user"  # TODO: Get from auth context
     rejection_note = rejection_data.get("rejection_note")
+    
+    # Update approval status immediately
+    approval.status = "rejected"
+    approval.rejected_by = rejected_by
+    approval.rejection_note = rejection_note
+    approval.rejected_at = datetime.utcnow()
     
     # Record fact (this is the source of truth)
     add_fact(

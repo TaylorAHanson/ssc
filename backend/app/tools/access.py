@@ -13,15 +13,30 @@ class GrantAccessTool(BaseTool):
     """Grant access to resources."""
     
     def __init__(self):
+        """Initialize providers from settings."""
         self.databricks = DatabricksProvider(
             host=settings.DATABRICKS_HOST,
             token=settings.DATABRICKS_TOKEN
         )
         self.idp = IDPProvider(
-            base_url="",  # TODO: Add to settings
-            api_key=""  # TODO: Add to settings
+            base_url=settings.IDP_BASE_URL or "",
+            api_key=settings.IDP_API_KEY or ""
         )
-        self.notifications = NotificationProvider(config={})
+        notification_config = {
+            "email": {
+                "smtp_host": settings.NOTIFICATION_EMAIL_SMTP_HOST,
+                "smtp_port": settings.NOTIFICATION_EMAIL_SMTP_PORT,
+                "smtp_user": settings.NOTIFICATION_EMAIL_SMTP_USER,
+                "smtp_password": settings.NOTIFICATION_EMAIL_SMTP_PASSWORD,
+            },
+            "slack": {
+                "webhook_url": settings.NOTIFICATION_SLACK_WEBHOOK_URL,
+            },
+            "teams": {
+                "webhook_url": settings.NOTIFICATION_TEAMS_WEBHOOK_URL,
+            }
+        }
+        self.notifications = NotificationProvider(config=notification_config)
     
     async def execute(
         self,

@@ -16,8 +16,8 @@ class WorkspaceProvisionStateMachine(BaseRequestStateMachine):
     manager_approval = State("manager_approval")
     training_pending = State("training_pending")
     provisioning = State("provisioning")
-    completed = State("completed")
-    rejected = State("rejected")
+    completed = State("completed", final=True)
+    rejected = State("rejected", final=True)
     
     # Transitions with conditional guards based on facts
     # Using python-statemachine's built-in conditional transitions

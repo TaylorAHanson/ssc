@@ -15,6 +15,7 @@ class RequestStatus(str, Enum):
     PROVISIONING = "provisioning"
     COMPLETED = "completed"
     REJECTED = "rejected"
+    FAILED = "failed"
 
 
 class RequestType(str, Enum):
@@ -46,10 +47,18 @@ class ApprovalType(str, Enum):
     SECURITY = "security"
 
 
+class ProgressInfo(BaseModel):
+    """Progress information for long-running operations."""
+    message: str
+    percent: int
+    timestamp: datetime
+
+
 class StateMachineState(BaseModel):
     """State machine state representation - linear flow from python-statemachine."""
     currentState: str
     states: List[Dict[str, Any]]  # List of {id, name, isActive, isCompleted, isInitial, isFinal}
+    currentProgress: Optional[ProgressInfo] = None
 
 
 class Approval(BaseModel):

@@ -19,22 +19,52 @@ class CreateWorkspaceTool(BaseTool):
     """Create a Databricks workspace."""
     
     def __init__(self):
-        # TODO: Get these from settings/config
+        """Initialize providers from settings."""
+        # Terraform provider - workspace_dir will be set per request in execute()
+        # Store base directory from settings for creating per-request workspaces
+        self.terraform_base_dir = settings.TERRAFORM_WORKSPACE_BASE_DIR
+        # Initialize with base directory - will create per-request workspace in execute()
         self.terraform = TerraformProvider(
-            workspace_dir="/tmp/terraform",
+            workspace_dir=self.terraform_base_dir,
             config={}
         )
-        self.databricks = DatabricksProvider(
-            host=settings.DATABRICKS_HOST,
-            token=settings.DATABRICKS_TOKEN
-        )
+        
+        # Databricks provider - only initialize if credentials are available
+        # This is optional since create_workspace is not yet implemented
+        # Terraform handles workspace provisioning, so this is for future workspace operations
+        self.databricks = None
+        if settings.DATABRICKS_HOST and settings.DATABRICKS_TOKEN:
+            try:
+                self.databricks = DatabricksProvider(
+                    host=settings.DATABRICKS_HOST,
+                    token=settings.DATABRICKS_TOKEN
+                )
+            except Exception as e:
+                logger.warning(f"Could not initialize DatabricksProvider: {e}. Workspace operations will be limited.")
+                self.databricks = None
+        
+        # IDP provider (optional - only if configured)
         self.idp = IDPProvider(
-            base_url="",  # TODO: Add to settings
-            api_key=""  # TODO: Add to settings
+            base_url=settings.IDP_BASE_URL or "",
+            api_key=settings.IDP_API_KEY or ""
         )
-        self.notifications = NotificationProvider(
-            config={}
-        )
+        
+        # Notification provider
+        notification_config = {
+            "email": {
+                "smtp_host": settings.NOTIFICATION_EMAIL_SMTP_HOST,
+                "smtp_port": settings.NOTIFICATION_EMAIL_SMTP_PORT,
+                "smtp_user": settings.NOTIFICATION_EMAIL_SMTP_USER,
+                "smtp_password": settings.NOTIFICATION_EMAIL_SMTP_PASSWORD,
+            },
+            "slack": {
+                "webhook_url": settings.NOTIFICATION_SLACK_WEBHOOK_URL,
+            },
+            "teams": {
+                "webhook_url": settings.NOTIFICATION_TEAMS_WEBHOOK_URL,
+            }
+        }
+        self.notifications = NotificationProvider(config=notification_config)
     
     async def execute(
         self,
@@ -71,8 +101,22 @@ class CreateWorkspaceTool(BaseTool):
         
         try:
             # Step 1: Provision infrastructure via Terraform
-            tf_config = self._build_terraform_config(name, environment, config)
-            tf_result = await self.terraform.apply(tf_config, variables=config)
+            # Create unique workspace directory per request to avoid conflicts
+            import os
+            workspace_dir = os.path.join(self.terraform_base_dir, f"workspace-{request_id}")
+            os.makedirs(workspace_dir, exist_ok=True)
+            
+            # Update Terraform provider's workspace directory for this request
+            # (or create new instance - using same instance but updating dir)
+            original_workspace_dir = self.terraform.workspace_dir
+            self.terraform.workspace_dir = workspace_dir
+            
+            try:
+                tf_config = self._build_terraform_config(name, environment, config)
+                tf_result = await self.terraform.apply(tf_config, variables=config)
+            finally:
+                # Restore original workspace_dir (for potential reuse, though typically new instance per request)
+                self.terraform.workspace_dir = original_workspace_dir
             
             # Extract workspace information from Terraform output
             workspace_url = tf_result.get("workspace_url", "")
@@ -94,15 +138,20 @@ class CreateWorkspaceTool(BaseTool):
             # Note: For serverless workspaces, Terraform already creates the workspace
             # This step might be for additional configuration
             db_result = {}
-            try:
-                db_result = await self.databricks.create_workspace(
-                    name=name,
-                    config=config.get("databricks_config", {})
-                )
-            except NotImplementedError:
-                # Databricks provider not fully implemented yet - that's okay
-                # Terraform already created the workspace
-                logger.info("Databricks provider create_workspace not implemented, using Terraform result")
+            if self.databricks:
+                try:
+                    db_result = await self.databricks.create_workspace(
+                        name=name,
+                        config=config.get("databricks_config", {})
+                    )
+                except NotImplementedError:
+                    # Databricks provider not fully implemented yet - that's okay
+                    # Terraform already created the workspace
+                    logger.info("Databricks provider create_workspace not implemented, using Terraform result")
+                    db_result = {"url": workspace_url}
+            else:
+                # Databricks provider not available - that's okay, Terraform already created the workspace
+                logger.info("Databricks provider not available, using Terraform result")
                 db_result = {"url": workspace_url}
             
             # Step 3: Grant access to requester (if IDP provider is configured)

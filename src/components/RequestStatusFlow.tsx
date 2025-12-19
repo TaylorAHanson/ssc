@@ -43,18 +43,19 @@ export function RequestStatusFlow({ stateMachine, requestStatus }: RequestStatus
     };
     flowNodes.push(userRequestNode);
 
-    if (stateMachine.parallelPaths.length === 0) {
+    // Use new linear states structure
+    if (stateMachine.states && stateMachine.states.length > 0) {
       // Simple linear flow - connect user request to first state
-      const states = ['pending', ...stateMachine.activeStates, ...stateMachine.completedStates];
-      const allStatesComplete = states.every(state => stateMachine.completedStates.includes(state));
+      const states = stateMachine.states;
+      const allStatesComplete = states.every(state => state.isCompleted);
       
       states.forEach((state, index) => {
-        const isCompleted = stateMachine.completedStates.includes(state);
-        const isActive = stateMachine.activeStates.includes(state);
+        const isCompleted = state.isCompleted;
+        const isActive = state.isActive;
         const isPending = !isCompleted && !isActive;
         
         flowNodes.push({
-          id: state,
+          id: state.id,
           type: 'default',
           position: { x: 200 + index * 200, y: 100 },
           data: {
@@ -76,7 +77,7 @@ export function RequestStatusFlow({ stateMachine, requestStatus }: RequestStatus
                 <span className={`text-sm font-medium text-center max-w-[120px] ${
                   isPending ? 'text-gray-400' : ''
                 }`}>
-                  {state.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                  {state.name}
                 </span>
               </div>
             ),
@@ -90,7 +91,7 @@ export function RequestStatusFlow({ stateMachine, requestStatus }: RequestStatus
           flowEdges.push({
             id: 'e-user-request',
             source: 'user-request',
-            target: state,
+            target: state.id,
             style: {
               stroke: isCompleted ? '#10b981' : isActive ? '#3253DC' : '#d1d5db',
               strokeWidth: 2,
@@ -100,8 +101,8 @@ export function RequestStatusFlow({ stateMachine, requestStatus }: RequestStatus
         } else {
           flowEdges.push({
             id: `e${index - 1}-${index}`,
-            source: states[index - 1],
-            target: state,
+            source: states[index - 1].id,
+            target: state.id,
             animated: isActive,
             style: {
               stroke: isCompleted ? '#10b981' : isActive ? '#3253DC' : '#d1d5db',
@@ -162,9 +163,10 @@ export function RequestStatusFlow({ stateMachine, requestStatus }: RequestStatus
 
         if (index === 0) {
           // Connect last state to first procedural step
+          const lastState = states[states.length - 1];
           flowEdges.push({
-            id: `e-${states[states.length - 1]}-terraform`,
-            source: states[states.length - 1],
+            id: `e-${lastState.id}-terraform`,
+            source: lastState.id,
             target: step.id,
             animated: isActive,
             style: {
@@ -187,8 +189,42 @@ export function RequestStatusFlow({ stateMachine, requestStatus }: RequestStatus
         }
       });
     } else {
-      // Parallel paths visualization
-      const pathCount = stateMachine.parallelPaths.length;
+      // Fallback: if states array is empty, show minimal flow
+      flowNodes.push({
+        id: stateMachine.currentState || 'unknown',
+        type: 'default',
+        position: { x: 200, y: 100 },
+        data: {
+          label: (
+            <div className="flex flex-col items-center gap-2">
+              <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center">
+                <Loader2 className="w-6 h-6 text-white animate-spin" />
+              </div>
+              <span className="text-sm font-medium text-center max-w-[120px]">
+                {stateMachine.currentState || 'Unknown'}
+              </span>
+            </div>
+          ),
+        },
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
+      });
+      
+      flowEdges.push({
+        id: 'e-user-request-fallback',
+        source: 'user-request',
+        target: stateMachine.currentState || 'unknown',
+        style: {
+          stroke: '#3253DC',
+          strokeWidth: 2,
+        },
+        animated: true,
+      });
+      
+      // Legacy parallel paths visualization (should not be reached with new structure)
+      // Commented out - using linear states structure now
+      /*
+      const pathCount = stateMachine.parallelPaths?.length || 0;
       const pathHeight = 150;
       const startY = 50;
       const userRequestY = startY + (pathCount - 1) * pathHeight / 2;
@@ -403,10 +439,11 @@ export function RequestStatusFlow({ stateMachine, requestStatus }: RequestStatus
           });
         }
       });
+      */
     }
 
     return { nodes: flowNodes, edges: flowEdges };
-  }, [stateMachine]);
+  }, [stateMachine, requestStatus]);
 
   return (
     <div className="w-full h-[500px] border border-gray-200 rounded-lg bg-white overflow-hidden">

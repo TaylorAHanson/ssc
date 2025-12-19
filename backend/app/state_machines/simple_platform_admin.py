@@ -12,8 +12,8 @@ class SimplePlatformAdminStateMachine(BaseRequestStateMachine):
     pending = State("pending", initial=True)
     platform_admin_approval = State("platform_admin_approval")
     provisioning = State("provisioning")
-    completed = State("completed")
-    rejected = State("rejected")
+    completed = State("completed", final=True)
+    rejected = State("rejected", final=True)
 
     submit = pending.to(platform_admin_approval, cond="has_request_submitted")
     approve_admin = platform_admin_approval.to(provisioning, cond="has_platform_admin_approval")

@@ -12,9 +12,10 @@ class CreateServicePrincipalTool(BaseTool):
     """Create service principal."""
     
     def __init__(self):
+        """Initialize providers from settings."""
         self.idp = IDPProvider(
-            base_url="",  # TODO: Add to settings
-            api_key=""  # TODO: Add to settings
+            base_url=settings.IDP_BASE_URL or "",
+            api_key=settings.IDP_API_KEY or ""
         )
         self.databricks = DatabricksProvider(
             host=settings.DATABRICKS_HOST,

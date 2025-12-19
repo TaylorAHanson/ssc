@@ -11,6 +11,12 @@ import asyncio
 import logging
 from app.workers.poller import start_poller
 
+# Configure logging to ensure we see INFO level logs
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -23,12 +29,15 @@ app = FastAPI(
 async def startup_event():
     """Start background tasks."""
     logger.info("Application starting up...")
-    asyncio.create_task(start_poller())
+    logger.info("Starting background poller task...")
+    task = asyncio.create_task(start_poller())
+    logger.info(f"Background poller task created: {task}")
+    # Don't await - let it run in background
 
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

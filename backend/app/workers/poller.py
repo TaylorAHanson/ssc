@@ -19,7 +19,7 @@ from app.state_machines.persistence import load_state_machine, save_state_machin
 from app.state_machines.lock import acquire_lock, release_lock, heartbeat_lock
 from app.models.request import RequestStatus
 from app.core.config import settings
-from app.core.exceptions import RetryableError, PermanentError
+from app.core.exceptions import RetryableError, PermanentError, ValidationError
 import traceback
 
 logger = logging.getLogger(__name__)
@@ -42,12 +42,16 @@ async def start_poller():
     
     # Get polling interval from config (default 5 seconds)
     poll_interval = getattr(settings, 'POLLER_INTERVAL_SECONDS', 5)
+    logger.info(f"Poller configured with interval: {poll_interval} seconds")
     
+    poll_count = 0
     while True:
+        poll_count += 1
         try:
+            logger.debug(f"Poller cycle #{poll_count} - checking for requests...")
             await process_open_requests()
         except Exception as e:
-            logger.error(f"Error in poller loop: {e}", exc_info=True)
+            logger.error(f"Error in poller loop (cycle #{poll_count}): {e}", exc_info=True)
         
         await asyncio.sleep(poll_interval)
 
@@ -73,9 +77,10 @@ async def process_open_requests():
         ).limit(settings.POLLER_BATCH_SIZE).all()
         
         if not requests:
+            logger.debug("No requests found to process")
             return  # No work to do
         
-        logger.debug(f"Found {len(requests)} requests to process")
+        logger.info(f"Found {len(requests)} request(s) to process: {[f'{r.id} ({r.current_state})' for r in requests]}")
         
         # Process in parallel with concurrency limit
         semaphore = asyncio.Semaphore(settings.POLLER_MAX_CONCURRENT)
@@ -118,8 +123,9 @@ async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
                     f"Request {request_id} exceeded max retries ({request.max_retries}), "
                     "marking as failed"
                 )
-                request.status = "failed"
-                request.current_state = "failed"
+                request.status = RequestStatus.FAILED.value
+                # Don't change current_state - keep the last valid state so state machine can still be loaded
+                # The status="failed" indicates failure, not the state
                 db.commit()
                 return
             
@@ -243,35 +249,60 @@ async def _process_request_state_machine(db, request: RequestModel):
     It just loads the state machine and calls tick().
     Also handles async tool execution for provisioning states.
     """
-    from app.state_machines.facts import has_fact
+    from app.state_machines.facts import has_fact, get_latest_fact
+    
+    logger.info(f"[{request.id}] Processing request - Current state: {request.current_state}, Status: {request.status}")
     
     # Load the polymorphic state machine
     sm = load_state_machine(request, db)
+    initial_state = sm.current_state.id
+    logger.info(f"[{request.id}] Loaded state machine - Current state: {initial_state}")
+    
+    # Log relevant facts for debugging
+    from app.db.request import EventModel
+    facts = db.query(EventModel).filter(
+        EventModel.request_id == request.id,
+        EventModel.event_type.in_(["request_submitted", "approval_received", "training_completed", "workspace_created", "provisioning_started", "request_rejected"])
+    ).all()
+    if facts:
+        fact_summary = {f.event_type: getattr(f, 'event_data', {}) for f in facts}
+        logger.info(f"[{request.id}] Relevant facts: {fact_summary}")
     
     # Let the state machine handle all logic
+    logger.info(f"[{request.id}] Calling state machine tick()...")
     changed = sm.tick()
+    new_state = sm.current_state.id
+    
+    if changed:
+        logger.info(f"[{request.id}] State changed: {initial_state} -> {new_state}")
+    else:
+        logger.info(f"[{request.id}] No state change (still in {initial_state})")
     
     # Handle async tool execution for provisioning
     # Check if we're in provisioning state and need to start provisioning
     if sm.current_state.id == "provisioning":
         if not has_fact(db, request.id, "provisioning_started") and not has_fact(db, request.id, "workspace_created"):
             # Start provisioning asynchronously
-            logger.info(f"Starting async workspace provisioning for request {request.id}")
+            logger.info(f"[{request.id}] Starting async workspace provisioning...")
             try:
                 await _execute_provisioning_tool(db, request, sm)
                 # Reload state machine after tool execution to pick up new facts
                 sm = load_state_machine(request, db)
-                sm.tick()  # Process any new transitions based on workspace_created fact
-                changed = True  # State may have changed
+                logger.info(f"[{request.id}] Re-running tick() after provisioning tool execution...")
+                changed = sm.tick()  # Process any new transitions based on workspace_created fact
+                if changed:
+                    logger.info(f"[{request.id}] State changed after provisioning: {sm.current_state.id}")
             except Exception as e:
-                logger.error(f"Error executing provisioning tool for request {request.id}: {e}", exc_info=True)
+                logger.error(f"[{request.id}] Error executing provisioning tool: {e}", exc_info=True)
                 raise
     
     # Save if state changed
     if changed:
         save_state_machine(db, request, sm)
         db.commit()
-        logger.debug(f"State machine processed for request {request.id}: {sm.current_state.id}")
+        logger.info(f"[{request.id}] Saved state machine - New state: {sm.current_state.id}")
+    else:
+        logger.debug(f"[{request.id}] No state change, skipping save")
 
 
 async def _execute_provisioning_tool(db, request: RequestModel, sm):
@@ -297,10 +328,22 @@ async def _execute_provisioning_tool(db, request: RequestModel, sm):
     environment = request.environment or "dev"
     
     # Build config for tool
+    # Get Databricks credentials from state_context (form data) or fall back to settings
+    from app.core.config import settings
+    
     config = {
-        "databricks_account_id": state_context.get("databricks_account_id"),
-        "client_id": state_context.get("client_id"),
-        "client_secret": state_context.get("client_secret"),
+        "databricks_account_id": (
+            state_context.get("databricks_account_id") or 
+            settings.DATABRICKS_ACCOUNT_ID
+        ),
+        "client_id": (
+            state_context.get("client_id") or 
+            settings.DATABRICKS_CLIENT_ID
+        ),
+        "client_secret": (
+            state_context.get("client_secret") or 
+            settings.DATABRICKS_CLIENT_SECRET
+        ),
         "region": state_context.get("region", "eu-west-1"),
         "cidr_block": state_context.get("cidr_block", "10.4.0.0/16"),
         "tags": state_context.get("tags", {}),
@@ -309,11 +352,20 @@ async def _execute_provisioning_tool(db, request: RequestModel, sm):
     
     # Validate required config
     if not config.get("databricks_account_id"):
-        raise ValueError("databricks_account_id is required in request state_context")
+        raise ValidationError(
+            "databricks_account_id is required. "
+            "Set in request metadata or DATABRICKS_ACCOUNT_ID environment variable."
+        )
     if not config.get("client_id"):
-        raise ValueError("client_id is required in request state_context")
+        raise ValidationError(
+            "client_id is required. "
+            "Set in request metadata or DATABRICKS_CLIENT_ID environment variable."
+        )
     if not config.get("client_secret"):
-        raise ValueError("client_secret is required in request state_context")
+        raise ValidationError(
+            "client_secret is required. "
+            "Set in request metadata or DATABRICKS_CLIENT_SECRET environment variable."
+        )
     
     # Get requested_by from request
     requested_by = state_context.get("requested_by") or "system"
@@ -381,8 +433,9 @@ async def _handle_permanent_error(
     worker_id: str
 ):
     """Handle a permanent error by marking request as failed."""
-    request.status = "failed"
-    request.current_state = "failed"
+    request.status = RequestStatus.FAILED.value
+    # Don't change current_state - keep the last valid state so state machine can still be loaded
+    # The status="failed" indicates failure, not the state
     request.last_error = {
         "error": str(error),
         "traceback": traceback.format_exc(),

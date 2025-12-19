@@ -10,8 +10,8 @@ class WorkspaceAccessStateMachine(BaseRequestStateMachine):
     pending = State("pending", initial=True)
     manager_approval = State("manager_approval")
     provisioning = State("provisioning")
-    completed = State("completed")
-    rejected = State("rejected")
+    completed = State("completed", final=True)
+    rejected = State("rejected", final=True)
 
     submit = pending.to(manager_approval, cond="has_request_submitted")
     approve_manager = manager_approval.to(provisioning, cond="has_manager_approval")

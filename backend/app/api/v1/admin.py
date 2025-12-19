@@ -35,12 +35,12 @@ class FormVersionInfo(BaseModel):
 class FormSchemaResponse(BaseModel):
     """Form schema response model."""
     path: str
-    schema: Dict[str, Any]
+    form_schema: Dict[str, Any]  # Renamed from 'schema' to avoid shadowing BaseModel.schema()
 
 
 class SaveFormRequest(BaseModel):
     """Request model for saving a form."""
-    schema: Dict[str, Any]
+    form_schema: Dict[str, Any]  # Renamed from 'schema' to avoid shadowing BaseModel.schema()
     create_version: bool = True
 
 
@@ -126,7 +126,7 @@ async def get_form(form_path: str, version: Optional[str] = None):
         if not schema:
             raise HTTPException(status_code=404, detail=f"Form not found: {form_path}")
         
-        return FormSchemaResponse(path=form_path, schema=schema)
+        return FormSchemaResponse(path=form_path, form_schema=schema)
     except HTTPException:
         raise
     except Exception as e:
@@ -149,13 +149,13 @@ async def save_form(form_path: str, request: SaveFormRequest):
             form_path = f"/{form_path}"
         
         # Validate schema has required structure
-        if not isinstance(request.schema, dict):
+        if not isinstance(request.form_schema, dict):
             raise HTTPException(status_code=400, detail="Schema must be a JSON object")
         
         # Save the form
         success = save_form_schema(
             form_path,
-            request.schema,
+            request.form_schema,
             create_version=request.create_version
         )
         
@@ -163,7 +163,7 @@ async def save_form(form_path: str, request: SaveFormRequest):
             raise HTTPException(status_code=500, detail="Failed to save form")
         
         # Return the saved form
-        return FormSchemaResponse(path=form_path, schema=request.schema)
+        return FormSchemaResponse(path=form_path, form_schema=request.form_schema)
     except HTTPException:
         raise
     except Exception as e:

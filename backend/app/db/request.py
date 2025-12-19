@@ -63,6 +63,8 @@ class ApprovalModel(Base):
     status = Column(String)  # 'pending', 'approved', 'rejected', 'delegated'
     approved_by = Column(String, nullable=True)
     approved_at = Column(DateTime, nullable=True)
+    rejected_by = Column(String, nullable=True)
+    rejected_at = Column(DateTime, nullable=True)
     rejection_note = Column(String, nullable=True)
     delegated_to = Column(String, nullable=True)
     delegated_to_email = Column(String, nullable=True)
