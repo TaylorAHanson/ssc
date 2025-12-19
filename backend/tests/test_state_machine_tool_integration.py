@@ -21,6 +21,15 @@ os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 os.environ["DATABRICKS_HOST"] = "https://test.databricks.com"
 os.environ["DATABRICKS_TOKEN"] = "test-token"
 
+# Unset OAuth-related variables to avoid Databricks SDK auth conflict
+# The SDK complains if both PAT (token) and OAuth (client_id/client_secret) are set
+if "DATABRICKS_ACCOUNT_ID" in os.environ:
+    del os.environ["DATABRICKS_ACCOUNT_ID"]
+if "DATABRICKS_CLIENT_ID" in os.environ:
+    del os.environ["DATABRICKS_CLIENT_ID"]
+if "DATABRICKS_CLIENT_SECRET" in os.environ:
+    del os.environ["DATABRICKS_CLIENT_SECRET"]
+
 # Temporarily rename .env file if it exists to avoid parsing errors
 backend_dir = os.path.dirname(os.path.dirname(__file__))
 env_file = os.path.join(backend_dir, ".env")
