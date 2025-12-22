@@ -221,7 +221,7 @@ class AgentLLMClient:
             return {
                 "role": "assistant", 
                 "content": "\n".join(text_parts),
-                "tool_calls": tool_calls if tool_calls else None
+                "tool_calls": tool_calls
             }
             
         if isinstance(content, list):
@@ -270,7 +270,7 @@ class AgentLLMClient:
             return {
                 "role": "assistant",
                 "content": "\n".join(filter(None, text_parts)),
-                "tool_calls": tool_calls if tool_calls else None
+                "tool_calls": tool_calls
             }
             
         return {"role": "assistant", "content": str(content)}

@@ -325,6 +325,8 @@ async def handle_conversation(request: ConversationRequest):
         # Extract response content using standardized keys
         agent_message = response.get("content", "")
         tool_calls = response.get("tool_calls", [])
+        if tool_calls is None:
+            tool_calls = []
         
         # Clean the message content
         if agent_message:

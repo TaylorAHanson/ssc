@@ -52,6 +52,12 @@ export interface State {
   isCompleted: boolean;
   isInitial: boolean;
   isFinal: boolean;
+  completedAt?: string;
+  facts?: {
+    type: string;
+    data: Record<string, any>;
+    timestamp: string;
+  }[];
 }
 
 // Legacy types kept for backwards compatibility (not used in new structure)

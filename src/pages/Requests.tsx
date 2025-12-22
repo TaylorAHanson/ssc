@@ -84,7 +84,6 @@ function ProvisioningProgress({ progress }: { progress: NonNullable<Request['sta
 }
 
 function RequestStateList({ request }: { request: Request }) {
-  const approvals = useRequestStore((state) => state.approvals);
   const fetchApprovals = useRequestStore((state) => state.fetchApprovals);
 
   useEffect(() => {
@@ -92,7 +91,7 @@ function RequestStateList({ request }: { request: Request }) {
   }, [fetchApprovals]);
 
   // Collect all states to display
-  let steps: { id: string; name: string; status: string; type?: string; order: number; completedAt?: string }[] = [];
+  let steps: { id: string; name: string; status: string; type?: string; order: number; completedAt?: string; facts?: any[] }[] = [];
 
   // Always add "User Request" as the first step
   steps.push({
@@ -106,57 +105,40 @@ function RequestStateList({ request }: { request: Request }) {
 
   // Use the new linear states structure
   if (request.stateMachine.states && request.stateMachine.states.length > 0) {
-    const stateSteps = request.stateMachine.states.map((state, index) => {
-      let completedAt = undefined;
-      
-      // Determine status - ensure rejected and completed are mutually exclusive
-      let status: 'pending' | 'active' | 'completed' | 'rejected' = 'pending';
-      if (state.isCompleted) {
-        // Check if this is a rejected state
-        if (state.id === 'rejected' || state.name.toLowerCase().includes('rejected')) {
-          status = 'rejected';
-        } else {
-          status = 'completed';
+    const stateSteps = request.stateMachine.states
+      .filter(state => {
+        // Skip terminal success state if we want a cleaner list
+        // Or if it's currently active but previous step was also "completed"
+        if (state.id === 'completed') return false;
+        return true;
+      })
+      .map((state, index) => {
+        let status: 'pending' | 'active' | 'completed' | 'rejected' = 'pending';
+        if (state.isCompleted) {
+          if (state.id === 'rejected' || state.name.toLowerCase().includes('rejected')) {
+            status = 'rejected';
+          } else {
+            status = 'completed';
+          }
+        } else if (state.isActive) {
+          // Special case: if the request overall is completed, this state should show as completed
+          if (request.status === 'completed') {
+            status = 'completed';
+          } else {
+            status = 'active';
+          }
         }
-      } else if (state.isActive) {
-        status = 'active';
-      }
-      
-      // Try to find matching approval timestamp
-      if (state.id.includes('approval') || state.isCompleted) {
-         // Look for an approved approval for this request
-         const relevantApproval = approvals.find(a => 
-           a.requestId === request.id && 
-           a.status === 'approved' &&
-           (
-             state.id.toLowerCase().includes(a.approvalType.toLowerCase()) || 
-             state.name.toLowerCase().includes(a.approvalType.toLowerCase())
-           )
-         );
-         if (relevantApproval) {
-           completedAt = relevantApproval.updatedAt;
-         }
-      }
 
-      return {
-        id: state.id,
-        name: state.name,
-        status,
-        order: index + 1,
-        completedAt
-      };
-    });
+        return {
+          id: state.id,
+          name: state.name,
+          status,
+          order: index + 1,
+          completedAt: state.completedAt,
+          facts: state.facts
+        };
+      });
     steps = [...steps, ...stateSteps];
-  } else {
-    // Fallback: if states array is empty or missing, show current state only
-    const currentState = request.stateMachine.currentState || 'unknown';
-    const isRejected = request.status === 'rejected' || currentState === 'rejected';
-    steps.push({
-      id: currentState,
-      name: currentState.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-      status: isRejected ? 'rejected' : 'active',
-      order: 1
-    });
   }
 
   return (
@@ -172,68 +154,107 @@ function RequestStateList({ request }: { request: Request }) {
           return (
             <div 
               key={`${step.id}-${idx}`} 
-              className={`p-4 flex items-center justify-between transition-colors ${
+              className={`p-4 flex flex-col transition-colors ${
                 isActive ? 'bg-blue-50 border-l-4 border-l-blue-500' :
                 isCompleted ? 'bg-green-50 border-l-4 border-l-green-500' :
                 isRejected ? 'bg-red-50 border-l-4 border-l-red-500' :
                 'bg-white border-l-4 border-l-gray-200'
               } first:rounded-t-lg last:rounded-b-lg hover:bg-opacity-80`}
             >
-              <div className="flex items-center gap-4 flex-1">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
-                  isCompleted ? 'bg-green-500 text-white' : 
-                  isRejected ? 'bg-red-500 text-white' :
-                  isActive ? 'bg-blue-500 text-white' : 
-                  'bg-gray-300 text-gray-600'
-                }`}>
-                  {isCompleted ? <CheckCircle2 className="w-6 h-6" /> : 
-                   isRejected ? <X className="w-6 h-6" /> :
-                   isActive ? <Loader2 className="w-6 h-6 animate-spin" /> : 
-                   <Circle className="w-6 h-6" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="text-base font-semibold text-gray-900">{step.name}</p>
-                    {step.type && (
-                      <span className="text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">
-                        {step.type}
-                      </span>
-                    )}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4 flex-1">
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
+                    isCompleted ? 'bg-green-500 text-white' : 
+                    isRejected ? 'bg-red-500 text-white' :
+                    isActive ? 'bg-blue-500 text-white' : 
+                    'bg-gray-300 text-gray-600'
+                  }`}>
+                    {isCompleted ? <CheckCircle2 className="w-6 h-6" /> : 
+                     isRejected ? <X className="w-6 h-6" /> :
+                     isActive ? <Loader2 className="w-6 h-6 animate-spin" /> : 
+                     <Circle className="w-6 h-6" />}
                   </div>
-                  <div className="flex items-center gap-3 text-sm text-gray-600">
-                    <span className={`font-medium ${
-                      isCompleted ? 'text-green-700' :
-                      isRejected ? 'text-red-700' :
-                      isActive ? 'text-blue-700' :
-                      'text-gray-500'
-                    }`}>
-                      {isCompleted ? 'Completed' :
-                       isRejected ? 'Rejected' :
-                       isActive ? 'In Progress' :
-                       'Pending'}
-                    </span>
-                    {(isUserRequest || (isCompleted && step.completedAt) || (isRejected && step.completedAt)) && (
-                      <>
-                        <span className="text-gray-400">•</span>
-                        <span className="text-gray-500">
-                          {formatDate(step.completedAt || request.createdAt)} ({formatDuration(step.completedAt || request.createdAt)})
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <p className="text-base font-semibold text-gray-900">{step.name}</p>
+                      {step.type && (
+                        <span className="text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">
+                          {step.type}
                         </span>
-                      </>
-                    )}
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-sm text-gray-600">
+                      <span className={`font-medium ${
+                        isCompleted ? 'text-green-700' :
+                        isRejected ? 'text-red-700' :
+                        isActive ? 'text-blue-700' :
+                        'text-gray-500'
+                      }`}>
+                        {isCompleted ? 'Completed' :
+                         isRejected ? 'Rejected' :
+                         isActive ? 'In Progress' :
+                         'Pending'}
+                      </span>
+                      {(step.completedAt || (isUserRequest && request.createdAt)) && (
+                        <>
+                          <span className="text-gray-400">•</span>
+                          <span className="text-gray-500">
+                            {formatDate(step.completedAt || request.createdAt)} ({formatDuration(step.completedAt || request.createdAt)})
+                          </span>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  {isActive && step.id === 'provisioning' && request.stateMachine.currentProgress && (
-                    <ProvisioningProgress progress={request.stateMachine.currentProgress} />
-                  )}
                 </div>
+
+                {isTraining && isActive && !isCompleted && !isRejected && (
+                  <div className="flex items-center gap-3 ml-4">
+                     <div className="text-sm text-yellow-800 bg-yellow-100 px-3 py-2 rounded-lg border border-yellow-300 flex items-center gap-2">
+                       <AlertCircle className="w-4 h-4" />
+                       Action Required
+                     </div>
+                     <TrainingAction requestId={request.id} />
+                  </div>
+                )}
               </div>
 
-              {isTraining && isActive && !isCompleted && !isRejected && (
-                <div className="flex items-center gap-3 ml-4">
-                   <div className="text-sm text-yellow-800 bg-yellow-100 px-3 py-2 rounded-lg border border-yellow-300 flex items-center gap-2">
-                     <AlertCircle className="w-4 h-4" />
-                     Action Required
-                   </div>
-                   <TrainingAction requestId={request.id} />
+              {/* Progress Bar for Provisioning */}
+              {isActive && step.id === 'provisioning' && request.stateMachine.currentProgress && (
+                <div className="ml-14">
+                  <ProvisioningProgress progress={request.stateMachine.currentProgress} />
+                </div>
+              )}
+
+              {/* Step Logs / Facts */}
+              {step.facts && step.facts.length > 0 && (
+                <div className="ml-14 mt-3 space-y-2">
+                  <div className="bg-gray-50 rounded border border-gray-100 p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-2">Step Logs</p>
+                    <div className="space-y-1.5">
+                      {step.facts.map((fact, fIdx) => (
+                        <div key={fIdx} className="flex items-start gap-2 text-xs">
+                          <span className="text-gray-400 font-mono flex-shrink-0">
+                            [{formatInTimeZone(parseUtcDate(fact.timestamp), 'America/Los_Angeles', 'HH:mm:ss')}]
+                          </span>
+                          <div className="text-gray-700">
+                            <span className="font-semibold text-gray-900">{fact.type.replace(/_/g, ' ')}</span>: {
+                              fact.type === 'repo_created' ? (
+                                <a href={fact.data.repo_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                                  {fact.data.repo_name}
+                                </a>
+                              ) : fact.type === 'workspace_created' ? (
+                                <span className="font-mono bg-gray-100 px-1 rounded">{fact.data.workspace_url}</span>
+                              ) : fact.type === 'approval_received' ? (
+                                <span>Approved by <span className="font-medium">{fact.data.actor}</span></span>
+                              ) : (
+                                <span>Action completed</span>
+                              )
+                            }
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

@@ -30,7 +30,17 @@ class GitHubProvider(BaseProvider):
     async def create_repo(self, name: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """Create repository."""
         try:
-            url = f"/orgs/{self.org}/repos" if self.org else "/user/repos"
+            # First, check if self.org is actually the current user
+            user_resp = await self.client.get("/user")
+            user_resp.raise_for_status()
+            current_user = user_resp.json()["login"]
+            
+            # If org is not set, or org is the same as current user, use /user/repos
+            if not self.org or self.org.lower() == current_user.lower():
+                url = "/user/repos"
+            else:
+                url = f"/orgs/{self.org}/repos"
+                
             response = await self.client.post(url, json={"name": name, **config})
             response.raise_for_status()
             return response.json()
@@ -49,7 +59,17 @@ class GitHubProvider(BaseProvider):
         """Create repository from template."""
         try:
             url = f"/repos/{template}/generate"
-            response = await self.client.post(url, json={"name": name, **config})
+            
+            # If org is set and different from current user, we should specify it as the new owner
+            user_resp = await self.client.get("/user")
+            user_resp.raise_for_status()
+            current_user = user_resp.json()["login"]
+            
+            payload = {"name": name, **config}
+            if self.org and self.org != current_user:
+                payload["owner"] = self.org
+                
+            response = await self.client.post(url, json=payload)
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:
@@ -83,7 +103,15 @@ class GitHubProvider(BaseProvider):
     async def set_permissions(self, repo: str, user: str, permission: str) -> bool:
         """Set repository permissions."""
         try:
-            repo_path = f"{self.org}/{repo}" if self.org else repo
+            if self.org:
+                repo_path = f"{self.org}/{repo}"
+            else:
+                # If no org, we need the authenticated user's login
+                user_resp = await self.client.get("/user")
+                user_resp.raise_for_status()
+                login = user_resp.json()["login"]
+                repo_path = f"{login}/{repo}"
+                
             response = await self.client.put(
                 f"/repos/{repo_path}/collaborators/{user}",
                 json={"permission": permission}

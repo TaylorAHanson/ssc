@@ -19,7 +19,7 @@ from app.state_machines.persistence import load_state_machine, save_state_machin
 from app.state_machines.lock import acquire_lock, release_lock, heartbeat_lock
 from app.models.request import RequestStatus
 from app.core.config import settings
-from app.core.exceptions import RetryableError, PermanentError, ValidationError
+from app.core.exceptions import RetryableError, PermanentError
 import traceback
 
 logger = logging.getLogger(__name__)
@@ -278,23 +278,8 @@ async def _process_request_state_machine(db, request: RequestModel):
     else:
         logger.info(f"[{request.id}] No state change (still in {initial_state})")
     
-    # Handle async tool execution for provisioning
-    # Check if we're in provisioning state and need to start provisioning
-    if sm.current_state.id == "provisioning":
-        if not has_fact(db, request.id, "provisioning_started") and not has_fact(db, request.id, "workspace_created"):
-            # Start provisioning asynchronously
-            logger.info(f"[{request.id}] Starting async workspace provisioning...")
-            try:
-                await _execute_provisioning_tool(db, request, sm)
-                # Reload state machine after tool execution to pick up new facts
-                sm = load_state_machine(request, db)
-                logger.info(f"[{request.id}] Re-running tick() after provisioning tool execution...")
-                changed = sm.tick()  # Process any new transitions based on workspace_created fact
-                if changed:
-                    logger.info(f"[{request.id}] State changed after provisioning: {sm.current_state.id}")
-            except Exception as e:
-                logger.error(f"[{request.id}] Error executing provisioning tool: {e}", exc_info=True)
-                raise
+    # Execute any tasks associated with the current state
+    await sm.execute_tasks()
     
     # Save if state changed
     if changed:
@@ -303,92 +288,6 @@ async def _process_request_state_machine(db, request: RequestModel):
         logger.info(f"[{request.id}] Saved state machine - New state: {sm.current_state.id}")
     else:
         logger.debug(f"[{request.id}] No state change, skipping save")
-
-
-async def _execute_provisioning_tool(db, request: RequestModel, sm):
-    """
-    Execute the provisioning tool for workspace creation.
-    
-    This is called by the poller when a request enters provisioning state.
-    """
-    from app.tools.workspace import CreateWorkspaceTool
-    
-    # Extract configuration from request
-    state_context = request.state_context or {}
-    
-    # Get workspace name and environment
-    workspace_name = state_context.get("workspace_name")
-    if not workspace_name:
-        # Try to extract from title
-        if ":" in request.title:
-            workspace_name = request.title.split(":")[-1].strip()
-        else:
-            workspace_name = request.title
-    
-    environment = request.environment or "dev"
-    
-    # Build config for tool
-    # Get Databricks credentials from state_context (form data) or fall back to settings
-    from app.core.config import settings
-    
-    config = {
-        "databricks_account_id": (
-            state_context.get("databricks_account_id") or 
-            settings.DATABRICKS_ACCOUNT_ID
-        ),
-        "client_id": (
-            state_context.get("client_id") or 
-            settings.DATABRICKS_CLIENT_ID
-        ),
-        "client_secret": (
-            state_context.get("client_secret") or 
-            settings.DATABRICKS_CLIENT_SECRET
-        ),
-        "region": state_context.get("region", "eu-west-1"),
-        "cidr_block": state_context.get("cidr_block", "10.4.0.0/16"),
-        "tags": state_context.get("tags", {}),
-        **state_context  # Include any other config
-    }
-    
-    # Validate required config
-    if not config.get("databricks_account_id"):
-        raise ValidationError(
-            "databricks_account_id is required. "
-            "Set in request metadata or DATABRICKS_ACCOUNT_ID environment variable."
-        )
-    if not config.get("client_id"):
-        raise ValidationError(
-            "client_id is required. "
-            "Set in request metadata or DATABRICKS_CLIENT_ID environment variable."
-        )
-    if not config.get("client_secret"):
-        raise ValidationError(
-            "client_secret is required. "
-            "Set in request metadata or DATABRICKS_CLIENT_SECRET environment variable."
-        )
-    
-    # Get requested_by from request
-    requested_by = state_context.get("requested_by") or "system"
-    
-    # Create and execute tool
-    tool = CreateWorkspaceTool()
-    
-    # Allow patching tool providers for testing
-    # In tests, providers can be mocked and injected here
-    if hasattr(tool, '_test_providers'):
-        for provider_name, provider_instance in tool._test_providers.items():
-            setattr(tool, provider_name, provider_instance)
-    
-    result = await tool.execute(
-        request_id=request.id,
-        name=workspace_name,
-        environment=environment,
-        config=config,
-        requested_by=requested_by,
-        db=db
-    )
-    
-    logger.info(f"Workspace provisioning completed for request {request.id}: {result}")
 
 
 async def _handle_retryable_error(

@@ -31,13 +31,13 @@ export function GithubRepoCreationForm() {
           };
           formData.scope = scopeMap[data.scope] || data.scope;
         }
-        if (data.repository_name) formData.repository_name = data.repository_name;
+        if (data.domain) formData.domain = data.domain;
+        if (data.team_name) formData.team_name = data.team_name;
+        if (data.repo_short_name) formData.repo_short_name = data.repo_short_name;
+        if (data.template) formData.template = data.template;
         if (data.visibility) formData.visibility = data.visibility;
+        if (data.members) formData.members = data.members;
         if (data.description) formData.description = data.description;
-        if (data.features) {
-          formData.features = Array.isArray(data.features) ? data.features : [data.features];
-        }
-        if (data.project_name) formData.project_name = data.project_name;
         if (data.justification) formData.justification = data.justification;
         
         survey.data = formData;
@@ -53,7 +53,10 @@ export function GithubRepoCreationForm() {
 
     const handleComplete = async (survey: Model) => {
       const data = survey.data;
-      const title = `GitHub Repository: ${data.repository_name} - ${data.visibility || 'Private'}`;
+      const repoName = data.domain && data.team_name && data.repo_short_name 
+        ? `${data.domain}-${data.team_name}-${data.repo_short_name}`
+        : (data.repository_name || 'New Repo');
+      const title = `GitHub Repository: ${repoName} - ${data.visibility || 'private'}`;
       
       await addRequest('github_repo_creation', title, undefined, data);
       navigate('/requests');

@@ -44,11 +44,20 @@ class BaseRequestStateMachine(StateMachine):
         states_list = []
         for state in all_states:
             state_id = state.id
+            
+            # Skip rejected state if we're not rejected
+            if state_id == "rejected" and self.current_state.id != "rejected":
+                continue
+                
             is_active = state_id == self.current_state.id
             is_completed = self._is_state_completed(state_id)
             
             # Get display name
             display_name = self._get_state_display_name(state_id)
+            
+            # Get completion timestamp and facts
+            completed_at = self._get_state_completion_timestamp(state_id)
+            facts = self._get_state_facts(state_id)
             
             states_list.append({
                 "id": state_id,
@@ -56,7 +65,9 @@ class BaseRequestStateMachine(StateMachine):
                 "isActive": is_active,
                 "isCompleted": is_completed,
                 "isInitial": state.initial,
-                "isFinal": state.final
+                "isFinal": state.final,
+                "completedAt": completed_at,
+                "facts": facts
             })
         
         # Get latest progress if available
@@ -75,6 +86,74 @@ class BaseRequestStateMachine(StateMachine):
             states=states_list,
             currentProgress=current_progress
         )
+    
+    def _get_state_completion_timestamp(self, state_id: str) -> Optional[datetime]:
+        """Get the timestamp when a state was completed."""
+        # Map states to their completion facts
+        mapping = {
+            "pending": "request_submitted",
+            "manager_approval": "approval_received",
+            "data_owner_approval": "approval_received",
+            "platform_admin_approval": "approval_received",
+            "training_pending": "training_completed",
+            "provisioning": "provisioning_completed",
+            "completed": None,
+            "rejected": "request_rejected"
+        }
+        
+        fact_type = mapping.get(state_id)
+        if not fact_type:
+            return None
+            
+        # For approvals, we need to match the type
+        if state_id in self.APPROVAL_NODES:
+            approval_type = self.APPROVAL_NODES[state_id].get("approval_type")
+            fact = get_latest_fact(self.db, self.request.id, fact_type, approval_type=approval_type)
+        else:
+            fact = get_latest_fact(self.db, self.request.id, fact_type)
+            
+        return fact.created_at if fact else None
+
+    def _get_state_facts(self, state_id: str) -> List[Dict[str, Any]]:
+        """Get relevant facts for a state to show as logs."""
+        from app.db.request import EventModel
+        
+        # Define which facts belong to which state
+        mapping = {
+            "pending": ["request_submitted"],
+            "manager_approval": ["approval_received"],
+            "data_owner_approval": ["approval_received"],
+            "platform_admin_approval": ["approval_received"],
+            "training_pending": ["training_completed"],
+            "provisioning": ["provisioning_started", "workspace_created", "repo_created", "provisioning_completed"],
+            "rejected": ["request_rejected"]
+        }
+        
+        event_types = mapping.get(state_id, [])
+        if not event_types:
+            return []
+            
+        # Query for these facts
+        query = self.db.query(EventModel).filter(
+            EventModel.request_id == self.request.id,
+            EventModel.event_type.in_(event_types)
+        )
+        
+        facts = []
+        for event in query.order_by(EventModel.created_at.asc()).all():
+            # For approvals, filter by type
+            if event.event_type == "approval_received" and state_id in self.APPROVAL_NODES:
+                approval_type = self.APPROVAL_NODES[state_id].get("approval_type")
+                if event.event_data.get("approval_type") != approval_type:
+                    continue
+            
+            facts.append({
+                "type": event.event_type,
+                "data": event.event_data,
+                "timestamp": event.created_at.isoformat()
+            })
+            
+        return facts
     
     def _is_state_completed(self, state_id: str) -> bool:
         """Check if a state has been completed based on facts."""
@@ -154,7 +233,10 @@ class BaseRequestStateMachine(StateMachine):
     def save(self):
         """Persist ONLY the core state machine status back to the request model."""
         self.request.current_state = self.current_state.id
-        self.request.status = self.get_mapped_status().value
+        # Only overwrite status if it's not already in a terminal "failed" state
+        # This prevents PermanentError status from being overwritten
+        if self.request.status != "failed":
+            self.request.status = self.get_mapped_status().value
         # We do NOT save parallel_paths, completed_states, or active_states anymore.
         # They are derived.
         self.request.updated_at = datetime.utcnow()
@@ -260,6 +342,13 @@ class BaseRequestStateMachine(StateMachine):
         
         # Check if state changed
         return self.current_state.id != initial_state
+
+    async def execute_tasks(self):
+        """
+        Execute any asynchronous tasks associated with the current state.
+        Override in subclasses to implement state-specific actions.
+        """
+        pass
     
     def _try_transitions(self):
         """

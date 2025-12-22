@@ -1,11 +1,51 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, ArrowRight, Send, ExternalLink } from 'lucide-react';
+import { Sparkles, ArrowRight, Send, ExternalLink, ChevronDown, Shield, BarChart3, Activity } from 'lucide-react';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 import { Button } from '../components/ui/button';
 import type { ChatMessage, ConversationState } from '../types';
 import { callAgent } from '../services/api';
+
+type AgentMode = 'Self Service Agent' | 'Governance' | 'FinOps' | 'Data Quality';
+
+const AGENT_SUGGESTIONS: Record<AgentMode, { label: string; query: string }[]> = {
+  'Self Service Agent': [
+    { label: 'Get workspace access', query: "I need to get access to a workspace for my team" },
+    { label: 'Request data access', query: "I need access to some data tables for my project" },
+    { label: 'Create a new workspace', query: "I'd like to create a new workspace for our analytics team" },
+    { label: 'Provision service principal', query: "I need a service principal for my CI/CD pipeline" },
+    { label: 'Create a new catalog', query: "I want to create a new catalog in Unity Catalog" },
+    { label: 'Request GitHub repo', query: "I need a new GitHub repository for my Databricks project" },
+    { label: 'Learn a new skill', query: "I want to learn new skills and improve my capabilities" },
+    { label: 'Browse reusable assets', query: "I want to see what design patterns and templates are available" }
+  ],
+  'Governance': [
+    { label: 'Overprovisioned users', query: "Which users are overprovisioned?" },
+    { label: 'Recent changes', query: "What changed in the last 24 hours?" },
+    { label: 'Workspace admins', query: "Who has workspace admin?" },
+    { label: 'Account admins', query: "List all users with Account Admin role" },
+    { label: 'Audit permissions', query: "Audit recent permission changes in the last 7 days" }
+  ],
+  'FinOps': [
+    { label: 'Expensive workspaces', query: "Which workspaces are the most expensive?" },
+    { label: 'Tagging compliance', query: "Which users are out of compliance with the tagging policy?" },
+    { label: 'Cost trends', query: "Show monthly cost trend by department" },
+    { label: 'Idle clusters', query: "Identify idle clusters that can be terminated" }
+  ],
+  'Data Quality': [
+    { label: 'Quality drops', query: "Do we see any large drops in quality over the last 24 hours?" },
+    { label: 'Schema drift', query: "List tables with schema drift in the last week" },
+    { label: 'Freshness check', query: "Check freshness of gold-tier tables in the production catalog" }
+  ]
+};
+
+const MODE_ICONS: Record<AgentMode, React.ReactNode> = {
+  'Self Service Agent': <Sparkles className="w-3.5 h-3.5" />,
+  'Governance': <Shield className="w-3.5 h-3.5" />,
+  'FinOps': <BarChart3 className="w-3.5 h-3.5" />,
+  'Data Quality': <Activity className="w-3.5 h-3.5" />
+};
 
 // Determine which form route to use based on conversation (fallback only for error cases)
 const determineFormRoute = (query: string, _answers: Record<string, string | string[]>, context?: { type: 'paas' | 'daas'; title: string }): { path: string; title: string } => {
@@ -27,6 +67,8 @@ const determineFormRoute = (query: string, _answers: Record<string, string | str
     return { path: '/paas/service-principal', title: 'Provision Service Principal' };
   } else if (lowerQuery.includes('marketplace') || lowerQuery.includes('certification')) {
     return { path: '/paas/marketplace', title: 'Marketplace Certification' };
+  } else if (lowerQuery.includes('github') || lowerQuery.includes('repo') || lowerQuery.includes('repository') || lowerQuery.includes('git')) {
+    return { path: '/paas/github-repo-creation', title: 'GitHub Repository Creation' };
   } else if (lowerQuery.includes('rest api') || (lowerQuery.includes('api') && !lowerQuery.includes('batch'))) {
     return { path: '/daas/rest-api', title: 'Request REST API Access' };
   } else if (lowerQuery.includes('batch') || lowerQuery.includes('delta sharing')) {
@@ -45,6 +87,8 @@ const determineFormRoute = (query: string, _answers: Record<string, string | str
       return { path: '/paas/service-principal', title: 'Provision Service Principal' };
     } else if (context.title.includes('Marketplace')) {
       return { path: '/paas/marketplace', title: 'Marketplace Certification' };
+    } else if (context.title.includes('GitHub')) {
+      return { path: '/paas/github-repo-creation', title: 'GitHub Repository Creation' };
     }
   } else if (context?.type === 'daas') {
     if (context.title.includes('REST API')) {
@@ -62,11 +106,23 @@ export function Home() {
   const [query, setQuery] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [conversationState, setConversationState] = useState<ConversationState | null>(null);
+  const [agentMode, setAgentMode] = useState<AgentMode>('Self Service Agent');
+  const [showModeDropdown, setShowModeDropdown] = useState(false);
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Clear any existing conversation state from localStorage on mount (fresh start on refresh)
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowModeDropdown(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
   useEffect(() => {
     // Clear conversation state but keep form prefill data
     const keysToRemove: string[] = [];
@@ -117,7 +173,10 @@ export function Home() {
           content: m.content,
           timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : (typeof m.timestamp === 'string' ? m.timestamp : new Date().toISOString()),
         })),
-        context: conversationState?.context,
+        context: {
+          ...conversationState?.context,
+          agent_mode: agentMode
+        },
       });
 
       // Use only agent-provided questions (no fallback)
@@ -223,7 +282,10 @@ export function Home() {
           content: m.content,
           timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : (typeof m.timestamp === 'string' ? m.timestamp : new Date().toISOString()),
         })),
-        context: conversationState.context,
+        context: {
+          ...conversationState.context,
+          agent_mode: agentMode
+        },
       });
 
       // Use only agent-provided questions (no fallback)
@@ -444,6 +506,45 @@ export function Home() {
                           <Send className="w-4 h-4" />
                         </Button>
                       </div>
+
+                      <div className="mt-2 flex items-center gap-2 px-1 relative" ref={dropdownRef}>
+                        <button
+                          type="button"
+                          onClick={() => setShowModeDropdown(!showModeDropdown)}
+                          className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors duration-200 py-1"
+                        >
+                          <span className="flex items-center gap-1.5">
+                            {MODE_ICONS[agentMode]}
+                            {agentMode}
+                          </span>
+                          <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showModeDropdown ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {showModeDropdown && (
+                          <div className="absolute bottom-full left-0 mb-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                            {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).map((mode) => (
+                              <button
+                                key={mode}
+                                type="button"
+                                onClick={() => {
+                                  setAgentMode(mode);
+                                  setShowModeDropdown(false);
+                                }}
+                                className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${
+                                  agentMode === mode 
+                                    ? 'bg-primary/5 text-primary font-semibold' 
+                                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                                }`}
+                              >
+                                <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
+                                  {MODE_ICONS[mode]}
+                                </span>
+                                {mode}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </form>
                   )}
                   
@@ -568,7 +669,10 @@ export function Home() {
                             content: m.content,
                             timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : (typeof m.timestamp === 'string' ? m.timestamp : new Date().toISOString()),
                           })),
-                          context: conversationState.context,
+                          context: {
+                            ...conversationState.context,
+                            agent_mode: agentMode
+                          },
                         });
 
                         const userMsg: ChatMessage = {
@@ -668,6 +772,45 @@ export function Home() {
                       <Send className="w-4 h-4" />
                     </Button>
                   </div>
+
+                  <div className="mt-2 flex items-center gap-2 px-1 relative" ref={dropdownRef}>
+                    <button
+                      type="button"
+                      onClick={() => setShowModeDropdown(!showModeDropdown)}
+                      className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors duration-200 py-1"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        {MODE_ICONS[agentMode]}
+                        {agentMode}
+                      </span>
+                      <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showModeDropdown ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {showModeDropdown && (
+                      <div className="absolute bottom-full left-0 mb-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                        {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => {
+                              setAgentMode(mode);
+                              setShowModeDropdown(false);
+                            }}
+                            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${
+                              agentMode === mode 
+                                ? 'bg-primary/5 text-primary font-semibold' 
+                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                            }`}
+                          >
+                            <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
+                              {MODE_ICONS[mode]}
+                            </span>
+                            {mode}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </form>
               </div>
             )}
@@ -733,22 +876,52 @@ export function Home() {
                     )}
                   </Button>
                 </div>
+
+                <div className="flex items-center gap-2 px-1 relative" ref={dropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => setShowModeDropdown(!showModeDropdown)}
+                    className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors duration-200 py-1"
+                  >
+                    <span className="flex items-center gap-1.5">
+                      {MODE_ICONS[agentMode]}
+                      {agentMode}
+                    </span>
+                    <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showModeDropdown ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {showModeDropdown && (
+                    <div className="absolute top-full left-0 mt-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+                      {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => {
+                            setAgentMode(mode);
+                            setShowModeDropdown(false);
+                          }}
+                          className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${
+                            agentMode === mode 
+                              ? 'bg-primary/5 text-primary font-semibold' 
+                              : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                          }`}
+                        >
+                          <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
+                            {MODE_ICONS[mode]}
+                          </span>
+                          {mode}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </form>
               
               {/* Quick suggestions */}
               <div className="mt-6 pt-6 border-t border-gray-200/50">
                 <p className="text-sm text-gray-500 mb-3">Try asking:</p>
                 <div className="flex flex-wrap gap-2">
-                  {[
-                    { label: 'Get workspace access', query: "I need to get access to a workspace for my team" },
-                    { label: 'Request data access', query: "I need access to some data tables for my project" },
-                    { label: 'Create a new workspace', query: "I'd like to create a new workspace for our analytics team" },
-                    { label: 'Provision service principal', query: "I need a service principal for my CI/CD pipeline" },
-                    { label: 'Learn a new skill', query: "I want to learn new skills and improve my capabilities" },
-                    { label: 'Find a community example', query: "I'm looking for examples of how others have solved similar problems" },
-                    { label: 'Attend a workshop', query: "Are there any upcoming workshops or training sessions I can attend?" },
-                    { label: 'Browse reusable assets', query: "I want to see what design patterns and templates are available" }
-                  ].map(({ label, query }) => (
+                  {AGENT_SUGGESTIONS[agentMode].map(({ label, query }) => (
                     <button
                       key={label}
                       onClick={() => {

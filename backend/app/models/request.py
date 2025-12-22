@@ -54,10 +54,22 @@ class ProgressInfo(BaseModel):
     timestamp: datetime
 
 
+class StateInfo(BaseModel):
+    """Detailed information about a state in the state machine."""
+    id: str
+    name: str
+    isActive: bool
+    isCompleted: bool
+    isInitial: bool
+    isFinal: bool
+    completedAt: Optional[datetime] = None
+    facts: Optional[List[Dict[str, Any]]] = None
+
+
 class StateMachineState(BaseModel):
     """State machine state representation - linear flow from python-statemachine."""
     currentState: str
-    states: List[Dict[str, Any]]  # List of {id, name, isActive, isCompleted, isInitial, isFinal}
+    states: List[StateInfo]
     currentProgress: Optional[ProgressInfo] = None
 
 

@@ -46,6 +46,65 @@ class WorkspaceProvisionStateMachine(BaseRequestStateMachine):
         "manager_approval": {"approval_type": "manager", "name": "Manager Approval"}
     }
     
+    async def execute_tasks(self):
+        """Execute workspace provisioning tasks."""
+        if self.current_state.id == "provisioning":
+            if not has_fact(self.db, self.request.id, "workspace_created"):
+                from app.tools.workspace import CreateWorkspaceTool
+                from datetime import datetime
+                from app.core.exceptions import ValidationError
+                from app.core.config import settings
+                
+                # Mark provisioning as started if not already marked
+                if not has_fact(self.db, self.request.id, "provisioning_started"):
+                    add_fact(self.db, self.request.id, "provisioning_started", {"started_at": datetime.utcnow().isoformat()}, actor="system")
+                    self.db.commit()
+                
+                # Extract configuration from request
+                state_context = self.request.state_context or {}
+                
+                # Get workspace name and environment
+                workspace_name = state_context.get("workspace_name")
+                if not workspace_name:
+                    if ":" in self.request.title:
+                        workspace_name = self.request.title.split(":")[-1].strip()
+                    else:
+                        workspace_name = self.request.title
+                
+                environment = self.request.environment or "dev"
+                
+                config = {
+                    "databricks_account_id": state_context.get("databricks_account_id") or settings.DATABRICKS_ACCOUNT_ID,
+                    "client_id": state_context.get("client_id") or settings.DATABRICKS_CLIENT_ID,
+                    "client_secret": state_context.get("client_secret") or settings.DATABRICKS_CLIENT_SECRET,
+                    "region": state_context.get("region", "eu-west-1"),
+                    "cidr_block": state_context.get("cidr_block", "10.4.0.0/16"),
+                    "tags": state_context.get("tags", {}),
+                    **state_context
+                }
+                
+                # Validate required config
+                if not config.get("databricks_account_id"):
+                    raise ValidationError("databricks_account_id is required.")
+                if not config.get("client_id"):
+                    raise ValidationError("client_id is required.")
+                if not config.get("client_secret"):
+                    raise ValidationError("client_secret is required.")
+                
+                requested_by = state_context.get("requested_by") or "system"
+                
+                logger.info(f"[{self.request.id}] Executing CreateWorkspaceTool...")
+                tool = CreateWorkspaceTool()
+                
+                await tool.execute(
+                    request_id=self.request.id,
+                    name=workspace_name,
+                    environment=environment,
+                    config=config,
+                    requested_by=requested_by,
+                    db=self.db
+                )
+
     def _process_current_state(self) -> bool:
         """
         Override to handle provisioning state - mark that provisioning should start.
