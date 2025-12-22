@@ -13,6 +13,9 @@ from app.state_machines.persistence import load_state_machine
 from app.state_machines.facts import add_fact
 from datetime import datetime
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -60,6 +63,7 @@ async def get_requests(
             requiresTraining=req.requires_training,
             trainingCompleted=req.training_completed,
             environment=req.environment,
+            lastError=req.last_error,
             metadata=req.state_context or {}
         ))
     return response_list
@@ -105,6 +109,7 @@ async def get_request(
             requiresTraining=request_model.requires_training,
             trainingCompleted=request_model.training_completed,
             environment=request_model.environment,
+            lastError=request_model.last_error,
             metadata=request_model.state_context or {}
         )
 

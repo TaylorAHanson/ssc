@@ -41,7 +41,9 @@ class TerraformProvider(BaseProvider):
             self._write_tf_files(config)
             
             # Run terraform init
-            await self._run_command(["terraform", "init"])
+            init_result = await self._run_command(["terraform", "init"])
+            if init_result["returncode"] != 0:
+                self._classify_error(init_result["stderr"] or init_result["stdout"])
             
             # Run terraform apply
             cmd = ["terraform", "apply", "-auto-approve", "-json"]
@@ -53,19 +55,45 @@ class TerraformProvider(BaseProvider):
             
             # Check for errors
             if result["returncode"] != 0:
-                error_msg = result["stderr"]
+                # For -json, errors might be in stdout as diagnostic objects
+                error_msg = self._extract_error_from_json(result["stdout"]) or result["stderr"]
                 self._classify_error(error_msg)
             
             return self._parse_output(result)
             
+        except (RetryableError, PermanentError):
+            raise
         except ConnectionError as e:
             raise RetryableError(f"Connection error: {str(e)}")
         except TimeoutError as e:
             raise RetryableError(f"Timeout error: {str(e)}")
-        except PermanentError:
-            raise
         except Exception as e:
             raise RetryableError(f"Unexpected error: {str(e)}")
+
+    def _extract_error_from_json(self, stdout: str) -> Optional[str]:
+        """Extract error message from Terraform JSON output."""
+        if not stdout:
+            return None
+            
+        errors = []
+        for line in stdout.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+                if event.get("type") == "diagnostic":
+                    diag = event.get("diagnostic", {})
+                    if diag.get("severity") == "error":
+                        summary = diag.get("summary", "")
+                        detail = diag.get("detail", "")
+                        msg = f"{summary}: {detail}" if detail else summary
+                        if msg:
+                            errors.append(msg)
+            except json.JSONDecodeError:
+                continue
+        
+        return "; ".join(errors) if errors else None
     
     async def destroy(self, config: Dict[str, Any]) -> bool:
         """Destroy infrastructure."""

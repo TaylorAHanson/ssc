@@ -273,21 +273,24 @@ async def _process_request_state_machine(db, request: RequestModel):
     changed = sm.tick()
     new_state = sm.current_state.id
     
-    if changed:
-        logger.info(f"[{request.id}] State changed: {initial_state} -> {new_state}")
+    # Save state machine to sync status and state
+    # We do this every time to ensure the database matches the state machine's internal view
+    # even if no state transition occurred (e.g. manual status resets)
+    if changed or request.status != sm.get_mapped_status().value:
+        if request.status != "failed":
+            logger.info(f"[{request.id}] Syncing state machine status: {request.status} -> {sm.get_mapped_status().value}")
+            save_state_machine(db, request, sm)
+            db.commit()
+            logger.info(f"[{request.id}] Saved state machine - Current state: {sm.current_state.id}, Status: {request.status}")
     else:
-        logger.info(f"[{request.id}] No state change (still in {initial_state})")
+        logger.debug(f"[{request.id}] No state change or status sync needed (still in {initial_state})")
     
     # Execute any tasks associated with the current state
+    # These tasks (like provisioning) can be long-running
     await sm.execute_tasks()
     
-    # Save if state changed
-    if changed:
-        save_state_machine(db, request, sm)
-        db.commit()
-        logger.info(f"[{request.id}] Saved state machine - New state: {sm.current_state.id}")
-    else:
-        logger.debug(f"[{request.id}] No state change, skipping save")
+    # If tasks added facts that might change state further, the next poll cycle will handle it
+    # We don't save again here to avoid redundant commits, tick() is what matters
 
 
 async def _handle_retryable_error(

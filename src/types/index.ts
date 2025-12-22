@@ -31,6 +31,7 @@ export interface Request {
   requiresTraining?: boolean;
   trainingCompleted?: boolean;
   environment?: Environment;
+  lastError?: any;
 }
 
 export interface ProgressInfo {

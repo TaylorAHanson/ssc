@@ -117,7 +117,7 @@ class CreateWorkspaceTool(BaseTool):
                 tf_config = self._build_terraform_config(name, environment, config)
                 
                 self.report_progress(db, request_id, "Applying infrastructure changes (this may take 5-10 minutes)...", 40)
-                tf_result = await self.terraform.apply(tf_config, variables=config)
+                tf_result = await self.terraform.apply(tf_config)
             finally:
                 # Restore original workspace_dir (for potential reuse, though typically new instance per request)
                 self.terraform.workspace_dir = original_workspace_dir

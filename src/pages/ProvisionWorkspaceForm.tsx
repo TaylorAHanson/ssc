@@ -71,24 +71,23 @@ export function ProvisionWorkspaceForm() {
                   data.environment === 'stage' ? 'stage' : 'prod';
       const title = `New Workspace: ${data.workspace_name} - ${data.environment || 'Dev'}`;
       
-      await addRequest('workspace_provision', title, env as any, data);
-      navigate('/requests');
+      try {
+        await addRequest('workspace_provision', title, env as any, data);
+        navigate('/requests');
+      } catch (e) {
+        console.error('Failed to submit request:', e);
+        // If it fails, allow the user to see the error or stay on page
+        // survey.showCompletedPage will handle the UI if we don't navigate
+      }
     };
 
     survey.onComplete.add(handleComplete);
+    survey.showCompletedPage = false; // Don't show default thank you page while navigating
 
     return () => {
       survey.onComplete.remove(handleComplete);
     };
   }, [survey, navigate, addRequest]);
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
-      </div>
-    );
-  }
 
   if (isLoading) {
     return (

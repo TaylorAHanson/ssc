@@ -113,7 +113,7 @@ function RequestStateList({ request }: { request: Request }) {
         return true;
       })
       .map((state, index) => {
-        let status: 'pending' | 'active' | 'completed' | 'rejected' = 'pending';
+        let status: 'pending' | 'active' | 'completed' | 'rejected' | 'failed' = 'pending';
         if (state.isCompleted) {
           if (state.id === 'rejected' || state.name.toLowerCase().includes('rejected')) {
             status = 'rejected';
@@ -121,9 +121,10 @@ function RequestStateList({ request }: { request: Request }) {
             status = 'completed';
           }
         } else if (state.isActive) {
-          // Special case: if the request overall is completed, this state should show as completed
           if (request.status === 'completed') {
             status = 'completed';
+          } else if (request.status === 'failed') {
+            status = 'failed';
           } else {
             status = 'active';
           }
@@ -147,6 +148,7 @@ function RequestStateList({ request }: { request: Request }) {
         {steps.map((step, idx) => {
           const isCompleted = step.status === 'completed';
           const isRejected = step.status === 'rejected';
+          const isFailed = step.status === 'failed';
           const isActive = step.status === 'active';
           const isTraining = step.id === 'training_pending';
           const isUserRequest = step.id === 'user_request';
@@ -155,21 +157,24 @@ function RequestStateList({ request }: { request: Request }) {
             <div 
               key={`${step.id}-${idx}`} 
               className={`p-4 flex flex-col transition-colors ${
+                isFailed ? 'bg-red-50 border-l-4 border-l-red-600' :
+                isRejected ? 'bg-red-50 border-l-4 border-l-red-500' :
                 isActive ? 'bg-blue-50 border-l-4 border-l-blue-500' :
                 isCompleted ? 'bg-green-50 border-l-4 border-l-green-500' :
-                isRejected ? 'bg-red-50 border-l-4 border-l-red-500' :
                 'bg-white border-l-4 border-l-gray-200'
               } first:rounded-t-lg last:rounded-b-lg hover:bg-opacity-80`}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4 flex-1">
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
-                    isCompleted ? 'bg-green-500 text-white' : 
+                    isFailed ? 'bg-red-600 text-white' :
                     isRejected ? 'bg-red-500 text-white' :
+                    isCompleted ? 'bg-green-500 text-white' : 
                     isActive ? 'bg-blue-500 text-white' : 
                     'bg-gray-300 text-gray-600'
                   }`}>
-                    {isCompleted ? <CheckCircle2 className="w-6 h-6" /> : 
+                    {isFailed ? <AlertCircle className="w-6 h-6" /> :
+                     isCompleted ? <CheckCircle2 className="w-6 h-6" /> : 
                      isRejected ? <X className="w-6 h-6" /> :
                      isActive ? <Loader2 className="w-6 h-6 animate-spin" /> : 
                      <Circle className="w-6 h-6" />}
@@ -185,12 +190,14 @@ function RequestStateList({ request }: { request: Request }) {
                     </div>
                     <div className="flex items-center gap-3 text-sm text-gray-600">
                       <span className={`font-medium ${
-                        isCompleted ? 'text-green-700' :
+                        isFailed ? 'text-red-800 font-bold' :
                         isRejected ? 'text-red-700' :
+                        isCompleted ? 'text-green-700' :
                         isActive ? 'text-blue-700' :
                         'text-gray-500'
                       }`}>
-                        {isCompleted ? 'Completed' :
+                        {isFailed ? 'Failed' :
+                         isCompleted ? 'Completed' :
                          isRejected ? 'Rejected' :
                          isActive ? 'In Progress' :
                          'Pending'}
@@ -226,9 +233,19 @@ function RequestStateList({ request }: { request: Request }) {
               )}
 
               {/* Step Logs / Facts */}
-              {step.facts && step.facts.length > 0 && (
+              {((step.facts && step.facts.length > 0) || (isFailed && request.lastError)) && (
                 <div className="ml-14 mt-3 space-y-2">
-                  <div className="bg-gray-50 rounded border border-gray-100 p-3">
+                  {isFailed && request.lastError && (
+                    <div className="bg-red-50 border border-red-200 rounded p-3 text-red-800 text-xs flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                      <div>
+                        <p className="font-bold mb-1">Error Details</p>
+                        <p>{request.lastError.error || 'An unexpected error occurred during this step.'}</p>
+                      </div>
+                    </div>
+                  )}
+                  {step.facts && step.facts.length > 0 && (
+                    <div className="bg-gray-50 rounded border border-gray-100 p-3">
                     <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-2">Step Logs</p>
                     <div className="space-y-1.5">
                       {step.facts.map((fact, fIdx) => (
@@ -246,6 +263,8 @@ function RequestStateList({ request }: { request: Request }) {
                                 <span className="font-mono bg-gray-100 px-1 rounded">{fact.data.workspace_url}</span>
                               ) : fact.type === 'approval_received' ? (
                                 <span>Approved by <span className="font-medium">{fact.data.actor}</span></span>
+                              ) : fact.type === 'provisioning_failed' ? (
+                                <span className="text-red-600 font-medium">Failed: {fact.data.error}</span>
                               ) : (
                                 <span>Action completed</span>
                               )
@@ -255,8 +274,9 @@ function RequestStateList({ request }: { request: Request }) {
                       ))}
                     </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
+            )}
             </div>
           );
         })}

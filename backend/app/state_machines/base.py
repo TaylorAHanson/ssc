@@ -37,6 +37,10 @@ class BaseRequestStateMachine(StateMachine):
         Return the state machine representation using python-statemachine's built-in states.
         Simple linear flow - no parallel paths.
         """
+        # Run tick() locally to ensure we have the most up-to-date state based on facts
+        # for the UI view, even if the DB hasn't been updated yet by the poller.
+        self.tick()
+
         # Get all states from python-statemachine in order
         all_states = list(self.states)
         
@@ -103,6 +107,10 @@ class BaseRequestStateMachine(StateMachine):
         
         fact_type = mapping.get(state_id)
         if not fact_type:
+            # For the terminal completed state, use the provisioning_completed fact
+            if state_id == "completed":
+                fact = get_latest_fact(self.db, self.request.id, "provisioning_completed")
+                return fact.created_at if fact else None
             return None
             
         # For approvals, we need to match the type
@@ -118,6 +126,12 @@ class BaseRequestStateMachine(StateMachine):
         """Get relevant facts for a state to show as logs."""
         from app.db.request import EventModel
         
+        # Don't show facts for states we haven't reached yet
+        if not self._is_state_completed(state_id) and self.current_state.id != state_id:
+            # Special exception: if the request is completed, show provisioning facts
+            if not (state_id == "provisioning" and self.current_state.id == "completed"):
+                return []
+        
         # Define which facts belong to which state
         mapping = {
             "pending": ["request_submitted"],
@@ -125,7 +139,7 @@ class BaseRequestStateMachine(StateMachine):
             "data_owner_approval": ["approval_received"],
             "platform_admin_approval": ["approval_received"],
             "training_pending": ["training_completed"],
-            "provisioning": ["provisioning_started", "workspace_created", "repo_created", "provisioning_completed"],
+            "provisioning": ["provisioning_started", "workspace_created", "repo_created", "provisioning_completed", "provisioning_failed"],
             "rejected": ["request_rejected"]
         }
         
@@ -163,13 +177,27 @@ class BaseRequestStateMachine(StateMachine):
         if self.current_state.id == "rejected":
             return state_id not in ["rejected", "completed"]
         
-        # Check if this is an approval state
-        if state_id in self.APPROVAL_NODES:
-            approval_type = self.APPROVAL_NODES[state_id].get("approval_type")
-            return has_fact(self.db, self.request.id, "approval_received", approval_type=approval_type)
+        # Check for specific completion facts using the same mapping as timestamps
+        mapping = {
+            "pending": "request_submitted",
+            "manager_approval": "approval_received",
+            "data_owner_approval": "approval_received",
+            "platform_admin_approval": "approval_received",
+            "training_pending": "training_completed",
+            "provisioning": "provisioning_completed",
+            "rejected": "request_rejected"
+        }
         
-        # Check if we've passed this state in the flow
-        # Simple heuristic: if current state comes after this one in the state list, it's completed
+        fact_type = mapping.get(state_id)
+        if fact_type:
+            if state_id in self.APPROVAL_NODES:
+                approval_type = self.APPROVAL_NODES[state_id].get("approval_type")
+                if has_fact(self.db, self.request.id, fact_type, approval_type=approval_type):
+                    return True
+            elif has_fact(self.db, self.request.id, fact_type):
+                return True
+        
+        # Fallback to simple heuristic: if current state comes after this one in the state list, it's completed
         all_states = list(self.states)
         current_index = next((i for i, s in enumerate(all_states) if s.id == self.current_state.id), -1)
         state_index = next((i for i, s in enumerate(all_states) if s.id == state_id), -1)
@@ -307,6 +335,11 @@ class BaseRequestStateMachine(StateMachine):
         """Check if platform admin approval has been received."""
         return has_fact(self.db, self.request.id, "approval_received", approval_type="platform_admin")
 
+    @property
+    def _always_false(self) -> bool:
+        """Helper for dummy transitions."""
+        return False
+
     def tick(self) -> bool:
         """
         Process one tick of the state machine.
@@ -374,6 +407,8 @@ class BaseRequestStateMachine(StateMachine):
             transitions_to_try.append(('approve_owner', lambda: self.approve_owner()))
         if hasattr(self, 'approve_admin'):
             transitions_to_try.append(('approve_admin', lambda: self.approve_admin()))
+        if hasattr(self, 'auto_approve'):
+            transitions_to_try.append(('auto_approve', lambda: self.auto_approve()))
         if hasattr(self, 'complete_training'):
             transitions_to_try.append(('complete_training', lambda: self.complete_training()))
         if hasattr(self, 'finish_provisioning'):

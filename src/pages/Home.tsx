@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Sparkles, ArrowRight, Send, ExternalLink, ChevronDown, Shield, BarChart3, Activity } from 'lucide-react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { Sparkles, ArrowRight, Send, ExternalLink, ChevronDown, Shield, BarChart3, Activity, RotateCcw } from 'lucide-react';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 import { Button } from '../components/ui/button';
@@ -109,9 +109,33 @@ export function Home() {
   const [agentMode, setAgentMode] = useState<AgentMode>('Self Service Agent');
   const [showModeDropdown, setShowModeDropdown] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const handleReset = () => {
+    setConversationState(null);
+    setQuery('');
+    setAgentMode('Self Service Agent');
+    setIsProcessing(false);
+    localStorage.removeItem('edas_hub_conversation_state');
+    // Focus the initial textarea after a short delay to allow the state change to render
+    setTimeout(() => {
+      const initialTextarea = document.querySelector('textarea');
+      if (initialTextarea instanceof HTMLTextAreaElement) {
+        initialTextarea.focus();
+      }
+    }, 100);
+  };
+
+  // Reset view when navigating to home page root
+  // We use location.key to ensure it resets even if already on the home page and the link is clicked
+  useEffect(() => {
+    if (location.pathname === '/') {
+      handleReset();
+    }
+  }, [location.pathname, location.key]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -417,6 +441,17 @@ export function Home() {
             <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
               {conversationState.context?.title || 'EDAS Hub'}
             </h1>
+          </div>
+          <div className="absolute right-0 top-1/2 -translate-y-1/2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleReset}
+              className="flex items-center gap-2 text-gray-500 hover:text-gray-900 hover:bg-gray-100/50 rounded-xl px-3"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span className="text-sm font-medium">Reset</span>
+            </Button>
           </div>
         </div>
 

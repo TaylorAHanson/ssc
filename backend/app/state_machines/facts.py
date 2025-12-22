@@ -126,21 +126,39 @@ def has_fact(
 def get_latest_fact(
     db: Session,
     request_id: str,
-    fact_type: str
+    fact_type: str,
+    **conditions
 ) -> Optional[EventModel]:
     """
-    Get the most recent fact of a given type.
+    Get the most recent fact of a given type, optionally matching conditions.
     
     Args:
         db: Database session
         request_id: Request ID
         fact_type: Type of fact
+        **conditions: Optional key-value pairs to match in fact_data
         
     Returns:
-        Most recent EventModel of that type, or None
+        Most recent matching EventModel of that type, or None
     """
     facts = get_facts(db, request_id, fact_type)
-    return facts[-1] if facts else None
+    
+    if not facts:
+        return None
+        
+    if not conditions:
+        return facts[-1]
+        
+    # Check facts in reverse order (latest first)
+    for fact in reversed(facts):
+        fact_data = fact.event_data or {}
+        if all(
+            fact_data.get(key) == value
+            for key, value in conditions.items()
+        ):
+            return fact
+            
+    return None
 
 
 def get_fact_data(

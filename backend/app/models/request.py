@@ -102,6 +102,7 @@ class Request(BaseModel):
     requiresTraining: Optional[bool] = False
     trainingCompleted: Optional[bool] = False
     environment: Optional[Environment] = None
+    lastError: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 

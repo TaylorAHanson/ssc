@@ -20,16 +20,18 @@ class WorkspaceProvisionStateMachine(BaseRequestStateMachine):
     rejected = State("rejected", final=True)
     
     # Transitions with conditional guards based on facts
-    # Using python-statemachine's built-in conditional transitions
-    # See: https://python-statemachine.readthedocs.io/en/latest/guards.html#conditions
-    
     submit = pending.to(manager_approval, cond="has_request_submitted")
     
     # Manager approval can go to training (if required) or provisioning (if not)
+    # For demo: we allow auto-transition if approval fact exists
     approve_manager = (
         manager_approval.to(training_pending, cond="has_manager_approval and requires_training") |
         manager_approval.to(provisioning, cond="has_manager_approval and not requires_training")
     )
+    
+    # For demo: auto-approve manager if fact missing but we want to skip
+    # (Commented out to keep the flow manual as requested by the bypass button mention)
+    # _auto_manager = manager_approval.to(provisioning, cond="not requires_training")
     
     complete_training = training_pending.to(provisioning, cond="has_training_completed")
     finish_provisioning = provisioning.to(completed, cond="has_workspace_created")
@@ -38,7 +40,8 @@ class WorkspaceProvisionStateMachine(BaseRequestStateMachine):
     reject = (
         pending.to(rejected, cond="has_request_rejected") |
         manager_approval.to(rejected, cond="has_request_rejected") |
-        training_pending.to(rejected, cond="has_request_rejected")
+        training_pending.to(rejected, cond="has_request_rejected") |
+        provisioning.to(rejected, cond="has_request_rejected")
     )
     
     # Approval node configuration
