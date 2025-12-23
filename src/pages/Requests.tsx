@@ -254,21 +254,18 @@ function RequestStateList({ request }: { request: Request }) {
                             [{formatInTimeZone(parseUtcDate(fact.timestamp), 'America/Los_Angeles', 'HH:mm:ss')}]
                           </span>
                           <div className="text-gray-700">
-                            <span className="font-semibold text-gray-900">{fact.type.replace(/_/g, ' ')}</span>: {
-                              fact.type === 'repo_created' ? (
-                                <a href={fact.data.repo_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                                  {fact.data.repo_name}
-                                </a>
-                              ) : fact.type === 'workspace_created' ? (
-                                <span className="font-mono bg-gray-100 px-1 rounded">{fact.data.workspace_url}</span>
-                              ) : fact.type === 'approval_received' ? (
-                                <span>Approved by <span className="font-medium">{fact.data.actor}</span></span>
-                              ) : fact.type === 'provisioning_failed' ? (
-                                <span className="text-red-600 font-medium">Failed: {fact.data.error}</span>
-                              ) : (
-                                <span>Action completed</span>
-                              )
-                            }
+                            <span className="font-semibold text-gray-900">{fact.type.replace(/_/g, ' ')}</span>
+                            {fact.type === 'repo_created' ? (
+                              <>: <a href={fact.data.repo_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                                {fact.data.repo_name}
+                              </a></>
+                            ) : fact.type === 'workspace_created' ? (
+                              <>: <span className="font-mono bg-gray-100 px-1 rounded">{fact.data.workspace_url}</span></>
+                            ) : fact.type === 'approval_received' ? (
+                              <>: <span>Approved by <span className="font-medium">{fact.data.actor}</span></span></>
+                            ) : fact.type === 'provisioning_failed' ? (
+                              <>: <span className="text-red-600 font-medium">Failed: {fact.data.error}</span></>
+                            ) : null}
                           </div>
                         </div>
                       ))}
