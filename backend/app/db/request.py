@@ -104,3 +104,17 @@ class FailureModel(Base):
     
     request = relationship("RequestModel", back_populates="failures")
 
+
+class DelegationModel(Base):
+    """Delegation database model for 'Delegate All' functionality."""
+    __tablename__ = "delegations"
+    
+    id = Column(String, primary_key=True)
+    delegator_email = Column(String, nullable=False)
+    delegatee_email = Column(String, nullable=False)
+    start_date = Column(DateTime, nullable=False)
+    end_date = Column(DateTime, nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+

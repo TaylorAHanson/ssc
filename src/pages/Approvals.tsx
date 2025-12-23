@@ -1,25 +1,52 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRequestStore } from '../stores/requestStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { CheckCircle2, UserPlus, Clock, Check, X, Shield, Database, Badge } from 'lucide-react';
+import { CheckCircle2, UserPlus, Clock, Check, X, Shield, Database, Badge, Calendar, Trash2, ArrowRight } from 'lucide-react';
 import { format } from 'date-fns';
-import type { Approval, ApprovalAction } from '../types';
+import { api } from '../services/api';
+import type { Approval, ApprovalAction, Delegation } from '../types';
 
 export function Approvals() {
   const approvals = useRequestStore((state) => state.approvals);
+  const delegations = useRequestStore((state) => state.delegations);
   const fetchApprovals = useRequestStore((state) => state.fetchApprovals);
+  const fetchDelegations = useRequestStore((state) => state.fetchDelegations);
+  const addDelegation = useRequestStore((state) => state.addDelegation);
+  const removeDelegation = useRequestStore((state) => state.removeDelegation);
   const processApproval = useRequestStore((state) => state.processApproval);
+  
   const [selectedApproval, setSelectedApproval] = useState<Approval | null>(null);
   const [actionType, setActionType] = useState<'approve' | 'reject' | 'delegate' | null>(null);
   const [note, setNote] = useState('');
   const [delegateEmail, setDelegateEmail] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  
+  // New delegation state
+  const [showDelegationForm, setShowDelegationForm] = useState(false);
+  const [newDelegateEmail, setNewDelegateEmail] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [delegationsToMe, setDelegationsToMe] = useState<Delegation[]>([]);
+
+  // Current mock user
+  const currentUserEmail = "admin@qualcomm.com";
+
+  const fetchAllData = useCallback(async () => {
+    await Promise.all([
+      fetchApprovals(),
+      fetchDelegations(currentUserEmail),
+      (async () => {
+        const toMe = await api.getDelegations(undefined, currentUserEmail);
+        setDelegationsToMe(toMe);
+      })()
+    ]);
+  }, [fetchApprovals, fetchDelegations, currentUserEmail]);
 
   useEffect(() => {
-    fetchApprovals();
-  }, [fetchApprovals]);
+    fetchAllData();
+  }, [fetchAllData]);
 
   // User roles
   const userRoles = ['platform_admin', 'data_owner', 'manager'];
@@ -30,10 +57,13 @@ export function Approvals() {
   };
 
   // Filter approvals by user's roles
-  const relevantApprovals = approvals.filter((a) => {
-    return userRoles.includes(a.approvalType) && a.status === 'pending';
+  // For the demo, we show everything if the user has roles
+  // In a real app, we'd also check if anyone delegated to us
+  const pendingApprovals = approvals.filter((a) => {
+    const hasRole = userRoles.includes(a.approvalType);
+    return hasRole && a.status === 'pending';
   });
-  const pendingApprovals = relevantApprovals;
+  
   const completedApprovals = approvals.filter((a) => a.status !== 'pending');
 
   const handleAction = async (approval: Approval, action: 'approve' | 'reject' | 'delegate') => {
@@ -43,7 +73,29 @@ export function Approvals() {
     setDelegateEmail('');
   };
 
+  const handleAddDelegation = async () => {
+    if (!newDelegateEmail || !startDate || !endDate) {
+      alert('Please fill in all fields');
+      return;
+    }
+
+    try {
+      await addDelegation({
+        delegatee_email: newDelegateEmail,
+        start_date: new Date(startDate).toISOString(),
+        end_date: new Date(endDate).toISOString(),
+      });
+      setShowDelegationForm(false);
+      setNewDelegateEmail('');
+      setStartDate('');
+      setEndDate('');
+    } catch (error) {
+      alert('Failed to add delegation');
+    }
+  };
+
   const submitAction = async () => {
+    // ... same as before ...
     if (!selectedApproval || !actionType) return;
     
     if (actionType === 'reject' && !note.trim()) {
@@ -94,11 +146,156 @@ export function Approvals() {
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Pending Approvals</h1>
-        <p className="text-gray-600">Review and process requests requiring your approval</p>
+    <div className="space-y-6 pb-20">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">Approvals & Delegations</h1>
+          <p className="text-gray-600">Review requests or manage your Out-of-Office delegations</p>
+        </div>
+        <Button 
+          onClick={() => setShowDelegationForm(!showDelegationForm)}
+          variant={showDelegationForm ? "outline" : "default"}
+          className="flex items-center gap-2"
+        >
+          <Calendar className="w-4 h-4" />
+          {showDelegationForm ? 'Cancel Delegation' : 'Manage OOO / Delegation'}
+        </Button>
       </div>
+
+      {/* Delegation Management Section */}
+      {showDelegationForm && (
+        <Card className="border-2 border-primary/20 shadow-lg animate-in fade-in slide-in-from-top-4 duration-300">
+          <CardHeader className="bg-primary/5">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <UserPlus className="w-5 h-5 text-primary" />
+              New "Delegate All" Configuration
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-6 space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-gray-700">Delegate To</label>
+                <Input 
+                  placeholder="delegate@qualcomm.com" 
+                  value={newDelegateEmail}
+                  onChange={(e) => setNewDelegateEmail(e.target.value)}
+                />
+                <p className="text-[10px] text-gray-500 italic">This person will receive all your approval tasks during the specified period.</p>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-gray-700">Start Date</label>
+                <Input 
+                  type="date" 
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-gray-700">End Date</label>
+                <Input 
+                  type="date" 
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                />
+              </div>
+            </div>
+            
+            <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
+              <Button variant="outline" onClick={() => setShowDelegationForm(false)}>Cancel</Button>
+              <Button onClick={handleAddDelegation} className="bg-primary text-white">
+                Enable Global Delegation
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Active Delegations List (By Me) */}
+      {delegations.length > 0 && (
+        <Card className="border-blue-100 bg-blue-50/30">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-bold text-blue-900 uppercase tracking-wider flex items-center gap-2">
+              <Calendar className="w-4 h-4" />
+              Your Active OOO Delegations
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {delegations.map((del) => (
+                <div key={del.id} className="bg-white border border-blue-200 rounded-lg p-4 flex items-center justify-between shadow-sm">
+                  <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs">
+                        {currentUserEmail[0].toUpperCase()}
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-gray-400" />
+                      <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-xs">
+                        {del.delegatee_email[0].toUpperCase()}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">
+                        All approvals delegated to <span className="text-blue-600">{del.delegatee_email}</span>
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Period: {format(new Date(del.start_date), 'MMM d, yyyy')} — {format(new Date(del.end_date), 'MMM d, yyyy')}
+                      </p>
+                    </div>
+                  </div>
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    onClick={() => removeDelegation(del.id)}
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Revoke
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Delegations TO ME Section */}
+      {delegationsToMe.length > 0 && (
+        <Card className="border-green-100 bg-green-50/30">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-bold text-green-900 uppercase tracking-wider flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4" />
+              Incoming Delegations (You are Acting Admin)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {delegationsToMe.map((del) => (
+                <div key={del.id} className="bg-white border border-green-200 rounded-lg p-4 flex items-center shadow-sm">
+                  <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs">
+                        {del.delegator_email[0].toUpperCase()}
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-gray-400" />
+                      <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-xs">
+                        {currentUserEmail[0].toUpperCase()}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">
+                        You are acting as <span className="text-green-600">{del.delegator_email}</span>
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Delegation active until {format(new Date(del.end_date), 'MMM d, yyyy')}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Role Section */}
       <Card>
@@ -125,11 +322,11 @@ export function Approvals() {
                 {role === 'data_owner' && (
                   <p className="text-sm text-gray-600 mb-2">Data Owner for: <strong>platform_catalog</strong></p>
                 )}
-                <ul className="space-y-1 text-sm text-gray-600">
+                <ul className="space-y-1.5 text-sm text-gray-600">
                   {approvalCapabilities[role as keyof typeof approvalCapabilities]?.map((capability, idx) => (
                     <li key={idx} className="flex items-start gap-2">
-                      <span className="text-primary mt-1">•</span>
-                      <span>{capability}</span>
+                      <span className="text-primary shrink-0 mt-1.5 text-xs">•</span>
+                      <span className="leading-relaxed">{capability}</span>
                     </li>
                   ))}
                 </ul>

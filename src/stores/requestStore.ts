@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Request, RequestType, Environment, Approval, ApprovalAction } from '../types';
+import type { Request, RequestType, Environment, Approval, ApprovalAction, Delegation, DelegationCreate } from '../types';
 import { api, getContent } from '../services/api';
 
 interface BannerData {
@@ -11,6 +11,7 @@ interface BannerData {
 interface RequestStore {
   requests: Request[];
   approvals: Approval[];
+  delegations: Delegation[];
   bannerMessage: string | null;
   bannerData: BannerData | null;
   addRequest: (type: RequestType, title: string, environment?: Environment, metadata?: Record<string, any>) => Promise<void>;
@@ -19,6 +20,9 @@ interface RequestStore {
   setBannerMessage: (message: string | null) => void;
   fetchRequests: () => Promise<void>;
   fetchApprovals: () => Promise<void>;
+  fetchDelegations: (delegatorEmail?: string) => Promise<void>;
+  addDelegation: (delegation: DelegationCreate) => Promise<void>;
+  removeDelegation: (id: string) => Promise<void>;
   processApproval: (action: ApprovalAction) => Promise<void>;
   getPendingApprovalsCount: () => number;
   fetchBannerMessage: () => Promise<void>;
@@ -28,6 +32,7 @@ interface RequestStore {
 export const useRequestStore = create<RequestStore>((set, get) => ({
   requests: [],
   approvals: [],
+  delegations: [],
   bannerMessage: null,
   bannerData: null,
 
@@ -85,6 +90,35 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
       set({ approvals });
     } catch (error) {
       console.error('Failed to fetch approvals:', error);
+    }
+  },
+
+  fetchDelegations: async (delegatorEmail) => {
+    try {
+      const delegations = await api.getDelegations(delegatorEmail);
+      set({ delegations });
+    } catch (error) {
+      console.error('Failed to fetch delegations:', error);
+    }
+  },
+
+  addDelegation: async (delegation) => {
+    try {
+      await api.createDelegation(delegation);
+      await get().fetchDelegations();
+    } catch (error) {
+      console.error('Failed to add delegation:', error);
+      throw error;
+    }
+  },
+
+  removeDelegation: async (id) => {
+    try {
+      await api.deleteDelegation(id);
+      await get().fetchDelegations();
+    } catch (error) {
+      console.error('Failed to remove delegation:', error);
+      throw error;
     }
   },
 

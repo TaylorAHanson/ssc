@@ -2,7 +2,7 @@
  * API service for communicating with the backend.
  */
 
-import type { Request, RequestType, Environment, Approval } from '../types';
+import type { Request, RequestType, Environment, Approval, Delegation, DelegationCreate } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
 
@@ -401,6 +401,48 @@ export async function completeTraining(requestId: string): Promise<void> {
   }
 }
 
+/**
+ * Delegation Management API
+ */
+export async function getDelegations(delegatorEmail?: string, delegateeEmail?: string): Promise<Delegation[]> {
+  const url = new URL(`${API_BASE_URL}/delegations`);
+  if (delegatorEmail) {
+    url.searchParams.set('delegator_email', delegatorEmail);
+  }
+  if (delegateeEmail) {
+    url.searchParams.set('delegatee_email', delegateeEmail);
+  }
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    throw new Error(`Failed to get delegations: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function createDelegation(delegation: DelegationCreate): Promise<Delegation> {
+  const response = await fetch(`${API_BASE_URL}/delegations`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(delegation),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to create delegation: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function deleteDelegation(delegationId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/delegations/${delegationId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to delete delegation: ${response.statusText}`);
+  }
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -409,5 +451,8 @@ export const api = {
   rejectRequest,
   deleteRequest,
   getApprovals,
-  completeTraining
+  completeTraining,
+  getDelegations,
+  createDelegation,
+  deleteDelegation
 };

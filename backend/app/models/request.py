@@ -121,3 +121,22 @@ class RequestUpdate(BaseModel):
     trainingCompleted: Optional[bool] = None
     metadata: Optional[Dict[str, Any]] = None
 
+
+class Delegation(BaseModel):
+    """Delegation model."""
+    id: str
+    delegator_email: str
+    delegatee_email: str
+    start_date: datetime
+    end_date: datetime
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class DelegationCreate(BaseModel):
+    """Delegation creation model."""
+    delegatee_email: str
+    start_date: datetime
+    end_date: datetime
+

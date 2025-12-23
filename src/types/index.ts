@@ -184,3 +184,20 @@ export interface DesignPattern {
   viewCount: number;
 }
 
+export interface Delegation {
+  id: string;
+  delegator_email: string;
+  delegatee_email: string;
+  start_date: string;
+  end_date: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DelegationCreate {
+  delegatee_email: string;
+  start_date: string;
+  end_date: string;
+}
+
