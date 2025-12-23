@@ -39,7 +39,9 @@ class BaseRequestStateMachine(StateMachine):
         """
         # Run tick() locally to ensure we have the most up-to-date state based on facts
         # for the UI view, even if the DB hasn't been updated yet by the poller.
-        self.tick()
+        # SKIP tick() for terminal states to avoid redundant processing and logs.
+        if self.request.status not in ["completed", "rejected", "failed"]:
+            self.tick()
 
         # Get all states from python-statemachine in order
         all_states = list(self.states)

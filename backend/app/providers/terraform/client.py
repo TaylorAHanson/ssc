@@ -133,13 +133,37 @@ class TerraformProvider(BaseProvider):
             raise RetryableError(f"Get state failed: {str(e)}")
     
     async def _run_command(self, cmd: list) -> Dict[str, Any]:
-        """Run Terraform command."""
+        """Run Terraform command with explicit environment loading."""
         try:
+            # Load environment variables from terrarform_temp/.env if it exists
+            # to ensure fresh AWS credentials are used
+            env = os.environ.copy()
+            
+            project_root = pathlib.Path(__file__).parent.parent.parent.parent.parent
+            env_file = project_root / "terrarform_temp" / ".env"
+            
+            if env_file.exists():
+                try:
+                    with open(env_file, "r") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line or line.startswith("#"):
+                                continue
+                            if "=" in line:
+                                key, value = line.split("=", 1)
+                                # Remove quotes if present
+                                value = value.strip("'\"")
+                                env[key.strip()] = value
+                    logger.info(f"Loaded environment variables from {env_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to load .env file {env_file}: {e}")
+
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=self.workspace_dir,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                env=env
             )
             stdout, stderr = await process.communicate()
             return {
@@ -316,7 +340,9 @@ class TerraformProvider(BaseProvider):
         """Classify Terraform error as retryable or permanent."""
         error_lower = error_msg.lower()
         
-        if "state lock" in error_lower:
+        if "expiredtoken" in error_lower or "security token included in the request is expired" in error_lower:
+            raise PermanentError(f"AWS Credentials Expired: Please refresh your AWS session token and restart the backend. (Error: {error_msg})")
+        elif "state lock" in error_lower:
             raise RetryableError(f"Terraform state locked: {error_msg}")
         elif "authentication" in error_lower or "unauthorized" in error_lower:
             raise PermanentError(f"Authentication failed: {error_msg}")
