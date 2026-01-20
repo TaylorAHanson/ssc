@@ -428,8 +428,10 @@ async def handle_conversation(request: ConversationRequest):
                         requires_more_info = False
                         logger.info("Answers validated - ready for form routing")
         
-        # If no tool calls but we have a message, try to infer from message content
-        if not tool_calls and agent_message:
+        # If no tool calls but we have a message, try to infer if we're done
+        if not tool_calls and agent_message and not json_instructions:
+            # Only infer requires_more_info = False if we don't have JSON but agent seems done
+            # This is a fallback for when the agent doesn't use the JSON format
             if any(phrase in agent_message.lower() for phrase in ["ready to submit", "form is ready", "let's proceed", "i'll create"]):
                 requires_more_info = False
                 form_route = _infer_route_from_conversation(request.query, request.conversation_history)

@@ -34,23 +34,23 @@ const navItems: NavItem[] = [
   { title: 'My Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Main' },
   { title: 'Pending Approvals', icon: <CheckCircle2 className="w-5 h-5" />, path: '/approvals', group: 'Main' },
   
+  // Enterprise Data
+  { title: 'Request Data Access', icon: <Key className="w-5 h-5" />, path: '/paas/request-access', group: 'Enterprise Data' },
+  { title: 'Marketplace Certification', icon: <ShoppingCart className="w-5 h-5" />, path: '/paas/marketplace', group: 'Enterprise Data' },
+
   // PaaS
   { title: 'Get Workspace Access', icon: <Database className="w-5 h-5" />, path: '/paas/workspace-access', group: 'PaaS' },
   { title: 'Create Catalog/Schema/Table', icon: <Database className="w-5 h-5" />, path: '/paas/request-catalog', group: 'PaaS' },
-  { title: 'Request Data Access', icon: <Key className="w-5 h-5" />, path: '/paas/request-access', group: 'PaaS' },
   { title: 'Provision New Workspace', icon: <Cloud className="w-5 h-5" />, path: '/paas/provision-workspace', group: 'PaaS' },
   { title: 'Provision Service Principal', icon: <Key className="w-5 h-5" />, path: '/paas/service-principal', group: 'PaaS' },
-  { title: 'Marketplace Certification', icon: <ShoppingCart className="w-5 h-5" />, path: '/paas/marketplace', group: 'PaaS' },
   { title: 'GitHub Repository Creation', icon: <Code className="w-5 h-5" />, path: '/paas/github-repo-creation', group: 'PaaS' },
-  
-  // DaaS
-  { title: 'Request REST API Access', icon: <Globe className="w-5 h-5" />, path: '/daas/rest-api', group: 'DaaS' },
-  { title: 'Request Batch Data Access', icon: <Download className="w-5 h-5" />, path: '/daas/batch-data', group: 'DaaS' },
+  { title: 'Request REST API Access', icon: <Globe className="w-5 h-5" />, path: '/daas/rest-api', group: 'PaaS' },
+  { title: 'Request Batch Data Access', icon: <Download className="w-5 h-5" />, path: '/daas/batch-data', group: 'PaaS' },
   
   // Community
   { title: 'Training', icon: <GraduationCap className="w-5 h-5" />, path: '/community/training', group: 'Community' },
-  { title: 'Upcoming Events', icon: <Calendar className="w-5 h-5" />, path: '/community/events', group: 'Community' },
-  { title: 'Reusable Assets', icon: <FileText className="w-5 h-5" />, path: '/community/assets', group: 'Community' },
+  { title: 'Event Calendar', icon: <Calendar className="w-5 h-5" />, path: '/community/events', group: 'Community' },
+  { title: 'Templates & Assets', icon: <FileText className="w-5 h-5" />, path: '/community/assets', group: 'Community' },
   { title: 'Community Links', icon: <MessageSquare className="w-5 h-5" />, path: '/community/links', group: 'Community' },
   
   // Admin

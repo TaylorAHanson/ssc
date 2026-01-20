@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { Sparkles, ArrowRight, Send, ExternalLink, ChevronDown, Shield, BarChart3, Activity, RotateCcw } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Sparkles, ArrowRight, Send, ExternalLink, ChevronDown, Shield, BarChart3, Activity } from 'lucide-react';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 import { Button } from '../components/ui/button';
@@ -109,7 +109,6 @@ export function Home() {
   const [agentMode, setAgentMode] = useState<AgentMode>('Self Service Agent');
   const [showModeDropdown, setShowModeDropdown] = useState(false);
   const navigate = useNavigate();
-  const location = useLocation();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -120,6 +119,7 @@ export function Home() {
     setAgentMode('Self Service Agent');
     setIsProcessing(false);
     localStorage.removeItem('edas_hub_conversation_state');
+    localStorage.removeItem('edas_hub_agent_mode');
     // Focus the initial textarea after a short delay to allow the state change to render
     setTimeout(() => {
       const initialTextarea = document.querySelector('textarea');
@@ -129,13 +129,38 @@ export function Home() {
     }, 100);
   };
 
-  // Reset view when navigating to home page root
-  // We use location.key to ensure it resets even if already on the home page and the link is clicked
+  // Load state from localStorage on mount
   useEffect(() => {
-    if (location.pathname === '/') {
-      handleReset();
+    const savedState = localStorage.getItem('edas_hub_conversation_state');
+    if (savedState) {
+      try {
+        const parsedState = JSON.parse(savedState);
+        // Convert timestamp strings back to Date objects
+        if (parsedState.messages) {
+          parsedState.messages = parsedState.messages.map((m: any) => ({
+            ...m,
+            timestamp: new Date(m.timestamp)
+          }));
+        }
+        setConversationState(parsedState);
+      } catch (e) {
+        console.error('Failed to parse saved conversation state', e);
+      }
     }
-  }, [location.pathname, location.key]);
+
+    const savedMode = localStorage.getItem('edas_hub_agent_mode');
+    if (savedMode) {
+      setAgentMode(savedMode as AgentMode);
+    }
+  }, []);
+
+  // Persist state to localStorage
+  useEffect(() => {
+    if (conversationState) {
+      localStorage.setItem('edas_hub_conversation_state', JSON.stringify(conversationState));
+    }
+    localStorage.setItem('edas_hub_agent_mode', agentMode);
+  }, [conversationState, agentMode]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -146,17 +171,6 @@ export function Home() {
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-  useEffect(() => {
-    // Clear conversation state but keep form prefill data
-    const keysToRemove: string[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key === 'edas_hub_conversation_state') {
-        keysToRemove.push(key);
-      }
-    }
-    keysToRemove.forEach(key => localStorage.removeItem(key));
   }, []);
 
   // Scroll to bottom when messages change
@@ -339,7 +353,8 @@ export function Home() {
       }
 
       // Determine if we should show confirmation (form route ready)
-      const showConfirmation = !agentResponse.requires_more_info && (agentResponse.form_route !== null || agentResponse.form_prefill_data !== undefined);
+      // Keep confirmation visible once it's been shown
+      const showConfirmation = conversationState?.showConfirmation || (!agentResponse.requires_more_info && (agentResponse.form_route !== null || agentResponse.form_prefill_data !== undefined));
 
       setConversationState({
         ...conversationState,
@@ -375,11 +390,11 @@ export function Home() {
   };
 
   const getButtonLabel = (path: string | undefined): string => {
-    if (!path) return 'Continue';
+    if (!path) return 'Continue to form';
     
     // Determine button label based on route
     if (path.startsWith('/paas/') || path.startsWith('/daas/')) {
-      return 'Proceed to pre-filled form';
+      return 'Go to pre-filled form';
     } else if (path.includes('/community/links') || path === '/community-links') {
       return 'Go to community links';
     } else if (path.includes('/community/assets') || path === '/reusable-assets') {
@@ -414,11 +429,7 @@ export function Home() {
       localStorage.setItem(`form_prefill_${routePath}`, JSON.stringify(prefillData));
     }
     
-    // Clear conversation state
-    // Conversation state is not persisted, so no need to remove from localStorage
-    setConversationState(null);
-    
-    // Navigate to the route
+    // Navigate in the same window
     navigate(routePath);
   };
 
@@ -438,21 +449,10 @@ export function Home() {
             <div className="p-2 bg-gradient-to-br from-primary to-primary/80 rounded-xl shadow-md">
               <Sparkles className="w-5 h-5 text-white" />
             </div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
-              {conversationState.context?.title || 'EDAS Hub'}
-            </h1>
-          </div>
-          <div className="absolute right-0 top-1/2 -translate-y-1/2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleReset}
-              className="flex items-center gap-2 text-gray-500 hover:text-gray-900 hover:bg-gray-100/50 rounded-xl px-3"
-            >
-              <RotateCcw className="w-4 h-4" />
-              <span className="text-sm font-medium">Reset</span>
-            </Button>
-          </div>
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
+            {conversationState.context?.title || 'EDAS Hub'}
+          </h1>
+        </div>
         </div>
 
         <div className="relative flex-1 flex flex-col">
@@ -487,7 +487,7 @@ export function Home() {
                   </div>
                 ))}
               
-              {/* Form Link - Show button inline with the last agent message that triggered confirmation */}
+              {/* Form Link */}
               {conversationState.showConfirmation && conversationState.formRoute && (
                 <div className="space-y-4 mt-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
                   <div className="bg-gradient-to-br from-blue-50 to-primary/5 border border-blue-200/50 rounded-2xl p-5 shadow-sm">
@@ -511,7 +511,7 @@ export function Home() {
 
             {/* Input Area */}
             {/* Show input for specific question types */}
-            {!allQuestionsAnswered && !conversationState.showConfirmation && currentQuestion && (
+            {!allQuestionsAnswered && currentQuestion && (
               <div className="border-t border-gray-200/50 pt-5 mt-4">
                 <div className="space-y-3">
                   {currentQuestion.type === 'text' && (
@@ -525,7 +525,7 @@ export function Home() {
                         }
                       }}
                     >
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 items-center">
                         <Input
                           type="text"
                           placeholder="Type your answer..."
@@ -536,9 +536,17 @@ export function Home() {
                         <Button 
                           type="submit" 
                           disabled={isProcessing}
-                          className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200"
+                          className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 h-10"
                         >
                           <Send className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={handleReset}
+                          className="rounded-xl border-emerald-200 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition-all duration-200 h-10 px-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
+                        >
+                          New Chat
                         </Button>
                       </div>
 
@@ -685,7 +693,7 @@ export function Home() {
             )}
             
             {/* General text input - always available when conversation is active and no specific question */}
-            {!conversationState.showConfirmation && (!currentQuestion || allQuestionsAnswered) && (
+            {(!currentQuestion || allQuestionsAnswered) && (
               <div className="border-t border-gray-200/50 pt-5 mt-4">
                 <form
                   onSubmit={async (e) => {
@@ -737,7 +745,9 @@ export function Home() {
                           });
                         }
 
-                        const showConfirmation = !agentResponse.requires_more_info && (agentResponse.form_route !== null || agentResponse.form_prefill_data !== undefined);
+                        // Determine if we should show confirmation (form route ready)
+                        // Keep confirmation visible once it's been shown
+                        const showConfirmation = conversationState.showConfirmation || (!agentResponse.requires_more_info && (agentResponse.form_route !== null || agentResponse.form_prefill_data !== undefined));
 
                         setConversationState({
                           ...conversationState,
@@ -783,11 +793,11 @@ export function Home() {
                     }
                   }}
                 >
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 items-center">
                     <Textarea
                       ref={inputRef}
                       placeholder="Type your message..."
-                      className="flex-1 rounded-xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 min-h-[36px] max-h-[100px]"
+                      className="flex-1 rounded-xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 min-h-[40px] max-h-[100px]"
                       disabled={isProcessing}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && !e.shiftKey) {
@@ -802,9 +812,17 @@ export function Home() {
                     <Button 
                       type="submit" 
                       disabled={isProcessing}
-                      className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 self-end"
+                      className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 self-end h-10"
                     >
                       <Send className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleReset}
+                      className="rounded-xl border-emerald-200 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition-all duration-200 self-end h-10 px-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
+                    >
+                      New Chat
                     </Button>
                   </div>
 
@@ -912,43 +930,45 @@ export function Home() {
                   </Button>
                 </div>
 
-                <div className="flex items-center gap-2 px-1 relative" ref={dropdownRef}>
-                  <button
-                    type="button"
-                    onClick={() => setShowModeDropdown(!showModeDropdown)}
-                    className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors duration-200 py-1"
-                  >
-                    <span className="flex items-center gap-1.5">
-                      {MODE_ICONS[agentMode]}
-                      {agentMode}
-                    </span>
-                    <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showModeDropdown ? 'rotate-180' : ''}`} />
-                  </button>
+                <div className="flex items-center justify-between px-1 relative">
+                  <div ref={dropdownRef}>
+                    <button
+                      type="button"
+                      onClick={() => setShowModeDropdown(!showModeDropdown)}
+                      className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors duration-200 py-1"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        {MODE_ICONS[agentMode]}
+                        {agentMode}
+                      </span>
+                      <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showModeDropdown ? 'rotate-180' : ''}`} />
+                    </button>
 
-                  {showModeDropdown && (
-                    <div className="absolute top-full left-0 mt-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                      {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).map((mode) => (
-                        <button
-                          key={mode}
-                          type="button"
-                          onClick={() => {
-                            setAgentMode(mode);
-                            setShowModeDropdown(false);
-                          }}
-                          className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${
-                            agentMode === mode 
-                              ? 'bg-primary/5 text-primary font-semibold' 
-                              : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                          }`}
-                        >
-                          <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
-                            {MODE_ICONS[mode]}
-                          </span>
-                          {mode}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                    {showModeDropdown && (
+                      <div className="absolute top-full left-0 mt-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+                        {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => {
+                              setAgentMode(mode);
+                              setShowModeDropdown(false);
+                            }}
+                            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${
+                              agentMode === mode 
+                                ? 'bg-primary/5 text-primary font-semibold' 
+                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                            }`}
+                          >
+                            <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
+                              {MODE_ICONS[mode]}
+                            </span>
+                            {mode}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </form>
               
