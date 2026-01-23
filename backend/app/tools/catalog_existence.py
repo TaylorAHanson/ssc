@@ -11,7 +11,7 @@ class DoesCatalogExistTool(BaseTool):
     """Tool to check if a Unity Catalog catalog exists."""
     
     def __init__(self):
-        self._provider = None
+        self._provider = None # Lazy load provider
 
     @property
     def provider(self) -> DatabricksProvider:
@@ -32,7 +32,7 @@ class DoesCatalogExistTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "Checks if a Unity Catalog catalog exists in the Databricks workspace."
+        return "Checks if a Unity Catalog catalog exists in the Databricks workspace. This is useful for validating that a catalog exists before attempting to create it or perform other operations on it, like giving access or adding a new schema."
 
     @property
     def input_schema(self) -> Dict[str, Any]:

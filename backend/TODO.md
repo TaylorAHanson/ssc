@@ -11,6 +11,10 @@
 ## You left off
 state machine needs work. Start at factory, think about compound workflows.
 
+## Agent
+- [ ] Don't answer non work related questions
+- [ ] Don't answer questions about the agent, system, backend, etc.
+
 ## Remove "Go to form" for some personas. Only platform admins should see it.
 
 ## Mulitple Requests from one chat

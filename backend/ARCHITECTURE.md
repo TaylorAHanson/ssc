@@ -2,55 +2,22 @@
 
 ## Overview
 
-The EDAS Hub backend is a **Databricks App** that runs on the Databricks platform. It is organized around five main architectural layers:
+The EDH Self-Service Center is a **Databricks App** that runs on the Databricks platform. It is organized around eight main architectural layers:
 
-1. **Agent Layer** - Information gathering and user assistance
-2. **State Machine Layer** - Workflow orchestration and business logic execution
-3. **API Layer** - UI-facing REST endpoints
-4. **Workers Layer** - Async task processing for long-running operations
-5. **Agent Tools Layer** - Read-only/informational operations for the Agent (check_exists, search_entitlements, etc.)
-
-All layers share:
-- **Providers Layer** - Abstracts external systems and infrastructure
-- **Database Layer** - Persistent state storage (Lakebase)
-- **Model Serving** - Databricks Model Serving endpoints for ML models
-
-## Deployment Platform
-
-**Databricks App**: This backend runs as a Databricks App, which provides:
-- Native integration with Databricks services
-- Access to Unity Catalog for data management
-- Model serving endpoints for ML model inference
-- Lakebase for data storage and state persistence
-- Built-in authentication and authorization
-- Scalable compute resources
-
-## Critical Architecture Requirements
-
-### 1. Async Processing
-Infrastructure operations (Terraform, Databricks) can take 5-20 minutes. **State machine transitions cannot happen in blocking HTTP requests.**
-
-**Solution**: Polling worker that checks the database every 5 seconds and processes pending requests in parallel with proper locking. 
-
-### 2. State Persistence
-State machines must persist to database. If container restarts during a Terraform apply, state must be recoverable.
-
-**Solution**: Lakebase (PostgreSQL-based database) with state locking mechanism. Lakebase provides ACID transactions and standard PostgreSQL features for reliable state persistence.
-
-### 3. Human-in-the-Loop
-Approvals break continuous flow. State machines must pause and wait for external events.
-
-**Solution**: `wait_for_event` pattern - state machine pauses, waits for API callback.
-
-### 4. Failure Handling & Retries
-Tools and providers will fail, especially Terraform operations. Infrastructure provisioning is inherently unreliable.
-
-**Solution**: Multi-level retry strategies, failure notifications, error states, and rollback mechanisms.
+- **Web UI** - Provides a user interface for interacting with the hub.
+- **API Endpoints** provide CRUD operations and serve the frontend UI and separate the UI from the business logic.
+- **Agents** focus on understanding user intent, gathering information, triggering workflows, and routing users to other parts of the hub.
+- **Agent Tools** are informational or validation operations used by the Agent to gather context.
+- **State Machines** handle the orchestration of compound and atomic workflows, calling **Providers** to execute actions.
+- **Providers** abstract external systems and infrastructure (Terraform, IDP, GitHub, Databricks, etc.) and are used by both Agent Tools and State Machines.
+- **Workers** perform long-running tasks, such as polling for external events or executing external commands.
+- **Database** stores state and facts about the system.
 
 ## Architecture Hierarchy
 
 ```mermaid
 graph TD
+    UI["UI Layer (Web)"]
     API["API Layer (REST)"]
     Agent["Agent Layer (LLM)"]
     
@@ -64,6 +31,7 @@ graph TD
     Providers["Providers Layer"]
     DB[("Database (Lakebase)")]
 
+    UI --> API
     API --> Agent
     
     Agent --> AgentTools
@@ -79,52 +47,52 @@ graph TD
     Providers -->|Add Facts| DB
 ```
 
-## Key Insight
+## Critical Architecture Requirements
 
-Most operations ultimately execute against external systems:
-- **Infrastructure** → Terraform (workspaces, networking, compute)
-- **Identity & Access** → IDP endpoints (users, groups, service principals, API keys)
-- **Code Repositories** → GitHub API/shell commands (repos, templates, scaffolding)
-- **Data Platform** → Databricks Python SDK (catalogs, schemas, tables, SQL) - prefer SDK over REST API
-- **Notifications** → Email/Slack/Teams APIs
+### 0. LLM Chokepoint (Governance)
+All requests, including those from administrators, must pass through the Agent (LLM) Layer. 
 
-By abstracting these into **Providers**, we:
-- Keep tools system-agnostic
-- Enable easy swapping of underlying systems (e.g., Terraform → Pulumi)
-- Make tools testable with mock providers
+**Solution**: Centralized governance chokepoint. By routing all interactions through the LLM, the system can enforce complex governance rules, validate intent, and ensure compliance in a single, manageable layer before any state machine or infrastructure changes are triggered.
+
+**Alternative**: Allow administrators to bypass the LLM layer and directly interact with the State Machine Layer. This would require additional governance controls and monitoring to ensure compliance and prevent unauthorized changes.
+
+### 1. Async Processing
+Infrastructure operations (Terraform, Databricks) can take 5-20 minutes. **State machine transitions cannot happen in blocking HTTP requests.** 
+
+**Solution**: Polling worker that checks the database every 5 seconds and processes pending requests in parallel with proper locking. 
+
+### 2. Heavy Lifting
+Databricks Apps are not designed to handle heavy lifting. **All heavy lifting must be handled by external services.**
+
+**Solution**: Workers Layer - Async task processing for long-running operations that calls APIs and services to perform the heavy lifting.
+
+### 3. State Persistence
+State machines must persist to database. If container restarts during a Terraform apply, state must be recoverable.
+
+**Solution**: Lakebase (PostgreSQL-based database) with state locking mechanism. Lakebase provides ACID transactions and standard PostgreSQL features for reliable state persistence.
+
+State should not be treated as a static, mutable property. To ensure consistency across restarts and failures, the current state must be derivable from a sequence of immutable facts.
+
+**Solution**: Re-executable state machines - rather than storing an explicit status string, the system re-evaluates the state machine logic against the history of recorded facts and external system state to determine the next transition.
+
+### 4. Human-in-the-Loop
+Approvals break continuous flow. State machines must pause and wait for external events.
+
+**Solution**: `wait_for_event` pattern - state machine pauses, waits for API callback.
+
+### 5. Failure Handling & Retries
+Tools and providers will fail, especially Terraform operations. Infrastructure provisioning is inherently unreliable.
+
+**Solution**: Multi-level retry strategies, failure notifications, error states, and rollback mechanisms.
 
 ## Architecture Principles
 
-### Separation of Concerns
-
-- **Agents** focus on understanding user intent, gathering information, and routing users to appropriate forms.
-- **State Machines** handle the orchestration of complex workflows, calling **Providers** directly to execute actions.
-- **API Endpoints** provide CRUD operations and serve the frontend UI
-- **Agent Tools** are informational or validation operations used by the Agent to gather context.
-- **Providers** abstract external systems and infrastructure (Terraform, IDP, GitHub, Databricks, etc.) and are used by both Agent Tools and State Machines.
-
-### Provider Abstraction
-
-Providers encapsulate all interaction with external systems:
-- **Authentication/Authorization** - Handle credentials, tokens, service principals
-- **Connection Management** - Manage connections, retries, timeouts
-- **System-Specific Logic** - Terraform commands, API calls, shell commands
-- **Error Handling** - Translate system errors to domain errors
-
-**Databricks Integration Preference**:
-- **Always prefer the Databricks Python SDK** (`databricks-sdk`) over direct REST API calls
-- The SDK provides type safety, better error handling, and automatic retry logic
-- Use `WorkspaceClient` from `databricks.sdk` for workspace operations
-- Use SDK methods for Unity Catalog, SQL warehouses, clusters, and other Databricks services
-- Only use REST API calls when the SDK doesn't support a specific feature
-- The SDK handles authentication, connection pooling, and rate limiting automatically
-
 ### Agent-Driven Workflows (Instruction-Based)
 
-For complex **Compound Workflows**, we are moving away from static UI forms in favor of an **Agent-Driven** approach.
+For **Compound Workflows** and **Atomic Workflows**, we are moving away from static UI forms in favor of an **Agent-Driven** approach, even for administrators.
 
 **Concept**:
-Instead of hardcoding a form for every new workflow, we define the workflow requirements in a **Markdown Instruction File**. The Agent reads this file and conducts the "form filling" via natural language conversation.
+Instead of hardcoding a form for every new workflow, we define the workflow requirements in a **Markdown Instruction File** specific to that workflow. The Agent reads this file and conducts the "form filling" via natural language conversation. 
 
 **Components**:
 1.  **Instruction Files** (`backend/app/agents/instructions/*.md`):
@@ -145,7 +113,9 @@ Instead of hardcoding a form for every new workflow, we define the workflow requ
     -   Agent: Calls `execute_workflow("project_onboarding", { "name": "...", ... })`.
     -   Backend: Triggers `ProjectOnboardingStateMachine`.
 
-This allows "Business Users" to essentially have a concierge experience without needing to navigate complex UI forms.
+This allows "Business Users" to essentially have a concierge experience without needing to navigate complex UI forms. 
+
+**TO CONSIDER:** having a sinlge generic tool for executing workflows may not work as predictably as having a specific execute_workflow_xyz tool for each workflow.
 
 ### Tool Usage Patterns
 
@@ -164,169 +134,216 @@ We distinguish between **Agent Tools** and **System Actions**:
   - **Implementation**: State Machines call **Providers** directly (e.g., `self.notification_provider.send_email()`). They do NOT use the `app/tools` wrappers.
   - **Why**: Avoids "tool" bloat and keeps logical flow clear. The Agent doesn't decide to send an email; the State Machine does it because the state changed.
 
+### Provider Abstraction
+
+Providers are the primary interface for interacting with external systems. They abstract the complexity of authentication, authorization, and connection management, and provide a consistent interface for the rest of the system. They are used **directly** by the State Machines and are wrapped by the Tools to be used **indirectly** by the Agent. 
+
+Providers encapsulate all interaction with external systems:
+- **Authentication/Authorization** - Handle credentials, tokens, service principals
+- **Connection Management** - Manage connections, retries, timeouts
+- **System-Specific Logic** - Terraform commands, API calls, shell commands
+- **Error Handling** - Translate system errors to domain errors
+
+**Databricks Integration Preference**:
+- **Always prefer the Databricks Python SDK** (`databricks-sdk`) over direct REST API calls
+- The SDK provides type safety, better error handling, and automatic retry logic
+- Use `WorkspaceClient` from `databricks.sdk` for workspace operations
+- Use SDK methods for Unity Catalog, SQL warehouses, clusters, and other Databricks services
+- Only use REST API calls when the SDK doesn't support a specific feature
+- The SDK handles authentication, connection pooling, and rate limiting automatically
+
 ## Contributing Tools & Providers
 
 ### Adding a New Provider
 
+0. **Create the Provider Folder**: Create a new folder as `app/providers/<system>`. 
+    - Include a `client.py` file that implements the provider class.
+    - Include a `__init__.py` file to make the folder a package.
+    - Include a `README.md` file to document the provider.
+    - Optionally include a `requirements.txt` file to list the provider's dependencies, if any.
 1.  **Create Provider Class**: Implement `BaseProvider` in `app/providers/<system>/client.py`.
 2.  **Implement Health Check**: Implement `health_check()` to verify connectivity.
 3.  **Add Methods**: Add methods that abstract system-specific operations.
 4.  **Error Handling**: Wrap system errors in `RetryableError` or `PermanentError`.
-5.  **Configuration**: Use `self.config` or environment variables for credentials.
+5.  **Configuration**: Use `self.config` for credentials. See [Configuration & Settings](#configuration--settings) for more information.
 
 ### Adding a New Tool
 
-1.  **Create Tool Class**: Inherit from `BaseTool` in `app/tools/<tool_name>.py`.
-2.  **Define Metadata**: Set `name` and `description` properties.
-3.  **Define Schema**: Define `input_schema` to describe parameters (for LLM/Agent usage).
+Once a provider is created, a tool can be created to wrap the provider's functionality. Tools do not need to be 1:1 with providers. A single provider can be used by multiple tools, or a single tool can use multiple providers. For example, the tool `does_catalog_exist` uses the `DatabricksProvider` method `execute_sql`. Another tool `does_schema_exist` also uses the `DatabricksProvider` method `execute_sql`. 
+
+1.  **Create Tool Class**: Inherit from `BaseTool` in `app/tools/<tool_name>.py` or `app/tools/<system>/<tool_name>.py` once the toolset grows.
+2.  **Define Metadata**: Set `name` and `description` properties. This is what the LLM will use to determine which tool to use. Be **very** specific and descriptive.
+3.  **Define Schema**: Define `input_schema` to describe parameters (for LLM/Agent usage). 
 4.  **Implement Execute**: Implement `execute()` method with business logic.
-5.  **Use Providers**: Instantiate providers inside `__init__` or `execute` method. Do NOT hardcode API calls.
+5.  **Use Providers**: Instantiate providers inside `__init__` or `execute` method. Do NOT hardcode API calls or system-specific logic. Use the providers instead.
+
+## Configuration & Settings
+
+The application uses a centralized configuration system built on `pydantic-settings`. This ensures strict type validation, default values, and a single source of truth for all application settings. Both app.yaml and .env files feed into this system, but we don't access them directly. Instead, we access the configuration through the `settings` object. This is done by importing `settings` from `app.core.config`.
+
+### Configuration Sources
+
+Settings are loaded in the following order of precedence:
+
+1.  **Environment Variables** (OS-level or container-injected, like the default Databricks Apps environment variables)
+2.  **`.env` file** (Local development only - using `python-dotenv`)
+3.  **Default Values** (Defined in `app/core/config.py`)
+
+### Key Files
+
+-   `backend/app/core/config.py`: Defines the `Settings` class / schema. **All new configuration must be added here.**
+-   `backend/.env`: Local secrets and overrides (ignored by git).
+-   `backend/.env.example`: Template for required environment variables. The .env file is not committed to git, so this file is used to document the required environment variables and provide a template for local development.
+-   `app.yaml` (Databricks Apps): Defines environment variables for the deployed production environment. This is the primary way to configure the application in production.
+
+### Adding a New Setting
+
+1.  **Define in `config.py`**: Add the field to the `Settings` class.
+    ```python
+    class Settings(BaseSettings):
+        ...
+        # New API Provider
+        MY_PROVIDER_API_KEY: str = ""  # SECRET: Set in .env, and app.yaml
+        MY_PROVIDER_TIMEOUT: int = 30
+    ```
+2.  **Update `.env.example`**: If it's a required secret, add it to `.env.example`.
+3.  **Use in Code**: Access via the global `settings` object.
+    ```python
+    from app.core.config import settings
+    
+    timeout = settings.MY_PROVIDER_TIMEOUT
+    ```
+
+### Handling Secrets & API Keys
+
+**NEVER EVER hardcode secrets or API keys in the code. No excuses.**
+
+When implementing a new Provider that requires authentication (e.g., `MyNewProvider`):
+
+1.  **Add Configuration**: Add the API key/token variable to `app/core/config.py`.
+2.  **Inject in Factory**: Update `app/core/config.py` or the provider factory to pass `settings` to the provider.
+3.  **Validate in Provider**: In `app/providers/<provider>/client.py`, check for the key in `__init__` or `health_check`.
+
+```python
+# app/providers/my_new_provider/client.py
+class MyNewProvider(BaseProvider):
+    def __init__(self, config: dict = None):
+        super().__init__(config)
+        self.api_key = self.config.get("api_key") or settings.MY_PROVIDER_API_KEY
+        
+        if not self.api_key:
+            # Don't crash on init, but health check should fail
+            pass
+            
+            # OR raise error if strictly required for startup
+            # raise ValueError("MY_PROVIDER_API_KEY is required")
+```
 
 ## Directory Structure
 
 ```
 backend/
+├── .env
+├── .env.example
+├── ARCHITECTURE.md
+├── GOVERNANCE.md
+├── TOOLS.md
 ├── app/
 │   ├── main.py                    # FastAPI application entry point
 │   │
-│   ├── core/                      # Core configuration and utilities
+│   ├── agents/                    # Agent system
+│   │   ├── __init__.py
+│   │   ├── content_registry.py    # Registry for content
+│   │   ├── forms_registry.py      # Registry for forms
+│   │   ├── prompts.py             # Agent prompts
+│   │   ├── instructions/          # Agent instructions (markdown files)
+│   │   └── tools/                 # Agent-specific tools
+│   │
+│   ├── api/                       # API endpoints
+│   │   └── v1/
+│   │       ├── __init__.py
+│   │       ├── admin.py
+│   │       ├── agent.py
+│   │       ├── approvals.py
+│   │       ├── content.py
+│   │       ├── delegations.py
+│   │       ├── requests.py
+│   │       └── workspaces/
+│   │
+│   ├── content/                   # Static content/markdown
+│   │
+│   ├── core/                      # Core configuration
 │   │   ├── __init__.py
 │   │   ├── config.py              # Application settings
-│   │   ├── exceptions.py          # Custom exceptions (RetryableError, PermanentError)
-│   │   └── retry.py               # Retry decorators and utilities
+│   │   ├── exceptions.py          # Custom exceptions
+│   │   └── retry.py               # Retry utilities
 │   │
-│   ├── db/                        # Database models (SQLAlchemy)
+│   ├── db/                        # Database models
 │   │   ├── __init__.py
-│   │   ├── base.py                # Base model class
-│   │   ├── session.py              # Lakebase (PostgreSQL) session management
-│   │   ├── request.py             # Request database model
-│   │   ├── approval.py            # Approval database model
-│   │   └── event.py               # Event tracking model
+│   │   ├── approval.py
+│   │   ├── base.py
+│   │   ├── event.py
+│   │   ├── request.py
+│   │   └── session.py
 │   │
-│   ├── model_serving/             # Databricks Model Serving integration
-│   │   ├── __init__.py
-│   │   ├── client.py              # Model serving endpoint client
-│   │   ├── agent_llm.py           # Agent LLM model endpoint
-│   │   └── classifiers.py        # Request classification models
+│   ├── forms/                     # Form definitions
 │   │
-│   ├── models/                    # Data models (Pydantic)
+│   ├── model_serving/             # Databricks Model Serving
 │   │   ├── __init__.py
-│   │   ├── request.py             # Request models
-│   │   ├── user.py                # User models
-│   │   └── entitlement.py         # Entitlement models
+│   │   ├── agent_llm.py
+│   │   └── client.py
 │   │
-│   ├── providers/                 # External system providers (abstraction layer)
+│   ├── models/                    # Pydantic models
 │   │   ├── __init__.py
-│   │   ├── base.py                # Base provider interface
-│   │   ├── terraform/             # Terraform provider
-│   │   │   ├── __init__.py
-│   │   │   ├── client.py          # Terraform CLI wrapper
-│   │   │   ├── workspace.py       # Workspace operations
-│   │   │   ├── infrastructure.py  # Infrastructure provisioning
-│   │   │   └── state.py          # State management
-│   │   ├── idp/                   # Identity Provider (IDP)
-│   │   │   ├── __init__.py
-│   │   │   ├── client.py          # IDP API client
-│   │   │   ├── users.py           # User management
-│   │   │   ├── groups.py          # Group management
-│   │   │   ├── service_principals.py  # Service principal operations
-│   │   │   └── api_keys.py        # API key management
-│   │   ├── github/                # GitHub provider
-│   │   │   ├── __init__.py
-│   │   │   ├── client.py          # GitHub API client
-│   │   │   ├── repos.py           # Repository operations
-│   │   │   ├── templates.py       # Template management
-│   │   │   └── shell.py           # Shell command execution (gh CLI)
-│   │   ├── databricks/            # Databricks provider
-│   │   │   ├── __init__.py
-│   │   │   ├── client.py          # Databricks SDK client (WorkspaceClient)
-│   │   │   ├── sql.py             # SQL execution via SDK
-│   │   │   ├── workspace.py       # Workspace operations via SDK
-│   │   │   ├── catalog.py         # Unity Catalog operations via SDK
-│   │   │   └── access.py          # Access control operations via SDK
-│   │   ├── sql/                   # SQL database provider
-│   │   │   ├── __init__.py
-│   │   │   ├── client.py          # SQL connection management
-│   │   │   └── query.py           # Query execution
-│   │   └── notifications/        # Notification provider
-│   │       ├── __init__.py
-│   │       ├── client.py          # Notification service client
-│   │       ├── email.py           # Email notifications
-│   │       ├── slack.py           # Slack notifications
-│   │       └── teams.py          # Teams notifications
+│   │   └── request.py
 │   │
-│   ├── tools/                     # Business operations (use providers)
+│   ├── providers/                 # External system providers
 │   │   ├── __init__.py
-│   │   ├── base.py                # Base tool interface
-│   │   ├── workspace.py           # create_workspace, delete_workspace
-│   │   ├── access.py              # grant_access, revoke_access
-│   │   ├── catalog.py             # create_catalog, list_catalogs
-│   │   ├── service_principal.py   # create_service_principal, create_api_key
-│   │   ├── github.py               # scaffold_repo, create_from_template
-│   │   ├── entitlements.py        # search_user_entitlements, check_access
-│   │   ├── validation.py          # check_exists, validate_resource_name
-│   │   └── notifications.py       # send_notification, notify_approvers
+│   │   ├── base.py
+│   │   ├── databricks/
+│   │   ├── github/
+│   │   ├── idp/
+│   │   ├── notifications/
+│   │   ├── sql/
+│   │   └── terraform/
 │   │
-│   ├── agents/                    # Agent system (information gathering)
+│   ├── services/                  # Business logic services
 │   │   ├── __init__.py
-│   │   ├── prompts.py             # Agent prompts, context, tool definitions
-│   │   ├── conversation.py        # Conversation handler
-│   │   ├── llm_client.py          # Databricks Model Serving client for LLM
-│   │   └── tools/                  # Agent-specific tool wrappers
-│   │       ├── __init__.py
-│   │       ├── check_exists.py    # Wraps tools.validation.check_exists
-│   │       ├── search_entitlements.py  # Wraps tools.entitlements.search_user_entitlements
-│   │       └── check_history.py   # Wraps tools.requests.check_request_history
+│   │   └── request_service.py
 │   │
 │   ├── state_machines/            # State machine orchestration
 │   │   ├── __init__.py
-│   │   ├── base.py  # BaseRequestStateMachine base class
-│   │   ├── factory.py  # get_state_machine() factory function
-│   │   ├── workspace_provision.py  # WorkspaceProvisionStateMachine
-│   │   ├── data_access.py  # DataAccessStateMachine
-│   │   ├── service_principal.py  # ServicePrincipalStateMachine
-│   │   ├── workspace_access.py  # WorkspaceAccessStateMachine
-│   │   ├── simple_platform_admin.py  # SimplePlatformAdminStateMachine
-│   │   └── github_repo_creation.py  # GithubRepoCreationStateMachine
-│   │   ├── persistence.py        # State persistence to database
-│   │   ├── lock.py               # State locking mechanism
-│   │   ├── orchestrators/         # State machine orchestrators
-│   │   │   ├── __init__.py
-│   │   │   ├── workspace_provision.py  # Orchestrates workspace provisioning
-│   │   │   ├── data_access.py     # Orchestrates data access requests
-│   │   │   └── service_principal.py   # Orchestrates service principal creation
-│   │   └── actions/               # State machine actions (call tools)
-│   │       ├── __init__.py
-│   │       ├── approval.py        # Approval workflow actions
-│   │       ├── provisioning.py   # Provisioning actions
-│   │       └── training.py        # Training-related actions
+│   │   ├── base.py
+│   │   ├── data_access.py
+│   │   ├── factory.py
+│   │   ├── facts.py
+│   │   ├── github_repo_creation.py
+│   │   ├── lock.py
+│   │   ├── persistence.py
+│   │   ├── project_onboarding.py
+│   │   ├── service_principal.py
+│   │   ├── simple_platform_admin.py
+│   │   ├── workspace_access.py
+│   │   └── workspace_provision.py
 │   │
-    │   ├── workers/                   # Async task workers
-    │   │   ├── __init__.py
-    │   │   └── poller.py              # Polling worker for state transitions
-    │   │
-    │   ├── services/                  # Business logic services
+│   ├── tools/                     # System tools
 │   │   ├── __init__.py
-│   │   ├── request_service.py    # Request business logic
-│   │   ├── approval_service.py   # Approval workflow logic
-│   │   └── entitlement_service.py # Entitlement management logic
+│   │   ├── base.py
+│   │   └── catalog_existence.py
 │   │
-│   └── api/                       # API endpoints (UI-facing)
+│   └── workers/                   # Async workers
 │       ├── __init__.py
-│       └── v1/
-│           ├── __init__.py
-│           ├── requests.py        # Request CRUD endpoints
-│           ├── agent.py          # Agent conversation endpoints
-│           ├── approvals.py      # Approval endpoints
-│           ├── admin.py           # Admin endpoints
-│           └── health.py          # Health check endpoints
+│       ├── poller.py
+│       └── tasks/
 │
 ├── requirements.txt
-├── README.md
-└── ARCHITECTURE.md                # This file
+├── edas_hub.db
+├── migrate_db.py
+├── test.db
+└── test_api.db
 ```
 
-## Layer Details
+## Layer Detailed Implementation
 
 ### Providers Layer (`app/providers/`)
 
@@ -422,17 +439,16 @@ class ConnectionError(RetryableError):
 **Provider Examples**:
 
 **Terraform Provider** (`providers/terraform/`):
-- `apply(config: dict, variables: dict) -> dict` - Apply Terraform configuration
-- `destroy(resource_id: str) -> bool` - Destroy infrastructure
-- `plan(config: dict) -> dict` - Plan infrastructure changes
-- `get_state(resource_id: str) -> dict` - Get Terraform state
+- `create_workspace(name: str, config: dict) -> dict` - Create workspace via SDK
+- `create_catalog(name: str, config: dict) -> dict` - Create Unity Catalog catalog via SDK
+- `create_schema(name: str, config: dict) -> dict` - Create Unity Catalog schema via SDK
+- `create_service_principal(name: str, config: dict) -> dict` - Create service principal
+- `rotate_credentials(name: str, config: dict) -> dict` - Rotate credentials
+- `grant_access(principal: str, resource: str, permissions: list) -> bool` - Grant access via SDK
 
 **IDP Provider** (`providers/idp/`):
-- `create_user(email: str, attributes: dict) -> dict` - Create user in IDP
-- `create_service_principal(name: str, config: dict) -> dict` - Create service principal
-- `create_api_key(principal_id: str, name: str) -> dict` - Create API key
+- `create_group(name: str, attributes: dict) -> dict` - Create group in IDP
 - `add_to_group(user_id: str, group_id: str) -> bool` - Add user to group
-- `grant_permission(principal_id: str, resource: str, permissions: list) -> bool`
 
 **GitHub Provider** (`providers/github/`):
 - `create_repo(name: str, config: dict) -> dict` - Create repository
@@ -441,16 +457,7 @@ class ConnectionError(RetryableError):
 - `set_permissions(repo: str, user: str, permission: str) -> bool` - Set repository permissions
 
 **Databricks Provider** (`providers/databricks/`):
-- Uses **Databricks Python SDK** (`databricks-sdk`) for all operations
 - `execute_sql(query: str, warehouse: str = None) -> dict` - Execute SQL query via SDK
-- `create_workspace(name: str, config: dict) -> dict` - Create workspace via SDK
-- `create_catalog(name: str, config: dict) -> dict` - Create Unity Catalog catalog via SDK
-- `grant_access(principal: str, resource: str, permissions: list) -> bool` - Grant access via SDK
-- All operations use `WorkspaceClient` from `databricks.sdk` rather than REST API calls
-
-**SQL Provider** (`providers/sql/`):
-- `execute_query(query: str, params: dict = None) -> list` - Execute SQL query
-- `execute_transaction(queries: list) -> dict` - Execute transaction
 
 **Notification Provider** (`providers/notifications/`):
 - `send_email(to: str, subject: str, body: str) -> bool` - Send email
@@ -458,31 +465,26 @@ class ConnectionError(RetryableError):
 
 ### Agent Tools Layer (`app/tools/`)
 
-**Purpose**: Operations that use providers to help the Agent understand the system state or trigger workflows.
+**Purpose**: Operations that use providers to help the Agent understand the system state.
 
 **Characteristics**:
 - Stateless functions/classes
-- Informational (validation, existence checks, search) or Task-oriented (`execute_workflow`)
+- Informational (validation, existence checks, search)
 - Use providers to interact with external systems
 - **Used by Agents** to gather context, validate parameters, or trigger state machines.
 - **Workflows (State Machines) do NOT use these tools** - they call providers directly.
 
-**Types of Tools**:
-1. **Informational Tools**: Read-only operations for gathering system context.
-2. **Execution Tools**: A specific tool (`execute_workflow`) used to transition the Agent's gathered data into a formal State Machine.
-
 **Example Agent Tools**:
-- `check_exists(resource_type: str, resource_name: str) -> bool`
-  - Uses: `databricks_provider.execute_sql()` to query Unity Catalog
-  - Or: `sql_provider.execute_query()` for database queries
+- `DoesCatalogExistTool` (`app/tools/catalog_existence.py`)
+  - **Purpose**: Checks if a catalog exists in Unity Catalog.
+  - **Uses**: `DatabricksProvider.execute_sql` to running `SHOW CATALOGS LIKE 'name'`.
+  - **Why**: Allows the agent to verify if a requested catalog name is available or if a target catalog exists before proceeding with a request.
 
-- `search_user_entitlements(user_email: str, resource_type: str) -> list`
-  - Uses: `databricks_provider.execute_sql()` to query entitlements
-  - Or: `idp_provider.get_user_groups()` to query IDP groups
-
-- `validate_resource_name(name: str) -> bool`
-  - Uses: local validation logic or provider-specific naming checks
-  - Help the agent ensure the parameters are valid before trigger a workflow.
+Note: As the system grows, more tools will be added here to wrap provider functionality for:
+- Checking schema existence
+- Searching for users/groups in the IDP
+- Validating resource names against naming conventions
+- checking current user entitlements
 
 ### Agent Layer (`app/agents/`)
 
