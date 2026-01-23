@@ -53,17 +53,20 @@ Tools and providers will fail, especially Terraform operations. Infrastructure p
 graph TD
     API["API Layer (REST)"]
     Agent["Agent Layer (LLM)"]
-    Exec["execute_workflow Tool"]
+    
+    subgraph AgentTools ["Agent Tools Layer"]
+        Tools["Information Tools"]
+        Exec["execute_workflow Tool"]
+    end
+    
     SM["State Machine Layer"]
     Workers["Workers Layer (Async)"]
-    Tools["Agent Tools Layer (Read-only)"]
     Providers["Providers Layer"]
     DB[("Database (Lakebase)")]
 
     API --> Agent
     
-    Agent --> Tools
-    Agent --> Exec
+    Agent --> AgentTools
     
     Exec -->|Triggers| SM
     
@@ -455,14 +458,18 @@ class ConnectionError(RetryableError):
 
 ### Agent Tools Layer (`app/tools/`)
 
-**Purpose**: Informational and validation operations that use providers to help the Agent understand the system state.
+**Purpose**: Operations that use providers to help the Agent understand the system state or trigger workflows.
 
 **Characteristics**:
 - Stateless functions/classes
-- Read-only or "safe" operations (validation, existence checks, search)
+- Informational (validation, existence checks, search) or Task-oriented (`execute_workflow`)
 - Use providers to interact with external systems
-- **Used by Agents** to gather context or validate parameters
+- **Used by Agents** to gather context, validate parameters, or trigger state machines.
 - **Workflows (State Machines) do NOT use these tools** - they call providers directly.
+
+**Types of Tools**:
+1. **Informational Tools**: Read-only operations for gathering system context.
+2. **Execution Tools**: A specific tool (`execute_workflow`) used to transition the Agent's gathered data into a formal State Machine.
 
 **Example Agent Tools**:
 - `check_exists(resource_type: str, resource_name: str) -> bool`
