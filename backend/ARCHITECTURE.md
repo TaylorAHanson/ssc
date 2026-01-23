@@ -73,7 +73,7 @@ graph TD
     SM --> Workers
     Workers --> Providers
     
-    Providers --> DB
+    Providers -->|Add Facts| DB
 ```
 
 ## Key Insight
