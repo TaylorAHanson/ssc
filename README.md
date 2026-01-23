@@ -23,23 +23,8 @@ This will start:
 
 Press `Ctrl+C` to stop both services.
 
-## Project Structure
+## Project Details
 📖 See [backend/ARCHITECTURE.md](./backend/ARCHITECTURE.md) for architecture details.
-
-## Frontend
-
-The frontend is built with:
-- **React 19** + **TypeScript**
-- **Vite** for build tooling
-- **Tailwind CSS** for styling
-- **React Router** for routing
-- **Zustand** for state management
-
-## Features
-
-- **Agent System** - Intelligent conversation handling to help users navigate to appropriate forms
-- **Request Management** - Full lifecycle management of data access requests
-- **State Machines** - Workflow orchestration for complex request processes
 
 ## Environment Setup
 
