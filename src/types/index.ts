@@ -1,4 +1,4 @@
-export type RequestStatus = 
+export type RequestStatus =
   | 'pending'
   | 'manager_approval'
   | 'training_pending'
@@ -7,7 +7,7 @@ export type RequestStatus =
   | 'rejected'
   | 'failed';
 
-export type RequestType = 
+export type RequestType =
   | 'workspace_access'
   | 'catalog_schema_table'
   | 'catalog_schema_table_access'
@@ -17,6 +17,8 @@ export type RequestType =
   | 'rest_api_access'
   | 'batch_data_access'
   | 'github_repo_creation';
+
+export type UserPersona = 'Business User' | 'Power User' | 'Platform Admin';
 
 export type Environment = 'dev' | 'test' | 'stage' | 'prod';
 

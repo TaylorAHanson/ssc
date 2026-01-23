@@ -22,6 +22,11 @@ class BaseProvider(ABC):
         """
         Check if the provider is healthy and accessible.
         
+        Should check:
+        1. Connectivity to the external system
+        2. Authentication validity
+        3. Basic permissions
+        
         Returns:
             True if provider is healthy, False otherwise
         """

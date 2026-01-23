@@ -355,7 +355,10 @@ class BaseRequestStateMachine(StateMachine):
             True if state was changed, False otherwise
         """
         initial_state = self.current_state.id
-        logger.info(f"[{self.request.id}] State machine tick() - Starting from state: {initial_state}")
+        if initial_state == "pending":
+            logger.info(f"[{self.request.id}] State machine tick() - Starting from state: {initial_state}")
+        else:
+            logger.debug(f"[{self.request.id}] State machine tick() - Starting from state: {initial_state}")
         
         # Step 1: Process current state (record facts if needed)
         logger.debug(f"[{self.request.id}] Processing current state: {initial_state}")
@@ -416,7 +419,7 @@ class BaseRequestStateMachine(StateMachine):
         if hasattr(self, 'finish_provisioning'):
             transitions_to_try.append(('finish_provisioning', lambda: self.finish_provisioning()))
         
-        logger.info(f"[{self.request.id}] Trying {len(transitions_to_try)} transition(s) from state '{self.current_state.id}': {[t[0] for t in transitions_to_try]}")
+        logger.debug(f"[{self.request.id}] Trying {len(transitions_to_try)} transition(s) from state '{self.current_state.id}': {[t[0] for t in transitions_to_try]}")
         
         # Try each transition - conditional guards will prevent invalid transitions
         for name, transition_func in transitions_to_try:
@@ -429,11 +432,11 @@ class BaseRequestStateMachine(StateMachine):
                 if state_before != state_after:
                     logger.info(f"[{self.request.id}] ✓ Transition '{name}' SUCCEEDED: {state_before} -> {state_after}")
                 else:
-                    logger.info(f"[{self.request.id}] ✗ Transition '{name}' attempted but no state change (guard condition not met or transition not available from this state)")
+                    logger.debug(f"[{self.request.id}] ✗ Transition '{name}' attempted but no state change (guard condition not met or transition not available from this state)")
             except Exception as e:
                 # Transition condition not met or not available from current state
                 # This is expected - just continue to next transition
-                logger.info(f"[{self.request.id}] ✗ Transition '{name}' failed: {type(e).__name__} - {str(e)[:100]}")
+                logger.debug(f"[{self.request.id}] ✗ Transition '{name}' failed: {type(e).__name__} - {str(e)[:100]}")
                 pass
     
     def _call_on_enter_hooks(self, previous_state: str, new_state: str):
@@ -541,6 +544,63 @@ class BaseRequestStateMachine(StateMachine):
             self.db.add(new_approval)
             self.db.commit()  # Commit immediately so approval is available
             logger.info(f"Created pending approval {approval_id} ({approval_type}) for request {self.request.id} (requested_by: {requested_by})")
+    
+    def spawn_child_request(self, request_type: str, payload: Dict[str, Any], title: str = None) -> RequestModel:
+        """
+        Spawn a child request to run an atomic workflow.
+        
+        Args:
+            request_type: The type of request to create (RequestType enum value)
+            payload: Context variables for the child request
+            title: Optional title for the child request
+            
+        Returns:
+            The created RequestModel instance
+        """
+        import uuid
+        child_id = f"req-{str(uuid.uuid4())}"
+        
+        # Inherit context but allow overrides
+        # We usually pass explicit payload for the specific atomic task
+        context = (self.request.state_context or {}).copy()
+        context.update(payload)
+        
+        child = RequestModel(
+            id=child_id,
+            type=request_type,
+            title=title or f"Sub-task: {request_type}",
+            status="pending",
+            current_state="pending",
+            state_context=context,
+            parent_id=self.request.id,
+            root_id=self.request.root_id or self.request.id,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        self.db.add(child)
+        self.db.flush() # Flush to get ID but don't commit yet if part of larger transaction? 
+        # Actually commit to ensure worker can pick it up
+        self.db.commit()
+        
+        logger.info(f"Spawned child request {child_id} ({request_type}) for parent {self.request.id}")
+        return child
+
+    def get_children(self) -> List[RequestModel]:
+        """Get all direct children of this request."""
+        return self.db.query(RequestModel).filter(
+            RequestModel.parent_id == self.request.id
+        ).all()
+
+    def all_children_completed(self) -> bool:
+        """Check if all child requests are completed."""
+        children = self.get_children()
+        if not children:
+            return True
+            
+        for child in children:
+            if child.status not in ["completed", "rejected", "failed"]:
+                return False
+        return True
     
     def __getattr__(self, name: str):
         """

@@ -80,7 +80,7 @@ async def process_open_requests():
             logger.debug("No requests found to process")
             return  # No work to do
         
-        logger.info(f"Found {len(requests)} request(s) to process: {[f'{r.id} ({r.current_state})' for r in requests]}")
+        logger.debug(f"Found {len(requests)} request(s) to process: {[f'{r.id} ({r.current_state})' for r in requests]}")
         
         # Process in parallel with concurrency limit
         semaphore = asyncio.Semaphore(settings.POLLER_MAX_CONCURRENT)
@@ -251,12 +251,12 @@ async def _process_request_state_machine(db, request: RequestModel):
     """
     from app.state_machines.facts import has_fact, get_latest_fact
     
-    logger.info(f"[{request.id}] Processing request - Current state: {request.current_state}, Status: {request.status}")
+    logger.debug(f"[{request.id}] Processing request - Current state: {request.current_state}, Status: {request.status}")
     
     # Load the polymorphic state machine
     sm = load_state_machine(request, db)
     initial_state = sm.current_state.id
-    logger.info(f"[{request.id}] Loaded state machine - Current state: {initial_state}")
+    logger.debug(f"[{request.id}] Loaded state machine - Current state: {initial_state}")
     
     # Log relevant facts for debugging
     from app.db.request import EventModel
@@ -266,10 +266,10 @@ async def _process_request_state_machine(db, request: RequestModel):
     ).all()
     if facts:
         fact_summary = {f.event_type: getattr(f, 'event_data', {}) for f in facts}
-        logger.info(f"[{request.id}] Relevant facts: {fact_summary}")
+        logger.debug(f"[{request.id}] Relevant facts: {fact_summary}")
     
     # Let the state machine handle all logic
-    logger.info(f"[{request.id}] Calling state machine tick()...")
+    logger.debug(f"[{request.id}] Calling state machine tick()...")
     changed = sm.tick()
     new_state = sm.current_state.id
     

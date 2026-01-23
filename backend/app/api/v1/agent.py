@@ -183,8 +183,16 @@ class AgentResponse(BaseModel):
 @router.get("/tools")
 async def get_agent_tools():
     """Get list of available agent tools."""
+    serialized_tools = [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": tool.input_schema
+        }
+        for tool in AGENT_TOOLS
+    ]
     return {
-        "tools": AGENT_TOOLS,
+        "tools": serialized_tools,
         "count": len(AGENT_TOOLS)
     }
 
@@ -291,62 +299,164 @@ async def handle_conversation(request: ConversationRequest):
                 {
                     "type": "function",
                     "function": {
-                        "name": tool["name"],
-                        "description": tool["description"],
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                param_name: {
-                                    "type": map_type_to_gemini(param_info.get("type", "string")),
-                                    "description": param_info.get("description", "")
-                                }
-                                for param_name, param_info in tool.get("parameters", {}).items()
-                            },
-                            "required": [
-                                param_name
-                                for param_name, param_info in tool.get("parameters", {}).items()
-                                if param_info.get("required", False)
-                            ]
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": (lambda schema: {
+                                "type": "object",
+                                "properties": {
+                                    param_name: {
+                                        "type": map_type_to_gemini(param_info.get("type", "string")),
+                                        "description": param_info.get("description", "")
+                                    }
+                                    for param_name, param_info in schema.get("properties", {}).items()
+                                },
+                                "required": schema.get("required", [])
+                            })(tool.input_schema if isinstance(tool.input_schema, dict) else (
+                                tool.input_schema.model_json_schema() if hasattr(tool.input_schema, "model_json_schema") 
+                                else tool.input_schema.schema()
+                            ))
                         }
                     }
-                }
                 for tool in AGENT_TOOLS
             ]
         
-        # Call the LLM endpoint
-        logger.info(f"Calling agent LLM endpoint: {llm_client.endpoint_name}")
-        response = await llm_client.generate_response(
-            messages=messages,
-            tools=tools,
-            temperature=0.7,
-            max_tokens=2000
-        )
+        # Loop for tool execution (ReAct pattern)
+        iteration = 0
+        final_response = None
         
-        # Extract response content using standardized keys
-        agent_message = response.get("content", "")
-        tool_calls = response.get("tool_calls", [])
-        if tool_calls is None:
-            tool_calls = []
-        
-        # Clean the message content
-        if agent_message:
-            # Ensure agent_message is a string
-            if not isinstance(agent_message, str):
-                agent_message = str(agent_message)
+        while iteration < settings.AGENT_MAX_ITERATIONS:
+            iteration += 1
+            logger.info(f"Agent iteration {iteration}/{settings.AGENT_MAX_ITERATIONS}")
             
-            # Remove JSON objects that might be embedded in the text (like signatures)
-            agent_message = re.sub(r'\{[^{}]*"signature"[^{}]*\}', '', agent_message, flags=re.IGNORECASE | re.DOTALL)
-            agent_message = agent_message.strip()
-        
-        # Log outcome
-        logger.info(f"Agent response length: {len(agent_message) if agent_message else 0}")
-        logger.info(f"Tool calls found: {len(tool_calls)}")
-        
-        # Only use fallback if we truly have no message AND no tool calls
-        if not agent_message and not tool_calls:
-            logger.warning("No agent message or tool calls found in response")
-            agent_message = "I understand. Let me help you with that. (System: No response generated)"
-        
+            # Call the LLM endpoint
+            logger.info(f"Calling agent LLM endpoint: {llm_client.endpoint_name}")
+            response = await llm_client.generate_response(
+                messages=messages,
+                tools=tools,
+                temperature=0.7,
+                max_tokens=2000
+            )
+            
+            # Extract response content using standardized keys
+            agent_message = response.get("content") or ""
+            tool_calls = response.get("tool_calls", [])
+            if tool_calls is None:
+                tool_calls = []
+            
+            # Clean the message content
+            if agent_message:
+                if not isinstance(agent_message, str):
+                    agent_message = str(agent_message)
+                agent_message = re.sub(r'\{[^{}]*"signature"[^{}]*\}', '', agent_message, flags=re.IGNORECASE | re.DOTALL)
+                agent_message = agent_message.strip()
+            
+            logger.info(f"Agent response length: {len(agent_message)}")
+            logger.info(f"Tool calls found: {len(tool_calls)}")
+            
+            # If we have no tool calls, we're done (or if we've reached max iterations)
+            if not tool_calls or iteration >= settings.AGENT_MAX_ITERATIONS:
+                final_response = response
+                break
+                
+            # Process tool calls
+            # Add assistant message with tool calls to history
+            messages.append({
+                "role": "assistant",  # Changed from 'model' to 'assistant' for endpoint compatibility
+                "tool_calls": tool_calls # Pass tool_calls directly instead of Gemini specific 'parts' structure
+                # The endpoint seems to want standard OpenAI-like tool_calls structure if we use 'assistant'
+            })
+            
+            # Execute tools and collect results
+            tool_outputs = []
+            
+            # Identify which tools to execute
+            executed_any_tool = False
+            for tool_call in tool_calls:
+                function_name = tool_call.get("function", {}).get("name", "")
+                function_args = tool_call.get("function", {}).get("arguments", {})
+                
+                # Parse arguments if it's a string (JSON)
+                if isinstance(function_args, str):
+                    try:
+                        function_args = json.loads(function_args)
+                    except:
+                        function_args = {}
+                
+                logger.info(f"Processing tool call: {function_name}")
+                
+                # Find matching generic tool
+                matching_tool = next((t for t in AGENT_TOOLS if t.name == function_name), None)
+                
+                if matching_tool:
+                    try:
+                        logger.info(f"Executing generic tool: {function_name}")
+                        # Validate arguments against schema (basic check)
+                        # TODO: stricter validation
+                        
+                        # Execute tool
+                        result = await matching_tool.execute(**function_args)
+                        
+                        # Add to outputs
+                        tool_outputs.append({
+                            "tool_call_id": tool_call.get("id", function_name), # Check if ID exists, else use name
+                            "name": function_name,
+                            "output": json.dumps(result, default=str)
+                        })
+                        executed_any_tool = True
+                        
+                    except Exception as e:
+                        logger.error(f"Error executing tool {function_name}: {e}", exc_info=True)
+                        tool_outputs.append({
+                            "tool_call_id": tool_call.get("id", function_name),
+                            "name": function_name,
+                            "error": str(e)
+                        })
+                        executed_any_tool = True
+                else:
+                    # Check for specialized tools (determine_request_type, etc.)
+                    if function_name in ["determine_request_type", "generate_follow_up_questions", "validate_answers"]:
+                        logger.info(f"Found specialized tool {function_name}, stopping loop")
+                        final_response = response
+                        iteration = settings.AGENT_MAX_ITERATIONS + 1 # Force break
+                        break
+            
+            if iteration > settings.AGENT_MAX_ITERATIONS:
+                break
+                
+            if not executed_any_tool:
+                # No generic tools were executed
+                final_response = response
+                break
+                
+            # Add tool outputs to history
+            # Standard OpenAI format for tool outputs
+            for output in tool_outputs:
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": output["tool_call_id"],
+                    "name": output["name"],
+                    "content": output.get("output") or output.get("error", "Error")
+                })
+
+        # Use the final response
+        if final_response:
+            response = final_response
+            agent_message = response.get("content") or ""
+            tool_calls = response.get("tool_calls", [])
+            if tool_calls is None: tool_calls = []
+
+        # Only use fallback if we truly have no message AND no tool calls (and no earlier loops produced valid content?)
+        # Actually, if the final response has no message and no tool calls, it's weird.
+        if not agent_message and not tool_calls and not json_instructions:
+             if not agent_message and not tool_calls:
+                 if iteration > 1:
+                     # If we looped, maybe we just finished tool execution and LLM decided to end?
+                     # If LLM returns empty string after tool execution, it might be an error or just "done".
+                     pass
+                 else:
+                     logger.warning("No agent message or tool calls found in response")
+                     agent_message = "I understand. Let me help you with that. (System: No response generated)"
+
         # Extract JSON instructions from message if present
         json_instructions = None
         form_prefill_data = None
@@ -362,7 +472,9 @@ async def handle_conversation(request: ConversationRequest):
                     agent_message = "Perfect! I have all the information I need. Ready to proceed to the form."
                 logger.info(f"Extracted JSON instructions: form_path={form_path}, prefill_data keys={list(form_prefill_data.keys())}")
         
-        # Process tool calls if present
+        # Process tool calls (Specialized tools logic remains here for final processing)
+        # Note: Generic tools were already executed in the loop. 
+        # We re-process tool_calls from final_response to handle specialized "termination" tools.
         form_route = None
         follow_up_questions = None
         requires_more_info = True
@@ -397,7 +509,7 @@ async def handle_conversation(request: ConversationRequest):
                     except:
                         function_args = {}
                 
-                logger.info(f"Tool call: {function_name} with args: {function_args}")
+                logger.info(f"Final processing of tool call: {function_name}")
                 
                 # Handle different tool functions
                 if function_name == "determine_request_type":
@@ -448,13 +560,13 @@ async def handle_conversation(request: ConversationRequest):
         logger.error(f"Configuration error: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Agent configuration error: {str(e)}"
+            detail="An internal configuration error occurred."
         )
     except Exception as e:
         logger.error(f"Error in agent conversation: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing conversation: {str(e)}"
+            detail="An internal error occurred while processing your request."
         )
 
 

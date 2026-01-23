@@ -2,7 +2,7 @@
 Request database models (SQLAlchemy).
 """
 from sqlalchemy import Column, String, DateTime, JSON, Integer, Boolean, ForeignKey, Text
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql import func
 from app.db.base import Base
 
@@ -45,7 +45,15 @@ class RequestModel(Base):
     # Environment
     environment = Column(String, nullable=True)  # 'dev', 'test', 'stage', 'prod'
     
+    # Hierarchy (Compound Workflows)
+    parent_id = Column(String, ForeignKey("requests.id"), nullable=True)
+    root_id = Column(String, ForeignKey("requests.id"), nullable=True)
+    
     # Relationships
+    children = relationship("RequestModel", 
+                          backref=backref("parent", remote_side=[id]),
+                          foreign_keys=[parent_id])
+    
     approvals = relationship("ApprovalModel", back_populates="request", cascade="all, delete-orphan")
     events = relationship("EventModel", back_populates="request", cascade="all, delete-orphan")
     failures = relationship("FailureModel", back_populates="request", cascade="all, delete-orphan")

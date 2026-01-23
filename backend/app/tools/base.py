@@ -11,6 +11,24 @@ from datetime import datetime
 class BaseTool(ABC):
     """Base class for all tools."""
     
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Tool name for MCP."""
+        pass
+
+    @property
+    @abstractmethod
+    def description(self) -> str:
+        """Tool description for MCP."""
+        pass
+
+    @property
+    @abstractmethod
+    def input_schema(self) -> Dict[str, Any]:
+        """JSON schema for tool input."""
+        pass
+
     @abstractmethod
     async def execute(self, *args, **kwargs) -> Dict[str, Any]:
         """

@@ -119,6 +119,7 @@ class Settings(BaseSettings):
     DATABRICKS_HOST: str = ""
     DATABRICKS_TOKEN: str = ""  # SECRET: Set in .env
     DATABRICKS_WORKSPACE_URL: str = ""
+    DATABRICKS_WAREHOUSE_ID: str = "" # SQL Warehouse ID for running queries
     
     # Databricks MWS (Account-level) Settings for Workspace Provisioning
     # SECRET: Set in .env file

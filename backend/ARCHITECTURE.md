@@ -146,13 +146,68 @@ Providers encapsulate all interaction with external systems:
 - Only use REST API calls when the SDK doesn't support a specific feature
 - The SDK handles authentication, connection pooling, and rate limiting automatically
 
-### Tool Sharing Across Layers
+### Agent-Driven Workflows (Instruction-Based)
 
-Tools are designed to be stateless, reusable business operations that:
-- Use providers to interact with external systems
-- Can be called by agents, state machines, or API endpoints
-- Are system-agnostic (don't know about Terraform, GitHub, etc. directly)
-- Focus on business logic, not infrastructure details
+For complex **Compound Workflows**, we are moving away from static UI forms in favor of an **Agent-Driven** approach.
+
+**Concept**:
+Instead of hardcoding a form for every new workflow, we define the workflow requirements in a **Markdown Instruction File**. The Agent reads this file and conducts the "form filling" via natural language conversation.
+
+**Components**:
+1.  **Instruction Files** (`backend/app/agents/instructions/*.md`):
+    -   Contains the "Script" for the Agent.
+    -   Lists required information to gather (e.g., "Ask for project name, cost center, and team members").
+    -   Defines validation rules and policy checks.
+
+2.  **Generic Execution Tool** (`execute_workflow`):
+    -   A single, reusable tool: `execute_workflow(workflow_type: str, parameters: Dict[str, Any])`.
+    -   The `parameters` argument effectively replaces the static form fields.
+    -   The Agent populates `parameters` based on the data gathered during the chat.
+
+3.  **Flow**:
+    -   User: "I need to onboard a new project."
+    -   Agent: Detects intent -> Loads `onboarding.md` instructions.
+    -   Agent: "Sure, what is the project name?" (following instructions).
+    -   ... Conversation continues until all params gathered ...
+    -   Agent: Calls `execute_workflow("project_onboarding", { "name": "...", ... })`.
+    -   Backend: Triggers `ProjectOnboardingStateMachine`.
+
+This allows "Business Users" to essentially have a concierge experience without needing to navigate complex UI forms.
+
+### Tool Usage Patterns
+
+We distinguish between **Agent Tools** and **System Actions**:
+
+- **Agent Tools** (`app/tools`):
+  - **Purpose**: Information gathering, validation, and "safe" actions for the LLM.
+  - **User**: The Agent (LLM).
+  - **Format**: Follow MCP schema (name, description, input_schema).
+  - **Examples**: `DoesCatalogExistTool`, `SearchUserEntitlementsTool`.
+  - **Restriction**: Agents should NOT have tools for major state mutations (e.g., "Provision Workspace", "Send Notification"). Those are deterministic outcomes handled by the State Machine.
+
+- **System Actions** (State Machine Logic):
+  - **Purpose**: Deterministic execution of business logic (provisioning, notifications, access grants).
+  - **User**: The State Machine.
+  - **Implementation**: State Machines call **Providers** directly (e.g., `self.notification_provider.send_email()`). They do NOT use the `app/tools` wrappers.
+  - **Why**: Avoids "tool" bloat and keeps logical flow clear. The Agent doesn't decide to send an email; the State Machine does it because the state changed.
+
+## Contributing Tools & Providers
+
+### Adding a New Provider
+
+1.  **Create Provider Class**: Implement `BaseProvider` in `app/providers/<system>/client.py`.
+2.  **Implement Health Check**: Implement `health_check()` to verify connectivity.
+3.  **Add Methods**: Add methods that abstract system-specific operations.
+4.  **Error Handling**: Wrap system errors in `RetryableError` or `PermanentError`.
+5.  **Configuration**: Use `self.config` or environment variables for credentials.
+
+### Adding a New Tool
+
+1.  **Create Tool Class**: Inherit from `BaseTool` in `app/tools/<tool_name>.py`.
+2.  **Define Metadata**: Set `name` and `description` properties.
+3.  **Define Schema**: Define `input_schema` to describe parameters (for LLM/Agent usage).
+4.  **Implement Execute**: Implement `execute()` method with business logic.
+5.  **Use Providers**: Instantiate providers inside `__init__` or `execute` method. Do NOT hardcode API calls.
 
 ## Directory Structure
 

@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { 
-  ChevronLeft, 
-  ChevronRight, 
-  Database, 
-  Cloud, 
+import {
+  ChevronLeft,
+  ChevronRight,
+  Database,
+  Cloud,
   Key,
   ShoppingCart,
   Globe,
@@ -21,11 +21,15 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
+import { useUserStore } from '../../stores/userStore';
+import type { UserPersona } from '../../types';
+
 interface NavItem {
   title: string;
   icon: React.ReactNode;
   path: string;
   group: string;
+  allowedPersonas?: UserPersona[]; // If undefined, allowed for all
 }
 
 const navItems: NavItem[] = [
@@ -33,35 +37,92 @@ const navItems: NavItem[] = [
   { title: 'Home', icon: <Home className="w-5 h-5" />, path: '/', group: 'Main' },
   { title: 'My Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Main' },
   { title: 'Pending Approvals', icon: <CheckCircle2 className="w-5 h-5" />, path: '/approvals', group: 'Main' },
-  
-  // Enterprise Data
+
+  // Enterprise Data - Available to everyone
   { title: 'Request Data Access', icon: <Key className="w-5 h-5" />, path: '/paas/request-access', group: 'Enterprise Data' },
   { title: 'Marketplace Certification', icon: <ShoppingCart className="w-5 h-5" />, path: '/paas/marketplace', group: 'Enterprise Data' },
 
-  // PaaS
-  { title: 'Get Workspace Access', icon: <Database className="w-5 h-5" />, path: '/paas/workspace-access', group: 'PaaS' },
-  { title: 'Create Catalog/Schema/Table', icon: <Database className="w-5 h-5" />, path: '/paas/request-catalog', group: 'PaaS' },
-  { title: 'Provision New Workspace', icon: <Cloud className="w-5 h-5" />, path: '/paas/provision-workspace', group: 'PaaS' },
-  { title: 'Provision Service Principal', icon: <Key className="w-5 h-5" />, path: '/paas/service-principal', group: 'PaaS' },
-  { title: 'GitHub Repository Creation', icon: <Code className="w-5 h-5" />, path: '/paas/github-repo-creation', group: 'PaaS' },
-  { title: 'Request REST API Access', icon: <Globe className="w-5 h-5" />, path: '/daas/rest-api', group: 'PaaS' },
-  { title: 'Request Batch Data Access', icon: <Download className="w-5 h-5" />, path: '/daas/batch-data', group: 'PaaS' },
-  
-  // Community
+  // PaaS - Restricted
+  // Business Users see NONE of these
+  // Power Users see Access/Create Catalog but NOT Provisioning
+  {
+    title: 'Get Workspace Access',
+    icon: <Database className="w-5 h-5" />,
+    path: '/paas/workspace-access',
+    group: 'PaaS',
+    allowedPersonas: ['Power User', 'Platform Admin']
+  },
+  {
+    title: 'Create Catalog/Schema/Table',
+    icon: <Database className="w-5 h-5" />,
+    path: '/paas/request-catalog',
+    group: 'PaaS',
+    allowedPersonas: ['Power User', 'Platform Admin']
+  },
+  {
+    title: 'Provision New Workspace',
+    icon: <Cloud className="w-5 h-5" />,
+    path: '/paas/provision-workspace',
+    group: 'PaaS',
+    allowedPersonas: ['Platform Admin'] // Admin only
+  },
+  {
+    title: 'Provision Service Principal',
+    icon: <Key className="w-5 h-5" />,
+    path: '/paas/service-principal',
+    group: 'PaaS',
+    allowedPersonas: ['Platform Admin'] // Admin only
+  },
+  {
+    title: 'GitHub Repository Creation',
+    icon: <Code className="w-5 h-5" />,
+    path: '/paas/github-repo-creation',
+    group: 'PaaS',
+    allowedPersonas: ['Power User', 'Platform Admin']
+  },
+  {
+    title: 'Request REST API Access',
+    icon: <Globe className="w-5 h-5" />,
+    path: '/daas/rest-api',
+    group: 'PaaS',
+    allowedPersonas: ['Power User', 'Platform Admin']
+  },
+  {
+    title: 'Request Batch Data Access',
+    icon: <Download className="w-5 h-5" />,
+    path: '/daas/batch-data',
+    group: 'PaaS',
+    allowedPersonas: ['Power User', 'Platform Admin']
+  },
+
+  // Community - Available to everyone
   { title: 'Training', icon: <GraduationCap className="w-5 h-5" />, path: '/community/training', group: 'Community' },
   { title: 'Event Calendar', icon: <Calendar className="w-5 h-5" />, path: '/community/events', group: 'Community' },
   { title: 'Templates & Assets', icon: <FileText className="w-5 h-5" />, path: '/community/assets', group: 'Community' },
   { title: 'Community Links', icon: <MessageSquare className="w-5 h-5" />, path: '/community/links', group: 'Community' },
-  
-  // Admin
-  { title: 'Admin', icon: <Settings className="w-5 h-5" />, path: '/admin', group: 'Admin' },
+
+  // Admin - Restricted
+  {
+    title: 'Admin',
+    icon: <Settings className="w-5 h-5" />,
+    path: '/admin',
+    group: 'Admin',
+    allowedPersonas: ['Platform Admin']
+  },
 ];
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
+  const currentPersona = useUserStore((state) => state.currentPersona);
 
-  const groupedItems = navItems.reduce((acc, item) => {
+  // Filter items based on current persona
+  const filteredItems = navItems.filter(item => {
+    if (!item.allowedPersonas) return true;
+    return item.allowedPersonas.includes(currentPersona);
+  });
+
+  const groupedItems = filteredItems.reduce((acc, item) => {
     if (!acc[item.group]) {
       acc[item.group] = [];
     }
@@ -125,6 +186,19 @@ export function Sidebar() {
           </div>
         ))}
       </nav>
+
+      {/* Persona Indicator (Optional: Helps user know what mode they are in if collapsed) */}
+      <div className="p-4 border-t border-gray-200">
+        {!collapsed ? (
+          <div className="text-xs text-gray-400 text-center">
+            Viewing as: <span className="font-medium text-gray-600">{currentPersona}</span>
+          </div>
+        ) : (
+          <div className="flex justify-center" title={`Viewing as ${currentPersona}`}>
+            <div className="w-2 h-2 rounded-full bg-primary/50"></div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

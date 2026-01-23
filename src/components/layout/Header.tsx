@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { Bell, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useRequestStore } from '../../stores/requestStore';
+import { useUserStore } from '../../stores/userStore';
 
 export function Header() {
   const pendingCount = useRequestStore((state) => state.getPendingApprovalsCount());
   const bannerData = useRequestStore((state) => state.bannerData);
+  const { currentPersona, setPersona } = useUserStore();
   const [isDismissed, setIsDismissed] = useState(false);
 
   const getBannerStyles = (type?: string) => {
@@ -52,18 +54,39 @@ export function Header() {
               </span>
             )}
           </Link>
-          <div className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-100 cursor-pointer transition-colors">
-            <div className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-semibold">
-              TH
+
+          <div className="relative group">
+            <div className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-100 cursor-pointer transition-colors">
+              <div className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-semibold">
+                TH
+              </div>
+              <div className="flex flex-col items-start">
+                <span className="text-sm font-medium text-gray-700">User Profile</span>
+                <span className="text-xs text-gray-500">{currentPersona}</span>
+              </div>
             </div>
-            <div className="flex flex-col">
-              <span className="text-sm font-medium text-gray-700">User Profile</span>
-              <span className="text-xs text-gray-500">taylor.hanson@qualcomm.com</span>
+
+            {/* Persona Switcher Dropdown */}
+            <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-md shadow-lg border border-gray-200 py-1 hidden group-hover:block z-50">
+              <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-100">
+                Switch Persona
+              </div>
+              {['Business User', 'Power User', 'Platform Admin'].map((persona) => (
+                <button
+                  key={persona}
+                  onClick={() => setPersona(persona as any)}
+                  className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center justify-between ${currentPersona === persona ? 'text-primary font-medium' : 'text-gray-700'
+                    }`}
+                >
+                  {persona}
+                  {currentPersona === persona && <div className="w-2 h-2 rounded-full bg-primary" />}
+                </button>
+              ))}
             </div>
           </div>
         </div>
       </div>
-    </header>
+    </header >
   );
 }
 

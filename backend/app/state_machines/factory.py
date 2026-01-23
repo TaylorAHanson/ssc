@@ -11,6 +11,7 @@ from app.state_machines.service_principal import ServicePrincipalStateMachine
 from app.state_machines.workspace_access import WorkspaceAccessStateMachine
 from app.state_machines.simple_platform_admin import SimplePlatformAdminStateMachine
 from app.state_machines.github_repo_creation import GithubRepoCreationStateMachine
+from app.state_machines.project_onboarding import ProjectOnboardingStateMachine
 import logging
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,9 @@ def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMac
     elif r_type in [RequestType.CATALOG_SCHEMA_TABLE, RequestType.MARKETPLACE_CERTIFICATION, RequestType.REST_API_ACCESS]:
         # Use SimplePlatformAdminStateMachine for these for now
         return SimplePlatformAdminStateMachine(request, db)
+    
+    elif r_type == RequestType.PROJECT_ONBOARDING:
+        return ProjectOnboardingStateMachine(request, db)
     
     # Fallback / Default for others (implement specific ones as needed)
     return WorkspaceProvisionStateMachine(request, db)
