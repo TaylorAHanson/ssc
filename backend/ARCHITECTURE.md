@@ -8,7 +8,7 @@ The EDAS Hub backend is a **Databricks App** that runs on the Databricks platfor
 2. **State Machine Layer** - Workflow orchestration and business logic execution
 3. **API Layer** - UI-facing REST endpoints
 4. **Workers Layer** - Async task processing for long-running operations
-5. **Tools Layer** - Business operations (create_workspace, grant_access, etc.)
+5. **Agent Tools Layer** - Read-only/informational operations for the Agent (check_exists, search_entitlements, etc.)
 
 All layers share:
 - **Providers Layer** - Abstracts external systems and infrastructure
@@ -49,61 +49,31 @@ Tools and providers will fail, especially Terraform operations. Infrastructure p
 
 ## Architecture Hierarchy
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  API Layer (REST Endpoints)                             │
-│  - Returns 202 (Accepted) for async operations          │  
-│  - Polling endpoints for status                         │
-│  - Callback endpoints for approvals                     │
-└────────────────────┬────────────────────────────────────┘
-                     │
-         ┌───────────┴───────────┐
-         │                       │
-         ▼                       ▼
-┌──────────────────┐   ┌──────────────────────────────┐
-│  Agent Layer     │   │  State Machine Layer         │
-│  (Synchronous)   │   │  (Persisted to DB)           │
-└──────────────────┘   └──────────────────────────────┘
-        |                           │
-        |                           ▼
-        |           ┌──────────────────────────────┐
-        |           │  Workers Layer (Async)       │
-        |           │  - Polling Worker            │
-        |           │  - Process state transitions │
-        |           │  - Execute long-running ops  │
-        |           └──────────────────────────────┘
-        |                        │
-        |                        ▼
-        |           ┌──────────────────────────────┐
-        |           │  Tools Layer                 │
-        └---------->│  - create_workspace()        │
-                    │  - grant_access()            │
-                    │  - create_service_principal()│
-                    └──────────────────────────────┘
-                                 │
-                                 ▼
-                    ┌──────────────────────────────┐
-                    │  Providers Layer             │
-                    │  - TerraformProvider         │
-                    │  - IDPProvider               │
-                    │  - DatabricksProvider        │
-                    └──────────────────────────────┘
-                                 │
-                                 ▼
-                    ┌──────────────────────────────┐
-                    │  Database Layer (Lakebase)   │
-                    │  - Request state persistence │
-                    │  - State locking             │
-                    │  - Event tracking            │
-                    └──────────────────────────────┘
-                                 │
-                                 ▼
-                    ┌──────────────────────────────┐
-                    │  Model Serving (Databricks)  │
-                    │  - ML model endpoints        │
-                    │  - Agent LLM inference       │
-                    │  - Request classification    │
-                    └──────────────────────────────┘
+```mermaid
+graph TD
+    API["API Layer (REST)"]
+    Agent["Agent Layer (LLM)"]
+    Exec["execute_workflow Tool"]
+    SM["State Machine Layer"]
+    Workers["Workers Layer (Async)"]
+    Tools["Agent Tools Layer (Read-only)"]
+    Providers["Providers Layer"]
+    DB[("Database (Lakebase)")]
+
+    API --> Agent
+    
+    Agent --> Tools
+    Agent --> Exec
+    
+    Exec -->|Triggers| SM
+    
+    Tools --> Providers
+    
+    SM -->|Persist| DB
+    SM --> Workers
+    Workers --> Providers
+    
+    Providers --> DB
 ```
 
 ## Key Insight
@@ -125,10 +95,10 @@ By abstracting these into **Providers**, we:
 ### Separation of Concerns
 
 - **Agents** focus on understanding user intent, gathering information, and routing users to appropriate forms.
-- **State Machines** handle the orchestration of complex workflows, calling tools in sequence to complete tasks
+- **State Machines** handle the orchestration of complex workflows, calling **Providers** directly to execute actions.
 - **API Endpoints** provide CRUD operations and serve the frontend UI
-- **Tools** are business operations that use providers to accomplish tasks
-- **Providers** abstract external systems and infrastructure (Terraform, IDP, GitHub, Databricks, etc.)
+- **Agent Tools** are informational or validation operations used by the Agent to gather context.
+- **Providers** abstract external systems and infrastructure (Terraform, IDP, GitHub, Databricks, etc.) and are used by both Agent Tools and State Machines.
 
 ### Provider Abstraction
 
@@ -483,38 +453,18 @@ class ConnectionError(RetryableError):
 - `send_email(to: str, subject: str, body: str) -> bool` - Send email
 - `send_teams(webhook: str, message: dict) -> bool` - Send Teams message
 
-### Tools Layer (`app/tools/`)
+### Agent Tools Layer (`app/tools/`)
 
-**Purpose**: Business operations that use providers to accomplish tasks. System-agnostic.
+**Purpose**: Informational and validation operations that use providers to help the Agent understand the system state.
 
 **Characteristics**:
 - Stateless functions/classes
-- Focus on business logic, not infrastructure details
+- Read-only or "safe" operations (validation, existence checks, search)
 - Use providers to interact with external systems
-- Can be called by agents, state machines, or API endpoints
-- Don't know about Terraform, GitHub, IDP directly - only know about providers
+- **Used by Agents** to gather context or validate parameters
+- **Workflows (State Machines) do NOT use these tools** - they call providers directly.
 
-**Example Tools**:
-- `create_workspace(name: str, config: dict) -> dict`
-  - Uses: `terraform_provider.apply()` for infrastructure
-  - Uses: `databricks_provider.create_workspace()` for Databricks setup
-  - Uses: `idp_provider.grant_permission()` for access
-
-- `grant_access(user: str, resource: str, permissions: list) -> bool`
-  - Uses: `databricks_provider.grant_access()` for Databricks permissions
-  - Uses: `idp_provider.add_to_group()` for IDP group membership
-  - Uses: `notification_provider.send_email()` to notify user
-
-- `create_service_principal(name: str, config: dict) -> dict`
-  - Uses: `idp_provider.create_service_principal()` to create in IDP
-  - Uses: `databricks_provider.grant_access()` to grant Databricks access
-  - Uses: `idp_provider.create_api_key()` if API key requested
-
-- `scaffold_github_repo(name: str, template: str, config: dict) -> dict`
-  - Uses: `github_provider.create_from_template()` to create repo
-  - Uses: `github_provider.set_permissions()` to set access
-  - Uses: `github_provider.run_shell_command()` for additional setup
-
+**Example Agent Tools**:
 - `check_exists(resource_type: str, resource_name: str) -> bool`
   - Uses: `databricks_provider.execute_sql()` to query Unity Catalog
   - Or: `sql_provider.execute_query()` for database queries
@@ -522,6 +472,10 @@ class ConnectionError(RetryableError):
 - `search_user_entitlements(user_email: str, resource_type: str) -> list`
   - Uses: `databricks_provider.execute_sql()` to query entitlements
   - Or: `idp_provider.get_user_groups()` to query IDP groups
+
+- `validate_resource_name(name: str) -> bool`
+  - Uses: local validation logic or provider-specific naming checks
+  - Help the agent ensure the parameters are valid before trigger a workflow.
 
 ### Agent Layer (`app/agents/`)
 
