@@ -34,6 +34,7 @@ export interface Request {
   trainingCompleted?: boolean;
   environment?: Environment;
   lastError?: any;
+  conversation?: ChatMessage[];
 }
 
 export interface ProgressInfo {
@@ -104,6 +105,7 @@ export interface Approval {
   rejectionNote?: string;
   delegatedTo?: string;
   delegatedToEmail?: string;
+  requestConversation?: ChatMessage[];
 }
 
 export interface ApprovalAction {

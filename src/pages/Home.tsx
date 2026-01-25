@@ -4,7 +4,7 @@ import {
   Sparkles, ArrowRight, Send, ExternalLink, ChevronDown, Shield, BarChart3, Activity,
   Database, Box, Server, CheckCircle, TrendingUp, AlertTriangle, FileText, Lock, Search, Info
 } from 'lucide-react';
-import { Input } from '../components/ui/input';
+
 import { Textarea } from '../components/ui/textarea';
 import { Button } from '../components/ui/button';
 import type { ChatMessage, ConversationState } from '../types';
@@ -267,6 +267,14 @@ const determineFormRoute = (query: string, _answers: Record<string, string | str
   return { path: '/paas/request-access', title: 'Request Data Access' };
 };
 
+const ThinkingBubble = () => (
+  <div className="flex items-center gap-1 px-1 py-1">
+    <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+    <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+    <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>
+  </div>
+);
+
 export function Home() {
   const [query, setQuery] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -277,6 +285,11 @@ export function Home() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const adjustHeight = (el: HTMLTextAreaElement) => {
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  };
 
   const handleReset = () => {
     setConversationState(null);
@@ -356,6 +369,7 @@ export function Home() {
     if (!query.trim() || isProcessing) return;
 
     const initialQuery = query.trim();
+    setQuery(''); // Clear input immediately
     setIsProcessing(true);
 
     // Create initial user message
@@ -366,18 +380,32 @@ export function Home() {
       timestamp: new Date(),
     };
 
+    // Create thinking message
+    const thinkingMessage: ChatMessage = {
+      id: "thinking",
+      type: 'agent',
+      content: '__THINKING__',
+      timestamp: new Date(),
+    };
+
+    // Optimistically set state with thinking bubble
+    setConversationState({
+      initialQuery,
+      messages: [userMessage, thinkingMessage],
+      currentQuestionIndex: 0,
+      followUpQuestions: [],
+      answers: {},
+      agentActions: [],
+      showConfirmation: false,
+      context: undefined,
+    });
+
     try {
       // Call the real agent endpoint
       const agentResponse = await callAgent({
         query: initialQuery,
-        conversation_history: conversationState?.messages?.map(m => ({
-          id: m.id,
-          type: m.type,
-          content: m.content,
-          timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : (typeof m.timestamp === 'string' ? m.timestamp : new Date().toISOString()),
-        })),
+        conversation_history: [], // First message, no history
         context: {
-          ...conversationState?.context,
           agent_mode: agentMode
         },
       });
@@ -385,11 +413,10 @@ export function Home() {
       // Use only agent-provided questions (no fallback)
       const followUpQuestions = agentResponse.follow_up_questions || [];
 
-      // Create agent message from response - show actual message or indicate waiting
+      // Create agent message from response
       let agentMessageContent = agentResponse.message;
       if (!agentMessageContent || !agentMessageContent.trim()) {
-        // If no message, the agent might be processing - show a helpful message
-        agentMessageContent = "I'm processing your request. Please wait...";
+        agentMessageContent = "I'm processing your request.";
       }
 
       const agentMessage: ChatMessage = {
@@ -399,7 +426,7 @@ export function Home() {
         timestamp: new Date(),
       };
 
-      // Create messages array
+      // Create messages array (replace thinking with real response)
       const messages: ChatMessage[] = [userMessage, agentMessage];
 
       // Add first question if agent provided one
@@ -412,49 +439,36 @@ export function Home() {
         });
       }
 
-      // Determine if we should show confirmation (form route ready)
+      // Determine if we should show confirmation
       const showConfirmation = !agentResponse.requires_more_info && (agentResponse.form_route !== null || agentResponse.form_prefill_data !== undefined);
 
-      setConversationState({
-        initialQuery,
+      setConversationState(prev => prev ? {
+        ...prev,
         messages,
-        currentQuestionIndex: 0,
         followUpQuestions,
-        answers: {},
-        agentActions: [],
         showConfirmation,
         formRoute: agentResponse.form_route || undefined,
         formPrefillData: agentResponse.form_prefill_data,
-        context: conversationState?.context,
-      });
+        context: prev.context // Preserve context if set (unlikely for initial)
+      } : null);
     } catch (error) {
       console.error('Error calling agent:', error);
-      // Show error message - no fallback questions
-      const messages: ChatMessage[] = [
-        userMessage,
-        {
-          id: (Date.now() + 1).toString(),
-          type: 'agent',
-          content: error instanceof Error
-            ? `I'm having trouble connecting to the agent service. ${error.message}. Please try again.`
-            : "I'm having trouble connecting to the agent service. Please try again.",
-          timestamp: new Date(),
-        },
-      ];
+      const errorMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        type: 'agent',
+        content: error instanceof Error
+          ? `I'm having trouble connecting to the agent service. ${error.message}. Please try again.`
+          : "I'm having trouble connecting to the agent service. Please try again.",
+        timestamp: new Date(),
+      };
 
-      setConversationState({
-        initialQuery,
-        messages,
-        currentQuestionIndex: 0,
-        followUpQuestions: [], // No questions on error
-        answers: {},
-        agentActions: [],
-        showConfirmation: false,
-        context: conversationState?.context,
-      });
+      setConversationState(prev => prev ? {
+        ...prev,
+        messages: [userMessage, errorMessage],
+        showConfirmation: false
+      } : null);
     }
 
-    setQuery('');
     setIsProcessing(false);
   };
 
@@ -474,6 +488,21 @@ export function Home() {
       content: Array.isArray(answer) ? answer.join(', ') : answer,
       timestamp: new Date(),
     };
+
+    // Create thinking message
+    const thinkingMessage: ChatMessage = {
+      id: "thinking",
+      type: 'agent',
+      content: '__THINKING__',
+      timestamp: new Date(),
+    };
+
+    // Optimistically update
+    setConversationState({
+      ...conversationState,
+      messages: [...conversationState.messages, answerMessage, thinkingMessage],
+      answers: updatedAnswers,
+    });
 
     try {
       // Call the agent with the answer to get next question or form route
@@ -497,10 +526,15 @@ export function Home() {
       const hasMoreQuestions = agentResponse.requires_more_info && followUpQuestions.length > 0;
 
       // Create agent message from response
+      let agentMessageContent = agentResponse.message;
+      if (!agentMessageContent || !agentMessageContent.trim()) {
+        agentMessageContent = "Thank you for that information.";
+      }
+
       const agentMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         type: 'agent',
-        content: agentResponse.message || "Thank you for that information.",
+        content: agentMessageContent,
         timestamp: new Date(),
       };
 
@@ -518,24 +552,21 @@ export function Home() {
       }
 
       // Determine if we should show confirmation (form route ready)
-      // Keep confirmation visible once it's been shown
       const showConfirmation = conversationState?.showConfirmation || (!agentResponse.requires_more_info && (agentResponse.form_route !== null || agentResponse.form_prefill_data !== undefined));
 
-      setConversationState({
-        ...conversationState,
+      setConversationState(prev => prev ? {
+        ...prev,
         messages,
         currentQuestionIndex: agentResponse.follow_up_questions ? 0 : nextIndex, // Reset if new questions
-        followUpQuestions: followUpQuestions,
-        answers: updatedAnswers,
-        agentActions: [],
+        followUpQuestions,
+        answers: updatedAnswers, // Keep updated answers
         showConfirmation,
-        formRoute: agentResponse.form_route || conversationState.formRoute,
-        formPrefillData: agentResponse.form_prefill_data || conversationState.formPrefillData,
-      });
+        formRoute: agentResponse.form_route || prev.formRoute,
+        formPrefillData: agentResponse.form_prefill_data || prev.formPrefillData,
+      } : null);
     } catch (error) {
       console.error('Error calling agent:', error);
-      // Show error message - no fallback questions
-      const agentMessage: ChatMessage = {
+      const errorMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         type: 'agent',
         content: error instanceof Error
@@ -544,11 +575,11 @@ export function Home() {
         timestamp: new Date(),
       };
 
-      setConversationState({
-        ...conversationState,
-        messages: [...conversationState.messages, answerMessage, agentMessage],
+      setConversationState(prev => prev ? {
+        ...prev,
+        messages: [...conversationState.messages, answerMessage, errorMessage],
         answers: updatedAnswers,
-      });
+      } : null);
     }
 
     setIsProcessing(false);
@@ -639,7 +670,9 @@ export function Home() {
                         : 'bg-gray-50 text-gray-900 border border-gray-200/50'
                         }`}
                     >
-                      {message.type === 'agent' ? (
+                      {message.content === '__THINKING__' ? (
+                        <ThinkingBubble />
+                      ) : message.type === 'agent' ? (
                         <div
                           className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
                           dangerouslySetInnerHTML={{ __html: message.content }}
@@ -690,12 +723,22 @@ export function Home() {
                         }}
                       >
                         <div className="flex gap-2 items-center">
-                          <Input
-                            type="text"
+                          <Textarea
                             placeholder="Type your answer..."
                             required={currentQuestion.required}
-                            className="flex-1 rounded-xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200"
+                            className="flex-1 rounded-xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 min-h-[48px] max-h-[200px] resize-none overflow-hidden py-3"
                             disabled={isProcessing}
+                            rows={1}
+                            onInput={(e) => adjustHeight(e.currentTarget)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                const form = e.currentTarget.closest('form');
+                                if (form && !isProcessing) {
+                                  form.requestSubmit();
+                                }
+                              }
+                            }}
                           />
                           <Button
                             type="submit"
@@ -864,6 +907,28 @@ export function Home() {
                       const userMessage = textarea.value.trim();
                       if (userMessage && !isProcessing) {
                         setIsProcessing(true);
+                        textarea.value = ''; // Clear input immediately
+
+                        const userMsg: ChatMessage = {
+                          id: Date.now().toString(),
+                          type: 'user',
+                          content: userMessage,
+                          timestamp: new Date(),
+                        };
+
+                        const thinkingMsg: ChatMessage = {
+                          id: "thinking",
+                          type: 'agent',
+                          content: '__THINKING__',
+                          timestamp: new Date(),
+                        };
+
+                        // Optimistic update
+                        setConversationState({
+                          ...conversationState,
+                          messages: [...conversationState.messages, userMsg, thinkingMsg],
+                        });
+
                         try {
                           // Call agent with the free-form message
                           const agentResponse = await callAgent({
@@ -879,13 +944,6 @@ export function Home() {
                               agent_mode: agentMode
                             },
                           });
-
-                          const userMsg: ChatMessage = {
-                            id: Date.now().toString(),
-                            type: 'user',
-                            content: userMessage,
-                            timestamp: new Date(),
-                          };
 
                           const agentMsg: ChatMessage = {
                             id: (Date.now() + 1).toString(),
@@ -907,29 +965,26 @@ export function Home() {
                             });
                           }
 
-                          // Determine if we should show confirmation (form route ready)
-                          // Keep confirmation visible once it's been shown
+                          // Determine if we should show confirmation
                           const showConfirmation = conversationState.showConfirmation || (!agentResponse.requires_more_info && (agentResponse.form_route !== null || agentResponse.form_prefill_data !== undefined));
 
-                          setConversationState({
-                            ...conversationState,
+                          setConversationState(prev => prev ? {
+                            ...prev,
                             messages,
-                            currentQuestionIndex: followUpQuestions.length > 0 ? 0 : conversationState.currentQuestionIndex,
+                            currentQuestionIndex: followUpQuestions.length > 0 ? 0 : prev.currentQuestionIndex,
                             followUpQuestions,
                             showConfirmation,
-                            formRoute: agentResponse.form_route || conversationState.formRoute,
-                            formPrefillData: agentResponse.form_prefill_data || conversationState.formPrefillData,
-                          });
+                            formRoute: agentResponse.form_route || prev.formRoute,
+                            formPrefillData: agentResponse.form_prefill_data || prev.formPrefillData,
+                          } : null);
 
-                          // Store prefilled data if available (prefer form_prefill_data from agent)
+                          // Store prefilled data if available
                           if (agentResponse.form_route) {
                             const prefillData = agentResponse.form_prefill_data || conversationState.answers;
                             if (prefillData && Object.keys(prefillData).length > 0) {
                               localStorage.setItem(`form_prefill_${agentResponse.form_route.path}`, JSON.stringify(prefillData));
                             }
                           }
-
-                          textarea.value = '';
                         } catch (error) {
                           console.error('Error calling agent:', error);
                           const errorMsg: ChatMessage = {
@@ -940,15 +995,10 @@ export function Home() {
                               : "I'm having trouble processing your message. Please try again.",
                             timestamp: new Date(),
                           };
-                          setConversationState({
-                            ...conversationState,
-                            messages: [...conversationState.messages, {
-                              id: Date.now().toString(),
-                              type: 'user',
-                              content: userMessage,
-                              timestamp: new Date(),
-                            }, errorMsg],
-                          });
+                          setConversationState(prev => prev ? {
+                            ...prev,
+                            messages: [...conversationState.messages, userMsg, errorMsg],
+                          } : null);
                         } finally {
                           setIsProcessing(false);
                         }
@@ -959,13 +1009,14 @@ export function Home() {
                       <Textarea
                         ref={inputRef}
                         placeholder="Type your message..."
-                        className="flex-1 rounded-xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 min-h-[40px] max-h-[100px]"
-                        disabled={isProcessing}
+                        className="flex-1 rounded-xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 min-h-[48px] max-h-[200px] resize-none overflow-hidden py-3"
+                        disabled={false} // Allow typing during processing
+                        onInput={(e) => adjustHeight(e.currentTarget)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' && !e.shiftKey) {
                             e.preventDefault();
                             const form = e.currentTarget.closest('form');
-                            if (form && !isProcessing) {
+                            if (form && !isProcessing && e.currentTarget.value.trim()) {
                               form.requestSubmit();
                             }
                           }
@@ -974,9 +1025,13 @@ export function Home() {
                       <Button
                         type="submit"
                         disabled={isProcessing}
-                        className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 self-end h-10"
+                        className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 self-end h-10 disabled:opacity-50"
                       >
-                        <Send className="w-4 h-4" />
+                        {isProcessing ? (
+                          <div className="w-4 h-4 rounded-full border-2 border-primary/20 border-t-primary animate-spin" />
+                        ) : (
+                          <Send className="w-4 h-4" />
+                        )}
                       </Button>
                       <Button
                         type="button"
@@ -1039,7 +1094,7 @@ export function Home() {
   return (
     <div className="flex items-center justify-center min-h-[calc(100vh-200px)] relative">
       <div className="w-full max-w-3xl">
-        <div className="text-center mb-12">
+        <div className="text-center mb-8">
           <div className="flex items-center justify-center gap-3 mb-6">
             <div className="p-3 bg-gradient-to-br from-primary to-primary/80 rounded-2xl shadow-lg">
               <Sparkles className="w-8 h-8 text-white" />
@@ -1049,7 +1104,7 @@ export function Home() {
             </h1>
           </div>
           <p className="text-lg text-gray-600 max-w-xl mx-auto">
-            Your intelligent assistant for EDAS self-service requests. Tell me what you need, and I'll guide you through the process.
+            Your intelligent assistant for EDAS self-service requests.
           </p>
         </div>
 
@@ -1066,14 +1121,20 @@ export function Home() {
                     ref={inputRef}
                     placeholder="What do you need to do today?"
                     value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    className="text-base py-2.5 pr-14 rounded-2xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 bg-white/90 backdrop-blur-sm min-h-[48px] max-h-[48px] resize-none overflow-hidden"
-                    disabled={isProcessing}
+                    onChange={(e) => {
+                      setQuery(e.target.value);
+                      adjustHeight(e.target);
+                    }}
+                    className="text-base py-3 pr-14 rounded-2xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 bg-white/90 backdrop-blur-sm min-h-[52px] max-h-[200px] resize-none overflow-hidden custom-scrollbar"
+                    disabled={false}
                     rows={1}
+                    onInput={(e) => adjustHeight(e.currentTarget)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
-                        handleInitialSubmit(e);
+                        if (!isProcessing && query.trim()) {
+                          handleInitialSubmit(e);
+                        }
                       }
                     }}
                   />

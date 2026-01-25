@@ -40,7 +40,8 @@ async def get_approvals(
             updatedAt=approval_model.updated_at,
             rejectionNote=approval_model.rejection_note,
             delegatedTo=approval_model.delegated_to,
-            delegatedToEmail=approval_model.delegated_to_email
+            delegatedToEmail=approval_model.delegated_to_email,
+            requestConversation=request_model.conversation
         ))
         
     return approvals

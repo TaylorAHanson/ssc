@@ -27,7 +27,7 @@ const formatDuration = (startDate: string) => {
   const start = parseUtcDate(startDate);
   const now = new Date();
   const hours = differenceInHours(now, start);
-  
+
   if (hours < 1) {
     return formatDistanceToNow(start, { addSuffix: true });
   }
@@ -52,9 +52,9 @@ function TrainingAction({ requestId }: { requestId: string }) {
   };
 
   return (
-    <Button 
-      size="sm" 
-      onClick={handleCompleteTraining} 
+    <Button
+      size="sm"
+      onClick={handleCompleteTraining}
       disabled={isLoading}
       className="bg-yellow-600 hover:bg-yellow-700 text-white h-8 text-xs"
     >
@@ -71,8 +71,8 @@ function ProvisioningProgress({ progress }: { progress: NonNullable<Request['sta
         <span className="text-sm font-bold text-blue-900">{progress.percent}%</span>
       </div>
       <div className="w-full bg-blue-200 rounded-full h-2.5">
-        <div 
-          className="bg-blue-600 h-2.5 rounded-full transition-all duration-500 ease-out" 
+        <div
+          className="bg-blue-600 h-2.5 rounded-full transition-all duration-500 ease-out"
           style={{ width: `${progress.percent}%` }}
         ></div>
       </div>
@@ -154,30 +154,28 @@ function RequestStateList({ request }: { request: Request }) {
           const isUserRequest = step.id === 'user_request';
 
           return (
-            <div 
-              key={`${step.id}-${idx}`} 
-              className={`p-4 flex flex-col transition-colors ${
-                isFailed ? 'bg-red-50 border-l-4 border-l-red-600' :
+            <div
+              key={`${step.id}-${idx}`}
+              className={`p-4 flex flex-col transition-colors ${isFailed ? 'bg-red-50 border-l-4 border-l-red-600' :
                 isRejected ? 'bg-red-50 border-l-4 border-l-red-500' :
-                isActive ? 'bg-blue-50 border-l-4 border-l-blue-500' :
-                isCompleted ? 'bg-green-50 border-l-4 border-l-green-500' :
-                'bg-white border-l-4 border-l-gray-200'
-              } first:rounded-t-lg last:rounded-b-lg hover:bg-opacity-80`}
+                  isActive ? 'bg-blue-50 border-l-4 border-l-blue-500' :
+                    isCompleted ? 'bg-green-50 border-l-4 border-l-green-500' :
+                      'bg-white border-l-4 border-l-gray-200'
+                } first:rounded-t-lg last:rounded-b-lg hover:bg-opacity-80`}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4 flex-1">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
-                    isFailed ? 'bg-red-600 text-white' :
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${isFailed ? 'bg-red-600 text-white' :
                     isRejected ? 'bg-red-500 text-white' :
-                    isCompleted ? 'bg-green-500 text-white' : 
-                    isActive ? 'bg-blue-500 text-white' : 
-                    'bg-gray-300 text-gray-600'
-                  }`}>
+                      isCompleted ? 'bg-green-500 text-white' :
+                        isActive ? 'bg-blue-500 text-white' :
+                          'bg-gray-300 text-gray-600'
+                    }`}>
                     {isFailed ? <AlertCircle className="w-6 h-6" /> :
-                     isCompleted ? <CheckCircle2 className="w-6 h-6" /> : 
-                     isRejected ? <X className="w-6 h-6" /> :
-                     isActive ? <Loader2 className="w-6 h-6 animate-spin" /> : 
-                     <Circle className="w-6 h-6" />}
+                      isCompleted ? <CheckCircle2 className="w-6 h-6" /> :
+                        isRejected ? <X className="w-6 h-6" /> :
+                          isActive ? <Loader2 className="w-6 h-6 animate-spin" /> :
+                            <Circle className="w-6 h-6" />}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
@@ -189,18 +187,17 @@ function RequestStateList({ request }: { request: Request }) {
                       )}
                     </div>
                     <div className="flex items-center gap-3 text-sm text-gray-600">
-                      <span className={`font-medium ${
-                        isFailed ? 'text-red-800 font-bold' :
+                      <span className={`font-medium ${isFailed ? 'text-red-800 font-bold' :
                         isRejected ? 'text-red-700' :
-                        isCompleted ? 'text-green-700' :
-                        isActive ? 'text-blue-700' :
-                        'text-gray-500'
-                      }`}>
+                          isCompleted ? 'text-green-700' :
+                            isActive ? 'text-blue-700' :
+                              'text-gray-500'
+                        }`}>
                         {isFailed ? 'Failed' :
-                         isCompleted ? 'Completed' :
-                         isRejected ? 'Rejected' :
-                         isActive ? 'In Progress' :
-                         'Pending'}
+                          isCompleted ? 'Completed' :
+                            isRejected ? 'Rejected' :
+                              isActive ? 'In Progress' :
+                                'Pending'}
                       </span>
                       {(step.completedAt || (isUserRequest && request.createdAt)) && (
                         <>
@@ -216,11 +213,11 @@ function RequestStateList({ request }: { request: Request }) {
 
                 {isTraining && isActive && !isCompleted && !isRejected && (
                   <div className="flex items-center gap-3 ml-4">
-                     <div className="text-sm text-yellow-800 bg-yellow-100 px-3 py-2 rounded-lg border border-yellow-300 flex items-center gap-2">
-                       <AlertCircle className="w-4 h-4" />
-                       Action Required
-                     </div>
-                     <TrainingAction requestId={request.id} />
+                    <div className="text-sm text-yellow-800 bg-yellow-100 px-3 py-2 rounded-lg border border-yellow-300 flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4" />
+                      Action Required
+                    </div>
+                    <TrainingAction requestId={request.id} />
                   </div>
                 )}
               </div>
@@ -246,34 +243,34 @@ function RequestStateList({ request }: { request: Request }) {
                   )}
                   {step.facts && step.facts.length > 0 && (
                     <div className="bg-gray-50 rounded border border-gray-100 p-3">
-                    <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-2">Step Logs</p>
-                    <div className="space-y-1.5">
-                      {step.facts.map((fact, fIdx) => (
-                        <div key={fIdx} className="flex items-start gap-2 text-xs">
-                          <span className="text-gray-400 font-mono flex-shrink-0">
-                            [{formatInTimeZone(parseUtcDate(fact.timestamp), 'America/Los_Angeles', 'HH:mm:ss')}]
-                          </span>
-                          <div className="text-gray-700">
-                            <span className="font-semibold text-gray-900">{fact.type.replace(/_/g, ' ')}</span>
-                            {fact.type === 'repo_created' ? (
-                              <>: <a href={fact.data.repo_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                                {fact.data.repo_name}
-                              </a></>
-                            ) : fact.type === 'workspace_created' ? (
-                              <>: <span className="font-mono bg-gray-100 px-1 rounded">{fact.data.workspace_url}</span></>
-                            ) : fact.type === 'approval_received' ? (
-                              <>: <span>Approved by <span className="font-medium">{fact.data.actor}</span></span></>
-                            ) : fact.type === 'provisioning_failed' ? (
-                              <>: <span className="text-red-600 font-medium">Failed: {fact.data.error}</span></>
-                            ) : null}
+                      <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-2">Step Logs</p>
+                      <div className="space-y-1.5">
+                        {step.facts.map((fact, fIdx) => (
+                          <div key={fIdx} className="flex items-start gap-2 text-xs">
+                            <span className="text-gray-400 font-mono flex-shrink-0">
+                              [{formatInTimeZone(parseUtcDate(fact.timestamp), 'America/Los_Angeles', 'HH:mm:ss')}]
+                            </span>
+                            <div className="text-gray-700">
+                              <span className="font-semibold text-gray-900">{fact.type.replace(/_/g, ' ')}</span>
+                              {fact.type === 'repo_created' ? (
+                                <>: <a href={fact.data.repo_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                                  {fact.data.repo_name}
+                                </a></>
+                              ) : fact.type === 'workspace_created' ? (
+                                <>: <span className="font-mono bg-gray-100 px-1 rounded">{fact.data.workspace_url}</span></>
+                              ) : fact.type === 'approval_received' ? (
+                                <>: <span>Approved by <span className="font-medium">{fact.data.actor}</span></span></>
+                              ) : fact.type === 'provisioning_failed' ? (
+                                <>: <span className="text-red-600 font-medium">Failed: {fact.data.error}</span></>
+                              ) : null}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
-            )}
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
@@ -288,6 +285,7 @@ export function Requests() {
   const deleteRequest = useRequestStore((state) => state.deleteRequest);
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'status' | 'conversation'>('status');
 
   // Derived state: get the full object from the store's list
   const selectedRequest = requests.find(r => r.id === selectedRequestId) || null;
@@ -351,13 +349,12 @@ export function Requests() {
                       {request.type.replace(/_/g, ' ')}
                     </td>
                     <td className="py-3 px-4">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                        request.status === 'completed' ? 'bg-green-100 text-green-800' :
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${request.status === 'completed' ? 'bg-green-100 text-green-800' :
                         request.status === 'provisioning' ? 'bg-blue-100 text-blue-800' :
-                        request.status === 'manager_approval' ? 'bg-yellow-100 text-yellow-800' :
-                        request.status === 'training_pending' ? 'bg-orange-100 text-orange-800' :
-                        'bg-gray-100 text-gray-800'
-                      }`}>
+                          request.status === 'manager_approval' ? 'bg-yellow-100 text-yellow-800' :
+                            request.status === 'training_pending' ? 'bg-orange-100 text-orange-800' :
+                              'bg-gray-100 text-gray-800'
+                        }`}>
                         {request.status.replace(/_/g, ' ')}
                       </span>
                     </td>
@@ -376,17 +373,21 @@ export function Requests() {
                           className="flex items-center gap-2"
                         >
                           <Eye className="w-4 h-4" />
-                          View Flow
+                          View
                         </Button>
                         <Button
                           onClick={(e) => handleDelete(request.id, e)}
                           variant="outline"
                           size="sm"
-                          className="flex items-center gap-2 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                          className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
                           disabled={isDeleting === request.id}
+                          title="Delete Request"
                         >
-                          <Trash2 className="w-4 h-4" />
-                          {isDeleting === request.id ? '...' : 'Delete'}
+                          {isDeleting === request.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
                         </Button>
                       </div>
                     </td>
@@ -422,10 +423,63 @@ export function Requests() {
               </div>
             </CardHeader>
             <CardContent className="flex-1 overflow-y-auto space-y-6 p-6">
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900 mb-4">Request Status</h2>
-                <RequestStateList request={selectedRequest} />
+              {/* Tabs */}
+              <div className="flex items-center gap-4 border-b border-gray-200 mb-6">
+                <button
+                  onClick={() => setActiveTab('status')}
+                  className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${activeTab === 'status'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    }`}
+                >
+                  Request Status
+                </button>
+                {selectedRequest.conversation && selectedRequest.conversation.length > 0 && (
+                  <button
+                    onClick={() => setActiveTab('conversation')}
+                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${activeTab === 'conversation'
+                      ? 'border-primary text-primary'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                      }`}
+                  >
+                    Conversation History
+                  </button>
+                )}
               </div>
+
+              {activeTab === 'status' ? (
+                <div>
+                  <RequestStateList request={selectedRequest} />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {selectedRequest.conversation?.map((message, idx) => (
+                    <div
+                      key={idx}
+                      className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div
+                        className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${message.type === 'user'
+                          ? 'bg-gradient-to-br from-primary to-primary/90 text-white'
+                          : 'bg-gray-50 text-gray-900 border border-gray-200/50'
+                          }`}
+                      >
+                        {message.type === 'agent' ? (
+                          <div
+                            className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
+                            dangerouslySetInnerHTML={{ __html: message.content }}
+                          />
+                        ) : (
+                          <p className="text-sm leading-relaxed">{message.content}</p>
+                        )}
+                        <p className={`text-[10px] mt-1 ${message.type === 'user' ? 'text-blue-100' : 'text-gray-400'}`}>
+                          {formatDate(typeof message.timestamp === 'string' ? message.timestamp : message.timestamp?.toISOString())}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

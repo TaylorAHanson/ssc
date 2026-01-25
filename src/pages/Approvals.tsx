@@ -3,7 +3,7 @@ import { useRequestStore } from '../stores/requestStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { CheckCircle2, UserPlus, Clock, Check, X, Shield, Database, Badge, Calendar, Trash2, ArrowRight } from 'lucide-react';
+import { CheckCircle2, UserPlus, Clock, Check, X, Shield, Database, Badge, Calendar, Trash2, ArrowRight, MessageSquare } from 'lucide-react';
 import { format } from 'date-fns';
 import { api } from '../services/api';
 import type { Approval, ApprovalAction, Delegation } from '../types';
@@ -16,13 +16,14 @@ export function Approvals() {
   const addDelegation = useRequestStore((state) => state.addDelegation);
   const removeDelegation = useRequestStore((state) => state.removeDelegation);
   const processApproval = useRequestStore((state) => state.processApproval);
-  
+
   const [selectedApproval, setSelectedApproval] = useState<Approval | null>(null);
+  const [selectedConversationApproval, setSelectedConversationApproval] = useState<Approval | null>(null);
   const [actionType, setActionType] = useState<'approve' | 'reject' | 'delegate' | null>(null);
   const [note, setNote] = useState('');
   const [delegateEmail, setDelegateEmail] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  
+
   // New delegation state
   const [showDelegationForm, setShowDelegationForm] = useState(false);
   const [newDelegateEmail, setNewDelegateEmail] = useState('');
@@ -63,7 +64,7 @@ export function Approvals() {
     const hasRole = userRoles.includes(a.approvalType);
     return hasRole && a.status === 'pending';
   });
-  
+
   const completedApprovals = approvals.filter((a) => a.status !== 'pending');
 
   const handleAction = async (approval: Approval, action: 'approve' | 'reject' | 'delegate') => {
@@ -97,19 +98,19 @@ export function Approvals() {
   const submitAction = async () => {
     // ... same as before ...
     if (!selectedApproval || !actionType) return;
-    
+
     if (actionType === 'reject' && !note.trim()) {
       alert('Please provide a rejection note');
       return;
     }
-    
+
     if (actionType === 'delegate' && !delegateEmail.trim()) {
       alert('Please provide an email address to delegate to');
       return;
     }
 
     setIsProcessing(true);
-    
+
     const action: ApprovalAction = {
       approvalId: selectedApproval.id,
       action: actionType,
@@ -118,7 +119,7 @@ export function Approvals() {
     };
 
     await processApproval(action);
-    
+
     setIsProcessing(false);
     setSelectedApproval(null);
     setActionType(null);
@@ -152,7 +153,7 @@ export function Approvals() {
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Approvals & Delegations</h1>
           <p className="text-gray-600">Review requests or manage your Out-of-Office delegations</p>
         </div>
-        <Button 
+        <Button
           onClick={() => setShowDelegationForm(!showDelegationForm)}
           variant={showDelegationForm ? "outline" : "default"}
           className="flex items-center gap-2"
@@ -175,8 +176,8 @@ export function Approvals() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="space-y-2">
                 <label className="text-sm font-semibold text-gray-700">Delegate To</label>
-                <Input 
-                  placeholder="delegate@qualcomm.com" 
+                <Input
+                  placeholder="delegate@qualcomm.com"
                   value={newDelegateEmail}
                   onChange={(e) => setNewDelegateEmail(e.target.value)}
                 />
@@ -184,22 +185,22 @@ export function Approvals() {
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-semibold text-gray-700">Start Date</label>
-                <Input 
-                  type="date" 
+                <Input
+                  type="date"
                   value={startDate}
                   onChange={(e) => setStartDate(e.target.value)}
                 />
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-semibold text-gray-700">End Date</label>
-                <Input 
-                  type="date" 
+                <Input
+                  type="date"
                   value={endDate}
                   onChange={(e) => setEndDate(e.target.value)}
                 />
               </div>
             </div>
-            
+
             <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
               <Button variant="outline" onClick={() => setShowDelegationForm(false)}>Cancel</Button>
               <Button onClick={handleAddDelegation} className="bg-primary text-white">
@@ -242,9 +243,9 @@ export function Approvals() {
                       </p>
                     </div>
                   </div>
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     className="text-red-600 hover:text-red-700 hover:bg-red-50"
                     onClick={() => removeDelegation(del.id)}
                   >
@@ -364,13 +365,12 @@ export function Approvals() {
                       </p>
                       <p>
                         <span className="font-medium">Approval Type:</span>{' '}
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          approval.approvalType === 'platform_admin' 
-                            ? 'bg-blue-100 text-blue-800' 
-                            : approval.approvalType === 'data_owner'
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${approval.approvalType === 'platform_admin'
+                          ? 'bg-blue-100 text-blue-800'
+                          : approval.approvalType === 'data_owner'
                             ? 'bg-purple-100 text-purple-800'
                             : 'bg-gray-100 text-gray-800'
-                        }`}>
+                          }`}>
                           {roleLabels[approval.approvalType] || approval.approvalType.replace(/_/g, ' ')}
                         </span>
                       </p>
@@ -407,10 +407,67 @@ export function Approvals() {
                     <UserPlus className="w-4 h-4 mr-2" />
                     Delegate
                   </Button>
+                  {approval.requestConversation && approval.requestConversation.length > 0 && (
+                    <Button
+                      onClick={() => setSelectedConversationApproval(approval)}
+                      variant="outline"
+                      className="border-gray-300 text-gray-700 hover:bg-gray-50"
+                    >
+                      <MessageSquare className="w-4 h-4 mr-2" />
+                      View Chat
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>
           ))}
+        </div>
+      )}
+
+      {/* Conversation Modal */}
+      {selectedConversationApproval && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-4xl max-h-[80vh] overflow-hidden flex flex-col bg-white">
+            <CardHeader className="flex-shrink-0 border-b border-gray-200">
+              <div className="flex items-start justify-between">
+                <CardTitle>Request Conversation: {selectedConversationApproval.requestTitle}</CardTitle>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectedConversationApproval(null)}
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-y-auto space-y-4 p-6 bg-gray-50/50">
+              {selectedConversationApproval.requestConversation?.map((message: any, idx: number) => (
+                <div
+                  key={idx}
+                  className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${message.type === 'user'
+                      ? 'bg-gradient-to-br from-primary to-primary/90 text-white'
+                      : 'bg-white text-gray-900 border border-gray-200'
+                      }`}
+                  >
+                    {message.type === 'agent' ? (
+                      <div
+                        className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
+                        dangerouslySetInnerHTML={{ __html: message.content }}
+                      />
+                    ) : (
+                      <p className="text-sm leading-relaxed">{message.content}</p>
+                    )}
+                    <p className={`text-[10px] mt-1 ${message.type === 'user' ? 'text-blue-100' : 'text-gray-400'}`}>
+                      {format(new Date(message.timestamp), 'PPp')}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
         </div>
       )}
 
@@ -428,14 +485,13 @@ export function Approvals() {
                         <span className="font-medium">Requested by:</span> {approval.requestedBy}
                       </p>
                       <p className="flex items-center gap-2">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          approval.status === 'approved' ? 'bg-green-100 text-green-800' :
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${approval.status === 'approved' ? 'bg-green-100 text-green-800' :
                           approval.status === 'rejected' ? 'bg-red-100 text-red-800' :
-                          'bg-blue-100 text-blue-800'
-                        }`}>
+                            'bg-blue-100 text-blue-800'
+                          }`}>
                           {approval.status === 'approved' ? 'Approved' :
-                           approval.status === 'rejected' ? 'Rejected' :
-                           'Delegated'}
+                            approval.status === 'rejected' ? 'Rejected' :
+                              'Delegated'}
                         </span>
                         {approval.delegatedTo && (
                           <span className="text-gray-500">→ {approval.delegatedTo}</span>
@@ -473,7 +529,7 @@ export function Approvals() {
               <p className="text-sm text-gray-600">
                 <span className="font-medium">Request:</span> {selectedApproval.requestTitle}
               </p>
-              
+
               {actionType === 'reject' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -511,14 +567,14 @@ export function Approvals() {
                 <Button
                   onClick={submitAction}
                   disabled={isProcessing || (actionType === 'reject' && !note.trim()) || (actionType === 'delegate' && !delegateEmail.trim())}
-                  className={actionType === 'approve' ? 'bg-green-600 hover:bg-green-700' : 
-                              actionType === 'reject' ? 'bg-red-600 hover:bg-red-700' :
-                              'bg-blue-600 hover:bg-blue-700'}
+                  className={actionType === 'approve' ? 'bg-green-600 hover:bg-green-700' :
+                    actionType === 'reject' ? 'bg-red-600 hover:bg-red-700' :
+                      'bg-blue-600 hover:bg-blue-700'}
                 >
-                  {isProcessing ? 'Processing...' : 
-                   actionType === 'approve' ? 'Confirm Approval' :
-                   actionType === 'reject' ? 'Confirm Rejection' :
-                   'Confirm Delegation'}
+                  {isProcessing ? 'Processing...' :
+                    actionType === 'approve' ? 'Confirm Approval' :
+                      actionType === 'reject' ? 'Confirm Rejection' :
+                        'Confirm Delegation'}
                 </Button>
                 <Button
                   variant="outline"

@@ -4,7 +4,7 @@ Agent API endpoints for conversation handling.
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-from app.agents.prompts import get_agent_prompt, AGENT_TOOLS, SYSTEM_CONTEXT
+from app.agents.prompts import get_agent_prompt, AGENT_TOOLS
 from app.model_serving.agent_llm import AgentLLMClient
 from app.core.config import settings
 import logging
@@ -201,7 +201,7 @@ async def get_agent_prompt_endpoint():
     """Get the agent system prompt and instructions."""
     return {
         "prompt": get_agent_prompt(),
-        "context": SYSTEM_CONTEXT
+        "context": {}
     }
 
 
@@ -382,6 +382,13 @@ async def handle_conversation(request: ConversationRequest):
                 if matching_tool:
                     try:
                         logger.info(f"Executing generic tool: {function_name}")
+                        
+                        # Inject conversation history/context for execute_workflow
+                        if function_name == "execute_workflow" and request.conversation_history:
+                            function_args["conversation_history"] = [
+                                m.dict() for m in request.conversation_history
+                            ]
+                        
                         # Validate arguments against schema (basic check)
                         # TODO: stricter validation
                         

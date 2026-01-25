@@ -111,7 +111,9 @@ Instead of hardcoding a form for every new workflow, we define the workflow requ
     -   Agent: "Sure, what is the project name?" (following instructions).
     -   ... Conversation continues until all params gathered ...
     -   Agent: Calls `execute_workflow("project_onboarding", { "name": "...", ... })`.
-    -   Backend: Triggers `ProjectOnboardingStateMachine`.
+    - Backend: Triggers `ProjectOnboardingStateMachine`.
+
+**Important**: Each unique workflow type (e.g., "create_catalog", "onboard_project") MUST have its own dedicated State Machine class. Do not reuse generic state machines for distinct business processes. This ensures that the logic for each workflow is isolated, testable, and independently evolvable.
 
 This allows "Business Users" to essentially have a concierge experience without needing to navigate complex UI forms. 
 

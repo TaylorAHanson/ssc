@@ -12,6 +12,7 @@ from app.state_machines.workspace_access import WorkspaceAccessStateMachine
 from app.state_machines.simple_platform_admin import SimplePlatformAdminStateMachine
 from app.state_machines.github_repo_creation import GithubRepoCreationStateMachine
 from app.state_machines.project_onboarding import ProjectOnboardingStateMachine
+from app.state_machines.create_catalog_schema import CreateCatalogSchemaStateMachine
 import logging
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,10 @@ def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMac
     elif r_type == RequestType.GITHUB_REPO_CREATION:
         return GithubRepoCreationStateMachine(request, db)
 
-    elif r_type in [RequestType.CATALOG_SCHEMA_TABLE, RequestType.MARKETPLACE_CERTIFICATION, RequestType.REST_API_ACCESS]:
+    elif r_type == RequestType.CATALOG_SCHEMA_TABLE:
+        return CreateCatalogSchemaStateMachine(request, db)
+
+    elif r_type in [RequestType.MARKETPLACE_CERTIFICATION, RequestType.REST_API_ACCESS]:
         # Use SimplePlatformAdminStateMachine for these for now
         return SimplePlatformAdminStateMachine(request, db)
     

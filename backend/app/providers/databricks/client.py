@@ -138,9 +138,27 @@ class DatabricksProvider(BaseProvider):
     async def create_catalog(self, name: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """Create Unity Catalog catalog."""
         try:
-            # TODO: Implement catalog creation via Unity Catalog API
-            raise NotImplementedError("Catalog creation not yet implemented")
+            # Use Databricks SDK to create catalog
+            # config should contain: comment, properties, etc.
+            catalog_name = name
+            comment = config.get("comment")
+            properties = config.get("properties")
+            
+            logger.info(f"Creating catalog '{catalog_name}' via Databricks SDK")
+            
+            # Create the catalog
+            result = self.client.catalogs.create(
+                name=catalog_name,
+                comment=comment,
+                properties=properties
+            )
+            
+            # Return result as dict
+            return result.as_dict()
+            
         except Exception as e:
+            if "already exists" in str(e):
+                raise PermanentError(f"Catalog '{name}' already exists")
             raise RetryableError(f"Catalog creation failed: {str(e)}")
     
     @retry_on_retryable(max_attempts=3)

@@ -64,7 +64,8 @@ async def get_requests(
             trainingCompleted=req.training_completed,
             environment=req.environment,
             lastError=req.last_error,
-            metadata=req.state_context or {}
+            metadata=req.state_context or {},
+            conversation=req.conversation
         ))
     return response_list
 
@@ -110,7 +111,8 @@ async def get_request(
             trainingCompleted=request_model.training_completed,
             environment=request_model.environment,
             lastError=request_model.last_error,
-            metadata=request_model.state_context or {}
+            metadata=request_model.state_context or {},
+            conversation=request_model.conversation
         )
 
 

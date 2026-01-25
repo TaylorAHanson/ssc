@@ -89,6 +89,7 @@ class Approval(BaseModel):
     rejectionNote: Optional[str] = None
     delegatedTo: Optional[str] = None
     delegatedToEmail: Optional[str] = None
+    requestConversation: Optional[List[Dict[str, Any]]] = None
 
 
 class Request(BaseModel):
@@ -105,6 +106,7 @@ class Request(BaseModel):
     environment: Optional[Environment] = None
     lastError: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    conversation: Optional[List[Dict[str, Any]]] = None  # Chat history
 
 
 class RequestCreate(BaseModel):
@@ -113,6 +115,7 @@ class RequestCreate(BaseModel):
     title: str
     environment: Optional[Environment] = None
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    conversation: Optional[List[Dict[str, Any]]] = None  # Chat history
 
 
 class RequestUpdate(BaseModel):

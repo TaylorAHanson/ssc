@@ -26,6 +26,12 @@ if "root_id" not in cols:
     cursor.execute("ALTER TABLE requests ADD COLUMN root_id TEXT")
 else:
     print("root_id already exists.")
+
+if "conversation" not in cols:
+    print("Adding conversation column...")
+    cursor.execute("ALTER TABLE requests ADD COLUMN conversation JSON")
+else:
+    print("conversation already exists.")
     
 conn.commit()
 conn.close()

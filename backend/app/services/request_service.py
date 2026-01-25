@@ -31,6 +31,7 @@ class RequestService:
             state_context=request_data.metadata or {},
             requires_training=request_data.type == RequestType.WORKSPACE_PROVISION,
             environment=request_data.environment.value if request_data.environment else None,
+            conversation=request_data.conversation,
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow()
         )

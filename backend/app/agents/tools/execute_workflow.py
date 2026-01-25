@@ -17,7 +17,7 @@ class ExecuteWorkflowTool(BaseTool):
     description: str = "Executes a specified workflow with the given parameters and initiates the corresponding state machine."
     input_schema: Type[BaseModel] = ExecuteWorkflowInput
 
-    async def execute(self, workflow_type: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, workflow_type: str, parameters: Dict[str, Any], conversation_history: list = None) -> Dict[str, Any]:
         """
         Create a request and trigger the workflow state machine.
         """
@@ -37,6 +37,7 @@ class ExecuteWorkflowTool(BaseTool):
                 status="pending",
                 current_state="pending",
                 state_context=parameters,
+                conversation=conversation_history,  # Save chat history
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
             )

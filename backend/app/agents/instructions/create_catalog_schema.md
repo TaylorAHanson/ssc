@@ -17,7 +17,7 @@
 Call `execute_workflow` with:
 ```json
 {
-  "workflow_type": "create_catalog_schema",
+  "workflow_type": "catalog_schema_table",
   "parameters": {
     "type": "...",
     "parent": "...",

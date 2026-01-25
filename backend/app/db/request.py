@@ -38,6 +38,9 @@ class RequestModel(Base):
     retry_count = Column(Integer, default=0)  # Current retry attempt
     max_retries = Column(Integer, default=3)  # Maximum retries allowed
     
+    # User-Agent Conversation
+    conversation = Column(JSON, nullable=True)  # Full chat history
+    
     # Training flags
     requires_training = Column(Boolean, default=False)
     training_completed = Column(Boolean, default=False)
