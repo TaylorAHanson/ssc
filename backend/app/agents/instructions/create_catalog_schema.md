@@ -11,7 +11,8 @@
     *   *Validation*: Alphanumeric and underscores only.
 4.  **Owner**: Who or what team should own this asset?
     *   *Default*: Suggest the current user's team if known.
-5.  **Comment**: A brief description of the asset's purpose.
+5.  **Discovery**: If a user mentions a parent catalog that does not exist, use the `get_catalog_list` tool to find similar or existing catalogs and suggest them to the user. Do not proceed with schema creation if the parent catalog is invalid.
+6.  **Comment**: A brief description of the asset's purpose.
 
 ## Execution
 Call `execute_workflow` with:

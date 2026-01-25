@@ -9,7 +9,9 @@
 ## Tools Usage
 Use the available tools to help the user:
 *   `DoesCatalogExist`: Check if a specific catalog exists.
-*   *Future tools*: `SearchMetadata`, `ListTables`, etc. (Use whatever is available in your toolbox).
+*   `get_catalog_list`: Lists all catalogs and their descriptions. Use this if a user is looking for a catalog but isn't sure of the exact name, or to browse available data.
+*   `get_schema_list`: Lists all schemas within a catalog and their descriptions. Use this to help users explore a specific catalog.
+*   `get_table_list`: Lists all tables within a schema and their descriptions. Use this to help users find specific datasets for analysis or access requests.
 
 ## Execution
 **DO NOT** call `execute_workflow`.

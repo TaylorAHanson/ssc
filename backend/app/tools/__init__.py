@@ -1,9 +1,15 @@
 from app.tools.catalog_existence import DoesCatalogExistTool
+from app.tools.get_catalog_list import GetCatalogListTool
+from app.tools.get_schema_list import GetSchemaListTool
+from app.tools.get_table_list import GetTableListTool
 from app.agents.tools.execute_workflow import ExecuteWorkflowTool
 
 # Registry of available tools
 AVAILABLE_TOOLS = [
     DoesCatalogExistTool(),
+    GetCatalogListTool(),
+    GetSchemaListTool(),
+    GetTableListTool(),
     ExecuteWorkflowTool()
 ]
 
