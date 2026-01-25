@@ -62,7 +62,7 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
     }
   },
 
-  updateRequest: async (id, updates) => {
+  updateRequest: async (_id, _updates) => {
     // This is currently client-side only optimistic update support if needed, 
     // but better to just re-fetch or use specific update endpoints if available.
     // Since we don't have a generic PATCH endpoint exposed in the store yet beyond API,
@@ -127,16 +127,16 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
       if (action.action === 'approve') {
         const approval = get().approvals.find(a => a.id === action.approvalId);
         if (!approval) throw new Error('Approval not found');
-        
+
         await api.approveRequest(approval.requestId);
-        
+
       } else if (action.action === 'reject') {
         const approval = get().approvals.find(a => a.id === action.approvalId);
         if (!approval) throw new Error('Approval not found');
-        
+
         await api.rejectRequest(approval.requestId, action.note);
       }
-      
+
       // Refresh state
       await Promise.all([
         get().fetchRequests(),
@@ -156,7 +156,7 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
     try {
       const bannerData = await getContent('system-banner') as BannerData;
       if (bannerData && bannerData.active && bannerData.message) {
-        set({ 
+        set({
           bannerMessage: bannerData.message,
           bannerData: bannerData
         });

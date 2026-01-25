@@ -9,9 +9,10 @@ export const mockApi = {
     environment?: Environment
   ): Promise<Request> {
     await delay(1500);
-    
+
     const initialState: StateMachineState = {
       currentState: 'pending',
+      states: [],
       parallelPaths: [],
       completedStates: [],
       activeStates: ['pending'],
@@ -62,16 +63,17 @@ export const mockApi = {
     stateUpdates?: Partial<StateMachineState>
   ): Promise<Request> {
     await delay(1500);
-    
+
     // This would normally fetch from backend
     // For now, we'll return a mock update
     const defaultState: StateMachineState = {
       currentState: newStatus,
+      states: [],
       parallelPaths: [],
       completedStates: [],
       activeStates: [newStatus],
     };
-    
+
     return {
       id: requestId,
       type: 'workspace_provision',
@@ -100,6 +102,7 @@ export const mockApi = {
       updatedAt: new Date().toISOString(),
       stateMachine: {
         currentState: 'training_pending',
+        states: [],
         parallelPaths: [],
         completedStates: ['training_pending'],
         activeStates: [],

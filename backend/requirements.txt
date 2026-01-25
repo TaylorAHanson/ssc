@@ -11,3 +11,5 @@ httpx
 psycopg2-binary
 databricks-sdk
 tenacity
+PyYAML
+GitPython

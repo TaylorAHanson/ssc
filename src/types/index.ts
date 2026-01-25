@@ -46,6 +46,9 @@ export interface StateMachineState {
   currentState: string;
   states: State[];
   currentProgress?: ProgressInfo;
+  parallelPaths?: ParallelPath[];
+  completedStates?: string[];
+  activeStates?: string[];
 }
 
 export interface State {

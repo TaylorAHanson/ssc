@@ -3,16 +3,15 @@ import { useAssetStore } from '../stores/assetStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { 
-  Search, 
-  Plus, 
-  X, 
-  Github, 
-  ExternalLink, 
-  Tag, 
-  User, 
-  Users, 
-  MessageSquare,
+import {
+  Search,
+  Plus,
+  X,
+  Github,
+  ExternalLink,
+  Tag,
+  User,
+  Users,
   Eye,
   FileText,
   Video,
@@ -21,7 +20,7 @@ import {
   Send
 } from 'lucide-react';
 import { format } from 'date-fns';
-import type { DesignPattern, AssetLink, DesignPatternComment } from '../types';
+import type { DesignPattern, AssetLink } from '../types';
 
 const ASSET_LINK_ICONS = {
   github: Github,
@@ -76,7 +75,7 @@ export function ReusableAssets() {
         pattern.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         pattern.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
         pattern.team.toLowerCase().includes(searchQuery.toLowerCase());
-      
+
       const matchesTags =
         selectedTags.length === 0 ||
         selectedTags.every((tag) => pattern.tags.includes(tag));
@@ -232,11 +231,10 @@ export function ReusableAssets() {
                 <button
                   key={tag}
                   onClick={() => handleTagToggle(tag)}
-                  className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                    selectedTags.includes(tag)
-                      ? 'bg-primary text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
+                  className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${selectedTags.includes(tag)
+                    ? 'bg-primary text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
                 >
                   <Tag className="w-3 h-3 inline mr-1" />
                   {tag}
@@ -439,11 +437,10 @@ export function ReusableAssets() {
                         key={tag}
                         onClick={() => handleAddTag(tag)}
                         disabled={submissionForm.tags.includes(tag)}
-                        className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
-                          submissionForm.tags.includes(tag)
-                            ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                        }`}
+                        className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${submissionForm.tags.includes(tag)
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
                       >
                         <Tag className="w-3 h-3 inline mr-1" />
                         {tag}
@@ -488,7 +485,6 @@ export function ReusableAssets() {
                 </div>
                 <div className="space-y-2">
                   {submissionForm.assetLinks.map((link, index) => {
-                    const LinkIcon = ASSET_LINK_ICONS[link.type] || LinkIcon;
                     return (
                       <div key={index} className="flex gap-2 items-start">
                         <select

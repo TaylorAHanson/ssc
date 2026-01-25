@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, ArrowRight, Send, ExternalLink, ChevronDown, Shield, BarChart3, Activity } from 'lucide-react';
+import {
+  Sparkles, ArrowRight, Send, ExternalLink, ChevronDown, Shield, BarChart3, Activity,
+  Database, Box, Server, CheckCircle, TrendingUp, AlertTriangle, FileText, Lock, Search, Info
+} from 'lucide-react';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 import { Button } from '../components/ui/button';
@@ -40,6 +43,168 @@ const AGENT_SUGGESTIONS: Record<AgentMode, { label: string; query: string }[]> =
   ]
 };
 
+interface DiscoveryItem {
+  title: string;
+  description: string;
+  query: string;
+}
+
+interface DiscoveryColumn {
+  title: string;
+  icon: React.ReactNode;
+  colorClass: string;
+  hoverBorderClass: string;
+  hoverTextClass: string;
+  items: DiscoveryItem[];
+}
+
+const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
+  'Self Service Agent': [
+    {
+      title: 'Enterprise Data',
+      icon: <Database className="w-5 h-5" />,
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
+      items: [
+        { title: 'Discover Enterprise Data', description: 'Search and explore data assets', query: "I want to discover enterprise data" },
+        { title: 'Request Data Access', description: 'Access via Catalog, Schema, or Table', query: "I need to request access to a dataset" },
+        { title: 'Marketplace Certification', description: 'Certify assets for broader consumption', query: "I need to certify a dataset for the marketplace" },
+      ]
+    },
+    {
+      title: 'Platform Services',
+      icon: <Box className="w-5 h-5" />,
+      colorClass: 'text-purple-600',
+      hoverBorderClass: 'hover:border-purple-300',
+      hoverTextClass: 'group-hover:text-purple-600',
+      items: [
+        { title: 'Workspace Access', description: 'Join an existing workspace', query: "I need access to a Databricks workspace" },
+        { title: 'Provision Workspace', description: 'Create a new Databricks environment', query: "I need to provision a new Databricks workspace" },
+        { title: 'Create Catalog or Schema', description: 'Create new data containers', query: "I need to create a new catalog or schema" },
+        { title: 'Service Principal', description: 'For external apps, automation, and CI/CD pipelines', query: "I need a service principal for CI/CD" },
+        { title: 'GitHub Repository', description: 'Create a new code repository', query: "I need to create a new GitHub repository" }
+      ]
+    },
+    {
+      title: 'Data Services',
+      icon: <Server className="w-5 h-5" />,
+      colorClass: 'text-emerald-600',
+      hoverBorderClass: 'hover:border-emerald-300',
+      hoverTextClass: 'group-hover:text-emerald-600',
+      items: [
+        { title: 'REST API Access', description: 'Programmatic data access', query: "I need REST API access to data" },
+        { title: 'Batch Data Access', description: 'High-volume data transfer', query: "I need batch data access via Delta Sharing" }
+      ]
+    }
+  ],
+  'Governance': [
+    {
+      title: 'Compliance & Security',
+      icon: <Lock className="w-5 h-5" />,
+      colorClass: 'text-blue-600',
+      hoverBorderClass: 'hover:border-blue-300',
+      hoverTextClass: 'group-hover:text-blue-600',
+      items: [
+        { title: 'Policy Review', description: 'Request a formal policy review', query: "I need to request a policy review for my project" },
+        { title: 'Security Baseline', description: 'Check workspace security standards', query: "Check if my workspace meets security baselines" }
+      ]
+    },
+    {
+      title: 'Data Stewardship',
+      icon: <Shield className="w-5 h-5" />,
+      colorClass: 'text-indigo-600',
+      hoverBorderClass: 'hover:border-indigo-300',
+      hoverTextClass: 'group-hover:text-indigo-600',
+      items: [
+        { title: 'Assign Owner', description: 'Update data asset ownership', query: "I need to assign a new owner to a catalog" },
+        { title: 'Data Classification', description: 'Apply PII or sensitivity tags', query: "I need to classify sensitive data in my schema" }
+      ]
+    },
+    {
+      title: 'Audit & Tracking',
+      icon: <FileText className="w-5 h-5" />,
+      colorClass: 'text-slate-600',
+      hoverBorderClass: 'hover:border-slate-300',
+      hoverTextClass: 'group-hover:text-slate-600',
+      items: [
+        { title: 'Access Report', description: 'See who can access your data', query: "Show me an access report for my production data" },
+        { title: 'Usage Audit', description: 'Review recent administrative actions', query: "Audit administrative actions in my workspace" }
+      ]
+    }
+  ],
+  'FinOps': [
+    {
+      title: 'Cost Analysis',
+      icon: <BarChart3 className="w-5 h-5" />,
+      colorClass: 'text-amber-600',
+      hoverBorderClass: 'hover:border-amber-300',
+      hoverTextClass: 'group-hover:text-amber-600',
+      items: [
+        { title: 'Usage Forecast', description: 'Predict future spending', query: "What is my predicted spend for next month?" },
+        { title: 'Department Billing', description: 'Breakdown by cost center', query: "Show me the cost breakdown by department" }
+      ]
+    },
+    {
+      title: 'Budgeting',
+      icon: <TrendingUp className="w-5 h-5" />,
+      colorClass: 'text-orange-600',
+      hoverBorderClass: 'hover:border-orange-300',
+      hoverTextClass: 'group-hover:text-orange-600',
+      items: [
+        { title: 'Set Budget Alert', description: 'Get notified of overages', query: "I want to set a cost alert for my workspace" },
+        { title: 'Budget Review', description: 'Compare actual vs. planned', query: "Review my team's budget performance" }
+      ]
+    },
+    {
+      title: 'Optimization',
+      icon: <CheckCircle className="w-5 h-5" />,
+      colorClass: 'text-green-600',
+      hoverBorderClass: 'hover:border-green-300',
+      hoverTextClass: 'group-hover:text-green-600',
+      items: [
+        { title: 'Idle Clusters', description: 'Terminate unused compute', query: "Identify idle clusters I can safely terminate" },
+        { title: 'Spot Instances', description: 'Analyze spot adoption', query: "Show me my spot instance savings report" }
+      ]
+    }
+  ],
+  'Data Quality': [
+    {
+      title: 'Health Checks',
+      icon: <Activity className="w-5 h-5" />,
+      colorClass: 'text-rose-600',
+      hoverBorderClass: 'hover:border-rose-300',
+      hoverTextClass: 'group-hover:text-rose-600',
+      items: [
+        { title: 'Schema Validation', description: 'Detect structural drift', query: "Check for schema drift in my bronze tables" },
+        { title: 'Null Check Report', description: 'Monitor field completeness', query: "Show me the null-value report for my core tables" }
+      ]
+    },
+    {
+      title: 'Monitoring',
+      icon: <Search className="w-5 h-5" />,
+      colorClass: 'text-cyan-600',
+      hoverBorderClass: 'hover:border-cyan-300',
+      hoverTextClass: 'group-hover:text-cyan-600',
+      items: [
+        { title: 'Pipeline SLA', description: 'Track data arrival times', query: "Are my production pipelines meeting SLAs?" },
+        { title: 'Data Freshness', description: 'Verify update frequency', query: "Check freshness of my dashboard source tables" }
+      ]
+    },
+    {
+      title: 'Validation',
+      icon: <AlertTriangle className="w-5 h-5" />,
+      colorClass: 'text-red-600',
+      hoverBorderClass: 'hover:border-red-300',
+      hoverTextClass: 'group-hover:text-red-600',
+      items: [
+        { title: 'Range Checks', description: 'Verify value constraints', query: "Run value range validation on my transaction data" },
+        { title: 'Cross-Source Sync', description: 'Compare with source systems', query: "Validate my lakehouse data against the source DB" }
+      ]
+    }
+  ]
+};
+
 const MODE_ICONS: Record<AgentMode, React.ReactNode> = {
   'Self Service Agent': <Sparkles className="w-3.5 h-3.5" />,
   'Governance': <Shield className="w-3.5 h-3.5" />,
@@ -50,7 +215,7 @@ const MODE_ICONS: Record<AgentMode, React.ReactNode> = {
 // Determine which form route to use based on conversation (fallback only for error cases)
 const determineFormRoute = (query: string, _answers: Record<string, string | string[]>, context?: { type: 'paas' | 'daas'; title: string }): { path: string; title: string } => {
   const lowerQuery = query.toLowerCase();
-  
+
   if (lowerQuery.includes('workspace access') || (lowerQuery.includes('workspace') && lowerQuery.includes('access'))) {
     return { path: '/paas/workspace-access', title: 'Get Workspace Access' };
   } else if (lowerQuery.includes('catalog') || lowerQuery.includes('schema') || lowerQuery.includes('table')) {
@@ -97,7 +262,7 @@ const determineFormRoute = (query: string, _answers: Record<string, string | str
       return { path: '/daas/batch-data', title: 'Request Batch Data Access' };
     }
   }
-  
+
   // Default fallback
   return { path: '/paas/request-access', title: 'Request Data Access' };
 };
@@ -192,7 +357,7 @@ export function Home() {
 
     const initialQuery = query.trim();
     setIsProcessing(true);
-    
+
     // Create initial user message
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
@@ -219,14 +384,14 @@ export function Home() {
 
       // Use only agent-provided questions (no fallback)
       const followUpQuestions = agentResponse.follow_up_questions || [];
-      
+
       // Create agent message from response - show actual message or indicate waiting
       let agentMessageContent = agentResponse.message;
       if (!agentMessageContent || !agentMessageContent.trim()) {
         // If no message, the agent might be processing - show a helpful message
         agentMessageContent = "I'm processing your request. Please wait...";
       }
-      
+
       const agentMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         type: 'agent',
@@ -236,7 +401,7 @@ export function Home() {
 
       // Create messages array
       const messages: ChatMessage[] = [userMessage, agentMessage];
-      
+
       // Add first question if agent provided one
       if (followUpQuestions.length > 0) {
         messages.push({
@@ -270,7 +435,7 @@ export function Home() {
         {
           id: (Date.now() + 1).toString(),
           type: 'agent',
-          content: error instanceof Error 
+          content: error instanceof Error
             ? `I'm having trouble connecting to the agent service. ${error.message}. Please try again.`
             : "I'm having trouble connecting to the agent service. Please try again.",
           timestamp: new Date(),
@@ -288,7 +453,7 @@ export function Home() {
         context: conversationState?.context,
       });
     }
-    
+
     setQuery('');
     setIsProcessing(false);
   };
@@ -373,7 +538,7 @@ export function Home() {
       const agentMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         type: 'agent',
-        content: error instanceof Error 
+        content: error instanceof Error
           ? `I'm having trouble processing your answer. ${error.message}. Please try again.`
           : "I'm having trouble processing your answer. Please try again.",
         timestamp: new Date(),
@@ -385,13 +550,13 @@ export function Home() {
         answers: updatedAnswers,
       });
     }
-    
+
     setIsProcessing(false);
   };
 
   const getButtonLabel = (path: string | undefined): string => {
     if (!path) return 'Continue to form';
-    
+
     // Determine button label based on route
     if (path.startsWith('/paas/') || path.startsWith('/daas/')) {
       return 'Go to pre-filled form';
@@ -419,16 +584,16 @@ export function Home() {
       console.error('No form route path available');
       return;
     }
-    
+
     const routePath = conversationState.formRoute.path;
-    
+
     // Store prefilled data in localStorage before navigating
     // Use form_prefill_data from agent if available, otherwise use answers
     const prefillData = conversationState.formPrefillData || conversationState.answers;
     if (prefillData && Object.keys(prefillData).length > 0) {
       localStorage.setItem(`form_prefill_${routePath}`, JSON.stringify(prefillData));
     }
-    
+
     // Navigate in the same window
     navigate(routePath);
   };
@@ -443,22 +608,22 @@ export function Home() {
       <div className="flex flex-col h-[calc(100vh-200px)] relative">
         {/* Background gradient */}
         <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-primary/10 pointer-events-none" />
-        
+
         <div className="text-center mb-6 relative z-10">
           <div className="flex items-center justify-center gap-3 mb-3">
             <div className="p-2 bg-gradient-to-br from-primary to-primary/80 rounded-xl shadow-md">
               <Sparkles className="w-5 h-5 text-white" />
             </div>
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
-            {conversationState.context?.title || 'EDAS Hub'}
-          </h1>
-        </div>
+            <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
+              {conversationState.context?.title || 'EDAS Hub'}
+            </h1>
+          </div>
         </div>
 
         <div className="relative flex-1 flex flex-col">
           {/* Glow effect */}
           <div className="absolute -inset-1 bg-gradient-to-r from-primary/20 to-primary/10 rounded-3xl blur-xl opacity-30" />
-          
+
           <div className="relative flex-1 flex flex-col bg-white/80 backdrop-blur-sm rounded-3xl shadow-2xl border border-gray-200/50 overflow-hidden">
             <div className="flex-1 flex flex-col p-6 overflow-hidden">
               {/* Messages */}
@@ -469,14 +634,13 @@ export function Home() {
                     className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2 duration-300`}
                   >
                     <div
-                      className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${
-                        message.type === 'user'
-                          ? 'bg-gradient-to-br from-primary to-primary/90 text-white'
-                          : 'bg-gray-50 text-gray-900 border border-gray-200/50'
-                      }`}
+                      className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${message.type === 'user'
+                        ? 'bg-gradient-to-br from-primary to-primary/90 text-white'
+                        : 'bg-gray-50 text-gray-900 border border-gray-200/50'
+                        }`}
                     >
                       {message.type === 'agent' ? (
-                        <div 
+                        <div
                           className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
                           dangerouslySetInnerHTML={{ __html: message.content }}
                         />
@@ -486,387 +650,384 @@ export function Home() {
                     </div>
                   </div>
                 ))}
-              
-              {/* Form Link */}
-              {conversationState.showConfirmation && conversationState.formRoute && (
-                <div className="space-y-4 mt-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                  <div className="bg-gradient-to-br from-blue-50 to-primary/5 border border-blue-200/50 rounded-2xl p-5 shadow-sm">
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <Button
-                          onClick={handleGoToForm}
-                          className="flex items-center gap-2 rounded-xl shadow-md hover:shadow-lg transition-all duration-200"
-                        >
-                          <ExternalLink className="w-4 h-4" />
-                          {getButtonLabel(conversationState.formRoute?.path)}
-                        </Button>
+
+                {/* Form Link */}
+                {conversationState.showConfirmation && conversationState.formRoute && (
+                  <div className="space-y-4 mt-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                    <div className="bg-gradient-to-br from-blue-50 to-primary/5 border border-blue-200/50 rounded-2xl p-5 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <Button
+                            onClick={handleGoToForm}
+                            className="flex items-center gap-2 rounded-xl shadow-md hover:shadow-lg transition-all duration-200"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                            {getButtonLabel(conversationState.formRoute?.path)}
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              )}
-              
-              <div ref={messagesEndRef} />
-            </div>
+                )}
 
-            {/* Input Area */}
-            {/* Show input for specific question types */}
-            {!allQuestionsAnswered && currentQuestion && (
-              <div className="border-t border-gray-200/50 pt-5 mt-4">
-                <div className="space-y-3">
-                  {currentQuestion.type === 'text' && (
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const input = e.currentTarget.querySelector('input') as HTMLInputElement;
-                        if (input.value.trim()) {
-                          handleAnswerSubmit(currentQuestion.id, input.value.trim());
-                          input.value = '';
-                        }
-                      }}
-                    >
-                      <div className="flex gap-2 items-center">
-                        <Input
-                          type="text"
-                          placeholder="Type your answer..."
-                          required={currentQuestion.required}
-                          className="flex-1 rounded-xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200"
-                          disabled={isProcessing}
-                        />
-                        <Button 
-                          type="submit" 
-                          disabled={isProcessing}
-                          className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 h-10"
-                        >
-                          <Send className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={handleReset}
-                          className="rounded-xl border-emerald-200 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition-all duration-200 h-10 px-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
-                        >
-                          New Chat
-                        </Button>
-                      </div>
+                <div ref={messagesEndRef} />
+              </div>
 
-                      <div className="mt-2 flex items-center gap-2 px-1 relative" ref={dropdownRef}>
-                        <button
-                          type="button"
-                          onClick={() => setShowModeDropdown(!showModeDropdown)}
-                          className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors duration-200 py-1"
-                        >
-                          <span className="flex items-center gap-1.5">
-                            {MODE_ICONS[agentMode]}
-                            {agentMode}
-                          </span>
-                          <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showModeDropdown ? 'rotate-180' : ''}`} />
-                        </button>
+              {/* Input Area */}
+              {/* Show input for specific question types */}
+              {!allQuestionsAnswered && currentQuestion && (
+                <div className="border-t border-gray-200/50 pt-5 mt-4">
+                  <div className="space-y-3">
+                    {currentQuestion.type === 'text' && (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const input = e.currentTarget.querySelector('input') as HTMLInputElement;
+                          if (input.value.trim()) {
+                            handleAnswerSubmit(currentQuestion.id, input.value.trim());
+                            input.value = '';
+                          }
+                        }}
+                      >
+                        <div className="flex gap-2 items-center">
+                          <Input
+                            type="text"
+                            placeholder="Type your answer..."
+                            required={currentQuestion.required}
+                            className="flex-1 rounded-xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200"
+                            disabled={isProcessing}
+                          />
+                          <Button
+                            type="submit"
+                            disabled={isProcessing}
+                            className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 h-10"
+                          >
+                            <Send className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={handleReset}
+                            className="rounded-xl border-emerald-200 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition-all duration-200 h-10 px-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
+                          >
+                            New Chat
+                          </Button>
+                        </div>
 
-                        {showModeDropdown && (
-                          <div className="absolute bottom-full left-0 mb-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                            {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).map((mode) => (
-                              <button
-                                key={mode}
-                                type="button"
-                                onClick={() => {
-                                  setAgentMode(mode);
-                                  setShowModeDropdown(false);
-                                }}
-                                className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${
-                                  agentMode === mode 
-                                    ? 'bg-primary/5 text-primary font-semibold' 
+                        <div className="mt-2 flex items-center gap-2 px-1 relative" ref={dropdownRef}>
+                          <button
+                            type="button"
+                            onClick={() => setShowModeDropdown(!showModeDropdown)}
+                            className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors duration-200 py-1"
+                          >
+                            <span className="flex items-center gap-1.5">
+                              {MODE_ICONS[agentMode]}
+                              {agentMode}
+                            </span>
+                            <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showModeDropdown ? 'rotate-180' : ''}`} />
+                          </button>
+
+                          {showModeDropdown && (
+                            <div className="absolute bottom-full left-0 mb-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                              {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).map((mode) => (
+                                <button
+                                  key={mode}
+                                  type="button"
+                                  onClick={() => {
+                                    setAgentMode(mode);
+                                    setShowModeDropdown(false);
+                                  }}
+                                  className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${agentMode === mode
+                                    ? 'bg-primary/5 text-primary font-semibold'
                                     : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                                }`}
-                              >
-                                <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
-                                  {MODE_ICONS[mode]}
-                                </span>
-                                {mode}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </form>
-                  )}
-                  
-                  {currentQuestion.type === 'radio' && (
-                    <div className="space-y-2">
-                      {currentQuestion.options?.map((option) => (
-                        <button
-                          key={option}
-                          onClick={() => handleAnswerSubmit(currentQuestion.id, option)}
-                          className="w-full text-left px-4 py-3 bg-gray-50 hover:bg-gradient-to-r hover:from-primary/10 hover:to-primary/5 rounded-xl border border-gray-200/50 hover:border-primary/30 transition-all duration-200 hover:shadow-sm text-sm"
-                        >
-                          {option}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  
-                  {currentQuestion.type === 'multi-select' && (
-                    <div className="space-y-2">
-                      {currentQuestion.options?.map((option) => {
-                        const isSelected = Array.isArray(conversationState.answers[currentQuestion.id]) &&
-                          conversationState.answers[currentQuestion.id].includes(option);
-                        return (
+                                    }`}
+                                >
+                                  <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
+                                    {MODE_ICONS[mode]}
+                                  </span>
+                                  {mode}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </form>
+                    )}
+
+                    {currentQuestion.type === 'radio' && (
+                      <div className="space-y-2">
+                        {currentQuestion.options?.map((option) => (
                           <button
                             key={option}
-                            onClick={() => {
-                              const current = Array.isArray(conversationState.answers[currentQuestion.id])
-                                ? conversationState.answers[currentQuestion.id] as string[]
-                                : [];
-                              const updated = isSelected
-                                ? current.filter(o => o !== option)
-                                : [...current, option];
-                              handleAnswerSubmit(currentQuestion.id, updated);
-                            }}
-                            className={`w-full text-left px-4 py-3 rounded-xl border transition-all duration-200 text-sm ${
-                              isSelected
-                                ? 'bg-gradient-to-r from-primary to-primary/90 text-white border-primary shadow-md'
-                                : 'bg-gray-50 hover:bg-gradient-to-r hover:from-primary/10 hover:to-primary/5 border-gray-200/50 hover:border-primary/30 hover:shadow-sm'
-                            }`}
+                            onClick={() => handleAnswerSubmit(currentQuestion.id, option)}
+                            className="w-full text-left px-4 py-3 bg-gray-50 hover:bg-gradient-to-r hover:from-primary/10 hover:to-primary/5 rounded-xl border border-gray-200/50 hover:border-primary/30 transition-all duration-200 hover:shadow-sm text-sm"
                           >
                             {option}
-                          </button>
-                        );
-                      })}
-                      {Array.isArray(conversationState.answers[currentQuestion.id]) &&
-                        conversationState.answers[currentQuestion.id].length > 0 && (
-                        <Button
-                          onClick={() => {
-                            const answer = conversationState.answers[currentQuestion.id];
-                            if (Array.isArray(answer) && answer.length > 0) {
-                              // Move to next question
-                              const nextIndex = conversationState.currentQuestionIndex + 1;
-                              if (nextIndex < conversationState.followUpQuestions.length) {
-                                const nextQuestion = conversationState.followUpQuestions[nextIndex];
-                                const agentMessage: ChatMessage = {
-                                  id: Date.now().toString(),
-                                  type: 'agent',
-                                  content: nextQuestion.question,
-                                  timestamp: new Date(),
-                                };
-                                setConversationState({
-                                  ...conversationState,
-                                  messages: [...conversationState.messages, agentMessage],
-                                  currentQuestionIndex: nextIndex,
-                                });
-                              } else {
-                                // All questions answered, determine form route
-                                const formRoute = determineFormRoute(
-                                  conversationState.initialQuery,
-                                  conversationState.answers,
-                                  conversationState.context
-                                );
-                                
-                                // Store prefilled data in localStorage for the form page
-                                localStorage.setItem(`form_prefill_${formRoute.path}`, JSON.stringify(conversationState.answers));
-                                
-                                const agentMessage: ChatMessage = {
-                                  id: Date.now().toString(),
-                                  type: 'agent',
-                                  content: `I have prefilled the correct form based on your input. Click the link below to review and submit.`,
-                                  timestamp: new Date(),
-                                };
-                                setConversationState({
-                                  ...conversationState,
-                                  messages: [...conversationState.messages, agentMessage],
-                                  currentQuestionIndex: nextIndex,
-                                  agentActions: [],
-                                  showConfirmation: true,
-                                  formRoute,
-                                });
-                              }
-                            }
-                          }}
-                          className="w-full mt-3 rounded-xl shadow-md hover:shadow-lg transition-all duration-200"
-                        >
-                          Continue
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-            
-            {/* General text input - always available when conversation is active and no specific question */}
-            {(!currentQuestion || allQuestionsAnswered) && (
-              <div className="border-t border-gray-200/50 pt-5 mt-4">
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    const textarea = e.currentTarget.querySelector('textarea') as HTMLTextAreaElement;
-                    const userMessage = textarea.value.trim();
-                    if (userMessage && !isProcessing) {
-                      setIsProcessing(true);
-                      try {
-                        // Call agent with the free-form message
-                        const agentResponse = await callAgent({
-                          query: userMessage,
-                          conversation_history: conversationState.messages.map(m => ({
-                            id: m.id,
-                            type: m.type,
-                            content: m.content,
-                            timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : (typeof m.timestamp === 'string' ? m.timestamp : new Date().toISOString()),
-                          })),
-                          context: {
-                            ...conversationState.context,
-                            agent_mode: agentMode
-                          },
-                        });
-
-                        const userMsg: ChatMessage = {
-                          id: Date.now().toString(),
-                          type: 'user',
-                          content: userMessage,
-                          timestamp: new Date(),
-                        };
-
-                        const agentMsg: ChatMessage = {
-                          id: (Date.now() + 1).toString(),
-                          type: 'agent',
-                          content: agentResponse.message || "I understand. Let me help you with that.",
-                          timestamp: new Date(),
-                        };
-
-                        const followUpQuestions = agentResponse.follow_up_questions || [];
-                        const messages: ChatMessage[] = [...conversationState.messages, userMsg, agentMsg];
-
-                        // Add first question if agent provided one
-                        if (followUpQuestions.length > 0) {
-                          messages.push({
-                            id: (Date.now() + 2).toString(),
-                            type: 'agent',
-                            content: followUpQuestions[0].question,
-                            timestamp: new Date(),
-                          });
-                        }
-
-                        // Determine if we should show confirmation (form route ready)
-                        // Keep confirmation visible once it's been shown
-                        const showConfirmation = conversationState.showConfirmation || (!agentResponse.requires_more_info && (agentResponse.form_route !== null || agentResponse.form_prefill_data !== undefined));
-
-                        setConversationState({
-                          ...conversationState,
-                          messages,
-                          currentQuestionIndex: followUpQuestions.length > 0 ? 0 : conversationState.currentQuestionIndex,
-                          followUpQuestions,
-                          showConfirmation,
-                          formRoute: agentResponse.form_route || conversationState.formRoute,
-                          formPrefillData: agentResponse.form_prefill_data || conversationState.formPrefillData,
-                        });
-
-                        // Store prefilled data if available (prefer form_prefill_data from agent)
-                        if (agentResponse.form_route) {
-                          const prefillData = agentResponse.form_prefill_data || conversationState.answers;
-                          if (prefillData && Object.keys(prefillData).length > 0) {
-                            localStorage.setItem(`form_prefill_${agentResponse.form_route.path}`, JSON.stringify(prefillData));
-                          }
-                        }
-
-                        textarea.value = '';
-                      } catch (error) {
-                        console.error('Error calling agent:', error);
-                        const errorMsg: ChatMessage = {
-                          id: (Date.now() + 1).toString(),
-                          type: 'agent',
-                          content: error instanceof Error 
-                            ? `I'm having trouble processing your message. ${error.message}. Please try again.`
-                            : "I'm having trouble processing your message. Please try again.",
-                          timestamp: new Date(),
-                        };
-                        setConversationState({
-                          ...conversationState,
-                          messages: [...conversationState.messages, {
-                            id: Date.now().toString(),
-                            type: 'user',
-                            content: userMessage,
-                            timestamp: new Date(),
-                          }, errorMsg],
-                        });
-                      } finally {
-                        setIsProcessing(false);
-                      }
-                    }
-                  }}
-                >
-                  <div className="flex gap-2 items-center">
-                    <Textarea
-                      ref={inputRef}
-                      placeholder="Type your message..."
-                      className="flex-1 rounded-xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 min-h-[40px] max-h-[100px]"
-                      disabled={isProcessing}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault();
-                          const form = e.currentTarget.closest('form');
-                          if (form && !isProcessing) {
-                            form.requestSubmit();
-                          }
-                        }
-                      }}
-                    />
-                    <Button 
-                      type="submit" 
-                      disabled={isProcessing}
-                      className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 self-end h-10"
-                    >
-                      <Send className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={handleReset}
-                      className="rounded-xl border-emerald-200 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition-all duration-200 self-end h-10 px-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
-                    >
-                      New Chat
-                    </Button>
-                  </div>
-
-                  <div className="mt-2 flex items-center gap-2 px-1 relative" ref={dropdownRef}>
-                    <button
-                      type="button"
-                      onClick={() => setShowModeDropdown(!showModeDropdown)}
-                      className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors duration-200 py-1"
-                    >
-                      <span className="flex items-center gap-1.5">
-                        {MODE_ICONS[agentMode]}
-                        {agentMode}
-                      </span>
-                      <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showModeDropdown ? 'rotate-180' : ''}`} />
-                    </button>
-
-                    {showModeDropdown && (
-                      <div className="absolute bottom-full left-0 mb-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                        {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).map((mode) => (
-                          <button
-                            key={mode}
-                            type="button"
-                            onClick={() => {
-                              setAgentMode(mode);
-                              setShowModeDropdown(false);
-                            }}
-                            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${
-                              agentMode === mode 
-                                ? 'bg-primary/5 text-primary font-semibold' 
-                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                            }`}
-                          >
-                            <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
-                              {MODE_ICONS[mode]}
-                            </span>
-                            {mode}
                           </button>
                         ))}
                       </div>
                     )}
+
+                    {currentQuestion.type === 'multi-select' && (
+                      <div className="space-y-2">
+                        {currentQuestion.options?.map((option) => {
+                          const isSelected = Array.isArray(conversationState.answers[currentQuestion.id]) &&
+                            conversationState.answers[currentQuestion.id].includes(option);
+                          return (
+                            <button
+                              key={option}
+                              onClick={() => {
+                                const current = Array.isArray(conversationState.answers[currentQuestion.id])
+                                  ? conversationState.answers[currentQuestion.id] as string[]
+                                  : [];
+                                const updated = isSelected
+                                  ? current.filter(o => o !== option)
+                                  : [...current, option];
+                                handleAnswerSubmit(currentQuestion.id, updated);
+                              }}
+                              className={`w-full text-left px-4 py-3 rounded-xl border transition-all duration-200 text-sm ${isSelected
+                                ? 'bg-gradient-to-r from-primary to-primary/90 text-white border-primary shadow-md'
+                                : 'bg-gray-50 hover:bg-gradient-to-r hover:from-primary/10 hover:to-primary/5 border-gray-200/50 hover:border-primary/30 hover:shadow-sm'
+                                }`}
+                            >
+                              {option}
+                            </button>
+                          );
+                        })}
+                        {Array.isArray(conversationState.answers[currentQuestion.id]) &&
+                          conversationState.answers[currentQuestion.id].length > 0 && (
+                            <Button
+                              onClick={() => {
+                                const answer = conversationState.answers[currentQuestion.id];
+                                if (Array.isArray(answer) && answer.length > 0) {
+                                  // Move to next question
+                                  const nextIndex = conversationState.currentQuestionIndex + 1;
+                                  if (nextIndex < conversationState.followUpQuestions.length) {
+                                    const nextQuestion = conversationState.followUpQuestions[nextIndex];
+                                    const agentMessage: ChatMessage = {
+                                      id: Date.now().toString(),
+                                      type: 'agent',
+                                      content: nextQuestion.question,
+                                      timestamp: new Date(),
+                                    };
+                                    setConversationState({
+                                      ...conversationState,
+                                      messages: [...conversationState.messages, agentMessage],
+                                      currentQuestionIndex: nextIndex,
+                                    });
+                                  } else {
+                                    // All questions answered, determine form route
+                                    const formRoute = determineFormRoute(
+                                      conversationState.initialQuery,
+                                      conversationState.answers,
+                                      conversationState.context
+                                    );
+
+                                    // Store prefilled data in localStorage for the form page
+                                    localStorage.setItem(`form_prefill_${formRoute.path}`, JSON.stringify(conversationState.answers));
+
+                                    const agentMessage: ChatMessage = {
+                                      id: Date.now().toString(),
+                                      type: 'agent',
+                                      content: `I have prefilled the correct form based on your input. Click the link below to review and submit.`,
+                                      timestamp: new Date(),
+                                    };
+                                    setConversationState({
+                                      ...conversationState,
+                                      messages: [...conversationState.messages, agentMessage],
+                                      currentQuestionIndex: nextIndex,
+                                      agentActions: [],
+                                      showConfirmation: true,
+                                      formRoute,
+                                    });
+                                  }
+                                }
+                              }}
+                              className="w-full mt-3 rounded-xl shadow-md hover:shadow-lg transition-all duration-200"
+                            >
+                              Continue
+                            </Button>
+                          )}
+                      </div>
+                    )}
                   </div>
-                </form>
-              </div>
-            )}
+                </div>
+              )}
+
+              {/* General text input - always available when conversation is active and no specific question */}
+              {(!currentQuestion || allQuestionsAnswered) && (
+                <div className="border-t border-gray-200/50 pt-5 mt-4">
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      const textarea = e.currentTarget.querySelector('textarea') as HTMLTextAreaElement;
+                      const userMessage = textarea.value.trim();
+                      if (userMessage && !isProcessing) {
+                        setIsProcessing(true);
+                        try {
+                          // Call agent with the free-form message
+                          const agentResponse = await callAgent({
+                            query: userMessage,
+                            conversation_history: conversationState.messages.map(m => ({
+                              id: m.id,
+                              type: m.type,
+                              content: m.content,
+                              timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : (typeof m.timestamp === 'string' ? m.timestamp : new Date().toISOString()),
+                            })),
+                            context: {
+                              ...conversationState.context,
+                              agent_mode: agentMode
+                            },
+                          });
+
+                          const userMsg: ChatMessage = {
+                            id: Date.now().toString(),
+                            type: 'user',
+                            content: userMessage,
+                            timestamp: new Date(),
+                          };
+
+                          const agentMsg: ChatMessage = {
+                            id: (Date.now() + 1).toString(),
+                            type: 'agent',
+                            content: agentResponse.message || "I understand. Let me help you with that.",
+                            timestamp: new Date(),
+                          };
+
+                          const followUpQuestions = agentResponse.follow_up_questions || [];
+                          const messages: ChatMessage[] = [...conversationState.messages, userMsg, agentMsg];
+
+                          // Add first question if agent provided one
+                          if (followUpQuestions.length > 0) {
+                            messages.push({
+                              id: (Date.now() + 2).toString(),
+                              type: 'agent',
+                              content: followUpQuestions[0].question,
+                              timestamp: new Date(),
+                            });
+                          }
+
+                          // Determine if we should show confirmation (form route ready)
+                          // Keep confirmation visible once it's been shown
+                          const showConfirmation = conversationState.showConfirmation || (!agentResponse.requires_more_info && (agentResponse.form_route !== null || agentResponse.form_prefill_data !== undefined));
+
+                          setConversationState({
+                            ...conversationState,
+                            messages,
+                            currentQuestionIndex: followUpQuestions.length > 0 ? 0 : conversationState.currentQuestionIndex,
+                            followUpQuestions,
+                            showConfirmation,
+                            formRoute: agentResponse.form_route || conversationState.formRoute,
+                            formPrefillData: agentResponse.form_prefill_data || conversationState.formPrefillData,
+                          });
+
+                          // Store prefilled data if available (prefer form_prefill_data from agent)
+                          if (agentResponse.form_route) {
+                            const prefillData = agentResponse.form_prefill_data || conversationState.answers;
+                            if (prefillData && Object.keys(prefillData).length > 0) {
+                              localStorage.setItem(`form_prefill_${agentResponse.form_route.path}`, JSON.stringify(prefillData));
+                            }
+                          }
+
+                          textarea.value = '';
+                        } catch (error) {
+                          console.error('Error calling agent:', error);
+                          const errorMsg: ChatMessage = {
+                            id: (Date.now() + 1).toString(),
+                            type: 'agent',
+                            content: error instanceof Error
+                              ? `I'm having trouble processing your message. ${error.message}. Please try again.`
+                              : "I'm having trouble processing your message. Please try again.",
+                            timestamp: new Date(),
+                          };
+                          setConversationState({
+                            ...conversationState,
+                            messages: [...conversationState.messages, {
+                              id: Date.now().toString(),
+                              type: 'user',
+                              content: userMessage,
+                              timestamp: new Date(),
+                            }, errorMsg],
+                          });
+                        } finally {
+                          setIsProcessing(false);
+                        }
+                      }
+                    }}
+                  >
+                    <div className="flex gap-2 items-center">
+                      <Textarea
+                        ref={inputRef}
+                        placeholder="Type your message..."
+                        className="flex-1 rounded-xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 min-h-[40px] max-h-[100px]"
+                        disabled={isProcessing}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            const form = e.currentTarget.closest('form');
+                            if (form && !isProcessing) {
+                              form.requestSubmit();
+                            }
+                          }
+                        }}
+                      />
+                      <Button
+                        type="submit"
+                        disabled={isProcessing}
+                        className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 self-end h-10"
+                      >
+                        <Send className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleReset}
+                        className="rounded-xl border-emerald-200 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition-all duration-200 self-end h-10 px-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
+                      >
+                        New Chat
+                      </Button>
+                    </div>
+
+                    <div className="mt-2 flex items-center gap-2 px-1 relative" ref={dropdownRef}>
+                      <button
+                        type="button"
+                        onClick={() => setShowModeDropdown(!showModeDropdown)}
+                        className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors duration-200 py-1"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          {MODE_ICONS[agentMode]}
+                          {agentMode}
+                        </span>
+                        <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showModeDropdown ? 'rotate-180' : ''}`} />
+                      </button>
+
+                      {showModeDropdown && (
+                        <div className="absolute bottom-full left-0 mb-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                          {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).map((mode) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => {
+                                setAgentMode(mode);
+                                setShowModeDropdown(false);
+                              }}
+                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${agentMode === mode
+                                ? 'bg-primary/5 text-primary font-semibold'
+                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                                }`}
+                            >
+                              <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
+                                {MODE_ICONS[mode]}
+                              </span>
+                              {mode}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </form>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -895,7 +1056,7 @@ export function Home() {
         <div className="relative">
           {/* Glow effect */}
           <div className="absolute -inset-1 bg-gradient-to-r from-primary/20 to-primary/10 rounded-3xl blur-xl opacity-30" />
-          
+
           <div className="relative bg-white/90 backdrop-blur-sm rounded-3xl shadow-xl border border-gray-200/50 overflow-hidden">
             <div className="p-8 md:p-10">
               <form onSubmit={handleInitialSubmit} className="space-y-4">
@@ -954,11 +1115,10 @@ export function Home() {
                               setAgentMode(mode);
                               setShowModeDropdown(false);
                             }}
-                            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${
-                              agentMode === mode 
-                                ? 'bg-primary/5 text-primary font-semibold' 
-                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                            }`}
+                            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${agentMode === mode
+                              ? 'bg-primary/5 text-primary font-semibold'
+                              : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                              }`}
                           >
                             <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
                               {MODE_ICONS[mode]}
@@ -971,22 +1131,43 @@ export function Home() {
                   </div>
                 </div>
               </form>
-              
+
               {/* Quick suggestions */}
               <div className="mt-6 pt-6 border-t border-gray-200/50">
-                <p className="text-sm text-gray-500 mb-3">Try asking:</p>
-                <div className="flex flex-wrap gap-2">
-                  {AGENT_SUGGESTIONS[agentMode].map(({ label, query }) => (
-                    <button
-                      key={label}
-                      onClick={() => {
-                        setQuery(query);
-                        inputRef.current?.focus();
-                      }}
-                      className="px-4 py-2 text-sm text-gray-700 bg-gray-50 hover:bg-gray-100 rounded-xl border border-gray-200/50 hover:border-primary/30 transition-all duration-200 hover:shadow-sm"
-                    >
-                      {label}
-                    </button>
+                {/* Service Discovery Categories */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
+                  {DISCOVERY_CONTENT[agentMode].map((column, idx) => (
+                    <div key={idx} className="space-y-4">
+                      <div className={`flex items-center gap-2 font-semibold ${column.colorClass}`}>
+                        {column.icon}
+                        <h3>{column.title}</h3>
+                      </div>
+                      <div className="grid gap-2">
+                        {column.items.map((item, itemIdx) => (
+                          <button
+                            key={itemIdx}
+                            onClick={() => {
+                              setQuery(item.query);
+                              inputRef.current?.focus();
+                            }}
+                            className={`relative p-2.5 rounded-xl border border-gray-200 hover:shadow-md hover:bg-white/80 transition-all duration-200 text-left group ${column.hoverBorderClass}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className={`text-sm font-medium text-gray-900 transition-colors ${column.hoverTextClass}`}>{item.title}</div>
+                              <div className="relative group/info">
+                                <Info className="w-4 h-4 text-gray-400 hover:text-gray-600 transition-colors" />
+                                {/* Tooltip */}
+                                <div className="absolute bottom-full right-0 mb-2 w-48 p-2 bg-gray-900 text-white text-xs rounded-lg shadow-xl opacity-0 translate-y-2 invisible group-hover/info:opacity-100 group-hover/info:translate-y-0 group-hover/info:visible transition-all duration-200 z-50 pointer-events-none">
+                                  {item.description}
+                                  {/* Arrow */}
+                                  <div className="absolute top-full right-1.5 -mt-1 border-4 border-transparent border-t-gray-900" />
+                                </div>
+                              </div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -994,6 +1175,6 @@ export function Home() {
           </div>
         </div>
       </div>
-    </div>
+    </div >
   );
 }

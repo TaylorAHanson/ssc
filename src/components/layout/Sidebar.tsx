@@ -3,21 +3,14 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   ChevronLeft,
   ChevronRight,
-  Database,
-  Cloud,
-  Key,
-  ShoppingCart,
-  Globe,
-  Download,
-  FileText,
-  MessageSquare,
   Settings,
   Home,
   List,
   CheckCircle2,
   GraduationCap,
   Calendar,
-  Code
+  FileText,
+  MessageSquare
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -37,63 +30,6 @@ const navItems: NavItem[] = [
   { title: 'Home', icon: <Home className="w-5 h-5" />, path: '/', group: 'Main' },
   { title: 'My Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Main' },
   { title: 'Pending Approvals', icon: <CheckCircle2 className="w-5 h-5" />, path: '/approvals', group: 'Main' },
-
-  // Enterprise Data - Available to everyone
-  { title: 'Request Data Access', icon: <Key className="w-5 h-5" />, path: '/paas/request-access', group: 'Enterprise Data' },
-  { title: 'Marketplace Certification', icon: <ShoppingCart className="w-5 h-5" />, path: '/paas/marketplace', group: 'Enterprise Data' },
-
-  // PaaS - Restricted
-  // Business Users see NONE of these
-  // Power Users see Access/Create Catalog but NOT Provisioning
-  {
-    title: 'Get Workspace Access',
-    icon: <Database className="w-5 h-5" />,
-    path: '/paas/workspace-access',
-    group: 'PaaS',
-    allowedPersonas: ['Power User', 'Platform Admin']
-  },
-  {
-    title: 'Create Catalog/Schema/Table',
-    icon: <Database className="w-5 h-5" />,
-    path: '/paas/request-catalog',
-    group: 'PaaS',
-    allowedPersonas: ['Power User', 'Platform Admin']
-  },
-  {
-    title: 'Provision New Workspace',
-    icon: <Cloud className="w-5 h-5" />,
-    path: '/paas/provision-workspace',
-    group: 'PaaS',
-    allowedPersonas: ['Platform Admin'] // Admin only
-  },
-  {
-    title: 'Provision Service Principal',
-    icon: <Key className="w-5 h-5" />,
-    path: '/paas/service-principal',
-    group: 'PaaS',
-    allowedPersonas: ['Platform Admin'] // Admin only
-  },
-  {
-    title: 'GitHub Repository Creation',
-    icon: <Code className="w-5 h-5" />,
-    path: '/paas/github-repo-creation',
-    group: 'PaaS',
-    allowedPersonas: ['Power User', 'Platform Admin']
-  },
-  {
-    title: 'Request REST API Access',
-    icon: <Globe className="w-5 h-5" />,
-    path: '/daas/rest-api',
-    group: 'PaaS',
-    allowedPersonas: ['Power User', 'Platform Admin']
-  },
-  {
-    title: 'Request Batch Data Access',
-    icon: <Download className="w-5 h-5" />,
-    path: '/daas/batch-data',
-    group: 'PaaS',
-    allowedPersonas: ['Power User', 'Platform Admin']
-  },
 
   // Community - Available to everyone
   { title: 'Training', icon: <GraduationCap className="w-5 h-5" />, path: '/community/training', group: 'Community' },

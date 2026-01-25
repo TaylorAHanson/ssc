@@ -5,7 +5,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from app.agents.prompts import get_agent_prompt, AGENT_TOOLS, SYSTEM_CONTEXT
-from app.agents.forms_registry import get_form_schema
 from app.model_serving.agent_llm import AgentLLMClient
 from app.core.config import settings
 import logging
@@ -223,7 +222,6 @@ async def handle_conversation(request: ConversationRequest):
         
         # Determine if we're routing to a specific form (check conversation history or infer)
         form_path = None
-        form_schema = None
         
         # Check if form route was mentioned in conversation history
         if request.conversation_history:
@@ -242,14 +240,8 @@ async def handle_conversation(request: ConversationRequest):
             if inferred_route:
                 form_path = inferred_route.get("path")
         
-        # Get form schema if we have a form path
-        if form_path:
-            form_schema = get_form_schema(form_path)
-            if form_schema:
-                logger.info(f"Injecting form schema for {form_path} into prompt")
-        
         # Gemini models only support ONE system prompt, so we need to combine everything
-        system_prompt = get_agent_prompt(form_schema=form_schema)
+        system_prompt = get_agent_prompt()
         
         # Add context to system prompt if provided
         if request.context:
