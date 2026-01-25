@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useRequestStore } from '../stores/requestStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { formatInTimeZone } from 'date-fns-tz';
-import { Eye, X, Trash2, CheckCircle2, Circle, Loader2, AlertCircle } from 'lucide-react';
+import { Eye, X, Trash2, CheckCircle2, Circle, Loader2, AlertCircle, Clock } from 'lucide-react';
 import type { Request } from '../types';
 
 import { formatDistanceToNow, differenceInHours } from 'date-fns';
 
-const parseUtcDate = (dateString: string) => {
+export const parseUtcDate = (dateString: string) => {
   if (!dateString) return new Date();
   // If string doesn't end with Z and doesn't have timezone offset, assume UTC and append Z
   if (!dateString.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(dateString)) {
@@ -83,7 +84,7 @@ function ProvisioningProgress({ progress }: { progress: NonNullable<Request['sta
   );
 }
 
-function RequestStateList({ request }: { request: Request }) {
+export function RequestStateList({ request }: { request: Request }) {
   const fetchApprovals = useRequestStore((state) => state.fetchApprovals);
 
   useEffect(() => {
@@ -283,9 +284,30 @@ export function Requests() {
   const requests = useRequestStore((state) => state.requests);
   const fetchRequests = useRequestStore((state) => state.fetchRequests);
   const deleteRequest = useRequestStore((state) => state.deleteRequest);
-  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
+  const { requestId } = useParams();
+  const navigate = useNavigate();
+  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(requestId || null);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'status' | 'conversation'>('status');
+  const [filterStatus, setFilterStatus] = useState<'pending' | 'completed' | 'failed'>('pending');
+
+  // Derived state: sort and filter
+  const filteredRequests = requests
+    .filter((r) => {
+      if (filterStatus === 'pending') return !['completed', 'rejected', 'failed'].includes(r.status);
+      if (filterStatus === 'completed') return r.status === 'completed';
+      if (filterStatus === 'failed') return ['rejected', 'failed'].includes(r.status);
+      return true;
+    })
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  useEffect(() => {
+    if (requestId) {
+      setSelectedRequestId(requestId);
+    } else {
+      setSelectedRequestId(null);
+    }
+  }, [requestId]);
 
   // Derived state: get the full object from the store's list
   const selectedRequest = requests.find(r => r.id === selectedRequestId) || null;
@@ -293,6 +315,7 @@ export function Requests() {
   useEffect(() => {
     fetchRequests();
   }, [fetchRequests]);
+
 
   const handleDelete = async (requestId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -306,6 +329,7 @@ export function Requests() {
     }
   };
 
+  // We only show empty state if there are NO requests at all, not just if filter hides them
   if (requests.length === 0) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -321,9 +345,37 @@ export function Requests() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">My Requests</h1>
-        <p className="text-gray-600">Track the status of your requests</p>
+      <div className="flex items-center justify-between bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+        <h1 className="text-3xl font-bold text-gray-900">My Requests</h1>
+        <div className="flex bg-gray-100 p-1 rounded-full border border-gray-200 shadow-inner">
+          <button
+            onClick={() => setFilterStatus('pending')}
+            className={`px-6 py-2 rounded-full text-sm font-bold transition-all duration-200 ${filterStatus === 'pending'
+              ? 'bg-white text-primary shadow-md transform scale-105'
+              : 'text-gray-500 hover:text-gray-700'
+              }`}
+          >
+            Pending
+          </button>
+          <button
+            onClick={() => setFilterStatus('completed')}
+            className={`px-6 py-2 rounded-full text-sm font-bold transition-all duration-200 ${filterStatus === 'completed'
+              ? 'bg-white text-green-600 shadow-md transform scale-105'
+              : 'text-gray-500 hover:text-gray-700'
+              }`}
+          >
+            Completed
+          </button>
+          <button
+            onClick={() => setFilterStatus('failed')}
+            className={`px-6 py-2 rounded-full text-sm font-bold transition-all duration-200 ${filterStatus === 'failed'
+              ? 'bg-white text-red-600 shadow-md transform scale-105'
+              : 'text-gray-500 hover:text-gray-700'
+              }`}
+          >
+            Failed
+          </button>
+        </div>
       </div>
 
       {/* Table View */}
@@ -342,57 +394,74 @@ export function Requests() {
                 </tr>
               </thead>
               <tbody>
-                {requests.map((request) => (
-                  <tr key={request.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-3 px-4 text-sm text-gray-900">{request.title}</td>
-                    <td className="py-3 px-4 text-sm text-gray-600">
-                      {request.type.replace(/_/g, ' ')}
-                    </td>
-                    <td className="py-3 px-4">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${request.status === 'completed' ? 'bg-green-100 text-green-800' :
-                        request.status === 'provisioning' ? 'bg-blue-100 text-blue-800' :
-                          request.status === 'manager_approval' ? 'bg-yellow-100 text-yellow-800' :
-                            request.status === 'training_pending' ? 'bg-orange-100 text-orange-800' :
-                              'bg-gray-100 text-gray-800'
-                        }`}>
-                        {request.status.replace(/_/g, ' ')}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-sm text-gray-600">
-                      {formatDate(request.createdAt)}
-                    </td>
-                    <td className="py-3 px-4 text-sm text-gray-600">
-                      {formatDate(request.updatedAt)}
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="flex items-center gap-2">
-                        <Button
-                          onClick={() => setSelectedRequestId(request.id)}
-                          variant="outline"
-                          size="sm"
-                          className="flex items-center gap-2"
-                        >
-                          <Eye className="w-4 h-4" />
-                          View
-                        </Button>
-                        <Button
-                          onClick={(e) => handleDelete(request.id, e)}
-                          variant="outline"
-                          size="sm"
-                          className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
-                          disabled={isDeleting === request.id}
-                          title="Delete Request"
-                        >
-                          {isDeleting === request.id ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="w-4 h-4" />
-                          )}
-                        </Button>
+                {filteredRequests.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-20 text-center">
+                      <div className="flex flex-col items-center justify-center space-y-3">
+                        <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center">
+                          <Clock className="w-6 h-6 text-gray-400" />
+                        </div>
+                        <div>
+                          <p className="text-lg font-semibold text-gray-900">No requests found</p>
+                          <p className="text-sm text-gray-500">There are no requests matching the "{filterStatus}" filter.</p>
+                        </div>
                       </div>
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredRequests.map((request) => (
+                    <tr key={request.id} className="border-b border-gray-100 hover:bg-gray-50">
+                      <td className="py-3 px-4 text-sm text-gray-900">{request.title}</td>
+                      <td className="py-3 px-4 text-sm text-gray-600">
+                        {request.type.replace(/_/g, ' ')}
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${request.status === 'completed' ? 'bg-green-100 text-green-800' :
+                          request.status === 'provisioning' ? 'bg-blue-100 text-blue-800' :
+                            request.status === 'manager_approval' ? 'bg-yellow-100 text-yellow-800' :
+                              request.status === 'training_pending' ? 'bg-orange-100 text-orange-800' :
+                                ['failed', 'rejected'].includes(request.status) ? 'bg-red-100 text-red-800' :
+                                  'bg-gray-100 text-gray-800'
+                          }`}>
+                          {request.status.replace(/_/g, ' ')}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-sm text-gray-600">
+                        {formatDate(request.createdAt)}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-gray-600">
+                        {formatDate(request.updatedAt)}
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <Button
+                            onClick={() => navigate(`/requests/${request.id}`)}
+                            variant="outline"
+                            size="sm"
+                            className="flex items-center gap-2"
+                          >
+                            <Eye className="w-4 h-4" />
+                            View
+                          </Button>
+                          <Button
+                            onClick={(e) => handleDelete(request.id, e)}
+                            variant="outline"
+                            size="sm"
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                            disabled={isDeleting === request.id}
+                            title="Delete Request"
+                          >
+                            {isDeleting === request.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-4 h-4" />
+                            )}
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -401,87 +470,89 @@ export function Requests() {
 
       {/* Flow Detail Modal */}
       {selectedRequest && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col bg-white">
-            <CardHeader className="flex-shrink-0 border-b border-gray-200">
-              <div className="flex items-start justify-between">
-                <div>
-                  <CardTitle>{selectedRequest.title}</CardTitle>
-                  <p className="text-sm text-gray-500 mt-1">
-                    Created {formatDate(selectedRequest.createdAt)}
-                  </p>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => navigate('/requests')}>
+          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-6xl max-h-[90vh] flex flex-col">
+            <Card className="w-full h-full overflow-hidden flex flex-col bg-white">
+              <CardHeader className="flex-shrink-0 border-b border-gray-200">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <CardTitle>{selectedRequest.title}</CardTitle>
+                    <p className="text-sm text-gray-500 mt-1">
+                      Created {formatDate(selectedRequest.createdAt)}
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => navigate('/requests')}
+                    className="flex items-center gap-2"
+                  >
+                    <X className="w-4 h-4" />
+                    Close
+                  </Button>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setSelectedRequestId(null)}
-                  className="flex items-center gap-2"
-                >
-                  <X className="w-4 h-4" />
-                  Close
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="flex-1 overflow-y-auto space-y-6 p-6">
-              {/* Tabs */}
-              <div className="flex items-center gap-4 border-b border-gray-200 mb-6">
-                <button
-                  onClick={() => setActiveTab('status')}
-                  className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${activeTab === 'status'
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                    }`}
-                >
-                  Request Status
-                </button>
-                {selectedRequest.conversation && selectedRequest.conversation.length > 0 && (
+              </CardHeader>
+              <CardContent className="flex-1 overflow-y-auto space-y-6 p-6">
+                {/* Tabs */}
+                <div className="flex items-center gap-4 border-b border-gray-200 mb-6">
                   <button
-                    onClick={() => setActiveTab('conversation')}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${activeTab === 'conversation'
+                    onClick={() => setActiveTab('status')}
+                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${activeTab === 'status'
                       ? 'border-primary text-primary'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                       }`}
                   >
-                    Conversation History
+                    Request Status
                   </button>
-                )}
-              </div>
-
-              {activeTab === 'status' ? (
-                <div>
-                  <RequestStateList request={selectedRequest} />
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {selectedRequest.conversation?.map((message, idx) => (
-                    <div
-                      key={idx}
-                      className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
+                  {selectedRequest.conversation && selectedRequest.conversation.length > 0 && (
+                    <button
+                      onClick={() => setActiveTab('conversation')}
+                      className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${activeTab === 'conversation'
+                        ? 'border-primary text-primary'
+                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                        }`}
                     >
-                      <div
-                        className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${message.type === 'user'
-                          ? 'bg-gradient-to-br from-primary to-primary/90 text-white'
-                          : 'bg-gray-50 text-gray-900 border border-gray-200/50'
-                          }`}
-                      >
-                        {message.type === 'agent' ? (
-                          <div
-                            className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
-                            dangerouslySetInnerHTML={{ __html: message.content }}
-                          />
-                        ) : (
-                          <p className="text-sm leading-relaxed">{message.content}</p>
-                        )}
-                        <p className={`text-[10px] mt-1 ${message.type === 'user' ? 'text-blue-100' : 'text-gray-400'}`}>
-                          {formatDate(typeof message.timestamp === 'string' ? message.timestamp : message.timestamp?.toISOString())}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
+                      Conversation History
+                    </button>
+                  )}
                 </div>
-              )}
-            </CardContent>
-          </Card>
+
+                {activeTab === 'status' ? (
+                  <div>
+                    <RequestStateList request={selectedRequest} />
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {selectedRequest.conversation?.map((message, idx) => (
+                      <div
+                        key={idx}
+                        className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
+                      >
+                        <div
+                          className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${message.type === 'user'
+                            ? 'bg-gradient-to-br from-primary to-primary/90 text-white'
+                            : 'bg-gray-50 text-gray-900 border border-gray-200/50'
+                            }`}
+                        >
+                          {message.type === 'agent' ? (
+                            <div
+                              className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
+                              dangerouslySetInnerHTML={{ __html: message.content }}
+                            />
+                          ) : (
+                            <p className="text-sm leading-relaxed">{message.content}</p>
+                          )}
+                          <p className={`text-[10px] mt-1 ${message.type === 'user' ? 'text-blue-100' : 'text-gray-400'}`}>
+                            {formatDate(typeof message.timestamp === 'string' ? message.timestamp : message.timestamp?.toISOString())}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </div>
       )}
     </div>

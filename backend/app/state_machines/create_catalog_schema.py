@@ -5,6 +5,7 @@ from app.models.request import RequestStatus
 from app.core.exceptions import PermanentError
 from app.providers.databricks.client import DatabricksProvider
 from app.core.config import settings
+from app.state_machines.facts import has_fact, add_fact
 import logging
 
 logger = logging.getLogger(__name__)
@@ -15,19 +16,42 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
     State machine for creating a Unity Catalog or Schema.
     """
     # States
-    pending = State(initial=True)
-    provisioning = State()
-    completed = State(final=True)
-    failed = State(final=True)
+    pending = State("pending", initial=True)
+    platform_admin_approval = State("platform_admin_approval")
+    provisioning = State("provisioning")
+    completed = State("completed", final=True)
+    rejected = State("rejected", final=True)
+    failed = State("failed", final=True)
 
     # Transitions
-    submit = pending.to(provisioning)
-    finish_provisioning = provisioning.to(completed)
-    mark_failed = pending.to(failed) | provisioning.to(failed)
+    submit = pending.to(platform_admin_approval, cond="has_request_submitted")
+    approve_admin = platform_admin_approval.to(provisioning, cond="has_platform_admin_approval")
+    finish_provisioning = provisioning.to(completed, cond="has_provisioning_completed")
+    reject = (
+        pending.to(rejected, cond="has_request_rejected") |
+        platform_admin_approval.to(rejected, cond="has_request_rejected")
+    )
+    mark_failed = (
+        pending.to(failed) | 
+        platform_admin_approval.to(failed) | 
+        provisioning.to(failed)
+    )
+
+    # Approval node configuration
+    APPROVAL_NODES = {
+        "platform_admin_approval": {"approval_type": "platform_admin", "name": "Platform Admin Approval"}
+    }
 
     def __init__(self, request, db_session):
         super().__init__(request, db_session)
-        self.databricks_provider = DatabricksProvider(
+        
+    def _get_provider(self):
+        """Lazy load provider."""
+        if not settings.DATABRICKS_HOST:
+             # This will cause an error when called if not set, which is what we want
+             logger.warning("DATABRICKS_HOST not set, provider methods will fail")
+             
+        return DatabricksProvider(
             host=settings.DATABRICKS_HOST,
             token=settings.DATABRICKS_TOKEN,
             client_id=settings.DATABRICKS_CLIENT_ID,
@@ -36,15 +60,22 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
 
     def on_enter_provisioning(self):
         """
-        Transition: Pending -> Provisioning
+        Transition: Approved -> Provisioning
         """
-        # Auto-approve for demo purposes
-        logger.info(f"[{self.request.id}] Auto-approving and starting provisioning")
+        logger.info(f"[{self.request.id}] Entering provisioning state")
+        # Logic moved to execute_tasks to allow state commit before potential failure
 
-    def on_enter_completed(self):
-        """
-        Transition: Provisioning -> Completed
-        """
+    async def execute_tasks(self):
+        """Execute async tasks for the current state."""
+        if self.current_state.id == "provisioning":
+            await self._provision_resources()
+            
+    async def _provision_resources(self):
+        """Provision resources in Databricks."""
+        # Check if already done
+        if self.has_provisioning_completed:
+            return
+
         params = self.request.state_context or {}
         asset_type = params.get("type", "").lower()
         name = params.get("name")
@@ -54,9 +85,13 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
             raise PermanentError("Asset name is required")
 
         try:
+            provider = self._get_provider()
+            # This will raise if provider init fails (missing config)
+            # But since we are in execute_tasks, the state 'provisioning' is already committed.
+            
             if asset_type == "catalog":
                 logger.info(f"Provisioning Catalog: {name}")
-                self.databricks_provider.create_catalog(name=name, config={"comment": comment})
+                provider.create_catalog(name=name, config={"comment": comment})
                 
             elif asset_type == "schema":
                 # Parent must be provided
@@ -67,7 +102,7 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
                 logger.info(f"Provisioning Schema: {parent}.{name}")
                 try:
                      # Placeholder for schema creation
-                     # self.databricks_provider.create_schema(...)
+                     # provider.create_schema(...)
                      logger.warning("Schema creation logic invoked but not fully implemented in provider. Skipping SDK call.")
                 except Exception as e:
                     raise PermanentError(f"Schema creation not implemented: {str(e)}")
@@ -76,18 +111,20 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
                  
             logger.info(f"Successfully created {asset_type} '{name}'")
             
+            # Record completion fact
+            add_fact(self.db, self.request.id, "provisioning_completed", {}, actor="system")
+            # The next tick will transition to completed
+            
         except Exception as e:
             logger.error(f"Provisioning failed: {e}")
-            # If we fail here, we might want to transition to failed, but on_enter_completed implies we are already there?
-            # actually, preventing the transition is better if possible, or triggering a fail transition.
-            # But in python-statemachine, on_enter is called after transition.
-            # Ideally the work happens in the transition action, not on_enter.
             raise e
+    @property
+    def has_provisioning_completed(self) -> bool:
+        """Check if provisioning has been completed."""
+        return has_fact(self.db, self.request.id, "provisioning_completed")
 
-    def submit(self):
-        """Action for submit transition"""
-        pass
-
-    def finish_provisioning(self):
-        """Action for finish_provisioning transition"""
+    def on_enter_completed(self):
+        """
+        Transition: Provisioning -> Completed
+        """
         pass

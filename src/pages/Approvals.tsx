@@ -1,24 +1,29 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRequestStore } from '../stores/requestStore';
+import { RequestDetailsModal } from '../components/RequestDetailsModal';
+import { RequestStateList } from './Requests';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { CheckCircle2, UserPlus, Clock, Check, X, Shield, Database, Badge, Calendar, Trash2, ArrowRight, MessageSquare } from 'lucide-react';
+import { CheckCircle2, UserPlus, Clock, Check, X, Shield, Database, Badge, Calendar, Trash2, ArrowRight } from 'lucide-react';
 import { format } from 'date-fns';
 import { api } from '../services/api';
 import type { Approval, ApprovalAction, Delegation } from '../types';
 
 export function Approvals() {
   const approvals = useRequestStore((state) => state.approvals);
+  const requests = useRequestStore((state) => state.requests);
   const delegations = useRequestStore((state) => state.delegations);
   const fetchApprovals = useRequestStore((state) => state.fetchApprovals);
+  const fetchRequests = useRequestStore((state) => state.fetchRequests);
   const fetchDelegations = useRequestStore((state) => state.fetchDelegations);
   const addDelegation = useRequestStore((state) => state.addDelegation);
   const removeDelegation = useRequestStore((state) => state.removeDelegation);
   const processApproval = useRequestStore((state) => state.processApproval);
 
   const [selectedApproval, setSelectedApproval] = useState<Approval | null>(null);
-  const [selectedConversationApproval, setSelectedConversationApproval] = useState<Approval | null>(null);
+  const [inspectedRequestId, setInspectedRequestId] = useState<string | null>(null);
+  const inspectedRequest = requests.find(r => r.id === inspectedRequestId);
   const [actionType, setActionType] = useState<'approve' | 'reject' | 'delegate' | null>(null);
   const [note, setNote] = useState('');
   const [delegateEmail, setDelegateEmail] = useState('');
@@ -37,13 +42,14 @@ export function Approvals() {
   const fetchAllData = useCallback(async () => {
     await Promise.all([
       fetchApprovals(),
+      fetchRequests(),
       fetchDelegations(currentUserEmail),
       (async () => {
         const toMe = await api.getDelegations(undefined, currentUserEmail);
         setDelegationsToMe(toMe);
       })()
     ]);
-  }, [fetchApprovals, fetchDelegations, currentUserEmail]);
+  }, [fetchApprovals, fetchRequests, fetchDelegations, currentUserEmail]);
 
   useEffect(() => {
     fetchAllData();
@@ -58,8 +64,6 @@ export function Approvals() {
   };
 
   // Filter approvals by user's roles
-  // For the demo, we show everything if the user has roles
-  // In a real app, we'd also check if anyone delegated to us
   const pendingApprovals = approvals.filter((a) => {
     const hasRole = userRoles.includes(a.approvalType);
     return hasRole && a.status === 'pending';
@@ -96,7 +100,6 @@ export function Approvals() {
   };
 
   const submitAction = async () => {
-    // ... same as before ...
     if (!selectedApproval || !actionType) return;
 
     if (actionType === 'reject' && !note.trim()) {
@@ -118,16 +121,19 @@ export function Approvals() {
       delegatedToEmail: actionType === 'delegate' ? delegateEmail : undefined,
     };
 
-    await processApproval(action);
-
-    setIsProcessing(false);
-    setSelectedApproval(null);
-    setActionType(null);
-    setNote('');
-    setDelegateEmail('');
+    try {
+      await processApproval(action);
+    } catch (error) {
+      console.error('Error processing approval:', error);
+    } finally {
+      setIsProcessing(false);
+      setSelectedApproval(null);
+      setActionType(null);
+      setNote('');
+      setDelegateEmail('');
+    }
   };
 
-  // What user can approve based on roles
   const approvalCapabilities = {
     platform_admin: [
       'Workspace provisioning requests',
@@ -163,7 +169,6 @@ export function Approvals() {
         </Button>
       </div>
 
-      {/* Delegation Management Section */}
       {showDelegationForm && (
         <Card className="border-2 border-primary/20 shadow-lg animate-in fade-in slide-in-from-top-4 duration-300">
           <CardHeader className="bg-primary/5">
@@ -211,7 +216,6 @@ export function Approvals() {
         </Card>
       )}
 
-      {/* Active Delegations List (By Me) */}
       {delegations.length > 0 && (
         <Card className="border-blue-100 bg-blue-50/30">
           <CardHeader className="pb-3">
@@ -226,11 +230,11 @@ export function Approvals() {
                 <div key={del.id} className="bg-white border border-blue-200 rounded-lg p-4 flex items-center justify-between shadow-sm">
                   <div className="flex items-center gap-6">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs">
+                      <div className="w-8 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs">
                         {currentUserEmail[0].toUpperCase()}
                       </div>
                       <ArrowRight className="w-4 h-4 text-gray-400" />
-                      <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-xs">
+                      <div className="w-8 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-xs">
                         {del.delegatee_email[0].toUpperCase()}
                       </div>
                     </div>
@@ -259,7 +263,6 @@ export function Approvals() {
         </Card>
       )}
 
-      {/* Delegations TO ME Section */}
       {delegationsToMe.length > 0 && (
         <Card className="border-green-100 bg-green-50/30">
           <CardHeader className="pb-3">
@@ -274,11 +277,11 @@ export function Approvals() {
                 <div key={del.id} className="bg-white border border-green-200 rounded-lg p-4 flex items-center shadow-sm">
                   <div className="flex items-center gap-6">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs">
+                      <div className="w-8 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs">
                         {del.delegator_email[0].toUpperCase()}
                       </div>
                       <ArrowRight className="w-4 h-4 text-gray-400" />
-                      <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-xs">
+                      <div className="w-8 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-bold text-xs">
                         {currentUserEmail[0].toUpperCase()}
                       </div>
                     </div>
@@ -298,11 +301,10 @@ export function Approvals() {
         </Card>
       )}
 
-      {/* Role Section */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Badge className="w-5 h-5" />
+            <Badge className="w-5 h-5 text-primary" />
             My Roles & Approval Capabilities
           </CardTitle>
         </CardHeader>
@@ -407,16 +409,20 @@ export function Approvals() {
                     <UserPlus className="w-4 h-4 mr-2" />
                     Delegate
                   </Button>
-                  {approval.requestConversation && approval.requestConversation.length > 0 && (
-                    <Button
-                      onClick={() => setSelectedConversationApproval(approval)}
-                      variant="outline"
-                      className="border-gray-300 text-gray-700 hover:bg-gray-50"
-                    >
-                      <MessageSquare className="w-4 h-4 mr-2" />
-                      View Chat
-                    </Button>
-                  )}
+
+                  <Button
+                    onClick={() => {
+                      setInspectedRequestId(approval.requestId);
+                      if (requests.length === 0) {
+                        fetchRequests();
+                      }
+                    }}
+                    variant="outline"
+                    className="border-gray-300 text-gray-700 hover:bg-gray-50"
+                  >
+                    <ArrowRight className="w-4 h-4 mr-2" />
+                    View Details
+                  </Button>
                 </div>
               </CardContent>
             </Card>
@@ -424,52 +430,15 @@ export function Approvals() {
         </div>
       )}
 
-      {/* Conversation Modal */}
-      {selectedConversationApproval && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-4xl max-h-[80vh] overflow-hidden flex flex-col bg-white">
-            <CardHeader className="flex-shrink-0 border-b border-gray-200">
-              <div className="flex items-start justify-between">
-                <CardTitle>Request Conversation: {selectedConversationApproval.requestTitle}</CardTitle>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setSelectedConversationApproval(null)}
-                >
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="flex-1 overflow-y-auto space-y-4 p-6 bg-gray-50/50">
-              {selectedConversationApproval.requestConversation?.map((message: any, idx: number) => (
-                <div
-                  key={idx}
-                  className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${message.type === 'user'
-                      ? 'bg-gradient-to-br from-primary to-primary/90 text-white'
-                      : 'bg-white text-gray-900 border border-gray-200'
-                      }`}
-                  >
-                    {message.type === 'agent' ? (
-                      <div
-                        className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
-                        dangerouslySetInnerHTML={{ __html: message.content }}
-                      />
-                    ) : (
-                      <p className="text-sm leading-relaxed">{message.content}</p>
-                    )}
-                    <p className={`text-[10px] mt-1 ${message.type === 'user' ? 'text-blue-100' : 'text-gray-400'}`}>
-                      {format(new Date(message.timestamp), 'PPp')}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        </div>
+      {inspectedRequest && (
+        <RequestDetailsModal
+          request={inspectedRequest}
+          onClose={() => setInspectedRequestId(null)}
+          RequestStateList={RequestStateList}
+        />
       )}
+
+
 
       {completedApprovals.length > 0 && (
         <div className="space-y-4 mt-8">
@@ -509,12 +478,29 @@ export function Approvals() {
                   </div>
                 </div>
               </CardHeader>
+              <CardContent>
+                <div className="flex gap-2">
+
+                  <Button
+                    onClick={() => {
+                      setInspectedRequestId(approval.requestId);
+                      if (requests.length === 0) {
+                        fetchRequests();
+                      }
+                    }}
+                    variant="outline"
+                    className="border-gray-300 text-gray-700 hover:bg-gray-50"
+                  >
+                    <ArrowRight className="w-4 h-4 mr-2" />
+                    View Details
+                  </Button>
+                </div>
+              </CardContent>
             </Card>
           ))}
         </div>
       )}
 
-      {/* Action Modal */}
       {selectedApproval && actionType && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <Card className="w-full max-w-md mx-4">

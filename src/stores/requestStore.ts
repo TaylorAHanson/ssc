@@ -137,6 +137,9 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
         await api.rejectRequest(approval.requestId, action.note);
       }
 
+      // Small delay to allow backend poller to transition state before we refetch
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
       // Refresh state
       await Promise.all([
         get().fetchRequests(),
