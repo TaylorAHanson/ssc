@@ -59,7 +59,7 @@ jobs:
             - name: DATABRICKS_WORKSPACE_URL
               valueFrom: "{{workspace_url}}"
             - name: DATABRICKS_WAREHOUSE_ID
-              value: "${{ secrets.DATABRICKS_WAREHOUSE_ID }}"
+              value: "${{ vars.DATABRICKS_WAREHOUSE_ID }}"
             - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
               value: "databricks-gemini-3-flash"
             - name: AGENT_ENABLED
@@ -88,7 +88,7 @@ jobs:
 
       - name: Configure Databricks CLI (OAuth)
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
@@ -102,7 +102,7 @@ jobs:
 
       - name: Upload code to Databricks Workspace
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
@@ -110,7 +110,7 @@ jobs:
 
       - name: Deploy App
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
@@ -125,7 +125,7 @@ jobs:
 
       - name: Get App URL
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
