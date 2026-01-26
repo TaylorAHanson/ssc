@@ -1,41 +1,25 @@
 # Databricks Asset Bundle Configuration
 # 
+# This bundle ONLY syncs files to workspace.
+# App creation and deployment is handled by deploy.sh
+#
 # Usage:
-#   Personal dev deployment:  ./deploy.sh dev
-#   Integration testing:      Handled by CI/CD
-#   Production:               Handled by CI/CD
+#   ./deploy.sh dev rohan-ahire
 #
 # Prerequisites:
 #   export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
 #   databricks auth login
-#
-# To deploy with your username:
-#   databricks bundle deploy -t dev --var dev_user=rohan-ahire
 
 bundle:
   name: edas-hub
 
-# Variables (can be overridden with --var or BUNDLE_VAR_xxx env vars)
-variables:
-  dev_user:
-    description: "Developer username for personal app (use dashes, not underscores)"
-    default: dev
-
 # Sync backend directory to workspace
 sync:
-  include:
-    - backend/**
+  paths:
+    - backend
 
 # Target environments
 targets:
-  # Personal development - each developer gets their own app
   dev:
     mode: development
     default: true
-    
-    resources:
-      apps:
-        edas_hub:
-          name: edas-hub-dev-${var.dev_user}
-          description: "EDAS Hub - Personal dev instance"
-          source_code_path: ./backend
