@@ -38,4 +38,5 @@ targets:
         edas_hub:
           name: edas-hub-dev-${var.dev_user}
           description: "EDAS Hub - Personal dev instance"
-          source_code_path: ./backend
+          # Reference the workspace path where bundle syncs files
+          source_code_path: ${workspace.file_path}/backend

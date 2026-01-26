@@ -87,12 +87,30 @@ cp -r dist/* backend/static/
 echo -e "${GREEN}✓ Frontend copied${NC}"
 
 # Deploy using bundle
-echo -e "\n${CYAN}Deploying to target: ${TARGET}...${NC}"
+echo -e "\n${CYAN}Deploying bundle to target: ${TARGET}...${NC}"
 databricks bundle deploy -t "$TARGET"
 echo -e "${GREEN}✓ Bundle deployed${NC}"
 
 # Get app info
 APP_NAME="edas-hub-dev-${BUNDLE_VAR_dev_user}"
+
+# Check if app exists before deploying
+echo -e "\n${CYAN}Checking if app exists...${NC}"
+if databricks apps get "$APP_NAME" &> /dev/null; then
+    echo -e "${GREEN}✓ App exists${NC}"
+    
+    # Deploy the app source code to compute
+    echo -e "${CYAN}Deploying source code to app compute...${NC}"
+    if databricks apps deploy "$APP_NAME" 2>&1; then
+        echo -e "${GREEN}✓ App deployment initiated${NC}"
+    else
+        echo -e "${YELLOW}Note: App deployment may already be in progress${NC}"
+        echo -e "${YELLOW}Check status: databricks apps get $APP_NAME${NC}"
+    fi
+else
+    echo -e "${YELLOW}App '$APP_NAME' not found - it may still be creating${NC}"
+    echo -e "${YELLOW}Wait a moment, then run: databricks apps deploy $APP_NAME${NC}"
+fi
 echo -e "\n${CYAN}Checking app status...${NC}"
 
 APP_INFO=$(databricks apps get "$APP_NAME" --output json 2>/dev/null || echo "{}")
