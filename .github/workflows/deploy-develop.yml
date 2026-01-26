@@ -60,18 +60,6 @@ jobs:
               valueFrom: "{{workspace_url}}"
             - name: DATABRICKS_WAREHOUSE_ID
               value: "${{ secrets.DATABRICKS_WAREHOUSE_ID }}"
-            - name: DATABASE_HOST
-              value: "${{ secrets.DATABASE_HOST }}"
-            - name: DATABASE_PORT
-              value: "5432"
-            - name: DATABASE_NAME
-              value: "databricks_postgres"
-            - name: DATABASE_USER
-              value: "${{ secrets.DATABASE_USER }}"
-            - name: DATABASE_SSLMODE
-              value: "require"
-            - name: DATABASE_INSTANCE_NAME
-              value: "${{ secrets.DATABASE_INSTANCE_NAME }}"
             - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
               value: "databricks-gemini-3-flash"
             - name: AGENT_ENABLED
@@ -98,17 +86,33 @@ jobs:
         run: |
           curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
 
-      - name: Configure Databricks CLI
+      - name: Configure Databricks CLI (OAuth)
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
-          echo "[DEFAULT]" > ~/.databrickscfg
-          echo "host = ${{ secrets.DATABRICKS_HOST }}" >> ~/.databrickscfg
-          echo "token = ${{ secrets.DATABRICKS_TOKEN }}" >> ~/.databrickscfg
+          # Verify OAuth credentials are set
+          if [ -z "$DATABRICKS_CLIENT_ID" ] || [ -z "$DATABRICKS_CLIENT_SECRET" ]; then
+            echo "Error: DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET must be set"
+            exit 1
+          fi
+          # CLI will use environment variables automatically for OAuth M2M
+          databricks auth describe
 
       - name: Upload code to Databricks Workspace
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
           databricks workspace import-dir ./backend ${{ env.WORKSPACE_PATH }} --overwrite
 
       - name: Deploy App
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
           # Check if app exists, create if not
           if ! databricks apps get ${{ env.APP_NAME }} > /dev/null 2>&1; then
@@ -120,6 +124,10 @@ jobs:
           databricks apps deploy ${{ env.APP_NAME }} --source-code-path ${{ env.WORKSPACE_PATH }}
 
       - name: Get App URL
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
           APP_URL=$(databricks apps get ${{ env.APP_NAME }} --output json | jq -r '.url')
           echo "## Deployment Successful! 🚀" >> $GITHUB_STEP_SUMMARY
