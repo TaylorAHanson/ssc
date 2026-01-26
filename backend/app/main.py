@@ -51,17 +51,6 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api/v1")
 
 
-@app.get("/")
-async def root():
-    """Health check endpoint."""
-    return {
-        "status": "ok",
-        "message": "EDAS Hub API is running",
-        "platform": "Databricks App",
-        "version": "1.0.0"
-    }
-
-
 @app.get("/health")
 async def health():
     """Detailed health check endpoint."""
@@ -90,20 +79,21 @@ if STATIC_DIR.exists():
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
     
-    # Serve index.html for the root and all non-API routes (SPA routing)
+    # Serve index.html for the root
     @app.get("/")
     async def serve_root():
         """Serve the SPA frontend."""
         index_path = STATIC_DIR / "index.html"
         if index_path.exists():
             return FileResponse(str(index_path))
-        return {"status": "ok", "message": "EDAS Hub API is running", "frontend": "not found"}
+        return {"status": "ok", "message": "EDAS Hub API", "frontend": "index.html not found"}
     
+    # Handle all non-API routes for SPA routing
     @app.get("/{full_path:path}")
     async def serve_spa(request: Request, full_path: str):
         """Serve the SPA frontend for all non-API routes."""
-        # Don't intercept API routes
-        if full_path.startswith("api/"):
+        # Don't intercept API or health routes
+        if full_path.startswith("api/") or full_path == "health":
             return {"error": "Not found"}
         
         # Try to serve the exact file first
@@ -119,4 +109,15 @@ if STATIC_DIR.exists():
         return {"error": "Frontend not found"}
 else:
     logger.info("Static directory not found - running in API-only mode")
+    
+    @app.get("/")
+    async def root():
+        """Health check endpoint (API-only mode)."""
+        return {
+            "status": "ok",
+            "message": "EDAS Hub API is running",
+            "platform": "Databricks App",
+            "version": "1.0.0",
+            "frontend": "Not deployed - static directory not found"
+        }
 
