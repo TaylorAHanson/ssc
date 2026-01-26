@@ -208,37 +208,33 @@
 
 ---
 
-## What We Configured Today
+## Platform Setup Guidelines
 
-### 1. GitHub Repository Secrets & Variables
+### GitHub Repository Secrets & Variables
 
-| Environment | Type | Name | Value | Purpose |
-|-------------|------|------|-------|---------|
-| development | Variable | `DATABRICKS_HOST` | `https://your-dev-workspace.cloud.databricks.com` | Workspace URL |
-| development | Secret | `DATABRICKS_CLIENT_ID` | `<sp-client-id>` | Service Principal for CI/CD |
-| development | Secret | `DATABRICKS_CLIENT_SECRET` | `<sp-secret>` | Service Principal secret |
-| development | Variable | `DATABRICKS_WAREHOUSE_ID` | `<warehouse-id>` | SQL Warehouse for queries |
+Configure these for **each environment** (Settings → Environments → [env]):
+
+| Environment | Type | Name | Example Value | Purpose |
+|-------------|------|------|---------------|---------|
+| development | Variable | `DATABRICKS_HOST` | `https://dev-workspace.cloud.databricks.com` | Workspace URL |
+| development | Secret | `DATABRICKS_CLIENT_ID` | `00000000-0000-...` | Service Principal Client ID |
+| development | Secret | `DATABRICKS_CLIENT_SECRET` | `dose...` | Service Principal secret |
+| development | Variable | `DATABRICKS_WAREHOUSE_ID` | `abc123def456` | SQL Warehouse ID |
 | development | Variable | `MODEL_SERVING_AGENT_LLM_ENDPOINT` | `databricks-claude-sonnet-4-5` | LLM endpoint name |
-| production | ... | (same structure) | ... | ... |
+| production | Variable | `DATABRICKS_HOST` | `https://prod-workspace.cloud.databricks.com` | Workspace URL |
+| production | Secret | `DATABRICKS_CLIENT_ID` | `00000000-0000-...` | Service Principal Client ID |
+| production | Secret | `DATABRICKS_CLIENT_SECRET` | `dose...` | Service Principal secret |
+| production | Variable | `DATABRICKS_WAREHOUSE_ID` | `xyz789` | SQL Warehouse ID |
+| production | Variable | `MODEL_SERVING_AGENT_LLM_ENDPOINT` | `databricks-claude-sonnet-4-5` | LLM endpoint name |
 
-### 2. Databricks Workspace Resources
+### Databricks Workspace Resources
 
-| Resource | Name | Purpose | Provisioning |
-|----------|------|---------|--------------|
-| **Service Principal** | `edas-hub-cicd-sp` | GitHub Actions deployment | Manual via Account Console |
-| **Databricks App** | `edas-hub-dev` | Development app | Auto-created by CI/CD |
-| **Databricks App** | `edas-hub` | Production app | Auto-created by CI/CD |
-| **SQL Warehouse** | (existing) | Execute SQL queries | Pre-existing |
-| **Model Serving Endpoint** | `databricks-claude-sonnet-4-5` | Foundation Model API | Pre-existing |
-
-### 3. Code Fixes Applied
-
-| Issue | Fix | File |
-|-------|-----|------|
-| Frontend using localhost:8000 | Added `VITE_API_BASE_URL=/api/v1` to build | `.github/workflows/deploy-*.yml` |
-| Model serving auth failing | Added OAuth via Databricks SDK | `backend/app/model_serving/client.py` |
-| URL missing https:// protocol | Auto-prepend https:// if missing | `backend/app/model_serving/client.py` |
-| Wrong model endpoint name | Made configurable via GitHub variable | `.github/workflows/deploy-*.yml` |
+| Resource | Name | Purpose | How to Provision |
+|----------|------|---------|------------------|
+| **Service Principal** | `edas-hub-{env}-cicd` | GitHub Actions deployment | Account Console → User Management |
+| **Databricks App** | `edas-hub-dev` / `edas-hub` | Application instance | Auto-created by CI/CD |
+| **SQL Warehouse** | (any serverless warehouse) | Execute SQL queries | Must exist, grant SP access |
+| **Model Serving Endpoint** | Foundation Model API | LLM for agent | Must exist, grant SP "Can Query" |
 
 ---
 
