@@ -37,34 +37,51 @@ Used for main branch deployments.
 
 Configure these secrets for **each environment** (Settings → Environments → [env] → Secrets):
 
+### Required Secrets (OAuth M2M Authentication)
+
 | Secret | Description | Example |
 |--------|-------------|---------|
 | `DATABRICKS_HOST` | Workspace URL | `https://your-workspace.cloud.databricks.com` |
-| `DATABRICKS_TOKEN` | PAT or OAuth token | `dapi...` |
-| `DATABRICKS_USER` | Your Databricks email | `user@company.com` |
+| `DATABRICKS_CLIENT_ID` | Service Principal Client ID | `00000000-0000-0000-0000-000000000000` |
+| `DATABRICKS_CLIENT_SECRET` | Service Principal Secret | `dose...` |
+| `DATABRICKS_USER` | Email for workspace path | `user@company.com` |
 | `DATABRICKS_WAREHOUSE_ID` | SQL Warehouse ID | `abc123def456` |
-| `DATABASE_HOST` | Lakebase host | `instance-xxx.database.cloud.databricks.com` |
-| `DATABASE_USER` | Service principal ID | `37734a7f-33d9-4355-...` |
-| `DATABASE_INSTANCE_NAME` | Lakebase instance name | `edas-backend` |
 
 ### Getting the Values
 
-#### DATABRICKS_TOKEN
-```bash
-# Generate a PAT in Databricks UI: User Settings → Developer → Access Tokens
-# Or use service principal OAuth (recommended for production)
+#### DATABRICKS_HOST
+Your Databricks workspace URL:
+```
+https://your-workspace.cloud.databricks.com
+```
+
+#### DATABRICKS_CLIENT_ID & DATABRICKS_CLIENT_SECRET
+Create a Service Principal for CI/CD:
+
+1. Go to **Account Console** → **User management** → **Service principals**
+2. Click **Add service principal**
+3. Name it: `github-actions-deployer`
+4. Generate an OAuth secret:
+   - Click on the service principal
+   - Go to **Secrets** tab
+   - Click **Generate secret**
+   - Copy the **Client ID** and **Secret** (secret is only shown once!)
+
+5. Grant workspace access:
+   - Go to your Workspace → **Settings** → **Identity and access**
+   - Add the service principal with **Admin** role (needed to deploy apps)
+
+#### DATABRICKS_USER
+Your email address (used for the workspace path where the app is deployed):
+```
+user@company.com
 ```
 
 #### DATABRICKS_WAREHOUSE_ID
-```bash
-# Find in Databricks UI: SQL → SQL Warehouses → [warehouse] → Connection details
-```
-
-#### DATABASE_USER (Service Principal ID)
-```bash
-# This is the app's service principal client ID
-# Get it from: databricks apps get <app-name> --output json | jq -r '.service_principal_client_id'
-```
+Find in Databricks UI:
+1. Go to **SQL** → **SQL Warehouses**
+2. Click on your warehouse
+3. Copy the **ID** from the connection details
 
 ## Workflow Files
 
@@ -143,26 +160,38 @@ Developer creates PR: develop → main
 ## First-Time Setup Checklist
 
 - [ ] Create GitHub repository
+- [ ] Create Service Principal for CI/CD deployments
+- [ ] Grant Service Principal admin access to workspace
 - [ ] Create `development` environment in GitHub
 - [ ] Create `production` environment in GitHub
 - [ ] Add secrets to `development` environment
 - [ ] Add secrets to `production` environment
 - [ ] Set up branch protection for `develop`
 - [ ] Set up branch protection for `main`
-- [ ] Create Databricks Apps in each workspace (or let workflow create them)
-- [ ] Create Lakebase instances in each workspace
-- [ ] Create service principal roles in each Lakebase instance
-- [ ] Grant CAN USE on Lakebase to each app's service principal
+- [ ] Test deployment with a PR to develop
 
 ## Troubleshooting
 
-### Deployment fails with "App not found"
-The workflow will auto-create the app. Ensure the token has permissions to create apps.
+### Deployment fails with "Authentication failed"
+Ensure:
+1. `DATABRICKS_CLIENT_ID` and `DATABRICKS_CLIENT_SECRET` are set correctly
+2. The Service Principal has workspace access
+3. The OAuth secret hasn't expired
 
-### OAuth token generation fails
-Ensure the app's service principal:
-1. Has CAN USE on the Lakebase instance
-2. Has a Postgres role created via `databricks_create_role()`
+### Deployment fails with "Permission denied"
+The Service Principal needs:
+1. Workspace Admin role (to create/deploy apps)
+2. CAN MANAGE permissions on the target workspace path
+
+### Deployment fails with "App not found"
+The workflow will auto-create the app. Ensure the Service Principal has permissions to create apps.
 
 ### Build fails
 Check Node.js version (should be 20) and Python version (should be 3.11).
+
+## Security Best Practices
+
+1. **Use separate Service Principals** for development and production environments
+2. **Rotate secrets regularly** - OAuth secrets should be rotated periodically
+3. **Use environment protection rules** - Require approval for production deployments
+4. **Limit Service Principal permissions** - Only grant what's needed
