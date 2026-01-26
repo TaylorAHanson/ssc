@@ -1,5 +1,9 @@
 """
 Databricks Model Serving endpoint client.
+
+Supports two authentication modes:
+1. Explicit token: Uses MODEL_SERVING_API_KEY or DATABRICKS_TOKEN
+2. OAuth (automatic): Uses Databricks SDK for OAuth in Databricks Apps
 """
 from typing import Dict, Any, Optional
 import httpx
@@ -12,17 +16,53 @@ from app.core.retry import retry_on_retryable
 logger = logging.getLogger(__name__)
 
 
+def _get_oauth_token() -> Optional[str]:
+    """
+    Get OAuth token using Databricks SDK.
+    This works automatically in Databricks Apps where OAuth is configured.
+    """
+    try:
+        from databricks.sdk import WorkspaceClient
+        # WorkspaceClient auto-detects auth from environment (OAuth in Apps)
+        w = WorkspaceClient()
+        # Get the auth headers which contain the OAuth token
+        headers = w.config.authenticate()
+        auth_header = headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]  # Remove "Bearer " prefix
+            logger.info("Successfully obtained OAuth token via Databricks SDK")
+            return token
+        logger.warning("OAuth token not found in SDK auth headers")
+        return None
+    except ImportError:
+        logger.warning("databricks-sdk not installed, OAuth not available")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to get OAuth token via SDK: {e}")
+        return None
+
+
 class ModelServingClient:
     """Client for Databricks Model Serving endpoints."""
     
     def __init__(self):
-        self.base_url = settings.DATABRICKS_WORKSPACE_URL
-        self.api_key = settings.MODEL_SERVING_API_KEY or settings.DATABRICKS_TOKEN
+        self.base_url = settings.DATABRICKS_WORKSPACE_URL or settings.DATABRICKS_HOST
         
         if not self.base_url:
-            raise ValueError("DATABRICKS_WORKSPACE_URL must be set in configuration")
+            raise ValueError("DATABRICKS_WORKSPACE_URL or DATABRICKS_HOST must be set in configuration")
+        
+        # Try explicit token first, then fall back to OAuth
+        self.api_key = settings.MODEL_SERVING_API_KEY or settings.DATABRICKS_TOKEN
+        
         if not self.api_key:
-            raise ValueError("MODEL_SERVING_API_KEY or DATABRICKS_TOKEN must be set in configuration")
+            logger.info("No explicit token provided, attempting OAuth via Databricks SDK...")
+            self.api_key = _get_oauth_token()
+        
+        if not self.api_key:
+            raise ValueError(
+                "Authentication required: Set MODEL_SERVING_API_KEY, DATABRICKS_TOKEN, "
+                "or ensure OAuth is configured (automatic in Databricks Apps)"
+            )
         
         # Ensure base_url doesn't end with a slash
         self.base_url = self.base_url.rstrip("/")
