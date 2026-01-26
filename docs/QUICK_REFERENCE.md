@@ -35,13 +35,26 @@
 
 ## Service Principal Permissions
 
-```
-✓ Workspace Member (add via Admin Console)
-✓ USE CATALOG on Unity Catalog
-✓ Can Query on Model Serving Endpoint
-✓ Can Use on SQL Warehouse
-✓ Can Manage on Databricks Apps (or workspace admin)
-```
+### CI/CD Service Principal (used by GitHub Actions)
+*This is the SP whose credentials are stored in GitHub Secrets*
+
+| Permission | Where to Grant |
+|------------|----------------|
+| Workspace Member | Admin Console → Users → Add SP |
+| Can Manage on Apps | Workspace Settings → Apps → Permissions |
+
+### App Service Principal (auto-created by Databricks Apps)
+*Each app gets its own SP named `app-xxxx <app-name>`. Grant these permissions:*
+
+| Permission | Where to Grant |
+|------------|----------------|
+| USE CATALOG | Unity Catalog → Catalog → Permissions |
+| USE SCHEMA | Unity Catalog → Schema → Permissions |
+| SELECT on tables | Unity Catalog → Table → Permissions |
+| Can Query | Model Serving → Endpoint → Permissions |
+| Can Use | SQL Warehouses → Warehouse → Permissions |
+
+> **Tip:** Find the App SP name in Databricks UI: Compute → Apps → Your App → Details → "Service Principal"
 
 ---
 
