@@ -29,32 +29,110 @@
 |------|---------|
 | `DATABRICKS_HOST` | `https://workspace.cloud.databricks.com` |
 | `DATABRICKS_WAREHOUSE_ID` | `abc123def456` |
-| `MODEL_SERVING_AGENT_LLM_ENDPOINT` | `databricks-claude-sonnet-4-5` |
+| `MODEL_SERVING_AGENT_LLM_ENDPOINT` | `databricks-gemini-2-5-flash` |
 
 ---
 
-## Service Principal Permissions
+## Service Principal Architecture
 
-### CI/CD Service Principal (used by GitHub Actions)
-*This is the SP whose credentials are stored in GitHub Secrets*
+### Security Boundary Diagram
 
-| Permission | Where to Grant |
-|------------|----------------|
-| Workspace Member | Admin Console → Users → Add SP |
-| Can Manage on Apps | Workspace Settings → Apps → Permissions |
+```mermaid
+flowchart TB
+    subgraph GitHub["GitHub Actions"]
+        CICD_DEV["CI/CD SP (Dev)"]
+        CICD_PROD["CI/CD SP (Prod)"]
+    end
 
-### App Service Principal (auto-created by Databricks Apps)
-*Each app gets its own SP named `app-xxxx <app-name>`. Grant these permissions:*
+    subgraph Databricks["Databricks Workspace"]
+        subgraph DevEnv["Development Environment"]
+            APP_DEV["App SP: edas-hub-dev"]
+            DEV_APP[("Dev App")]
+        end
+        
+        subgraph ProdEnv["Production Environment"]
+            APP_PROD["App SP: edas-hub"]
+            PROD_APP[("Prod App")]
+        end
+        
+        subgraph SharedResources["Shared Resources"]
+            LLM["Model Serving\n(Gemini 2.5 Flash)"]
+            UC["Unity Catalog"]
+            SQL["SQL Warehouse"]
+        end
+    end
 
-| Permission | Where to Grant |
-|------------|----------------|
-| USE CATALOG | Unity Catalog → Catalog → Permissions |
-| USE SCHEMA | Unity Catalog → Schema → Permissions |
-| SELECT on tables | Unity Catalog → Table → Permissions |
-| Can Query | Model Serving → Endpoint → Permissions |
-| Can Use | SQL Warehouses → Warehouse → Permissions |
+    CICD_DEV -->|"Deploy only"| DEV_APP
+    CICD_PROD -->|"Deploy only"| PROD_APP
+    
+    APP_DEV -->|"Runtime access"| LLM
+    APP_DEV -->|"Runtime access"| UC
+    APP_DEV -->|"Runtime access"| SQL
+    
+    APP_PROD -->|"Runtime access"| LLM
+    APP_PROD -->|"Runtime access"| UC
+    APP_PROD -->|"Runtime access"| SQL
+```
 
-> **Tip:** Find the App SP name in Databricks UI: Compute → Apps → Your App → Details → "Service Principal"
+### Service Principal Inventory
+
+| SP Name | Purpose | Environment | Credentials Stored In |
+|---------|---------|-------------|----------------------|
+| `cicd-edas-hub-dev` | Deploy dev app | Development | GitHub Secrets (dev) |
+| `cicd-edas-hub-prod` | Deploy prod app | Production | GitHub Secrets (prod) |
+| `app-xxxx edas-hub-dev` | Runtime for dev app | Development | Auto-managed by Databricks |
+| `app-xxxx edas-hub` | Runtime for prod app | Production | Auto-managed by Databricks |
+
+### Principle of Least Privilege
+
+#### CI/CD Service Principals (Deployment Only)
+*These SPs should NOT have access to data or runtime resources*
+
+| Permission | Scope | Rationale |
+|------------|-------|-----------|
+| Workspace Member | Workspace | Required to access workspace |
+| Can Manage | Apps only | Deploy and manage app lifecycle |
+| ❌ No Unity Catalog access | - | Not needed for deployment |
+| ❌ No SQL Warehouse access | - | Not needed for deployment |
+| ❌ No Model Serving access | - | Not needed for deployment |
+
+#### App Service Principals (Runtime Only)
+*These SPs have data access but cannot deploy or modify infrastructure*
+
+| Permission | Scope | Rationale |
+|------------|-------|-----------|
+| USE CATALOG | Specific catalogs only | Read metadata for agent tools |
+| USE SCHEMA | Specific schemas only | Read metadata for agent tools |
+| SELECT | Specific tables only | Query data for agent tools |
+| Can Query | LLM endpoint only | Call LLM for agent responses |
+| Can Use | Designated warehouse | Execute SQL queries |
+| ❌ No Workspace admin | - | Cannot modify infrastructure |
+| ❌ No Apps permissions | - | Cannot deploy or modify apps |
+
+### Security Boundaries
+
+```mermaid
+flowchart LR
+    subgraph Blast["Blast Radius Isolation"]
+        direction TB
+        B1["Dev App SP compromise\n→ Only dev data exposed"]
+        B2["Prod App SP compromise\n→ Only prod data exposed"]  
+        B3["CI/CD SP compromise\n→ Can deploy, no data access"]
+    end
+```
+
+### Where to Grant Permissions
+
+| SP Type | Permission | Location |
+|---------|------------|----------|
+| CI/CD | Workspace Member | Admin Console → Users → Add SP |
+| CI/CD | Can Manage on Apps | Compute → Apps → Permissions |
+| App | USE CATALOG/SCHEMA | Catalog Explorer → Catalog → Permissions |
+| App | SELECT on tables | Catalog Explorer → Table → Permissions |
+| App | Can Query | Model Serving → Endpoint → Permissions |
+| App | Can Use | SQL Warehouses → Warehouse → Permissions |
+
+> **Finding App SP:** Compute → Apps → Your App → Service Principal field (e.g., `app-xxxx edas-hub-dev`)
 
 ---
 

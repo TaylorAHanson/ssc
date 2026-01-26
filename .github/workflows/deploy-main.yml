@@ -54,7 +54,7 @@ jobs:
             - name: DATABRICKS_WAREHOUSE_ID
               value: "${{ vars.DATABRICKS_WAREHOUSE_ID }}"
             - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
-              value: "${{ vars.MODEL_SERVING_AGENT_LLM_ENDPOINT || 'databricks-claude-sonnet-4-5' }}"
+              value: "${{ vars.MODEL_SERVING_AGENT_LLM_ENDPOINT || 'databricks-gemini-2-5-flash' }}"
             - name: AGENT_ENABLED
               value: "true"
             - name: AGENT_MAX_ITERATIONS
