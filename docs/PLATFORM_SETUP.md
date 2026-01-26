@@ -162,7 +162,7 @@
 │  │   Databricks App     │    │   Model Serving      │    │   Unity Catalog    │    │
 │  │   (edas-hub-dev)     │    │   Endpoint           │    │                    │    │
 │  │                      │    │                      │    │   ┌────────────┐   │    │
-│  │  ┌────────────────┐  │    │  Claude Sonnet 4.5   │    │   │ Catalogs   │   │    │
+│  │  ┌────────────────┐  │    │  Gemini 2.5 Flash    │    │   │ Catalogs   │   │    │
 │  │  │ FastAPI Backend│◄─┼────┼─► (Foundation Model) │    │   │ Schemas    │   │    │
 │  │  │                │  │    │                      │    │   │ Tables     │   │    │
 │  │  │  - Agent API   │  │    └──────────────────────┘    │   └────────────┘   │    │
@@ -220,12 +220,12 @@ Configure these for **each environment** (Settings → Environments → [env]):
 | development | Secret | `DATABRICKS_CLIENT_ID` | `00000000-0000-...` | Service Principal Client ID |
 | development | Secret | `DATABRICKS_CLIENT_SECRET` | `dose...` | Service Principal secret |
 | development | Variable | `DATABRICKS_WAREHOUSE_ID` | `abc123def456` | SQL Warehouse ID |
-| development | Variable | `MODEL_SERVING_AGENT_LLM_ENDPOINT` | `databricks-claude-sonnet-4-5` | LLM endpoint name |
+| development | Variable | `MODEL_SERVING_AGENT_LLM_ENDPOINT` | `databricks-gemini-2-5-flash` | LLM endpoint name |
 | production | Variable | `DATABRICKS_HOST` | `https://prod-workspace.cloud.databricks.com` | Workspace URL |
 | production | Secret | `DATABRICKS_CLIENT_ID` | `00000000-0000-...` | Service Principal Client ID |
 | production | Secret | `DATABRICKS_CLIENT_SECRET` | `dose...` | Service Principal secret |
 | production | Variable | `DATABRICKS_WAREHOUSE_ID` | `xyz789` | SQL Warehouse ID |
-| production | Variable | `MODEL_SERVING_AGENT_LLM_ENDPOINT` | `databricks-claude-sonnet-4-5` | LLM endpoint name |
+| production | Variable | `MODEL_SERVING_AGENT_LLM_ENDPOINT` | `databricks-gemini-2-5-flash` | LLM endpoint name |
 
 ### Databricks Workspace Resources
 
@@ -296,7 +296,7 @@ GRANT SELECT ON TABLE *.*.* TO `edas-hub-{env}-cicd`;
 #### 4. Verify Model Serving Endpoint
 
 1. Go to **Serving** in Databricks workspace
-2. Confirm the Foundation Model endpoint exists (e.g., `databricks-claude-sonnet-4-5`)
+2. Confirm the Foundation Model endpoint exists (e.g., `databricks-gemini-2-5-flash`)
 3. Click on endpoint → **Permissions** → Add Service Principal with "Can Query"
 
 #### 5. Deploy & Test
