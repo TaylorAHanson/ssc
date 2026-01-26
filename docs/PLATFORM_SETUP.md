@@ -323,51 +323,130 @@ git push origin main     # → deploys to production
 
 ## Local Developer Setup (Bundle Deploy)
 
-For developers to deploy personal instances:
+For developers to deploy personal app instances without going through CI/CD.
 
-### 1. Prerequisites
+### One-Time Setup (Do Once)
+
+#### 1. Install Databricks CLI
 
 ```bash
-# Install Databricks CLI
 curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
 
-# Authenticate
+# Verify installation
+databricks --version  # Should be 0.250.0 or higher
+```
+
+#### 2. Authenticate to Your Workspace
+
+```bash
+# Login (opens browser for OAuth)
 databricks auth login --host https://your-workspace.cloud.databricks.com
+
+# Verify authentication
+databricks auth describe
 ```
 
-### 2. Set Environment Variables
+#### 3. Set Environment Variables (add to your ~/.zshrc or ~/.bashrc)
 
 ```bash
+# Required
 export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+
+# Optional (needed if app uses SQL queries)
 export DATABRICKS_WAREHOUSE_ID=your-warehouse-id
+
+# Your username for personal app naming (use dashes, not underscores)
+export BUNDLE_VAR_dev_user=your-name  # e.g., "rohan-ahire"
 ```
 
-### 3. Deploy Personal Instance
+Reload your shell: `source ~/.zshrc`
+
+---
+
+### Deploy Your Personal Instance
+
+#### Option A: Using the Deploy Script
 
 ```bash
+# Build frontend and deploy to Databricks
 ./deploy.sh dev
-# Creates: edas-hub-dev-{your-username}
+```
+
+#### Option B: Using Bundle Commands Directly
+
+```bash
+# Just deploy (assumes frontend already built)
+databricks bundle deploy -t dev --var dev_user=your-name
+
+# Start the app after deployment
+databricks apps start edas-hub-dev-your-name
 ```
 
 ---
 
-## Troubleshooting
+### After Deployment
 
-### Common Issues
+1. Go to **Databricks Workspace → Compute → Apps**
+2. Find your app: `edas-hub-dev-{your-name}`
+3. Click **Start** to start the compute
+4. Once running, click the **URL** to access your app
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| "localhost:8000" error in browser | `VITE_API_BASE_URL` not set during build | Ensure workflow has `VITE_API_BASE_URL: /api/v1` |
-| "internal configuration error" | Model serving auth failed | Check OAuth setup, SP permissions |
-| "Request URL missing protocol" | `{{workspace_url}}` doesn't include https | Code auto-prepends https:// now |
-| "Endpoint not found" 404 | Wrong endpoint name | Check `MODEL_SERVING_AGENT_LLM_ENDPOINT` variable |
-| "Authentication failed" 401 | SP lacks permissions | Grant SP access to Model Serving endpoint |
+---
 
-### Viewing Logs
+### What the Deploy Script Automates
 
-1. Go to **Compute → Apps → {app-name}**
-2. Click **Logs** tab
-3. Search for "Error" or specific keywords
+| Step | Manual | ./deploy.sh |
+|------|--------|-------------|
+| Check Databricks CLI installed | You | Automated |
+| Check authentication | You (one-time) | Validates |
+| Build frontend (`npm run build`) | You | Automated |
+| Copy frontend to `backend/static/` | You | Automated |
+| Run `databricks bundle deploy` | You | Automated |
+
+### What You Must Do Manually
+
+| Step | Why |
+|------|-----|
+| Install Databricks CLI | One-time system setup |
+| Run `databricks auth login` | OAuth requires browser interaction |
+| Set environment variables | Personal configuration |
+| Start app compute (first time) | Databricks requires explicit start |
+
+---
+
+### Updating Your Personal App
+
+After making code changes:
+
+```bash
+# Redeploy with your changes
+./deploy.sh dev
+
+# Or just the backend (faster, no frontend rebuild)
+databricks bundle deploy -t dev --var dev_user=your-name
+```
+
+---
+
+### Cleaning Up
+
+To delete your personal app:
+
+```bash
+databricks apps delete edas-hub-dev-your-name
+databricks bundle destroy -t dev --var dev_user=your-name
+```
+
+---
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| "cannot configure default credentials" | Run `databricks auth login --host $DATABRICKS_HOST` |
+| "App name must contain only lowercase letters, numbers, and dashes" | Use dashes in `dev_user`, not underscores |
+| "active deployment in progress" | Wait for current deployment to finish |
+| "Compute is in stopped state" | Go to Apps UI and click Start |
 
 ---
 

@@ -1,78 +1,30 @@
 # Databricks Asset Bundle Configuration
 # 
 # Usage:
-#   Personal dev deployment:  databricks bundle deploy -t dev
-#   Integration testing:      databricks bundle deploy -t integration  
-#   Production:               databricks bundle deploy -t prod
+#   Personal dev deployment:  ./deploy.sh dev
+#   Integration testing:      Handled by CI/CD
+#   Production:               Handled by CI/CD
 #
-# Each developer gets their own app instance with -t dev
+# Prerequisites:
+#   export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+#   databricks auth login
+#
+# To deploy with your username:
+#   databricks bundle deploy -t dev --var dev_user=rohan-ahire
 
 bundle:
   name: edas-hub
 
-# Variables that can be overridden per target
+# Variables (can be overridden with --var or BUNDLE_VAR_xxx env vars)
 variables:
-  warehouse_id:
-    description: "Databricks SQL Warehouse ID"
-    default: ""
-  model_endpoint:
-    description: "Model serving endpoint name"
-    default: "databricks-claude-sonnet-4-5"
+  dev_user:
+    description: "Developer username for personal app (use dashes, not underscores)"
+    default: dev
 
-# Workspace configuration
-workspace:
-  host: ${var.databricks_host}
-
-# Include the backend directory as the source
-include:
-  - backend/**
-
-# App resource definition
-resources:
-  apps:
-    edas_hub:
-      name: ${bundle.target}-edas-hub-${bundle.git.branch}
-      description: "EDAS Hub - ${bundle.target} environment"
-      source_code_path: ${workspace.file_path}/backend
-      
-      config:
-        command:
-          - "python"
-          - "-m"
-          - "uvicorn"
-          - "app.main:app"
-          - "--host"
-          - "0.0.0.0"
-          - "--port"
-          - "8000"
-        
-        env:
-          - name: DATABRICKS_HOST
-            valueFrom: "{{workspace_url}}"
-          - name: DATABRICKS_WORKSPACE_URL
-            valueFrom: "{{workspace_url}}"
-          - name: DATABRICKS_WAREHOUSE_ID
-            value: ${var.warehouse_id}
-          - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
-            value: ${var.model_endpoint}
-          - name: AGENT_ENABLED
-            value: "true"
-          - name: AGENT_MAX_ITERATIONS
-            value: "10"
-          - name: AGENT_TIMEOUT_SECONDS
-            value: "60"
-          - name: CORS_ORIGINS
-            value: "*"
-          - name: POLLER_INTERVAL_SECONDS
-            value: "5"
-          - name: POLLER_BATCH_SIZE
-            value: "50"
-          - name: POLLER_MAX_CONCURRENT
-            value: "10"
-        
-        resources:
-          num_cpus: 1
-          memory_mb: 2048
+# Sync backend directory to workspace
+sync:
+  include:
+    - backend/**
 
 # Target environments
 targets:
@@ -80,48 +32,10 @@ targets:
   dev:
     mode: development
     default: true
-    variables:
-      databricks_host: ${DATABRICKS_HOST}
-      warehouse_id: ${DATABRICKS_WAREHOUSE_ID}
+    
     resources:
       apps:
         edas_hub:
-          # Use current_user to create unique app per developer
-          name: edas-hub-dev-${workspace.current_user.short_name}
-          description: "EDAS Hub - Personal dev instance for ${workspace.current_user.userName}"
-          config:
-            resources:
-              num_cpus: 1
-              memory_mb: 2048
-
-  # Shared integration environment (deployed from develop branch via CI/CD)
-  integration:
-    mode: development
-    variables:
-      databricks_host: ${DATABRICKS_HOST}
-      warehouse_id: ${DATABRICKS_WAREHOUSE_ID}
-    resources:
-      apps:
-        edas_hub:
-          name: edas-hub-integration
-          description: "EDAS Hub - Integration Testing Environment"
-          config:
-            resources:
-              num_cpus: 1
-              memory_mb: 2048
-
-  # Production (deployed from main branch via CI/CD)
-  prod:
-    mode: production
-    variables:
-      databricks_host: ${DATABRICKS_HOST}
-      warehouse_id: ${DATABRICKS_WAREHOUSE_ID}
-    resources:
-      apps:
-        edas_hub:
-          name: edas-hub
-          description: "EDAS Hub - Production Environment"
-          config:
-            resources:
-              num_cpus: 2
-              memory_mb: 4096
+          name: edas-hub-dev-${var.dev_user}
+          description: "EDAS Hub - Personal dev instance"
+          source_code_path: ./backend
