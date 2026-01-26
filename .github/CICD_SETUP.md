@@ -39,13 +39,12 @@ Configure these secrets for **each environment** (Settings → Environments → 
 
 ### Required Secrets (OAuth M2M Authentication)
 
-| Secret | Description | Example |
-|--------|-------------|---------|
-| `DATABRICKS_HOST` | Workspace URL | `https://your-workspace.cloud.databricks.com` |
-| `DATABRICKS_CLIENT_ID` | Service Principal Client ID | `00000000-0000-0000-0000-000000000000` |
-| `DATABRICKS_CLIENT_SECRET` | Service Principal Secret | `dose...` |
-| `DATABRICKS_USER` | Email for workspace path | `user@company.com` |
-| `DATABRICKS_WAREHOUSE_ID` | SQL Warehouse ID | `abc123def456` |
+| Name | Type | Description | Example |
+|------|------|-------------|---------|
+| `DATABRICKS_HOST` | Variable | Workspace URL | `https://your-workspace.cloud.databricks.com` |
+| `DATABRICKS_CLIENT_ID` | Secret | Service Principal Client ID | `00000000-0000-0000-0000-000000000000` |
+| `DATABRICKS_CLIENT_SECRET` | Secret | Service Principal Secret | `dose...` |
+| `DATABRICKS_WAREHOUSE_ID` | Variable | SQL Warehouse ID | `abc123def456` |
 
 ### Getting the Values
 
@@ -70,12 +69,6 @@ Create a Service Principal for CI/CD:
 5. Grant workspace access:
    - Go to your Workspace → **Settings** → **Identity and access**
    - Add the service principal with **Admin** role (needed to deploy apps)
-
-#### DATABRICKS_USER
-Your email address (used for the workspace path where the app is deployed):
-```
-user@company.com
-```
 
 #### DATABRICKS_WAREHOUSE_ID
 Find in Databricks UI:
