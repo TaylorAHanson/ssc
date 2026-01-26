@@ -9,14 +9,17 @@ import { Training } from './pages/Training';
 import { Events } from './pages/Events';
 import { ReusableAssets } from './pages/ReusableAssets';
 import { CommunityLinks } from './pages/CommunityLinks';
+import { useBrandingStore } from './stores/brandingStore';
 import { useRequestStore } from './stores/requestStore';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
+  const fetchBranding = useBrandingStore((state) => state.fetchBranding);
 
   useEffect(() => {
     fetchBannerMessage();
-  }, [fetchBannerMessage]);
+    fetchBranding();
+  }, [fetchBannerMessage, fetchBranding]);
 
   return (
     <BrowserRouter>

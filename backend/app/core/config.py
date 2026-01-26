@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     # API Settings
     API_V1_PREFIX: str = "/api/v1"
     PROJECT_NAME: str = "EDAS Hub API"
+    LOG_LEVEL: str = "INFO"
+    
+    # Branding Settings
+    BRAND_NAME: str = "EDAS Hub"
+    BRAND_LOGO_URL: str = ""
+    BRAND_COLOR_PRIMARY: str = "#3253DC"
+    BRAND_COLOR_SECONDARY: str = "#0ea5e9"
     
     # CORS (can be overridden in .env as JSON array or comma-separated)
     # Example in .env: CORS_ORIGINS=["http://localhost:5173","http://localhost:3000"]
@@ -155,6 +162,13 @@ class Settings(BaseSettings):
     # Terraform Settings
     TERRAFORM_WORKSPACE_BASE_DIR: str = "/tmp/terraform"  # Base directory for Terraform workspaces
     TERRAFORM_TEMPLATE_DIR: str = ""  # Path to Terraform template directory (defaults to project root/terrarform_temp)
+    
+    # Terraform GitOps Settings
+    INFRA_REPO_URL: str = "" # URL of the infrastructure git repository
+    INFRA_REPO_BRANCH: str = "main" # Main branch for infrastructure repo
+    GIT_USERNAME: str = "Ops Bot"
+    GIT_EMAIL: str = "ops-bot@example.com"
+    GIT_SSH_KEY_PATH: str = "" # Path to SSH key for git operations
     
     # IDP (Identity Provider) Settings
     # SECRET: Set in .env file

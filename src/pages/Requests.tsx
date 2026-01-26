@@ -140,6 +140,36 @@ export function RequestStateList({ request }: { request: Request }) {
           facts: state.facts
         };
       });
+
+    // Fallback: If request is failed but we have no states (e.g. failed to load state machine),
+    // add a synthetic failed step so the error is visible.
+    if (request.status === 'failed' && stateSteps.length === 0) {
+      stateSteps.push({
+        id: 'system_failure',
+        name: 'System Processing',
+        status: 'failed',
+        order: 1,
+        completedAt: request.updatedAt,
+        facts: []
+      });
+    }
+
+    // Fix for "failed" state visualization:
+    // If request is globally failed, but no step is marked as "failed" (because checks above failed to match isActive),
+    // then assume the first "pending" step is the one that failed.
+    if (request.status === 'failed') {
+      const hasFailedStep = stateSteps.some(s => s.status === 'failed');
+      if (!hasFailedStep) {
+        const firstPendingIdx = stateSteps.findIndex(s => s.status === 'pending');
+        if (firstPendingIdx !== -1) {
+          stateSteps[firstPendingIdx].status = 'failed';
+        } else if (stateSteps.length > 0) {
+          // If all are completed (rare for failed) or something else, mark the last one?
+          // For now, only targeting pending steps.
+        }
+      }
+    }
+
     steps = [...steps, ...stateSteps];
   }
 
@@ -329,19 +359,7 @@ export function Requests() {
     }
   };
 
-  // We only show empty state if there are NO requests at all, not just if filter hides them
-  if (requests.length === 0) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <p className="text-lg text-gray-600 mb-4">No requests yet</p>
-          <p className="text-sm text-gray-500">
-            Start by using the Agentic Helper on the home page to create a request.
-          </p>
-        </div>
-      </div>
-    );
-  }
+
 
   return (
     <div className="space-y-6">
@@ -530,7 +548,7 @@ export function Requests() {
                       >
                         <div
                           className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${message.type === 'user'
-                            ? 'bg-gradient-to-br from-primary to-primary/90 text-white'
+                            ? 'bg-primary text-white'
                             : 'bg-gray-50 text-gray-900 border border-gray-200/50'
                             }`}
                         >

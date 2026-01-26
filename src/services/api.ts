@@ -302,8 +302,8 @@ export async function updateWorkspaceFeature(
  * Request Management API
  */
 export async function createRequest(
-  type: RequestType, 
-  title: string, 
+  type: RequestType,
+  title: string,
   environment?: Environment,
   metadata?: Record<string, any>
 ): Promise<Request> {
@@ -328,7 +328,7 @@ export async function createRequest(
   // The backend returns { request_id, status, message } for create
   // We might want to fetch the full request details or just construct a basic object
   const result = await response.json();
-  
+
   // Fetch the full request to return consistent object
   return getRequest(result.request_id);
 }
@@ -441,6 +441,22 @@ export async function deleteDelegation(delegationId: string): Promise<void> {
   if (!response.ok) {
     throw new Error(`Failed to delete delegation: ${response.statusText}`);
   }
+}
+
+/**
+ * Get branding settings.
+ */
+export async function getBranding(): Promise<{
+  brand_name: string;
+  brand_logo_url: string;
+  brand_color_primary: string;
+  brand_color_secondary: string;
+}> {
+  const response = await fetch(`${API_BASE_URL}/branding`);
+  if (!response.ok) {
+    throw new Error(`Failed to get branding: ${response.statusText}`);
+  }
+  return response.json();
 }
 
 export const api = {

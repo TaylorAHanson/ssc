@@ -208,3 +208,9 @@ export interface DelegationCreate {
   end_date: string;
 }
 
+export interface Branding {
+  brand_name: string;
+  brand_logo_url: string;
+  brand_color_primary: string;
+  brand_color_secondary: string;
+}

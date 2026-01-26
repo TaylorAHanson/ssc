@@ -125,44 +125,7 @@ class DatabricksProvider(BaseProvider):
                 raise RetryableError(f"SQL execution temporarily unavailable: {str(e)}")
             raise RetryableError(f"SQL execution failed: {str(e)}")
     
-    @retry_on_retryable(max_attempts=3)
-    async def create_workspace(self, name: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create workspace (via API)."""
-        try:
-            # TODO: Implement workspace creation via Databricks API
-            raise NotImplementedError("Workspace creation not yet implemented")
-        except Exception as e:
-            raise RetryableError(f"Workspace creation failed: {str(e)}")
-    
-    @retry_on_retryable(max_attempts=3)
-    async def create_catalog(self, name: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create Unity Catalog catalog."""
-        try:
-            # Use Databricks SDK to create catalog
-            # config should contain: comment, properties, etc.
-            catalog_name = name
-            comment = config.get("comment")
-            properties = config.get("properties")
-            
-            logger.info(f"Creating catalog '{catalog_name}' via Databricks SDK")
-            
-            # Create the catalog
-            result = self.client.catalogs.create(
-                name=catalog_name,
-                comment=comment,
-                properties=properties
-            )
-            
-            # Return result as dict
-            return result.as_dict()
-            
-        except Exception as e:
-            if "already exists" in str(e):
-                raise PermanentError(f"Catalog '{name}' already exists")
-            raise RetryableError(f"Catalog creation failed: {str(e)}")
-    
-    @retry_on_retryable(max_attempts=3)
-    async def grant_access(self, principal: str, resource: str, permissions: list) -> bool:
+
         """Grant access to resource."""
         try:
             # TODO: Implement access grant via Databricks API

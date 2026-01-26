@@ -275,6 +275,8 @@ const ThinkingBubble = () => (
   </div>
 );
 
+import { useBrandingStore } from '../stores/brandingStore';
+
 export function Home() {
   const [query, setQuery] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -285,6 +287,7 @@ export function Home() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const { brandName, brandLogoUrl } = useBrandingStore();
 
   const adjustHeight = (el: HTMLTextAreaElement) => {
     el.style.height = 'auto';
@@ -642,11 +645,15 @@ export function Home() {
 
         <div className="text-center mb-6 relative z-10">
           <div className="flex items-center justify-center gap-3 mb-3">
-            <div className="p-2 bg-gradient-to-br from-primary to-primary/80 rounded-xl shadow-md">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
-              {conversationState.context?.title || 'EDAS Hub'}
+            {brandLogoUrl ? (
+              <img src={brandLogoUrl} alt="Logo" className="w-10 h-10 object-contain shadow-md rounded-xl" />
+            ) : (
+              <div className="p-2 bg-primary rounded-xl shadow-md">
+                <Sparkles className="w-5 h-5 text-white" />
+              </div>
+            )}
+            <h1 className="text-3xl font-bold text-gray-900">
+              {conversationState.context?.title || brandName}
             </h1>
           </div>
         </div>
@@ -666,7 +673,7 @@ export function Home() {
                   >
                     <div
                       className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${message.type === 'user'
-                        ? 'bg-gradient-to-br from-primary to-primary/90 text-white'
+                        ? 'bg-primary text-white'
                         : 'bg-gray-50 text-gray-900 border border-gray-200/50'
                         }`}
                     >
