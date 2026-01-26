@@ -327,13 +327,18 @@ For developers to deploy personal app instances without going through CI/CD.
 
 ### One-Time Setup (Do Once)
 
-#### 1. Install Databricks CLI
+#### 1. Install or Update Databricks CLI
 
 ```bash
+# Install (or update if already installed)
 curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
 
 # Verify installation
 databricks --version  # Should be 0.250.0 or higher
+
+# If you need to update an existing installation
+databricks --version  # Check current version
+curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh  # Re-run to update
 ```
 
 #### 2. Authenticate to Your Workspace
