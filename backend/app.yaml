@@ -2,52 +2,29 @@
 # This file defines how the app runs on Databricks Apps platform
 
 command:
-  - "python"
-  - "-m"
-  - "uvicorn"
-  - "app.main:app"
-  - "--host"
-  - "0.0.0.0"
-  - "--port"
-  - "8000"
+  - python
+  - run.py
 
-# Environment variables
 env:
-  # Databricks Configuration - workspace URL is auto-injected
   - name: DATABRICKS_HOST
     valueFrom: "{{workspace_url}}"
   - name: DATABRICKS_WORKSPACE_URL
     valueFrom: "{{workspace_url}}"
-  
-  # SQL Warehouse ID for running queries (set via DATABRICKS_WAREHOUSE_ID env var or override here)
   - name: DATABRICKS_WAREHOUSE_ID
     value: ""
-  
-  # Model Serving endpoint name
   - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
-    value: "databricks-claude-sonnet-4-5"
-  
-  # Agent Settings
+    value: databricks-claude-sonnet-4-5
   - name: AGENT_ENABLED
     value: "true"
   - name: AGENT_MAX_ITERATIONS
     value: "10"
   - name: AGENT_TIMEOUT_SECONDS
     value: "60"
-  
-  # CORS
   - name: CORS_ORIGINS
     value: "*"
-  
-  # Poller Settings
   - name: POLLER_INTERVAL_SECONDS
     value: "5"
   - name: POLLER_BATCH_SIZE
     value: "50"
   - name: POLLER_MAX_CONCURRENT
     value: "10"
-
-# Resource allocation
-resources:
-  num_cpus: 1
-  memory_mb: 2048

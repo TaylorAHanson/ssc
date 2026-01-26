@@ -8,7 +8,6 @@ python-dotenv
 sqlalchemy
 alembic
 httpx
-psycopg2-binary
 databricks-sdk
 tenacity
 PyYAML

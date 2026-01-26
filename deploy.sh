@@ -86,30 +86,46 @@ mkdir -p backend/static
 cp -r dist/* backend/static/
 echo -e "${GREEN}✓ Frontend copied${NC}"
 
-# Deploy using bundle
-echo -e "\n${CYAN}Deploying bundle to target: ${TARGET}...${NC}"
-databricks bundle deploy -t "$TARGET"
-echo -e "${GREEN}✓ Bundle deployed${NC}"
+# Sync files to workspace (bypassing bundle to avoid state issues)
+echo -e "\n${CYAN}Syncing files to workspace...${NC}"
+CURRENT_USER=$(databricks current-user me --output json 2>/dev/null | grep -o '"userName":"[^"]*"' | cut -d'"' -f4)
+WORKSPACE_BASE="/Workspace/Users/${CURRENT_USER}/.bundle/edas-hub/dev/files"
+
+# Create target directory and sync backend
+echo -e "${CYAN}Uploading backend to ${WORKSPACE_BASE}/backend...${NC}"
+databricks workspace import-dir backend "${WORKSPACE_BASE}/backend" --overwrite
+echo -e "${GREEN}✓ Files synced to workspace${NC}"
 
 # Get app info
 APP_NAME="edas-hub-dev-${BUNDLE_VAR_dev_user}"
+WORKSPACE_PATH="${WORKSPACE_BASE}/backend"
 
-# Check if app exists before deploying
+# Check if app exists, create if not
 echo -e "\n${CYAN}Checking if app exists...${NC}"
 if databricks apps get "$APP_NAME" &> /dev/null; then
     echo -e "${GREEN}✓ App exists${NC}"
-    
-    # Deploy the app source code to compute
-    echo -e "${CYAN}Deploying source code to app compute...${NC}"
-    if databricks apps deploy "$APP_NAME" 2>&1; then
-        echo -e "${GREEN}✓ App deployment initiated${NC}"
-    else
-        echo -e "${YELLOW}Note: App deployment may already be in progress${NC}"
-        echo -e "${YELLOW}Check status: databricks apps get $APP_NAME${NC}"
-    fi
 else
-    echo -e "${YELLOW}App '$APP_NAME' not found - it may still be creating${NC}"
-    echo -e "${YELLOW}Wait a moment, then run: databricks apps deploy $APP_NAME${NC}"
+    echo -e "${YELLOW}App '$APP_NAME' not found, creating...${NC}"
+    if databricks apps create "$APP_NAME" --description "EDAS Hub - Personal dev instance for ${BUNDLE_VAR_dev_user}" 2>&1; then
+        echo -e "${GREEN}✓ App created${NC}"
+        # Wait for compute to be ready
+        echo -e "${CYAN}Waiting for app compute to initialize...${NC}"
+        sleep 10
+    else
+        echo -e "${RED}Failed to create app${NC}"
+        exit 1
+    fi
+fi
+
+# Deploy the app source code
+echo -e "\n${CYAN}Deploying source code to app compute...${NC}"
+echo -e "${CYAN}Source path: ${WORKSPACE_PATH}${NC}"
+
+if databricks apps deploy "$APP_NAME" --source-code-path "$WORKSPACE_PATH" 2>&1; then
+    echo -e "${GREEN}✓ App deployment initiated${NC}"
+else
+    echo -e "${YELLOW}Note: App deployment may already be in progress${NC}"
+    echo -e "${YELLOW}Check status: databricks apps get $APP_NAME${NC}"
 fi
 echo -e "\n${CYAN}Checking app status...${NC}"
 
