@@ -91,9 +91,11 @@ Find in Databricks UI:
 
 | File | Trigger | Description |
 |------|---------|-------------|
-| `.github/workflows/ci.yml` | PRs, feature branches | Lint, type-check, build, test |
-| `.github/workflows/deploy-develop.yml` | Push to develop | Deploy to dev environment |
-| `.github/workflows/deploy-main.yml` | Push to main | Deploy to production |
+| `.github/workflows/ci.yml` | PRs to any branch | Lint, type-check, build, test |
+| `.github/workflows/deploy-develop.yml` | PR merged to develop | Deploy to dev environment |
+| `.github/workflows/deploy-main.yml` | PR merged to main | Deploy to production |
+
+> **Note:** Developers should never push directly to `develop` or `main`. All changes go through pull requests. The deploy workflows trigger automatically when PRs are merged.
 
 ## Setting Up Branch Protection
 
