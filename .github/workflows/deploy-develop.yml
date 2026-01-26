@@ -1,0 +1,128 @@
+# Deploy to Development Environment
+# Triggered on merge to develop branch
+
+name: Deploy to Development
+
+on:
+  push:
+    branches:
+      - develop
+
+env:
+  APP_NAME: edas-hub-dev
+  WORKSPACE_PATH: /Workspace/Users/${{ secrets.DATABRICKS_USER }}/apps/edas-hub-dev
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: development
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Copy frontend to backend
+        run: |
+          rm -rf backend/static
+          mkdir -p backend/static
+          cp -r dist/* backend/static/
+
+      - name: Generate app.yaml for Development
+        run: |
+          cat > backend/app.yaml << 'EOF'
+          # Databricks App Configuration - DEVELOPMENT
+          command:
+            - "python"
+            - "-m"
+            - "uvicorn"
+            - "app.main:app"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+
+          env:
+            - name: DATABRICKS_HOST
+              valueFrom: "{{workspace_url}}"
+            - name: DATABRICKS_WORKSPACE_URL
+              valueFrom: "{{workspace_url}}"
+            - name: DATABRICKS_WAREHOUSE_ID
+              value: "${{ secrets.DATABRICKS_WAREHOUSE_ID }}"
+            - name: DATABASE_HOST
+              value: "${{ secrets.DATABASE_HOST }}"
+            - name: DATABASE_PORT
+              value: "5432"
+            - name: DATABASE_NAME
+              value: "databricks_postgres"
+            - name: DATABASE_USER
+              value: "${{ secrets.DATABASE_USER }}"
+            - name: DATABASE_SSLMODE
+              value: "require"
+            - name: DATABASE_INSTANCE_NAME
+              value: "${{ secrets.DATABASE_INSTANCE_NAME }}"
+            - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
+              value: "databricks-gemini-3-flash"
+            - name: AGENT_ENABLED
+              value: "true"
+            - name: AGENT_MAX_ITERATIONS
+              value: "10"
+            - name: AGENT_TIMEOUT_SECONDS
+              value: "60"
+            - name: CORS_ORIGINS
+              value: "*"
+            - name: POLLER_INTERVAL_SECONDS
+              value: "5"
+            - name: POLLER_BATCH_SIZE
+              value: "50"
+            - name: POLLER_MAX_CONCURRENT
+              value: "10"
+
+          resources:
+            num_cpus: 1
+            memory_mb: 2048
+          EOF
+
+      - name: Install Databricks CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+
+      - name: Configure Databricks CLI
+        run: |
+          echo "[DEFAULT]" > ~/.databrickscfg
+          echo "host = ${{ secrets.DATABRICKS_HOST }}" >> ~/.databrickscfg
+          echo "token = ${{ secrets.DATABRICKS_TOKEN }}" >> ~/.databrickscfg
+
+      - name: Upload code to Databricks Workspace
+        run: |
+          databricks workspace import-dir ./backend ${{ env.WORKSPACE_PATH }} --overwrite
+
+      - name: Deploy App
+        run: |
+          # Check if app exists, create if not
+          if ! databricks apps get ${{ env.APP_NAME }} > /dev/null 2>&1; then
+            echo "Creating app ${{ env.APP_NAME }}..."
+            databricks apps create ${{ env.APP_NAME }} --description "EDAS Hub - Development Environment"
+          fi
+          
+          # Deploy
+          databricks apps deploy ${{ env.APP_NAME }} --source-code-path ${{ env.WORKSPACE_PATH }}
+
+      - name: Get App URL
+        run: |
+          APP_URL=$(databricks apps get ${{ env.APP_NAME }} --output json | jq -r '.url')
+          echo "## Deployment Successful! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** Development" >> $GITHUB_STEP_SUMMARY
+          echo "**App URL:** $APP_URL" >> $GITHUB_STEP_SUMMARY
