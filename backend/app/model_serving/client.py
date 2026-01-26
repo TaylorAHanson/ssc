@@ -51,6 +51,11 @@ class ModelServingClient:
         if not self.base_url:
             raise ValueError("DATABRICKS_WORKSPACE_URL or DATABRICKS_HOST must be set in configuration")
         
+        # Ensure base_url has https:// protocol
+        if not self.base_url.startswith("http://") and not self.base_url.startswith("https://"):
+            self.base_url = f"https://{self.base_url}"
+            logger.info(f"Added https:// protocol to base_url: {self.base_url}")
+        
         # Try explicit token first, then fall back to OAuth
         self.api_key = settings.MODEL_SERVING_API_KEY or settings.DATABRICKS_TOKEN
         
