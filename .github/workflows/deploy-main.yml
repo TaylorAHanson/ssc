@@ -31,6 +31,9 @@ jobs:
         run: npm ci
 
       - name: Build frontend
+        env:
+          # Use relative URL for production (same host serves frontend + API)
+          VITE_API_BASE_URL: /api/v1
         run: npm run build
 
       - name: Copy frontend to backend
@@ -41,8 +44,9 @@ jobs:
 
       - name: Generate app.yaml for Production
         run: |
-          cat > backend/app.yaml << 'EOF'
+          cat > backend/app.yaml << EOF
           # Databricks App Configuration - PRODUCTION
+          # OAuth is automatic - no DATABRICKS_TOKEN needed
           command:
             - "python"
             - "-m"
@@ -54,28 +58,65 @@ jobs:
             - "8000"
 
           env:
+            # Databricks Configuration (OAuth automatic in Apps)
             - name: DATABRICKS_HOST
               valueFrom: "{{workspace_url}}"
             - name: DATABRICKS_WORKSPACE_URL
               valueFrom: "{{workspace_url}}"
             - name: DATABRICKS_WAREHOUSE_ID
               value: "${{ vars.DATABRICKS_WAREHOUSE_ID }}"
+            
+            # Model Serving (OAuth automatic - no API key needed)
             - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
-              value: "databricks-gemini-3-flash"
+              value: "${{ vars.MODEL_SERVING_AGENT_LLM_ENDPOINT || 'databricks-gemini-3-flash' }}"
+            - name: MODEL_SERVING_CLASSIFIER_ENDPOINT
+              value: "${{ vars.MODEL_SERVING_CLASSIFIER_ENDPOINT || '' }}"
+            
+            # GitHub Integration (optional)
+            - name: GITHUB_TOKEN
+              value: "${{ secrets.APP_GITHUB_TOKEN || '' }}"
+            - name: GITHUB_ORG
+              value: "${{ vars.GITHUB_ORG || '' }}"
+            
+            # Agent Settings
             - name: AGENT_ENABLED
               value: "true"
             - name: AGENT_MAX_ITERATIONS
               value: "10"
             - name: AGENT_TIMEOUT_SECONDS
               value: "60"
-            - name: CORS_ORIGINS
-              value: "*"
+            
+            # Poller Settings
             - name: POLLER_INTERVAL_SECONDS
               value: "5"
             - name: POLLER_BATCH_SIZE
               value: "50"
             - name: POLLER_MAX_CONCURRENT
               value: "10"
+            - name: POLLER_LOCK_TIMEOUT_MINUTES
+              value: "5"
+            - name: POLLER_LOCK_TIMEOUT_LONG_RUNNING_MINUTES
+              value: "30"
+            - name: POLLER_HEARTBEAT_INTERVAL_SECONDS
+              value: "300"
+            
+            # Retry Settings
+            - name: DEFAULT_MAX_RETRIES
+              value: "3"
+            - name: TERRAFORM_MAX_RETRIES
+              value: "2"
+            - name: API_MAX_RETRIES
+              value: "3"
+            - name: DB_MAX_RETRIES
+              value: "5"
+            
+            # API Configuration
+            - name: CORS_ORIGINS
+              value: "*"
+            - name: API_V1_PREFIX
+              value: "/api/v1"
+            - name: PROJECT_NAME
+              value: "EDAS Hub API"
 
           resources:
             num_cpus: 2
