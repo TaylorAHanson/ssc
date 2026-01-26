@@ -50,7 +50,7 @@ Configure these for **each environment** (Settings → Environments → [env]):
 
 | Name | Type | Description | Default |
 |------|------|-------------|---------|
-| `MODEL_SERVING_AGENT_LLM_ENDPOINT` | Variable | LLM endpoint name | `databricks-gemini-3-flash` |
+| `MODEL_SERVING_AGENT_LLM_ENDPOINT` | Variable | LLM endpoint name | `databricks-gemini-2-5-flash` |
 | `MODEL_SERVING_CLASSIFIER_ENDPOINT` | Variable | Classifier endpoint name | (empty) |
 | `GITHUB_ORG` | Variable | GitHub organization name | (empty) |
 | `APP_GITHUB_TOKEN` | **Secret** | GitHub PAT for app operations | (empty) |
