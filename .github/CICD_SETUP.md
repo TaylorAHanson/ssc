@@ -33,18 +33,29 @@ Used for develop branch deployments.
 Used for main branch deployments.
 - Optional: Add required reviewers for approval before deployment
 
-## Required Secrets
+## Required Secrets & Variables
 
-Configure these secrets for **each environment** (Settings → Environments → [env] → Secrets):
+Configure these for **each environment** (Settings → Environments → [env]):
 
-### Required Secrets (OAuth M2M Authentication)
+### Required (for deployment to work)
 
 | Name | Type | Description | Example |
 |------|------|-------------|---------|
 | `DATABRICKS_HOST` | Variable | Workspace URL | `https://your-workspace.cloud.databricks.com` |
-| `DATABRICKS_CLIENT_ID` | Secret | Service Principal Client ID | `00000000-0000-0000-0000-000000000000` |
-| `DATABRICKS_CLIENT_SECRET` | Secret | Service Principal Secret | `dose...` |
+| `DATABRICKS_CLIENT_ID` | **Secret** | Service Principal Client ID | `00000000-0000-0000-0000-000000000000` |
+| `DATABRICKS_CLIENT_SECRET` | **Secret** | Service Principal Secret | `dose...` |
 | `DATABRICKS_WAREHOUSE_ID` | Variable | SQL Warehouse ID | `abc123def456` |
+
+### Optional (for full app functionality)
+
+| Name | Type | Description | Default |
+|------|------|-------------|---------|
+| `MODEL_SERVING_AGENT_LLM_ENDPOINT` | Variable | LLM endpoint name | `databricks-gemini-3-flash` |
+| `MODEL_SERVING_CLASSIFIER_ENDPOINT` | Variable | Classifier endpoint name | (empty) |
+| `GITHUB_ORG` | Variable | GitHub organization name | (empty) |
+| `APP_GITHUB_TOKEN` | **Secret** | GitHub PAT for app operations | (empty) |
+
+> **Note:** The app uses OAuth automatically inside Databricks Apps, so `DATABRICKS_TOKEN` and `MODEL_SERVING_API_KEY` are **not needed**.
 
 ### Getting the Values
 
