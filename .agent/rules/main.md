@@ -7,5 +7,7 @@ trigger: always_on
 
 ## Development and Troubleshooting Tools
 - In local development, we store a sqllite database at backend/edas_hub.db. You may execute queries on the local database as needed.
-- For troubleshooting, you may tail the logs at backend.log or frontend.log. This is especially helpful for python errors or for getting log statements. 
+- For troubleshooting, you may tail the logs at backend.log or frontend.log. This is especially helpful for python errors or for getting log statements.
 
+## Gotchas
+- Don't hardcode the app name or use the app name in any variable naming. There are environment settings prefixed by BRANDING_ that should be used instead. See backend/app/core/config.py for more details.
