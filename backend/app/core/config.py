@@ -25,14 +25,20 @@ class Settings(BaseSettings):
     
     # API Settings
     API_V1_PREFIX: str = "/api/v1"
-    PROJECT_NAME: str = "EDAS Hub API"
+    PROJECT_NAME: str = "ATLAS API"
+    DESCRIPTION: str = "Agentic Control Tower for Lakehouse Automation & Self-Service Experience"
+    VERSION: str = "1.0.0"
     LOG_LEVEL: str = "INFO"
     
     # Branding Settings
-    BRAND_NAME: str = "EDAS Hub"
+    BRAND_NAME: str = "ATLAS"
     BRAND_LOGO_URL: str = ""
-    BRAND_COLOR_PRIMARY: str = "#3253DC"
-    BRAND_COLOR_SECONDARY: str = "#0ea5e9"
+    BRAND_COLOR_PRIMARY: str = "#FF3621"
+    BRAND_COLOR_SECONDARY: str = "#1B5162"
+    BRAND_COLOR_INFO: str = "#1B5162"
+    BRAND_COLOR_ALERT: str = "#98102A"
+    BRAND_COLOR_WARNING: str = "#FFAB00"
+    BRAND_COLOR_SUCCESS: str = "#00A972"
     
     # CORS (can be overridden in .env as JSON array or comma-separated)
     # Example in .env: CORS_ORIGINS=["http://localhost:5173","http://localhost:3000"]

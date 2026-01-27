@@ -11,7 +11,7 @@
 #   databricks auth login
 
 bundle:
-  name: edas-hub
+  name: atlas
 
 # Sync backend directory to workspace
 sync:

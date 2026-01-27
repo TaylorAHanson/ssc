@@ -1,4 +1,4 @@
-# Databricks App Configuration for EDAS Hub
+# Databricks App Configuration for ATLAS
 # This file defines how the app runs on Databricks Apps platform
 
 command:

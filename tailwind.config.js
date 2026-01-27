@@ -10,8 +10,12 @@ export default {
         border: "hsl(214.3 31.8% 91.4%)",
         primary: {
           DEFAULT: "var(--brand-primary)",
-          foreground: "#ffffff",
         },
+        secondary: "var(--brand-secondary)",
+        info: "var(--brand-info)",
+        alert: "var(--brand-alert)",
+        warning: "var(--brand-warning)",
+        success: "var(--brand-success)",
         background: {
           DEFAULT: "#F3F4F6",
         },

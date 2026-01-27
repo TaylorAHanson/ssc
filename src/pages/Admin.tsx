@@ -15,6 +15,7 @@ import {
 } from '../services/api';
 import type { ContentInfo, ContentVersionInfo, WorkspaceInfo, FeatureInfo } from '../services/api';
 import { Switch } from '../components/ui/switch';
+import { TestRunner } from '../components/admin/TestRunner';
 
 export function Admin() {
   const requests = useRequestStore((state) => state.requests);
@@ -27,7 +28,7 @@ export function Admin() {
     fetchApprovals();
   }, [fetchRequests, fetchApprovals]);
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'content-manager' | 'feature-management'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'content-manager' | 'feature-management' | 'test-runner'>('dashboard');
 
   // Content management state
   const [contentFiles, setContentFiles] = useState<ContentInfo[]>([]);
@@ -289,8 +290,8 @@ export function Admin() {
         <button
           onClick={() => setActiveTab('dashboard')}
           className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'dashboard'
-              ? 'border-b-2 border-primary text-primary'
-              : 'text-gray-600 hover:text-gray-900'
+            ? 'border-b-2 border-primary text-primary'
+            : 'text-gray-600 hover:text-gray-900'
             }`}
         >
           Dashboard
@@ -298,8 +299,8 @@ export function Admin() {
         <button
           onClick={() => setActiveTab('content-manager')}
           className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'content-manager'
-              ? 'border-b-2 border-primary text-primary'
-              : 'text-gray-600 hover:text-gray-900'
+            ? 'border-b-2 border-primary text-primary'
+            : 'text-gray-600 hover:text-gray-900'
             }`}
         >
           <FileText className="w-4 h-4 inline mr-2" />
@@ -308,14 +309,26 @@ export function Admin() {
         <button
           onClick={() => setActiveTab('feature-management')}
           className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'feature-management'
-              ? 'border-b-2 border-primary text-primary'
-              : 'text-gray-600 hover:text-gray-900'
+            ? 'border-b-2 border-primary text-primary'
+            : 'text-gray-600 hover:text-gray-900'
             }`}
         >
           <ToggleLeft className="w-4 h-4 inline mr-2" />
           Feature Management
         </button>
+        <button
+          onClick={() => setActiveTab('test-runner')}
+          className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'test-runner'
+            ? 'border-b-2 border-primary text-primary'
+            : 'text-gray-600 hover:text-gray-900'
+            }`}
+        >
+          <Activity className="w-4 h-4 inline mr-2" />
+          Test Runner
+        </button>
       </div>
+
+      {activeTab === 'test-runner' && <TestRunner />}
 
       {activeTab === 'dashboard' && (
         <div className="space-y-6">
@@ -417,8 +430,8 @@ export function Admin() {
                           </td>
                           <td className="py-3 px-4">
                             <span className={`px-2 py-1 rounded-full text-xs font-medium ${request.status === 'completed' ? 'bg-green-100 text-green-800' :
-                                request.status === 'provisioning' ? 'bg-blue-100 text-blue-800' :
-                                  'bg-gray-100 text-gray-800'
+                              request.status === 'provisioning' ? 'bg-blue-100 text-blue-800' :
+                                'bg-gray-100 text-gray-800'
                               }`}>
                               {request.status.replace(/_/g, ' ')}
                             </span>

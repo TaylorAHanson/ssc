@@ -1,2 +1,2 @@
-# EDAS Hub Backend Application
+# ATLAS Backend Application
 

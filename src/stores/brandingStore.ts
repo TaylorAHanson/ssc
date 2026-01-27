@@ -1,21 +1,30 @@
 import { create } from 'zustand';
 import { getBranding } from '../services/api';
+import defaultLogo from '../assets/icon.svg';
 
 interface BrandingState {
     brandName: string;
     brandLogoUrl: string;
     brandColorPrimary: string;
     brandColorSecondary: string;
+    brandColorInfo: string;
+    brandColorAlert: string;
+    brandColorWarning: string;
+    brandColorSuccess: string;
     isLoading: boolean;
     error: string | null;
     fetchBranding: () => Promise<void>;
 }
 
 export const useBrandingStore = create<BrandingState>((set) => ({
-    brandName: 'EDAS Hub',
-    brandLogoUrl: '',
-    brandColorPrimary: '#3253DC',
-    brandColorSecondary: '#0ea5e9',
+    brandName: 'ATLAS',
+    brandLogoUrl: defaultLogo,
+    brandColorPrimary: '#FF3621',
+    brandColorSecondary: '#1B5162',
+    brandColorInfo: '#1B5162',
+    brandColorAlert: '#98102A',
+    brandColorWarning: '#FFAB00',
+    brandColorSuccess: '#00A972',
     isLoading: false,
     error: null,
     fetchBranding: async () => {
@@ -24,15 +33,30 @@ export const useBrandingStore = create<BrandingState>((set) => ({
             const branding = await getBranding();
             set({
                 brandName: branding.brand_name,
-                brandLogoUrl: branding.brand_logo_url,
+                brandLogoUrl: branding.brand_logo_url || defaultLogo,
                 brandColorPrimary: branding.brand_color_primary,
                 brandColorSecondary: branding.brand_color_secondary,
+                brandColorInfo: branding.brand_color_info,
+                brandColorAlert: branding.brand_color_alert,
+                brandColorWarning: branding.brand_color_warning,
+                brandColorSuccess: branding.brand_color_success,
                 isLoading: false,
             });
 
-            // Apply primary color to CSS variable for Tailwind and other usages
+            // Apply colors to CSS variables for Tailwind and other usages
             document.documentElement.style.setProperty('--brand-primary', branding.brand_color_primary);
             document.documentElement.style.setProperty('--brand-secondary', branding.brand_color_secondary);
+            document.documentElement.style.setProperty('--brand-info', branding.brand_color_info);
+            document.documentElement.style.setProperty('--brand-alert', branding.brand_color_alert);
+            document.documentElement.style.setProperty('--brand-warning', branding.brand_color_warning);
+            document.documentElement.style.setProperty('--brand-success', branding.brand_color_success);
+
+            // Update favicon
+            const logoUrl = branding.brand_logo_url || defaultLogo;
+            const favicon = document.querySelector('link[rel="icon"]');
+            if (favicon) {
+                favicon.setAttribute('href', logoUrl);
+            }
         } catch (error) {
             set({
                 error: error instanceof Error ? error.message : 'Failed to fetch branding',

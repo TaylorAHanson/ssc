@@ -374,7 +374,17 @@ class BaseRequestStateMachine(StateMachine):
             from app.providers.notifications.client import NotificationProvider
             recipient = to_email or (self.request.state_context or {}).get("requested_by_email")
             if recipient:
-                await NotificationProvider().send_email(to=recipient, subject=subject, body=body)
+                metadata = {
+                    "id": self.request.id,
+                    "status": self._get_state_display_name(self.request.current_state),
+                    "requested_by": (self.request.state_context or {}).get("requested_by", "Unknown")
+                }
+                await NotificationProvider().send_email(
+                    to=recipient, 
+                    subject=subject, 
+                    body=body,
+                    metadata=metadata
+                )
         except Exception as e:
             logger.error(f"[{self.request.id}] Notification failed: {e}")
 

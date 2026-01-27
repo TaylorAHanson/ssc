@@ -1,5 +1,5 @@
 """
-FastAPI main application entry point for EDAS Hub backend.
+FastAPI main application entry point for ATLAS backend.
 
 This application runs as a Databricks App.
 """
@@ -25,9 +25,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="EDAS Hub API",
-    description="Enterprise Data and Analytics Services Self-Service Hub Backend (Databricks App)",
-    version="0.0.1",
+    title=settings.PROJECT_NAME,
+    description=settings.DESCRIPTION,
+    version=settings.VERSION,
 )
 
 @app.on_event("startup")
@@ -63,7 +63,7 @@ async def health():
     
     return {
         "status": "healthy",
-        "service": "edas-hub-api",
+        "service": "atlas-api",
         "platform": "Databricks App",
         "version": "1.0.0",
         "database": db_type,
@@ -90,7 +90,7 @@ if STATIC_DIR.exists():
         index_path = STATIC_DIR / "index.html"
         if index_path.exists():
             return FileResponse(str(index_path))
-        return {"status": "ok", "message": "EDAS Hub API", "frontend": "index.html not found"}
+        return {"status": "ok", "message": "ATLAS API", "frontend": "index.html not found"}
     
     # Handle all non-API routes for SPA routing
     @app.get("/{full_path:path}")
@@ -119,7 +119,7 @@ else:
         """Health check endpoint (API-only mode)."""
         return {
             "status": "ok",
-            "message": "EDAS Hub API is running",
+            "message": "ATLAS API is running",
             "platform": "Databricks App",
             "version": "1.0.0",
             "frontend": "Not deployed - static directory not found"

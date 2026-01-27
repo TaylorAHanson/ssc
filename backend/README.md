@@ -1,6 +1,6 @@
-# EDAS Hub Backend
+# ATLAS Backend
 
-FastAPI backend for the EDAS (Enterprise Data and Analytics Services) Hub self-service portal.
+FastAPI backend for ATLAS (Agentic Control Tower for Lakehouse Automation & Self‑Service Experience), a self-service portal for Databricks.
 
 📖 **For architecture details, see [ARCHITECTURE.md](./ARCHITECTURE.md)**
 
