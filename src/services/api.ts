@@ -451,12 +451,73 @@ export async function getBranding(): Promise<{
   brand_logo_url: string;
   brand_color_primary: string;
   brand_color_secondary: string;
+  brand_color_info: string;
+  brand_color_alert: string;
+  brand_color_warning: string;
+  brand_color_success: string;
 }> {
   const response = await fetch(`${API_BASE_URL}/branding`);
   if (!response.ok) {
     throw new Error(`Failed to get branding: ${response.statusText}`);
   }
   return response.json();
+}
+
+// ... existing imports/exports
+
+export interface TestRunRequest {
+  path?: string;
+  args?: string[];
+}
+
+export interface TestRunResponse {
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  command: string[];
+}
+
+export async function runTests(path?: string, args?: string[]): Promise<TestRunResponse> {
+  const response = await fetch(`${API_BASE_URL}/dev/tests`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path, args }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to run tests: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function listTests(): Promise<string[]> {
+  const response = await fetch(`${API_BASE_URL}/dev/tests/list`);
+  if (!response.ok) {
+    throw new Error(`Failed to list tests: ${response.statusText}`);
+  }
+  const data = await response.json();
+  return data.tests;
+}
+
+export async function resetDb(): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/dev/db/reset`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to reset database: ${response.statusText}`);
+  }
+}
+
+export async function seedDb(): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/dev/db/seed`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to seed database: ${response.statusText}`);
+  }
 }
 
 export const api = {
@@ -470,5 +531,9 @@ export const api = {
   completeTraining,
   getDelegations,
   createDelegation,
-  deleteDelegation
+  deleteDelegation,
+  runTests,
+  listTests,
+  resetDb,
+  seedDb
 };

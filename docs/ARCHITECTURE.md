@@ -1,8 +1,8 @@
-# EDAS Hub Backend Architecture
+# ATLAS Backend Architecture
 
 ## Overview
 
-The EDH Self-Service Center is a **Databricks App** that runs on the Databricks platform. It is organized around eight main architectural layers:
+The ATLAS (Agentic Control Tower for Lakehouse Automation & Self‑Service Experience) Self-Service Center is a **Databricks App** that runs on the Databricks platform. It is organized around eight main architectural layers:
 
 - **Web UI** - Provides a user interface for interacting with the hub.
 - **API Endpoints** provide CRUD operations and serve the frontend UI and separate the UI from the business logic.
@@ -798,6 +798,85 @@ async def process_single_request(semaphore, request_id):
         except PermanentError as e:
             # Handle permanent errors
             await _handle_permanent_error(db, request, e, worker_id)
+```
+
+### State Machine Layer (`app/state_machines/`)
+
+**Purpose**: Orchestrate complex business logic, handle state transitions, and ensure idempotency.
+
+**Responsibility**:
+- **Fact-Based Decision Making**: Transitions are determined by deriving the current state from a sequence of immutable facts (Events) rather than just the previous status.
+- **Side Effects**: Directly calls **Providers** to execute actions (e.g., provisioning infrastructure).
+- **Process Orchestration**: Manages the lifecycle of a request, including approvals, long-running tasks, and sub-tasks.
+
+**Complex Flow Architecture**:
+
+To handle sophisticated enterprise workflows (e.g., "Onboard a new Project" which requires approvals, a GitHub repo, and a Databricks workspace), we use the following patterns:
+
+#### 1. Hierarchical (Compound) Workflows
+**Problem**: Large, monolithic state machines are brittle and hard to test. A single "Onboarding" state machine would become unmanageable if it tried to handle the nuances of repo creation, workspace provisioning, and group management simultaneously.
+
+**Solution**: **Parent-Child Request Model**.
+- **Parent Request** (e.g., `PROJECT_ONBOARDING`): Acts as the "Conductor". It tracks the overall progress and defines the high-level steps.
+- **Child Requests** (e.g., `GITHUB_REPO_CREATION`, `WORKSPACE_PROVISION`): Atomic units of work with their own independent state machines.
+- **Mechanism**:
+  - The Parent SM's `tick()` method evaluates its state.
+  - It calls `spawn_child_request()` to create a dependent task.
+  - It waits for the Child Request to reach a `completed` state (checking the DB).
+  - Once the child completes, the Parent records a fact (e.g., `repo_created`) and transitions to the next step.
+
+```mermaid
+graph TD
+    Parent[Project Onboarding SM] -->|Spawns| Child1[GitHub Repo SM]
+    Parent -->|Spawns| Child2[Workspace SM]
+    
+    Child1 -->|Success| Fact1(Repo Created Fact)
+    Child2 -->|Success| Fact2(Workspace Provisioned Fact)
+    
+    Fact1 --> Parent
+    Fact2 --> Parent
+    
+    Parent -->|All Facts Present| Done[Completed]
+```
+
+#### 2. Fact-Based Dynamic Routing
+**Problem**: Linear flows are insufficient for logic like "If cost > $1000, require VP approval, else Skip".
+
+**Solution**: **Guard Clauses on Transitions**.
+- Transitions are not just `State A -> State B`. They are `State A + Facts -> State B`.
+- The State Machine's `tick()` method re-evaluates available transitions every cycle.
+- **Example Logic**:
+  ```python
+  def _try_transitions(self):
+      # Dynamic Routing based on facts
+      if self.current_state == "cost_check":
+          cost = self.get_fact("cost_estimate")
+          if cost > 1000:
+              if not self.has_fact("vp_approval"):
+                  self.transition_to("vp_approval_required")
+              else:
+                  self.transition_to("provisioning")
+          else:
+              self.transition_to("provisioning")
+  ```
+
+#### 3. Idempotency & Re-entrancy
+**Problem**: A worker process might crash or complete a task but fail to save the state, leading to a retry. We must ensure we don't provision the same resource twice.
+
+**Solution**: **Check-then-Act**.
+- **Idempotent Actions**: Before calling `create_workspace`, the State Machine checks `remote_workspace_exists`.
+- **Fact Recording**: Successful actions are immediately recorded as Facts in the DB.
+- **State Recovery**: On restart, the State Machine rebuilds its context from the DB Facts. If `workspace_created` fact exists, it skips the provisioning step.
+
+#### 4. Failure Recovery & Compensation
+**Problem**: If Step 3 of a flow fails (e.g., Workspace provisioned, but User addition failed), we must decide whether to Retry, Fail, or Rollback.
+
+**Solution**:
+- **Retryable Errors**: Handled automatically by the Worker (exponential backoff).
+- **Permanent Failures**:
+  - Transition to a `failed` state.
+  - **Compensation**: "Rollback" states can be defined to undo previous actions (e.g., `delete_partial_resources`).
+  - **Manual Intervention**: The system can pause in a `failed` state, allowing an Admin to fix the issue (e.g., update bad config) and then manually trigger a "Resume" or "Retry" transition via the UI.
         finally:
             release_lock(db, request_id)
 

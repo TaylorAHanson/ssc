@@ -1,4 +1,4 @@
-# EDAS Hub - Quick Reference Card
+# ATLAS - Quick Reference Card
 
 ## Deployment Commands
 
@@ -10,8 +10,8 @@
 ./deploy.sh dev
 
 # CI/CD auto-deploys on push:
-# - develop branch → edas-hub-dev
-# - main branch → edas-hub
+# - develop branch → atlas-dev
+# - main branch → atlas
 ```
 
 ---
@@ -86,16 +86,16 @@ flowchart TB
 
 | SP Name | Purpose | Environment | Credentials Stored In |
 |---------|---------|-------------|----------------------|
-| `cicd-edas-hub-dev` | Deploy dev app | Development | GitHub Secrets (dev) |
-| `cicd-edas-hub-prod` | Deploy prod app | Production | GitHub Secrets (prod) |
-| `app-xxxx edas-hub-dev` | Runtime for dev app | Development | Auto-managed by Databricks |
-| `app-xxxx edas-hub` | Runtime for prod app | Production | Auto-managed by Databricks |
+| `cicd-atlas-dev` | Deploy dev app | Development | GitHub Secrets (dev) |
+| `cicd-atlas-prod` | Deploy prod app | Production | GitHub Secrets (prod) |
+| `app-xxxx atlas-dev` | Runtime for dev app | Development | Auto-managed by Databricks |
+| `app-xxxx atlas` | Runtime for prod app | Production | Auto-managed by Databricks |
 
 ### Environment-Specific Resources
 
 | Resource | Development | Production |
 |----------|-------------|------------|
-| App Name | `edas-hub-dev` | `edas-hub` |
+| App Name | `atlas-dev` | `atlas` |
 | LLM Endpoint | Dev endpoint | Prod endpoint |
 | SQL Warehouse | Dev warehouse | Prod warehouse |
 | UC Catalog/Tables | Dev catalog | Prod catalog |
@@ -158,7 +158,7 @@ flowchart LR
 | App | Can Query | Model Serving → Endpoint → Permissions |
 | App | Can Use | SQL Warehouses → Warehouse → Permissions |
 
-> **Finding App SP:** Compute → Apps → Your App → Service Principal field (e.g., `app-xxxx edas-hub-dev`)
+> **Finding App SP:** Compute → Apps → Your App → Service Principal field (e.g., `app-xxxx atlas-dev`)
 
 ---
 

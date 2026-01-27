@@ -99,8 +99,12 @@ export function RequestStateList({ request }: { request: Request }) {
   if (request.stateMachine.states && request.stateMachine.states.length > 0) {
     const stateSteps = request.stateMachine.states
       .filter(state => {
+        // Skip terminal failure/rejection states if they aren't the current state
+        // This ensures the "happy path" is the default view
+        if (state.id === 'failed' && request.status !== 'failed') return false;
+        if (state.id === 'rejected' && request.status !== 'rejected') return false;
+
         // Skip terminal success state if we want a cleaner list
-        // Or if it's currently active but previous step was also "completed"
         if (state.id === 'completed') return false;
         return true;
       })
@@ -132,31 +136,38 @@ export function RequestStateList({ request }: { request: Request }) {
         };
       });
 
-    // Fallback: If request is failed but we have no states (e.g. failed to load state machine),
-    // add a synthetic failed step so the error is visible.
-    if (request.status === 'failed' && stateSteps.length === 0) {
+    // Handle terminal "Completed" state - always show it as the final goal if not failed/rejected
+    if (request.status !== 'failed' && request.status !== 'rejected') {
+      const completionState = request.stateMachine.states.find(s => s.id === 'completed');
       stateSteps.push({
-        id: 'system_failure',
-        name: 'System Processing',
-        status: 'failed',
-        order: 1,
-        completedAt: request.updatedAt,
+        id: 'completed_goal',
+        name: 'Completed',
+        status: request.status === 'completed' ? 'completed' : 'pending',
+        order: stateSteps.length + 1,
+        completedAt: completionState?.completedAt,
         facts: []
       });
     }
 
-    // Fix for "failed" state visualization:
-    // If request is globally failed, but no step is marked as "failed" (because checks above failed to match isActive),
-    // then assume the first "pending" step is the one that failed.
+    // Fallback: If request is failed but we have no states (e.g. failed to load state machine),
+    // add a synthetic failed step so the error is visible.
     if (request.status === 'failed') {
       const hasFailedStep = stateSteps.some(s => s.status === 'failed');
       if (!hasFailedStep) {
-        const firstPendingIdx = stateSteps.findIndex(s => s.status === 'pending');
-        if (firstPendingIdx !== -1) {
-          stateSteps[firstPendingIdx].status = 'failed';
-        } else if (stateSteps.length > 0) {
-          // If all are completed (rare for failed) or something else, mark the last one?
-          // For now, only targeting pending steps.
+        // Replace the last active/pending step with failed, or append if needed
+        const activeIdx = stateSteps.findIndex(s => s.status === 'active' || s.status === 'pending');
+        if (activeIdx !== -1) {
+          stateSteps[activeIdx].status = 'failed';
+          stateSteps[activeIdx].name = `${stateSteps[activeIdx].name} (Failed)`;
+        } else {
+          stateSteps.push({
+            id: 'system_failure',
+            name: 'System Processing',
+            status: 'failed',
+            order: stateSteps.length + 1,
+            completedAt: request.updatedAt,
+            facts: []
+          });
         }
       }
     }
@@ -174,22 +185,29 @@ export function RequestStateList({ request }: { request: Request }) {
           const isActive = step.status === 'active';
           const isTraining = step.id === 'training_pending';
 
+          const getStepBg = () => {
+            if (isFailed || isRejected) return 'color-mix(in srgb, var(--brand-alert), transparent 95%)';
+            if (isActive) return 'color-mix(in srgb, var(--brand-info), transparent 95%)';
+            if (isCompleted) return 'color-mix(in srgb, var(--brand-success), transparent 95%)';
+            return 'white';
+          };
+
           return (
             <div
               key={`${step.id}-${idx}`}
-              className={`p-4 flex flex-col transition-colors ${isFailed ? 'bg-red-50 border-l-4 border-l-red-600' :
-                isRejected ? 'bg-red-50 border-l-4 border-l-red-500' :
-                  isActive ? 'bg-blue-50 border-l-4 border-l-blue-500' :
-                    isCompleted ? 'bg-green-50 border-l-4 border-l-green-500' :
-                      'bg-white border-l-4 border-l-gray-200'
+              style={{ backgroundColor: getStepBg() }}
+              className={`p-4 flex flex-col transition-colors border-l-4 ${isFailed || isRejected ? 'border-l-alert' :
+                isActive ? 'border-l-info' :
+                  isCompleted ? 'border-l-success' :
+                    'border-l-gray-200'
                 } first:rounded-t-lg last:rounded-b-lg hover:bg-opacity-80`}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4 flex-1">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${isFailed ? 'bg-red-600 text-white' :
-                    isRejected ? 'bg-red-500 text-white' :
-                      isCompleted ? 'bg-green-500 text-white' :
-                        isActive ? 'bg-blue-500 text-white' :
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${isFailed ? 'bg-alert text-white' :
+                    isRejected ? 'bg-alert text-white' :
+                      isCompleted ? 'bg-success text-white' :
+                        isActive ? 'bg-info text-white' :
                           'bg-gray-300 text-gray-600'
                     }`}>
                     {isFailed ? <AlertCircle className="w-6 h-6" /> :
@@ -208,10 +226,10 @@ export function RequestStateList({ request }: { request: Request }) {
                       )}
                     </div>
                     <div className="flex items-center gap-3 text-sm text-gray-600">
-                      <span className={`font-medium ${isFailed ? 'text-red-800 font-bold' :
-                        isRejected ? 'text-red-700' :
-                          isCompleted ? 'text-green-700' :
-                            isActive ? 'text-blue-700' :
+                      <span className={`font-medium ${isFailed ? 'text-alert font-bold' :
+                        isRejected ? 'text-alert' :
+                          isCompleted ? 'text-success' :
+                            isActive ? 'text-info' :
                               'text-gray-500'
                         }`}>
                         {isFailed ? 'Failed' :

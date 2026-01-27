@@ -28,7 +28,7 @@ TARGET="${1:-dev}"
 DEV_USER="${2:-}"
 
 echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║  EDAS Hub - Databricks App Deployment  ║${NC}"
+echo -e "${BLUE}║  ATLAS - Databricks App Deployment    ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════╝${NC}\n"
 
 # Check for databricks CLI
@@ -89,7 +89,7 @@ echo -e "${GREEN}✓ Frontend copied${NC}"
 # Sync files to workspace (bypassing bundle to avoid state issues)
 echo -e "\n${CYAN}Syncing files to workspace...${NC}"
 CURRENT_USER=$(databricks current-user me --output json 2>/dev/null | grep -o '"userName":"[^"]*"' | cut -d'"' -f4)
-WORKSPACE_BASE="/Workspace/Users/${CURRENT_USER}/.bundle/edas-hub/dev/files"
+WORKSPACE_BASE="/Workspace/Users/${CURRENT_USER}/.bundle/atlas/dev/files"
 
 # Create target directory and sync backend
 echo -e "${CYAN}Uploading backend to ${WORKSPACE_BASE}/backend...${NC}"
@@ -97,7 +97,7 @@ databricks workspace import-dir backend "${WORKSPACE_BASE}/backend" --overwrite
 echo -e "${GREEN}✓ Files synced to workspace${NC}"
 
 # Get app info
-APP_NAME="edas-hub-dev-${BUNDLE_VAR_dev_user}"
+APP_NAME="atlas-dev-${BUNDLE_VAR_dev_user}"
 WORKSPACE_PATH="${WORKSPACE_BASE}/backend"
 
 # Check if app exists, create if not
@@ -106,7 +106,7 @@ if databricks apps get "$APP_NAME" &> /dev/null; then
     echo -e "${GREEN}✓ App exists${NC}"
 else
     echo -e "${YELLOW}App '$APP_NAME' not found, creating...${NC}"
-    if databricks apps create "$APP_NAME" --description "EDAS Hub - Personal dev instance for ${BUNDLE_VAR_dev_user}" 2>&1; then
+    if databricks apps create "$APP_NAME" --description "ATLAS - Personal dev instance for ${BUNDLE_VAR_dev_user}" 2>&1; then
         echo -e "${GREEN}✓ App created${NC}"
         # Wait for compute to be ready
         echo -e "${CYAN}Waiting for app compute to initialize...${NC}"

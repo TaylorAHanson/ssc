@@ -1,6 +1,6 @@
-# EDAS Hub - Self-Service Portal
+# ATLAS - Self-Service Portal
 
-Enterprise Data and Analytics Services (EDAS) Hub is a self-service portal for Qualcomm employees to request access to data and analytics resources.
+ATLAS (Agentic Control Tower for Lakehouse Automation & Self‑Service Experience) is a self-service portal for employees to request access to data and analytics resources.
 
 ## Quick Start
 

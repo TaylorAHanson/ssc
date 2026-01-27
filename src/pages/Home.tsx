@@ -75,9 +75,9 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
     {
       title: 'Platform Services',
       icon: <Box className="w-5 h-5" />,
-      colorClass: 'text-purple-600',
-      hoverBorderClass: 'hover:border-purple-300',
-      hoverTextClass: 'group-hover:text-purple-600',
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
       items: [
         { title: 'Workspace Access', description: 'Join an existing workspace', query: "I need access to a Databricks workspace" },
         { title: 'Provision Workspace', description: 'Create a new Databricks environment', query: "I need to provision a new Databricks workspace" },
@@ -89,9 +89,9 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
     {
       title: 'Data Services',
       icon: <Server className="w-5 h-5" />,
-      colorClass: 'text-emerald-600',
-      hoverBorderClass: 'hover:border-emerald-300',
-      hoverTextClass: 'group-hover:text-emerald-600',
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
       items: [
         { title: 'REST API Access', description: 'Programmatic data access', query: "I need REST API access to data" },
         { title: 'Batch Data Access', description: 'High-volume data transfer', query: "I need batch data access via Delta Sharing" }
@@ -102,9 +102,9 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
     {
       title: 'Compliance & Security',
       icon: <Lock className="w-5 h-5" />,
-      colorClass: 'text-blue-600',
-      hoverBorderClass: 'hover:border-blue-300',
-      hoverTextClass: 'group-hover:text-blue-600',
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
       items: [
         { title: 'Policy Review', description: 'Request a formal policy review', query: "I need to request a policy review for my project" },
         { title: 'Security Baseline', description: 'Check workspace security standards', query: "Check if my workspace meets security baselines" }
@@ -113,9 +113,9 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
     {
       title: 'Data Stewardship',
       icon: <Shield className="w-5 h-5" />,
-      colorClass: 'text-indigo-600',
-      hoverBorderClass: 'hover:border-indigo-300',
-      hoverTextClass: 'group-hover:text-indigo-600',
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
       items: [
         { title: 'Assign Owner', description: 'Update data asset ownership', query: "I need to assign a new owner to a catalog" },
         { title: 'Data Classification', description: 'Apply PII or sensitivity tags', query: "I need to classify sensitive data in my schema" }
@@ -124,9 +124,9 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
     {
       title: 'Audit & Tracking',
       icon: <FileText className="w-5 h-5" />,
-      colorClass: 'text-slate-600',
-      hoverBorderClass: 'hover:border-slate-300',
-      hoverTextClass: 'group-hover:text-slate-600',
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
       items: [
         { title: 'Access Report', description: 'See who can access your data', query: "Show me an access report for my production data" },
         { title: 'Usage Audit', description: 'Review recent administrative actions', query: "Audit administrative actions in my workspace" }
@@ -137,9 +137,9 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
     {
       title: 'Cost Analysis',
       icon: <BarChart3 className="w-5 h-5" />,
-      colorClass: 'text-amber-600',
-      hoverBorderClass: 'hover:border-amber-300',
-      hoverTextClass: 'group-hover:text-amber-600',
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
       items: [
         { title: 'Usage Forecast', description: 'Predict future spending', query: "What is my predicted spend for next month?" },
         { title: 'Department Billing', description: 'Breakdown by cost center', query: "Show me the cost breakdown by department" }
@@ -148,9 +148,9 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
     {
       title: 'Budgeting',
       icon: <TrendingUp className="w-5 h-5" />,
-      colorClass: 'text-orange-600',
-      hoverBorderClass: 'hover:border-orange-300',
-      hoverTextClass: 'group-hover:text-orange-600',
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
       items: [
         { title: 'Set Budget Alert', description: 'Get notified of overages', query: "I want to set a cost alert for my workspace" },
         { title: 'Budget Review', description: 'Compare actual vs. planned', query: "Review my team's budget performance" }
@@ -159,9 +159,9 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
     {
       title: 'Optimization',
       icon: <CheckCircle className="w-5 h-5" />,
-      colorClass: 'text-green-600',
-      hoverBorderClass: 'hover:border-green-300',
-      hoverTextClass: 'group-hover:text-green-600',
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
       items: [
         { title: 'Idle Clusters', description: 'Terminate unused compute', query: "Identify idle clusters I can safely terminate" },
         { title: 'Spot Instances', description: 'Analyze spot adoption', query: "Show me my spot instance savings report" }
@@ -172,9 +172,9 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
     {
       title: 'Health Checks',
       icon: <Activity className="w-5 h-5" />,
-      colorClass: 'text-rose-600',
-      hoverBorderClass: 'hover:border-rose-300',
-      hoverTextClass: 'group-hover:text-rose-600',
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
       items: [
         { title: 'Schema Validation', description: 'Detect structural drift', query: "Check for schema drift in my bronze tables" },
         { title: 'Null Check Report', description: 'Monitor field completeness', query: "Show me the null-value report for my core tables" }
@@ -183,9 +183,9 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
     {
       title: 'Monitoring',
       icon: <Search className="w-5 h-5" />,
-      colorClass: 'text-cyan-600',
-      hoverBorderClass: 'hover:border-cyan-300',
-      hoverTextClass: 'group-hover:text-cyan-600',
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
       items: [
         { title: 'Pipeline SLA', description: 'Track data arrival times', query: "Are my production pipelines meeting SLAs?" },
         { title: 'Data Freshness', description: 'Verify update frequency', query: "Check freshness of my dashboard source tables" }
@@ -194,9 +194,9 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
     {
       title: 'Validation',
       icon: <AlertTriangle className="w-5 h-5" />,
-      colorClass: 'text-red-600',
-      hoverBorderClass: 'hover:border-red-300',
-      hoverTextClass: 'group-hover:text-red-600',
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
       items: [
         { title: 'Range Checks', description: 'Verify value constraints', query: "Run value range validation on my transaction data" },
         { title: 'Cross-Source Sync', description: 'Compare with source systems', query: "Validate my lakehouse data against the source DB" }
@@ -299,8 +299,8 @@ export function Home() {
     setQuery('');
     setAgentMode('Self Service Agent');
     setIsProcessing(false);
-    localStorage.removeItem('edas_hub_conversation_state');
-    localStorage.removeItem('edas_hub_agent_mode');
+    localStorage.removeItem('atlas_conversation_state');
+    localStorage.removeItem('atlas_agent_mode');
     // Focus the initial textarea after a short delay to allow the state change to render
     setTimeout(() => {
       const initialTextarea = document.querySelector('textarea');
@@ -312,7 +312,7 @@ export function Home() {
 
   // Load state from localStorage on mount
   useEffect(() => {
-    const savedState = localStorage.getItem('edas_hub_conversation_state');
+    const savedState = localStorage.getItem('atlas_conversation_state');
     if (savedState) {
       try {
         const parsedState = JSON.parse(savedState);
@@ -329,7 +329,7 @@ export function Home() {
       }
     }
 
-    const savedMode = localStorage.getItem('edas_hub_agent_mode');
+    const savedMode = localStorage.getItem('atlas_agent_mode');
     if (savedMode) {
       setAgentMode(savedMode as AgentMode);
     }
@@ -338,9 +338,9 @@ export function Home() {
   // Persist state to localStorage
   useEffect(() => {
     if (conversationState) {
-      localStorage.setItem('edas_hub_conversation_state', JSON.stringify(conversationState));
+      localStorage.setItem('atlas_conversation_state', JSON.stringify(conversationState));
     }
-    localStorage.setItem('edas_hub_agent_mode', agentMode);
+    localStorage.setItem('atlas_agent_mode', agentMode);
   }, [conversationState, agentMode]);
 
   // Close dropdown when clicking outside
@@ -646,7 +646,7 @@ export function Home() {
         <div className="text-center mb-6 relative z-10">
           <div className="flex items-center justify-center gap-3 mb-3">
             {brandLogoUrl ? (
-              <img src={brandLogoUrl} alt="Logo" className="w-10 h-10 object-contain shadow-md rounded-xl" />
+              <img src={brandLogoUrl} alt="Logo" className="w-10 h-10 object-contain rounded-xl" />
             ) : (
               <div className="p-2 bg-primary rounded-xl shadow-md">
                 <Sparkles className="w-5 h-5 text-white" />
@@ -758,7 +758,7 @@ export function Home() {
                             type="button"
                             variant="outline"
                             onClick={handleReset}
-                            className="rounded-xl border-emerald-200 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition-all duration-200 h-10 px-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
+                            className="rounded-xl border-primary/30 text-primary hover:bg-primary/5 hover:text-primary/80 transition-all duration-200 h-10 px-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
                           >
                             New Chat
                           </Button>
@@ -1044,7 +1044,7 @@ export function Home() {
                         type="button"
                         variant="outline"
                         onClick={handleReset}
-                        className="rounded-xl border-emerald-200 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition-all duration-200 self-end h-10 px-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
+                        className="rounded-xl border-primary/30 text-primary hover:bg-primary/5 hover:text-primary/80 transition-all duration-200 self-end h-10 px-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
                       >
                         New Chat
                       </Button>
@@ -1103,15 +1103,19 @@ export function Home() {
       <div className="w-full max-w-3xl">
         <div className="text-center mb-8">
           <div className="flex items-center justify-center gap-3 mb-6">
-            <div className="p-3 bg-gradient-to-br from-primary to-primary/80 rounded-2xl shadow-lg">
-              <Sparkles className="w-8 h-8 text-white" />
-            </div>
+            {brandLogoUrl ? (
+              <img src={brandLogoUrl} alt="Logo" className="w-16 h-16 object-contain rounded-2xl" />
+            ) : (
+              <div className="p-3 bg-gradient-to-br from-primary to-primary/80 rounded-2xl shadow-lg">
+                <Sparkles className="w-8 h-8 text-white" />
+              </div>
+            )}
             <h1 className="text-5xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
-              EDAS Hub
+              {brandName}
             </h1>
           </div>
           <p className="text-lg text-gray-600 max-w-xl mx-auto">
-            Your intelligent assistant for EDAS self-service requests.
+            Your intelligent assistant for {brandName} self-service requests.
           </p>
         </div>
 

@@ -1,4 +1,4 @@
-# EDAS Hub - Platform Architecture & Setup Guide
+# ATLAS - Platform Architecture & Setup Guide
 
 ## Developer Contribution Journey
 
@@ -129,9 +129,9 @@
 
 | Method | Trigger | Workspace Path | App Name |
 |--------|---------|----------------|----------|
-| `./deploy.sh dev` | Manual (local) | `/Workspace/Users/{you}/.bundle/edas-hub/dev/` | `edas-hub-dev-{username}` |
-| Push to `develop` | CI/CD (GitHub Actions) | `/Workspace/Shared/apps/edas-hub-dev/` | `edas-hub-dev` |
-| Push to `main` | CI/CD (GitHub Actions) | `/Workspace/Shared/apps/edas-hub/` | `edas-hub` |
+| `./deploy.sh dev` | Manual (local) | `/Workspace/Users/{you}/.bundle/atlas/dev/` | `atlas-dev-{username}` |
+| Push to `develop` | CI/CD (GitHub Actions) | `/Workspace/Shared/apps/atlas-dev/` | `atlas-dev` |
+| Push to `main` | CI/CD (GitHub Actions) | `/Workspace/Shared/apps/atlas/` | `atlas` |
 
 ---
 
@@ -231,8 +231,8 @@ Configure these for **each environment** (Settings → Environments → [env]):
 
 | Resource | Name | Purpose | How to Provision |
 |----------|------|---------|------------------|
-| **Service Principal** | `edas-hub-{env}-cicd` | GitHub Actions deployment | Account Console → User Management |
-| **Databricks App** | `edas-hub-dev` / `edas-hub` | Application instance | Auto-created by CI/CD |
+| **Service Principal** | `atlas-{env}-cicd` | GitHub Actions deployment | Account Console → User Management |
+| **Databricks App** | `atlas-dev` / `atlas` | Application instance | Auto-created by CI/CD |
 | **SQL Warehouse** | (any serverless warehouse) | Execute SQL queries | Must exist, grant SP access |
 | **Model Serving Endpoint** | Foundation Model API | LLM for agent | Must exist, grant SP "Can Query" |
 
@@ -313,7 +313,7 @@ git push origin main     # → deploys to production
 
 | Setting | Development | Production |
 |---------|-------------|------------|
-| App Name | `edas-hub-dev` | `edas-hub` |
+| App Name | `atlas-dev` | `atlas` |
 | CPU | 1 | 2 |
 | Memory | 2048 MB | 4096 MB |
 | Branch | `develop` | `main` |
@@ -384,7 +384,7 @@ Reload your shell: `source ~/.zshrc`
 databricks bundle deploy -t dev --var dev_user=your-name
 
 # Start the app after deployment
-databricks apps start edas-hub-dev-your-name
+databricks apps start atlas-dev-your-name
 ```
 
 ---
@@ -438,7 +438,7 @@ databricks bundle deploy -t dev --var dev_user=your-name
 To delete your personal app:
 
 ```bash
-databricks apps delete edas-hub-dev-your-name
+databricks apps delete atlas-dev-your-name
 databricks bundle destroy -t dev --var dev_user=your-name
 ```
 

@@ -4,8 +4,12 @@
 
 :root {
   --radius: 0.5rem;
-  --brand-primary: #3253DC;
-  --brand-secondary: #0ea5e9;
+  --brand-primary: #FF3621;
+  --brand-secondary: #1B5162;
+  --brand-info: #1B5162;
+  --brand-alert: #98102A;
+  --brand-warning: #FFAB00;
+  --brand-success: #00A972;
 }
 
 * {
@@ -58,6 +62,7 @@ body {
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
@@ -68,6 +73,7 @@ body {
     transform: translateY(10px);
     opacity: 0;
   }
+
   to {
     transform: translateY(0);
     opacity: 1;

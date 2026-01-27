@@ -1,7 +1,7 @@
-# EDAS Hub Governance Framework
+# ATLAS Governance Framework
 
 ## Overview
-The Enterprise Data and Analytics Services (EDAS) Hub is designed to empower Qualcomm employees with self-service access to data and infrastructure while maintaining a rigorous security and governance posture. This framework is built upon the **Databricks Well-Architected Framework** and the **Databricks AI Governance Framework (DAGF)**, balancing agility with the principles of least privilege, cost optimization, and data integrity.
+ATLAS is designed to empower employees with self-service access to data and infrastructure while maintaining a rigorous security and governance posture. This framework is built upon the **Databricks Well-Architected Framework** and the **Databricks AI Governance Framework (DAGF)**, balancing agility with the principles of least privilege, cost optimization, and data integrity.
 
 ---
 
@@ -16,7 +16,7 @@ Our intelligent agent provides continuous governance and FinOps support by:
 *   **Policy Guarding**: Real-time checking of requests against established Governance and Security policies before they even reach a human reviewer.
 
 ### Just-in-Time (JIT) & Granular Entitlements
-Instead of broad, persistent administrative roles, the EDAS Hub facilitates granular access:
+Instead of broad, persistent administrative roles, ATLAS facilitates granular access:
 *   **3-Level Namespace**: All data access is governed via Unity Catalog using the `catalog.schema.table` structure.
 *   **Attribute-Based Access Control (ABAC)**: Where possible, access is determined by user attributes (department, project) rather than manual assignment.
 *   **Time-Bound Access**: Temporary access is preferred for troubleshooting or one-time analysis, with automated revocation.
@@ -39,7 +39,7 @@ To maintain control without becoming a bottleneck, we categorize requests based 
 ---
 
 ## 3. Preventing Data Proliferation & Agentic Discovery
-A core goal of EDAS Hub is to prevent "Data Swamps" where multiple copies of the same dataset exist. We follow the Databricks principle of **Unifying Data and AI Governance**.
+A core goal of ATLAS is to prevent "Data Swamps" where multiple copies of the same dataset exist. We follow the Databricks principle of **Unifying Data and AI Governance**.
 
 ### Agentic Data Overlap Prevention
 The agent intervenes during the request process to maintain data integrity:
@@ -70,7 +70,7 @@ Governance includes financial responsibility. We treat cost management as an ope
 ---
 
 ## 5. AI Governance & Responsible AI
-As we scale AI capabilities, the EDAS Hub follows the **Databricks AI Governance Framework (DAGF)** with agent-guided oversight:
+As we scale AI capabilities, ATLAS follows the **Databricks AI Governance Framework (DAGF)** with agent-guided oversight:
 *   **Model Governance**: All ML models must be registered in the Unity Catalog Model Registry with clear ownership and lineage.
 *   **Feature Store Reuse**: The agent proactively checks the Feature Store during "Create Model" inquiries to prevent redundant feature engineering.
 *   **Monitoring**: Promoting the use of Lakehouse Monitoring for data and model drift. The agent can summarize drift reports and suggest retraining triggers.
@@ -86,5 +86,5 @@ Governance is an ongoing cycle of monitoring and refinement, moving from manual 
 *   **Security Posture Improvement**: The agent identifies users with unrotated API keys or over-provisioned permissions and guides them through the remediation process.
 
 ### Operational Logging
-*   **Audit Logging**: Every action in the EDAS Hub (request, approval, provisioning) is logged and stored in a system table for compliance reviews.
+*   **Audit Logging**: Every action in ATLAS (request, approval, provisioning) is logged and stored in a system table for compliance reviews.
 *   **Orphaned Permission Cleanup**: Automated monthly reviews to identify and remove access for users who have changed roles or left the company.
