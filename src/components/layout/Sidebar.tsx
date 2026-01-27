@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
+import { useBrandingStore } from '../../stores/brandingStore';
 import { useUserStore } from '../../stores/userStore';
 import type { UserPersona } from '../../types';
 
@@ -51,6 +52,7 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
   const currentPersona = useUserStore((state) => state.currentPersona);
+  const { brandName, brandLogoUrl } = useBrandingStore();
 
   // Filter items based on current persona
   const filteredItems = navItems.filter(item => {
@@ -73,18 +75,21 @@ export function Sidebar() {
         collapsed ? "w-16" : "w-72"
       )}
     >
-      <div className="flex items-center justify-between p-4 border-b border-gray-200">
+      <div className="flex items-center gap-3 p-4 border-b border-gray-200 min-h-[65px]">
+        {brandLogoUrl && !collapsed && (
+          <img src={brandLogoUrl} alt="Logo" className="w-6 h-6 object-contain" />
+        )}
         {!collapsed && (
-          <h2 className="text-lg font-semibold text-primary">EDAS Self Service Hub</h2>
+          <h2 className="text-lg font-semibold text-primary truncate">{brandName}</h2>
         )}
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="p-1 rounded-md hover:bg-gray-100"
+          className={cn("p-1 rounded-md hover:bg-gray-100", collapsed && "mx-auto")}
         >
           {collapsed ? (
             <ChevronRight className="w-5 h-5" />
           ) : (
-            <ChevronLeft className="w-5 h-5" />
+            <ChevronLeft className="w-5 h-5 flex-shrink-0" />
           )}
         </button>
       </div>

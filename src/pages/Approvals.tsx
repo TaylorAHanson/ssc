@@ -7,6 +7,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { CheckCircle2, UserPlus, Clock, Check, X, Shield, Database, Badge, Calendar, Trash2, ArrowRight } from 'lucide-react';
 import { format } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
 import { api } from '../services/api';
 import type { Approval, ApprovalAction, Delegation } from '../types';
 
@@ -378,7 +379,7 @@ export function Approvals() {
                       </p>
                       <p className="flex items-center gap-1">
                         <Clock className="w-4 h-4" />
-                        <span>Requested {format(new Date(approval.createdAt), 'PPp')}</span>
+                        <span>Requested {formatInTimeZone(new Date(approval.createdAt), 'America/Los_Angeles', 'PPp zzz')}</span>
                       </p>
                     </div>
                   </div>
@@ -472,7 +473,7 @@ export function Approvals() {
                         </p>
                       )}
                       <p className="text-xs text-gray-500">
-                        {format(new Date(approval.updatedAt), 'PPp')}
+                        {formatInTimeZone(new Date(approval.updatedAt), 'America/Los_Angeles', 'PPp zzz')}
                       </p>
                     </div>
                   </div>

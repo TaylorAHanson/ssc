@@ -30,7 +30,7 @@ def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMac
     if r_type == RequestType.WORKSPACE_PROVISION:
         return WorkspaceProvisionStateMachine(request, db)
     
-    elif r_type in [RequestType.CATALOG_SCHEMA_TABLE_ACCESS, RequestType.BATCH_DATA_ACCESS]:
+    elif r_type in [RequestType.CATALOG_SCHEMA_TABLE_ACCESS, RequestType.BATCH_DATA_ACCESS, RequestType.DATA_ACCESS_REQUEST]:
         return DataAccessStateMachine(request, db)
         
     elif r_type == RequestType.SERVICE_PRINCIPAL:

@@ -1,7 +1,8 @@
 """
 Request API endpoints.
 """
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, status, Request as FastAPIRequest
+import fastapi
 from fastapi.responses import JSONResponse
 from typing import List, Optional
 from sqlalchemy.orm import Session
@@ -134,12 +135,26 @@ async def get_request_status(
 
 
 @router.post("/", response_model=dict, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_request(
+    request: fastapi.Request,
     request_data: RequestCreate,
     db: Session = Depends(get_db)
 ):
     """Create a new request."""
-    request = RequestService.create_request(db, request_data)
+    # Inject user context into metadata if available
+    if hasattr(request.state, "user"):
+        user = request.state.user
+        if not request_data.metadata:
+            request_data.metadata = {}
+            
+        if "requested_by" not in request_data.metadata:
+            request_data.metadata["requested_by"] = user.get("username", "unknown")
+            
+        if "requested_by_email" not in request_data.metadata:
+            request_data.metadata["requested_by_email"] = user.get("email")
+            
+    request_obj = RequestService.create_request(db, request_data)
     return {
         "request_id": request.id,
         "status": request.status,

@@ -30,6 +30,7 @@ class RequestType(str, Enum):
     BATCH_DATA_ACCESS = "batch_data_access"
     GITHUB_REPO_CREATION = "github_repo_creation"
     PROJECT_ONBOARDING = "project_onboarding"
+    DATA_ACCESS_REQUEST = "data_access_request"
 
 
 class Environment(str, Enum):

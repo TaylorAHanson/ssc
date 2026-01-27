@@ -81,7 +81,7 @@ class ModelServingClient:
             timeout=60.0
         )
     
-    @retry_on_retryable(max_attempts=3)
+    @retry_on_retryable(max_attempts=5, min_wait=2.0, max_wait=30.0)
     async def invoke_endpoint(
         self,
         endpoint_name: str,
@@ -212,6 +212,9 @@ class ModelServingClient:
             
             if e.response.status_code >= 500:
                 raise RetryableError(f"Model serving error: {error_message}")
+            elif e.response.status_code == 429:
+                # Rate limit exceeded - definitely retry
+                raise RetryableError(f"Rate limit exceeded (429): {error_message}")
             elif e.response.status_code == 404:
                 raise RetryableError(f"Endpoint '{endpoint_name}' not found: {error_message}")
             elif e.response.status_code == 401:

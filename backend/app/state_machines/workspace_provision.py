@@ -1,10 +1,16 @@
 """
 Workspace Provision state machine.
+Uses Terraform GitOps provider.
 """
+from typing import Dict, Any
 from statemachine import State
 from app.state_machines.base import BaseRequestStateMachine
 from app.state_machines.facts import has_fact, add_fact
+from app.providers.terraform.client import TerraformProvider
+from app.core.config import settings
+from app.core.exceptions import PermanentError
 import logging
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -15,120 +21,159 @@ class WorkspaceProvisionStateMachine(BaseRequestStateMachine):
     pending = State("pending", initial=True)
     manager_approval = State("manager_approval")
     training_pending = State("training_pending")
-    provisioning = State("provisioning")
+    
+    # GitOps States
+    terraform_planning = State("terraform_planning")
+    awaiting_admin_approval = State("awaiting_admin_approval")
+    terraform_applying = State("terraform_applying")
+    
     completed = State("completed", final=True)
     rejected = State("rejected", final=True)
+    failed = State("failed", final=True)
     
-    # Transitions with conditional guards based on facts
+    # Transitions
     submit = pending.to(manager_approval, cond="has_request_submitted")
     
-    # Manager approval can go to training (if required) or provisioning (if not)
-    # For demo: we allow auto-transition if approval fact exists
+    # Manager Approval
     approve_manager = (
         manager_approval.to(training_pending, cond="has_manager_approval and requires_training") |
-        manager_approval.to(provisioning, cond="has_manager_approval and not requires_training")
+        manager_approval.to(terraform_planning, cond="has_manager_approval and not requires_training")
     )
     
-    # For demo: auto-approve manager if fact missing but we want to skip
-    # (Commented out to keep the flow manual as requested by the bypass button mention)
-    # _auto_manager = manager_approval.to(provisioning, cond="not requires_training")
+    complete_training = training_pending.to(terraform_planning, cond="has_training_completed")
     
-    complete_training = training_pending.to(provisioning, cond="has_training_completed")
-    finish_provisioning = provisioning.to(completed, cond="has_workspace_created")
+    # GitOps Flow
+    finish_planning = terraform_planning.to(awaiting_admin_approval, cond="has_terraform_plan")
+    approve_admin = awaiting_admin_approval.to(terraform_applying, cond="has_platform_admin_approval")
+    finish_applying = terraform_applying.to(completed, cond="has_terraform_apply_success")
     
-    # Rejection can happen from any state
+    # Rejection
     reject = (
         pending.to(rejected, cond="has_request_rejected") |
         manager_approval.to(rejected, cond="has_request_rejected") |
         training_pending.to(rejected, cond="has_request_rejected") |
-        provisioning.to(rejected, cond="has_request_rejected")
+        terraform_planning.to(rejected, cond="has_request_rejected") |
+        awaiting_admin_approval.to(rejected, cond="has_request_rejected") |
+        terraform_applying.to(rejected, cond="has_request_rejected")
+    )
+    
+    mark_failed = (
+        pending.to(failed) | 
+        manager_approval.to(failed) |
+        training_pending.to(failed) |
+        terraform_planning.to(failed) | 
+        awaiting_admin_approval.to(failed) | 
+        terraform_applying.to(failed)
     )
     
     # Approval node configuration
+    # Multiple approvals: Manager first, then Platform Admin (for plan)
     APPROVAL_NODES = {
-        "manager_approval": {"approval_type": "manager", "name": "Manager Approval"}
+        "manager_approval": {"approval_type": "manager", "name": "Manager Approval"},
+        "awaiting_admin_approval": {"approval_type": "platform_admin", "name": "Platform Admin Approval (Review Plan)"}
     }
     
-    async def execute_tasks(self):
-        """Execute workspace provisioning tasks."""
-        if self.current_state.id == "provisioning":
-            if not has_fact(self.db, self.request.id, "workspace_created"):
-                from app.tools.workspace import CreateWorkspaceTool
-                from datetime import datetime
-                from app.core.exceptions import ValidationError
-                from app.core.config import settings
-                
-                # Mark provisioning as started if not already marked
-                if not has_fact(self.db, self.request.id, "provisioning_started"):
-                    add_fact(self.db, self.request.id, "provisioning_started", {"started_at": datetime.utcnow().isoformat()}, actor="system")
-                    self.db.commit()
-                
-                # Extract configuration from request
-                state_context = self.request.state_context or {}
-                
-                # Get workspace name and environment
-                workspace_name = state_context.get("workspace_name")
-                if not workspace_name:
-                    if ":" in self.request.title:
-                        workspace_name = self.request.title.split(":")[-1].strip()
-                    else:
-                        workspace_name = self.request.title
-                
-                environment = self.request.environment or "dev"
-                
-                config = {
-                    "databricks_account_id": state_context.get("databricks_account_id") or settings.DATABRICKS_ACCOUNT_ID,
-                    "client_id": state_context.get("client_id") or settings.DATABRICKS_CLIENT_ID,
-                    "client_secret": state_context.get("client_secret") or settings.DATABRICKS_CLIENT_SECRET,
-                    "region": state_context.get("region", "eu-west-1"),
-                    "cidr_block": state_context.get("cidr_block", "10.4.0.0/16"),
-                    "tags": state_context.get("tags", {}),
-                    **state_context
-                }
-                
-                # Validate required config
-                if not config.get("databricks_account_id"):
-                    raise ValidationError("databricks_account_id is required.")
-                if not config.get("client_id"):
-                    raise ValidationError("client_id is required.")
-                if not config.get("client_secret"):
-                    raise ValidationError("client_secret is required.")
-                
-                requested_by = state_context.get("requested_by") or "system"
-                
-                logger.info(f"[{self.request.id}] Executing CreateWorkspaceTool...")
-                tool = CreateWorkspaceTool()
-                
-                await tool.execute(
-                    request_id=self.request.id,
-                    name=workspace_name,
-                    environment=environment,
-                    config=config,
-                    requested_by=requested_by,
-                    db=self.db
-                )
+    def __init__(self, request, db_session):
+        # Handle legacy states
+        if request.current_state == "provisioning":
+            request.current_state = "terraform_planning"
+            
+        super().__init__(request, db_session)
 
-    def _process_current_state(self) -> bool:
-        """
-        Override to handle provisioning state - mark that provisioning should start.
+    def _get_provider(self):
+        """Lazy load provider."""
+        repo_url = settings.INFRA_REPO_URL
+        if not repo_url:
+            logger.warning("INFRA_REPO_URL not set.")
+            
+        return TerraformProvider(
+            repo_url=repo_url,
+            branch=settings.INFRA_REPO_BRANCH or "main",
+            config={
+                "git_username": settings.GIT_USERNAME,
+                "git_email": settings.GIT_EMAIL,
+                "ssh_key_path": settings.GIT_SSH_KEY_PATH
+            }
+        )
+
+    async def on_enter_terraform_planning_async(self):
+        """Execute async tasks for terraform_planning state."""
+        await self._run_plan()
         
-        The actual async tool execution will be handled by the poller.
-        We just mark that provisioning should start by checking facts.
-        """
-        changed = super()._process_current_state()
+    async def on_enter_terraform_applying_async(self):
+        """Execute async tasks for terraform_applying state."""
+        # Notify user: Approved
+        await self._send_notification(
+            subject=f"Workspace Request Approved: {self.request.title}",
+            body=f"Your request for workspace '{self.request.title}' has been approved. Provisioning changes now..."
+        )
+        await self._run_apply()
+
+    async def on_enter_completed_async(self):
+        """Execute async tasks for completed state."""
+        # Notify user: Success
+        await self._send_notification(
+            subject=f"Workspace Created: {self.request.title}",
+            body=f"Your workspace '{self.request.title}' has been successfully created and is ready for use."
+        )
+
+    async def _run_plan(self):
+        """Trigger Terraform Plan."""
+        if has_fact(self.db, self.request.id, "terraform_plan_started"):
+             return
+
+        params = self.request.state_context or {}
+        name = params.get("workspace_name")
+        if not name and ":" in self.request.title:
+            name = self.request.title.split(":")[-1].strip()
         
-        # Handle provisioning state - check if we need to start provisioning
-        if self.current_state.id == "provisioning":
-            # Check if provisioning has already started or completed
-            if has_fact(self.db, self.request.id, "workspace_created"):
-                # Workspace already created - provisioning is done
-                if not has_fact(self.db, self.request.id, "provisioning_completed"):
-                    logger.info(f"Workspace already exists for request {self.request.id}, marking complete")
-                    add_fact(self.db, self.request.id, "provisioning_completed", {}, actor="system")
-            elif not has_fact(self.db, self.request.id, "provisioning_started"):
-                # Provisioning hasn't started yet - mark that it should start
-                # The actual async execution will be handled separately
-                logger.info(f"Provisioning state entered for request {self.request.id} - will be processed by poller")
-                # Don't start provisioning here - it will be handled by async processing
+        if not name:
+            name = self.request.title # Fallback
+
+        try:
+            logger.info(f"Starting Workspace Plan for {name} ({self.request.id})")
+            provider = self._get_provider()
+            
+            # Construct YAML spec for Workspace
+            content = {
+                "resource_type": "workspace",
+                "name": name,
+                "properties": params
+            }
+            target_file = f"resources/workspaces/{name}.yaml"
+            
+            await provider.plan(
+                request_id=self.request.id,
+                target_file=target_file,
+                content=content,
+                commit_message=f"Plan: Workspace {name}"
+            )
+            
+            add_fact(self.db, self.request.id, "terraform_plan_started", {}, actor="system")
+            
+        except Exception as e:
+            logger.error(f"Plan failed: {e}")
+            raise e
+
+    async def _run_apply(self):
+        """Trigger Terraform Apply."""
+        if has_fact(self.db, self.request.id, "terraform_apply_started"):
+            return
+
+        try:
+            logger.info(f"Starting Terraform Apply for {self.request.id}")
+            provider = self._get_provider()
+            await provider.apply(request_id=self.request.id)
+            add_fact(self.db, self.request.id, "terraform_apply_started", {}, actor="system")
+            
+        except Exception as e:
+            logger.error(f"Apply failed: {e}")
+            raise e
+
+    @property
+    def has_terraform_plan(self) -> bool:
+        return has_fact(self.db, self.request.id, "terraform_plan_received")
         
-        return changed
+    @property
+    def has_terraform_apply_success(self) -> bool:
+        return has_fact(self.db, self.request.id, "terraform_apply_received")

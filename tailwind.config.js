@@ -9,7 +9,7 @@ export default {
       colors: {
         border: "hsl(214.3 31.8% 91.4%)",
         primary: {
-          DEFAULT: "#3253DC",
+          DEFAULT: "var(--brand-primary)",
           foreground: "#ffffff",
         },
         background: {

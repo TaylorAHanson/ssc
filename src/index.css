@@ -4,6 +4,8 @@
 
 :root {
   --radius: 0.5rem;
+  --brand-primary: #3253DC;
+  --brand-secondary: #0ea5e9;
 }
 
 * {

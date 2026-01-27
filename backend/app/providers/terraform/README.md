@@ -1,63 +1,196 @@
 # Terraform Provider (GitOps Pattern)
 
 ## Overview
-This provider implements a **GitOps** pattern for infrastructure provisioning. Unlike the standard direct-execution pattern (where the worker runs `terraform apply`), this provider acts as a bridge to an external Git repository. An external CI/CD system (e.g., GitHub Actions, GitLab CI) is responsible for the actual `terraform apply` execution.
+This provider implements a **GitOps** pattern for infrastructure provisioning. Unlike a direct-execution model where the backend runs Terraform directly, this provider acts as an automation bridge to an external Infrastructure-as-Code (IaC) Git repository. 
 
-This approach aligns with the system's **Async Processing** and **State Machine** architecture by decoupling the "request" for infrastructure from the "execution" of it, treating the Git commit as the actuation event. It also keeps terraform out of the backend codebase.
+The core principle is **Isolation through Branching**: every request gets its own branch, allowing for independent `terraform plan` execution and review before merging to `main` for a final `terraform apply`.
 
-## Integration with Architecture
+## Architecture Flow
 
-### 1. State Machine Layer
-The **State Machines** (e.g., `WorkspaceProvisionStateMachine`) remain the orchestrators. They call the `TerraformProvider` directly.
-*   **Action**: Instead of blocking on a 20-minute `apply`, the State Machine calls `provider.apply()`, which now returns quickly after pushing a commit.
-*   **State Transition**: The State Machine transitions to a `provisioning` state (or `git_push_complete`) and waits.
+```mermaid
+sequenceDiagram
+    participant Admin as Platform Admin (UI)
+    participant SM as State Machine
+    participant TP as Terraform Provider
+    participant Git as Git Repo (Infra)
+    participant CI as CI/CD (GitHub Actions)
 
-### 2. Provider Layer
-The `TerraformProvider` abstracts the Git interaction.
-*   **`apply(config)`**: 
-    1.  Clones/Pulls the configuration repo.
-    2.  Reads the target YAML files (e.g., `resources/<workspace>/catalogs.yaml`).
-    3.  Modifies them based on the request.
-    4.  Commits and Pushes to specific branch.
-    5.  Returns the **Commit SHA** as the "Resource ID".
+    Note over SM: State: terraform_planning
+    SM->>TP: plan(config)
+    TP->>Git: Create branch 'request/{id}'
+    TP->>Git: Commit YAML changes
+    TP->>Git: Push branch
+    Git->>CI: Trigger Plan Workflow
+    CI->>CI: terraform plan
+    CI->>SM: POST /api/callbacks/plan (Send summary)
+    
+    Note over SM: State: awaiting_approval
+    SM-->>Admin: Show Plan in UI
+    Admin->>SM: Approve Request
+    
+    Note over SM: State: terraform_applying
+    SM->>TP: apply()
+    TP->>Git: Merge 'request/{id}' to 'main'
+    Git->>CI: Trigger Apply Workflow
+    CI->>CI: terraform apply
+    CI->>SM: POST /api/callbacks/apply (Send status/outputs)
+    
+    Note over SM: State: active/completed
+```
 
-### 3. Feedback Loop (Workers/API)
-The system needs to know when the external `terraform apply` succeeds.
-*   **Mechanism**: **Webhook / Callback** (Recommended).
-*   **Flow**:
-    1.  External CI runs `terraform apply`.
-    2.  On success/failure, CI invokes the backend API: `POST /api/v1/callbacks/terraform/{request_id}`.
-    3.  **Polling Worker**: Alternatively, if webhooks aren't possible, the standard Polling Worker can check the CI build status using the `GithubProvider`.
+## Key Components
 
-## Workflow (Example: Create Catalog)
+### 1. State Machine Integration
+State machines using this provider must handle the following sequence:
 
-1.  **State Machine** requests `create_catalog`.
-2.  **Provider** checks out `main` (or feature branch).
-3.  **Provider** reads `resources/<workspace_id>/catalogs.yml` (or creates it if it doesn't exist).
-4.  **Provider** adds the new catalog definition.
-5.  **Provider** commits: "Ops: Create catalog 'sales_dev' (Req: 123)".
-6.  **Provider** pushes to remote.
-7.  **External CI** detects change -> Runs Terraform.
-8.  **External CI** reports status back to Backend.
-9.  **State Machine** advances to `active` or `failed`.
+1.  **`terraform_planning`**: The SM calls `provisioner.plan()`. This is an async state. The SM waits for a callback from the CI system containing the plan result.
+2.  **`awaiting_approval`**: Once the plan is received, the SM transitions here. This is a "Human-in-the-loop" state where a Platform Admin reviews the plan in the UI.
+3.  **`terraform_applying`**: Upon approval, the SM calls `provisioner.apply()`. This state triggers the merge to `main`. The SM waits for a final callback confirming execution.
 
-## Design Decisions & TODOs
+### 2. Provider Responsibilities
+The `TerraformProvider` handles the low-level Git mechanics:
+- **`plan(request_id, target_file, content)`**:
+    - Switches to a new branch: `request/{request_id}`.
+    - Updates YAML files with the desired state.
+    - Pushes the branch to trigger remote CI.
+- **`apply(request_id)`**:
+    - Merges the request branch into the target branch (usually `main`).
+    - Pushes the merge to trigger remote execution.
 
-### 1. Atomicity & Concurrency
-*Problem*: Multiple State Machines modifying `catalogs.yml` concurrently.
-*   **Architecture Alignment**: The `Workers` layer uses **Database Locking** (Line 630 in ARCHITECTURE.md) to process requests serialized per-request-ID, but we need serialization *per-resource-file* in Git.
-*   **Solution**: 
-    *   **Optimistic Locking**: Provider checks `git rev-parse HEAD` before push. If changed, rebase and retry (handled by `tenacity` retry logic in `client.py`).
+### 3. CI/CD Requirements
+The external repository must host two primary workflows:
 
-### 2. Schema Strategy
-*Problem*: Monolithic `catalogs.yml` vs split files.
-*   **Recommendation**: **Split Files** (`resources/<workspace_id>/*.yaml`).
-    *   Reduces git conflicts (Atomicity).
-    *    aligns with **State Machine** encapsulation (one SM operates on one Workspace usually).
-    *   "Supply Chain" view can be aggregated by the CI system or a separate tool.
+#### **Plan Workflow** (`plan.yml`)
+- **Trigger**: `on: push: branches: ["request/*"]`
+- **Commands**:
+    ```bash
+    terraform init
+    terraform plan -no-color > plan_output.txt
+    ```
+- **Callback**: Send `plan_output.txt` to the Backend callback API.
 
-### 3. Information Feedback
-*Problem*: How to get outputs (e.g., `workspace_url`) back?
-*   **Solution**: 
-    *   **State File**: CI parses `terraform.tfstate` or `terraform output` and sends the JSON payload to the Callback API.
-    *   **Backend Storage**: CI writes `outputs.json` to the git repo. Provider pulls and reads it (slower). -> **Prefer Callback**.
+#### **Apply Workflow** (`apply.yml`)
+- **Trigger**: `on: push: branches: ["main"]`
+- **Commands**:
+    ```bash
+    terraform init
+    terraform apply -auto-approve
+    ```
+- **Callback**: Send success/failure and any `terraform output -json` to the Backend callback API.
+
+## Implementation Details
+
+### Branch Management
+By using `request/{request_id}` branches, we ensure:
+- **Zero Conflicts**: Multiple requests can be in the "Planning" phase simultaneously.
+- **Isolation**: Each plan is specific to the changes in its branch.
+- **Auditability**: Every infrastructure change is backed by a Git commit and a recorded plan.
+- **Cleanup**: Once merged and applied, the request branch can be safely deleted.
+
+### Environment & Directory Structure
+The provider assumes a convention-based directory structure in the IaC repo. This structure is optimized for **YAML-driven configuration**, allowing the Provider to write simple YAML files instead of parsing/generating complex HCL code.
+
+The Terraform `main.tf` is expected to use `yamldecode()` to read these files and iterate over them (e.g., `for_each`) to create resources.
+
+```text
+infrastructure-repo/
+├── databricks/
+│   ├── modules/                 # Reusable Terraform Modules
+│   │   ├── unity-catalog/
+│   │   └── workspace-config/
+│   ├── envs/
+│   │   ├── dev/
+│   │   │   ├── main.tf          # Calls modules using data from yaml
+│   │   │   ├── data/            # The "Database" of YAML files
+│   │   │   │   ├── catalogs/
+│   │   │   │   │   ├── sales-analytics.yaml
+│   │   │   │   │   └── finance-reporting.yaml
+│   │   │   │   ├── grants/      # Global/Account level grants
+│   │   │   │   │   └── account-groups.yaml
+│   │   │   │   └── workspaces/
+│   │   │   │       └── project-phoenix.yaml
+│   │   │   └── provider.tf
+│   │   └── prod/
+│   │       └── ...
+└── .github/
+    └── workflows/
+```
+
+### Configuration Examples
+
+The `TerraformProvider` writes to these specific YAML files based on the `Request`.
+
+#### 1. Catalogs & Schemas (`data/catalogs/{name}.yaml`)
+Used for `CATALOG_SCHEMA_TABLE` requests.
+```yaml
+name: "finance_prod"
+comment: "Primary catalog for finance team"
+properties:
+  owner: "group:finance-admins"
+schemas:
+  - name: "gold"
+    comment: "Curated business data"
+    tables: [] # Managed by other processes or dbt
+  - name: "silver"
+    comment: "Cleaned data"
+grants:
+  - principal: "group:finance-analysts"
+    privileges: ["USE_CATALOG", "SELECT"]
+  - principal: "group:finance-engineers"
+    privileges: ["ALL_PRIVILEGES"]
+  - principal: "group:audit-team"
+    privileges: ["SELECT"]
+```
+
+#### 2. Workspaces (`data/workspaces/{name}.yaml`)
+Used for `WORKSPACE_PROVISION` requests.
+```yaml
+display_name: "Project Phoenix Lab"
+region: "us-west-2"
+sku: "premium"
+tags:
+  - key: "CostCenter"
+    value: "CC-1234"
+  - key: "Project"
+    value: "Phoenix"
+principals:
+  - group_name: "phoenix-devs"
+    permission_level: "CAN_MANAGE"
+  - group_name: "phoenix-viewers"
+    permission_level: "CAN_VIEW"
+network:
+  privatelink: true
+  storage_customer_managed_key: true
+```
+
+#### 3. Global Permissions (`data/grants/global.yaml`)
+Used for `WORKSPACE_ACCESS` or `USER_ONBOARDING` requests.
+```yaml
+# Account-level group mapping or metastore admin assignments
+metastore_admins:
+  - "group:platform-admins"
+  - "user:alice@example.com"
+account_groups:
+  - name: "finance-analysts"
+    members:
+      - "user:bob@example.com"
+```
+
+### The Callback API
+The Backend provides a centralized callback endpoint:
+`POST /api/v1/callbacks/terraform/{request_id}`
+
+The payload structure:
+```json
+{
+  "action": "plan" | "apply",
+  "status": "success" | "failure",
+  "summary": "Terraform plan details or apply logs",
+  "outputs": {
+    "workspace_url": "https://...",
+    "metastore_id": "..."
+  },
+  "error": "Error details if status is failure"
+}
+```
+This callback updates the **Facts** for the request, which in turn triggers the next state transition in the State Machine.

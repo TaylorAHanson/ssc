@@ -14,10 +14,11 @@ import logging
 import os
 from pathlib import Path
 from app.workers.poller import start_poller
+from app.middleware.auth import AuthMiddleware
 
-# Configure logging to ensure we see INFO level logs
+# Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="EDAS Hub API",
     description="Enterprise Data and Analytics Services Self-Service Hub Backend (Databricks App)",
-    version="1.0.0",
+    version="0.0.1",
 )
 
 @app.on_event("startup")
@@ -46,6 +47,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Authentication Middleware (Context Propagation)
+app.add_middleware(AuthMiddleware)
 
 # Include API routes
 app.include_router(api_router, prefix="/api/v1")

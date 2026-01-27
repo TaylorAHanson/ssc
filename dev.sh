@@ -202,6 +202,9 @@ fi
 if ! $PYTHON_CMD -c "import sqlalchemy" 2>/dev/null; then
     MISSING_DEPS+=("sqlalchemy")
 fi
+if ! $PYTHON_CMD -c "import git" 2>/dev/null; then
+    MISSING_DEPS+=("git")
+fi
 
 if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
     echo -e "${YELLOW}Missing dependencies: ${MISSING_DEPS[*]}. Installing from requirements.txt...${NC}"
