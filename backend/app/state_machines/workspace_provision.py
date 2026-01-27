@@ -74,6 +74,10 @@ class WorkspaceProvisionStateMachine(BaseRequestStateMachine):
     }
     
     def __init__(self, request, db_session):
+        # Handle legacy states
+        if request.current_state == "provisioning":
+            request.current_state = "terraform_planning"
+            
         super().__init__(request, db_session)
 
     def _get_provider(self):
@@ -92,12 +96,26 @@ class WorkspaceProvisionStateMachine(BaseRequestStateMachine):
             }
         )
 
-    async def execute_tasks(self):
-        """Execute async tasks for the current state."""
-        if self.current_state.id == "terraform_planning":
-            await self._run_plan()
-        elif self.current_state.id == "terraform_applying":
-            await self._run_apply()
+    async def on_enter_terraform_planning_async(self):
+        """Execute async tasks for terraform_planning state."""
+        await self._run_plan()
+        
+    async def on_enter_terraform_applying_async(self):
+        """Execute async tasks for terraform_applying state."""
+        # Notify user: Approved
+        await self._send_notification(
+            subject=f"Workspace Request Approved: {self.request.title}",
+            body=f"Your request for workspace '{self.request.title}' has been approved. Provisioning changes now..."
+        )
+        await self._run_apply()
+
+    async def on_enter_completed_async(self):
+        """Execute async tasks for completed state."""
+        # Notify user: Success
+        await self._send_notification(
+            subject=f"Workspace Created: {self.request.title}",
+            body=f"Your workspace '{self.request.title}' has been successfully created and is ready for use."
+        )
 
     async def _run_plan(self):
         """Trigger Terraform Plan."""

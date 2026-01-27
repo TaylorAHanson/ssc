@@ -20,8 +20,47 @@ class NotificationProvider(BaseProvider):
     @retry_on_retryable(max_attempts=3)
     async def send_email(self, to: str, subject: str, body: str) -> bool:
         """Send email notification."""
-        # TODO: Implement email sending (SMTP, SendGrid, etc.)
-        return True
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            from app.core.config import settings
+            
+            smtp_host = settings.NOTIFICATION_EMAIL_SMTP_HOST
+            smtp_port = settings.NOTIFICATION_EMAIL_SMTP_PORT
+            smtp_user = settings.NOTIFICATION_EMAIL_SMTP_USER
+            smtp_password = settings.NOTIFICATION_EMAIL_SMTP_PASSWORD
+            
+            if not smtp_host:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info(f"======== MOCK EMAIL NOTIFICATION ========")
+                logger.info(f"To: {to}")
+                logger.info(f"Subject: {subject}")
+                logger.info(f"Body: {body}")
+                logger.info(f"=========================================")
+                return True
+
+            msg = MIMEMultipart()
+            msg['From'] = smtp_user or "noreply@edas-hub.com"
+            msg['To'] = to
+            msg['Subject'] = subject
+            msg.attach(MIMEText(body, 'plain'))
+            
+            # Using synchronous smtplib in async function - technically blocking but fine for low volume
+            # In production, run this in a threadpool or use aiosmtplib
+            with smtplib.SMTP(smtp_host, smtp_port) as server:
+                if smtp_port == 587:
+                    server.starttls()
+                
+                if smtp_user and smtp_password:
+                    server.login(smtp_user, smtp_password)
+                
+                server.send_message(msg)
+                
+            return True
+        except Exception as e:
+            raise RetryableError(f"Email notification failed: {str(e)}")
     
     @retry_on_retryable(max_attempts=3)
     async def send_slack(self, channel: str, message: str) -> bool:

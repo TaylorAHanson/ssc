@@ -59,7 +59,15 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
         "awaiting_approval": {"approval_type": "platform_admin", "name": "Platform Admin Approval (Review Plan)"}
     }
 
+
+    
+    # ...
+
     def __init__(self, request, db_session):
+        # Handle legacy states
+        if request.current_state == "provisioning" or request.current_state == "manager_approval":
+            request.current_state = "terraform_planning"
+            
         super().__init__(request, db_session)
         
     def _get_provider(self):
@@ -78,12 +86,26 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
             }
         )
 
-    async def execute_tasks(self):
-        """Execute async tasks for the current state."""
-        if self.current_state.id == "terraform_planning":
-            await self._run_plan()
-        elif self.current_state.id == "terraform_applying":
-            await self._run_apply()
+    async def on_enter_terraform_planning_async(self):
+        """Execute async tasks for terraform_planning state."""
+        await self._run_plan()
+        
+    async def on_enter_terraform_applying_async(self):
+        """Execute async tasks for terraform_applying state."""
+        # Notify user: Approved
+        await self._send_notification(
+            subject=f"Catalog/Schema Request Approved: {self.request.title}",
+            body=f"Your request '{self.request.title}' has been approved. Applying changes now..."
+        )
+        await self._run_apply()
+            
+    async def on_enter_completed_async(self):
+        """Execute async tasks for completed state."""
+        # Notify user: Success
+        await self._send_notification(
+            subject=f"Catalog/Schema Created: {self.request.title}",
+            body=f"Your request '{self.request.title}' has been successfully completed."
+        )
             
     async def _run_plan(self):
         """Trigger Terraform Plan mechanism."""

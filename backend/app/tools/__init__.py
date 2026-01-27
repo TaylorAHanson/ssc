@@ -3,6 +3,8 @@ from app.tools.get_catalog_list import GetCatalogListTool
 from app.tools.get_schema_list import GetSchemaListTool
 from app.tools.get_table_list import GetTableListTool
 from app.agents.tools.execute_workflow import ExecuteWorkflowTool
+from app.tools.search_requests import SearchRequestsTool
+from app.tools.search_approvals import SearchApprovalsTool
 
 # Registry of available tools
 AVAILABLE_TOOLS = [
@@ -10,6 +12,8 @@ AVAILABLE_TOOLS = [
     GetCatalogListTool(),
     GetSchemaListTool(),
     GetTableListTool(),
-    ExecuteWorkflowTool()
+    ExecuteWorkflowTool(),
+    SearchRequestsTool(),
+    SearchApprovalsTool()
 ]
 

@@ -1,13 +1,17 @@
 # Hub 
 
-## Automated scheduling of a go/nogo decision iwth microsoft outlook
-- Oncall schedule - offer standing timeslots and an invite link as an MVP - this should be a provider method somewhere
+## Terraform
+- [ ] Introduce a terraform repo
+
+## Compound Workflows
+- [ ] Prove this works for the first time
+
+## "Microsoft Provider"
+- [ ] Automated scheduling of a go/nogo decision with microsoft outlook. Offer standing timeslots and an invite link 
 
 ## Tools
 - [ ] To each tool, add a description of how it runs (obo, sp) and enforce that in some way
 
-## Overhaul Terraform provider
-- [ ] see readme in terraform provider folder
 
 # Command Center
 

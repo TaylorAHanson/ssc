@@ -94,15 +94,6 @@ export function RequestStateList({ request }: { request: Request }) {
   // Collect all states to display
   let steps: { id: string; name: string; status: string; type?: string; order: number; completedAt?: string; facts?: any[] }[] = [];
 
-  // Always add "User Request" as the first step
-  steps.push({
-    id: 'user_request',
-    name: 'User Request',
-    status: 'completed',
-    type: 'Initialization',
-    order: 0,
-    completedAt: request.createdAt
-  });
 
   // Use the new linear states structure
   if (request.stateMachine.states && request.stateMachine.states.length > 0) {
@@ -182,7 +173,6 @@ export function RequestStateList({ request }: { request: Request }) {
           const isFailed = step.status === 'failed';
           const isActive = step.status === 'active';
           const isTraining = step.id === 'training_pending';
-          const isUserRequest = step.id === 'user_request';
 
           return (
             <div
@@ -230,7 +220,7 @@ export function RequestStateList({ request }: { request: Request }) {
                               isActive ? 'In Progress' :
                                 'Pending'}
                       </span>
-                      {(step.completedAt || (isUserRequest && request.createdAt)) && (
+                      {(step.completedAt || step.id === request.stateMachine.states[0]?.id) && (
                         <>
                           <span className="text-gray-400">•</span>
                           <span className="text-gray-500">

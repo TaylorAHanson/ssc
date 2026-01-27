@@ -116,11 +116,6 @@ def get_agent_prompt() -> str:
 You have access to the following tools:
 {_format_tools_list(AGENT_TOOLS)}
 """
-    else:
-        tools_section = """
-## Important: Natural Conversation
-You should have natural conversations with users. Do NOT use function calling or tools to determine request types or generate questions - these are things you do naturally through understanding the conversation. Simply ask questions, understand user needs, and guide them to the appropriate form when ready.
-"""
 
     # Load dynamic content
     content_section = ""

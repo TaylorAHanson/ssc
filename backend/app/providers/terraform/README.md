@@ -88,21 +88,93 @@ By using `request/{request_id}` branches, we ensure:
 - **Cleanup**: Once merged and applied, the request branch can be safely deleted.
 
 ### Environment & Directory Structure
-The provider assumes a convention-based directory structure in the IaC repo:
+The provider assumes a convention-based directory structure in the IaC repo. This structure is optimized for **YAML-driven configuration**, allowing the Provider to write simple YAML files instead of parsing/generating complex HCL code.
+
+The Terraform `main.tf` is expected to use `yamldecode()` to read these files and iterate over them (e.g., `for_each`) to create resources.
+
 ```text
 infrastructure-repo/
-├── environments/
-│   ├── dev/
-│   ├── prod/
-│   └── common.tf
-├── resources/
-│   ├── workspace-a/
-│   │   ├── catalogs.yaml
-│   │   └── unity_catalog.tf
-│   └── workspace-b/
-└── ...
+├── databricks/
+│   ├── modules/                 # Reusable Terraform Modules
+│   │   ├── unity-catalog/
+│   │   └── workspace-config/
+│   ├── envs/
+│   │   ├── dev/
+│   │   │   ├── main.tf          # Calls modules using data from yaml
+│   │   │   ├── data/            # The "Database" of YAML files
+│   │   │   │   ├── catalogs/
+│   │   │   │   │   ├── sales-analytics.yaml
+│   │   │   │   │   └── finance-reporting.yaml
+│   │   │   │   ├── grants/      # Global/Account level grants
+│   │   │   │   │   └── account-groups.yaml
+│   │   │   │   └── workspaces/
+│   │   │   │       └── project-phoenix.yaml
+│   │   │   └── provider.tf
+│   │   └── prod/
+│   │       └── ...
+└── .github/
+    └── workflows/
 ```
-The `TerraformProvider` will primarily interact with the YAML files in the `resources/` directory.
+
+### Configuration Examples
+
+The `TerraformProvider` writes to these specific YAML files based on the `Request`.
+
+#### 1. Catalogs & Schemas (`data/catalogs/{name}.yaml`)
+Used for `CATALOG_SCHEMA_TABLE` requests.
+```yaml
+name: "finance_prod"
+comment: "Primary catalog for finance team"
+properties:
+  owner: "group:finance-admins"
+schemas:
+  - name: "gold"
+    comment: "Curated business data"
+    tables: [] # Managed by other processes or dbt
+  - name: "silver"
+    comment: "Cleaned data"
+grants:
+  - principal: "group:finance-analysts"
+    privileges: ["USE_CATALOG", "SELECT"]
+  - principal: "group:finance-engineers"
+    privileges: ["ALL_PRIVILEGES"]
+  - principal: "group:audit-team"
+    privileges: ["SELECT"]
+```
+
+#### 2. Workspaces (`data/workspaces/{name}.yaml`)
+Used for `WORKSPACE_PROVISION` requests.
+```yaml
+display_name: "Project Phoenix Lab"
+region: "us-west-2"
+sku: "premium"
+tags:
+  - key: "CostCenter"
+    value: "CC-1234"
+  - key: "Project"
+    value: "Phoenix"
+principals:
+  - group_name: "phoenix-devs"
+    permission_level: "CAN_MANAGE"
+  - group_name: "phoenix-viewers"
+    permission_level: "CAN_VIEW"
+network:
+  privatelink: true
+  storage_customer_managed_key: true
+```
+
+#### 3. Global Permissions (`data/grants/global.yaml`)
+Used for `WORKSPACE_ACCESS` or `USER_ONBOARDING` requests.
+```yaml
+# Account-level group mapping or metastore admin assignments
+metastore_admins:
+  - "group:platform-admins"
+  - "user:alice@example.com"
+account_groups:
+  - name: "finance-analysts"
+    members:
+      - "user:bob@example.com"
+```
 
 ### The Callback API
 The Backend provides a centralized callback endpoint:

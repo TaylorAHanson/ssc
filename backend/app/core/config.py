@@ -188,6 +188,11 @@ class Settings(BaseSettings):
     GITHUB_TOKEN: str = ""  # SECRET: Set in .env
     GITHUB_ORG: str = ""  # GitHub organization name
     
+    # Mock User Settings (for local dev when auth headers are missing)
+    MOCK_USER_EMAIL: str = "dev@example.com"
+    MOCK_USER_NAME: str = "dev_user"
+    MOCK_USER_ID: str = "dev_user_id"
+    
     class Config:
         env_file = ".env"
         case_sensitive = True
