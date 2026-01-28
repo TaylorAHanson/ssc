@@ -1,7 +1,7 @@
 """
 Agent API endpoints for conversation handling.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from app.agents.prompts import get_agent_prompt, AGENT_TOOLS
@@ -206,7 +206,7 @@ async def get_agent_prompt_endpoint():
 
 
 @router.post("/conversation", response_model=AgentResponse)
-async def handle_conversation(request: ConversationRequest):
+async def handle_conversation(request: ConversationRequest, req: Request):
     """
     Handle a conversation turn with the agent.
     """
@@ -392,6 +392,13 @@ async def handle_conversation(request: ConversationRequest):
                         # Validate arguments against schema (basic check)
                         # TODO: stricter validation
                         
+                        # Add OBO token if available and tool requests it (implicitly or explicitly)
+                        if hasattr(request, "state") and hasattr(request.state, "token") and request.state.token:
+                            # We inject it as a special kwarg that tools can use if they want
+                            # but filtering it from schema validation might be tricky if schema doesn't have it.
+                            # For now, let's just pass it in kwargs. Tools need to accept **kwargs or have 'obo_token' arg.
+                            function_args["_obo_token"] = request.state.token
+
                         # Execute tool
                         result = await matching_tool.execute(**function_args)
                         

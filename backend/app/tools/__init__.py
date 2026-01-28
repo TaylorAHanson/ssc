@@ -5,6 +5,7 @@ from app.tools.get_table_list import GetTableListTool
 from app.agents.tools.execute_workflow import ExecuteWorkflowTool
 from app.tools.search_requests import SearchRequestsTool
 from app.tools.search_approvals import SearchApprovalsTool
+from app.tools.search_user_entitlements import SearchUserEntitlementsTool
 
 # Registry of available tools
 AVAILABLE_TOOLS = [
@@ -14,6 +15,7 @@ AVAILABLE_TOOLS = [
     GetTableListTool(),
     ExecuteWorkflowTool(),
     SearchRequestsTool(),
-    SearchApprovalsTool()
+    SearchApprovalsTool(),
+    SearchUserEntitlementsTool()
 ]
 

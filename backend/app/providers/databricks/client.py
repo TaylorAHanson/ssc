@@ -57,6 +57,30 @@ class DatabricksProvider(BaseProvider):
                 )
         except Exception as e:
             raise ValueError(f"Databricks client initialization failed: {str(e)}") from e
+
+    def get_workspace_client(self, token: Optional[str] = None) -> WorkspaceClient:
+        """
+        Get a WorkspaceClient instance.
+        
+        If a token is provided (e.g. OBO token), returns a new client using that token.
+        Otherwise, returns the default client (Service Principal or default Token).
+        
+        Args:
+            token: Optional OBO access token
+            
+        Returns:
+            WorkspaceClient
+        """
+        if token:
+            # Create a new client with the provided token
+            # Note: We use auth_type="pat" as often required when passing token explicitly
+            return WorkspaceClient(
+                host=self.host,
+                token=token,
+                auth_type="pat"
+            )
+        return self.client
+
     
     @retry_on_retryable(max_attempts=3)
     async def execute_sql(self, query: str, warehouse: Optional[str] = None) -> Dict[str, Any]:

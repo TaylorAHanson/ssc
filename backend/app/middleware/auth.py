@@ -23,12 +23,24 @@ class AuthMiddleware(BaseHTTPMiddleware):
         username = request.headers.get("X-Forwarded-Preferred-Username", settings.MOCK_USER_NAME)
         user_id = request.headers.get("X-Forwarded-User", settings.MOCK_USER_ID)
         
+        
+        # Extract OBO Token (Databricks Apps)
+        # Check both X-Forwarded-Access-Token and Authorization header
+        obo_token = request.headers.get("X-Forwarded-Access-Token")
+        
+        # Fallback to mock token for local dev if configured and no header present
+        if not obo_token and settings.MOCK_USER_TOKEN:
+             obo_token = settings.MOCK_USER_TOKEN
+             # Only log this in debug mode to avoid leaking secrets in logs
+             logger.debug("AuthMiddleware: Using MOCK_USER_TOKEN")
+        
         # Store in request state
         request.state.user = {
             "email": email,
             "username": username,
             "id": user_id
         }
+        request.state.token = obo_token
         
         # Log only if different from default (to avoid noise) or on every request for debugging
         if email != settings.MOCK_USER_EMAIL:
