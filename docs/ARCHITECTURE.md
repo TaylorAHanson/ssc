@@ -1694,14 +1694,53 @@ Add to `requirements.txt`:
 - **Provider Versioning**: Support for provider versioning and backward compatibility
 - **Tool Registry**: Central registry for tool discovery and documentation
 - **Tool Middleware**: Additional middleware layer for tools (caching, rate limiting)
-- **Provider Testing**: Standardized testing patterns for providers (mocking external systems)
 - **Multi-Provider Support**: Support for multiple providers of same type (e.g., multiple IDPs)
 - **State Machine Visualization**: Real-time state visualization for debugging
 - **Task Monitoring**: Dashboard for monitoring async task progress
-- **Retry Strategies**: Configurable retry strategies for failed tasks ✅ (Implemented)
-- **Dead Letter Queue**: Handle permanently failed tasks ✅ (Implemented)
 - **Failure Analytics**: Dashboard for failure rates, common errors, retry success rates
 - **Automatic Recovery**: Self-healing mechanisms for common failure patterns
 - **Circuit Breaker Pattern**: Temporarily disable failing providers to prevent cascade failures
 - **Health Checks**: Monitor provider health and automatically failover
+- **Proactive Agentic Monitoring**: run without a user to provide proactive monitoring of system health and issues
+
+## Feature Management / Disabling Features
+
+Features (Tools and Workflows) can be manually disabled by modifying the codebase. This is preferred over complex configuration flags to keep the codebase simple.
+
+### Disabling Tools
+
+To disable a tool, comment it out in the `AVAILABLE_TOOLS` registry in `backend/app/tools/__init__.py`.
+
+**Example:**
+```python
+# backend/app/tools/__init__.py
+
+AVAILABLE_TOOLS = [
+    DoesCatalogExistTool(),
+    # GetCatalogListTool(),  <-- Disabled
+    GetSchemaListTool(),
+    ...
+]
+```
+
+### Disabling Workflows
+
+To disable a workflow, you must prevent the State Machine from being instantiated for that request type. Comment out the mapping in `backend/app/state_machines/factory.py`.
+
+**Example:**
+```python
+# backend/app/state_machines/factory.py
+
+def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMachine:
+    ...
+    if r_type == RequestType.WORKSPACE_PROVISION:
+        return WorkspaceProvisionStateMachine(request, db)
+    
+    # elif r_type == RequestType.PROJECT_ONBOARDING:   <-- Disabled
+    #    return ProjectOnboardingStateMachine(request, db)
+    ...
+```
+
+Optionally, you can also comment out the Enum value in `backend/app/models/request.py` to prevent the API from even validating the request type, though disabling the factory is usually sufficient to stop execution.
+
 
