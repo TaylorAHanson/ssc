@@ -4,7 +4,7 @@
 
 ## Information to Gather
 1.  **Asset Type**: What kind of asset do you need access to?
-    *   *Options*: `catalog`, `schema`, `table`.
+    *   *Options*: `catalog`, `schema`, `table`, `volume`.
 2.  **Asset Name**: The full name of the asset (e.g., `catalog.schema.table`).
     *   *Validation*: Should look like a valid SQL identifier.
 3.  **Access Level**: What level of access do you need?

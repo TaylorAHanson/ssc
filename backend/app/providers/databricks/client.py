@@ -148,15 +148,126 @@ class DatabricksProvider(BaseProvider):
             if "TEMPORARILY_UNAVAILABLE" in str(e):
                 raise RetryableError(f"SQL execution temporarily unavailable: {str(e)}")
             raise RetryableError(f"SQL execution failed: {str(e)}")
-    
 
-        """Grant access to resource."""
+    @retry_on_retryable(max_attempts=3)
+    async def grant_access(
+        self,
+        asset_type: str,
+        asset_name: str,
+        principal: str,
+        access_level: str
+    ) -> Dict[str, Any]:
+        """
+        Grant access to a Unity Catalog asset using the Grants API.
+
+        Args:
+            asset_type: Type of asset (catalog, schema, table, volume)
+            asset_name: Full name of the asset (e.g., "my_catalog.my_schema.my_table")
+            principal: User or group to grant access to (email or group name)
+            access_level: Level of access (read, write, manage)
+
+        Returns:
+            Dictionary with grant result details
+        """
+        from databricks.sdk.service.catalog import SecurableType, PermissionsChange, Privilege
+
         try:
-            # TODO: Implement access grant via Databricks API
-            raise NotImplementedError("Access grant not yet implemented")
+            # Map asset_type to SecurableType
+            securable_type_map = {
+                "catalog": SecurableType.CATALOG,
+                "schema": SecurableType.SCHEMA,
+                "table": SecurableType.TABLE,
+                "volume": SecurableType.VOLUME,
+            }
+
+            securable_type = securable_type_map.get(asset_type.lower())
+            if not securable_type:
+                raise PermanentError(f"Invalid asset_type: {asset_type}. Must be one of: catalog, schema, table, volume")
+
+            # Map access_level to privileges
+            # Unity Catalog privilege hierarchy:
+            # - read: SELECT (for tables), USE_CATALOG/USE_SCHEMA (for catalogs/schemas)
+            # - write: SELECT + MODIFY
+            # - manage: ALL_PRIVILEGES
+            privilege_map = {
+                "read": self._get_read_privileges(asset_type),
+                "write": self._get_write_privileges(asset_type),
+                "manage": [Privilege.ALL_PRIVILEGES],
+            }
+
+            privileges = privilege_map.get(access_level.lower())
+            if not privileges:
+                raise PermanentError(f"Invalid access_level: {access_level}. Must be one of: read, write, manage")
+
+            logger.info(f"Granting {access_level} access on {asset_type} '{asset_name}' to {principal}")
+
+            # Build the permission change
+            changes = [
+                PermissionsChange(
+                    add=privileges,
+                    principal=principal
+                )
+            ]
+
+            # Update permissions using the grants API
+            self.client.grants.update(
+                securable_type=securable_type,
+                full_name=asset_name,
+                changes=changes
+            )
+
+            logger.info(f"Successfully granted {access_level} access on {asset_name} to {principal}")
+
+            return {
+                "success": True,
+                "asset_type": asset_type,
+                "asset_name": asset_name,
+                "principal": principal,
+                "access_level": access_level,
+                "privileges_granted": [str(p) for p in privileges]
+            }
+
+        except PermanentError:
+            raise
         except Exception as e:
-            raise RetryableError(f"Access grant failed: {str(e)}")
-    
+            error_str = str(e)
+            # Classify errors
+            if "NOT_FOUND" in error_str:
+                raise PermanentError(f"Asset not found: {asset_name}")
+            if "PERMISSION_DENIED" in error_str:
+                raise PermanentError(f"Permission denied to grant access on {asset_name}: {error_str}")
+            if "INVALID_PARAMETER" in error_str or "INVALID_STATE" in error_str:
+                raise PermanentError(f"Invalid grant request: {error_str}")
+            if "TEMPORARILY_UNAVAILABLE" in error_str or "RATE_LIMIT" in error_str:
+                raise RetryableError(f"Temporarily unavailable: {error_str}")
+            raise RetryableError(f"Failed to grant access: {error_str}")
+
+    def _get_read_privileges(self, asset_type: str) -> list:
+        """Get the privileges needed for read access based on asset type."""
+        from databricks.sdk.service.catalog import Privilege
+
+        if asset_type.lower() == "catalog":
+            return [Privilege.USE_CATALOG]
+        elif asset_type.lower() == "schema":
+            return [Privilege.USE_SCHEMA]
+        elif asset_type.lower() in ["table", "volume"]:
+            return [Privilege.SELECT]
+        return [Privilege.SELECT]
+
+    def _get_write_privileges(self, asset_type: str) -> list:
+        """Get the privileges needed for write access based on asset type."""
+        from databricks.sdk.service.catalog import Privilege
+
+        if asset_type.lower() == "catalog":
+            return [Privilege.USE_CATALOG, Privilege.CREATE_SCHEMA]
+        elif asset_type.lower() == "schema":
+            return [Privilege.USE_SCHEMA, Privilege.CREATE_TABLE, Privilege.CREATE_VOLUME]
+        elif asset_type.lower() == "table":
+            return [Privilege.SELECT, Privilege.MODIFY]
+        elif asset_type.lower() == "volume":
+            return [Privilege.READ_VOLUME, Privilege.WRITE_VOLUME]
+        return [Privilege.SELECT, Privilege.MODIFY]
+
     async def health_check(self) -> bool:
         """Check if Databricks is accessible."""
         try:
