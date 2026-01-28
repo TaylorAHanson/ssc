@@ -5,6 +5,7 @@ import { RequestStateList } from './Requests';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
+import { Textarea } from '../components/ui/textarea';
 import { CheckCircle2, UserPlus, Clock, Check, X, Shield, Database, Badge, Calendar, Trash2, ArrowRight } from 'lucide-react';
 import { format } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
@@ -522,12 +523,11 @@ export function Approvals() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Rejection Note <span className="text-red-500">*</span>
                   </label>
-                  <Input
-                    type="text"
+                  <Textarea
                     placeholder="Please provide a reason for rejection..."
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
-                    className="w-full"
+                    className="w-full min-h-[100px]"
                   />
                 </div>
               )}
