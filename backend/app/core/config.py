@@ -198,6 +198,7 @@ class Settings(BaseSettings):
     MOCK_USER_EMAIL: str = "dev@example.com"
     MOCK_USER_NAME: str = "dev_user"
     MOCK_USER_ID: str = "dev_user_id"
+    MOCK_USER_TOKEN: str = "" # SECRET: Set in .env (for testing OBO/PAT locally)
     
     class Config:
         env_file = ".env"
