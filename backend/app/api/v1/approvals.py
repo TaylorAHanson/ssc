@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.db.request import ApprovalModel, RequestModel
 from app.models.request import Approval, RequestType, ApprovalType
+from app.api.deps import get_current_user
+from app.db.user import UserModel
 
 router = APIRouter()
 
@@ -14,10 +16,18 @@ router = APIRouter()
 @router.get("/", response_model=List[Approval])
 async def get_approvals(
     status: Optional[str] = None,
+    current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all approvals, optionally filtered by status."""
+    """Get approvals, filtered by user involvement if not an admin."""
     query = db.query(ApprovalModel, RequestModel).join(RequestModel, ApprovalModel.request_id == RequestModel.id)
+    
+    # Filter by user involvement if not a platform admin
+    if not current_user.has_role("platform_admin"):
+        query = query.filter(
+            (ApprovalModel.requested_by_email == current_user.email) | 
+            (ApprovalModel.delegated_to_email == current_user.email)
+        )
     
     if status:
         query = query.filter(ApprovalModel.status == status)
@@ -50,9 +60,10 @@ async def get_approvals(
 @router.get("/{approval_id}", response_model=Approval)
 async def get_approval(
     approval_id: str,
+    current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get a specific approval by ID."""
+    """Get a specific approval by ID, with permission check."""
     result = db.query(ApprovalModel, RequestModel)\
         .join(RequestModel, ApprovalModel.request_id == RequestModel.id)\
         .filter(ApprovalModel.id == approval_id)\
@@ -60,6 +71,14 @@ async def get_approval(
         
     if not result:
         raise HTTPException(status_code=404, detail="Approval not found")
+        
+    approval_model, request_model = result
+    
+    # Check permission
+    if not current_user.has_role("platform_admin"):
+        if approval_model.requested_by_email != current_user.email and \
+           approval_model.delegated_to_email != current_user.email:
+            raise HTTPException(status_code=403, detail="Not authorized to view this approval")
         
     approval_model, request_model = result
     

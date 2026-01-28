@@ -1,7 +1,7 @@
 """
 Agent API endpoints for conversation handling.
 """
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from app.agents.prompts import get_agent_prompt, AGENT_TOOLS
@@ -16,30 +16,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _map_request_type_to_route(request_type: str, route: str) -> Optional[Dict[str, str]]:
-    """Map request type to form route."""
-    # If route is already a full path, use it
-    if route.startswith("/"):
-        # Extract title from route
-        route_parts = route.strip("/").split("/")
-        if len(route_parts) >= 2:
-            form_name = route_parts[1].replace("-", " ").title()
-            return {"path": route, "title": form_name}
-    
-    # Map request types to routes
-    route_mapping = {
-        "workspace_access": {"path": "/paas/workspace-access", "title": "Get Workspace Access"},
-        "catalog_schema_table": {"path": "/paas/request-catalog", "title": "Create Catalog/Schema/Table"},
-        "catalog_schema_table_access": {"path": "/paas/request-access", "title": "Request Data Access"},
-        "workspace_provision": {"path": "/paas/provision-workspace", "title": "Provision New Workspace"},
-        "service_principal": {"path": "/paas/service-principal", "title": "Provision Service Principal"},
-        "marketplace_certification": {"path": "/paas/marketplace", "title": "Marketplace Certification"},
-        "github_repo_creation": {"path": "/paas/github-repo-creation", "title": "GitHub Repository Creation"},
-        "rest_api_access": {"path": "/daas/rest-api", "title": "Request REST API Access"},
-        "batch_data_access": {"path": "/daas/batch-data", "title": "Request Batch Data Access"},
-    }
-    
-    return route_mapping.get(request_type)
+
 
 
 def _extract_json_instructions(message: str) -> Optional[Dict[str, Any]]:
@@ -108,42 +85,7 @@ def _clean_message_remove_json(message: str) -> str:
     return cleaned.strip()
 
 
-def _infer_route_from_conversation(query: str, conversation_history: Optional[List[Any]]) -> Optional[Dict[str, str]]:
-    """Infer form route from conversation content."""
-    query_lower = query.lower()
-    
-    # Check for workspace-related keywords
-    if any(word in query_lower for word in ["workspace", "databricks"]):
-        if any(word in query_lower for word in ["access", "get access", "need access"]):
-            return {"path": "/paas/workspace-access", "title": "Get Workspace Access"}
-        elif any(word in query_lower for word in ["create", "new", "provision"]):
-            return {"path": "/paas/provision-workspace", "title": "Provision New Workspace"}
-    
-    # Check for data access keywords
-    if any(word in query_lower for word in ["catalog", "schema", "table", "data access"]):
-        if any(word in query_lower for word in ["create", "new"]):
-            return {"path": "/paas/request-catalog", "title": "Create Catalog/Schema/Table"}
-        else:
-            return {"path": "/paas/request-access", "title": "Request Data Access"}
-    
-    # Check for service principal
-    if "service principal" in query_lower:
-        return {"path": "/paas/service-principal", "title": "Provision Service Principal"}
-    
-    # Check for GitHub repository
-    if any(word in query_lower for word in ["github", "repo", "repository", "git"]):
-        if any(word in query_lower for word in ["create", "new", "provision", "set up"]):
-            return {"path": "/paas/github-repo-creation", "title": "GitHub Repository Creation"}
-    
-    # Check for API access
-    if any(word in query_lower for word in ["api", "rest", "endpoint"]):
-        return {"path": "/daas/rest-api", "title": "Request REST API Access"}
-    
-    # Check for batch data
-    if any(word in query_lower for word in ["batch", "delta sharing"]):
-        return {"path": "/daas/batch-data", "title": "Request Batch Data Access"}
-    
-    return None
+
 
 
 class ChatMessage(BaseModel):
@@ -179,34 +121,57 @@ class AgentResponse(BaseModel):
     form_prefill_data: Optional[Dict[str, Any]] = None
 
 
+from app.api.deps import get_current_user
+from app.db.user import UserModel, RoleModel
+
 @router.get("/tools")
-async def get_agent_tools():
-    """Get list of available agent tools."""
-    serialized_tools = [
-        {
-            "name": tool.name,
-            "description": tool.description,
-            "input_schema": tool.input_schema
-        }
-        for tool in AGENT_TOOLS
-    ]
+async def get_agent_tools(current_user: UserModel = Depends(get_current_user)):
+    """Get list of available agent tools, filtered by user permissions."""
+    
+    # Define tool permission requirements
+    # Map tool name -> required role (None means available to all)
+    tool_permissions = {
+        "admin_action": "platform_admin",
+        "finance_approval": "finance_admin", 
+        "security_audit": "security_admin",
+        # Default tools are public
+    }
+    
+    visible_tools = []
+    for tool in AGENT_TOOLS:
+        required_role = tool_permissions.get(tool.name)
+        
+        # If no specific role required, or user has the role, show the tool
+        if not required_role or current_user.has_role(required_role):
+            visible_tools.append({
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema
+            })
+
     return {
-        "tools": serialized_tools,
-        "count": len(AGENT_TOOLS)
+        "tools": visible_tools,
+        "count": len(visible_tools)
     }
 
-
 @router.get("/prompt")
-async def get_agent_prompt_endpoint():
+async def get_agent_prompt_endpoint(current_user: UserModel = Depends(get_current_user)):
     """Get the agent system prompt and instructions."""
     return {
         "prompt": get_agent_prompt(),
-        "context": {}
+        "context": {
+            "user_email": current_user.email,
+            "user_roles": [r.name for r in current_user.roles]
+        }
     }
 
 
 @router.post("/conversation", response_model=AgentResponse)
-async def handle_conversation(request: ConversationRequest, req: Request):
+async def handle_conversation(
+    request: ConversationRequest, 
+    req: Request,
+    current_user: UserModel = Depends(get_current_user)
+):
     """
     Handle a conversation turn with the agent.
     """
@@ -220,28 +185,26 @@ async def handle_conversation(request: ConversationRequest, req: Request):
         # Build conversation messages
         messages = []
         
-        # Determine if we're routing to a specific form (check conversation history or infer)
-        form_path = None
+        # Filter tools by user permissions
+        tool_permissions = {
+            "admin_action": "platform_admin",
+            "finance_approval": "finance_admin", 
+            "security_audit": "security_admin",
+        }
         
-        # Check if form route was mentioned in conversation history
-        if request.conversation_history:
-            for msg in request.conversation_history:
-                # Look for form paths in agent messages
-                if msg.type == "agent" and msg.content:
-                    # Check for form path patterns
-                    path_match = re.search(r'/paas/[-\w]+|/daas/[-\w]+', msg.content)
-                    if path_match:
-                        form_path = path_match.group(0)
-                        break
-        
-        # If no form path found, try to infer from current query
-        if not form_path:
-            inferred_route = _infer_route_from_conversation(request.query, request.conversation_history)
-            if inferred_route:
-                form_path = inferred_route.get("path")
-        
+        visible_tools = []
+        for tool in AGENT_TOOLS:
+            required_role = tool_permissions.get(tool.name)
+            if not required_role or current_user.has_role(required_role):
+                visible_tools.append(tool)
+
         # Gemini models only support ONE system prompt, so we need to combine everything
-        system_prompt = get_agent_prompt()
+        system_prompt = get_agent_prompt(tools_override=visible_tools)
+        
+        # Add user identity to system prompt
+        user_roles_str = ", ".join([r.name for r in current_user.roles])
+        identity_context = f"\n\nCURRENT USER IDENTITY:\n- Email: {current_user.email}\n- Active Persona/Roles: {user_roles_str}"
+        system_prompt = f"{system_prompt}{identity_context}"
         
         # Add context to system prompt if provided
         if request.context:
@@ -286,7 +249,7 @@ async def handle_conversation(request: ConversationRequest, req: Request):
             return type_mapping.get(param_type.lower(), "string")
         
         tools = None
-        if AGENT_TOOLS:
+        if visible_tools:
             tools = [
                 {
                     "type": "function",
@@ -309,7 +272,7 @@ async def handle_conversation(request: ConversationRequest, req: Request):
                             ))
                         }
                     }
-                for tool in AGENT_TOOLS
+                for tool in visible_tools
             ]
         
         # Loop for tool execution (ReAct pattern)
@@ -376,8 +339,8 @@ async def handle_conversation(request: ConversationRequest, req: Request):
                 
                 logger.info(f"Processing tool call: {function_name}")
                 
-                # Find matching generic tool
-                matching_tool = next((t for t in AGENT_TOOLS if t.name == function_name), None)
+                # Find matching generic tool in visible tools
+                matching_tool = next((t for t in visible_tools if t.name == function_name), None)
                 
                 if matching_tool:
                     try:
@@ -517,15 +480,8 @@ async def handle_conversation(request: ConversationRequest, req: Request):
                 
                 logger.info(f"Final processing of tool call: {function_name}")
                 
-                # Handle different tool functions
-                if function_name == "determine_request_type":
-                    route = function_args.get("route", "")
-                    request_type = function_args.get("request_type", "")
-                    if route:
-                        form_route = _map_request_type_to_route(request_type, route)
-                        logger.info(f"Determined form route: {form_route}")
-                
-                elif function_name == "generate_follow_up_questions":
+                # Handle different specialized tools
+                if function_name == "generate_follow_up_questions":
                     questions_data = function_args.get("questions", [])
                     if questions_data:
                         follow_up_questions = [
@@ -546,13 +502,7 @@ async def handle_conversation(request: ConversationRequest, req: Request):
                         requires_more_info = False
                         logger.info("Answers validated - ready for form routing")
         
-        # If no tool calls but we have a message, try to infer if we're done
-        if not tool_calls and agent_message and not json_instructions:
-            # Only infer requires_more_info = False if we don't have JSON but agent seems done
-            # This is a fallback for when the agent doesn't use the JSON format
-            if any(phrase in agent_message.lower() for phrase in ["ready to submit", "form is ready", "let's proceed", "i'll create"]):
-                requires_more_info = False
-                form_route = _infer_route_from_conversation(request.query, request.conversation_history)
+        # Return response
         
         return AgentResponse(
             message=agent_message,
@@ -576,16 +526,7 @@ async def handle_conversation(request: ConversationRequest, req: Request):
         )
 
 
-@router.post("/determine-request-type")
-async def determine_request_type(query: str):
-    """Determine request type from user query."""
-    raise HTTPException(status_code=501, detail="Not implemented yet")
 
-
-@router.post("/generate-questions")
-async def generate_questions(request_type: str, current_answers: Optional[Dict[str, Any]] = None):
-    """Generate follow-up questions for a request type."""
-    raise HTTPException(status_code=501, detail="Not implemented yet")
 
 
 @router.get("/health")

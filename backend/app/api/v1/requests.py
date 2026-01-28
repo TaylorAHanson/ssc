@@ -16,6 +16,9 @@ from datetime import datetime
 import json
 import logging
 
+from app.api.deps import get_current_user
+from app.db.user import UserModel
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -25,10 +28,18 @@ router = APIRouter()
 async def get_requests(
     skip: int = 0,
     limit: int = 100,
+    current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all requests."""
-    requests = RequestService.get_requests(db, skip=skip, limit=limit)
+    # Build query
+    query = db.query(RequestModel)
+    
+    # Non-admins can only see their own requests
+    if not current_user.has_role("platform_admin"):
+        query = query.filter(RequestModel.requester_email == current_user.email)
+    
+    requests = query.offset(skip).limit(limit).all()
     response_list = []
     
     for req in requests:
@@ -64,6 +75,7 @@ async def get_requests(
             requiresTraining=req.requires_training,
             trainingCompleted=req.training_completed,
             environment=req.environment,
+            requester_email=req.requester_email,
             lastError=req.last_error,
             metadata=req.state_context or {},
             conversation=req.conversation
@@ -74,12 +86,18 @@ async def get_requests(
 @router.get("/{request_id}", response_model=Request)
 async def get_request(
     request_id: str,
+    current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get a specific request by ID."""
     request_model = RequestService.get_request(db, request_id)
     if not request_model:
         raise HTTPException(status_code=404, detail="Request not found")
+        
+    # Check permission
+    if not current_user.has_role("platform_admin") and request_model.requester_email != current_user.email:
+        logger.warning(f"Unauthorized access attempt to {request_id} by {current_user.email}")
+        raise HTTPException(status_code=403, detail="Not authorized to view this request")
         
     # Dynamically calculate state machine view
     try:
@@ -135,29 +153,29 @@ async def get_request_status(
 
 
 @router.post("/", response_model=dict, status_code=status.HTTP_201_CREATED)
-@router.post("/", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_request(
-    request: fastapi.Request,
     request_data: RequestCreate,
+    current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Create a new request."""
-    # Inject user context into metadata if available
-    if hasattr(request.state, "user"):
-        user = request.state.user
-        if not request_data.metadata:
-            request_data.metadata = {}
-            
-        if "requested_by" not in request_data.metadata:
-            request_data.metadata["requested_by"] = user.get("username", "unknown")
-            
-        if "requested_by_email" not in request_data.metadata:
-            request_data.metadata["requested_by_email"] = user.get("email")
+    # Set the requester email from authenticated user
+    request_data.requester_email = current_user.email
+    
+    # Inject user context into metadata if missing
+    if not request_data.metadata:
+        request_data.metadata = {}
+        
+    if "requested_by" not in request_data.metadata:
+        request_data.metadata["requested_by"] = current_user.full_name or current_user.email
+        
+    if "requested_by_email" not in request_data.metadata:
+        request_data.metadata["requested_by_email"] = current_user.email
             
     request_obj = RequestService.create_request(db, request_data)
     return {
-        "request_id": request.id,
-        "status": request.status,
+        "request_id": request_obj.id,
+        "status": request_obj.status,
         "message": "Request created successfully"
     }
 
@@ -165,6 +183,7 @@ async def create_request(
 @router.post("/{request_id}/approve", status_code=status.HTTP_200_OK)
 async def approve_request(
     request_id: str,
+    current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -182,7 +201,7 @@ async def approve_request(
     if not approval:
         raise HTTPException(status_code=404, detail="No pending approval found for this request")
     
-    approved_by = "api_user"  # TODO: Get from auth context
+    approved_by = current_user.email
     
     # Update approval status immediately
     approval.status = "approved"
@@ -209,6 +228,7 @@ async def approve_request(
 async def reject_request(
     request_id: str,
     rejection_data: dict,
+    current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -226,7 +246,7 @@ async def reject_request(
     if not approval:
         raise HTTPException(status_code=404, detail="No pending approval found for this request")
     
-    rejected_by = "api_user"  # TODO: Get from auth context
+    rejected_by = current_user.email
     rejection_note = rejection_data.get("rejection_note")
     
     # Update approval status immediately
@@ -260,6 +280,10 @@ async def delete_request(
     request = db.query(RequestModel).filter(RequestModel.id == request_id).first()
     if not request:
         raise HTTPException(status_code=404, detail="Request not found")
+    
+    # Only admins or owner can delete
+    if not current_user.has_role("platform_admin") and request.requester_email != current_user.email:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this request")
     
     db.delete(request)
     db.commit()
