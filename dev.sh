@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Development script to run both frontend and backend concurrently
-# Usage: ./dev.sh
+# Usage: ./dev.sh [--debug]
+
 
 # Don't use set -e here because we want to handle errors manually
 # set -e
@@ -13,6 +14,15 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+
+# Parse arguments
+DEBUG_MODE=false
+for arg in "$@"; do
+    if [ "$arg" == "--debug" ]; then
+        DEBUG_MODE=true
+        echo -e "${YELLOW}Debug mode enabled${NC}"
+    fi
+done
 
 # Function to cleanup background processes on exit
 cleanup() {
@@ -205,6 +215,11 @@ fi
 if ! $PYTHON_CMD -c "import git" 2>/dev/null; then
     MISSING_DEPS+=("git")
 fi
+if [ "$DEBUG_MODE" = true ]; then
+    if ! $PYTHON_CMD -c "import debugpy" 2>/dev/null; then
+        MISSING_DEPS+=("debugpy")
+    fi
+fi
 
 if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
     echo -e "${YELLOW}Missing dependencies: ${MISSING_DEPS[*]}. Installing from requirements.txt...${NC}"
@@ -221,6 +236,13 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
         echo -e "${CYAN}Installing dependencies (this may take a minute)...${NC}"
         $LOCAL_PYTHON_CMD -m pip install -r requirements.txt
         INSTALL_EXIT_CODE=$?
+
+        # Explicitly install debugpy if needed (since it's not in requirements.txt)
+        if [ "$DEBUG_MODE" = true ] && [ $INSTALL_EXIT_CODE -eq 0 ]; then
+             echo -e "${CYAN}Ensuring debugpy is installed...${NC}"
+             $LOCAL_PYTHON_CMD -m pip install debugpy
+             INSTALL_EXIT_CODE=$?
+        fi
         cd ..
         if [ $INSTALL_EXIT_CODE -eq 0 ]; then
             echo -e "${GREEN}✓ Dependencies installed${NC}"
@@ -250,7 +272,21 @@ else
 fi
 # Add timestamp to log file
 echo "=== Backend started at $(date) ===" > ../backend.log
-$LOCAL_UVICORN_CMD app.main:app --reload --port 8000 >> ../backend.log 2>&1 &
+echo "=== Backend started at $(date) ===" > ../backend.log
+
+# Determine Python command for inside backend directory
+if [[ "$PYTHON_CMD" == backend/* ]]; then
+    LOCAL_PYTHON_CMD="${PYTHON_CMD#backend/}"
+else
+    LOCAL_PYTHON_CMD="$PYTHON_CMD"
+fi
+
+if [ "$DEBUG_MODE" = true ]; then
+    echo -e "${GREEN}→ Starting backend API with debugger on port 5678...${NC}"
+    $LOCAL_PYTHON_CMD -m debugpy --listen 0.0.0.0:5678 -m uvicorn app.main:app --reload --port 8000 >> ../backend.log 2>&1 &
+else
+    $LOCAL_UVICORN_CMD app.main:app --reload --port 8000 >> ../backend.log 2>&1 &
+fi
 BACKEND_PID=$!
 cd ..
 
