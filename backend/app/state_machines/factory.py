@@ -12,7 +12,9 @@ from app.state_machines.workspace_access import WorkspaceAccessStateMachine
 from app.state_machines.simple_platform_admin import SimplePlatformAdminStateMachine
 from app.state_machines.github_repo_creation import GithubRepoCreationStateMachine
 from app.state_machines.project_onboarding import ProjectOnboardingStateMachine
+from app.state_machines.project_onboarding import ProjectOnboardingStateMachine
 from app.state_machines.create_catalog_schema import CreateCatalogSchemaStateMachine
+from app.state_machines.experiments import SimpleEmailStateMachine, CampaignStateMachine
 import logging
 
 logger = logging.getLogger(__name__)
@@ -51,6 +53,14 @@ def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMac
     
     elif r_type == RequestType.PROJECT_ONBOARDING:
         return ProjectOnboardingStateMachine(request, db)
+
+    # This is for testing the coupmound workflows
+    elif r_type == RequestType.SIMPLE_EMAIL:
+        return SimpleEmailStateMachine(request, db)
+
+    # This is for testing the coupmound workflows
+    elif r_type == RequestType.CAMPAIGN:
+        return CampaignStateMachine(request, db)
     
     # Fallback / Default for others (implement specific ones as needed)
     return WorkspaceProvisionStateMachine(request, db)

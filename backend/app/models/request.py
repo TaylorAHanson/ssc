@@ -31,6 +31,8 @@ class RequestType(str, Enum):
     GITHUB_REPO_CREATION = "github_repo_creation"
     PROJECT_ONBOARDING = "project_onboarding"
     DATA_ACCESS_REQUEST = "data_access_request"
+    SIMPLE_EMAIL = "simple_email"
+    CAMPAIGN = "campaign"
 
 
 class Environment(str, Enum):
