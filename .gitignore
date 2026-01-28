@@ -40,6 +40,7 @@ __pycache__/
 
 # Test files
 *.db
+backend/edas_hub.db
 test.db
 
 # Terraform
