@@ -12,3 +12,4 @@ databricks-sdk
 tenacity
 PyYAML
 GitPython
+pyinstrument

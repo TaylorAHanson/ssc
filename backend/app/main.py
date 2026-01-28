@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 from app.workers.poller import start_poller
 from app.middleware.auth import AuthMiddleware
+from app.middleware.profiler import PyinstrumentMiddleware
 
 # Configure logging
 logging.basicConfig(
@@ -50,6 +51,9 @@ app.add_middleware(
 
 # Authentication Middleware (Context Propagation)
 app.add_middleware(AuthMiddleware)
+
+# Profiling Middleware
+app.add_middleware(PyinstrumentMiddleware)
 
 # Include API routes
 app.include_router(api_router, prefix="/api/v1")
