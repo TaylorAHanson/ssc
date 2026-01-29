@@ -8,8 +8,20 @@ resources:
   apps:
     atlas:
       name: ${var.app_name}
-      description: "ATLAS - Self-service platform for Databricks"
-      source_code_path: ./backend
+      description: "ATLAS - Self-service platform for ${var.environment}"
+
+      # Source code path - Points to backend directory in synced bundle
+      source_code_path: "${var.source_code_path}"
+
+      # NOTE: user_api_scopes removed due to Terraform provider bug
+      # Can be configured manually in Databricks UI after deployment
+
+      # Permissions for the app itself (who can manage/use the app)
+      permissions:
+        - level: CAN_MANAGE
+          user_name: "${workspace.current_user.userName}"
+        - level: CAN_USE
+          group_name: "users"
 
 # Sync configuration
 sync:
@@ -54,6 +66,12 @@ variables:
   app_name:
     description: "Application name"
     default: "atlas"
+  environment:
+    description: "Environment name (local, dev, stage, prod)"
+    default: "local"
+  source_code_path:
+    description: "Path to source code in workspace"
+    default: "./backend"
 
 # Target environments
 targets:
@@ -72,10 +90,12 @@ targets:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     variables:
       app_name: "atlas-local-${var.dev_user}"
+      environment: "local"
+      source_code_path: "./backend"
 
   # Development environment
   dev:
-    mode: development
+    mode: production
     presets:
       tags:
         version: "VERSION_TAG"
@@ -87,10 +107,12 @@ targets:
       root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
     variables:
       app_name: "atlas-dev"
+      environment: "dev"
+      source_code_path: "./backend"
 
   # Staging environment
   stage:
-    mode: development
+    mode: production
     presets:
       tags:
         version: "VERSION_TAG"
@@ -102,6 +124,8 @@ targets:
       root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
     variables:
       app_name: "atlas-stage"
+      environment: "stage"
+      source_code_path: "./backend"
 
   # Production environment
   prod:
@@ -117,3 +141,5 @@ targets:
       root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
     variables:
       app_name: "atlas-prod"
+      environment: "prod"
+      source_code_path: "./backend"
