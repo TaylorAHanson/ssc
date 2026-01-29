@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Entrypoint for running ATLAS on Databricks Apps.
+Entrypoint for running EDAS Hub on Databricks Apps.
 Handles path setup and starts the uvicorn server.
 """
 import os
@@ -11,10 +11,26 @@ def main():
     # Get the directory where this script lives
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
-    print(f"Starting ATLAS...")
+    print(f"Starting EDAS Hub...")
     print(f"Script directory: {script_dir}")
     print(f"Current working directory: {os.getcwd()}")
     print(f"Directory contents: {os.listdir(script_dir)}")
+    
+    # === DEBUG: Dump database-related environment variables ===
+    print("\n=== DATABASE ENV VARS DEBUG ===", flush=True)
+    db_vars = ["DATABASE_URL", "DATABASE_HOST", "DATABASE_PORT", "DATABASE_NAME", 
+               "DATABASE_USER", "DATABASE_PASSWORD", "PGUSER", "PGPASSWORD", "PGHOST"]
+    for var in db_vars:
+        val = os.environ.get(var)
+        if val:
+            # Mask passwords
+            if "PASSWORD" in var or "URL" in var:
+                print(f"  {var} = [SET, length={len(val)}]", flush=True)
+            else:
+                print(f"  {var} = {val}", flush=True)
+        else:
+            print(f"  {var} = [NOT SET]", flush=True)
+    print("=== END DATABASE ENV VARS ===\n", flush=True)
     
     # Change to script directory
     os.chdir(script_dir)
