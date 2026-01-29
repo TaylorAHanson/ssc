@@ -1,14 +1,15 @@
 """
 Admin API endpoints for feature management.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
+from app.api.deps import require_role
 import logging
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_role("platform_admin"))])
 
 
 class WorkspaceInfo(BaseModel):

@@ -15,6 +15,7 @@ class RequestModel(Base):
     type = Column(String)  # RequestType enum
     title = Column(String)
     status = Column(String)  # Current state (State Machine reads/writes this)
+    requester_email = Column(String, nullable=True)  # Who created the request
     state_context = Column(JSON)  # Stores variables (workspace_name, config, etc.)
     
     # State locking for idempotency

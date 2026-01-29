@@ -107,6 +107,7 @@ class Request(BaseModel):
     requiresTraining: Optional[bool] = False
     trainingCompleted: Optional[bool] = False
     environment: Optional[Environment] = None
+    requester_email: Optional[str] = None
     lastError: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
     conversation: Optional[List[Dict[str, Any]]] = None  # Chat history
@@ -116,6 +117,7 @@ class RequestCreate(BaseModel):
     """Request creation model."""
     type: RequestType
     title: str
+    requester_email: Optional[str] = None
     environment: Optional[Environment] = None
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
     conversation: Optional[List[Dict[str, Any]]] = None  # Chat history

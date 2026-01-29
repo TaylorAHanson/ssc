@@ -1,16 +1,37 @@
 #!/bin/bash
 set -e
 
-# Usage: ./deploy.sh <target> <profile> [dev_user] [debug]
+# Usage: ./deploy.sh [target] [dev_user] [debug] [--profile <profile>]
 # Examples:
-#   ./deploy.sh local default srikanth        # Local with username
-#   ./deploy.sh dev default                            # Dev (no username needed)
-#   ./deploy.sh local default srikanth true   # Local with debug
+#   ./deploy.sh local srikanth --profile default        # Local with username
+#   ./deploy.sh dev                                     # Dev (no username needed)
+#   ./deploy.sh local srikanth true                     # Local with debug
 
+# Parse arguments
+POSITIONAL_ARGS=()
+PROFILE=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -p|--profile)
+      PROFILE="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1") # save positional arg
+      shift # past argument
+      ;;
+  esac
+done
+
+set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
+
+# Usage: ./deploy.sh [target] [dev_user] [debug] --profile <profile>
 TARGET=${1:-local}
-PROFILE=${2:-}
-DEV_USER=${3:-}
-DEBUG_MODE=${4:-false}
+DEV_USER=${2:-}
+# Handle debug flag if passed as positional arg or env var
+DEBUG_MODE=${3:-false}
 
 # Configuration
 BUNDLE_NAME="atlas"

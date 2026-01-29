@@ -107,14 +107,15 @@ from app.tools import AVAILABLE_TOOLS
 AGENT_TOOLS = AVAILABLE_TOOLS
 
 
-def get_agent_prompt() -> str:
+def get_agent_prompt(tools_override: Optional[List[Any]] = None) -> str:
     """Get the complete agent prompt combining system prompt and instructions."""
     tools_section = ""
-    if AGENT_TOOLS:
+    effective_tools = tools_override if tools_override is not None else AGENT_TOOLS
+    if effective_tools:
         tools_section = f"""
 ## Available Tools
 You have access to the following tools:
-{_format_tools_list(AGENT_TOOLS)}
+{_format_tools_list(effective_tools)}
 """
 
     # Load dynamic content

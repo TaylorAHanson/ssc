@@ -18,7 +18,23 @@ export type RequestType =
   | 'batch_data_access'
   | 'github_repo_creation';
 
-export type UserPersona = 'Business User' | 'Power User' | 'Platform Admin';
+export interface Role {
+  id: string;
+  name: string; // e.g., 'platform_admin'
+  description?: string;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  full_name?: string;
+  is_active: boolean;
+  roles: Role[];
+  created_at: string;
+  updated_at: string;
+}
+
+export type UserPersona = 'Platform Admin' | 'Governance Admin' | 'Security Admin' | 'Finance Admin' | 'Business User';
 
 export type Environment = 'dev' | 'test' | 'stage' | 'prod';
 

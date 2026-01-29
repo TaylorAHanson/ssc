@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Bell, X } from 'lucide-react';
+import { Bell, X, Settings } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useRequestStore } from '../../stores/requestStore';
 import { useUserStore } from '../../stores/userStore';
@@ -7,8 +7,25 @@ import { useUserStore } from '../../stores/userStore';
 export function Header() {
   const pendingCount = useRequestStore((state) => state.getPendingApprovalsCount());
   const bannerData = useRequestStore((state) => state.bannerData);
-  const { currentPersona, setPersona } = useUserStore();
+
+  // Use selectors for better reactivity and debugging
+  const currentPersona = useUserStore((state) => state.currentPersona);
+  const currentUser = useUserStore((state) => state.currentUser);
+  const isDevMode = useUserStore((state) => state.isDevMode);
+  const activeRoleOverride = useUserStore((state) => state.activeRoleOverride);
+  const toggleDevMode = useUserStore((state) => state.toggleDevMode);
+  const setRoleOverride = useUserStore((state) => state.setRoleOverride);
+
   const [isDismissed, setIsDismissed] = useState(false);
+
+  // Define personas based on roles
+  const personas = [
+    { label: 'Platform Admin', value: 'platform_admin' },
+    { label: 'Governance Admin', value: 'governance_admin' },
+    { label: 'Security Admin', value: 'security_admin' },
+    { label: 'Finance Admin', value: 'finance_admin' },
+    { label: 'Business User', value: 'business_user' },
+  ];
 
   const getBannerConfig = (type?: string) => {
     switch (type) {
@@ -64,39 +81,83 @@ export function Header() {
           </Link>
 
           <div className="relative group">
-            <div className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-100 cursor-pointer transition-colors">
-              <div className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-semibold">
-                TH
+            <div className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-100 cursor-pointer transition-colors border border-transparent group-hover:border-gray-100 group-hover:bg-gray-50">
+              <div className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-semibold shadow-sm overflow-hidden">
+                {currentUser?.full_name?.split(' ').map(n => n[0]).join('') || 'TH'}
               </div>
-              <div className="flex flex-col items-start">
-                <span className="text-sm font-medium text-gray-700">User Profile</span>
-                <span className="text-xs text-gray-500">{currentPersona}</span>
+              <div className="flex flex-col items-start min-w-[100px]">
+                <span className="text-sm font-bold text-gray-800 leading-tight truncate max-w-[120px]">
+                  {currentUser?.full_name || 'Taylor Hanson'}
+                </span>
+                <span className="text-[10px] text-gray-500 uppercase tracking-tighter font-bold">{currentPersona}</span>
               </div>
             </div>
 
-            {/* Persona Switcher Dropdown */}
-            <div className="absolute right-0 top-full pt-2 w-48 hidden group-hover:block z-50">
-              <div className="bg-white rounded-md shadow-lg border border-gray-200 py-1">
-                <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-100">
-                  Switch Persona
+            {/* User Dropdown */}
+            <div className="absolute right-0 top-full pt-2 w-64 hidden group-hover:block z-50 animate-in fade-in slide-in-from-top-1 duration-200">
+              <div className="bg-white rounded-lg shadow-xl border border-gray-200 py-2">
+
+                <div className="px-4 py-3 border-b border-gray-100">
+                  <p className="text-xs font-semibold text-gray-400 uppercase">Account</p>
+                  <p className="text-sm font-medium text-gray-900 truncate mt-1">{currentUser?.email || 'taylor.hanson@example.com'}</p>
                 </div>
-                {['Business User', 'Power User', 'Platform Admin'].map((persona) => (
-                  <button
-                    key={persona}
-                    onClick={() => setPersona(persona as any)}
-                    className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center justify-between ${currentPersona === persona ? 'text-primary font-medium' : 'text-gray-700'
-                      }`}
-                  >
-                    {persona}
-                    {currentPersona === persona && <div className="w-2 h-2 rounded-full bg-primary" />}
+
+                {/* Dev Mode Section */}
+                <div className="px-4 py-3 border-b border-gray-100 bg-gray-50/50">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Settings className="w-3.5 h-3.5 text-gray-400" />
+                      <span className="text-xs font-bold text-gray-700">Dev Persona Mode</span>
+                    </div>
+                    <button
+                      type="button"
+                      className={`w-8 h-4 rounded-full p-0.5 transition-colors focus:outline-none ${isDevMode ? 'bg-blue-600' : 'bg-gray-300'}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleDevMode();
+                      }}
+                    >
+                      <div className={`w-3 h-3 bg-white rounded-full shadow-sm transition-transform duration-200 ${isDevMode ? 'translate-x-4' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+
+                  {isDevMode && (
+                    <div className="mt-3 space-y-2 animate-in fade-in slide-in-from-top-2">
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Simulate Role</p>
+                      <div className="grid grid-cols-1 gap-1">
+                        <button
+                          onClick={() => setRoleOverride(null)}
+                          className={`text-left px-2 py-1.5 text-xs rounded-md transition-colors ${!activeRoleOverride ? 'bg-blue-100 text-blue-700 font-bold' : 'hover:bg-white text-gray-600 shadow-sm border border-gray-100'}`}
+                        >
+                          Default (My Real Roles)
+                        </button>
+                        {personas.map((p) => (
+                          <button
+                            key={p.value}
+                            onClick={() => setRoleOverride(p.value)}
+                            className={`text-left px-2 py-1.5 text-xs rounded-md transition-colors ${activeRoleOverride === p.value ? 'bg-blue-100 text-blue-700 font-bold' : 'hover:bg-white text-gray-600 shadow-sm border border-gray-100'}`}
+                          >
+                            {p.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="px-2 pt-2">
+                  <button className="w-full text-left px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-md transition-colors font-medium">
+                    Settings
                   </button>
-                ))}
+                  <button className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-md transition-colors font-medium">
+                    Sign out
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
-    </header >
+    </header>
   );
 }
-

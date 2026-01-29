@@ -51,6 +51,8 @@ const navItems: NavItem[] = [
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
+
+  // Reactive store selectors
   const currentPersona = useUserStore((state) => state.currentPersona);
   const { brandName, brandLogoUrl } = useBrandingStore();
 
@@ -71,7 +73,7 @@ export function Sidebar() {
   return (
     <div
       className={cn(
-        "bg-white border-r border-gray-200 transition-all duration-300 flex flex-col",
+        "bg-white border-r border-gray-200 transition-all duration-300 flex flex-col relative",
         collapsed ? "w-16" : "w-72"
       )}
     >
@@ -127,20 +129,7 @@ export function Sidebar() {
           </div>
         ))}
       </nav>
-
-      {/* Persona Indicator (Optional: Helps user know what mode they are in if collapsed) */}
-      <div className="p-4 border-t border-gray-200">
-        {!collapsed ? (
-          <div className="text-xs text-gray-400 text-center">
-            Viewing as: <span className="font-medium text-gray-600">{currentPersona}</span>
-          </div>
-        ) : (
-          <div className="flex justify-center" title={`Viewing as ${currentPersona}`}>
-            <div className="w-2 h-2 rounded-full bg-primary/50"></div>
-          </div>
-        )}
-      </div>
+      {/* Redundant Profile Section Removed */}
     </div>
   );
 }
-

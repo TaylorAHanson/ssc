@@ -3,6 +3,7 @@ from app.core.config import settings
 
 router = APIRouter()
 
+@router.get("")
 @router.get("/")
 async def get_branding():
     """Get brand-specific settings for the frontend."""
