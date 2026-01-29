@@ -12,6 +12,7 @@ The Settings class uses pydantic-settings which automatically loads from:
 from pydantic_settings import BaseSettings
 from pydantic import field_validator, Field
 from typing import List, Union, Any
+import os
 import json
 
 
@@ -31,14 +32,16 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     
     # Branding Settings
-    BRAND_NAME: str = "ATLAS"
-    BRAND_LOGO_URL: str = ""
-    BRAND_COLOR_PRIMARY: str = "#FF3621"
-    BRAND_COLOR_SECONDARY: str = "#1B5162"
-    BRAND_COLOR_INFO: str = "#1B5162"
-    BRAND_COLOR_ALERT: str = "#98102A"
-    BRAND_COLOR_WARNING: str = "#FFAB00"
-    BRAND_COLOR_SUCCESS: str = "#00A972"
+    # We explicitly pull from os.getenv to ensure they are picked up, 
+    # as sometimes pydantic-settings case sensitivity can be tricky.
+    BRAND_NAME: str = os.getenv("BRAND_NAME", "ATLAS")
+    BRAND_LOGO_URL: str = os.getenv("BRAND_LOGO_URL", "")
+    BRAND_COLOR_PRIMARY: str = os.getenv("BRAND_COLOR_PRIMARY", "#FF3621")
+    BRAND_COLOR_SECONDARY: str = os.getenv("BRAND_COLOR_SECONDARY", "#1B5162")
+    BRAND_COLOR_INFO: str = os.getenv("BRAND_COLOR_INFO", "#1B5162")
+    BRAND_COLOR_ALERT: str = os.getenv("BRAND_COLOR_ALERT", "#98102A")
+    BRAND_COLOR_WARNING: str = os.getenv("BRAND_COLOR_WARNING", "#FFAB00")
+    BRAND_COLOR_SUCCESS: str = os.getenv("BRAND_COLOR_SUCCESS", "#00A972")
     
     # CORS (can be overridden in .env as JSON array or comma-separated)
     # Example in .env: CORS_ORIGINS=["http://localhost:5173","http://localhost:3000"]

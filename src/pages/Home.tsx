@@ -9,6 +9,8 @@ import { Textarea } from '../components/ui/textarea';
 import { Button } from '../components/ui/button';
 import type { ChatMessage, ConversationState } from '../types';
 import { callAgent } from '../services/api';
+import { useUserStore } from '../stores/userStore';
+import type { UserPersona } from '../types';
 
 type AgentMode = 'Self Service Agent' | 'Governance' | 'FinOps' | 'Data Quality';
 
@@ -212,6 +214,13 @@ const MODE_ICONS: Record<AgentMode, React.ReactNode> = {
   'Data Quality': <Activity className="w-3.5 h-3.5" />
 };
 
+const MODE_PERMISSIONS: Record<AgentMode, UserPersona[]> = {
+  'Self Service Agent': ['Platform Admin', 'Business User', 'Governance Admin', 'Finance Admin', 'Security Admin'],
+  'Governance': ['Platform Admin', 'Governance Admin', 'Security Admin'],
+  'FinOps': ['Platform Admin', 'Finance Admin'],
+  'Data Quality': ['Platform Admin', 'Governance Admin']
+};
+
 // Determine which form route to use based on conversation (fallback only for error cases)
 const determineFormRoute = (query: string, _answers: Record<string, string | string[]>, context?: { type: 'paas' | 'daas'; title: string }): { path: string; title: string } => {
   const lowerQuery = query.toLowerCase();
@@ -283,6 +292,7 @@ export function Home() {
   const [conversationState, setConversationState] = useState<ConversationState | null>(null);
   const [agentMode, setAgentMode] = useState<AgentMode>('Self Service Agent');
   const [showModeDropdown, setShowModeDropdown] = useState(false);
+  const currentPersona = useUserStore((state) => state.currentPersona);
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -342,6 +352,13 @@ export function Home() {
     }
     localStorage.setItem('atlas_agent_mode', agentMode);
   }, [conversationState, agentMode]);
+
+  // Reset agent mode if current persona no longer allows it
+  useEffect(() => {
+    if (!MODE_PERMISSIONS[agentMode].includes(currentPersona)) {
+      setAgentMode('Self Service Agent');
+    }
+  }, [currentPersona, agentMode]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -779,25 +796,27 @@ export function Home() {
 
                           {showModeDropdown && (
                             <div className="absolute bottom-full left-0 mb-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                              {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).map((mode) => (
-                                <button
-                                  key={mode}
-                                  type="button"
-                                  onClick={() => {
-                                    setAgentMode(mode);
-                                    setShowModeDropdown(false);
-                                  }}
-                                  className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${agentMode === mode
-                                    ? 'bg-primary/5 text-primary font-semibold'
-                                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                                    }`}
-                                >
-                                  <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
-                                    {MODE_ICONS[mode]}
-                                  </span>
-                                  {mode}
-                                </button>
-                              ))}
+                              {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[])
+                                .filter(mode => MODE_PERMISSIONS[mode].includes(currentPersona))
+                                .map((mode) => (
+                                  <button
+                                    key={mode}
+                                    type="button"
+                                    onClick={() => {
+                                      setAgentMode(mode);
+                                      setShowModeDropdown(false);
+                                    }}
+                                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${agentMode === mode
+                                      ? 'bg-primary/5 text-primary font-semibold'
+                                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                                      }`}
+                                  >
+                                    <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
+                                      {MODE_ICONS[mode]}
+                                    </span>
+                                    {mode}
+                                  </button>
+                                ))}
                             </div>
                           )}
                         </div>
@@ -1065,25 +1084,27 @@ export function Home() {
 
                       {showModeDropdown && (
                         <div className="absolute bottom-full left-0 mb-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                          {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).map((mode) => (
-                            <button
-                              key={mode}
-                              type="button"
-                              onClick={() => {
-                                setAgentMode(mode);
-                                setShowModeDropdown(false);
-                              }}
-                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${agentMode === mode
-                                ? 'bg-primary/5 text-primary font-semibold'
-                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                                }`}
-                            >
-                              <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
-                                {MODE_ICONS[mode]}
-                              </span>
-                              {mode}
-                            </button>
-                          ))}
+                          {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[])
+                            .filter(mode => MODE_PERMISSIONS[mode].includes(currentPersona))
+                            .map((mode) => (
+                              <button
+                                key={mode}
+                                type="button"
+                                onClick={() => {
+                                  setAgentMode(mode);
+                                  setShowModeDropdown(false);
+                                }}
+                                className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${agentMode === mode
+                                  ? 'bg-primary/5 text-primary font-semibold'
+                                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                                  }`}
+                              >
+                                <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
+                                  {MODE_ICONS[mode]}
+                                </span>
+                                {mode}
+                              </button>
+                            ))}
                         </div>
                       )}
                     </div>
@@ -1179,25 +1200,27 @@ export function Home() {
 
                     {showModeDropdown && (
                       <div className="absolute top-full left-0 mt-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                        {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).map((mode) => (
-                          <button
-                            key={mode}
-                            type="button"
-                            onClick={() => {
-                              setAgentMode(mode);
-                              setShowModeDropdown(false);
-                            }}
-                            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${agentMode === mode
-                              ? 'bg-primary/5 text-primary font-semibold'
-                              : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                              }`}
-                          >
-                            <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
-                              {MODE_ICONS[mode]}
-                            </span>
-                            {mode}
-                          </button>
-                        ))}
+                        {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[])
+                          .filter(mode => MODE_PERMISSIONS[mode].includes(currentPersona))
+                          .map((mode) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => {
+                                setAgentMode(mode);
+                                setShowModeDropdown(false);
+                              }}
+                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${agentMode === mode
+                                ? 'bg-primary/5 text-primary font-semibold'
+                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                                }`}
+                            >
+                              <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
+                                {MODE_ICONS[mode]}
+                              </span>
+                              {mode}
+                            </button>
+                          ))}
                       </div>
                     )}
                   </div>

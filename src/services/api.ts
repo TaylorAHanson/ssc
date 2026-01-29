@@ -4,7 +4,27 @@
 
 import type { Request, RequestType, Environment, Approval, Delegation, DelegationCreate } from '../types';
 
+import { useUserStore } from '../stores/userStore';
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+
+/**
+ * Gets consistent headers including dev role override if active
+ */
+function getHeaders(contentType: string = 'application/json'): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (contentType) {
+    headers['Content-Type'] = contentType;
+  }
+
+  // Get current dev mode state from store
+  const { isDevMode, activeRoleOverride } = useUserStore.getState();
+  if (isDevMode && activeRoleOverride) {
+    headers['X-Dev-Role-Override'] = activeRoleOverride;
+  }
+
+  return headers;
+}
 
 export interface ChatMessage {
   id: string;
@@ -45,9 +65,7 @@ export async function callAgent(request: ConversationRequest): Promise<AgentResp
   try {
     const response = await fetch(`${API_BASE_URL}/agent/conversation`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: getHeaders(),
       body: JSON.stringify(request),
     });
 
@@ -102,7 +120,9 @@ export interface FormSchemaResponse {
  * List all available forms.
  */
 export async function listForms(): Promise<FormInfo[]> {
-  const response = await fetch(`${API_BASE_URL}/admin/forms`);
+  const response = await fetch(`${API_BASE_URL}/admin/forms`, {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     throw new Error(`Failed to list forms: ${response.statusText}`);
   }
@@ -117,7 +137,9 @@ export async function getForm(formPath: string, version?: string): Promise<FormS
   if (version) {
     url.searchParams.set('version', version);
   }
-  const response = await fetch(url.toString());
+  const response = await fetch(url.toString(), {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     throw new Error(`Failed to get form: ${response.statusText}`);
   }
@@ -134,11 +156,9 @@ export async function saveForm(
 ): Promise<FormSchemaResponse> {
   const response = await fetch(`${API_BASE_URL}/admin/forms${formPath}`, {
     method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: getHeaders(),
     body: JSON.stringify({
-      form_schema: schema,  // Updated to match backend field name
+      form_schema: schema,
       create_version: createVersion,
     }),
   });
@@ -160,7 +180,9 @@ export async function getFormVersions(formPath: string): Promise<FormVersionInfo
   // where formPath can contain slashes like /paas/request/catalog
   const url = `${API_BASE_URL}/admin/forms${normalizedPath}/versions`;
   console.log('Fetching versions from:', url);
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
     console.error('Failed to get form versions:', response.status, errorText);
@@ -184,7 +206,9 @@ export interface ContentVersionInfo {
 }
 
 export async function listContent(): Promise<ContentInfo[]> {
-  const response = await fetch(`${API_BASE_URL}/content/content`);
+  const response = await fetch(`${API_BASE_URL}/content/content`, {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     throw new Error(`Failed to list content: ${response.statusText}`);
   }
@@ -196,7 +220,9 @@ export async function getContent(filename: string, version?: string): Promise<Re
   if (version) {
     url.searchParams.set('version', version);
   }
-  const response = await fetch(url.toString());
+  const response = await fetch(url.toString(), {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     throw new Error(`Failed to get content: ${response.statusText}`);
   }
@@ -210,9 +236,7 @@ export async function saveContent(
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/content/content/${filename}`, {
     method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: getHeaders(),
     body: JSON.stringify({
       content,
       create_version: createVersion,
@@ -225,7 +249,9 @@ export async function saveContent(
 }
 
 export async function getContentVersions(filename: string): Promise<ContentVersionInfo[]> {
-  const response = await fetch(`${API_BASE_URL}/content/content/${filename}/versions`);
+  const response = await fetch(`${API_BASE_URL}/content/content/${filename}/versions`, {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     throw new Error(`Failed to get content versions: ${response.statusText}`);
   }
@@ -258,7 +284,9 @@ export interface WorkspaceFeaturesResponse {
  * List all available workspaces.
  */
 export async function listWorkspaces(): Promise<WorkspaceInfo[]> {
-  const response = await fetch(`${API_BASE_URL}/admin/workspaces`);
+  const response = await fetch(`${API_BASE_URL}/admin/workspaces`, {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     throw new Error(`Failed to list workspaces: ${response.statusText}`);
   }
@@ -269,7 +297,9 @@ export async function listWorkspaces(): Promise<WorkspaceInfo[]> {
  * Get feature states for a specific workspace.
  */
 export async function getWorkspaceFeatures(workspaceId: string): Promise<WorkspaceFeaturesResponse> {
-  const response = await fetch(`${API_BASE_URL}/admin/workspaces/${workspaceId}/features`);
+  const response = await fetch(`${API_BASE_URL}/admin/workspaces/${workspaceId}/features`, {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     throw new Error(`Failed to get workspace features: ${response.statusText}`);
   }
@@ -286,9 +316,7 @@ export async function updateWorkspaceFeature(
 ): Promise<FeatureInfo> {
   const response = await fetch(`${API_BASE_URL}/admin/workspaces/${workspaceId}/features/${featureId}`, {
     method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: getHeaders(),
     body: JSON.stringify({ enabled }),
   });
   if (!response.ok) {
@@ -309,9 +337,7 @@ export async function createRequest(
 ): Promise<Request> {
   const response = await fetch(`${API_BASE_URL}/requests`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: getHeaders(),
     body: JSON.stringify({
       type,
       title,
@@ -334,7 +360,9 @@ export async function createRequest(
 }
 
 export async function getRequests(): Promise<Request[]> {
-  const response = await fetch(`${API_BASE_URL}/requests`);
+  const response = await fetch(`${API_BASE_URL}/requests`, {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     throw new Error(`Failed to get requests: ${response.statusText}`);
   }
@@ -342,7 +370,9 @@ export async function getRequests(): Promise<Request[]> {
 }
 
 export async function getRequest(requestId: string): Promise<Request> {
-  const response = await fetch(`${API_BASE_URL}/requests/${requestId}`);
+  const response = await fetch(`${API_BASE_URL}/requests/${requestId}`, {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     throw new Error(`Failed to get request: ${response.statusText}`);
   }
@@ -361,9 +391,7 @@ export async function approveRequest(requestId: string): Promise<void> {
 export async function rejectRequest(requestId: string, reason?: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/requests/${requestId}/reject`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: getHeaders(),
     body: JSON.stringify({ rejection_note: reason }),
   });
   if (!response.ok) {
@@ -376,7 +404,9 @@ export async function getApprovals(status?: string): Promise<Approval[]> {
   if (status) {
     url.searchParams.set('status', status);
   }
-  const response = await fetch(url.toString());
+  const response = await fetch(url.toString(), {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     throw new Error(`Failed to get approvals: ${response.statusText}`);
   }
@@ -412,7 +442,9 @@ export async function getDelegations(delegatorEmail?: string, delegateeEmail?: s
   if (delegateeEmail) {
     url.searchParams.set('delegatee_email', delegateeEmail);
   }
-  const response = await fetch(url.toString());
+  const response = await fetch(url.toString(), {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     throw new Error(`Failed to get delegations: ${response.statusText}`);
   }
@@ -422,9 +454,7 @@ export async function getDelegations(delegatorEmail?: string, delegateeEmail?: s
 export async function createDelegation(delegation: DelegationCreate): Promise<Delegation> {
   const response = await fetch(`${API_BASE_URL}/delegations`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: getHeaders(),
     body: JSON.stringify(delegation),
   });
   if (!response.ok) {
@@ -456,7 +486,9 @@ export async function getBranding(): Promise<{
   brand_color_warning: string;
   brand_color_success: string;
 }> {
-  const response = await fetch(`${API_BASE_URL}/branding`);
+  const response = await fetch(`${API_BASE_URL}/branding`, {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     throw new Error(`Failed to get branding: ${response.statusText}`);
   }
@@ -480,9 +512,7 @@ export interface TestRunResponse {
 export async function runTests(path?: string, args?: string[]): Promise<TestRunResponse> {
   const response = await fetch(`${API_BASE_URL}/dev/tests`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: getHeaders(),
     body: JSON.stringify({ path, args }),
   });
 
@@ -494,7 +524,9 @@ export async function runTests(path?: string, args?: string[]): Promise<TestRunR
 }
 
 export async function listTests(): Promise<string[]> {
-  const response = await fetch(`${API_BASE_URL}/dev/tests/list`);
+  const response = await fetch(`${API_BASE_URL}/dev/tests/list`, {
+    headers: getHeaders()
+  });
   if (!response.ok) {
     throw new Error(`Failed to list tests: ${response.statusText}`);
   }

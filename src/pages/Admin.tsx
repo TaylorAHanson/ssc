@@ -16,6 +16,7 @@ import {
 import type { ContentInfo, ContentVersionInfo, WorkspaceInfo, FeatureInfo } from '../services/api';
 import { Switch } from '../components/ui/switch';
 import { TestRunner } from '../components/admin/TestRunner';
+import { Users } from './admin/Users';
 
 export function Admin() {
   const requests = useRequestStore((state) => state.requests);
@@ -28,7 +29,7 @@ export function Admin() {
     fetchApprovals();
   }, [fetchRequests, fetchApprovals]);
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'content-manager' | 'feature-management' | 'test-runner'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'content-manager' | 'feature-management' | 'test-runner'>('dashboard');
 
   // Content management state
   const [contentFiles, setContentFiles] = useState<ContentInfo[]>([]);
@@ -297,6 +298,18 @@ export function Admin() {
           Dashboard
         </button>
         <button
+          onClick={() => setActiveTab('users')}
+          className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'users'
+            ? 'border-b-2 border-primary text-primary'
+            : 'text-gray-600 hover:text-gray-900'
+            }`}
+        >
+          <div className="flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-users"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+            Users & Roles
+          </div>
+        </button>
+        <button
           onClick={() => setActiveTab('content-manager')}
           className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'content-manager'
             ? 'border-b-2 border-primary text-primary'
@@ -329,6 +342,7 @@ export function Admin() {
       </div>
 
       {activeTab === 'test-runner' && <TestRunner />}
+      {activeTab === 'users' && <Users />}
 
       {activeTab === 'dashboard' && (
         <div className="space-y-6">
