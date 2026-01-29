@@ -22,7 +22,7 @@ class NotificationProvider(BaseProvider):
         self.teams_config = self.get_config("teams", {})
     
     @retry_on_retryable(max_attempts=3)
-    async def send_email(self, to: str, subject: str, body: str, metadata: Optional[Dict[str, Any]] = None) -> bool:
+    async def send_email(self, to: str, subject: str, body: str, metadata: Optional[Dict[str, Any]] = None, is_html: bool = False) -> bool:
         """Send email notification."""
         try:
             import smtplib
@@ -35,7 +35,8 @@ class NotificationProvider(BaseProvider):
             smtp_user = settings.NOTIFICATION_EMAIL_SMTP_USER
             smtp_password = settings.NOTIFICATION_EMAIL_SMTP_PASSWORD
             
-            html_body = self._get_html_body(body, metadata)
+            # Always wrap in template, but hint if the body itself is already HTML
+            html_body = self._get_html_body(body, metadata, is_html=is_html)
 
             if not smtp_host:
                 import logging
@@ -45,8 +46,9 @@ class NotificationProvider(BaseProvider):
                     f"To: {to}\n"
                     f"Subject: {subject}\n"
                     f"Metadata: {metadata}\n"
-                    f"Body (Text): {body}\n"
+                    f"Body (Text length): {len(body)}\n"
                     f"Body (HTML length): {len(html_body)}\n"
+                    f"is_html: {is_html}\n"
                     f"=========================================\n"
                 )
                 logger.info(mock_msg)
@@ -78,7 +80,7 @@ class NotificationProvider(BaseProvider):
         except Exception as e:
             raise RetryableError(f"Email notification failed: {str(e)}")
 
-    def _get_html_body(self, message: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+    def _get_html_body(self, message: str, metadata: Optional[Dict[str, Any]] = None, is_html: bool = False) -> str:
         """Generate branded HTML body for email."""
         from app.core.config import settings
         
@@ -114,6 +116,9 @@ class NotificationProvider(BaseProvider):
             if metadata.get("requested_by"):
                 details_html += f'<li><strong>Requested By:</strong> {metadata["requested_by"]}</li>'
             details_html += '</ul></div>'
+        
+        # If is_html is True, don't escape newlines
+        formatted_message = message if is_html else message.replace('\n', '<br>')
             
         return f"""
 <!DOCTYPE html>
@@ -128,7 +133,7 @@ class NotificationProvider(BaseProvider):
             padding: 40px 20px;
         }}
         .container {{
-            max-width: 600px;
+            max-width: 800px;
             margin: 0 auto;
             background-color: #ffffff;
             border-radius: 8px;
@@ -198,6 +203,10 @@ class NotificationProvider(BaseProvider):
             border-radius: 4px;
             font-family: monospace;
         }}
+        /* Table styles for reports */
+        table {{ border-collapse: collapse; width: 100%; margin-bottom: 1rem; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #f2f2f2; }}
     </style>
 </head>
 <body>
@@ -208,7 +217,7 @@ class NotificationProvider(BaseProvider):
         </div>
         <div class="main-content">
             <div class="message">
-                {message.replace('\n', '<br>')}
+                {formatted_message}
             </div>
             {details_html}
         </div>

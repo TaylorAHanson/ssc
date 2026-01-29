@@ -29,6 +29,7 @@ class RequestService:
             status="pending",
             current_state="pending",
             state_context=request_data.metadata or {},
+            requester_email=request_data.requester_email,
             requires_training=request_data.type == RequestType.WORKSPACE_PROVISION,
             environment=request_data.environment.value if request_data.environment else None,
             conversation=request_data.conversation,

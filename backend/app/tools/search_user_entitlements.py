@@ -76,13 +76,46 @@ class SearchUserEntitlementsTool(BaseTool):
             if use_obo:
                 obo_token = kwargs.get("_obo_token")
                 if obo_token:
-                    client = self.provider.get_workspace_client(token=obo_token)
-                    using_obo = True
+                    print(f"DEBUG: Using OBO token for search (len={len(obo_token)})")
+                    
+                    # CRITICAL FIX based on production example:
+                    # The Databricks SDK prioritizes environment variables (Client ID/Secret) over the passed token.
+                    # We must temporarily remove them to force the SDK to use ONLY our OBO token.
+                    import os
+                    saved_client_id = os.environ.pop('DATABRICKS_CLIENT_ID', None)
+                    saved_client_secret = os.environ.pop('DATABRICKS_CLIENT_SECRET', None)
+                    
+                    try:
+                        # Initialize client strictly with Host and OBO Token
+                        # We use WorkspaceClient directly instead of provider helper to ensure clean config
+                        from databricks.sdk import WorkspaceClient as WSClient
+                        # Fallback for host if not in env
+                        host = os.getenv("DATABRICKS_HOST") or settings.DATABRICKS_HOST
+                        client = WSClient(
+                            host=host,
+                            token=obo_token.strip()
+                        )
+                        print(f"DEBUG: Initialized OBO client for host {client.config.host}")
+                        using_obo = True
+                    finally:
+                        # Restore env vars immediately
+                        if saved_client_id:
+                            os.environ['DATABRICKS_CLIENT_ID'] = saved_client_id
+                        if saved_client_secret:
+                            os.environ['DATABRICKS_CLIENT_SECRET'] = saved_client_secret
                 else:
+                    print("DEBUG: OBO requested but no token found in kwargs. Falling back to Service Principal.")
                     # If requested OBO but no token available, fall back to SP but note it? 
                     # Or should we fail? The requirement says "can use OBO instead of service principle".
                     # Let's fallback to SP but maybe log it.
                     pass
+            
+            # Identify who we are
+            try:
+                me = client.current_user.me()
+                print(f"DEBUG: Search executing as user: {me.user_name} (ID: {me.id})")
+            except Exception as e:
+                print(f"DEBUG: Could not determine current user identity: {e}")
             
             # Get current user info for permission cross-referencing
             current_user = None
@@ -279,10 +312,12 @@ class SearchUserEntitlementsTool(BaseTool):
                         if items_found >= max_items:
                             break
                             
-                except Exception:
+                except Exception as e:
+                    print(f"DEBUG: Failed to list workspace path {path}: {e}")
                     pass # Skip folders we can't read
                     
-        except Exception:
+        except Exception as e:
+             print(f"DEBUG: Error in workspace search: {e}")
              pass 
         return results
 
@@ -313,6 +348,7 @@ class SearchUserEntitlementsTool(BaseTool):
                     "state": cluster.state.value if hasattr(cluster.state, 'value') else str(cluster.state),
                     "permission": permission_level
                 })
-        except Exception:
+        except Exception as e:
+            print(f"DEBUG: Error in compute search: {e}")
             pass
         return results
