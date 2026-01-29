@@ -40,14 +40,25 @@ Tools to validate input and find resources.
 
 ---
 
-## 4. Suggestions for Other Agents (Governance, FinOps)
-Additional tools recommended for a large-scale enterprise environment.
+## 4. Governance & Automated Oversight Tools
+These tools allow the Governance Agent to proactively monitor the Lakehouse for hygiene, security, and cost efficiency.
 
-| Tool Name | Description | Category | Target |
+### Resource & Cost Optimization
+| Tool Name | Description | Priority | Target |
 |-----------|-------------|----------|--------|
-| `CheckBudgetStatusTool` | Checks if a cost center or workspace is projected to exceed its monthly budget. | FinOps | Cost Control |
-| `ScanSecurityPostureTool` | Scans workspace for security violations (e.g., public clusters, unencrypted storage, over-privileged users). | Security | Compliance |
-| `VerifyDataSLAComplianceTool` | Checks if critical tables have been updated within their expected SLA timeframe. | Observability | Data Quality |
-| `AnalyzeClusterUsageTool` | Identifies underutilized or over-provisioned clusters and suggests instance type optimizations. | FinOps | Optimization |
-| `FindStaleResourcesTool` | Scans for notebooks, tables, or jobs that haven't been accessed in X days to suggest archiving. | Governance | Cleanup |
-| `SearchComplianceViolationsTool` | Scans metadata and table samples for potential PII violations in non-secure zones. | Security | Compliance |
+| `DetectOverProvisioningTool` | Analyzes cluster and warehouse metrics to identify resources with consistently low utilization relative to their instance size. | **High** | Cost |
+| `IdentifyStaleAssetsTool` | Identifies tables, models, or jobs that have not been queried or run in X days ("Unused Data"). | **Medium** | Cost/Hygiene |
+| `FindEmptyContainersTool` | Identifies Catalogs or Schemas that contain zero child objects (tables, views, volumes) to reduce namespace clutter. | **Low** | Hygiene |
+
+### Security & Compliance Audit
+| Tool Name | Description | Priority | Target |
+|-----------|-------------|----------|--------|
+| `AuditPrivilegedAccessTool` | Scans Unity Catalog for principals with `Account Admin`, `Metastore Admin`, or broad `ALL PRIVILEGES` grants. | **Critical** | Security |
+| `IdentifyOrphanedAssetsTool` | Validates asset ownership against the IDP to find resources owned by deleted users or service principals. | **High** | Security |
+| `ReviewDataClassificationTool` | Scans schema metadata to identify columns likely containing PII that lack proper sensitivity tags. | **High** | Compliance |
+
+### Data Quality & Usage
+| Tool Name | Description | Priority | Target |
+|-----------|-------------|----------|--------|
+| `AnalyzeAssetUsageTool` | Queries system tables to generate usage heatmaps, identifying frequently vs. rarely accessed assets. | **Medium** | Observability |
+| `ScanUndocumentedAssetsTool` | Lists data assets (tables, columns) that are missing `COMMENT` fields to enforce documentation standards. | **Low** | Quality |

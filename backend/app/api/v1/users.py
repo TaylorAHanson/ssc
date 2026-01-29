@@ -47,6 +47,7 @@ async def read_users_me(current_user: UserModel = Depends(get_current_user)):
     """Get current user."""
     return current_user
 
+@router.get("")
 @router.get("/", response_model=List[User], dependencies=[Depends(require_role("platform_admin"))])
 async def read_users(
     skip: int = 0, 
@@ -57,6 +58,7 @@ async def read_users(
     users = db.query(UserModel).offset(skip).limit(limit).all()
     return users
 
+@router.post("")
 @router.post("/", response_model=User, dependencies=[Depends(require_role("platform_admin"))])
 async def create_user(
     user_in: UserCreate,

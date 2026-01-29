@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("")
 @router.get("/", response_model=List[Request])
 async def get_requests(
     skip: int = 0,
@@ -152,6 +153,7 @@ async def get_request_status(
     }
 
 
+@router.post("")
 @router.post("/", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_request(
     request_data: RequestCreate,

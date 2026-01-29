@@ -13,6 +13,7 @@ from app.db.user import UserModel
 router = APIRouter()
 
 
+@router.get("")
 @router.get("/", response_model=List[Approval])
 async def get_approvals(
     status: Optional[str] = None,

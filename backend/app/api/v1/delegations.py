@@ -14,6 +14,7 @@ from app.db.user import UserModel
 
 router = APIRouter()
 
+@router.get("")
 @router.get("/", response_model=List[Delegation])
 async def get_delegations(
     delegator_email: Optional[str] = None,
@@ -53,6 +54,7 @@ async def get_delegations(
         ) for d in results
     ]
 
+@router.post("")
 @router.post("/", response_model=Delegation)
 async def create_delegation(
     delegation_in: DelegationCreate,
