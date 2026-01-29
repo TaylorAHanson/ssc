@@ -5,11 +5,16 @@ command:
   - python
   - run.py
 
+authorization:
+  type: user
+  scopes:
+    - iam.access-control:read
+    - iam.current-user:read
+    - sql
+    - files.files
+    - all-apis
+    
 env:
-  - name: DATABRICKS_HOST
-    valueFrom: "{{workspace_url}}"
-  - name: DATABRICKS_WORKSPACE_URL
-    valueFrom: "{{workspace_url}}"
   - name: DATABRICKS_WAREHOUSE_ID
     value: "5c5e40da3caf812c"
   - name: MODEL_SERVING_AGENT_LLM_ENDPOINT

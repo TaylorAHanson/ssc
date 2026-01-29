@@ -356,11 +356,11 @@ async def handle_conversation(
                         # TODO: stricter validation
                         
                         # Add OBO token if available and tool requests it (implicitly or explicitly)
-                        if hasattr(request, "state") and hasattr(request.state, "token") and request.state.token:
+                        if hasattr(req, "state") and hasattr(req.state, "token") and req.state.token:
                             # We inject it as a special kwarg that tools can use if they want
                             # but filtering it from schema validation might be tricky if schema doesn't have it.
                             # For now, let's just pass it in kwargs. Tools need to accept **kwargs or have 'obo_token' arg.
-                            function_args["_obo_token"] = request.state.token
+                            function_args["_obo_token"] = req.state.token
 
                         # Execute tool
                         result = await matching_tool.execute(**function_args)
