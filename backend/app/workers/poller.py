@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
-from app.db.session import get_lakebase_session, get_engine
+from app.db.session import get_lakebase_session, get_engine, reset_database_connection
 from app.db.base import Base
 from app.db.request import RequestModel, FailureModel
 from app.state_machines.persistence import load_state_machine, save_state_machine
@@ -45,13 +45,35 @@ async def start_poller():
     logger.info(f"Poller configured with interval: {poll_interval} seconds")
     
     poll_count = 0
+    consecutive_db_errors = 0
     while True:
         poll_count += 1
         try:
             logger.debug(f"Poller cycle #{poll_count} - checking for requests...")
             await process_open_requests()
+            consecutive_db_errors = 0  # Reset on success
         except Exception as e:
-            logger.error(f"Error in poller loop (cycle #{poll_count}): {e}", exc_info=True)
+            error_msg = str(e).lower()
+            is_auth_error = (
+                "failed to decode token" in error_msg or
+                "authentication failed" in error_msg or
+                "password authentication failed" in error_msg or
+                "operationalerror" in error_msg
+            )
+            
+            if is_auth_error:
+                consecutive_db_errors += 1
+                logger.error(
+                    f"Database auth error in poller (cycle #{poll_count}, consecutive: {consecutive_db_errors}): {e}"
+                )
+                
+                # After 3 consecutive auth errors, reset the connection pool
+                if consecutive_db_errors >= 3:
+                    logger.warning("🔄 Too many consecutive DB auth errors - resetting connection pool...")
+                    reset_database_connection()
+                    consecutive_db_errors = 0
+            else:
+                logger.error(f"Error in poller loop (cycle #{poll_count}): {e}", exc_info=True)
         
         await asyncio.sleep(poll_interval)
 
