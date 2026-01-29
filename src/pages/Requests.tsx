@@ -280,6 +280,7 @@ export function RequestStateList({ request }: { request: Request }) {
                       </div>
                     </div>
                   )}
+
                   {step.facts && step.facts.length > 0 && (
                     <div className="bg-gray-50 rounded border border-gray-100 p-3">
                       <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-2">Step Logs</p>
@@ -301,6 +302,15 @@ export function RequestStateList({ request }: { request: Request }) {
                                 <>: <span>Approved by <span className="font-medium">{fact.data.actor}</span></span></>
                               ) : fact.type === 'provisioning_failed' ? (
                                 <>: <span className="text-red-600 font-medium">Failed: {fact.data.error}</span></>
+                              ) : fact.type === 'request_rejected' ? (
+                                <>
+                                  : <span className="text-red-600 font-medium">Rejected by {fact.data.rejected_by}</span>
+                                  {fact.data.rejection_note && (
+                                    <div className="mt-1 p-2 bg-red-50 border border-red-100 rounded text-red-800 italic">
+                                      "{fact.data.rejection_note}"
+                                    </div>
+                                  )}
+                                </>
                               ) : null}
                             </div>
                           </div>
