@@ -49,7 +49,9 @@ export interface Request {
   requiresTraining?: boolean;
   trainingCompleted?: boolean;
   environment?: Environment;
+  requester_email?: string;
   lastError?: any;
+  metadata?: Record<string, any>;
   conversation?: ChatMessage[];
 }
 
@@ -229,4 +231,46 @@ export interface Branding {
   brand_logo_url: string;
   brand_color_primary: string;
   brand_color_secondary: string;
+}
+
+export interface PromptDef {
+  label: string;
+  prompt: string;
+}
+
+export interface ReportSubscription {
+  id: string;
+  name: string;
+  subscribers: string;
+  schedule_cron: string;
+  prompts: PromptDef[];
+  is_active: boolean;
+  last_run_at: string | null;
+  next_run_at: string;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface ReportSubscriptionCreate {
+  name: string;
+  subscribers: string;
+  schedule_cron: string;
+  prompts: PromptDef[];
+  is_active: boolean;
+}
+
+export interface ReportSubscriptionUpdate {
+  name?: string;
+  subscribers?: string;
+  schedule_cron?: string;
+  prompts?: PromptDef[];
+  is_active?: boolean;
+}
+
+export interface ExecutionSummary {
+  id: string;
+  title: string;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
 }

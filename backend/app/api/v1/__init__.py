@@ -2,7 +2,7 @@
 API v1 routes.
 """
 from fastapi import APIRouter
-from app.api.v1 import requests, agent, approvals, admin, content, delegations, branding, callbacks, users
+from app.api.v1 import requests, agent, approvals, admin, content, delegations, branding, callbacks, users, reports
 
 router = APIRouter()
 
@@ -16,6 +16,7 @@ router.include_router(admin.router, prefix="/admin", tags=["admin"])
 router.include_router(content.router, prefix="/content", tags=["content"])
 router.include_router(branding.router, prefix="/branding", tags=["branding"])
 router.include_router(callbacks.router, prefix="/callbacks/terraform", tags=["callbacks"])
+router.include_router(reports.router, prefix="/reports", tags=["reports"])
 # Dev/Test routes
 from app.api.v1 import dev
 router.include_router(dev.router, prefix="/dev", tags=["dev"])

@@ -9,6 +9,7 @@ import logging
 import os
 import socket
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Optional
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -17,7 +18,10 @@ from app.db.base import Base
 from app.db.request import RequestModel, FailureModel
 from app.state_machines.persistence import load_state_machine, save_state_machine
 from app.state_machines.lock import acquire_lock, release_lock, heartbeat_lock
-from app.models.request import RequestStatus
+from app.models.request import RequestStatus, RequestType
+from app.db.report_subscription import ReportSubscription
+from croniter import croniter
+import uuid
 from app.core.config import settings
 from app.core.exceptions import RetryableError, PermanentError
 import traceback
@@ -51,6 +55,10 @@ async def start_poller():
         try:
             logger.debug(f"Poller cycle #{poll_count} - checking for requests...")
             await process_open_requests()
+            
+            # Check for scheduled reports (could be throttled if needed, but checking DB is cheap)
+            await process_scheduled_reports()
+
             consecutive_db_errors = 0  # Reset on success
         except Exception as e:
             error_msg = str(e).lower()
@@ -123,6 +131,77 @@ async def process_open_requests():
                     exc_info=result
                 )
                 
+    finally:
+        db.close()
+
+
+
+async def process_scheduled_reports():
+    """Check for and spawn scheduled reports."""
+    db = get_lakebase_session()
+    try:
+        now = datetime.utcnow()
+        due_subs = db.query(ReportSubscription).filter(
+            ReportSubscription.is_active == True,
+            ReportSubscription.next_run_at <= now
+        ).all()
+        
+        if due_subs:
+            logger.info(f"Found {len(due_subs)} due report subscription(s). Spawning requests...")
+            
+        for sub in due_subs:
+            try:
+                # 1. Spawn Request
+                req_id = f"req-{uuid.uuid4()}"
+                
+                # Context with all needed info
+                context = {
+                    "subscription_id": sub.id,
+                    "name": sub.name,
+                    "subscribers": sub.subscribers,
+                    "prompts": sub.prompts,
+                    "schedule_cron": sub.schedule_cron
+                }
+                
+                new_request = RequestModel(
+                    id=req_id,
+                    type=RequestType.REPORT_EXECUTION.value,
+                    title=f"Report: {sub.name}",
+                    status=RequestStatus.PENDING.value,
+                    current_state="pending",
+                    state_context=context,
+                    created_at=now,
+                    updated_at=now
+                )
+                db.add(new_request)
+                
+                # 2. Update Subscription
+                sub.last_run_at = now
+                
+                # Calculate next run
+                # Calculate next run in PST to respect user timezone
+                pst_tz = ZoneInfo("America/Los_Angeles")
+                
+                # Convert current UTC time to PST
+                now_utc = now.replace(tzinfo=ZoneInfo("UTC"))
+                now_pst = now_utc.astimezone(pst_tz)
+                
+                # Get next scheduled time in PST
+                iter = croniter(sub.schedule_cron, now_pst)
+                next_pst = iter.get_next(datetime)
+                
+                # Convert back to UTC for storage (naive)
+                sub.next_run_at = next_pst.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+                
+                db.commit()
+                logger.info(f"Spawned report request {req_id} for subscription {sub.id}. Next run: {sub.next_run_at}")
+                
+            except Exception as e:
+                logger.error(f"Failed to process subscription {sub.id}: {e}", exc_info=True)
+                db.rollback() # Rollback validation of this single sub if failed
+                
+    except Exception as e:
+        logger.error(f"Error in process_scheduled_reports: {e}", exc_info=True)
     finally:
         db.close()
 

@@ -2,7 +2,10 @@
  * API service for communicating with the backend.
  */
 
-import type { Request, RequestType, Environment, Approval, Delegation, DelegationCreate } from '../types';
+import type {
+  Request, RequestType, Environment, Approval, Delegation, DelegationCreate,
+  ReportSubscription, ReportSubscriptionCreate, ReportSubscriptionUpdate, ExecutionSummary
+} from '../types';
 
 import { useUserStore } from '../stores/userStore';
 
@@ -541,6 +544,70 @@ export async function resetDb(): Promise<void> {
   if (!response.ok) {
     throw new Error(`Failed to reset database: ${response.statusText}`);
   }
+}
+
+
+/**
+ * Reports API
+ */
+export async function listSubscriptions(): Promise<ReportSubscription[]> {
+  const response = await fetch(`${API_BASE_URL}/reports/subscriptions`, {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to list subscriptions: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function createSubscription(data: ReportSubscriptionCreate): Promise<ReportSubscription> {
+  const response = await fetch(`${API_BASE_URL}/reports/subscriptions`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to create subscription: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function updateSubscription(id: string, data: ReportSubscriptionUpdate): Promise<ReportSubscription> {
+  const response = await fetch(`${API_BASE_URL}/reports/subscriptions/${id}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to update subscription: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function deleteSubscription(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/reports/subscriptions/${id}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to delete subscription: ${response.statusText}`);
+  }
+}
+
+export async function listExecutions(subscriptionId?: string): Promise<ExecutionSummary[]> {
+  const url = new URL(`${API_BASE_URL}/reports/executions`);
+  if (subscriptionId) {
+    url.searchParams.set('subscription_id', subscriptionId);
+  }
+  const response = await fetch(url.toString(), {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to list executions: ${response.statusText}`);
+  }
+  return response.json();
 }
 
 export async function seedDb(): Promise<void> {

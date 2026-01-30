@@ -10,7 +10,8 @@ import {
   GraduationCap,
   Calendar,
   FileText,
-  MessageSquare
+  MessageSquare,
+  BarChart
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -43,6 +44,14 @@ const navItems: NavItem[] = [
     title: 'Admin',
     icon: <Settings className="w-5 h-5" />,
     path: '/admin',
+    group: 'Admin',
+    allowedPersonas: ['Platform Admin']
+  },
+
+  {
+    title: 'Reports',
+    icon: <BarChart className="w-5 h-5" />,
+    path: '/admin/reports',
     group: 'Admin',
     allowedPersonas: ['Platform Admin']
   },

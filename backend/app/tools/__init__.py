@@ -19,3 +19,8 @@ AVAILABLE_TOOLS = [
     SearchUserEntitlementsTool()
 ]
 
+def get_read_only_tools():
+    """Returns tools that don't perform destructive actions or workflow executions."""
+    # Exclude ExecuteWorkflowTool
+    return [t for t in AVAILABLE_TOOLS if not t.name == "execute_workflow"]
+
