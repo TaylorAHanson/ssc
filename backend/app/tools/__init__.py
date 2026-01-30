@@ -20,6 +20,7 @@ from app.tools.governance.search_audit_logs import SearchAuditLogsTool
 from app.tools.governance.check_overprovisioning import CheckOverprovisionedUsersTool
 from app.tools.governance.check_orphans import CheckOrphanedAssetsTool
 from app.tools.governance.check_quality import CheckAssetQualityTool
+from app.tools.governance.list_workspaces import ListWorkspacesTool
 
 # Registry of available tools
 AVAILABLE_TOOLS = [
@@ -40,7 +41,8 @@ AVAILABLE_TOOLS = [
     SearchAuditLogsTool(),
     CheckOverprovisionedUsersTool(),
     CheckOrphanedAssetsTool(),
-    CheckAssetQualityTool()
+    CheckAssetQualityTool(),
+    ListWorkspacesTool()
 ]
 
 def get_read_only_tools():

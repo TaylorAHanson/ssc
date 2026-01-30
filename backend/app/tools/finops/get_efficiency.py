@@ -53,7 +53,7 @@ class GetResourceEfficiencyTool(BaseTool):
             "required": ["metric"]
         }
 
-    async def execute(self, metric: str, threshold_hours: int = 24) -> Dict[str, Any]:
+    async def execute(self, metric: str, threshold_hours: int = 24, **kwargs) -> Dict[str, Any]:
         try:
             if metric == "idle_time":
                 # Find clusters that are in running state but have low usage? 

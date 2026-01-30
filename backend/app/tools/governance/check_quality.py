@@ -54,7 +54,7 @@ class CheckAssetQualityTool(BaseTool):
             "required": ["check_type"]
         }
 
-    async def execute(self, check_type: str, scope: str = "TABLE") -> Dict[str, Any]:
+    async def execute(self, check_type: str, scope: str = "TABLE", **kwargs) -> Dict[str, Any]:
         try:
             if check_type == "missing_description":
                 # comments column in information_schema
