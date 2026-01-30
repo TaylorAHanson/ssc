@@ -52,7 +52,7 @@ Capabilities:
             }
         }
 
-    async def execute(self, check_type: str = "risk_score") -> Dict[str, Any]:
+    async def execute(self, check_type: str = "risk_score", **kwargs) -> Dict[str, Any]:
         try:
             if check_type == "risk_score":
                 query = """

@@ -49,7 +49,7 @@ class CheckOrphanedAssetsTool(BaseTool):
             "required": []
         }
 
-    async def execute(self, asset_type: str = "CATALOG") -> Dict[str, Any]:
+    async def execute(self, asset_type: str = "CATALOG", **kwargs) -> Dict[str, Any]:
         try:
             # Logic: Get list of all valid users. Get list of all asset owners. Find diff.
             # In SQL-only:
