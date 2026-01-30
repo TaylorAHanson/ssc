@@ -330,6 +330,7 @@ export function RequestStateList({ request }: { request: Request }) {
 
 export function Requests() {
   const requests = useRequestStore((state) => state.requests);
+  const isLoadingRequests = useRequestStore((state) => state.isLoadingRequests);
   const fetchRequests = useRequestStore((state) => state.fetchRequests);
   const deleteRequest = useRequestStore((state) => state.deleteRequest);
   const { requestId } = useParams();
@@ -377,7 +378,47 @@ export function Requests() {
     }
   };
 
+  // Show loading state while fetching requests
+  if (isLoadingRequests && requests.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
+        <Loader2 className="w-12 h-12 animate-spin text-primary opacity-20" />
+        <p className="text-sm text-gray-500 animate-pulse">Loading your requests...</p>
+      </div>
+    );
+  }
 
+  // We only show empty state if there are NO requests at all, not just if filter hides them
+  if (requests.length === 0) {
+    if (requestId) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
+          <AlertCircle className="w-12 h-12 text-yellow-500 opacity-50" />
+          <div className="text-center">
+            <p className="text-lg font-semibold text-gray-900">Request Not Found</p>
+            <p className="text-sm text-gray-500 max-w-xs">
+              The request <strong>{requestId}</strong> could not be found in the current database. 
+              It may have been deleted or the database was reset.
+            </p>
+            <Button variant="outline" className="mt-6" onClick={() => navigate('/requests')}>
+              View All Requests
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <p className="text-lg text-gray-600 mb-4">No requests yet</p>
+          <p className="text-sm text-gray-500">
+            Start by using the Agentic Helper on the home page to create a request.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

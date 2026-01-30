@@ -80,7 +80,22 @@ echo ""
 # Step 1: Build frontend
 echo "[1/3] Building frontend..."
 npm ci --silent
-VITE_API_BASE_URL=/api/v1 npm run build --silent
+
+# Clean previous build
+rm -rf dist
+
+# Set VITE_API_BASE_URL for the build - must be relative for deployed apps
+export VITE_API_BASE_URL="/api/v1"
+echo "  Building with VITE_API_BASE_URL=${VITE_API_BASE_URL}"
+npm run build
+
+# Verify the env var was embedded in the build
+if grep -q "localhost:8000" dist/assets/*.js 2>/dev/null; then
+    echo "⚠️ WARNING: Build still contains localhost:8000 - env var may not have been applied"
+else
+    echo "✓ Build verified - no localhost references"
+fi
+
 rm -rf backend/static
 mkdir -p backend/static
 cp -r dist/* backend/static/
