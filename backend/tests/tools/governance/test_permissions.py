@@ -24,16 +24,22 @@ async def test_check_object_permissions(mock_provider):
         result = await tool.execute(object_type="TABLE", object_name="main.db.tbl")
         
         assert result["grants"] == ["grant1"]
-        assert "SHOW GRANTS ON TABLE main.db.tbl" in MockP.return_value.execute_sql.call_args[0][0]
+        args, kwargs = MockP.return_value.execute_sql.call_args
+        assert "SHOW GRANTS ON TABLE main.db.tbl" in args[0]
+        assert kwargs["timeout_seconds"] == 300
 
 @pytest.mark.asyncio
 async def test_audit_user_access(mock_provider):
      with patch("app.tools.governance.audit_access.DatabricksProvider") as MockP:
         MockP.return_value.execute_sql = AsyncMock(return_value={"rows": ["priv1"]})
         tool = AuditUserAccessTool()
-        result = await tool.execute(user_email="test@example.com")
+        result = await tool.execute(user_email="test@example.com", catalog="main")
         
         assert "direct_grants" in result
-        assert result["direct_grants"]["catalogs"] == ["priv1"]
+        assert result["direct_grants"]["catalog"] == ["priv1"]
         # Should call 3 times (cat, schema, table)
         assert MockP.return_value.execute_sql.call_count == 3
+        # Verify first call has timeout and catalog
+        args, kwargs = MockP.return_value.execute_sql.call_args_list[0]
+        assert "catalog_name = 'main'" in args[0]
+        assert kwargs["timeout_seconds"] == 120

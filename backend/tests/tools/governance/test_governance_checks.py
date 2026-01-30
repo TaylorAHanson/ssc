@@ -5,14 +5,31 @@ from app.tools.governance.check_orphans import CheckOrphanedAssetsTool
 from app.tools.governance.check_quality import CheckAssetQualityTool
 
 @pytest.mark.asyncio
-async def test_check_overprovisioning():
+async def test_check_overprovisioning_risk_score():
     with patch("app.tools.governance.check_overprovisioning.DatabricksProvider") as MockP:
-        MockP.return_value.execute_sql = AsyncMock(return_value={"rows": [{"grantee": "admin"}]})
+        MockP.return_value.execute_sql = AsyncMock(return_value={"rows": [{"email": "user@example.com", "over_provisioning_score": 2}]})
         tool = CheckOverprovisionedUsersTool()
         
-        result = await tool.execute(check_type="admins")
-        assert "high_privilege_users" in result
-        assert "system.information_schema.catalog_privileges" in MockP.return_value.execute_sql.call_args[0][0]
+        result = await tool.execute(check_type="risk_score")
+        assert "risk_assessment" in result
+        assert result["risk_assessment"][0]["over_provisioning_score"] == 2
+        
+        args, _ = MockP.return_value.execute_sql.call_args
+        assert "over_provisioning_score" in args[0]
+        assert "system.access.audit" in args[0]
+
+@pytest.mark.asyncio
+async def test_check_overprovisioning_workspace_admins():
+    with patch("app.tools.governance.check_overprovisioning.DatabricksProvider") as MockP:
+        MockP.return_value.execute_sql = AsyncMock(return_value={"rows": [{"email": "admin@example.com"}]})
+        tool = CheckOverprovisionedUsersTool()
+        
+        result = await tool.execute(check_type="workspace_admins")
+        assert "workspace_admins" in result
+        assert result["workspace_admins"][0]["email"] == "admin@example.com"
+        
+        args, _ = MockP.return_value.execute_sql.call_args
+        assert "system.information_schema.group_members" in args[0]
 
 @pytest.mark.asyncio
 async def test_check_orphans():

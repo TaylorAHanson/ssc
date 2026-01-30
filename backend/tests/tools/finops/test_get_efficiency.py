@@ -15,7 +15,7 @@ async def test_get_efficiency_idle_clusters(mock_provider):
     
     mock_provider.execute_sql.return_value = {
         "rows": [
-            {"cluster_name": "test-cluster", "state": "RUNNING"}
+            {"cluster_id": "test-cluster-id", "cluster_name": "test-cluster", "owned_by": "me"}
         ]
     }
     
@@ -28,5 +28,5 @@ async def test_get_efficiency_idle_clusters(mock_provider):
     args = mock_provider.execute_sql.call_args[0]
     query = args[0]
     assert "system.compute.clusters" in query
-    assert "state = 'RUNNING'" in query
-    assert "INTERVAL 48 HOURS" in query
+    assert "cluster_name" in query
+    assert "delete_time IS NULL" in query

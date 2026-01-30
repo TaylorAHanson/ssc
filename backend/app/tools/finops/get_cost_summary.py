@@ -108,7 +108,8 @@ class GetCostSummaryTool(BaseTool):
             
             logger.info(f"Executing Cost SQL: {query}")
             
-            result = await self.provider.execute_sql(query)
+            # Developer decision: Set timeout to 300s (5 mins) for heavy cost queries
+            result = await self.provider.execute_sql(query, timeout_seconds=300)
             rows = result.get("rows", [])
             logger.info(f"Cost SQL Result: {len(rows)} rows returned")
             

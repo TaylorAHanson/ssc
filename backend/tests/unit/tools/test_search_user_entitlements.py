@@ -24,36 +24,30 @@ async def test_search_entitlements_obo(tool, mock_provider):
     """Test that OBO token is used when provided."""
     obo_token = "test-obo-token"
     
-    # We need to patch the WorkspaceClient constructor because the tool 
-    # instantiates a new one directly for OBO to bypass env vars
-    with patch("databricks.sdk.WorkspaceClient") as MockWSClient:
-        mock_obo_client = MockWSClient.return_value
-        
-        # Mock me()
-        mock_obo_client.current_user.me.return_value = MagicMock(user_name="me")
-        
-        # Mock catalog list
-        mock_obo_client.catalogs.list.return_value = []
-        
-        # Execute with OBO
-        await tool.execute(
-            entitlement_types=["data"], 
-            use_obo=True, 
-            _obo_token=obo_token
-        )
-        
-        
-        # Verify WorkspaceClient was instantiated with token
-        # The tool uses WSClient(host=..., token=...)
-        # We can check if MockWSClient was called
-        MockWSClient.assert_called()
-        call_kwargs = MockWSClient.call_args.kwargs
-        assert call_kwargs.get("token") == obo_token
-        
-        # Verify me() was called (it might be called multiple times)
-        mock_obo_client.current_user.me.assert_called()
-        # Verify search used OBO client
-        mock_obo_client.catalogs.list.assert_called_once()
+    # Mock return of get_workspace_client
+    mock_obo_client = MagicMock(spec=WorkspaceClient)
+    mock_provider.get_workspace_client.return_value = mock_obo_client
+    
+    # Mock me()
+    mock_obo_client.current_user.me.return_value = MagicMock(user_name="me")
+    
+    # Mock catalog list
+    mock_obo_client.catalogs.list.return_value = []
+    
+    # Execute with OBO
+    await tool.execute(
+        entitlement_types=["data"], 
+        use_obo=True, 
+        _obo_token=obo_token
+    )
+    
+    # Verify get_workspace_client was called with token
+    mock_provider.get_workspace_client.assert_called_with(token=obo_token)
+    
+    # Verify me() was called (it might be called multiple times)
+    mock_obo_client.current_user.me.assert_called()
+    # Verify search used OBO client
+    mock_obo_client.catalogs.list.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_search_entitlements_fallback(tool, mock_provider):

@@ -57,12 +57,16 @@ class GetForecastedSpendTool(BaseTool):
             end_date = now.strftime('%Y-%m-%d')
             
             query = f"""
-                SELECT SUM(usage_quantity * list_price) as total_cost 
-                FROM system.billing.usage 
-                WHERE usage_date BETWEEN '{start_date}' AND '{end_date}'
+                SELECT SUM(u.usage_quantity * lp.pricing.default) as total_cost 
+                FROM system.billing.usage u
+                JOIN system.billing.list_prices lp 
+                  ON u.sku_name = lp.sku_name
+                  AND u.usage_start_time >= lp.price_start_time
+                  AND (lp.price_end_time IS NULL OR u.usage_end_time <= lp.price_end_time)
+                WHERE u.usage_date BETWEEN '{start_date}' AND '{end_date}'
             """
             
-            result = await self.provider.execute_sql(query)
+            result = await self.provider.execute_sql(query, timeout_seconds=300)
             rows = result.get("rows", [])
             total_30d_cost = 0.0
             if rows and rows[0].get("total_cost") is not None:
@@ -71,12 +75,16 @@ class GetForecastedSpendTool(BaseTool):
             # 3. Get spend MTD (Month to Date)
             month_start = now.replace(day=1).strftime('%Y-%m-%d')
             query_mtd = f"""
-                SELECT SUM(usage_quantity * list_price) as total_cost 
-                FROM system.billing.usage 
-                WHERE usage_date BETWEEN '{month_start}' AND '{end_date}'
+                SELECT SUM(u.usage_quantity * lp.pricing.default) as total_cost 
+                FROM system.billing.usage u
+                JOIN system.billing.list_prices lp 
+                  ON u.sku_name = lp.sku_name
+                  AND u.usage_start_time >= lp.price_start_time
+                  AND (lp.price_end_time IS NULL OR u.usage_end_time <= lp.price_end_time)
+                WHERE u.usage_date BETWEEN '{month_start}' AND '{end_date}'
             """
             
-            result_mtd = await self.provider.execute_sql(query_mtd)
+            result_mtd = await self.provider.execute_sql(query_mtd, timeout_seconds=300)
             rows_mtd = result_mtd.get("rows", [])
             mtd_cost = 0.0
             if rows_mtd and rows_mtd[0].get("total_cost") is not None:

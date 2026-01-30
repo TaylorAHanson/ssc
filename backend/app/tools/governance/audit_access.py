@@ -42,46 +42,40 @@ class AuditUserAccessTool(BaseTool):
                 "user_email": {
                     "type": "string",
                     "description": "Email of the user to audit"
+                },
+                "catalog": {
+                    "type": "string",
+                    "description": "The specific catalog to audit permissions within"
                 }
             },
-            "required": ["user_email"]
+            "required": ["user_email", "catalog"]
         }
 
-    async def execute(self, user_email: str) -> Dict[str, Any]:
+    async def execute(self, user_email: str, catalog: str) -> Dict[str, Any]:
         try:
             # We need to query system.information_schema tables for grants to this user OR groups they belong to.
-            # This is complex in SQL without knowing all groups.
-            # Ideally, `system.access.table_privileges` etc. are the place.
-            # However, `system.privileges` isn't a single table.
-            
             # Strategy: Query a few key views in `system.information_schema`.
-            # We assume the user principal is the email.
-            
-            # Using `system.information_schema.routine_privileges`, `table_privileges`, `catalog_privileges`, `schema_privileges`
-            # AND filtering by grantee = user_email
-            
-            # NOTE: This only captures DIRECT grants to the user unless we also expand groups.
-            # Doing full group expansion in SQL is hard. 
-            # For MVP, we will report DIRECT grants and maybe note that group grants are excluded or best effort.
+            # Filtering by grantee = user_email AND the specific catalog.
             
             queries = {
-                "catalogs": f"SELECT * FROM system.information_schema.catalog_privileges WHERE grantee = '{user_email}'",
-                "schemas": f"SELECT * FROM system.information_schema.schema_privileges WHERE grantee = '{user_email}'",
-                "tables": f"SELECT * FROM system.information_schema.table_privileges WHERE grantee = '{user_email}'"
+                "catalog": f"SELECT * FROM system.information_schema.catalog_privileges WHERE grantee = '{user_email}' AND catalog_name = '{catalog}'",
+                "schemas": f"SELECT * FROM system.information_schema.schema_privileges WHERE grantee = '{user_email}' AND catalog_name = '{catalog}'",
+                "tables": f"SELECT * FROM system.information_schema.table_privileges WHERE grantee = '{user_email}' AND table_catalog = '{catalog}'"
             }
             
             final_results = {}
             for key, q in queries.items():
                 try:
-                    res = await self.provider.execute_sql(q)
+                    res = await self.provider.execute_sql(q, timeout_seconds=120)
                     final_results[key] = res.get("rows", [])
                 except Exception as e:
                     final_results[key] = f"Error: {str(e)}"
 
             return {
                 "user_email": user_email,
+                "catalog": catalog,
                 "direct_grants": final_results,
-                "note": "Shows DIRECT grants only. inherited group permissions require group expansion logic not yet fully implemented via SQL-only tool."
+                "note": "Shows DIRECT grants only within the specified catalog."
             }
                 
         except Exception as e:

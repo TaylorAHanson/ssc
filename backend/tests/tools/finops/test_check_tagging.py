@@ -14,7 +14,7 @@ async def test_check_tagging_compliance(mock_provider):
     tool = CheckTaggingComplianceTool()
     
     mock_provider.execute_sql.return_value = {
-        "rows": [{"cluster_name": "bad-cluster", "custom_tags": {}}]
+        "rows": [{"resource_id": "bad-id", "resource_name": "bad-cluster", "tags": {}}]
     }
     
     required_tags = ["CostCenter", "Project"]
@@ -25,6 +25,7 @@ async def test_check_tagging_compliance(mock_provider):
     
     args = mock_provider.execute_sql.call_args[0]
     query = args[0]
-    assert "NOT map_contains_key(custom_tags, 'CostCenter')" in query
-    assert "NOT map_contains_key(custom_tags, 'Project')" in query
+    assert "NOT map_contains_key(tags, 'CostCenter')" in query
+    assert "NOT map_contains_key(tags, 'Project')" in query
+    assert "delete_time IS NULL" in query
     assert "OR" in query # Should check if ANY tag is missing

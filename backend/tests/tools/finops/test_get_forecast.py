@@ -41,3 +41,8 @@ async def test_get_forecasted_spend(mock_provider):
         
         # Verify 2 calls
         assert mock_provider.execute_sql.call_count == 2
+        
+        # Verify first call (30 day) has join and timeout
+        args, kwargs = mock_provider.execute_sql.call_args_list[0]
+        assert "JOIN system.billing.list_prices" in args[0]
+        assert kwargs["timeout_seconds"] == 300

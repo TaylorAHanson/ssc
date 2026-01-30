@@ -65,15 +65,14 @@ class GetResourceEfficiencyTool(BaseTool):
                 query = f"""
                     SELECT 
                         cluster_id, 
-                        cluster_name, 
+                        cluster_name,
                         owned_by, 
-                        create_time, 
-                        state, 
-                        custom_tags
+                        create_time,
+                        change_time,
+                        tags
                     FROM system.compute.clusters
-                    WHERE state = 'RUNNING'
-                    AND create_time < current_timestamp() - INTERVAL {threshold_hours} HOURS
-                    ORDER BY create_time ASC
+                    WHERE delete_time IS NULL
+                    ORDER BY change_time DESC
                     LIMIT 100
                 """
                 

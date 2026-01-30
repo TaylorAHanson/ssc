@@ -62,10 +62,8 @@ class CheckTaggingComplianceTool(BaseTool):
             
             tag_checks = []
             for tag in required_tags:
-                # Assuming custom_tags is map<string,string>
-                # Using element_at or map_contains_key depends on dialect.
-                # Databricks SQL: map_contains_key(custom_tags, 'key')
-                tag_checks.append(f"NOT map_contains_key(custom_tags, '{tag}')")
+                # Based on user documentation, 'tags' is the map column.
+                tag_checks.append(f"NOT map_contains_key(tags, '{tag}')")
             
             # If ANY tag is missing, select it
             where_clause = " OR ".join(tag_checks)
@@ -76,9 +74,9 @@ class CheckTaggingComplianceTool(BaseTool):
                     cluster_name as resource_name,
                     'CLUSTER' as resource_type,
                     owned_by,
-                    custom_tags
+                    tags
                 FROM system.compute.clusters
-                WHERE state = 'RUNNING' 
+                WHERE delete_time IS NULL 
                 AND ({where_clause})
                 LIMIT 100
             """

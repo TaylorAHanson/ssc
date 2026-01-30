@@ -64,7 +64,7 @@ class CheckObjectPermissionsTool(BaseTool):
             
             query = f"SHOW GRANTS ON {object_type} {object_name}"
             
-            result = await self.provider.execute_sql(query)
+            result = await self.provider.execute_sql(query, timeout_seconds=300)
             
             # Also get owner
             # DESCRIBE [TYPE] [NAME] usually shows owner? Or use system.information_schema
