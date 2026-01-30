@@ -93,15 +93,14 @@ class AgentResponse(BaseModel):
 @router.get("/tools")
 async def get_agent_tools(current_user: UserModel = Depends(get_current_user)):
     """Get list of available agent tools, filtered by user permissions."""
-    tool_permissions = {
-        "admin_action": "platform_admin",
-        "finance_approval": "finance_admin", 
-        "security_audit": "security_admin",
-    }
     visible_tools = []
     for tool in AGENT_TOOLS:
-        required_role = tool_permissions.get(tool.name)
-        if not required_role or current_user.has_role(required_role):
+        allowed = True
+        if hasattr(tool, "required_role") and tool.required_role:
+            if not current_user.has_role(tool.required_role):
+                allowed = False
+        
+        if allowed:
             visible_tools.append({
                 "name": tool.name,
                 "description": tool.description,
@@ -131,17 +130,44 @@ async def handle_conversation(
         raise HTTPException(status_code=503, detail="Agent is currently disabled")
     
     try:
-        # Filter tools by user permissions
-        tool_permissions = {
-            "admin_action": "platform_admin",
-            "finance_approval": "finance_admin", 
-            "security_audit": "security_admin",
-        }
+        # User Refresh: Ensure we have the latest roles from DB
+        # The dependency might return a slightly stale state if updated externally
+        from app.db.session import get_session_local
+        db = get_session_local()()
+        try:
+            current_user = db.merge(current_user)
+            db.refresh(current_user)
+            # Force load roles while session is still open
+            # This prevents DetachedInstanceError when accessing them later
+            _ = current_user.roles
+        finally:
+            db.close()
+            
+        logger.info(f"Incoming agent request context: {request.context}")
         
+        # DEBUG: Log user roles to debug visibility issues
+        logger.info(f"Current User: {current_user.email}")
+        logger.info(f"Current User Roles: {[r.name for r in current_user.roles]}")
+
+        # Extract mode from context first to filter tools
+        agent_mode = "self_service"
+        if request.context and "mode" in request.context:
+            agent_mode = request.context.get("mode", "self_service")
+
+        # Filter tools by user permissions AND mode
         visible_tools = []
         for tool in AGENT_TOOLS:
-            required_role = tool_permissions.get(tool.name)
-            if not required_role or current_user.has_role(required_role):
+            # Mode-based filtering
+            if tool.name == "execute_workflow" and agent_mode != "self_service":
+                continue
+
+            # Role-based filtering
+            allowed = True
+            if hasattr(tool, "required_role") and tool.required_role:
+                if not current_user.has_role(tool.required_role):
+                    allowed = False
+            
+            if allowed:
                 visible_tools.append(tool)
 
         # Build user identity for the runner
@@ -154,7 +180,8 @@ async def handle_conversation(
         runner = AgentRunner(
             tools=visible_tools,
             user_identity=user_identity,
-            max_iterations=settings.AGENT_MAX_ITERATIONS
+            max_iterations=settings.AGENT_MAX_ITERATIONS,
+            mode=agent_mode
         )
         
         # Format history for runner
@@ -237,7 +264,8 @@ async def handle_conversation(
         
     except Exception as e:
         logger.error(f"Error in agent conversation: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        # Don't expose usage internal errors to the client
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing your request.")
 
 @router.get("/health")
 async def agent_health():

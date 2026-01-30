@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.tools.get_catalog_list import GetCatalogListTool
+from app.tools.self_service.get_catalog_list import GetCatalogListTool
 from app.core.exceptions import RetryableError
 
 class MockCatalog:
@@ -17,7 +17,7 @@ class TestGetCatalogListTool:
     
     @pytest.fixture
     def tool(self):
-        with patch("app.tools.get_catalog_list.DatabricksProvider") as MockProvider:
+        with patch("app.tools.self_service.get_catalog_list.DatabricksProvider") as MockProvider:
             mock_instance = MockProvider.return_value
             tool = GetCatalogListTool()
             tool._provider = mock_instance

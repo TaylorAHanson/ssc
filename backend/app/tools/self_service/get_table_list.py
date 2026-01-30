@@ -28,7 +28,7 @@ class GetTableListTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "Lists all tables within a specified catalog and schema in Unity Catalog, including their descriptions/comments. Use this to help users discover specific datasets."
+        return "Lists all tables within a specified catalog and schema in Unity Catalog, including their descriptions/comments. Use this to help users discover specific datasets. NEXT STEP: If the user needs access, proceed to the 'Request Data Access' workflow."
 
     @property
     def input_schema(self) -> Dict[str, Any]:

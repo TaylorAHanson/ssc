@@ -9,6 +9,8 @@ from app.core.retry import retry_on_retryable
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
 import logging
+import asyncio
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -83,60 +85,94 @@ class DatabricksProvider(BaseProvider):
 
     
     @retry_on_retryable(max_attempts=3)
-    async def execute_sql(self, query: str, warehouse: Optional[str] = None) -> Dict[str, Any]:
+    async def execute_sql(self, query: str, warehouse: Optional[str] = None, timeout_seconds: int = 120) -> Dict[str, Any]:
         """
-        Execute SQL query using Databricks SDK.
+        Execute SQL query using Databricks SDK with async polling.
         
         Args:
             query: SQL query to execute
             warehouse: SQL warehouse ID (optional, falls back to default if configured)
+            timeout_seconds: Max seconds to wait for completion (default 120)
             
         Returns:
             Dictionary with 'rows' and 'schema'
         """
         try:
             # use the statement execution API
-            # Ideally we would use a warehouse_id from config if not provided
             warehouse_id = warehouse or self.get_config("warehouse_id")
             
             if not warehouse_id:
-                # If no warehouse ID, we might try to use the workspace client's default mechanism 
-                # or raise error if it requires one. 
-                # For now let's assume one is needed for SQL execution via SDK usually.
-                # However, for 'SHOW CATALOGS' sometimes we can use the Unity Catalog API directly,
-                # but the request asked for executeSql.
                 raise ValueError("warehouse_id is required for SQL execution")
 
-            # Execute the statement
-            response = self.client.statement_execution.execute_statement(
+            # Execute the statement in ASYNC mode (wait_timeout="0s")
+            response = await asyncio.to_thread(
+                self.client.statement_execution.execute_statement,
                 statement=query,
                 warehouse_id=warehouse_id,
-                wait_timeout="50s" # Wait up to 50s for result
+                wait_timeout="0s" 
             )
             
-            # If we need to wait more, the SDK usually handles it if we use the right method,
-            # or `execute_statement` might return a handle we need to poll.
-            # actually databricks-sdk `execute_statement` waits by default if proper params are set, 
-            # or returns a response we can check. 
-            # Let's verify SDK usage. Since I can't browse, I will assume standard synchronous-wait behavior 
-            # or simple response parsing. 
+            statement_id = response.statement_id
+            
+            # Polling loop
+            start_time = time.time()
+            final_response = None
+            
+            while True:
+                # Check timeout
+                if (time.time() - start_time) > timeout_seconds:
+                    # Cancel query if timed out
+                    try:
+                        await asyncio.to_thread(self.client.statement_execution.cancel_execution, statement_id)
+                    except:
+                        pass
+                    raise RetryableError(f"SQL execution timed out after {timeout_seconds}s")
+                
+                # Get status
+                status_resp = await asyncio.to_thread(self.client.statement_execution.get_statement, statement_id)
+                state = status_resp.status.state.value # Enum to string
+                
+                if state == "SUCCEEDED":
+                    final_response = status_resp
+                    break
+                elif state in ["FAILED", "CANCELED", "CLOSED"]:
+                    error_msg = f"SQL execution failed with state {state}"
+                    if status_resp.status.error:
+                        error_msg += f": {status_resp.status.error.message}"
+                    raise RetryableError(error_msg)
+                else:
+                    # RUNNING, PENDING
+                    await asyncio.sleep(1)
             
             # Simplified result parsing
-            # Note: response structure depends on SDK version. 
-            # Trying standard path: response.result.data_array for data
-            # And: response.manifest.schema.columns for schema (metadata often in manifest)
-            
-            rows = []
-            if response.result and response.result.data_array:
-                rows = [row.as_dict() for row in response.result.data_array]
-            
+            # Extract columns first
             columns = []
-            # Try to get schema from manifest (usual location) or result (older SDKs?)
-            if response.manifest and response.manifest.schema and response.manifest.schema.columns:
-                columns = [col.name for col in response.manifest.schema.columns]
-            elif response.result and hasattr(response.result, 'schema') and response.result.schema:
-                columns = [col.name for col in response.result.schema.columns]
-                
+            if final_response.manifest and final_response.manifest.schema and final_response.manifest.schema.columns:
+                columns = [col.name for col in final_response.manifest.schema.columns]
+            elif final_response.result and hasattr(final_response.result, 'schema') and final_response.result.schema:
+                columns = [col.name for col in final_response.result.schema.columns]
+
+            # Map rows to columns
+            rows = []
+            if final_response.result and final_response.result.data_array:
+                for row in final_response.result.data_array:
+                    # Case 1: row is already a dict (unlikely based on error)
+                    if isinstance(row, dict):
+                        rows.append(row)
+                    # Case 2: row is an object with as_dict (old SDK?)
+                    elif hasattr(row, 'as_dict'):
+                        rows.append(row.as_dict())
+                    # Case 3: row is a list of values (common SQL API)
+                    elif isinstance(row, list) and columns:
+                        rows.append(dict(zip(columns, row)))
+                    # Case 4: row is a list but no columns known
+                    elif isinstance(row, list):
+                        # Fallback to index keys if no schema
+                        rows.append({f"col_{i}": v for i, v in enumerate(row)})
+                    else:
+                        # Fallback for unknown type
+                        rows.append(row)
+            
             result = {
                 "rows": rows,
                 "schema": columns

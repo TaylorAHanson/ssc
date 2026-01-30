@@ -28,7 +28,7 @@ class GetSchemaListTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "Lists all schemas within a specified catalog in Unity Catalog, including their descriptions/comments. Use this to explore the structure of a catalog."
+        return "Lists all schemas within a specified catalog in Unity Catalog, including their descriptions/comments. Use this to explore the structure of a catalog. NEXT STEP: Use 'get_table_list' to find datasets within a schema."
 
     @property
     def input_schema(self) -> Dict[str, Any]:
