@@ -6,6 +6,7 @@ from app.tools.execute_workflow import ExecuteWorkflowTool
 from app.tools.self_service.search_requests import SearchRequestsTool
 from app.tools.self_service.search_approvals import SearchApprovalsTool
 from app.tools.self_service.search_user_entitlements import SearchUserEntitlementsTool
+from app.tools.self_service.search_events import SearchEventsTool
 
 # FinOps Tools
 from app.tools.finops.get_cost_summary import GetCostSummaryTool
@@ -42,7 +43,8 @@ AVAILABLE_TOOLS = [
     CheckOverprovisionedUsersTool(),
     CheckOrphanedAssetsTool(),
     CheckAssetQualityTool(),
-    ListWorkspacesTool()
+    ListWorkspacesTool(),
+    SearchEventsTool()
 ]
 
 def get_read_only_tools():
