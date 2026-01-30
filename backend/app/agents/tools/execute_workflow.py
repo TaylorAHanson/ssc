@@ -21,6 +21,9 @@ class ExecuteWorkflowTool(BaseTool):
         """
         Create a request and trigger the workflow state machine.
         """
+        # Get user email from injected context
+        user_email = kwargs.get("_user_email")
+        
         db = get_lakebase_session()
         try:
             # Generate Request ID
@@ -38,6 +41,7 @@ class ExecuteWorkflowTool(BaseTool):
                 current_state="pending",
                 state_context=parameters,
                 conversation=conversation_history,  # Save chat history
+                requester_email=user_email,  # Set requester for permission filtering
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
             )
