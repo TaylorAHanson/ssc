@@ -136,6 +136,10 @@ class AgentRunner:
                         # Inject OBO token if provided
                         if obo_token:
                             fn_args["_obo_token"] = obo_token
+                        
+                        # Inject user identity for tools that need it (e.g., execute_workflow)
+                        if self.user_identity:
+                            fn_args["_user_email"] = self.user_identity.get("email")
                             
                         result = await matching_tool.execute(**fn_args)
                         tool_outputs.append({
