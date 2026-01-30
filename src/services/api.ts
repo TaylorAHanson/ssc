@@ -9,6 +9,9 @@ import type {
 
 import { useUserStore } from '../stores/userStore';
 
+// API Base URL - set via VITE_API_BASE_URL environment variable at build time
+// For production: /api/v1 (relative)
+// For local dev: http://localhost:8000/api/v1
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
 
 /**

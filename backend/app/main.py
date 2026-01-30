@@ -3,10 +3,10 @@ FastAPI main application entry point for ATLAS backend.
 
 This application runs as a Databricks App.
 """
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from app.api.v1 import router as api_router
 from app.core.config import settings
 import asyncio
@@ -29,7 +29,45 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     description=settings.DESCRIPTION,
     version=settings.VERSION,
+    # Disable automatic trailing slash redirects - they cause issues with reverse proxies
+    # because FastAPI constructs redirect URLs using localhost instead of the actual host
+    redirect_slashes=False,
 )
+
+# Static directory definition
+STATIC_DIR = Path(__file__).parent.parent / "static"
+
+@app.exception_handler(404)
+async def spa_fallback_handler(request: Request, exc):
+    """
+    Catch-all 404 handler to support SPA deep linking.
+    If a route isn't found, we serve index.html unless it's an API route.
+    """
+    path = request.url.path
+    
+    # Don't intercept API or health routes - let them return real 404s
+    if path.startswith("/api/") or path == "/health" or path.startswith("/.auth/"):
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "Not found"}
+        )
+    
+    # If the file exists physically in static folder, serve it (should have been caught by StaticFiles)
+    # This is a safety check
+    local_path = STATIC_DIR / path.lstrip("/")
+    if local_path.exists() and local_path.is_file():
+        return FileResponse(str(local_path))
+    
+    # Fallback to index.html for all other routes (the SPA will handle routing)
+    index_path = STATIC_DIR / "index.html"
+    if index_path.exists():
+        logger.info(f"404 intercepted for {path}. Serving SPA index.html")
+        return FileResponse(str(index_path))
+    
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={"detail": "Frontend not found"}
+    )
 
 @app.on_event("startup")
 async def startup_event():
@@ -63,21 +101,31 @@ app.include_router(api_router, prefix="/api/v1")
 async def health():
     """Detailed health check endpoint."""
     from app.db.session import get_database_url
-    db_type = "SQLite" if "sqlite" in get_database_url() else "Lakebase (PostgreSQL)"
+    from app.core.config import settings
+    url = get_database_url()
+    db_type = "SQLite" if "sqlite" in url else "Lakebase (PostgreSQL)"
+    
+    # Mask URL for safe display
+    masked_url = url
+    if "@" in url:
+        parts = url.split("@")
+        prefix = parts[0].split(":")
+        if len(prefix) > 2:
+            masked_url = f"{prefix[0]}:{prefix[1]}:****@{parts[1]}"
     
     return {
         "status": "healthy",
         "service": "atlas-api",
         "platform": "Databricks App",
-        "version": "1.0.0",
-        "database": db_type,
-        "workers": "Background Poller"
+        "database_type": db_type,
+        "database_url": masked_url,
+        "env_db_host": settings.DATABASE_HOST,
+        "env_db_user": settings.DATABASE_USER
     }
 
 
 # Static file serving for frontend (production mode)
 # The frontend is built and placed in the 'static' directory by CI/CD
-STATIC_DIR = Path(__file__).parent.parent / "static"
 
 if STATIC_DIR.exists():
     logger.info(f"Serving static files from: {STATIC_DIR}")
@@ -95,26 +143,6 @@ if STATIC_DIR.exists():
         if index_path.exists():
             return FileResponse(str(index_path))
         return {"status": "ok", "message": "ATLAS API", "frontend": "index.html not found"}
-    
-    # Handle all non-API routes for SPA routing
-    @app.get("/{full_path:path}")
-    async def serve_spa(request: Request, full_path: str):
-        """Serve the SPA frontend for all non-API routes."""
-        # Don't intercept API or health routes
-        if full_path.startswith("api/") or full_path == "health":
-            return {"error": "Not found"}
-        
-        # Try to serve the exact file first
-        file_path = STATIC_DIR / full_path
-        if file_path.exists() and file_path.is_file():
-            return FileResponse(str(file_path))
-        
-        # For all other routes, serve index.html (SPA routing)
-        index_path = STATIC_DIR / "index.html"
-        if index_path.exists():
-            return FileResponse(str(index_path))
-        
-        return {"error": "Frontend not found"}
 else:
     logger.info("Static directory not found - running in API-only mode")
     
@@ -125,7 +153,6 @@ else:
             "status": "ok",
             "message": "ATLAS API is running",
             "platform": "Databricks App",
-            "version": "1.0.0",
+            "version": settings.VERSION,
             "frontend": "Not deployed - static directory not found"
         }
-

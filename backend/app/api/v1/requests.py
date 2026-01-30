@@ -24,8 +24,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("")
-@router.get("/", response_model=List[Request])
+@router.get("", response_model=List[Request])
 async def get_requests(
     skip: int = 0,
     limit: int = 100,
@@ -91,9 +90,18 @@ async def get_request(
     db: Session = Depends(get_db)
 ):
     """Get a specific request by ID."""
+    from app.db.session import get_database_url
+    db_url = get_database_url()
+    logger.info(f"[GET /requests/{request_id}] Using database: {db_url[:50]}...")
+    
     request_model = RequestService.get_request(db, request_id)
     if not request_model:
+        # Debug: List all request IDs to see what's in the DB
+        all_requests = db.query(RequestModel).limit(10).all()
+        logger.error(f"[GET /requests/{request_id}] ❌ NOT FOUND. Existing requests: {[r.id for r in all_requests]}")
         raise HTTPException(status_code=404, detail="Request not found")
+    
+    logger.info(f"[GET /requests/{request_id}] ✅ Found request")
         
     # Check permission
     if not current_user.has_role("platform_admin") and request_model.requester_email != current_user.email:
@@ -153,8 +161,7 @@ async def get_request_status(
     }
 
 
-@router.post("")
-@router.post("/", response_model=dict, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_request(
     request_data: RequestCreate,
     current_user: UserModel = Depends(get_current_user),
@@ -276,6 +283,7 @@ async def reject_request(
 @router.delete("/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_request(
     request_id: str,
+    current_user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Delete a request."""

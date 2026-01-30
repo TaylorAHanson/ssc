@@ -14,8 +14,7 @@ from app.db.user import UserModel
 
 router = APIRouter()
 
-@router.get("")
-@router.get("/", response_model=List[Delegation])
+@router.get("", response_model=List[Delegation])
 async def get_delegations(
     delegator_email: Optional[str] = None,
     delegatee_email: Optional[str] = None,
@@ -54,8 +53,7 @@ async def get_delegations(
         ) for d in results
     ]
 
-@router.post("")
-@router.post("/", response_model=Delegation)
+@router.post("", response_model=Delegation)
 async def create_delegation(
     delegation_in: DelegationCreate,
     current_user: UserModel = Depends(get_current_user),
@@ -107,4 +105,3 @@ async def delete_delegation(
     db.commit()
     
     return {"status": "deleted"}
-
