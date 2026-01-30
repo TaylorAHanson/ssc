@@ -162,6 +162,10 @@ class Settings(BaseSettings):
     AGENT_MAX_ITERATIONS: int = 10
     AGENT_TIMEOUT_SECONDS: int = 60
     
+    # Calendar Settings
+    EVENT_CALENDAR_URL: str = ""
+    EVENT_SYNC_INTERVAL_MINUTES: int = 60
+    
     # Retry Settings
     DEFAULT_MAX_RETRIES: int = 3
     TERRAFORM_MAX_RETRIES: int = 2
@@ -206,6 +210,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 settings = Settings()
