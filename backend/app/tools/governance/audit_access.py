@@ -51,7 +51,7 @@ class AuditUserAccessTool(BaseTool):
             "required": ["user_email", "catalog"]
         }
 
-    async def execute(self, user_email: str, catalog: str) -> Dict[str, Any]:
+    async def execute(self, user_email: str, catalog: str, **kwargs) -> Dict[str, Any]:
         try:
             # We need to query system.information_schema tables for grants to this user OR groups they belong to.
             # Strategy: Query a few key views in `system.information_schema`.

@@ -47,7 +47,7 @@ class DoesCatalogExistTool(BaseTool):
             "required": ["catalog_name"]
         }
 
-    async def execute(self, catalog_name: str) -> Dict[str, Any]:
+    async def execute(self, catalog_name: str, **kwargs) -> Dict[str, Any]:
         """
         Check if catalog exists.
         

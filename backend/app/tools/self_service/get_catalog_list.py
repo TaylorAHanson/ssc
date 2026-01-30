@@ -38,7 +38,7 @@ class GetCatalogListTool(BaseTool):
             "required": []
         }
 
-    async def execute(self) -> Dict[str, Any]:
+    async def execute(self, **kwargs) -> Dict[str, Any]:
         """
         Fetch the list of catalogs along with their descriptions.
         """
@@ -51,7 +51,8 @@ class GetCatalogListTool(BaseTool):
                     "name": catalog.name,
                     "comment": catalog.comment or "No description provided",
                     "catalog_type": catalog.catalog_type.value if hasattr(catalog.catalog_type, 'value') else str(catalog.catalog_type),
-                    "owner": catalog.owner
+                    "owner": catalog.owner,
+                    "properties": catalog.properties or {}
                 })
             
             return {
