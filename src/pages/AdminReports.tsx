@@ -12,6 +12,7 @@ import {
 } from '../services/api';
 import type { ReportSubscription, ReportSubscriptionCreate, ExecutionSummary, PromptDef } from '../types';
 import { format } from 'date-fns';
+import cronstrue from 'cronstrue';
 
 export function AdminReports() {
     const [subscriptions, setSubscriptions] = useState<ReportSubscription[]>([]);
@@ -136,6 +137,14 @@ export function AdminReports() {
         );
     }
 
+    const getCronDescription = (cron: string) => {
+        try {
+            return cronstrue.toString(cron);
+        } catch (e) {
+            return 'Invalid cron expression';
+        }
+    };
+
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -195,6 +204,9 @@ export function AdminReports() {
                                         placeholder="0 9 * * *"
                                         required
                                     />
+                                    <p className="text-xs text-blue-600 mt-1">
+                                        {getCronDescription(formData.schedule_cron)}
+                                    </p>
                                 </div>
                             </div>
 
@@ -272,7 +284,8 @@ export function AdminReports() {
                                             {!sub.is_active && <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">Inactive</span>}
                                         </h3>
                                         <p className="text-sm text-gray-500 mt-1">
-                                            Schedule: <code className="bg-gray-100 px-1 rounded">{sub.schedule_cron}</code> •
+                                            Schedule: <code className="bg-gray-100 px-1 rounded">{sub.schedule_cron}</code>
+                                            <span className="text-xs text-blue-600 ml-2 italic">({getCronDescription(sub.schedule_cron)})</span> •
                                             Next Run: {sub.next_run_at ? format(new Date(sub.next_run_at), 'MMM d, HH:mm') : 'N/A'}
                                         </p>
                                         <p className="text-sm text-gray-500 mt-1">
