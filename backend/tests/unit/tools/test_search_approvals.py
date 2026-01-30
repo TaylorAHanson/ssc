@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch
-from app.tools.search_approvals import SearchApprovalsTool
+from app.tools.self_service.search_approvals import SearchApprovalsTool
 from tests.factories.request_factory import RequestFactory
 from tests.factories.approval_factory import ApprovalFactory
 
@@ -8,7 +8,7 @@ class TestSearchApprovalsTool:
     
     @pytest.fixture
     def tool(self, db_session):
-        with patch("app.tools.search_approvals.get_lakebase_session", return_value=db_session):
+        with patch("app.tools.self_service.search_approvals.get_lakebase_session", return_value=db_session):
             yield SearchApprovalsTool()
 
     @pytest.mark.asyncio

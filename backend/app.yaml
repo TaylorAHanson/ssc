@@ -6,6 +6,18 @@ command:
   - run.py
    
 env:
+  # Database Configuration (Lakebase - PostgreSQL)
+  # Password is fetched automatically from Databricks secrets using the app's service principal
+  - name: DATABASE_HOST
+    value: "instance-83344571-9f1d-49b2-a400-f0eda63bfcda.database.cloud.databricks.com"
+  - name: DATABASE_PORT
+    value: "5432"
+  - name: DATABASE_NAME
+    value: "databricks_postgres"
+  - name: DATABASE_USER
+    value: "edas_app"
+  
+  # Databricks Configuration
   - name: DATABRICKS_WAREHOUSE_ID
     value: "5c5e40da3caf812c"
   - name: MODEL_SERVING_AGENT_LLM_ENDPOINT

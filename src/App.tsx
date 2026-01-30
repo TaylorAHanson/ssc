@@ -9,6 +9,7 @@ import { Training } from './pages/Training';
 import { Events } from './pages/Events';
 import { ReusableAssets } from './pages/ReusableAssets';
 import { CommunityLinks } from './pages/CommunityLinks';
+import { AdminReports } from './pages/AdminReports';
 import { useBrandingStore } from './stores/brandingStore';
 import { useRequestStore } from './stores/requestStore';
 import { useUserStore } from './stores/userStore';
@@ -42,6 +43,14 @@ function App() {
             element={
               <ProtectedRoute allowedPersonas={['Platform Admin']}>
                 <Admin />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/reports"
+            element={
+              <ProtectedRoute allowedPersonas={['Platform Admin']}>
+                <AdminReports />
               </ProtectedRoute>
             }
           />

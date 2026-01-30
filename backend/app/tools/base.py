@@ -29,6 +29,15 @@ class BaseTool(ABC):
         """JSON schema for tool input."""
         pass
 
+    @property
+    def required_role(self) -> Optional[str]:
+        """
+        Optional role required to execute this tool.
+        If None, the tool is available to all users (subject to other checks).
+        Example: 'platform_admin', 'finance_admin'
+        """
+        return None
+
     @abstractmethod
     async def execute(self, *args, **kwargs) -> Dict[str, Any]:
         """

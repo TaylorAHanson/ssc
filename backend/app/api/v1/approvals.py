@@ -13,8 +13,7 @@ from app.db.user import UserModel
 router = APIRouter()
 
 
-@router.get("")
-@router.get("/", response_model=List[Approval])
+@router.get("", response_model=List[Approval])
 async def get_approvals(
     status: Optional[str] = None,
     current_user: UserModel = Depends(get_current_user),
@@ -98,4 +97,3 @@ async def get_approval(
         delegatedTo=approval_model.delegated_to,
         delegatedToEmail=approval_model.delegated_to_email
     )
-

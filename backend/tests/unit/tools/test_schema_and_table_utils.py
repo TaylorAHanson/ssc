@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from app.tools.get_schema_list import GetSchemaListTool
-from app.tools.get_table_list import GetTableListTool
+from app.tools.self_service.get_schema_list import GetSchemaListTool
+from app.tools.self_service.get_table_list import GetTableListTool
 from app.core.exceptions import RetryableError
 
 class MockSchema:
@@ -27,7 +27,7 @@ class MockTable:
 class TestGetSchemaListTool:
     @pytest.fixture
     def tool(self):
-        with patch("app.tools.get_schema_list.DatabricksProvider") as MockProvider:
+        with patch("app.tools.self_service.get_schema_list.DatabricksProvider") as MockProvider:
             tool = GetSchemaListTool()
             tool._provider = MockProvider.return_value
             return tool
@@ -48,7 +48,7 @@ class TestGetSchemaListTool:
 class TestGetTableListTool:
     @pytest.fixture
     def tool(self):
-        with patch("app.tools.get_table_list.DatabricksProvider") as MockProvider:
+        with patch("app.tools.self_service.get_table_list.DatabricksProvider") as MockProvider:
             tool = GetTableListTool()
             tool._provider = MockProvider.return_value
             return tool

@@ -1,13 +1,13 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.tools.catalog_existence import DoesCatalogExistTool
+from app.tools.self_service.catalog_existence import DoesCatalogExistTool
 from app.core.exceptions import RetryableError
 
 class TestDoesCatalogExistTool:
     
     @pytest.fixture
     def tool(self):
-        with patch("app.tools.catalog_existence.DatabricksProvider") as MockProvider:
+        with patch("app.tools.self_service.catalog_existence.DatabricksProvider") as MockProvider:
             # Setup the mock provider instance
             mock_instance = MockProvider.return_value
             tool = DoesCatalogExistTool()

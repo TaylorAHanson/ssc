@@ -33,6 +33,7 @@ class RequestType(str, Enum):
     DATA_ACCESS_REQUEST = "data_access_request"
     SIMPLE_EMAIL = "simple_email"
     CAMPAIGN = "campaign"
+    REPORT_EXECUTION = "report_execution"
 
 
 class Environment(str, Enum):

@@ -290,7 +290,12 @@ export function Home() {
   const [query, setQuery] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [conversationState, setConversationState] = useState<ConversationState | null>(null);
-  const [agentMode, setAgentMode] = useState<AgentMode>('Self Service Agent');
+  const [agentMode, setAgentMode] = useState<AgentMode>(() => {
+    // Initialize from localStorage directly to avoid race conditions
+    const savedMode = localStorage.getItem('atlas_agent_mode');
+    return (savedMode as AgentMode) || 'Self Service Agent';
+  });
+
   const [showModeDropdown, setShowModeDropdown] = useState(false);
   const currentPersona = useUserStore((state) => state.currentPersona);
   const navigate = useNavigate();
@@ -298,6 +303,7 @@ export function Home() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { brandName, brandLogoUrl } = useBrandingStore();
+  const isInitialized = useUserStore((state) => state.isInitialized);
 
   const adjustHeight = (el: HTMLTextAreaElement) => {
     el.style.height = 'auto';
@@ -307,11 +313,12 @@ export function Home() {
   const handleReset = () => {
     setConversationState(null);
     setQuery('');
-    setAgentMode('Self Service Agent');
+    // Ensure we KEEP the current mode
+    // setAgentMode('Self Service Agent');
     setIsProcessing(false);
     localStorage.removeItem('atlas_conversation_state');
-    localStorage.removeItem('atlas_agent_mode');
-    // Focus the initial textarea after a short delay to allow the state change to render
+    // localStorage.removeItem('atlas_agent_mode');
+
     setTimeout(() => {
       const initialTextarea = document.querySelector('textarea');
       if (initialTextarea instanceof HTMLTextAreaElement) {
@@ -320,13 +327,12 @@ export function Home() {
     }, 100);
   };
 
-  // Load state from localStorage on mount
+  // Load state from localStorage on mount (Conversation Only)
   useEffect(() => {
     const savedState = localStorage.getItem('atlas_conversation_state');
     if (savedState) {
       try {
         const parsedState = JSON.parse(savedState);
-        // Convert timestamp strings back to Date objects
         if (parsedState.messages) {
           parsedState.messages = parsedState.messages.map((m: any) => ({
             ...m,
@@ -338,12 +344,7 @@ export function Home() {
         console.error('Failed to parse saved conversation state', e);
       }
     }
-
-    const savedMode = localStorage.getItem('atlas_agent_mode');
-    if (savedMode) {
-      setAgentMode(savedMode as AgentMode);
-    }
-  }, []);
+  }, []); // Only run once on mount
 
   // Persist state to localStorage
   useEffect(() => {
@@ -353,12 +354,16 @@ export function Home() {
     localStorage.setItem('atlas_agent_mode', agentMode);
   }, [conversationState, agentMode]);
 
-  // Reset agent mode if current persona no longer allows it
+  // Reset agent mode only if current persona explicitly FORBIDS it
   useEffect(() => {
-    if (!MODE_PERMISSIONS[agentMode].includes(currentPersona)) {
-      setAgentMode('Self Service Agent');
+    if (isInitialized && currentPersona && MODE_PERMISSIONS[agentMode]) {
+      if (!MODE_PERMISSIONS[agentMode].includes(currentPersona)) {
+        // If the user's persona doesn't allow this mode, reset to Self Service
+        console.warn(`Resetting mode from ${agentMode} because persona ${currentPersona} does not allow it.`);
+        setAgentMode('Self Service Agent');
+      }
     }
-  }, [currentPersona, agentMode]);
+  }, [currentPersona, agentMode, isInitialized]);
 
   // Close dropdown when clicking outside
   useEffect(() => {

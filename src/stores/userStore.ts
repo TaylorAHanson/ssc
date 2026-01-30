@@ -9,6 +9,7 @@ interface UserState {
     users: User[];
     roles: Role[];
     isLoading: boolean;
+    isInitialized: boolean;
     error: string | null;
 
     fetchCurrentUser: () => Promise<void>;
@@ -55,6 +56,8 @@ export const useUserStore = create<UserState>()(
                 await get().fetchCurrentUser();
             },
 
+            isInitialized: false,
+
             setRoleOverride: async (role: string | null) => {
                 set({ activeRoleOverride: role });
                 await get().fetchCurrentUser();
@@ -77,10 +80,24 @@ export const useUserStore = create<UserState>()(
                     set({
                         currentUser: user,
                         currentPersona: derivePersona(user),
-                        isLoading: false
+                        isLoading: false,
+                        isInitialized: true,
+                        error: null
                     });
                 } catch (error: any) {
-                    set({ error: error.message, isLoading: false });
+                    const isDefinitiveError =
+                        error.message.includes('401') ||
+                        error.message.includes('404') ||
+                        error.message.includes('Unauthorized');
+
+                    set({
+                        error: error.message,
+                        isLoading: false,
+                        isInitialized: isDefinitiveError
+                    });
+
+                    // Log the error for debugging reset issues
+                    console.error('[userStore] Fetch current user failed:', error.message);
                 }
             },
 

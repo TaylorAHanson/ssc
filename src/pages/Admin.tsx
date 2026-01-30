@@ -6,7 +6,8 @@ import { Textarea } from '../components/ui/textarea';
 import { Input } from '../components/ui/input';
 import {
   Save, Loader2, Clock, RotateCcw, FileText,
-  Activity, CheckCircle2, FileStack, TrendingUp, ToggleLeft, Search
+  Activity, CheckCircle2, FileStack, TrendingUp, ToggleLeft, Search,
+  ChevronUp, ChevronDown
 } from 'lucide-react';
 import { format, subDays, isAfter } from 'date-fns';
 import {
@@ -51,6 +52,13 @@ export function Admin() {
   const [isLoadingFeatures, setIsLoadingFeatures] = useState(false);
   const [updatingFeatures, setUpdatingFeatures] = useState<Set<string>>(new Set());
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState('');
+
+  // Dashboard requests search and sort state
+  const [dashboardSearchQuery, setDashboardSearchQuery] = useState('');
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>({
+    key: 'createdAt',
+    direction: 'desc'
+  });
 
   // Load content on tab change
   useEffect(() => {
@@ -279,6 +287,53 @@ export function Admin() {
     setSelectedWorkspace(workspaceId);
   };
 
+  const handleSort = (key: string) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const filteredRequests = requests.filter(request => {
+    const query = dashboardSearchQuery.toLowerCase();
+    return (
+      request.id.toLowerCase().includes(query) ||
+      request.title.toLowerCase().includes(query) ||
+      request.type.toLowerCase().includes(query) ||
+      request.status.toLowerCase().includes(query) ||
+      (request.requester_email || '').toLowerCase().includes(query) ||
+      (request.metadata?.requested_by || '').toLowerCase().includes(query)
+    );
+  });
+
+  const sortedRequests = [...filteredRequests].sort((a, b) => {
+    if (!sortConfig) return 0;
+
+    const { key, direction } = sortConfig;
+    let aValue: any = a[key as keyof typeof a];
+    let bValue: any = b[key as keyof typeof b];
+
+    // Handle dates
+    if (key === 'createdAt' || key === 'updatedAt') {
+      aValue = new Date(aValue).getTime();
+      bValue = new Date(bValue).getTime();
+    }
+
+    if (aValue < bValue) return direction === 'asc' ? -1 : 1;
+    if (aValue > bValue) return direction === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  const SortIcon = ({ column }: { column: string }) => {
+    if (!sortConfig || sortConfig.key !== column) {
+      return <ChevronUp className="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />;
+    }
+    return sortConfig.direction === 'asc'
+      ? <ChevronUp className="w-4 h-4 text-primary" />
+      : <ChevronDown className="w-4 h-4 text-primary" />;
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -411,29 +466,104 @@ export function Admin() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Activity className="w-5 h-5" />
-                All Requests
-              </CardTitle>
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <CardTitle className="flex items-center gap-2">
+                  <Activity className="w-5 h-5" />
+                  All Requests
+                </CardTitle>
+                <div className="relative w-full md:w-64">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                  <Input
+                    type="text"
+                    placeholder="Search requests..."
+                    value={dashboardSearchQuery}
+                    onChange={(e) => setDashboardSearchQuery(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
-              {requests.length === 0 ? (
-                <p className="text-gray-500 text-center py-8">No requests found</p>
+              {sortedRequests.length === 0 ? (
+                <div className="py-12 text-center">
+                  <p className="text-gray-500">
+                    {dashboardSearchQuery ? "No results matching your search" : "No requests found"}
+                  </p>
+                  {dashboardSearchQuery && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => setDashboardSearchQuery('')}
+                      className="mt-2 text-primary"
+                    >
+                      Clear Search
+                    </Button>
+                  )}
+                </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-gray-200">
-                        <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">ID</th>
-                        <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Title</th>
-                        <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Type</th>
-                        <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Status</th>
-                        <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Created</th>
-                        <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Updated</th>
+                        <th
+                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
+                          onClick={() => handleSort('id')}
+                        >
+                          <div className="flex items-center gap-1">
+                            ID <SortIcon column="id" />
+                          </div>
+                        </th>
+                        <th
+                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
+                          onClick={() => handleSort('title')}
+                        >
+                          <div className="flex items-center gap-1">
+                            Title <SortIcon column="title" />
+                          </div>
+                        </th>
+                        <th
+                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
+                          onClick={() => handleSort('type')}
+                        >
+                          <div className="flex items-center gap-1">
+                            Type <SortIcon column="type" />
+                          </div>
+                        </th>
+                        <th
+                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
+                          onClick={() => handleSort('status')}
+                        >
+                          <div className="flex items-center gap-1">
+                            Status <SortIcon column="status" />
+                          </div>
+                        </th>
+                        <th
+                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
+                          onClick={() => handleSort('requester_email')}
+                        >
+                          <div className="flex items-center gap-1">
+                            Requested By <SortIcon column="requester_email" />
+                          </div>
+                        </th>
+                        <th
+                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
+                          onClick={() => handleSort('createdAt')}
+                        >
+                          <div className="flex items-center gap-1">
+                            Created <SortIcon column="createdAt" />
+                          </div>
+                        </th>
+                        <th
+                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
+                          onClick={() => handleSort('updatedAt')}
+                        >
+                          <div className="flex items-center gap-1">
+                            Updated <SortIcon column="updatedAt" />
+                          </div>
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {requests.map((request) => (
+                      {sortedRequests.map((request) => (
                         <tr key={request.id} className="border-b border-gray-100 hover:bg-gray-50">
                           <td className="py-3 px-4 text-sm text-gray-600 font-mono">
                             {request.id.slice(0, 8)}...
@@ -449,6 +579,9 @@ export function Admin() {
                               }`}>
                               {request.status.replace(/_/g, ' ')}
                             </span>
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-600">
+                            {request.metadata?.requested_by || request.requester_email || '—'}
                           </td>
                           <td className="py-3 px-4 text-sm text-gray-600">
                             {format(new Date(request.createdAt), 'MMM d, yyyy HH:mm')}
