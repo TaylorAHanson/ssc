@@ -22,16 +22,18 @@ class AgentRunner:
         system_prompt: Optional[str] = None,
         tools: Optional[List[Any]] = None,
         user_identity: Optional[Dict[str, str]] = None,
-        max_iterations: int = 5
+        max_iterations: int = 5,
+        mode: str = "self_service"
     ):
         self.llm_client = AgentLLMClient()
         self.tools = tools or []
         self.max_iterations = max_iterations
         self.user_identity = user_identity or {}
+        self.mode = mode
         
         # Build standard system prompt if not provided
         if system_prompt is None:
-            self.system_prompt = get_agent_prompt(tools_override=self.tools)
+            self.system_prompt = get_agent_prompt(tools_override=self.tools, mode=self.mode)
             if self.user_identity:
                 id_str = "\n\nCURRENT USER IDENTITY:\n"
                 for k, v in self.user_identity.items():
@@ -51,18 +53,19 @@ class AgentRunner:
         Executes the agent loop for a single query.
         Returns the final standardized response.
         """
-        messages = [{"role": "system", "content": self.system_prompt}]
+        # Inject context into system prompt
+        current_system_prompt = self.system_prompt
+        if context:
+            ctx_str = "\n\nCURRENT CONTEXT:\n" + "\n".join([f"{k}: {v}" for k, v in context.items()])
+            current_system_prompt += ctx_str
+        
+        messages = [{"role": "system", "content": current_system_prompt}]
         
         if history:
             messages.extend(history)
             
         # Add current query
-        query_msg = query
-        if context:
-            ctx_str = "\n\nContext:\n" + "\n".join([f"{k}: {v}" for k, v in context.items()])
-            query_msg += ctx_str
-            
-        messages.append({"role": "user", "content": query_msg})
+        messages.append({"role": "user", "content": query})
         
         # Format tools for LLM
         formatted_tools = self._format_tools_for_llm(self.tools)

@@ -1,11 +1,25 @@
-from app.tools.catalog_existence import DoesCatalogExistTool
-from app.tools.get_catalog_list import GetCatalogListTool
-from app.tools.get_schema_list import GetSchemaListTool
-from app.tools.get_table_list import GetTableListTool
-from app.agents.tools.execute_workflow import ExecuteWorkflowTool
-from app.tools.search_requests import SearchRequestsTool
-from app.tools.search_approvals import SearchApprovalsTool
-from app.tools.search_user_entitlements import SearchUserEntitlementsTool
+from app.tools.self_service.catalog_existence import DoesCatalogExistTool
+from app.tools.self_service.get_catalog_list import GetCatalogListTool
+from app.tools.self_service.get_schema_list import GetSchemaListTool
+from app.tools.self_service.get_table_list import GetTableListTool
+from app.tools.execute_workflow import ExecuteWorkflowTool
+from app.tools.self_service.search_requests import SearchRequestsTool
+from app.tools.self_service.search_approvals import SearchApprovalsTool
+from app.tools.self_service.search_user_entitlements import SearchUserEntitlementsTool
+
+# FinOps Tools
+from app.tools.finops.get_cost_summary import GetCostSummaryTool
+from app.tools.finops.get_efficiency import GetResourceEfficiencyTool
+from app.tools.finops.check_tagging import CheckTaggingComplianceTool
+from app.tools.finops.get_forecast import GetForecastedSpendTool
+
+# Governance Tools
+from app.tools.governance.check_permissions import CheckObjectPermissionsTool
+from app.tools.governance.audit_access import AuditUserAccessTool
+from app.tools.governance.search_audit_logs import SearchAuditLogsTool
+from app.tools.governance.check_overprovisioning import CheckOverprovisionedUsersTool
+from app.tools.governance.check_orphans import CheckOrphanedAssetsTool
+from app.tools.governance.check_quality import CheckAssetQualityTool
 
 # Registry of available tools
 AVAILABLE_TOOLS = [
@@ -16,7 +30,17 @@ AVAILABLE_TOOLS = [
     ExecuteWorkflowTool(),
     SearchRequestsTool(),
     SearchApprovalsTool(),
-    SearchUserEntitlementsTool()
+    SearchUserEntitlementsTool(),
+    GetCostSummaryTool(),
+    GetResourceEfficiencyTool(),
+    CheckTaggingComplianceTool(),
+    GetForecastedSpendTool(),
+    CheckObjectPermissionsTool(),
+    AuditUserAccessTool(),
+    SearchAuditLogsTool(),
+    CheckOverprovisionedUsersTool(),
+    CheckOrphanedAssetsTool(),
+    CheckAssetQualityTool()
 ]
 
 def get_read_only_tools():

@@ -28,7 +28,7 @@ class GetCatalogListTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "Lists all available catalogs in the Databricks Unity Catalog, including their descriptions and comments. Use this to discover available catalogs or to find similar catalog names if a specific one is not found."
+        return "Lists all available catalogs in the Databricks Unity Catalog, including their descriptions and comments. Use this to discover available catalogs or to find similar catalog names if a specific one is not found. NEXT STEP: Use 'get_schema_list' to explore a specific catalog."
 
     @property
     def input_schema(self) -> Dict[str, Any]:

@@ -26,8 +26,8 @@ def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMac
         # Ensure we have a valid enum
         r_type = RequestType(request.type)
     except ValueError:
-        logger.warning(f"Invalid request type '{request.type}' for request {request.id}. Defaulting to WORKSPACE_PROVISION.")
-        r_type = RequestType.WORKSPACE_PROVISION
+        logger.error(f"Invalid request type '{request.type}' for request {request.id}")
+        raise ValueError(f"Invalid request type: {request.type}")
     
     if r_type == RequestType.WORKSPACE_PROVISION:
         return WorkspaceProvisionStateMachine(request, db)
@@ -67,5 +67,5 @@ def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMac
         return ReportExecutionStateMachine(request, db)
     
     # Fallback / Default for others (implement specific ones as needed)
-    return WorkspaceProvisionStateMachine(request, db)
+    raise ValueError(f"No state machine implemented for request type: {r_type}")
 

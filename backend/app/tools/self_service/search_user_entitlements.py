@@ -30,7 +30,7 @@ class SearchUserEntitlementsTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "Searches for user entitlements across Data (Unity Catalog), Workspace (Notebooks, Folders), and Compute resources. Can filter by entitlement type and resource name."
+        return "Searches for user entitlements across Data (Unity Catalog), Workspace (Notebooks, Folders), and Compute resources. Features: 1) Recursively searches workspace folders up to 5 levels deep. 2) Analyzes EFFECTIVE permissions, resolving both direct access and group inheritance (e.g., 'MANAGE' via 'Admin Group'). Use this to answer 'what do I have access to?' or 'can I access X?'."
 
     @property
     def input_schema(self) -> Dict[str, Any]:
