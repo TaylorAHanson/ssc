@@ -330,7 +330,6 @@ export function RequestStateList({ request }: { request: Request }) {
 
 export function Requests() {
   const requests = useRequestStore((state) => state.requests);
-  const isLoadingRequests = useRequestStore((state) => state.isLoadingRequests);
   const fetchRequests = useRequestStore((state) => state.fetchRequests);
   const deleteRequest = useRequestStore((state) => state.deleteRequest);
   const { requestId } = useParams();
@@ -377,16 +376,6 @@ export function Requests() {
       }
     }
   };
-
-  // Show loading state while fetching requests
-  if (isLoadingRequests && requests.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
-        <Loader2 className="w-12 h-12 animate-spin text-primary opacity-20" />
-        <p className="text-sm text-gray-500 animate-pulse">Loading your requests...</p>
-      </div>
-    );
-  }
 
   // We only show empty state if there are NO requests at all, not just if filter hides them
   if (requests.length === 0) {
