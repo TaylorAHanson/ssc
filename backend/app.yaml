@@ -25,14 +25,21 @@ env:
   - name: DEFAULT_ENVIRONMENT
     value: "dev"
   - name: GIT_USERNAME
-    value: "atlas-infra-bot[bot]"
+    value: "ATLAS Bot"
   - name: GIT_EMAIL
-    value: "atlas-infra-bot[bot]@users.noreply.github.com"
+    value: "atlas-bot@databricks.com"
   
-  # GitHub App Authentication (atlas-infra-bot)
-  # Private key is fetched at runtime from Databricks secrets (valueFrom doesn't handle multi-line PEM well)
+  # GitHub PAT Authentication (fallback, works with IP allowlist)
+  # Fetched at runtime from Databricks secrets
+  - name: GIT_TOKEN_SECRET_SCOPE
+    value: "atlas-hub"
+  - name: GIT_TOKEN_SECRET_KEY
+    value: "github-pat"
+  
+  # GitHub App Authentication (atlas-infra-bot) - blocked by org IP allowlist
+  # Kept for future use if IP allowlist is updated
   - name: GITHUB_APP_ID
-    value: "2770726"
+    value: ""
   - name: GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE
     value: "atlas-hub"
   - name: GITHUB_APP_PRIVATE_KEY_SECRET_KEY
