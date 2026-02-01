@@ -184,8 +184,10 @@ class Settings(BaseSettings):
     GIT_EMAIL: str = "atlas-bot@databricks.com"
     GIT_SSH_KEY_PATH: str = "" # Path to SSH key for git operations
     GIT_TOKEN: str = "" # GitHub personal access token for HTTPS auth (fallback)
+    GIT_TOKEN_SECRET_SCOPE: str = ""  # Databricks secret scope for PAT
+    GIT_TOKEN_SECRET_KEY: str = ""  # Secret key name for PAT
     
-    # GitHub App Authentication (preferred over PAT)
+    # GitHub App Authentication (blocked by org IP allowlist, kept for future)
     GITHUB_APP_ID: str = "" # GitHub App ID
     GITHUB_APP_PRIVATE_KEY: str = "" # PEM-encoded private key (store in secrets)
     GITHUB_APP_INSTALLATION_ID: str = "" # Optional: specific installation ID
@@ -218,6 +220,46 @@ class Settings(BaseSettings):
     
     # Cache for runtime-fetched secrets
     _github_app_private_key_cached: str = ""
+    _git_token_cached: str = ""
+    
+    def get_git_token(self) -> str:
+        """
+        Get GitHub PAT, fetching from Databricks secrets at runtime if needed.
+        """
+        # If already set via env var, use it
+        if self.GIT_TOKEN:
+            return self.GIT_TOKEN
+        
+        # If we already fetched it, return cached value
+        if self._git_token_cached:
+            return self._git_token_cached
+        
+        # Try to fetch from Databricks secrets at runtime
+        if self.GIT_TOKEN_SECRET_SCOPE and self.GIT_TOKEN_SECRET_KEY:
+            try:
+                from databricks.sdk import WorkspaceClient
+                import base64
+                import logging
+                logger = logging.getLogger(__name__)
+                
+                w = WorkspaceClient()
+                secret = w.secrets.get_secret(
+                    scope=self.GIT_TOKEN_SECRET_SCOPE,
+                    key=self.GIT_TOKEN_SECRET_KEY
+                )
+                if secret and secret.value:
+                    # Databricks SDK returns secrets base64 encoded
+                    token_value = base64.b64decode(secret.value).decode('utf-8').strip()
+                    self._git_token_cached = token_value
+                    logger.info(
+                        f"Fetched GitHub PAT from secrets/{self.GIT_TOKEN_SECRET_SCOPE}/{self.GIT_TOKEN_SECRET_KEY}"
+                    )
+                    return self._git_token_cached
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to fetch GitHub PAT from secrets: {e}")
+        
+        return ""
     
     def get_github_app_private_key(self) -> str:
         """

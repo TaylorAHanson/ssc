@@ -93,7 +93,7 @@ class WorkspaceProvisionStateMachine(BaseRequestStateMachine):
                 "git_username": settings.GIT_USERNAME,
                 "git_email": settings.GIT_EMAIL,
                 "ssh_key_path": settings.GIT_SSH_KEY_PATH,
-                "git_token": settings.GIT_TOKEN,
+                "git_token": settings.get_git_token(),  # Fetch at runtime if needed
                 # GitHub App authentication (preferred)
                 "github_app_id": settings.GITHUB_APP_ID,
                 "github_app_private_key": settings.get_github_app_private_key(),  # Fetch at runtime if needed
