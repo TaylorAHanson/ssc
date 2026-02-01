@@ -46,7 +46,11 @@ def generate_github_app_token(app_id: str, private_key: str, installation_id: st
     try:
         encoded_jwt = jwt.encode(payload, private_key, algorithm="RS256")
     except Exception as e:
-        logger.error(f"Failed to generate JWT: {e}")
+        # Log key format details for debugging
+        key_preview = private_key[:50] if len(private_key) > 50 else private_key
+        has_newlines = '\n' in private_key
+        has_escaped_newlines = '\\n' in private_key
+        logger.error(f"Failed to generate JWT: {e}. Key length: {len(private_key)}, has_newlines: {has_newlines}, has_escaped_newlines: {has_escaped_newlines}, starts_with: {repr(key_preview)}")
         raise RetryableError(f"JWT generation failed: {e}")
     
     headers = {

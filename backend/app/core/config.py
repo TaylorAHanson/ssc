@@ -242,10 +242,15 @@ class Settings(BaseSettings):
                     key=self.GITHUB_APP_PRIVATE_KEY_SECRET_KEY
                 )
                 if secret and secret.value:
-                    self._github_app_private_key_cached = secret.value
+                    key_value = secret.value
+                    # Handle case where newlines were stored as literal \n
+                    if '\\n' in key_value and '\n' not in key_value:
+                        key_value = key_value.replace('\\n', '\n')
+                    self._github_app_private_key_cached = key_value
                     import logging
-                    logging.getLogger(__name__).info(
-                        f"Fetched GitHub App private key from secrets/{self.GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE}/{self.GITHUB_APP_PRIVATE_KEY_SECRET_KEY} (length: {len(secret.value)})"
+                    logger = logging.getLogger(__name__)
+                    logger.info(
+                        f"Fetched GitHub App private key from secrets/{self.GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE}/{self.GITHUB_APP_PRIVATE_KEY_SECRET_KEY} (length: {len(key_value)}, starts_with: {key_value[:30] if len(key_value) > 30 else key_value})"
                     )
                     return self._github_app_private_key_cached
             except Exception as e:
