@@ -24,6 +24,7 @@ from croniter import croniter
 import uuid
 from app.core.config import settings
 from app.core.exceptions import RetryableError, PermanentError
+from app.workers.tasks.sync_calendar import sync_calendar_task
 import traceback
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,9 @@ async def start_poller():
             
             # Check for scheduled reports (could be throttled if needed, but checking DB is cheap)
             await process_scheduled_reports()
+            
+            # Sync calendar events
+            await sync_calendar_task()
 
             consecutive_db_errors = 0  # Reset on success
         except Exception as e:

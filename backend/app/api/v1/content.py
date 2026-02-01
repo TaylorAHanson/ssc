@@ -11,6 +11,7 @@ from app.agents.content_registry import (
     list_content_versions,
     get_content_version
 )
+from app.workers.tasks.sync_calendar import sync_calendar_task
 import logging
 
 logger = logging.getLogger(__name__)
@@ -98,5 +99,18 @@ async def update_content(filename: str, request: SaveContentRequest):
         raise
     except Exception as e:
         logger.error(f"Error saving content {filename}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/calendar/sync")
+async def trigger_calendar_sync():
+    """Manually trigger a calendar sync."""
+    try:
+        # Note: sync_calendar_task has its own interval check, but 
+        # for manual triggering we explicitly bypass it.
+        await sync_calendar_task(force=True)
+        return {"status": "success", "message": "Calendar sync triggered"}
+    except Exception as e:
+        logger.error(f"Error triggering calendar sync: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

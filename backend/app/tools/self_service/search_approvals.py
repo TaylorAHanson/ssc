@@ -44,7 +44,7 @@ class SearchApprovalsTool(BaseTool):
             "required": []
         }
 
-    async def execute(self, approval_type: str = None, status: str = "pending", request_id: str = None, limit: int = 5) -> Dict[str, Any]:
+    async def execute(self, approval_type: str = None, status: str = "pending", request_id: str = None, limit: int = 5, **kwargs) -> Dict[str, Any]:
         """
         Execute the search for approvals.
         """

@@ -96,3 +96,7 @@ env:
     value: ""
   - name: NOTIFICATION_TEAMS_WEBHOOK_URL
     value: ""
+  - name: EVENT_CALENDAR_URL
+    value: ""
+  - name: EVENT_SYNC_INTERVAL_MINUTES
+    value: "60"

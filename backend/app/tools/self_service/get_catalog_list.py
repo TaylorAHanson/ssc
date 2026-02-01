@@ -28,7 +28,7 @@ class GetCatalogListTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "Lists all available catalogs in the Databricks Unity Catalog, including their descriptions and comments. Use this to discover available catalogs or to find similar catalog names if a specific one is not found."
+        return "Lists all available catalogs in the Databricks Unity Catalog, including their descriptions and comments. Use this to discover available catalogs or to find similar catalog names if a specific one is not found. NEXT STEP: Use 'get_schema_list' to explore a specific catalog."
 
     @property
     def input_schema(self) -> Dict[str, Any]:
@@ -38,7 +38,7 @@ class GetCatalogListTool(BaseTool):
             "required": []
         }
 
-    async def execute(self) -> Dict[str, Any]:
+    async def execute(self, **kwargs) -> Dict[str, Any]:
         """
         Fetch the list of catalogs along with their descriptions.
         """
@@ -51,7 +51,8 @@ class GetCatalogListTool(BaseTool):
                     "name": catalog.name,
                     "comment": catalog.comment or "No description provided",
                     "catalog_type": catalog.catalog_type.value if hasattr(catalog.catalog_type, 'value') else str(catalog.catalog_type),
-                    "owner": catalog.owner
+                    "owner": catalog.owner,
+                    "properties": catalog.properties or {}
                 })
             
             return {

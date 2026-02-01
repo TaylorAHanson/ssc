@@ -3,11 +3,12 @@ trigger: always_on
 ---
 
 ## Context
-- When a new context or conversation is started, review docs/ARCHITECTURE.md for a detailed explanation on how the backend works. If any significant changes are needed to this file, make sure to include that as part of the implementation plan.
+- When a new context or conversation is started, review docs/ARCHITECTURE.md for a detailed explanation on how the backend works. If any significant changes are needed to this file, make sure to include that as part of the implementation plan. There are other important docs in the docs folder, so check there as needed.
 
 ## Development and Troubleshooting Tools
+- Debugpy is enabled when running via `./dev.sh --debug` but the user needs to click the green play button labelled "Attach to Backend" in the debugging panel. The agent can either do this themselves ask the user to do this to capture variable output rather than inserting debug statements everywhere.
 - In local development, we store a sqllite database at backend/edas_hub.db. You may execute queries on the local database as needed.
-- For troubleshooting, you may tail the logs at backend.log or frontend.log. This is especially helpful for python errors or for getting log statements.
+- For troubleshooting, you may tail the logs at backend.log or frontend.log. This is especially helpful for python errors or for getting log statements. Always check backend.log before finishing up, since there may be errors preventing fastApi from starting.
 
 ## Gotchas
 - Don't hardcode the app name or use the app name in any variable naming. There are environment settings prefixed by BRANDING_ that should be used instead. See backend/app/core/config.py for more details.

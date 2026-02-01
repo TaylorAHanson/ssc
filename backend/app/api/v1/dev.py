@@ -147,20 +147,24 @@ def seed_db():
 
             # Seed Admin User
             admin_email = "admin@qualcomm.com"
-            if not db.query(UserModel).filter(UserModel.email == admin_email).first():
+            admin_user = db.query(UserModel).filter(UserModel.email == admin_email).first()
+            
+            if not admin_user:
                 admin_user = UserModel(
                     id=str(uuid.uuid4()),
                     email=admin_email,
                     full_name="System Admin",
                     is_active=True
                 )
-                
-                # Assign all roles to super admin
-                all_roles = db.query(RoleModel).all()
-                admin_user.roles = all_roles
-                
                 db.add(admin_user)
-                db.commit()
+            
+            # Always ensure admin has all roles
+            all_roles = db.query(RoleModel).all()
+            # Convert list of roles to set of IDs to avoid duplicates if appending, 
+            # but for admin we can just reset the relationship
+            admin_user.roles = all_roles
+            
+            db.commit()
 
             # Create sample requests if none exist
             if db.query(RequestModel).count() == 0:

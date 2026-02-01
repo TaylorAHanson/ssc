@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from app.tools.search_requests import SearchRequestsTool
+from app.tools.self_service.search_requests import SearchRequestsTool
 from tests.factories.request_factory import RequestFactory
 
 class TestSearchRequestsTool:
@@ -10,7 +10,7 @@ class TestSearchRequestsTool:
         # We need to patch get_lakebase_session to return our test db_session
         # Since the tool calls it inside execute: db = get_lakebase_session()
         # We can patch the function in the module
-        with patch("app.tools.search_requests.get_lakebase_session", return_value=db_session):
+        with patch("app.tools.self_service.search_requests.get_lakebase_session", return_value=db_session):
             yield SearchRequestsTool()
 
     @pytest.mark.asyncio
