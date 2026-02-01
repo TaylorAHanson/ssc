@@ -242,13 +242,25 @@ class Settings(BaseSettings):
                     key=self.GITHUB_APP_PRIVATE_KEY_SECRET_KEY
                 )
                 if secret and secret.value:
+                    import base64
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    
                     key_value = secret.value
+                    
+                    # Databricks SDK returns secrets base64 encoded - decode if needed
+                    if not key_value.startswith('-----BEGIN'):
+                        try:
+                            key_value = base64.b64decode(key_value).decode('utf-8')
+                            logger.info("Decoded base64-encoded private key from Databricks secrets")
+                        except Exception as e:
+                            logger.warning(f"Failed to base64 decode secret, using as-is: {e}")
+                    
                     # Handle case where newlines were stored as literal \n
                     if '\\n' in key_value and '\n' not in key_value:
                         key_value = key_value.replace('\\n', '\n')
+                    
                     self._github_app_private_key_cached = key_value
-                    import logging
-                    logger = logging.getLogger(__name__)
                     logger.info(
                         f"Fetched GitHub App private key from secrets/{self.GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE}/{self.GITHUB_APP_PRIVATE_KEY_SECRET_KEY} (length: {len(key_value)}, starts_with: {key_value[:30] if len(key_value) > 30 else key_value})"
                     )
