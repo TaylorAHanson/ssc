@@ -125,9 +125,13 @@ class TerraformProvider(BaseProvider):
         self._cached_token = None
         self._token_expires_at = 0
         
+        # Debug logging for auth configuration
+        logger.info(f"TerraformProvider initialized: repo={repo_url}, github_app_id={self.github_app_id}, private_key_configured={bool(self.github_app_private_key)}, private_key_len={len(self.github_app_private_key) if self.github_app_private_key else 0}")
+        
     def _get_github_app_token(self) -> Optional[str]:
         """Get or refresh GitHub App installation token."""
         if not self.github_app_id or not self.github_app_private_key:
+            logger.warning(f"GitHub App auth not configured: app_id={bool(self.github_app_id)}, private_key={bool(self.github_app_private_key)}, private_key_len={len(self.github_app_private_key) if self.github_app_private_key else 0}")
             return None
             
         # Check if we have a valid cached token (with 5 min buffer)
