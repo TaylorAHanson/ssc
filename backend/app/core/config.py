@@ -175,9 +175,16 @@ class Settings(BaseSettings):
     # Terraform GitOps Settings
     INFRA_REPO_URL: str = "" # URL of the infrastructure git repository
     INFRA_REPO_BRANCH: str = "main" # Main branch for infrastructure repo
-    GIT_USERNAME: str = "Ops Bot"
-    GIT_EMAIL: str = "ops-bot@example.com"
+    DEFAULT_ENVIRONMENT: str = "dev" # Default environment for GitOps (dev, staging, prod)
+    GIT_USERNAME: str = "ATLAS Bot"
+    GIT_EMAIL: str = "atlas-bot@databricks.com"
     GIT_SSH_KEY_PATH: str = "" # Path to SSH key for git operations
+    GIT_TOKEN: str = "" # GitHub personal access token for HTTPS auth (fallback)
+    
+    # GitHub App Authentication (preferred over PAT)
+    GITHUB_APP_ID: str = "" # GitHub App ID
+    GITHUB_APP_PRIVATE_KEY: str = "" # PEM-encoded private key (store in secrets)
+    GITHUB_APP_INSTALLATION_ID: str = "" # Optional: specific installation ID
     
     # IDP (Identity Provider) Settings
     # SECRET: Set in .env file

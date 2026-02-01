@@ -80,7 +80,12 @@ class ServicePrincipalStateMachine(BaseRequestStateMachine):
             config={
                 "git_username": settings.GIT_USERNAME,
                 "git_email": settings.GIT_EMAIL,
-                "ssh_key_path": settings.GIT_SSH_KEY_PATH
+                "ssh_key_path": settings.GIT_SSH_KEY_PATH,
+                "git_token": settings.GIT_TOKEN,
+                # GitHub App authentication (preferred)
+                "github_app_id": settings.GITHUB_APP_ID,
+                "github_app_private_key": settings.GITHUB_APP_PRIVATE_KEY,
+                "github_app_installation_id": settings.GITHUB_APP_INSTALLATION_ID,
             }
         )
 

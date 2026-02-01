@@ -82,7 +82,12 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
             config={
                 "git_username": settings.GIT_USERNAME,
                 "git_email": settings.GIT_EMAIL,
-                "ssh_key_path": settings.GIT_SSH_KEY_PATH
+                "ssh_key_path": settings.GIT_SSH_KEY_PATH,
+                "git_token": settings.GIT_TOKEN,
+                # GitHub App authentication (preferred)
+                "github_app_id": settings.GITHUB_APP_ID,
+                "github_app_private_key": settings.GITHUB_APP_PRIVATE_KEY,
+                "github_app_installation_id": settings.GITHUB_APP_INSTALLATION_ID,
             }
         )
 
@@ -118,6 +123,8 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
         params = self.request.state_context or {}
         asset_type = params.get("type", "").lower()
         name = params.get("name")
+        catalog = params.get("catalog", "main")
+        environment = params.get("environment", settings.DEFAULT_ENVIRONMENT or "dev")
         
         if not name:
              raise PermanentError("Asset name is required")
@@ -126,17 +133,18 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
             logger.info(f"Starting Terraform Plan for {self.request.id}")
             provider = self._get_provider()
             
-            # Construct YAML content
-            # This logic mimics what the original used, but formats as YAML for GitOps
-            content = self._generate_yaml_spec(asset_type, name, params)
-            target_file = f"resources/{name}.yaml" # Simplification
+            # Construct YAML content matching the Terraform repo format
+            content = self._generate_yaml_spec(asset_type, name, catalog, params)
+            
+            # Path structure: envs/{env}/resources/{name}.yaml
+            target_file = f"envs/{environment}/resources/{name}.yaml"
             
             # This creates the branch and pushes it
             await provider.plan(
                 request_id=self.request.id,
                 target_file=target_file,
                 content=content,
-                commit_message=f"Plan: {asset_type} {name}"
+                commit_message=f"Plan: {asset_type} {name} in {catalog}"
             )
             
             # Record fact that we started
@@ -166,13 +174,43 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
             logger.error(f"Apply failed: {e}")
             raise e
 
-    def _generate_yaml_spec(self, asset_type, name, params):
-        """Generate YAML content for the resource."""
-        # Simple schema for now
+    def _generate_yaml_spec(self, asset_type: str, name: str, catalog: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate YAML content matching the Terraform repo format.
+        
+        Expected format for schema:
+        resource_type: schema
+        name: my_schema
+        properties:
+          catalog: my_catalog
+          comment: "Description"
+          grants:
+            - principal: "user@example.com"
+              privileges: [USE_SCHEMA, SELECT]
+        """
+        # Build properties
+        properties = {
+            "catalog": catalog,
+            "comment": params.get("comment", f"Created via ATLAS request"),
+        }
+        
+        # Add grants if specified
+        grants = params.get("grants", [])
+        if grants:
+            properties["grants"] = grants
+        elif params.get("requester_email"):
+            # Default: grant requester basic permissions
+            properties["grants"] = [
+                {
+                    "principal": params.get("requester_email"),
+                    "privileges": ["USE_SCHEMA", "CREATE_TABLE", "SELECT"]
+                }
+            ]
+        
         return {
-            "resource_type": asset_type,
+            "resource_type": asset_type or "schema",
             "name": name,
-            "properties": params
+            "properties": properties
         }
 
     @property

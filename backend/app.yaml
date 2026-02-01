@@ -17,6 +17,26 @@ env:
   - name: DATABASE_USER
     value: "edas_app"
   
+  # Infrastructure Repository (Terraform GitOps)
+  - name: INFRA_REPO_URL
+    value: "https://github.com/databricks-field-eng/fe-agentic-self-service-terraform"
+  - name: INFRA_REPO_BRANCH
+    value: "main"
+  - name: DEFAULT_ENVIRONMENT
+    value: "dev"
+  - name: GIT_USERNAME
+    value: "atlas-infra-bot[bot]"
+  - name: GIT_EMAIL
+    value: "atlas-infra-bot[bot]@users.noreply.github.com"
+  
+  # GitHub App Authentication (atlas-infra-bot)
+  # Store secrets: databricks secrets put-secret atlas-hub github-app-id
+  #                databricks secrets put-secret atlas-hub github-app-private-key
+  - name: GITHUB_APP_ID
+    value: "2770726"
+  - name: GITHUB_APP_PRIVATE_KEY
+    valueFrom: "{{secrets/atlas-hub/github-app-private-key}}"
+
   # Databricks Configuration
   - name: DATABRICKS_WAREHOUSE_ID
     value: "5c5e40da3caf812c"

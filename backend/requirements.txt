@@ -14,3 +14,6 @@ PyYAML
 GitPython
 pyinstrument
 croniter
+PyJWT
+cryptography
+requests

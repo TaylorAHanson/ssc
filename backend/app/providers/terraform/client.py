@@ -10,9 +10,78 @@ import shutil
 import logging
 import yaml
 import git
+import time
+import requests
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def generate_github_app_token(app_id: str, private_key: str, installation_id: str = None) -> str:
+    """
+    Generate a GitHub App installation access token.
+    
+    Args:
+        app_id: GitHub App ID
+        private_key: PEM-encoded private key
+        installation_id: Optional installation ID (will be fetched if not provided)
+    
+    Returns:
+        Installation access token for git operations
+    """
+    try:
+        import jwt
+    except ImportError:
+        logger.error("PyJWT not installed. Run: pip install PyJWT")
+        raise RetryableError("PyJWT library not available")
+    
+    # Generate JWT
+    now = int(time.time())
+    payload = {
+        "iat": now - 60,  # Issued 60 seconds ago (clock skew)
+        "exp": now + (10 * 60),  # Expires in 10 minutes
+        "iss": app_id
+    }
+    
+    try:
+        encoded_jwt = jwt.encode(payload, private_key, algorithm="RS256")
+    except Exception as e:
+        logger.error(f"Failed to generate JWT: {e}")
+        raise RetryableError(f"JWT generation failed: {e}")
+    
+    headers = {
+        "Authorization": f"Bearer {encoded_jwt}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
+    
+    # Get installation ID if not provided
+    if not installation_id:
+        resp = requests.get("https://api.github.com/app/installations", headers=headers)
+        if resp.status_code != 200:
+            logger.error(f"Failed to get installations: {resp.text}")
+            raise RetryableError(f"Failed to get GitHub App installations: {resp.status_code}")
+        
+        installations = resp.json()
+        if not installations:
+            raise PermanentError("GitHub App has no installations")
+        
+        # Use first installation (or find specific one by org/repo)
+        installation_id = installations[0]["id"]
+        logger.info(f"Using GitHub App installation ID: {installation_id}")
+    
+    # Get installation access token
+    resp = requests.post(
+        f"https://api.github.com/app/installations/{installation_id}/access_tokens",
+        headers=headers
+    )
+    
+    if resp.status_code != 201:
+        logger.error(f"Failed to get installation token: {resp.text}")
+        raise RetryableError(f"Failed to get installation token: {resp.status_code}")
+    
+    token_data = resp.json()
+    return token_data["token"]
 
 
 class TerraformProvider(BaseProvider):
@@ -30,15 +99,70 @@ class TerraformProvider(BaseProvider):
         Args:
             repo_url: URL of the infrastructure git repository.
             branch: Main branch to operate on (default: main).
-            config: Additional configuration (local_repo_path, etc.).
+            config: Additional configuration including:
+                - local_repo_path: Where to clone the repo
+                - git_username: Git commit author name
+                - git_email: Git commit author email
+                - ssh_key_path: Path to SSH key (for SSH auth)
+                - git_token: GitHub PAT (for simple HTTPS auth)
+                - github_app_id: GitHub App ID (for GitHub App auth)
+                - github_app_private_key: PEM-encoded private key
+                - github_app_installation_id: Optional installation ID
         """
         super().__init__(config)
         self.repo_url = repo_url
         self.main_branch = branch
         self.local_repo_path = self.config.get("local_repo_path", "/tmp/infra-repo")
-        self.username = self.config.get("git_username", "Ops Bot")
-        self.email = self.config.get("git_email", "ops-bot@example.com")
+        self.username = self.config.get("git_username", "ATLAS Bot")
+        self.email = self.config.get("git_email", "atlas-bot@databricks.com")
         self.ssh_key_path = self.config.get("ssh_key_path")
+        self.git_token = self.config.get("git_token")  # GitHub PAT for HTTPS auth
+        
+        # GitHub App authentication (preferred over PAT)
+        self.github_app_id = self.config.get("github_app_id")
+        self.github_app_private_key = self.config.get("github_app_private_key")
+        self.github_app_installation_id = self.config.get("github_app_installation_id")
+        self._cached_token = None
+        self._token_expires_at = 0
+        
+    def _get_github_app_token(self) -> Optional[str]:
+        """Get or refresh GitHub App installation token."""
+        if not self.github_app_id or not self.github_app_private_key:
+            return None
+            
+        # Check if we have a valid cached token (with 5 min buffer)
+        if self._cached_token and time.time() < (self._token_expires_at - 300):
+            return self._cached_token
+        
+        # Generate new token
+        self._cached_token = generate_github_app_token(
+            self.github_app_id,
+            self.github_app_private_key,
+            self.github_app_installation_id
+        )
+        # Installation tokens are valid for 1 hour
+        self._token_expires_at = time.time() + 3600
+        logger.info("Generated new GitHub App installation token")
+        return self._cached_token
+        
+    def _get_authenticated_url(self) -> str:
+        """Get repo URL with authentication credentials if using HTTPS."""
+        if not self.repo_url:
+            return ""
+        
+        if not self.repo_url.startswith("https://"):
+            return self.repo_url
+            
+        # Try GitHub App authentication first
+        app_token = self._get_github_app_token()
+        if app_token:
+            return self.repo_url.replace("https://", f"https://x-access-token:{app_token}@")
+        
+        # Fall back to PAT if provided
+        if self.git_token:
+            return self.repo_url.replace("https://", f"https://x-access-token:{self.git_token}@")
+        
+        return self.repo_url
         
     @retry_on_retryable(max_attempts=3)
     async def plan(self, request_id: str, target_file: str, content: Dict[str, Any], commit_message: str) -> Dict[str, Any]:
@@ -194,6 +318,7 @@ class TerraformProvider(BaseProvider):
     def _prepare_repo(self) -> git.Repo:
         """Clone or load and pull the repository."""
         repo_path = Path(self.local_repo_path)
+        auth_url = self._get_authenticated_url()
         
         if self.ssh_key_path:
             os.environ["GIT_SSH_COMMAND"] = f"ssh -i {self.ssh_key_path} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
@@ -201,14 +326,21 @@ class TerraformProvider(BaseProvider):
         try:
             if repo_path.exists() and (repo_path / ".git").exists():
                 repo = git.Repo(repo_path)
-                if self.repo_url not in repo.remotes.origin.url:
+                # Check if the base repo URL matches (ignoring auth tokens in URL)
+                current_url = repo.remotes.origin.url
+                base_repo_url = self.repo_url.split("@")[-1] if "@" in self.repo_url else self.repo_url
+                current_base_url = current_url.split("@")[-1] if "@" in current_url else current_url
+                
+                if base_repo_url not in current_base_url and current_base_url not in base_repo_url:
                     shutil.rmtree(repo_path)
-                    repo = git.Repo.clone_from(self.repo_url, repo_path, branch=self.main_branch)
-                # Don't pull here, let methods handle branching/pulling
+                    repo = git.Repo.clone_from(auth_url, repo_path, branch=self.main_branch)
+                else:
+                    # Update remote URL in case token changed
+                    repo.remotes.origin.set_url(auth_url)
             else:
                 if repo_path.exists():
                     shutil.rmtree(repo_path)
-                repo = git.Repo.clone_from(self.repo_url, repo_path, branch=self.main_branch)
+                repo = git.Repo.clone_from(auth_url, repo_path, branch=self.main_branch)
                 
             with repo.config_writer() as cw:
                 cw.set_value("user", "name", self.username)
