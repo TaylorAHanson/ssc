@@ -30,12 +30,13 @@ env:
     value: "atlas-infra-bot[bot]@users.noreply.github.com"
   
   # GitHub App Authentication (atlas-infra-bot)
-  # Store secrets: databricks secrets put-secret atlas-hub github-app-id
-  #                databricks secrets put-secret atlas-hub github-app-private-key
+  # Private key is fetched at runtime from Databricks secrets (valueFrom doesn't handle multi-line PEM well)
   - name: GITHUB_APP_ID
     value: "2770726"
-  - name: GITHUB_APP_PRIVATE_KEY
-    valueFrom: "{{secrets/atlas-hub/github-app-private-key}}"
+  - name: GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE
+    value: "atlas-hub"
+  - name: GITHUB_APP_PRIVATE_KEY_SECRET_KEY
+    value: "github-app-private-key"
 
   # Databricks Configuration
   - name: DATABRICKS_WAREHOUSE_ID

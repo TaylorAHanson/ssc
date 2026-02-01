@@ -189,6 +189,8 @@ class Settings(BaseSettings):
     GITHUB_APP_ID: str = "" # GitHub App ID
     GITHUB_APP_PRIVATE_KEY: str = "" # PEM-encoded private key (store in secrets)
     GITHUB_APP_INSTALLATION_ID: str = "" # Optional: specific installation ID
+    GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE: str = "atlas-hub"  # Databricks secret scope
+    GITHUB_APP_PRIVATE_KEY_SECRET_KEY: str = "github-app-private-key"  # Secret key name
     
     # IDP (Identity Provider) Settings
     # SECRET: Set in .env file
@@ -213,6 +215,44 @@ class Settings(BaseSettings):
     MOCK_USER_NAME: str = "dev_user"
     MOCK_USER_ID: str = "dev_user_id"
     MOCK_USER_TOKEN: str = "" # SECRET: Set in .env (for testing OBO/PAT locally)
+    
+    # Cache for runtime-fetched secrets
+    _github_app_private_key_cached: str = ""
+    
+    def get_github_app_private_key(self) -> str:
+        """
+        Get GitHub App private key, fetching from Databricks secrets at runtime if needed.
+        This handles the case where valueFrom doesn't properly resolve multi-line secrets.
+        """
+        # If already set via env var (valueFrom worked), use it
+        if self.GITHUB_APP_PRIVATE_KEY:
+            return self.GITHUB_APP_PRIVATE_KEY
+        
+        # If we already fetched it, return cached value
+        if self._github_app_private_key_cached:
+            return self._github_app_private_key_cached
+        
+        # Try to fetch from Databricks secrets at runtime
+        if self.GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE and self.GITHUB_APP_PRIVATE_KEY_SECRET_KEY:
+            try:
+                from databricks.sdk import WorkspaceClient
+                w = WorkspaceClient()
+                secret = w.secrets.get_secret(
+                    scope=self.GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE,
+                    key=self.GITHUB_APP_PRIVATE_KEY_SECRET_KEY
+                )
+                if secret and secret.value:
+                    self._github_app_private_key_cached = secret.value
+                    import logging
+                    logging.getLogger(__name__).info(
+                        f"Fetched GitHub App private key from secrets/{self.GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE}/{self.GITHUB_APP_PRIVATE_KEY_SECRET_KEY} (length: {len(secret.value)})"
+                    )
+                    return self._github_app_private_key_cached
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to fetch GitHub App private key from secrets: {e}")
+        
+        return ""
     
     class Config:
         env_file = ".env"

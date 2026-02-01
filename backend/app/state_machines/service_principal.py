@@ -84,7 +84,7 @@ class ServicePrincipalStateMachine(BaseRequestStateMachine):
                 "git_token": settings.GIT_TOKEN,
                 # GitHub App authentication (preferred)
                 "github_app_id": settings.GITHUB_APP_ID,
-                "github_app_private_key": settings.GITHUB_APP_PRIVATE_KEY,
+                "github_app_private_key": settings.get_github_app_private_key(),  # Fetch at runtime if needed
                 "github_app_installation_id": settings.GITHUB_APP_INSTALLATION_ID,
             }
         )
