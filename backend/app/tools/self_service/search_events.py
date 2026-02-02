@@ -11,12 +11,20 @@ class SearchEventsInput(BaseModel):
     end_date: Optional[str] = Field(None, description="Filter events up to this date (ISO format: YYYY-MM-DD)")
 
 class SearchEventsTool(BaseTool):
-    name = "search_events"
-    description = "Search for upcoming workshops, webinars, office hours, and community events. Use this to help users find training and support sessions."
-    input_schema = SearchEventsInput
+    @property
+    def name(self) -> str:
+        return "search_events"
+
+    @property
+    def description(self) -> str:
+        return "Search for upcoming workshops, webinars, office hours, and community events. Use this to help users find training and support sessions."
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return SearchEventsInput.model_json_schema()
 
     async def execute(self, query: Optional[str] = None, event_type: Optional[str] = None, 
-                start_date: Optional[str] = None, end_date: Optional[str] = None, **kwargs) -> List[Dict[str, Any]]:
+                start_date: Optional[str] = None, end_date: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
         Execute the event search.
         """
@@ -74,4 +82,8 @@ class SearchEventsTool(BaseTool):
         filtered_events.sort(key=lambda x: x['date'])
         
         # Limit to 10 results to keep context small
-        return filtered_events[:10]
+        results = filtered_events[:10]
+        return {
+            "count": len(results),
+            "events": results
+        }
