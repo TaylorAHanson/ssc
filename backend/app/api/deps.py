@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.db.user import UserModel
 import logging
+from app.providers.github.client import GitHubProvider
 
 logger = logging.getLogger(__name__)
 from app.core.config import settings
@@ -190,3 +191,14 @@ def require_any_role(role_names: list[str]):
             )
         return user
     return version_checker
+
+async def get_github_provider() -> GitHubProvider:
+    """
+    Dependency to get a GitHub provider instance.
+    Uses GITHUB_TOKEN and GITHUB_ORG from settings.
+    """
+    async with GitHubProvider(
+        token=settings.GITHUB_TOKEN,
+        org=settings.GITHUB_ORG
+    ) as github:
+        yield github
