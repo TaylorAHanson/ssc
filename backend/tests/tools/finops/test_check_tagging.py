@@ -1,6 +1,10 @@
 import pytest
 from unittest.mock import AsyncMock, patch
-from app.tools.finops.check_tagging import CheckTaggingComplianceTool
+from app.tools.finops.check_tagging import check_tagging_compliance
+
+@pytest.fixture
+def tool():
+    return check_tagging_compliance
 
 @pytest.fixture
 def mock_provider():
@@ -10,9 +14,7 @@ def mock_provider():
         yield provider_instance
 
 @pytest.mark.asyncio
-async def test_check_tagging_compliance(mock_provider):
-    tool = CheckTaggingComplianceTool()
-    
+async def test_check_tagging_compliance(tool, mock_provider):
     mock_provider.execute_sql.return_value = {
         "rows": [{"resource_id": "bad-id", "resource_name": "bad-cluster", "tags": {}}]
     }

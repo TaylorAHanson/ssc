@@ -1,6 +1,13 @@
 """
 Databricks Model Serving endpoint client.
 
+ROLE: Low-Level Transport Layer
+RESPONSIBILITY: 
+- Handles raw HTTP communication with Databricks Model Serving.
+- Manages Authentication (Explicit Token vs OAuth).
+- Implements Retry logic and Error Handling for HTTP status codes.
+- Agnostic to the payload content (works for LLMs, Classifiers, etc.).
+
 Supports two authentication modes:
 1. Explicit token: Uses MODEL_SERVING_API_KEY or DATABRICKS_TOKEN
 2. OAuth (automatic): Uses Databricks SDK for OAuth in Databricks Apps
@@ -125,35 +132,31 @@ class ModelServingClient:
                 payload = {"inputs": inputs}
             
             # Log request details for debugging
-            logger.info(f"Invoking endpoint: {endpoint_name}")
-            logger.info(f"URL: {self.base_url}{url}")
-            logger.info(f"Payload keys: {list(payload.keys())}")
+            logger.debug(f"Invoking endpoint: {endpoint_name}")
+            logger.debug(f"URL: {self.base_url}{url}")
+            logger.debug(f"Payload keys: {list(payload.keys())}")
             if "messages" in payload:
-                logger.info(f"Messages count: {len(payload['messages'])}")
+                logger.debug(f"Messages count: {len(payload['messages'])}")
                 # Log first message structure
                 if payload["messages"]:
-                    logger.info(f"First message keys: {list(payload['messages'][0].keys())}")
+                    logger.debug(f"First message keys: {list(payload['messages'][0].keys())}")
             # Log full payload (truncated for large payloads)
             import json
             payload_str = json.dumps(payload, indent=2)
-            if len(payload_str) > 1000:
-                logger.info(f"Payload (truncated): {payload_str[:1000]}...")
-            else:
-                logger.info(f"Payload: {payload_str}")
             
             # Log request for debugging
-            logger.info(f"=== Databricks Request ===")
-            logger.info(f"URL: {url}")
-            logger.info(f"Payload: {json.dumps(payload, indent=2, default=str)[:2000]}")
+            logger.debug(f"=== Databricks Request ===")
+            logger.debug(f"URL: {url}")
+            logger.debug(f"Payload: {json.dumps(payload, indent=2, default=str)[:2000]}")
             
             response = await self.client.post(url, json=payload)
             response.raise_for_status()
             result = response.json()
             
             # Log response for debugging
-            logger.info(f"=== Databricks Response ===")
-            logger.info(f"Status: {response.status_code}")
-            logger.info(f"Response structure: {json.dumps(result, indent=2, default=str)[:3000]}")
+            logger.debug(f"=== Databricks Response ===")
+            logger.debug(f"Status: {response.status_code}")
+            logger.debug(f"Response structure: {json.dumps(result, indent=2, default=str)[:3000]}")
             
             # Handle different response formats
             # Foundation Model APIs typically return: {"choices": [...]} or {"output": "..."}

@@ -518,6 +518,22 @@ Agent tools are higher-level wrappers around base tools that provide agent-speci
 4. Agent asks follow-up questions → Uses `generate_follow_up_questions` (via Model Serving)
 5. Agent routes to form → Uses `determine_form_route` with prefill data
 
+### Model Context Protocol (MCP) Integration
+
+The Agent layer exposes its capabilities via the **Model Context Protocol (MCP)**, allowing both internal and external agents to discover and invoke tools in a standardized way.
+
+**MCP Server Architecture**:
+- **Embedded Server**: We run a FastMCP server *inside* the FastAPI application (`app/mcp_server.py`). 
+- **Tool Registration**: Current agent tools are automatically registered with the MCP server.
+- **Transport Mechanisms**:
+    - **SSE (Server-Sent Events)**: Experimental endpoint at `/mcp/sse` for remote agent connection.
+    - **Stdio**: A separate entrypoint (`backend/run_mcp.py`) allows running the server over standard input/output for local CLI usage or Cursor integration.
+
+**Why MCP?**:
+- **Standardization**: Decouples tool definition from the specific LLM provider.
+- **Interoperability**: Allows other MCP-compliant clients (like Claude Desktop or IDEs) to use our backend tools directly.
+- **Future Proofing**: Positions the architecture to easily swap or upgrade agent capabilities without rewriting tool interfaces.
+
 ### Database Layer (`app/db/`)
 
 **Purpose**: Persistent storage for state machines and request data using Lakebase (PostgreSQL-based database).

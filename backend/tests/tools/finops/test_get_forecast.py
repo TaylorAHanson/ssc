@@ -1,7 +1,11 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-from app.tools.finops.get_forecast import GetForecastedSpendTool
+from app.tools.finops.get_forecast import get_forecasted_spend
 from datetime import datetime
+
+@pytest.fixture
+def tool():
+    return get_forecasted_spend
 
 @pytest.fixture
 def mock_provider():
@@ -11,9 +15,7 @@ def mock_provider():
         yield provider_instance
 
 @pytest.mark.asyncio
-async def test_get_forecasted_spend(mock_provider):
-    tool = GetForecastedSpendTool()
-    
+async def test_get_forecasted_spend(tool, mock_provider):
     # Mock date to be deterministically mid-month? 
     # Hard to mock datetime.utcnow inside the tool without patching it.
     # Let's patch datetime

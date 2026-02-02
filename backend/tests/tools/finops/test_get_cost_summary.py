@@ -1,6 +1,10 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.tools.finops.get_cost_summary import GetCostSummaryTool
+from app.tools.finops.get_cost_summary import get_cost_summary
+
+@pytest.fixture
+def tool():
+    return get_cost_summary
 
 @pytest.fixture
 def mock_provider():
@@ -10,9 +14,7 @@ def mock_provider():
         yield provider_instance
 
 @pytest.mark.asyncio
-async def test_get_cost_summary_success(mock_provider):
-    tool = GetCostSummaryTool()
-    
+async def test_get_cost_summary_success(tool, mock_provider):
     start_date = "2023-01-01"
     end_date = "2023-01-31"
     
@@ -40,9 +42,7 @@ async def test_get_cost_summary_success(mock_provider):
     assert "GROUP BY 1" in query
 
 @pytest.mark.asyncio
-async def test_get_cost_summary_group_by(mock_provider):
-    tool = GetCostSummaryTool()
-    
+async def test_get_cost_summary_group_by(tool, mock_provider):
     mock_provider.execute_sql.return_value = {"rows": []}
     
     await tool.execute(start_date="2023-01-01", end_date="2023-01-31", group_by="workspace_id")

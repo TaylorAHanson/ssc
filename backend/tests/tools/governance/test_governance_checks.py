@@ -1,14 +1,14 @@
 import pytest
 from unittest.mock import AsyncMock, patch
-from app.tools.governance.check_overprovisioning import CheckOverprovisionedUsersTool
-from app.tools.governance.check_orphans import CheckOrphanedAssetsTool
-from app.tools.governance.check_quality import CheckAssetQualityTool
+from app.tools.governance.check_overprovisioning import check_overprovisioned_users
+from app.tools.governance.check_orphans import check_orphaned_assets
+from app.tools.governance.check_quality import check_asset_quality
 
 @pytest.mark.asyncio
 async def test_check_overprovisioning_risk_score():
     with patch("app.tools.governance.check_overprovisioning.DatabricksProvider") as MockP:
         MockP.return_value.execute_sql = AsyncMock(return_value={"rows": [{"email": "user@example.com", "over_provisioning_score": 2}]})
-        tool = CheckOverprovisionedUsersTool()
+        tool = check_overprovisioned_users
         
         result = await tool.execute(check_type="risk_score")
         assert "risk_assessment" in result
@@ -22,7 +22,7 @@ async def test_check_overprovisioning_risk_score():
 async def test_check_overprovisioning_workspace_admins():
     with patch("app.tools.governance.check_overprovisioning.DatabricksProvider") as MockP:
         MockP.return_value.execute_sql = AsyncMock(return_value={"rows": [{"email": "admin@example.com"}]})
-        tool = CheckOverprovisionedUsersTool()
+        tool = check_overprovisioned_users
         
         result = await tool.execute(check_type="workspace_admins")
         assert "workspace_admins" in result
@@ -35,7 +35,7 @@ async def test_check_overprovisioning_workspace_admins():
 async def test_check_orphans():
     with patch("app.tools.governance.check_orphans.DatabricksProvider") as MockP:
         MockP.return_value.execute_sql = AsyncMock(return_value={"rows": [{"name": "orphaned_cat"}]})
-        tool = CheckOrphanedAssetsTool()
+        tool = check_orphaned_assets
         
         result = await tool.execute(asset_type="CATALOG")
         assert "assets" in result
@@ -45,7 +45,7 @@ async def test_check_orphans():
 async def test_check_quality():
     with patch("app.tools.governance.check_quality.DatabricksProvider") as MockP:
         MockP.return_value.execute_sql = AsyncMock(return_value={"rows": [{"name": "bad_table"}]})
-        tool = CheckAssetQualityTool()
+        tool = check_asset_quality
         
         result = await tool.execute(check_type="missing_description", scope="TABLE")
         assert "issues" in result

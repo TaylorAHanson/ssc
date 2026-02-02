@@ -4,6 +4,7 @@ API dependencies.
 from fastapi import Depends, HTTPException, status, Header
 from typing import Generator, Optional
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from app.db.session import get_db
 from app.db.user import UserModel
 import logging
@@ -112,6 +113,13 @@ def get_current_user(
             db.refresh(user)
             logger.info(f"Successfully bootstrapped user: {user.email}")
             
+        except IntegrityError:
+            db.rollback()
+            logger.warning(f"Race condition detected during bootstrap for {MOCK_USER_EMAIL}. Fetching existing user.")
+            user = db.query(UserModel).filter(UserModel.email == MOCK_USER_EMAIL).first()
+            if not user:
+                raise HTTPException(status_code=500, detail="User creation failed due to race condition, but user could not be retrieved.")
+
         except Exception as e:
             logger.error(f"Failed to bootstrap admin user: {e}")
             # If bootstrap fails, fall back to raising 401

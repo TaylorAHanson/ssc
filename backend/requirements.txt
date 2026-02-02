@@ -19,3 +19,4 @@ PyJWT
 cryptography
 requests
 icalendar
+mcp>=0.1.0
