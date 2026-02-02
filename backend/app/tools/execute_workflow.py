@@ -13,9 +13,17 @@ class ExecuteWorkflowInput(BaseModel):
     parameters: Dict[str, Any] = Field(..., description="Key-value parameters required by the workflow")
 
 class ExecuteWorkflowTool(BaseTool):
-    name: str = "execute_workflow"
-    description: str = "Executes a specified workflow with the given parameters and initiates the corresponding state machine."
-    input_schema: Type[BaseModel] = ExecuteWorkflowInput
+    @property
+    def name(self) -> str:
+        return "execute_workflow"
+
+    @property
+    def description(self) -> str:
+        return "Executes a specified workflow with the given parameters and initiates the corresponding state machine."
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return ExecuteWorkflowInput.model_json_schema()
 
     async def execute(self, workflow_type: str, parameters: Dict[str, Any], conversation_history: list = None, **kwargs) -> Dict[str, Any]:
         """

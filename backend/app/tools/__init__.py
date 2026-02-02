@@ -7,6 +7,7 @@ from app.tools.self_service.search_requests import SearchRequestsTool
 from app.tools.self_service.search_approvals import SearchApprovalsTool
 from app.tools.self_service.search_user_entitlements import SearchUserEntitlementsTool
 from app.tools.self_service.search_events import SearchEventsTool
+from app.tools.self_service.check_github_repo import CheckGitHubRepoTool
 
 # FinOps Tools
 from app.tools.finops.get_cost_summary import GetCostSummaryTool
@@ -44,7 +45,8 @@ AVAILABLE_TOOLS = [
     CheckOrphanedAssetsTool(),
     CheckAssetQualityTool(),
     ListWorkspacesTool(),
-    SearchEventsTool()
+    SearchEventsTool(),
+    CheckGitHubRepoTool()
 ]
 
 def get_read_only_tools():

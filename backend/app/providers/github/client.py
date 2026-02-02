@@ -54,11 +54,36 @@ class GitHubProvider(BaseProvider):
         except httpx.RequestError as e:
             raise RetryableError(f"Request error: {str(e)}")
     
+    async def check_repo_exists(self, name: str) -> bool:
+        """Check if repository exists."""
+        try:
+            if self.org:
+                url = f"/repos/{self.org}/{name}"
+            else:
+                user_resp = await self.client.get("/user")
+                user_resp.raise_for_status()
+                login = user_resp.json()["login"]
+                url = f"/repos/{login}/{name}"
+                
+            response = await self.client.get(url)
+            return response.status_code == 200
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return False
+            raise PermanentError(f"Failed to check repo existence: {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
     @retry_on_retryable(max_attempts=3)
     async def create_from_template(self, template: str, name: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """Create repository from template."""
         try:
-            url = f"/repos/{template}/generate"
+            # If template doesn't have an owner prefix and we have an org, use the org
+            template_path = template
+            if "/" not in template and self.org:
+                template_path = f"{self.org}/{template}"
+                
+            url = f"/repos/{template_path}/generate"
             
             # If org is set and different from current user, we should specify it as the new owner
             user_resp = await self.client.get("/user")
@@ -76,7 +101,8 @@ class GitHubProvider(BaseProvider):
             if e.response.status_code >= 500:
                 raise RetryableError(f"GitHub server error: {str(e)}")
             else:
-                raise PermanentError(f"Failed to create from template: {str(e)}")
+                error_detail = e.response.json().get("message", str(e))
+                raise PermanentError(f"Failed to create from template '{template}': {error_detail}")
         except httpx.RequestError as e:
             raise RetryableError(f"Request error: {str(e)}")
     
