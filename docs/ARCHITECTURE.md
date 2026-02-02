@@ -169,15 +169,40 @@ Providers encapsulate all interaction with external systems:
 4.  **Error Handling**: Wrap system errors in `RetryableError` or `PermanentError`.
 5.  **Configuration**: Use `self.config` for credentials. See [Configuration & Settings](#configuration--settings) for more information.
 
+
 ### Adding a New Tool
 
-Once a provider is created, a tool can be created to wrap the provider's functionality. Tools do not need to be 1:1 with providers. A single provider can be used by multiple tools, or a single tool can use multiple providers. For example, the tool `does_catalog_exist` uses the `DatabricksProvider` method `execute_sql`. Another tool `does_schema_exist` also uses the `DatabricksProvider` method `execute_sql`. 
+All tools should be implemented using the **FastMCP** pattern (introduced in Feb 2026), which uses decorators instead of class inheritance. This is significantly simpler and more robust.
 
-1.  **Create Tool Class**: Inherit from `BaseTool` in `app/tools/<tool_name>.py` or `app/tools/<system>/<tool_name>.py` once the toolset grows.
-2.  **Define Metadata**: Set `name` and `description` properties. This is what the LLM will use to determine which tool to use. Be **very** specific and descriptive.
-3.  **Define Schema**: Define `input_schema` to describe parameters (for LLM/Agent usage). 
-4.  **Implement Execute**: Implement `execute()` method with business logic.
-5.  **Use Providers**: Instantiate providers inside `__init__` or `execute` method. Do NOT hardcode API calls or system-specific logic. Use the providers instead.
+1.  **Create Tool File**: Create a new file in `app/tools/<domain>/<tool_name>.py`.
+2.  **Define Input Schema**: Create a Pydantic model for the tool arguments.
+3.  **Implement & Decorate**: Write an async function decorated with `@tool`.
+
+**Template**:
+```python
+# app/tools/domain/my_tool.py
+from typing import Dict, Any
+from pydantic import BaseModel, Field
+from app.tools.mcp import tool
+from app.providers.my_system import MySystemProvider
+
+class MyToolInput(BaseModel):
+    arg1: str = Field(..., description="Description of the argument")
+
+@tool(
+    name="my_tool_name",
+    description="Detailed description of what the tool does.",
+    args_schema=MyToolInput
+)
+async def my_tool_name(arg1: str) -> Dict[str, Any]:
+    """Docstring for the tool function."""
+    # Instantiate provider here (stateless)
+    provider = MySystemProvider(...)
+    
+    return await provider.do_something(arg1)
+```
+
+4.  **Register Tool**: Import and add the tool function to `AVAILABLE_TOOLS` in `app/tools/__init__.py`.
 
 ## Configuration & Settings
 

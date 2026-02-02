@@ -9,6 +9,7 @@ from app.tools.self_service.search_user_entitlements import search_user_entitlem
 from app.tools.self_service.search_events import search_events
 from app.tools.self_service.check_github_repo import check_github_repo
 from app.tools.self_service.list_github_templates import list_github_templates
+from app.tools.self_service.find_owner import find_owner
 
 # FinOps Tools
 from app.tools.finops.get_cost_summary import get_cost_summary
@@ -48,7 +49,8 @@ AVAILABLE_TOOLS = [
     list_workspaces,
     search_events,
     check_github_repo,
-    list_github_templates
+    list_github_templates,
+    find_owner
 ]
 
 def get_read_only_tools():
