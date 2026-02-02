@@ -27,6 +27,24 @@ class DataAccessStateMachine(BaseRequestStateMachine):
     the manager_approval state and related transitions below.
     """
 
+    # Override completion facts mapping for UI state tracking
+    STATE_COMPLETION_FACTS = {
+        "pending": "request_submitted",
+        # "manager_approval": "approval_received",  # Uncomment when manager approval is enabled
+        "data_owner_approval": "approval_received",
+        "provisioning": "access_granted",  # Data access uses access_granted, not provisioning_completed
+        "rejected": "request_rejected"
+    }
+
+    # Override log facts for UI display
+    STATE_LOG_FACTS = {
+        "pending": ["request_submitted"],
+        # "manager_approval": ["approval_received"],  # Uncomment when manager approval is enabled
+        "data_owner_approval": ["approval_received"],
+        "provisioning": ["access_grant_started", "access_granted", "access_grant_failed"],
+        "rejected": ["request_rejected"]
+    }
+
     # States
     pending = State("pending", initial=True)
     # manager_approval = State("manager_approval")  # TODO: Uncomment when manager lookup is implemented
@@ -216,3 +234,19 @@ class DataAccessStateMachine(BaseRequestStateMachine):
     def has_access_granted(self) -> bool:
         """Check if access has been successfully granted."""
         return has_fact(self.db, self.request.id, "access_granted")
+
+    # --------------------------------------------------------------------------
+    # UI Display Overrides
+    # --------------------------------------------------------------------------
+
+    def _get_state_display_name(self, state_id: str) -> str:
+        """Override display names for data access-specific states."""
+        display_names = {
+            "pending": "Created",
+            "data_owner_approval": "Data Owner Approval",
+            "provisioning": "Granting Access",
+            "completed": "Access Granted",
+            "rejected": "Rejected",
+            "failed": "Failed"
+        }
+        return display_names.get(state_id, super()._get_state_display_name(state_id))
