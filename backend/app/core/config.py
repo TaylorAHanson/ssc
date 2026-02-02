@@ -162,6 +162,10 @@ class Settings(BaseSettings):
     AGENT_MAX_ITERATIONS: int = 10
     AGENT_TIMEOUT_SECONDS: int = 60
     
+    # Calendar Settings
+    EVENT_CALENDAR_URL: str = ""
+    EVENT_SYNC_INTERVAL_MINUTES: int = 60
+    
     # Retry Settings
     DEFAULT_MAX_RETRIES: int = 3
     TERRAFORM_MAX_RETRIES: int = 2
@@ -175,9 +179,20 @@ class Settings(BaseSettings):
     # Terraform GitOps Settings
     INFRA_REPO_URL: str = "" # URL of the infrastructure git repository
     INFRA_REPO_BRANCH: str = "main" # Main branch for infrastructure repo
-    GIT_USERNAME: str = "Ops Bot"
-    GIT_EMAIL: str = "ops-bot@example.com"
+    DEFAULT_ENVIRONMENT: str = "dev" # Default environment for GitOps (dev, staging, prod)
+    GIT_USERNAME: str = "ATLAS Bot"
+    GIT_EMAIL: str = "atlas-bot@databricks.com"
     GIT_SSH_KEY_PATH: str = "" # Path to SSH key for git operations
+    GIT_TOKEN: str = "" # GitHub personal access token for HTTPS auth (fallback)
+    GIT_TOKEN_SECRET_SCOPE: str = ""  # Databricks secret scope for PAT
+    GIT_TOKEN_SECRET_KEY: str = ""  # Secret key name for PAT
+    
+    # GitHub App Authentication (blocked by org IP allowlist, kept for future)
+    GITHUB_APP_ID: str = "" # GitHub App ID
+    GITHUB_APP_PRIVATE_KEY: str = "" # PEM-encoded private key (store in secrets)
+    GITHUB_APP_INSTALLATION_ID: str = "" # Optional: specific installation ID
+    GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE: str = "atlas-hub"  # Databricks secret scope
+    GITHUB_APP_PRIVATE_KEY_SECRET_KEY: str = "github-app-private-key"  # Secret key name
     
     # IDP (Identity Provider) Settings
     # SECRET: Set in .env file
@@ -203,9 +218,105 @@ class Settings(BaseSettings):
     MOCK_USER_ID: str = "dev_user_id"
     MOCK_USER_TOKEN: str = "" # SECRET: Set in .env (for testing OBO/PAT locally)
     
+    # Cache for runtime-fetched secrets
+    _github_app_private_key_cached: str = ""
+    _git_token_cached: str = ""
+    
+    def get_git_token(self) -> str:
+        """
+        Get GitHub PAT, fetching from Databricks secrets at runtime if needed.
+        """
+        # If already set via env var, use it
+        if self.GIT_TOKEN:
+            return self.GIT_TOKEN
+        
+        # If we already fetched it, return cached value
+        if self._git_token_cached:
+            return self._git_token_cached
+        
+        # Try to fetch from Databricks secrets at runtime
+        if self.GIT_TOKEN_SECRET_SCOPE and self.GIT_TOKEN_SECRET_KEY:
+            try:
+                from databricks.sdk import WorkspaceClient
+                import base64
+                import logging
+                logger = logging.getLogger(__name__)
+                
+                w = WorkspaceClient()
+                secret = w.secrets.get_secret(
+                    scope=self.GIT_TOKEN_SECRET_SCOPE,
+                    key=self.GIT_TOKEN_SECRET_KEY
+                )
+                if secret and secret.value:
+                    # Databricks SDK returns secrets base64 encoded
+                    token_value = base64.b64decode(secret.value).decode('utf-8').strip()
+                    self._git_token_cached = token_value
+                    logger.info(
+                        f"Fetched GitHub PAT from secrets/{self.GIT_TOKEN_SECRET_SCOPE}/{self.GIT_TOKEN_SECRET_KEY}"
+                    )
+                    return self._git_token_cached
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to fetch GitHub PAT from secrets: {e}")
+        
+        return ""
+    
+    def get_github_app_private_key(self) -> str:
+        """
+        Get GitHub App private key, fetching from Databricks secrets at runtime if needed.
+        This handles the case where valueFrom doesn't properly resolve multi-line secrets.
+        """
+        # If already set via env var (valueFrom worked), use it
+        if self.GITHUB_APP_PRIVATE_KEY:
+            return self.GITHUB_APP_PRIVATE_KEY
+        
+        # If we already fetched it, return cached value
+        if self._github_app_private_key_cached:
+            return self._github_app_private_key_cached
+        
+        # Try to fetch from Databricks secrets at runtime
+        if self.GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE and self.GITHUB_APP_PRIVATE_KEY_SECRET_KEY:
+            try:
+                from databricks.sdk import WorkspaceClient
+                w = WorkspaceClient()
+                secret = w.secrets.get_secret(
+                    scope=self.GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE,
+                    key=self.GITHUB_APP_PRIVATE_KEY_SECRET_KEY
+                )
+                if secret and secret.value:
+                    import base64
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    
+                    key_value = secret.value
+                    
+                    # Databricks SDK returns secrets base64 encoded - decode if needed
+                    if not key_value.startswith('-----BEGIN'):
+                        try:
+                            key_value = base64.b64decode(key_value).decode('utf-8')
+                            logger.info("Decoded base64-encoded private key from Databricks secrets")
+                        except Exception as e:
+                            logger.warning(f"Failed to base64 decode secret, using as-is: {e}")
+                    
+                    # Handle case where newlines were stored as literal \n
+                    if '\\n' in key_value and '\n' not in key_value:
+                        key_value = key_value.replace('\\n', '\n')
+                    
+                    self._github_app_private_key_cached = key_value
+                    logger.info(
+                        f"Fetched GitHub App private key from secrets/{self.GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE}/{self.GITHUB_APP_PRIVATE_KEY_SECRET_KEY} (length: {len(key_value)}, starts_with: {key_value[:30] if len(key_value) > 30 else key_value})"
+                    )
+                    return self._github_app_private_key_cached
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to fetch GitHub App private key from secrets: {e}")
+        
+        return ""
+    
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 settings = Settings()

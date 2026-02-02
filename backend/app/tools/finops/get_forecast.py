@@ -40,11 +40,27 @@ class GetForecastedSpendTool(BaseTool):
     def input_schema(self) -> Dict[str, Any]:
         return {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "start_date": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "Start date for the historical spend calculation (YYYY-MM-DD). Defaults to 30 days ago."
+                },
+                "end_date": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "End date for the historical spend calculation (YYYY-MM-DD). Defaults to today."
+                },
+                "forecast_days": {
+                    "type": "integer",
+                    "description": "Number of historical days to consider for daily run rate calculation. Defaults to 30.",
+                    "default": 30
+                }
+            },
             "required": []
         }
 
-    async def execute(self) -> Dict[str, Any]:
+    async def execute(self, **kwargs) -> Dict[str, Any]:
         try:
             # 1. Get current month progress
             now = datetime.utcnow()

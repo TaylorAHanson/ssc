@@ -221,10 +221,13 @@ export async function listContent(): Promise<ContentInfo[]> {
   return response.json();
 }
 
-export async function getContent(filename: string, version?: string): Promise<Record<string, any> | any[]> {
+export async function getContent(filename: string, version?: string, params?: Record<string, string>): Promise<Record<string, any> | any[]> {
   const url = new URL(`${API_BASE_URL}/content/content/${filename}`);
   if (version) {
     url.searchParams.set('version', version);
+  }
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   }
   const response = await fetch(url.toString(), {
     headers: getHeaders()
@@ -260,6 +263,21 @@ export async function getContentVersions(filename: string): Promise<ContentVersi
   });
   if (!response.ok) {
     throw new Error(`Failed to get content versions: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Trigger a manual calendar sync.
+ */
+export async function triggerCalendarSync(): Promise<{ status: string; message: string }> {
+  const response = await fetch(`${API_BASE_URL}/content/calendar/sync`, {
+    method: 'POST',
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to sync calendar: ${response.statusText}`);
   }
   return response.json();
 }

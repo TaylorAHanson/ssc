@@ -48,7 +48,7 @@ class CheckTaggingComplianceTool(BaseTool):
             "required": ["required_tags"]
         }
 
-    async def execute(self, required_tags: List[str]) -> Dict[str, Any]:
+    async def execute(self, required_tags: List[str], **kwargs) -> Dict[str, Any]:
         try:
             # We can check system.compute.clusters for tags
             # The custom_tags column is a Map(String, String) or similar structure.

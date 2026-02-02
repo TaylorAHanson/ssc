@@ -6,6 +6,7 @@ pydantic-settings
 python-multipart
 python-dotenv
 sqlalchemy
+psycopg2-binary
 alembic
 httpx
 databricks-sdk
@@ -14,3 +15,7 @@ PyYAML
 GitPython
 pyinstrument
 croniter
+PyJWT
+cryptography
+requests
+icalendar

@@ -61,7 +61,7 @@ class GetCostSummaryTool(BaseTool):
             "required": ["start_date", "end_date"]
         }
 
-    async def execute(self, start_date: str, end_date: str, granularity: str = "total", group_by: Optional[str] = None) -> Dict[str, Any]:
+    async def execute(self, start_date: str, end_date: str, granularity: str = "total", group_by: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         import logging
         logger = logging.getLogger(__name__)
         

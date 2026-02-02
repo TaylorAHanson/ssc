@@ -6,6 +6,7 @@ from app.tools.execute_workflow import ExecuteWorkflowTool
 from app.tools.self_service.search_requests import SearchRequestsTool
 from app.tools.self_service.search_approvals import SearchApprovalsTool
 from app.tools.self_service.search_user_entitlements import SearchUserEntitlementsTool
+from app.tools.self_service.search_events import SearchEventsTool
 
 # FinOps Tools
 from app.tools.finops.get_cost_summary import GetCostSummaryTool
@@ -20,6 +21,7 @@ from app.tools.governance.search_audit_logs import SearchAuditLogsTool
 from app.tools.governance.check_overprovisioning import CheckOverprovisionedUsersTool
 from app.tools.governance.check_orphans import CheckOrphanedAssetsTool
 from app.tools.governance.check_quality import CheckAssetQualityTool
+from app.tools.governance.list_workspaces import ListWorkspacesTool
 
 # Registry of available tools
 AVAILABLE_TOOLS = [
@@ -40,7 +42,9 @@ AVAILABLE_TOOLS = [
     SearchAuditLogsTool(),
     CheckOverprovisionedUsersTool(),
     CheckOrphanedAssetsTool(),
-    CheckAssetQualityTool()
+    CheckAssetQualityTool(),
+    ListWorkspacesTool(),
+    SearchEventsTool()
 ]
 
 def get_read_only_tools():

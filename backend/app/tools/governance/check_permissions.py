@@ -52,7 +52,7 @@ class CheckObjectPermissionsTool(BaseTool):
             "required": ["object_type", "object_name"]
         }
 
-    async def execute(self, object_type: str, object_name: str) -> Dict[str, Any]:
+    async def execute(self, object_type: str, object_name: str, **kwargs) -> Dict[str, Any]:
         try:
             # UC System tables: system.information_schema.table_privileges etc.
             # But SHOW GRANTS is often simpler and supported via SQL execution.

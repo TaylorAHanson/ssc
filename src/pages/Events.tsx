@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { Calendar, Clock, MapPin, Users, Mail, ChevronLeft, ChevronRight, Link2, CalendarPlus } from 'lucide-react';
+import { Calendar, Clock, MapPin, Users, Mail, ChevronLeft, ChevronRight, Link2, CalendarPlus, RefreshCcw } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, addMonths, subMonths, addMinutes } from 'date-fns';
-import { getContent } from '../services/api';
+import { getContent, triggerCalendarSync } from '../services/api';
+import { useUserStore } from '../stores/userStore';
 
 interface Event {
   id: string;
@@ -16,7 +17,7 @@ interface Event {
   type: 'Workshop' | 'Webinar' | 'Office Hours' | 'Community Meetup';
   attendees: number;
   maxAttendees?: number;
-  teamsLink?: string;
+  joinLink?: string;
 }
 
 // Helper function to create dates relative to today (for mock events fallback)
@@ -167,7 +168,7 @@ const eventTypeColors = {
 const parseDuration = (duration: string): number => {
   const hoursMatch = duration.match(/([\d.]+)\s*hours?/i);
   const minutesMatch = duration.match(/([\d.]+)\s*minutes?/i);
-  
+
   let totalMinutes = 0;
   if (hoursMatch) {
     totalMinutes += parseFloat(hoursMatch[1]) * 60;
@@ -175,7 +176,7 @@ const parseDuration = (duration: string): number => {
   if (minutesMatch) {
     totalMinutes += parseFloat(minutesMatch[1]);
   }
-  
+
   return totalMinutes || 60; // Default to 60 minutes if parsing fails
 };
 
@@ -184,22 +185,22 @@ const generateICS = (event: Event): string => {
   const startDate = event.date;
   const durationMinutes = parseDuration(event.duration);
   const endDate = addMinutes(startDate, durationMinutes);
-  
-  const teamsLink = event.teamsLink || '';
-  
+
+  const joinLink = event.joinLink || '';
+
   // Format dates in ICS format (YYYYMMDDTHHMMSSZ)
   const formatICSDate = (date: Date): string => {
     return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
   };
-  
+
   // Escape text for ICS format
   const escapeICS = (text: string): string => {
     return text.replace(/\\/g, '\\\\')
-               .replace(/;/g, '\\;')
-               .replace(/,/g, '\\,')
-               .replace(/\n/g, '\\n');
+      .replace(/;/g, '\\;')
+      .replace(/,/g, '\\,')
+      .replace(/\n/g, '\\n');
   };
-  
+
   const icsContent = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -212,9 +213,9 @@ const generateICS = (event: Event): string => {
     `DTSTART:${formatICSDate(startDate)}`,
     `DTEND:${formatICSDate(endDate)}`,
     `SUMMARY:${escapeICS(event.title)}`,
-    `DESCRIPTION:${escapeICS(event.description)}\\n\\nMicrosoft Teams Meeting:\\n${teamsLink}`,
+    `DESCRIPTION:${escapeICS(event.description)}\\n\\nMeeting Link:\\n${joinLink}`,
     `LOCATION:${escapeICS(event.location)}`,
-    `URL:${teamsLink}`,
+    `URL:${joinLink}`,
     'STATUS:CONFIRMED',
     'SEQUENCE:0',
     'BEGIN:VALARM',
@@ -225,7 +226,7 @@ const generateICS = (event: Event): string => {
     'END:VEVENT',
     'END:VCALENDAR'
   ].join('\r\n');
-  
+
   return icsContent;
 };
 
@@ -237,20 +238,20 @@ const generateCalendarICS = (events: Event[]): string => {
       const startDate = event.date;
       const durationMinutes = parseDuration(event.duration);
       const endDate = addMinutes(startDate, durationMinutes);
-      
-      const teamsLink = event.teamsLink || '';
-      
+
+      const joinLink = event.joinLink || '';
+
       const formatICSDate = (date: Date): string => {
         return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
       };
-      
+
       const escapeICS = (text: string): string => {
         return text.replace(/\\/g, '\\\\')
-                   .replace(/;/g, '\\;')
-                   .replace(/,/g, '\\,')
-                   .replace(/\n/g, '\\n');
+          .replace(/;/g, '\\;')
+          .replace(/,/g, '\\,')
+          .replace(/\n/g, '\\n');
       };
-      
+
       return [
         'BEGIN:VEVENT',
         `UID:${event.id}@databricks-selfservice`,
@@ -258,15 +259,15 @@ const generateCalendarICS = (events: Event[]): string => {
         `DTSTART:${formatICSDate(startDate)}`,
         `DTEND:${formatICSDate(endDate)}`,
         `SUMMARY:${escapeICS(event.title)}`,
-        `DESCRIPTION:${escapeICS(event.description)}\\n\\nMicrosoft Teams Meeting:\\n${teamsLink}`,
+        `DESCRIPTION:${escapeICS(event.description)}\\n\\nMeeting Link:\\n${joinLink}`,
         `LOCATION:${escapeICS(event.location)}`,
-        `URL:${teamsLink}`,
+        `URL:${joinLink}`,
         'STATUS:CONFIRMED',
         'SEQUENCE:0',
         'END:VEVENT'
       ].join('\r\n');
     });
-  
+
   return [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -299,26 +300,47 @@ export function Events() {
   const [selectedFilter, setSelectedFilter] = useState<Event['type'] | 'All'>('All');
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [expandedEventIds, setExpandedEventIds] = useState<Set<string>>(new Set());
   const eventRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+  const { currentPersona, isDevMode } = useUserStore();
+
+  const isAdmin = ['Platform Admin', 'Governance Admin', 'Security Admin', 'Finance Admin'].includes(currentPersona);
+
+  const loadEvents = async (isRefresh: boolean = false) => {
+    try {
+      setLoading(true);
+      setError(null);
+      // Use _t as a cache-buster instead of version to avoid backend version lookup
+      const cacheBuster = isRefresh ? String(Date.now()) : undefined;
+      const apiEvents = await getContent('events.json', undefined, cacheBuster ? { _t: cacheBuster } : undefined) as any[];
+
+      if (!Array.isArray(apiEvents)) {
+        throw new Error('API returned invalid data format for events');
+      }
+
+      const convertedEvents = apiEvents.map(convertApiEventToEvent);
+      setEvents(convertedEvents);
+    } catch (err: any) {
+      console.error('Failed to load events:', err);
+      setError(err.message || 'Failed to load events');
+
+      // Fallback to mock events ONLY if in dev mode
+      if (isDevMode) {
+        setEvents(mockEvents);
+      } else {
+        setEvents([]);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const loadEvents = async () => {
-      try {
-        setLoading(true);
-        const apiEvents = await getContent('events.json') as any[];
-        const convertedEvents = apiEvents.map(convertApiEventToEvent);
-        setEvents(convertedEvents);
-      } catch (error) {
-        console.error('Failed to load events:', error);
-        // Fallback to mock events if API fails
-        setEvents(mockEvents);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     loadEvents();
   }, []);
+
 
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(currentDate);
@@ -339,18 +361,40 @@ export function Events() {
     downloadICS(icsContent, 'databricks-events.ics');
   };
 
+  const handleRefreshCalendar = async () => {
+    try {
+      setSyncing(true);
+      await triggerCalendarSync();
+      await loadEvents(true);
+    } catch (error) {
+      console.error('Failed to sync calendar:', error);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const toggleExpand = (eventId: string) => {
+    const newSet = new Set(expandedEventIds);
+    if (newSet.has(eventId)) {
+      newSet.delete(eventId);
+    } else {
+      newSet.add(eventId);
+    }
+    setExpandedEventIds(newSet);
+  };
+
   const handleDateClick = (date: Date) => {
     setSelectedDate(date);
     const eventsForDate = getEventsForDate(date);
-    
+
     if (eventsForDate.length > 0) {
       // Scroll to the first event and highlight it
       const firstEvent = eventsForDate[0];
       const eventElement = eventRefs.current[firstEvent.id];
-      
+
       if (eventElement) {
         eventElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        
+
         // Flash green
         setHighlightedEventId(firstEvent.id);
         setTimeout(() => {
@@ -374,26 +418,37 @@ export function Events() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-3xl font-bold text-gray-900 mb-2">Upcoming Events</h1>
-            <p className="text-gray-600">Browse and register for upcoming Databricks training sessions and community events</p>
           </div>
-          <Button
-            onClick={handleSubscribeToCalendar}
-            className="flex items-center gap-2 bg-primary text-white hover:bg-primary/90 font-semibold px-6 py-2"
-          >
-            <CalendarPlus className="w-5 h-5" />
-            Subscribe to Calendar
-          </Button>
+          <div className="flex items-center gap-3">
+            {isAdmin && (
+              <Button
+                variant="outline"
+                onClick={handleRefreshCalendar}
+                disabled={syncing}
+                className="flex items-center gap-2"
+              >
+                <RefreshCcw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+                {syncing ? 'Syncing...' : 'Refresh Calendar'}
+              </Button>
+            )}
+            <Button
+              onClick={handleSubscribeToCalendar}
+              className="flex items-center gap-2 bg-primary text-white hover:bg-primary/90 font-semibold px-6 py-2"
+            >
+              <CalendarPlus className="w-5 h-5" />
+              Subscribe to Calendar
+            </Button>
+          </div>
         </div>
-        
+
         {/* Filter Chips */}
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setSelectedFilter('All')}
-            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
-              selectedFilter === 'All'
-                ? 'bg-primary text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
+            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${selectedFilter === 'All'
+              ? 'bg-primary text-white'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
           >
             All
           </button>
@@ -401,16 +456,22 @@ export function Events() {
             <button
               key={type}
               onClick={() => setSelectedFilter(type as Event['type'])}
-              className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
-                selectedFilter === type
-                  ? `${eventTypeColors[type as keyof typeof eventTypeColors]} border-2 border-gray-900`
-                  : `${eventTypeColors[type as keyof typeof eventTypeColors]} hover:opacity-80`
-              }`}
+              className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${selectedFilter === type
+                ? `${eventTypeColors[type as keyof typeof eventTypeColors]} border-2 border-gray-900`
+                : `${eventTypeColors[type as keyof typeof eventTypeColors]} hover:opacity-80`
+                }`}
             >
               {type}
             </button>
           ))}
         </div>
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg relative mb-4" role="alert">
+            <strong className="font-bold">Error: </strong>
+            <span className="block sm:inline">{error}</span>
+          </div>
+        )}
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6">
@@ -509,77 +570,93 @@ export function Events() {
             </Card>
           ) : (
             upcomingEvents.map((event) => (
-            <div
-              key={event.id}
-              ref={(el) => {
-                eventRefs.current[event.id] = el;
-              }}
-              className={`transition-all duration-500 ${
-                highlightedEventId === event.id
+              <div
+                key={event.id}
+                ref={(el) => {
+                  eventRefs.current[event.id] = el;
+                }}
+                className={`transition-all duration-500 ${highlightedEventId === event.id
                   ? 'ring-4 ring-green-500 bg-green-50 rounded-lg'
                   : ''
-              }`}
-            >
-              <Card
-                className={highlightedEventId === event.id ? 'bg-green-50' : ''}
+                  }`}
               >
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${eventTypeColors[event.type]}`}>
-                        {event.type}
-                      </span>
-                    </div>
-                    <CardTitle className="text-lg">{event.title}</CardTitle>
-                    <p className="text-sm text-gray-600 mt-2">{event.description}</p>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="grid md:grid-cols-2 gap-4 mb-4">
-                  <div className="flex items-center gap-2 text-sm text-gray-600">
-                    <Calendar className="w-4 h-4" />
-                    <span>{format(event.date, 'EEEE, MMMM d, yyyy')}</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-gray-600">
-                    <Clock className="w-4 h-4" />
-                    <span>{event.time} ({event.duration})</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-gray-600">
-                    <MapPin className="w-4 h-4" />
-                    <span>{event.location}</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-gray-600">
-                    <Users className="w-4 h-4" />
-                    <span>
-                      {event.attendees} {event.maxAttendees ? `/ ${event.maxAttendees}` : ''} attendees
-                    </span>
-                  </div>
-                </div>
-                {event.teamsLink && (
-                  <div className="mb-4">
-                    <a
-                      href={event.teamsLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 underline"
-                    >
-                      <Link2 className="w-4 h-4" />
-                      Join Microsoft Teams Meeting
-                    </a>
-                  </div>
-                )}
-                <Button
-                  onClick={() => handleInviteMe(event)}
-                  className="w-full"
+                <Card
+                  className={highlightedEventId === event.id ? 'bg-green-50' : ''}
                 >
-                  <Mail className="w-4 h-4 mr-2" />
-                  Add to Calendar
-                </Button>
-              </CardContent>
-            </Card>
-            </div>
+                  <CardHeader>
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${eventTypeColors[event.type]}`}>
+                            {event.type}
+                          </span>
+                        </div>
+                        <CardTitle className="text-lg">{event.title}</CardTitle>
+                        <div className="mt-2 group relative">
+                          <p className={`text-sm text-gray-600 ${!expandedEventIds.has(event.id) ? 'line-clamp-2' : ''}`}>
+                            {event.description}
+                          </p>
+                          {event.description && event.description.length > 120 && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleExpand(event.id);
+                              }}
+                              className="text-xs text-primary hover:underline mt-1 font-medium"
+                            >
+                              {expandedEventIds.has(event.id) ? 'Show less' : 'Show more'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid md:grid-cols-2 gap-4 mb-4">
+                      <div className="flex items-center gap-2 text-sm text-gray-600">
+                        <Calendar className="w-4 h-4" />
+                        <span>{format(event.date, 'EEEE, MMMM d, yyyy')}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm text-gray-600">
+                        <Clock className="w-4 h-4" />
+                        <span>{event.time} ({event.duration})</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm text-gray-600">
+                        <MapPin className="w-4 h-4" />
+                        <span>{event.location}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm text-gray-600">
+                        <Users className="w-4 h-4" />
+                        <span>
+                          {event.attendees} {event.maxAttendees ? `/ ${event.maxAttendees}` : ''} attendees
+                        </span>
+                      </div>
+                    </div>
+                    {event.joinLink && (
+                      <div className="mb-4">
+                        <a
+                          href={event.joinLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 underline"
+                        >
+                          <Link2 className="w-4 h-4" />
+                          {event.joinLink.includes('teams.microsoft.com') ? 'Join Microsoft Teams Meeting' :
+                            event.joinLink.includes('meet.google.com') ? 'Join Google Meet' :
+                              event.joinLink.includes('zoom.us') ? 'Join Zoom Meeting' : 'Join Meeting'}
+                        </a>
+                      </div>
+                    )}
+                    <Button
+                      onClick={() => handleInviteMe(event)}
+                      className="w-full"
+                    >
+                      <Mail className="w-4 h-4 mr-2" />
+                      Add to Calendar
+                    </Button>
+                  </CardContent>
+                </Card>
+              </div>
             ))
           )}
         </div>

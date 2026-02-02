@@ -40,7 +40,7 @@ class SearchRequestsTool(BaseTool):
             "required": []
         }
 
-    async def execute(self, query: str = None, status: str = None, limit: int = 5) -> Dict[str, Any]:
+    async def execute(self, query: str = None, status: str = None, limit: int = 5, **kwargs) -> Dict[str, Any]:
         """
         Execute the search.
         """

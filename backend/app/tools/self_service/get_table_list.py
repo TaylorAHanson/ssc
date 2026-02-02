@@ -47,7 +47,7 @@ class GetTableListTool(BaseTool):
             "required": ["catalog_name", "schema_name"]
         }
 
-    async def execute(self, catalog_name: str, schema_name: str) -> Dict[str, Any]:
+    async def execute(self, catalog_name: str, schema_name: str, **kwargs) -> Dict[str, Any]:
         """
         Fetch the list of tables for a schema along with their descriptions.
         """
@@ -62,7 +62,8 @@ class GetTableListTool(BaseTool):
                     "schema_name": table.schema_name,
                     "table_type": table.table_type.value if hasattr(table.table_type, 'value') else str(table.table_type),
                     "comment": table.comment or "No description provided",
-                    "owner": table.owner
+                    "owner": table.owner,
+                    "properties": table.properties or {}
                 })
             
             return {

@@ -17,6 +17,34 @@ env:
   - name: DATABASE_USER
     value: "edas_app"
   
+  # Infrastructure Repository (Terraform GitOps)
+  - name: INFRA_REPO_URL
+    value: "https://github.com/databricks-field-eng/fe-agentic-self-service-terraform"
+  - name: INFRA_REPO_BRANCH
+    value: "main"
+  - name: DEFAULT_ENVIRONMENT
+    value: "dev"
+  - name: GIT_USERNAME
+    value: "ATLAS Bot"
+  - name: GIT_EMAIL
+    value: "atlas-bot@databricks.com"
+  
+  # GitHub PAT Authentication (fallback, works with IP allowlist)
+  # Fetched at runtime from Databricks secrets
+  - name: GIT_TOKEN_SECRET_SCOPE
+    value: "atlas-hub"
+  - name: GIT_TOKEN_SECRET_KEY
+    value: "github-pat"
+  
+  # GitHub App Authentication (atlas-infra-bot) - blocked by org IP allowlist
+  # Kept for future use if IP allowlist is updated
+  - name: GITHUB_APP_ID
+    value: ""
+  - name: GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE
+    value: "atlas-hub"
+  - name: GITHUB_APP_PRIVATE_KEY_SECRET_KEY
+    value: "github-app-private-key"
+
   # Databricks Configuration
   - name: DATABRICKS_WAREHOUSE_ID
     value: "5c5e40da3caf812c"
@@ -76,3 +104,7 @@ env:
     value: ""
   - name: NOTIFICATION_TEAMS_WEBHOOK_URL
     value: ""
+  - name: EVENT_CALENDAR_URL
+    value: ""
+  - name: EVENT_SYNC_INTERVAL_MINUTES
+    value: "60"

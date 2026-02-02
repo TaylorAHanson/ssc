@@ -102,7 +102,8 @@ Table Schema for system.access.audit:
         email: Optional[str] = None,
         aggregation_type: str = "list",
         group_by_columns: Optional[list] = None,
-        additional_where: Optional[str] = None
+        additional_where: Optional[str] = None,
+        **kwargs
     ) -> Dict[str, Any]:
         try:
             where_clauses = [
