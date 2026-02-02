@@ -1,5 +1,12 @@
 """
 Agent LLM model endpoint client.
+
+ROLE: High-Level Domain Logic
+RESPONSIBILITY:
+- Acts as the Agent wrapper specifically for LLM interactions.
+- Formats prompts and manages conversation context (messages).
+- Parses complex LLM responses (OpenAI/Gemini formats) into clean, usable dictionaries.
+- Uses `ModelServingClient` internally for the network transport.
 """
 from typing import Dict, Any, List, Optional
 import logging
@@ -96,7 +103,7 @@ class AgentLLMClient:
         if not isinstance(response, dict):
             return self._create_error_response(str(response))
 
-        # Strategy: Try specific parsers in order of likelihood
+        # Strategy: Strictly follow OpenAI format as enforced by Databricks Model Serving
         
         # 1. Top-level tool calls (OpenAI/Gemini variant)
         if "tool_calls" in response or "function_calls" in response:
@@ -106,23 +113,13 @@ class AgentLLMClient:
         if "choices" in response:
             return self._parse_openai_format(response)
             
-        # 3. Gemini "candidates" format
-        if "candidates" in response:
-            return self._parse_gemini_format(response)
-            
-        # 4. "message" wrapper (custom/databricks wrapper)
+        # 3. Direct "message" wrapper (Gemini/Databricks variant seen in logs)
         if "message" in response:
             return self._parse_message_wrapper(response["message"])
             
-        # 5. Direct content/output
+        # 4. Direct content/output (Fallback)
         if "content" in response:
-             # This might still contain complex Gemini content structures
-             content = response["content"]
-             if isinstance(content, (list, dict)):
-                 res = self._parse_gemini_content(content)
-                 res["role"] = response.get("role", "assistant")
-                 return res
-             return {"role": response.get("role", "assistant"), "content": str(content)}
+             return {"role": response.get("role", "assistant"), "content": str(response["content"])}
              
         if "output" in response:
              return {"role": "assistant", "content": str(response["output"])}
@@ -159,155 +156,35 @@ class AgentLLMClient:
             
         choice = choices[0]
         if "message" in choice:
-            message = choice["message"]
-            # Handle complex content in OpenAI message wrapper
-            if isinstance(message.get("content"), (list, dict)):
-                parsed = self._parse_gemini_content(message["content"])
-                # Preserve existing tool_calls if they exist in the message but not in parsed
-                if "tool_calls" in message and not parsed.get("tool_calls"):
-                    parsed["tool_calls"] = message["tool_calls"]
-                # Override role if not present
-                if "role" not in parsed:
-                    parsed["role"] = message.get("role", "assistant")
-                return parsed
-            return message
+            return self._parse_message_wrapper(choice["message"])
         elif "text" in choice:
             return {"role": "assistant", "content": choice["text"]}
         elif "content" in choice:
-            content = choice["content"]
-            if isinstance(content, (list, dict)):
-                return self._parse_gemini_content(content)
-            return {"role": "assistant", "content": content}
+            return {"role": "assistant", "content": choice["content"]}
         
         return self._create_error_response("Unknown OpenAI choice format")
 
-    def _parse_gemini_format(self, response: Dict[str, Any]) -> Dict[str, Any]:
-        candidates = response.get("candidates", [])
-        if not candidates:
-            return self._create_error_response("Empty candidates in response")
-            
-        candidate = candidates[0]
+    def _parse_message_wrapper(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Parses a message object which might have string content or list of content parts.
+        Structure seen: {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
+        """
+        content = message.get("content")
+        role = message.get("role", "assistant")
+        tool_calls = message.get("tool_calls")
         
-        # Check for top-level functionCalls in candidate
-        if "functionCalls" in candidate:
-             tool_calls = []
-             for fc in candidate["functionCalls"]:
-                tool_calls.append({
-                    "id": fc.get("name", "call_id"),
-                    "type": "function",
-                    "function": {
-                        "name": fc.get("name", ""),
-                        "arguments": fc.get("args", {})
-                    }
-                })
-             return {"role": "assistant", "content": "", "tool_calls": tool_calls}
-
-        content = candidate.get("content")
-        return self._parse_gemini_content(content)
-
-    def _parse_gemini_content(self, content: Any) -> Dict[str, Any]:
-        if isinstance(content, str):
-            return {"role": "assistant", "content": content}
-            
-        if isinstance(content, dict) and "parts" in content:
-            # Old Gemini format
-            text_parts = []
-            tool_calls = []
-            for part in content["parts"]:
-                if "text" in part:
-                    text_parts.append(part["text"])
-                if "functionCall" in part:
-                    self._extract_gemini_function_call(part["functionCall"], tool_calls)
-            return {
-                "role": "assistant", 
-                "content": "\n".join(text_parts),
-                "tool_calls": tool_calls
-            }
-            
+        parsed = {"role": role, "tool_calls": tool_calls}
+        
+        # Handle list-of-content-parts format (OpenAI/Gemini standard)
         if isinstance(content, list):
-            # New Gemini format (reasoning, summary, etc)
             text_parts = []
-            tool_calls = []
+            for part in content:
+                if isinstance(part, dict) and "text" in part:
+                    text_parts.append(part["text"])
             
-            for item in content:
-                if not isinstance(item, dict): continue
-                
-                item_type = item.get("type")
-                
-                # Direct text
-                if "text" in item:
-                    text_parts.append(item["text"])
-                    
-                # Direct function call in item
-                if "functionCall" in item:
-                    self._extract_gemini_function_call(item["functionCall"], tool_calls)
-                if "function_call" in item:
-                    self._extract_gemini_function_call(item["function_call"], tool_calls)
-                
-                # Top level tool_calls list
-                if "tool_calls" in item and isinstance(item["tool_calls"], list):
-                    tool_calls.extend(item["tool_calls"])
-
-                if item_type == "functionCall":
-                     # Sometimes the dict itself is the function call wrapper
-                     # But usually it has a key 'functionCall' inside, which we handled above
-                     pass
-
-                # Reasoning/Summary block
-                if item_type == "reasoning":
-                    if "summary" in item:
-                        for summary_item in item["summary"]:
-                            if "text" in summary_item:
-                                text_parts.append(summary_item["text"])
-                            if "functionCall" in summary_item:
-                                self._extract_gemini_function_call(summary_item["functionCall"], tool_calls)
-                    
-                    # Tool calls might be directly in reasoning block?
-                    # Previous debugging suggested this might happen
-                    if "tool_calls" in item and isinstance(item["tool_calls"], list):
-                        tool_calls.extend(item["tool_calls"])
-
-            return {
-                "role": "assistant",
-                "content": "\n".join(filter(None, text_parts)),
-                "tool_calls": tool_calls
-            }
+            # Use joined text as primary content
+            parsed["content"] = "\n".join(text_parts)
+        else:
+            parsed["content"] = content or ""
             
-        return {"role": "assistant", "content": str(content)}
-
-    def _extract_gemini_function_call(self, fc_data: Dict, tool_calls_list: List):
-        # Handle various function call shapes
-        name = fc_data.get("name")
-        if not name: return
-        
-        tool_calls_list.append({
-            "id": name, # Gemini doesn't always provide ID, use name
-            "type": "function",
-            "function": {
-                "name": name,
-                "arguments": fc_data.get("args", fc_data.get("arguments", {}))
-            }
-        })
-
-    def _parse_message_wrapper(self, message_obj: Any) -> Dict[str, Any]:
-        # Recursive call if it looks like a standard response structure inside "message"
-        if not isinstance(message_obj, dict):
-             return {"role": "assistant", "content": str(message_obj)}
-             
-        # Check for tool calls at this level
-        if "tool_calls" in message_obj or "function_calls" in message_obj:
-            return self._extract_top_level_tools(message_obj)
-            
-        content = message_obj.get("content")
-        role = message_obj.get("role", "assistant")
-        
-        # If content is a list/dict, use the Gemini content parser
-        if isinstance(content, (dict, list)):
-            parsed = self._parse_gemini_content(content)
-            parsed["role"] = role
-            return parsed
-            
-        return {
-            "role": role, 
-            "content": content or ""
-        }
+        return parsed

@@ -13,8 +13,8 @@
     *   If it exists already, ask the user for a different project name.
 5.  **Visibility**: Public (Internal) or Private?
     *   *Options*: `internal`, `private`.
-6.  **Template Discovery**: Call `list_github_templates` to find available reusable templates.
-    *   Use the **Project Description** to filter or recommend templates. It's probably good to ask for this before offering templates.
+6.  **Template Discovery**: Call `list_github_templates` AFTER you get the description to find available reusable templates.
+    *   Use the **Project Description** to filter or recommend templates.
     *   Present the available templates to the user and ask if they would like to use one.
     *   If they choose a template, use its `name` in the `execute_workflow` call.
 

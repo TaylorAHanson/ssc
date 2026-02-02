@@ -112,6 +112,8 @@ Phase A: Data Gathering
   - Do NOT ask one question at a time. Batch them.
   - Use HTML lists (`<ul><li>`) for clarity.
   - Validate answers immediately based on the rules in the instruction file.
+- Order
+  - Always ask for the name before asking for the description.
 
 Phase B: Confirmation (CRITICAL)
 - NEVER execute a workflow without explicit confirmation.

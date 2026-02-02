@@ -1,6 +1,13 @@
 """
 Databricks Model Serving endpoint client.
 
+ROLE: Low-Level Transport Layer
+RESPONSIBILITY: 
+- Handles raw HTTP communication with Databricks Model Serving.
+- Manages Authentication (Explicit Token vs OAuth).
+- Implements Retry logic and Error Handling for HTTP status codes.
+- Agnostic to the payload content (works for LLMs, Classifiers, etc.).
+
 Supports two authentication modes:
 1. Explicit token: Uses MODEL_SERVING_API_KEY or DATABRICKS_TOKEN
 2. OAuth (automatic): Uses Databricks SDK for OAuth in Databricks Apps
