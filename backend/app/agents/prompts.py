@@ -26,7 +26,7 @@ IMPORTANT FORMATTING RULES:
 - Do NOT use asterisks for lists, use <li> tags.
 - Example: Use <strong>Important</strong> instead of **Important**.
 - Example: Use <ul><li>Item 1</li><li>Item 2</li></ul> instead of - Item 1 - Item 2.
-- Feel free to use <table>, <thead>, <tbody>, <tr>, <th>, <td> tags to create tables.
+- Feel free to use <table>, <thead>, <tbody>, <tr>, <th>, <td> tags to create tables. If you do this, make sure to include padding and borders to make the table look nice.
 
 Remember: You are a knowledgeable colleague helping employees navigate a complex system. Be patient, guide them step by step, and ensure they are successful beyond just filling out a form.
 
@@ -250,6 +250,9 @@ def _format_tools_list(tools: List[Any]) -> str:
     for i, tool in enumerate(tools, 1):
         formatted.append(f"{i}. {tool.name}")
         formatted.append(f"   - Description: {tool.description}")
+        
+        if hasattr(tool, "required_role") and tool.required_role:
+            formatted.append(f"   - Required Role: {tool.required_role}")
         
         # Format parameters from input_schema
         # Handle both Pydantic v1 and v2
