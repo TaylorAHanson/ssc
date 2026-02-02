@@ -130,19 +130,9 @@ async def handle_conversation(
         raise HTTPException(status_code=503, detail="Agent is currently disabled")
     
     try:
-        # User Refresh: Ensure we have the latest roles from DB
-        # The dependency might return a slightly stale state if updated externally
-        from app.db.session import get_session_local
-        db = get_session_local()()
-        try:
-            current_user = db.merge(current_user)
-            db.refresh(current_user)
-            # Force load roles while session is still open
-            # This prevents DetachedInstanceError when accessing them later
-            _ = current_user.roles
-        finally:
-            db.close()
-            
+        # User Refresh removed to preserve Dev Persona overrides
+        # The dependency injection provides the correct user state
+        
         logger.info(f"Incoming agent request context: {request.context}")
         
         # DEBUG: Log user roles to debug visibility issues
