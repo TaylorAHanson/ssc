@@ -225,32 +225,46 @@ async def setup_github_templates():
         if not token or not org:
             raise HTTPException(status_code=400, detail="GITHUB_TOKEN and GITHUB_ORG must be configured")
 
-        templates = ["data-engineering", "data-science", "databricks-apps", "genie-room"]
+        templates = {
+            "data-engineering": ["pipeline", "etl", "databricks", "spark"],
+            "data-science": ["ml", "notebook", "databricks", "scikit-learn"],
+            "databricks-apps": ["react", "fastapi", "databricks", "template"],
+            "genie-room": ["genai", "ai-agent", "databricks", "llm"]
+        }
         results = []
 
         async with GitHubProvider(token=token, org=org) as github:
-            for template_name in templates:
+            for template_name, topics in templates.items():
                 # 1. Check if repo exists
                 exists = await github.check_repo_exists(template_name)
+                
+                repo_path = f"{org}/{template_name}"
+                headers = {
+                    "Authorization": f"token {token}",
+                    "Accept": "application/vnd.github.v3+json"
+                }
                 
                 if not exists:
                     config = {
                         "description": f"Template for {template_name} projects",
-                        "private": True,
+                        "private": False, # Make them public so they are visible
                         "is_template": True
                     }
                     await github.create_repo(template_name, config)
                     results.append(f"Created {template_name}")
                 else:
                     # Ensure it is marked as a template
-                    url = f"https://api.github.com/repos/{org}/{template_name}"
-                    headers = {
-                        "Authorization": f"token {token}",
-                        "Accept": "application/vnd.github.v3+json"
-                    }
                     async with httpx.AsyncClient() as client:
-                        await client.patch(url, headers=headers, json={"is_template": True})
+                        await client.patch(f"https://api.github.com/repos/{repo_path}", headers=headers, json={"is_template": True})
                     results.append(f"Ensured {template_name} is template")
+                
+                # Apply Topics (Tags)
+                async with httpx.AsyncClient() as client:
+                    # Topics API requires a specific accept header
+                    topic_headers = headers.copy()
+                    topic_headers["Accept"] = "application/vnd.github.mercury-preview+json"
+                    await client.put(f"https://api.github.com/repos/{repo_path}/topics", headers=topic_headers, json={"names": topics})
+                results.append(f"Applied tags to {template_name}: {topics}")
                 
                 # 2. Add boilerplate files
                 files = {

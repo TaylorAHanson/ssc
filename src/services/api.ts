@@ -268,6 +268,32 @@ export async function getContentVersions(filename: string): Promise<ContentVersi
 }
 
 /**
+ * GitHub API
+ */
+export interface GitHubTemplate {
+  id: number;
+  name: string;
+  full_name: string;
+  description: string;
+  url: string;
+  is_template: boolean;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  owner: string;
+}
+
+export async function listGitHubTemplates(): Promise<GitHubTemplate[]> {
+  const response = await fetch(`${API_BASE_URL}/github/templates`, {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to list GitHub templates: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
  * Trigger a manual calendar sync.
  */
 export async function triggerCalendarSync(): Promise<{ status: string; message: string }> {

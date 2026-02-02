@@ -3,17 +3,20 @@
 **Goal**: Create a new GitHub repository in the organization.
 
 ## Information to Gather
-1.  **Business Domain**: What is the business domain for this project? (e.g., "marketing", "sales", "finance")
+1.  **Project Description**: What is the purpose of this repository? What technologies or languages will it use?
+    *   *Action*: Use the description to help suggest relevant templates in step 6.
+2.  **Business Domain**: What is the business domain for this project? (e.g., "marketing", "sales", "finance")
     *   *Validation*: Alphanumeric with hyphens only.
-2.  **Project Name**: What is the name of the project?
+3.  **Project Name**: What is the name of the project?
     *   *Validation*: Alphanumeric with hyphens only.
-3.  **Check Availability**: Once you have the domain and project name, **MANDATORY**: Call `check_github_repo` with the name `edh-{businessdomain}-{projectname}` to ensure it is available.
+4.  **Check Availability**: Once you have the domain and project name, **MANDATORY**: Call `check_github_repo` with the name `edh-{businessdomain}-{projectname}` to ensure it is available.
     *   If it exists already, ask the user for a different project name.
-4.  **Description**: A short description of the repository's purpose.
 5.  **Visibility**: Public (Internal) or Private?
     *   *Options*: `internal`, `private`.
-6.  **Template**: (Optional) Do you want to start from a template?
-    *   *Options*: `data-engineering`, `data-science`, `databricks-apps`, `genie-room`.
+6.  **Template Discovery**: Call `list_github_templates` to find available reusable templates.
+    *   Use the **Project Description** to filter or recommend templates. It's probably good to ask for this before offering templates.
+    *   Present the available templates to the user and ask if they would like to use one.
+    *   If they choose a template, use its `name` in the `execute_workflow` call.
 
 ## Naming Convention
 You MUST construct the repository name as: `edh-{businessdomain}-{projectname}`.

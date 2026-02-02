@@ -1,7 +1,7 @@
 """
 GitHub provider client.
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from app.providers.base import BaseProvider
 from app.core.exceptions import RetryableError, PermanentError
 from app.core.retry import retry_on_retryable
@@ -71,6 +71,57 @@ class GitHubProvider(BaseProvider):
             if e.response.status_code == 404:
                 return False
             raise PermanentError(f"Failed to check repo existence: {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
+    async def list_templates(self) -> List[Dict[str, Any]]:
+        """List all repositories marked as templates in the organization."""
+        try:
+            # First, get the authenticated user's login
+            user_resp = await self.client.get("/user")
+            user_resp.raise_for_status()
+            auth_user = user_resp.json()["login"]
+            
+            # If org is not set, or matches the auth user, use /user/repos to see private repos
+            if not self.org or self.org.lower() == auth_user.lower():
+                url = "/user/repos"
+                response = await self.client.get(url, params={"type": "all", "per_page": 100})
+            else:
+                # Try org endpoint first
+                url = f"/orgs/{self.org}/repos"
+                response = await self.client.get(url, params={"type": "all", "per_page": 100})
+                
+                # If org endpoint fails with 404, try user endpoint (fallback to public repos)
+                if response.status_code == 404:
+                    url = f"/users/{self.org}/repos"
+                    response = await self.client.get(url, params={"type": "all", "per_page": 100})
+            
+            response.raise_for_status()
+            
+            repos = response.json()
+            # Filter for repositories where is_template is True
+            templates = [
+                {
+                    "id": repo["id"],
+                    "name": repo["name"],
+                    "full_name": repo["full_name"],
+                    "description": repo.get("description") or "No description",
+                    "url": repo["html_url"],
+                    "is_template": repo.get("is_template", False),
+                    "tags": repo.get("topics", []),
+                    "created_at": repo.get("created_at"),
+                    "updated_at": repo.get("updated_at"),
+                    "owner": repo["owner"]["login"]
+                }
+                for repo in repos if repo.get("is_template")
+            ]
+            
+            return templates
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            else:
+                raise PermanentError(f"Failed to list templates: {str(e)}")
         except httpx.RequestError as e:
             raise RetryableError(f"Request error: {str(e)}")
 
