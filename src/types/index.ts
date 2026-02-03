@@ -78,6 +78,7 @@ export interface State {
   isInitial: boolean;
   isFinal: boolean;
   completedAt?: string;
+  startedAt?: string;
   facts?: {
     type: string;
     data: Record<string, any>;

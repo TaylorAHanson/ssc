@@ -174,12 +174,18 @@ async def handle_conversation(
             mode=agent_mode
         )
         
-        # Format history for runner
+        # Format history for runner - preserve all metadata including timestamps
         history = []
         if request.conversation_history:
             for msg in request.conversation_history:
+                # Standard roles for LLM
                 role = "user" if msg.type == "user" else "assistant"
-                history.append({"role": role, "content": msg.content})
+                history.append({
+                    "role": role, 
+                    "content": msg.content,
+                    "timestamp": msg.timestamp,
+                    "type": msg.type
+                })
         
         # Get OBO token if available
         obo_token = None

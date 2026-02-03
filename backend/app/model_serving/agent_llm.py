@@ -37,8 +37,20 @@ class AgentLLMClient:
         """
         Generate LLM response for agent conversation.
         """
+        # Strip metadata from messages for LLM compatibility
+        stripped_messages = []
+        for msg in messages:
+            stripped = {"role": msg.get("role"), "content": msg.get("content")}
+            if "tool_calls" in msg:
+                stripped["tool_calls"] = msg["tool_calls"]
+            if "tool_call_id" in msg:
+                stripped["tool_call_id"] = msg["tool_call_id"]
+            if "name" in msg:
+                stripped["name"] = msg["name"]
+            stripped_messages.append(stripped)
+
         inputs = {
-            "messages": messages,
+            "messages": stripped_messages,
             "temperature": temperature,
             "max_tokens": max_tokens
         }

@@ -4,6 +4,7 @@ Reusable Agent Runner for executing agent loops with tools.
 import json
 import logging
 import re
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
 from app.model_serving.agent_llm import AgentLLMClient
 from app.agents.prompts import get_agent_prompt
@@ -64,8 +65,13 @@ class AgentRunner:
         if history:
             messages.extend(history)
             
-        # Add current query
-        messages.append({"role": "user", "content": query})
+        # Add current query with timestamp and type
+        messages.append({
+            "role": "user", 
+            "content": query,
+            "timestamp": datetime.now().isoformat(),
+            "type": "user"
+        })
         
         # Format tools for LLM
         formatted_tools = self._format_tools_for_llm(self.tools)
@@ -96,10 +102,12 @@ class AgentRunner:
                 final_content = agent_message
                 break
                 
-            # Add assistant message to history
+            # Add assistant message to history with timestamp
             messages.append({
                 "role": "assistant",
-                "tool_calls": tool_calls
+                "tool_calls": tool_calls,
+                "timestamp": datetime.now().isoformat(),
+                "type": "agent"
             })
             
             # Execute tools
@@ -130,8 +138,9 @@ class AgentRunner:
                         logger.info(f"Executing tool: {fn_name}")
                         
                         # Inject conversation history/context for execute_workflow if available
-                        if fn_name == "execute_workflow" and history:
-                            fn_args["conversation_history"] = history
+                        if fn_name == "execute_workflow":
+                            # Pass all messages EXCEPT the system prompt to the tool
+                            fn_args["conversation_history"] = [m for m in messages if m.get("role") != "system"]
                             
                         # Inject OBO token if provided
                         if obo_token:
