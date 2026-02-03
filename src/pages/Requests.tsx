@@ -386,7 +386,7 @@ export function Requests() {
           <div className="text-center">
             <p className="text-lg font-semibold text-gray-900">Request Not Found</p>
             <p className="text-sm text-gray-500 max-w-xs">
-              The request <strong>{requestId}</strong> could not be found in the current database. 
+              The request <strong>{requestId}</strong> could not be found in the current database.
               It may have been deleted or the database was reset.
             </p>
             <Button variant="outline" className="mt-6" onClick={() => navigate('/requests')}>
@@ -589,31 +589,36 @@ export function Requests() {
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {selectedRequest.conversation?.map((message, idx) => (
-                      <div
-                        key={idx}
-                        className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
-                      >
+                    {selectedRequest.conversation?.map((message, idx) => {
+                      const isUser = message.type === 'user' || (message as any).role === 'user';
+                      const isAgent = message.type === 'agent' || (message as any).role === 'assistant' || (message as any).role === 'agent';
+
+                      return (
                         <div
-                          className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${message.type === 'user'
-                            ? 'bg-primary text-white'
-                            : 'bg-gray-50 text-gray-900 border border-gray-200/50'
-                            }`}
+                          key={idx}
+                          className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
                         >
-                          {message.type === 'agent' ? (
-                            <div
-                              className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
-                              dangerouslySetInnerHTML={{ __html: message.content }}
-                            />
-                          ) : (
-                            <p className="text-sm leading-relaxed">{message.content}</p>
-                          )}
-                          <p className={`text-[10px] mt-1 ${message.type === 'user' ? 'text-blue-100' : 'text-gray-400'}`}>
-                            {formatDate(typeof message.timestamp === 'string' ? message.timestamp : message.timestamp?.toISOString())}
-                          </p>
+                          <div
+                            className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${isUser
+                              ? 'bg-primary text-white'
+                              : 'bg-gray-50 text-gray-900 border border-gray-200/50'
+                              }`}
+                          >
+                            {isAgent ? (
+                              <div
+                                className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
+                                dangerouslySetInnerHTML={{ __html: message.content }}
+                              />
+                            ) : (
+                              <p className="text-sm leading-relaxed">{message.content}</p>
+                            )}
+                            <p className={`text-[10px] mt-1 ${isUser ? 'text-blue-100' : 'text-gray-400'}`}>
+                              {formatDate(typeof message.timestamp === 'string' ? message.timestamp : message.timestamp?.toISOString())}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </CardContent>

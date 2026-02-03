@@ -80,11 +80,17 @@ class BaseRequestStateMachine(StateMachine):
                 logger.debug(f"[{self.request.id}] State synchronized during UI fetch")
 
         states_view = []
+        # Track previous completion time to determine next state's start time
+        # Initial state starts when request was created
+        previous_completed_at = self.request.created_at
+        
         for state in self.states:
             # Hide rejection logs/status if not applicable
             if state.id == "rejected" and self.current_state.id != "rejected":
                 continue
-                
+            
+            completed_at = self._get_state_completion_timestamp(state.id)
+            
             states_view.append({
                 "id": state.id,
                 "name": self._get_state_display_name(state.id),
@@ -92,9 +98,15 @@ class BaseRequestStateMachine(StateMachine):
                 "isCompleted": self._is_state_completed(state.id),
                 "isInitial": state.initial,
                 "isFinal": state.final,
-                "completedAt": self._get_state_completion_timestamp(state.id),
+                "completedAt": completed_at,
+                "startedAt": previous_completed_at,
                 "facts": self._get_state_facts(state.id)
             })
+            
+            # The next state starts when this one completes
+            # If this state is not completed, the next one hasn't started (or logic depends on parallel paths, but for now linear)
+            if completed_at:
+                previous_completed_at = completed_at
         
         return StateMachineState(
             currentState=self.current_state.id,

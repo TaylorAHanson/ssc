@@ -5,11 +5,9 @@ import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
 import { Input } from '../components/ui/input';
 import {
-  Save, Loader2, Clock, RotateCcw, FileText,
-  Activity, CheckCircle2, FileStack, TrendingUp, ToggleLeft, Search,
-  ChevronUp, ChevronDown
+  Save, Loader2, Clock, RotateCcw, FileText, ToggleLeft, Activity, Search
 } from 'lucide-react';
-import { format, subDays, isAfter } from 'date-fns';
+import { format } from 'date-fns';
 import {
   listContent, getContent, saveContent, getContentVersions,
   listWorkspaces, getWorkspaceFeatures, updateWorkspaceFeature
@@ -18,10 +16,9 @@ import type { ContentInfo, ContentVersionInfo, WorkspaceInfo, FeatureInfo } from
 import { Switch } from '../components/ui/switch';
 import { TestRunner } from '../components/admin/TestRunner';
 import { Users } from './admin/Users';
+import { AdminDashboard } from './admin/AdminDashboard';
 
 export function Admin() {
-  const requests = useRequestStore((state) => state.requests);
-  const getPendingApprovalsCount = useRequestStore((state) => state.getPendingApprovalsCount);
   const fetchRequests = useRequestStore((state) => state.fetchRequests);
   const fetchApprovals = useRequestStore((state) => state.fetchApprovals);
 
@@ -54,11 +51,6 @@ export function Admin() {
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState('');
 
   // Dashboard requests search and sort state
-  const [dashboardSearchQuery, setDashboardSearchQuery] = useState('');
-  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>({
-    key: 'createdAt',
-    direction: 'desc'
-  });
 
   // Load content on tab change
   useEffect(() => {
@@ -287,52 +279,6 @@ export function Admin() {
     setSelectedWorkspace(workspaceId);
   };
 
-  const handleSort = (key: string) => {
-    let direction: 'asc' | 'desc' = 'asc';
-    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
-      direction = 'desc';
-    }
-    setSortConfig({ key, direction });
-  };
-
-  const filteredRequests = requests.filter(request => {
-    const query = dashboardSearchQuery.toLowerCase();
-    return (
-      request.id.toLowerCase().includes(query) ||
-      request.title.toLowerCase().includes(query) ||
-      request.type.toLowerCase().includes(query) ||
-      request.status.toLowerCase().includes(query) ||
-      (request.requester_email || '').toLowerCase().includes(query) ||
-      (request.metadata?.requested_by || '').toLowerCase().includes(query)
-    );
-  });
-
-  const sortedRequests = [...filteredRequests].sort((a, b) => {
-    if (!sortConfig) return 0;
-
-    const { key, direction } = sortConfig;
-    let aValue: any = a[key as keyof typeof a];
-    let bValue: any = b[key as keyof typeof b];
-
-    // Handle dates
-    if (key === 'createdAt' || key === 'updatedAt') {
-      aValue = new Date(aValue).getTime();
-      bValue = new Date(bValue).getTime();
-    }
-
-    if (aValue < bValue) return direction === 'asc' ? -1 : 1;
-    if (aValue > bValue) return direction === 'asc' ? 1 : -1;
-    return 0;
-  });
-
-  const SortIcon = ({ column }: { column: string }) => {
-    if (!sortConfig || sortConfig.key !== column) {
-      return <ChevronUp className="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />;
-    }
-    return sortConfig.direction === 'asc'
-      ? <ChevronUp className="w-4 h-4 text-primary" />
-      : <ChevronDown className="w-4 h-4 text-primary" />;
-  };
 
   return (
     <div className="space-y-6">
@@ -397,208 +343,8 @@ export function Admin() {
       </div>
 
       {activeTab === 'test-runner' && <TestRunner />}
+      {activeTab === 'dashboard' && <AdminDashboard />}
       {activeTab === 'users' && <Users />}
-
-      {activeTab === 'dashboard' && (
-        <div className="space-y-6">
-          {/* Metrics Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Card className="bg-blue-50 border-blue-100">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="p-2 bg-blue-100 rounded-lg">
-                    <FileStack className="w-6 h-6 text-blue-700" />
-                  </div>
-                  <span className="text-sm font-medium text-blue-600 bg-blue-100 px-2 py-1 rounded-full">Total</span>
-                </div>
-                <div className="space-y-1">
-                  <h3 className="text-2xl font-bold text-gray-900">{requests.length}</h3>
-                  <p className="text-sm text-gray-600">Total Requests</p>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-amber-50 border-amber-100">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="p-2 bg-amber-100 rounded-lg">
-                    <Clock className="w-6 h-6 text-amber-700" />
-                  </div>
-                  <span className="text-sm font-medium text-amber-600 bg-amber-100 px-2 py-1 rounded-full">Action Required</span>
-                </div>
-                <div className="space-y-1">
-                  <h3 className="text-2xl font-bold text-gray-900">{getPendingApprovalsCount()}</h3>
-                  <p className="text-sm text-gray-600">Pending Approvals</p>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-green-50 border-green-100">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="p-2 bg-green-100 rounded-lg">
-                    <CheckCircle2 className="w-6 h-6 text-green-700" />
-                  </div>
-                  <span className="text-sm font-medium text-green-600 bg-green-100 px-2 py-1 rounded-full">Active</span>
-                </div>
-                <div className="space-y-1">
-                  <h3 className="text-2xl font-bold text-gray-900">{requests.filter(r => r.type === 'workspace_provision' && r.status === 'completed').length}</h3>
-                  <p className="text-sm text-gray-600">Active Workspaces</p>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-purple-50 border-purple-100">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="p-2 bg-purple-100 rounded-lg">
-                    <TrendingUp className="w-6 h-6 text-purple-700" />
-                  </div>
-                  <span className="text-sm font-medium text-purple-600 bg-purple-100 px-2 py-1 rounded-full">Last 24h</span>
-                </div>
-                <div className="space-y-1">
-                  <h3 className="text-2xl font-bold text-gray-900">{requests.filter(r => isAfter(new Date(r.createdAt), subDays(new Date(), 1))).length}</h3>
-                  <p className="text-sm text-gray-600">New Requests</p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card>
-            <CardHeader>
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <CardTitle className="flex items-center gap-2">
-                  <Activity className="w-5 h-5" />
-                  All Requests
-                </CardTitle>
-                <div className="relative w-full md:w-64">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-                  <Input
-                    type="text"
-                    placeholder="Search requests..."
-                    value={dashboardSearchQuery}
-                    onChange={(e) => setDashboardSearchQuery(e.target.value)}
-                    className="pl-9"
-                  />
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {sortedRequests.length === 0 ? (
-                <div className="py-12 text-center">
-                  <p className="text-gray-500">
-                    {dashboardSearchQuery ? "No results matching your search" : "No requests found"}
-                  </p>
-                  {dashboardSearchQuery && (
-                    <Button
-                      variant="ghost"
-                      onClick={() => setDashboardSearchQuery('')}
-                      className="mt-2 text-primary"
-                    >
-                      Clear Search
-                    </Button>
-                  )}
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-gray-200">
-                        <th
-                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
-                          onClick={() => handleSort('id')}
-                        >
-                          <div className="flex items-center gap-1">
-                            ID <SortIcon column="id" />
-                          </div>
-                        </th>
-                        <th
-                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
-                          onClick={() => handleSort('title')}
-                        >
-                          <div className="flex items-center gap-1">
-                            Title <SortIcon column="title" />
-                          </div>
-                        </th>
-                        <th
-                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
-                          onClick={() => handleSort('type')}
-                        >
-                          <div className="flex items-center gap-1">
-                            Type <SortIcon column="type" />
-                          </div>
-                        </th>
-                        <th
-                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
-                          onClick={() => handleSort('status')}
-                        >
-                          <div className="flex items-center gap-1">
-                            Status <SortIcon column="status" />
-                          </div>
-                        </th>
-                        <th
-                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
-                          onClick={() => handleSort('requester_email')}
-                        >
-                          <div className="flex items-center gap-1">
-                            Requested By <SortIcon column="requester_email" />
-                          </div>
-                        </th>
-                        <th
-                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
-                          onClick={() => handleSort('createdAt')}
-                        >
-                          <div className="flex items-center gap-1">
-                            Created <SortIcon column="createdAt" />
-                          </div>
-                        </th>
-                        <th
-                          className="text-left py-3 px-4 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 group"
-                          onClick={() => handleSort('updatedAt')}
-                        >
-                          <div className="flex items-center gap-1">
-                            Updated <SortIcon column="updatedAt" />
-                          </div>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sortedRequests.map((request) => (
-                        <tr key={request.id} className="border-b border-gray-100 hover:bg-gray-50">
-                          <td className="py-3 px-4 text-sm text-gray-600 font-mono">
-                            {request.id.slice(0, 8)}...
-                          </td>
-                          <td className="py-3 px-4 text-sm text-gray-900">{request.title}</td>
-                          <td className="py-3 px-4 text-sm text-gray-600">
-                            {request.type.replace(/_/g, ' ')}
-                          </td>
-                          <td className="py-3 px-4">
-                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${request.status === 'completed' ? 'bg-green-100 text-green-800' :
-                              request.status === 'provisioning' ? 'bg-blue-100 text-blue-800' :
-                                'bg-gray-100 text-gray-800'
-                              }`}>
-                              {request.status.replace(/_/g, ' ')}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-gray-600">
-                            {request.metadata?.requested_by || request.requester_email || '—'}
-                          </td>
-                          <td className="py-3 px-4 text-sm text-gray-600">
-                            {format(new Date(request.createdAt), 'MMM d, yyyy HH:mm')}
-                          </td>
-                          <td className="py-3 px-4 text-sm text-gray-600">
-                            {format(new Date(request.updatedAt), 'MMM d, yyyy HH:mm')}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      )}
 
       {activeTab === 'content-manager' && (
         <div className="flex gap-6 h-[calc(100vh-200px)]">
