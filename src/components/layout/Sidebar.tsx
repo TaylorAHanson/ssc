@@ -11,7 +11,8 @@ import {
   Calendar,
   FileText,
   MessageSquare,
-  BarChart
+  BarChart,
+  Upload
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -52,6 +53,13 @@ const navItems: NavItem[] = [
     title: 'Reports',
     icon: <BarChart className="w-5 h-5" />,
     path: '/admin/reports',
+    group: 'Admin',
+    allowedPersonas: ['Platform Admin']
+  },
+  {
+    title: 'Training Upload',
+    icon: <Upload className="w-5 h-5" />,
+    path: '/admin/training',
     group: 'Admin',
     allowedPersonas: ['Platform Admin']
   },

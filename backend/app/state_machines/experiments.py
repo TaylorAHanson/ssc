@@ -72,17 +72,24 @@ class CampaignStateMachine(BaseRequestStateMachine):
     
     # States
     pending = State("Pending", initial=True)
+    training_pending = State("Training Pending")
     running = State("Running Campaign")
     completed = State("Completed", final=True)
     
     # Transitions
-    start = pending.to(running)
+    # Start -> Check Training
+    start = pending.to(training_pending)
     submit = start # Alias for base class auto-submission
+    
+    # Training -> Running (Auto-transition when 'training_completed' fact appears)
+    complete_training = training_pending.to(running, cond="has_training_completed")
+    
     finish = running.to(completed)
     
     # Facts - Simplified for experiment
     STATE_COMPLETION_FACTS = {
         "pending": "request_submitted",
+        "training_pending": "training_completed",
         "running": "campaign_finished"
     }
     
