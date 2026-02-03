@@ -4,7 +4,7 @@ import { Layout } from './components/layout/Layout';
 import { Home } from './pages/Home';
 import { Requests } from './pages/Requests';
 import { Admin } from './pages/Admin';
-import { TrainingUpload } from './pages/Admin/TrainingUpload';
+import { TrainingUpload } from './pages/admin/TrainingUpload';
 import { Approvals } from './pages/Approvals';
 import { Training } from './pages/Training';
 import { Events } from './pages/Events';
