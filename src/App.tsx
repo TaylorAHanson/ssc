@@ -4,6 +4,7 @@ import { Layout } from './components/layout/Layout';
 import { Home } from './pages/Home';
 import { Requests } from './pages/Requests';
 import { Admin } from './pages/Admin';
+import { TrainingUpload } from './pages/Admin/TrainingUpload';
 import { Approvals } from './pages/Approvals';
 import { Training } from './pages/Training';
 import { Events } from './pages/Events';
@@ -51,6 +52,14 @@ function App() {
             element={
               <ProtectedRoute allowedPersonas={['Platform Admin']}>
                 <AdminReports />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/training"
+            element={
+              <ProtectedRoute allowedPersonas={['Platform Admin']}>
+                <TrainingUpload />
               </ProtectedRoute>
             }
           />

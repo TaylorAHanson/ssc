@@ -157,6 +157,7 @@ def get_current_user(
             # Detach user from session to prevent this ephemeral change from affecting
             # the DB or other queries in this session (like GET /users list).
             db.expunge(user)
+            db.expunge(target_role)
             
             # Create a clone ensuring we don't mutate DB session object permanently
             # But UserModel is an ORM object...

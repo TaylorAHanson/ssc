@@ -666,6 +666,37 @@ export async function seedDb(): Promise<void> {
   }
 }
 
+// Training API
+export async function getTrainingStatus(): Promise<{ tracks: any, completed_codes: string[] }> {
+  const response = await fetch(`${API_BASE_URL}/training/me`, {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to get training status: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function uploadTrainingData(file: File): Promise<{ message: string, stats: any }> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(`${API_BASE_URL}/training/upload`, {
+    method: 'POST',
+    headers: {
+      'Authorization': getHeaders()['Authorization'] || '',
+      'X-Dev-Role-Override': getHeaders()['X-Dev-Role-Override'] || '',
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to upload training data: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -681,5 +712,7 @@ export const api = {
   runTests,
   listTests,
   resetDb,
-  seedDb
+  seedDb,
+  getTrainingStatus,
+  uploadTrainingData
 };
