@@ -237,20 +237,12 @@ class DatabricksProvider(BaseProvider):
 
             logger.info(f"Granting {access_level} access on {asset_type} '{asset_name}' to {principal}")
 
-            # Build the permission change
-            changes = [
-                PermissionsChange(
-                    add=privileges,
-                    principal=principal
-                )
-            ]
+            # Use SQL GRANT statements for reliable cross-type support
+            grant_statements = self._build_grant_sql(asset_type.lower(), asset_name, principal, access_level.lower())
 
-            # Update permissions using the grants API
-            self.client.grants.update(
-                securable_type=securable_type,
-                full_name=asset_name,
-                changes=changes
-            )
+            for sql in grant_statements:
+                logger.info(f"Executing: {sql}")
+                await self.execute_sql(sql)
 
             logger.info(f"Successfully granted {access_level} access on {asset_name} to {principal}")
 
@@ -303,6 +295,84 @@ class DatabricksProvider(BaseProvider):
         elif asset_type.lower() == "volume":
             return [Privilege.READ_VOLUME, Privilege.WRITE_VOLUME]
         return [Privilege.SELECT, Privilege.MODIFY]
+
+    def _build_grant_sql(self, asset_type: str, asset_name: str, principal: str, access_level: str) -> list:
+        """
+        Build SQL GRANT statements for Unity Catalog access.
+
+        For schema access, this grants USE CATALOG on parent catalog first,
+        then grants schema-level permissions.
+
+        Args:
+            asset_type: catalog, schema, table, or volume
+            asset_name: Full name (e.g., "catalog.schema" or "catalog.schema.table")
+            principal: User email or group name
+            access_level: read, write, or manage
+
+        Returns:
+            List of SQL GRANT statements to execute in order
+        """
+        statements = []
+        parts = asset_name.split(".")
+
+        # Privilege mapping
+        privilege_map = {
+            "catalog": {
+                "read": "USE CATALOG",
+                "write": "USE CATALOG, CREATE SCHEMA",
+                "manage": "ALL PRIVILEGES",
+            },
+            "schema": {
+                "read": "USE SCHEMA",
+                "write": "USE SCHEMA, CREATE TABLE, CREATE VIEW, CREATE FUNCTION",
+                "manage": "ALL PRIVILEGES",
+            },
+            "table": {
+                "read": "SELECT",
+                "write": "SELECT, MODIFY",
+                "manage": "ALL PRIVILEGES",
+            },
+            "volume": {
+                "read": "READ VOLUME",
+                "write": "READ VOLUME, WRITE VOLUME",
+                "manage": "ALL PRIVILEGES",
+            },
+        }
+
+        if asset_type == "catalog":
+            # Just grant on catalog
+            privileges = privilege_map["catalog"].get(access_level, "USE CATALOG")
+            statements.append(f"GRANT {privileges} ON CATALOG `{asset_name}` TO `{principal}`")
+
+        elif asset_type == "schema":
+            # First grant USE CATALOG on parent catalog, then schema permissions
+            if len(parts) >= 2:
+                catalog_name = parts[0]
+                statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog_name}` TO `{principal}`")
+            privileges = privilege_map["schema"].get(access_level, "USE SCHEMA")
+            statements.append(f"GRANT {privileges} ON SCHEMA `{asset_name}` TO `{principal}`")
+
+        elif asset_type == "table":
+            # Grant USE CATALOG, USE SCHEMA, then table permissions
+            if len(parts) >= 3:
+                catalog_name = parts[0]
+                schema_name = f"{parts[0]}.{parts[1]}"
+                statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog_name}` TO `{principal}`")
+                statements.append(f"GRANT USE SCHEMA ON SCHEMA `{schema_name}` TO `{principal}`")
+            privileges = privilege_map["table"].get(access_level, "SELECT")
+            statements.append(f"GRANT {privileges} ON TABLE `{asset_name}` TO `{principal}`")
+
+        elif asset_type == "volume":
+            # Grant USE CATALOG, USE SCHEMA, then volume permissions
+            if len(parts) >= 3:
+                catalog_name = parts[0]
+                schema_name = f"{parts[0]}.{parts[1]}"
+                statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog_name}` TO `{principal}`")
+                statements.append(f"GRANT USE SCHEMA ON SCHEMA `{schema_name}` TO `{principal}`")
+            privileges = privilege_map["volume"].get(access_level, "READ VOLUME")
+            statements.append(f"GRANT {privileges} ON VOLUME `{asset_name}` TO `{principal}`")
+
+        return statements
 
     async def health_check(self) -> bool:
         """Check if Databricks is accessible."""

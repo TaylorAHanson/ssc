@@ -5,6 +5,7 @@ Uses Databricks SDK to grant permissions via Unity Catalog Grants API.
 """
 from statemachine import State
 from app.state_machines.base import BaseRequestStateMachine
+from app.models.request import RequestStatus
 from app.state_machines.facts import has_fact, add_fact
 from app.core.config import settings
 from app.core.exceptions import PermanentError, RetryableError
@@ -30,7 +31,7 @@ class DataAccessStateMachine(BaseRequestStateMachine):
     # Override completion facts mapping for UI state tracking
     STATE_COMPLETION_FACTS = {
         "pending": "request_submitted",
-        # "manager_approval": "approval_received",  # Uncomment when manager approval is enabled
+        "manager_approval": "approval_received",
         "data_owner_approval": "approval_received",
         "provisioning": "access_granted",  # Data access uses access_granted, not provisioning_completed
         "rejected": "request_rejected"
@@ -39,15 +40,21 @@ class DataAccessStateMachine(BaseRequestStateMachine):
     # Override log facts for UI display
     STATE_LOG_FACTS = {
         "pending": ["request_submitted"],
-        # "manager_approval": ["approval_received"],  # Uncomment when manager approval is enabled
+        "manager_approval": ["approval_received"],
         "data_owner_approval": ["approval_received"],
         "provisioning": ["access_grant_started", "access_granted", "access_grant_failed"],
         "rejected": ["request_rejected"]
     }
+    
+    # Override status mapping for data owner approval
+    STATUS_MAPPING = {
+        **BaseRequestStateMachine.STATUS_MAPPING,
+        "data_owner_approval": RequestStatus.DATA_OWNER_APPROVAL
+    }
 
     # States
     pending = State("pending", initial=True)
-    # manager_approval = State("manager_approval")  # TODO: Uncomment when manager lookup is implemented
+    manager_approval = State("manager_approval")
     data_owner_approval = State("data_owner_approval")
     provisioning = State("provisioning")
     completed = State("completed", final=True)
@@ -55,22 +62,24 @@ class DataAccessStateMachine(BaseRequestStateMachine):
     failed = State("failed", final=True)
 
     # Transitions
-    # Skip manager approval - go directly to data_owner_approval
-    submit = pending.to(data_owner_approval, cond="has_request_submitted")
+    # 1. Submit -> Manager Approval
+    submit = pending.to(manager_approval, cond="has_request_submitted")
 
-    # Manager Approval -> Data Owner Approval (commented out)
-    # approve_manager = manager_approval.to(data_owner_approval, cond="has_manager_approval")
+    # 2. Manager Approval -> Data Owner Approval
+    # Note: The transition source (manager_approval) already ensures we're in the right state
+    approve_manager = manager_approval.to(data_owner_approval, cond="has_manager_approval")
 
-    # Data Owner Approval -> Provisioning
+    # 3. Data Owner Approval -> Provisioning
+    # Note: The transition source (data_owner_approval) already ensures we're in the right state
     approve_owner = data_owner_approval.to(provisioning, cond="has_data_owner_approval")
 
-    # Provisioning -> Completed
+    # 4. Provisioning -> Completed
     finish_provisioning = provisioning.to(completed, cond="has_access_granted")
 
     # Rejection from any non-final state
     reject = (
         pending.to(rejected, cond="has_request_rejected") |
-        # manager_approval.to(rejected, cond="has_request_rejected") |
+        manager_approval.to(rejected, cond="has_request_rejected") |
         data_owner_approval.to(rejected, cond="has_request_rejected") |
         provisioning.to(rejected, cond="has_request_rejected")
     )
@@ -78,14 +87,14 @@ class DataAccessStateMachine(BaseRequestStateMachine):
     # Failure transitions
     mark_failed = (
         pending.to(failed) |
-        # manager_approval.to(failed) |
+        manager_approval.to(failed) |
         data_owner_approval.to(failed) |
         provisioning.to(failed)
     )
 
     # Approval node configuration
     APPROVAL_NODES = {
-        # "manager_approval": {"approval_type": "manager", "name": "Manager Approval"},
+        "manager_approval": {"approval_type": "manager", "name": "Manager Approval"},
         "data_owner_approval": {"approval_type": "data_owner", "name": "Data Owner Approval"}
     }
 
@@ -113,10 +122,10 @@ class DataAccessStateMachine(BaseRequestStateMachine):
     # State Entry Handlers (Async)
     # --------------------------------------------------------------------------
 
-    # async def on_enter_manager_approval_async(self):
-    #     """Execute async tasks when entering manager_approval state."""
-    #     # Notification is handled by base class approval creation
-    #     pass
+    async def on_enter_manager_approval_async(self):
+        """Execute async tasks when entering manager_approval state."""
+        # Notification is handled by base class approval creation
+        pass
 
     async def on_enter_data_owner_approval_async(self):
         """Execute async tasks when entering data_owner_approval state."""
@@ -125,26 +134,30 @@ class DataAccessStateMachine(BaseRequestStateMachine):
 
     async def on_enter_provisioning_async(self):
         """Execute async tasks for provisioning state."""
-        # Notify user: Approved, provisioning access
-        await self._send_notification(
-            subject=f"Data Access Request Approved: {self.request.title}",
-            body=f"Your data access request '{self.request.title}' has been approved by the data owner. Access is being provisioned."
-        )
+        # Notify user: Approved, provisioning access (with idempotency check)
+        if not has_fact(self.db, self.request.id, "provisioning_notification_sent"):
+            await self._send_notification(
+                subject=f"Data Access Request Approved: {self.request.title}",
+                body=f"Your data access request '{self.request.title}' has been approved by the data owner. Access is being provisioned."
+            )
+            add_fact(self.db, self.request.id, "provisioning_notification_sent", {}, actor="system")
         # Run the actual provisioning
         await self._grant_access()
 
     async def on_enter_completed_async(self):
         """Execute async tasks for completed state."""
-        # Notify user: Success
-        ctx = self.request.state_context or {}
-        asset_name = ctx.get("asset_name", "the requested resource")
-        access_level = ctx.get("access_level", "access")
+        # Notify user: Success (with idempotency check)
+        if not has_fact(self.db, self.request.id, "completed_notification_sent"):
+            ctx = self.request.state_context or {}
+            asset_name = ctx.get("asset_name", "the requested resource")
+            access_level = ctx.get("access_level", "access")
 
-        await self._send_notification(
-            subject=f"Data Access Granted: {self.request.title}",
-            body=f"Your data access request '{self.request.title}' has been successfully completed. "
-                 f"You now have {access_level} access to {asset_name}."
-        )
+            await self._send_notification(
+                subject=f"Data Access Granted: {self.request.title}",
+                body=f"Your data access request '{self.request.title}' has been successfully completed. "
+                     f"You now have {access_level} access to {asset_name}."
+            )
+            add_fact(self.db, self.request.id, "completed_notification_sent", {}, actor="system")
 
     # --------------------------------------------------------------------------
     # Provisioning Logic
@@ -225,10 +238,13 @@ class DataAccessStateMachine(BaseRequestStateMachine):
     # Fact Properties (Used in transitions)
     # --------------------------------------------------------------------------
 
-    # @property
-    # def has_manager_approval(self) -> bool:
-    #     """Check if manager has approved the request."""
-    #     return has_fact(self.db, self.request.id, "manager_approval")
+    @property
+    def has_manager_approval(self) -> bool:
+        """Check if manager has approved the request."""
+        res = has_fact(self.db, self.request.id, "approval_received", approval_type="manager")
+        if res:
+            logger.info(f"[{self.request.id}] DEBUG: has_manager_approval is TRUE")
+        return res
 
     @property
     def has_access_granted(self) -> bool:
@@ -243,6 +259,7 @@ class DataAccessStateMachine(BaseRequestStateMachine):
         """Override display names for data access-specific states."""
         display_names = {
             "pending": "Created",
+            "manager_approval": "Manager Approval",
             "data_owner_approval": "Data Owner Approval",
             "provisioning": "Granting Access",
             "completed": "Access Granted",
