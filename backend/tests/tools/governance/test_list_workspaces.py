@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch
-from app.tools.governance.list_workspaces import ListWorkspacesTool
+from app.tools.governance.list_workspaces import list_workspaces
 
 @pytest.mark.asyncio
 async def test_list_workspaces():
@@ -18,7 +18,7 @@ async def test_list_workspaces():
             ]
         }
         MockP.return_value.execute_sql = AsyncMock(return_value=mock_data)
-        tool = ListWorkspacesTool()
+        tool = list_workspaces
         
         # Test without filter
         result = await tool.execute()

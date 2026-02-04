@@ -1,12 +1,15 @@
 import pytest
 from unittest.mock import AsyncMock, patch
-from app.tools.governance.search_audit_logs import SearchAuditLogsTool
+from app.tools.governance.search_audit_logs import search_audit_logs
+
+@pytest.fixture
+def tool():
+    return search_audit_logs
 
 @pytest.mark.asyncio
-async def test_search_audit_logs_list():
+async def test_search_audit_logs_list(tool):
     with patch("app.tools.governance.search_audit_logs.DatabricksProvider") as MockP:
         MockP.return_value.execute_sql = AsyncMock(return_value={"rows": [{"action_name": "login"}]})
-        tool = SearchAuditLogsTool()
         
         result = await tool.execute(start_date="2023-01-01", end_date="2023-01-02", email="user@example.com")
         
@@ -21,10 +24,9 @@ async def test_search_audit_logs_list():
         assert kwargs["timeout_seconds"] == 300
 
 @pytest.mark.asyncio
-async def test_search_audit_logs_count():
+async def test_search_audit_logs_count(tool):
     with patch("app.tools.governance.search_audit_logs.DatabricksProvider") as MockP:
         MockP.return_value.execute_sql = AsyncMock(return_value={"rows": [{"event_count": 100}]})
-        tool = SearchAuditLogsTool()
         
         result = await tool.execute(
             start_date="2023-01-01", 
@@ -40,10 +42,9 @@ async def test_search_audit_logs_count():
         assert "GROUP BY" not in args[0]
 
 @pytest.mark.asyncio
-async def test_search_audit_logs_group_by():
+async def test_search_audit_logs_group_by(tool):
     with patch("app.tools.governance.search_audit_logs.DatabricksProvider") as MockP:
         MockP.return_value.execute_sql = AsyncMock(return_value={"rows": [{"actor": "user1", "event_count": 50}]})
-        tool = SearchAuditLogsTool()
         
         result = await tool.execute(
             start_date="2023-01-01", 

@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { Card, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Search, CheckCircle2, BookOpen, Unlock, ChevronRight } from 'lucide-react';
-import { getContent } from '../services/api';
+import { getTrainingStatus } from '../services/api';
 
 interface Course {
   id: string;
@@ -31,27 +31,31 @@ interface TrackWithStatus extends PersonaPath {
   totalCount: number;
 }
 
-// Mock completed courses (in production, this would come from an API)
-const completedCourseIds = new Set(['fundamentals', 'accred-1']);
-
-// Mock pending courses (for demonstration)
-const pendingCourseIds = new Set(['sql-bi', 'get-started-de', 'get-started-ml', 'data-ingestion', 'sql-analytics']);
-
 export function Training() {
   const [searchTerm, setSearchTerm] = useState('');
   const [allTracks, setAllTracks] = useState<PersonaPath[]>([]);
   const [activeTab, setActiveTab] = useState<string>('');
   const [loading, setLoading] = useState(true);
+  const [completedCourseIds, setCompletedCourseIds] = useState<Set<string>>(new Set());
+
+  // Mock pending courses (for demonstration)
+  const pendingCourseIds = new Set(['sql-bi', 'get-started-de', 'get-started-ml', 'data-ingestion', 'sql-analytics']);
 
   // Fetch training data
   useEffect(() => {
     const loadTrainingData = async () => {
       try {
         setLoading(true);
-        const data = await getContent('training.json') as PersonaPath[];
-        setAllTracks(data);
-        if (data.length > 0) {
-          setActiveTab(data[0].persona);
+        // Fetch both tracks and status
+        const { tracks, completed_codes } = await getTrainingStatus() as any;
+
+        setAllTracks(tracks || []);
+
+        // Update loaded completed courses
+        setCompletedCourseIds(new Set(completed_codes || []));
+
+        if (tracks && tracks.length > 0) {
+          setActiveTab(tracks[0].persona);
         }
       } catch (error) {
         console.error('Failed to load training data:', error);

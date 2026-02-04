@@ -13,6 +13,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
     and provide mock defaults for local development.
     """
     async def dispatch(self, request: Request, call_next):
+        # Skip middleware for MCP SSE routes to avoid BaseHTTPMiddleware buffering issues
+        if request.url.path.startswith("/mcp"):
+             return await call_next(request)
+
         # Extract headers (case-insensitive usually, but using request.headers.get is safe)
         # Databricks Apps headers:
         # X-Forwarded-Email: IdP email

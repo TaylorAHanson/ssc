@@ -204,7 +204,145 @@ def seed_db():
                 return {"message": "Database seeded with roles and admin user (requests already existed)"}
         finally:
             db.close()
-
     except Exception as e:
         logger.error(f"Failed to seed database: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/github/setup-templates")
+async def setup_github_templates():
+    """Seed the GitHub organization with test templates."""
+    try:
+        from app.core.config import settings
+        from app.providers.github.client import GitHubProvider
+        import httpx
+        from datetime import datetime
+        import base64
+
+        token = settings.GITHUB_TOKEN or settings.get_git_token()
+        org = settings.GITHUB_ORG
+        
+        if not token or not org:
+            raise HTTPException(status_code=400, detail="GITHUB_TOKEN and GITHUB_ORG must be configured")
+
+        templates = {
+            "data-engineering": ["pipeline", "etl", "databricks", "spark"],
+            "data-science": ["ml", "notebook", "databricks", "scikit-learn"],
+            "databricks-apps": ["react", "fastapi", "databricks", "template"],
+            "genie-room": ["genai", "ai-agent", "databricks", "llm"]
+        }
+        results = []
+
+        async with GitHubProvider(token=token, org=org) as github:
+            for template_name, topics in templates.items():
+                # 1. Check if repo exists
+                exists = await github.check_repo_exists(template_name)
+                
+                repo_path = f"{org}/{template_name}"
+                headers = {
+                    "Authorization": f"token {token}",
+                    "Accept": "application/vnd.github.v3+json"
+                }
+                
+                if not exists:
+                    config = {
+                        "description": f"Template for {template_name} projects",
+                        "private": False, # Make them public so they are visible
+                        "is_template": True
+                    }
+                    await github.create_repo(template_name, config)
+                    results.append(f"Created {template_name}")
+                else:
+                    # Ensure it is marked as a template
+                    async with httpx.AsyncClient() as client:
+                        await client.patch(f"https://api.github.com/repos/{repo_path}", headers=headers, json={"is_template": True})
+                    results.append(f"Ensured {template_name} is template")
+                
+                # Apply Topics (Tags)
+                async with httpx.AsyncClient() as client:
+                    # Topics API requires a specific accept header
+                    topic_headers = headers.copy()
+                    topic_headers["Accept"] = "application/vnd.github.mercury-preview+json"
+                    await client.put(f"https://api.github.com/repos/{repo_path}/topics", headers=topic_headers, json={"names": topics})
+                results.append(f"Applied tags to {template_name}: {topics}")
+                
+                # 2. Add boilerplate files
+                files = {
+                    "README.md": f"# {template_name} Template\nCreated for ATLAS testing on {datetime.now().isoformat()}",
+                    "databricks.yml": "bundle:\n  name: my-bundle\n\nartifacts:\n  default:\n    type: wheel\n    build: python setup.py bdist_wheel",
+                    ".gitignore": "__pycache__/\n*.pyc\n.databricks/\n"
+                }
+                
+                for path, content in files.items():
+                    url = f"https://api.github.com/repos/{org}/{template_name}/contents/{path}"
+                    headers = {
+                        "Authorization": f"token {token}",
+                        "Accept": "application/vnd.github.v3+json"
+                    }
+                    
+                    async with httpx.AsyncClient() as client:
+                        get_resp = await client.get(url, headers=headers)
+                        sha = None
+                        if get_resp.status_code == 200:
+                            sha = get_resp.json().get("sha")
+                        
+                        payload = {
+                            "message": f"Seed {path}",
+                            "content": base64.b64encode(content.encode()).decode(),
+                        }
+                        if sha:
+                            payload["sha"] = sha
+                        
+                        await client.put(url, headers=headers, json=payload)
+
+        return {"status": "success", "actions": results}
+    except Exception as e:
+        logger.error(f"Failed to setup GitHub templates: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/github/trigger-test")
+async def trigger_github_test():
+    """Trigger a mock GitHub Repo Creation request."""
+    try:
+        from app.db.session import get_session_local
+        from app.db.request import RequestModel
+        from app.models.request import RequestType, RequestStatus
+        from datetime import datetime
+        import uuid
+        
+        db = get_session_local()()
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M")
+            repo_name = f"edh-test-project-{timestamp}"
+            
+            request_id = f"req-{uuid.uuid4()}"
+            request = RequestModel(
+                id=request_id,
+                type=RequestType.GITHUB_REPO_CREATION.value,
+                title=f"Test GitHub Repo: {repo_name}",
+                status=RequestStatus.PENDING.value,
+                current_state="pending",
+                state_context={
+                    "repo_name": repo_name,
+                    "description": "Automated test repository created via trigger endpoint",
+                    "visibility": "private",
+                    "template": "data-engineering",
+                    "requested_by": "System Test",
+                    "requested_by_email": "admin@example.com"
+                },
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            db.add(request)
+            db.commit()
+            return {
+                "status": "success",
+                "request_id": request_id,
+                "repo_name": repo_name
+            }
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Failed to trigger GitHub test: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

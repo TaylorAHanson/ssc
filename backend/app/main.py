@@ -94,7 +94,17 @@ app.add_middleware(AuthMiddleware)
 app.add_middleware(PyinstrumentMiddleware)
 
 # Include API routes
+# Include API routes
 app.include_router(api_router, prefix="/api/v1")
+
+# Mount MCP Server (SSE)
+# This enables external agents to connect via /mcp/sse
+try:
+    from app.mcp_server import mcp
+    app.mount("/mcp", mcp.sse_app())
+    logger.info("Mounted MCP Server at /mcp")
+except Exception as e:
+    logger.warning(f"Failed to mount MCP Server: {e}")
 
 
 @app.get("/health")

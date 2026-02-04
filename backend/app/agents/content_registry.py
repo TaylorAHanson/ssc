@@ -113,6 +113,10 @@ def list_content() -> List[Dict[str, Any]]:
         # Skip version files
         if _is_version_file(filepath.name):
             continue
+            
+        # Skip events.json as it is managed by live sync
+        if filepath.name == "events.json":
+            continue
         
         # Generate a title from filename
         title = filepath.stem.replace("-", " ").title()

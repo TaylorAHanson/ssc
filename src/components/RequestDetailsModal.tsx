@@ -64,31 +64,36 @@ export function RequestDetailsModal({ request, onClose, RequestStateList }: Requ
                     ) : (
                         <div className="space-y-4">
                             {request.conversation && request.conversation.length > 0 ? (
-                                request.conversation.map((message, idx) => (
-                                    <div
-                                        key={idx}
-                                        className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
-                                    >
+                                request.conversation.map((message, idx) => {
+                                    const isUser = message.type === 'user' || (message as any).role === 'user';
+                                    const isAgent = message.type === 'agent' || (message as any).role === 'assistant' || (message as any).role === 'agent';
+
+                                    return (
                                         <div
-                                            className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${message.type === 'user'
-                                                ? 'bg-primary text-white'
-                                                : 'bg-white text-gray-900 border border-gray-100'
-                                                }`}
+                                            key={idx}
+                                            className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
                                         >
-                                            {message.type === 'agent' ? (
-                                                <div
-                                                    className="text-sm leading-relaxed prose prose-sm max-w-none text-current"
-                                                    dangerouslySetInnerHTML={{ __html: message.content }}
-                                                />
-                                            ) : (
-                                                <p className="text-sm leading-relaxed">{message.content}</p>
-                                            )}
-                                            <p className={`text-[10px] mt-2 opacity-70 font-medium`}>
-                                                {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                            </p>
+                                            <div
+                                                className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${isUser
+                                                    ? 'bg-primary text-white'
+                                                    : 'bg-white text-gray-900 border border-gray-100'
+                                                    }`}
+                                            >
+                                                {isAgent ? (
+                                                    <div
+                                                        className="text-sm leading-relaxed prose prose-sm max-w-none text-current"
+                                                        dangerouslySetInnerHTML={{ __html: message.content }}
+                                                    />
+                                                ) : (
+                                                    <p className="text-sm leading-relaxed">{message.content}</p>
+                                                )}
+                                                <p className={`text-[10px] mt-2 opacity-70 font-medium`}>
+                                                    {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                </p>
+                                            </div>
                                         </div>
-                                    </div>
-                                ))
+                                    );
+                                })
                             ) : (
                                 <div className="text-center py-12 text-gray-400 italic">
                                     No conversation history available.

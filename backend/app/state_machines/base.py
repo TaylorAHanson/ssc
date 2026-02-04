@@ -80,11 +80,17 @@ class BaseRequestStateMachine(StateMachine):
                 logger.debug(f"[{self.request.id}] State synchronized during UI fetch")
 
         states_view = []
+        # Track previous completion time to determine next state's start time
+        # Initial state starts when request was created
+        previous_completed_at = self.request.created_at
+        
         for state in self.states:
             # Hide rejection logs/status if not applicable
             if state.id == "rejected" and self.current_state.id != "rejected":
                 continue
-                
+            
+            completed_at = self._get_state_completion_timestamp(state.id)
+            
             states_view.append({
                 "id": state.id,
                 "name": self._get_state_display_name(state.id),
@@ -92,9 +98,15 @@ class BaseRequestStateMachine(StateMachine):
                 "isCompleted": self._is_state_completed(state.id),
                 "isInitial": state.initial,
                 "isFinal": state.final,
-                "completedAt": self._get_state_completion_timestamp(state.id),
+                "completedAt": completed_at,
+                "startedAt": previous_completed_at,
                 "facts": self._get_state_facts(state.id)
             })
+            
+            # The next state starts when this one completes
+            # If this state is not completed, the next one hasn't started (or logic depends on parallel paths, but for now linear)
+            if completed_at:
+                previous_completed_at = completed_at
         
         return StateMachineState(
             currentState=self.current_state.id,
@@ -173,6 +185,43 @@ class BaseRequestStateMachine(StateMachine):
             if not has_fact(self.db, self.request.id, "provisioning_completed"):
                 add_fact(self.db, self.request.id, "provisioning_completed", {}, actor="system")
         
+        # Handle training verification
+        if state_id == "training_pending" and not self.has_training_completed:
+            # Check if user has completed required training
+            from app.providers.training.client import TrainingProvider
+            
+            provider = TrainingProvider(self.db)
+            ctx = self.request.state_context or {}
+            user_email = ctx.get("requested_by_email") or self.request.requester_email
+            
+            if not user_email:
+                logger.warning(f"[{self.request.id}] Cannot verify training: No email found in context")
+                return changed
+
+            # Get required courses from context, default to empty
+            required_courses = ctx.get("required_trainings", [])
+            
+            completed_courses = provider.get_user_training_status(user_email)
+            
+            # Check if all required courses are in completed list
+            missing = [c for c in required_courses if c not in completed_courses]
+            
+            if not missing:
+                logger.info(f"[{self.request.id}] Training verification passed for {user_email}")
+                add_fact(self.db, self.request.id, "training_completed", {
+                    "completed_courses": completed_courses,
+                    "verified_at": datetime.utcnow().isoformat()
+                }, actor="system")
+                
+                # Check for auto-transition
+                if hasattr(self, "complete_training"):
+                     self.complete_training()
+                     changed = True
+            else:
+                # Log only once or periodically? For now, we just don't transition.
+                # maybe log info occasionally
+                pass
+
         return changed
 
     # --------------------------------------------------------------------------

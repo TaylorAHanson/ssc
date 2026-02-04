@@ -68,6 +68,7 @@ class StateInfo(BaseModel):
     isInitial: bool
     isFinal: bool
     completedAt: Optional[datetime] = None
+    startedAt: Optional[datetime] = None
     facts: Optional[List[Dict[str, Any]]] = None
 
 

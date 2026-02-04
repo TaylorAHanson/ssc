@@ -1,6 +1,10 @@
 import pytest
 from unittest.mock import AsyncMock, patch
-from app.tools.finops.get_efficiency import GetResourceEfficiencyTool
+from app.tools.finops.get_efficiency import get_resource_efficiency_metrics
+
+@pytest.fixture
+def tool():
+    return get_resource_efficiency_metrics
 
 @pytest.fixture
 def mock_provider():
@@ -10,9 +14,7 @@ def mock_provider():
         yield provider_instance
 
 @pytest.mark.asyncio
-async def test_get_efficiency_idle_clusters(mock_provider):
-    tool = GetResourceEfficiencyTool()
-    
+async def test_get_efficiency_idle_clusters(tool, mock_provider):
     mock_provider.execute_sql.return_value = {
         "rows": [
             {"cluster_id": "test-cluster-id", "cluster_name": "test-cluster", "owned_by": "me"}
