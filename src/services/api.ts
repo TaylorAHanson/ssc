@@ -268,6 +268,32 @@ export async function getContentVersions(filename: string): Promise<ContentVersi
 }
 
 /**
+ * GitHub API
+ */
+export interface GitHubTemplate {
+  id: number;
+  name: string;
+  full_name: string;
+  description: string;
+  url: string;
+  is_template: boolean;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  owner: string;
+}
+
+export async function listGitHubTemplates(): Promise<GitHubTemplate[]> {
+  const response = await fetch(`${API_BASE_URL}/github/templates`, {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to list GitHub templates: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
  * Trigger a manual calendar sync.
  */
 export async function triggerCalendarSync(): Promise<{ status: string; message: string }> {
@@ -640,6 +666,37 @@ export async function seedDb(): Promise<void> {
   }
 }
 
+// Training API
+export async function getTrainingStatus(): Promise<{ tracks: any, completed_codes: string[] }> {
+  const response = await fetch(`${API_BASE_URL}/training/me`, {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to get training status: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function uploadTrainingData(file: File): Promise<{ message: string, stats: any }> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(`${API_BASE_URL}/training/upload`, {
+    method: 'POST',
+    headers: {
+      'Authorization': getHeaders()['Authorization'] || '',
+      'X-Dev-Role-Override': getHeaders()['X-Dev-Role-Override'] || '',
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to upload training data: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -655,5 +712,7 @@ export const api = {
   runTests,
   listTests,
   resetDb,
-  seedDb
+  seedDb,
+  getTrainingStatus,
+  uploadTrainingData
 };

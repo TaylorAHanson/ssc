@@ -1,10 +1,10 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.tools.self_service.get_catalog_list import GetCatalogListTool
+from app.tools.self_service.get_catalog_list import get_catalog_list
 from app.core.exceptions import RetryableError
 
 class MockCatalog:
-    def __init__(self, name, comment=None, owner="test_owner", catalog_type="MANAGED_CATALOG"):
+    def __init__(self, name, comment=None, owner="test_owner", catalog_type="MANAGED_CATALOG", properties=None):
         self.name = name
         self.comment = comment
         self.owner = owner
@@ -12,39 +12,37 @@ class MockCatalog:
         self.catalog_type.value = catalog_type
         # Also support direct string conversion if value attribute is missing
         self.catalog_type.__str__ = lambda x: catalog_type
+        self.properties = properties
 
 class TestGetCatalogListTool:
     
     @pytest.fixture
     def tool(self):
+        return get_catalog_list
+    
+    @pytest.fixture
+    def mock_provider(self):
         with patch("app.tools.self_service.get_catalog_list.DatabricksProvider") as MockProvider:
-            mock_instance = MockProvider.return_value
-            tool = GetCatalogListTool()
-            tool._provider = mock_instance
-            return tool
+            yield MockProvider.return_value
 
     @pytest.mark.asyncio
     async def test_properties(self, tool):
         assert tool.name == "get_catalog_list"
         assert "catalog" in tool.description.lower()
-        assert tool.input_schema["properties"] == {}
+        # With Pydantic v2 / function schema, properties might be empty if no args
+        schema = tool.input_schema
+        # If no arguments, it might be empty object
+        assert schema.get("properties", {}) == {}
 
     @pytest.mark.asyncio
-    async def test_execute_success(self, tool):
+    async def test_execute_success(self, tool, mock_provider):
         # Setup mock return data
         mock_catalogs = [
             MockCatalog(name="main", comment="Main catalog"),
             MockCatalog(name="samples", comment=None, catalog_type="SYSTEM_CATALOG")
         ]
         
-        # We need to mock the synchronous client call inside the async execute
-        # Note: In the tool code, it calls self.provider.client.catalogs.list()
-        # This looks synchronous. If the tool wasn't wrapped in run_in_executor, it blocks.
-        # But the tool execute method is async. Let's verify if the provider call is async or sync.
-        # Looking at previous file view: catalogs = self.provider.client.catalogs.list()
-        # It seems direct SDK call, which is sync.
-        
-        tool.provider.client.catalogs.list.return_value = mock_catalogs
+        mock_provider.client.catalogs.list.return_value = mock_catalogs
 
         # Execute
         result = await tool.execute()
@@ -64,8 +62,8 @@ class TestGetCatalogListTool:
         assert second["catalog_type"] == "SYSTEM_CATALOG"
 
     @pytest.mark.asyncio
-    async def test_execute_empty(self, tool):
-        tool.provider.client.catalogs.list.return_value = []
+    async def test_execute_empty(self, tool, mock_provider):
+        mock_provider.client.catalogs.list.return_value = []
         
         result = await tool.execute()
         
@@ -73,8 +71,8 @@ class TestGetCatalogListTool:
         assert result["catalogs"] == []
 
     @pytest.mark.asyncio
-    async def test_execute_error(self, tool):
-        tool.provider.client.catalogs.list.side_effect = Exception("SDK Error")
+    async def test_execute_error(self, tool, mock_provider):
+        mock_provider.client.catalogs.list.side_effect = Exception("SDK Error")
         
         with pytest.raises(RetryableError) as excinfo:
             await tool.execute()

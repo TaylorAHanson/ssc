@@ -130,19 +130,9 @@ async def handle_conversation(
         raise HTTPException(status_code=503, detail="Agent is currently disabled")
     
     try:
-        # User Refresh: Ensure we have the latest roles from DB
-        # The dependency might return a slightly stale state if updated externally
-        from app.db.session import get_session_local
-        db = get_session_local()()
-        try:
-            current_user = db.merge(current_user)
-            db.refresh(current_user)
-            # Force load roles while session is still open
-            # This prevents DetachedInstanceError when accessing them later
-            _ = current_user.roles
-        finally:
-            db.close()
-            
+        # User Refresh removed to preserve Dev Persona overrides
+        # The dependency injection provides the correct user state
+        
         logger.info(f"Incoming agent request context: {request.context}")
         
         # DEBUG: Log user roles to debug visibility issues
@@ -184,12 +174,18 @@ async def handle_conversation(
             mode=agent_mode
         )
         
-        # Format history for runner
+        # Format history for runner - preserve all metadata including timestamps
         history = []
         if request.conversation_history:
             for msg in request.conversation_history:
+                # Standard roles for LLM
                 role = "user" if msg.type == "user" else "assistant"
-                history.append({"role": role, "content": msg.content})
+                history.append({
+                    "role": role, 
+                    "content": msg.content,
+                    "timestamp": msg.timestamp,
+                    "type": msg.type
+                })
         
         # Get OBO token if available
         obo_token = None

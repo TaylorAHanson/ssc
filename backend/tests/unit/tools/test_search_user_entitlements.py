@@ -1,9 +1,13 @@
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from app.tools.self_service.search_user_entitlements import SearchUserEntitlementsTool
+from app.tools.self_service.search_user_entitlements import search_user_entitlements
 from app.providers.databricks import DatabricksProvider
 from databricks.sdk import WorkspaceClient
+
+@pytest.fixture
+def tool():
+    return search_user_entitlements
 
 @pytest.fixture
 def mock_provider():
@@ -12,12 +16,6 @@ def mock_provider():
         provider_instance.client = MagicMock(spec=WorkspaceClient)
         provider_instance.get_workspace_client = MagicMock(return_value=MagicMock(spec=WorkspaceClient))
         yield provider_instance
-
-@pytest.fixture
-def tool(mock_provider):
-    tool = SearchUserEntitlementsTool()
-    tool._provider = mock_provider
-    return tool
 
 @pytest.mark.asyncio
 async def test_search_entitlements_obo(tool, mock_provider):
