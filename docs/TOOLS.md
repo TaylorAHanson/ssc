@@ -1,64 +1,56 @@
-# ATLAS Tools Inventory
+# Tools Inventory
 
-This document outlines the tools available to the AI agent. **Tools are exclusively for information gathering and discovery.** 
-
-The only exception is the `ExecuteWorkflowTool`, which is the mechanism for the agent to take action by invoking provider functions (see `PROVIDERS.md`).
+This document outlines the tools available to the AI agent, categorized by functional mode. Tools are primarily for **information gathering and discovery**, with the exception of the `execute_workflow` tool which executes actions.
 
 ---
 
-## 1. The Action Tool
-
-| Tool Name | Description | Priority | Target |
-|-----------|-------------|----------|--------|
-| `ExecuteWorkflowTool` | The "Special Tool" used to execute a plan. It takes a list of provider function calls (e.g., `CreateWorkspace`, `GrantAccess`) and executes them transactionally. | **Critical** | Action Execution |
-
----
-
-## 2. User Onboarding & Verification Tools
-Tools for verifying user status and entitlements.
-
-| Tool Name | Description | Priority | Target |
-|-----------|-------------|----------|--------|
-| `CheckTrainingStatusTool` | Integrates with internal HR/Training systems to verify mandatory coursework. | **Critical** | Onboarding |
-| `SearchUserEntitlementsTool` | Provides a comprehensive view of a user's current access across all Workspaces, Catalogs, and Schemas. | **Critical** | Discovery |
-| `ListAvailableWorkspacesTool` | Lists all existing Databricks workspaces available for join requests. | **High** | Discovery |
-| `ListAvailableDatasetsTool` | Lists high-level certified catalogs and schemas available for access. | **High** | Discovery |
-| `CheckRequestHistoryTool` | Checks for pending or duplicate requests to prevent spam. | **High** | Governance |
+## 1. Core Action Tool
+| Tool Name | Description | Status | UI Intent / Trigger |
+|-----------|-------------|--------|---------------------|
+| `execute_workflow` | Primary mechanism to invoke provider functions (e.g., Create Workspace). | [x] Implemented | "Shall I proceed with this request?" |
 
 ---
 
-## 3. Information & Discovery Tools
-Tools to validate input and find resources.
-
-| Tool Name | Description | Priority | Target |
-|-----------|-------------|----------|--------|
-| `CheckExistsTool` | Checks if a specific catalog, schema, or table exists. Supports fuzzy matching. | **Critical** | Validation |
-| `SearchCatalogTool` | Searches Unity Catalog metadata for datasets matching keywords. | **High** | Discovery |
-| `SuggestReusableAssetTool` | Matches user needs with existing templates or certified datasets. | **Deferred** | Innovation |
-| `GetAccessRequestStatusTool` | Checks the status of an ongoing access request. | **High** | Operations |
-| `GetWorkspaceStatusTool` | Polls the status of a provisioning operation. | **High** | Operations |
+## 2. Self-Service (Standard Mode)
+| Tool Name | Description | Status | UI Hint / Intent |
+|-----------|-------------|--------|---------------------|
+| `does_catalog_exist` | Checks if a specific catalog, schema, or table exists. | [x] Implemented | Validation logic |
+| `get_catalog_list` | Lists all catalogs available to the user. | [x] Implemented | "Discover Enterprise Data" |
+| `get_schema_list` | Lists schemas within a catalog. | [x] Implemented | "Discover Enterprise Data" |
+| `get_table_list` | Lists tables within a schema. | [x] Implemented | "Discover Enterprise Data" |
+| `search_requests` | Searches for current or past user requests. | [x] Implemented | "Check request status" |
+| `search_approvals` | Searches for pending approvals for the user. | [x] Implemented | Menu: Pending Approvals |
+| `search_user_entitlements` | Views a user's access across workspaces and data. | [x] Implemented | "Search user permissions" |
+| `check_training_status` | Verifies mandatory coursework completion. | [x] Implemented | "Learn a new skill" |
+| `list_github_templates` | Lists available GitHub repository templates. | [x] Implemented | "Request GitHub repo" |
+| `check_github_repo` | Checks if a GitHub repository exists. | [x] Implemented | "Request GitHub repo" |
+| `search_events` | Finds community events or office hours. | [x] Implemented | Menu: Event Calendar |
 
 ---
 
-## 4. Governance & Automated Oversight Tools
-These tools allow the Governance Agent to proactively monitor the Lakehouse for hygiene, security, and cost efficiency.
+## 3. FinOps (Finance Admin)
+| Tool Name | Description | Status | UI Hint / Intent |
+|-----------|-------------|--------|---------------------|
+| `get_cost_summary` | Provides a summary of spend by department or workspace. | [x] Implemented | "Department Billing" |
+| `get_resource_efficiency_metrics` | Analyzes cluster utilization and overprovisioning. | [x] Implemented | "Idle Clusters" |
+| `get_forecasted_spend` | Predicts future spend based on historics. | [x] Implemented | "Usage Forecast" |
+| `get_forecasted_spend` | Predicts future spend. | [x] Implemented | "Forecast Next Month" |
+| `get_cost_summary` | Summary of spend by cost center. | [x] Implemented | "Department Billing" |
 
-### Resource & Cost Optimization
-| Tool Name | Description | Priority | Target |
-|-----------|-------------|----------|--------|
-| `DetectOverProvisioningTool` | Analyzes cluster and warehouse metrics to identify resources with consistently low utilization relative to their instance size. | **High** | Cost |
-| `IdentifyStaleAssetsTool` | Identifies tables, models, or jobs that have not been queried or run in X days ("Unused Data"). | **Medium** | Cost/Hygiene |
-| `FindEmptyContainersTool` | Identifies Catalogs or Schemas that contain zero child objects (tables, views, volumes) to reduce namespace clutter. | **Low** | Hygiene |
+---
 
-### Security & Compliance Audit
-| Tool Name | Description | Priority | Target |
-|-----------|-------------|----------|--------|
-| `AuditPrivilegedAccessTool` | Scans Unity Catalog for principals with `Account Admin`, `Metastore Admin`, or broad `ALL PRIVILEGES` grants. | **Critical** | Security |
-| `IdentifyOrphanedAssetsTool` | Validates asset ownership against the IDP to find resources owned by deleted users or service principals. | **High** | Security |
-| `ReviewDataClassificationTool` | Scans schema metadata to identify columns likely containing PII that lack proper sensitivity tags. | **High** | Compliance |
+## 4. Governance (Security Admin)
+| Tool Name | Description | Status | UI Hint / Intent |
+|-----------|-------------|--------|---------------------|
+| `check_object_permissions` | Audits access to specific catalogs or schemas. | [x] Implemented | "Access Report" |
+| `audit_user_access` | Audits all access grants for a specific principal. | [x] Implemented | "Audit permissions" |
+| `search_audit_logs` | Searches Unity Catalog audit logs. | [x] Implemented | "Usage Audit" |
+| `check_overprovisioned_users` | Identifies users with excessive privileges. | [x] Implemented | "Overprovisioned users" |
+| `list_workspaces` | Lists all available Databricks workspaces. | [x] Implemented | "Workspace Access" |
+| `find_owner` | Locates the owner of a specific data asset. | [x] Implemented | "Assign Owner" |
+| `search_audit_logs` | Queries login events and admin actions. | [x] Implemented | "Count Failed Logins", "Unique Users" |
 
-### Data Quality & Usage
-| Tool Name | Description | Priority | Target |
-|-----------|-------------|----------|--------|
-| `AnalyzeAssetUsageTool` | Queries system tables to generate usage heatmaps, identifying frequently vs. rarely accessed assets. | **Medium** | Observability |
-| `ScanUndocumentedAssetsTool` | Lists data assets (tables, columns) that are missing `COMMENT` fields to enforce documentation standards. | **Low** | Quality |
+---
+
+## 5. Data Quality
+TODO

@@ -1,6 +1,6 @@
-# ATLAS - Self-Service Portal
+# Self-Service Portal
 
-ATLAS (Agentic Control Tower for Lakehouse Automation & Self‑Service Experience) is a self-service portal for employees to request access to data and analytics resources.
+This is a self-service portal for employees to request access to data and analytics resources.
 
 ## Quick Start
 

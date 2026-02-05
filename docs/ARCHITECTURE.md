@@ -1,8 +1,8 @@
-# ATLAS Backend Architecture
+# Backend Architecture
 
 ## Overview
 
-The ATLAS (Agentic Control Tower for Lakehouse Automation & Self‑Service Experience) Self-Service Center is a **Databricks App** that runs on the Databricks platform. It is organized around eight main architectural layers:
+The Self-Service Center is a **Databricks App** that runs on the Databricks platform. It is organized around eight main architectural layers:
 
 - **Web UI** - Provides a user interface for interacting with the hub.
 - **API Endpoints** provide CRUD operations and serve the frontend UI and separate the UI from the business logic.

@@ -1,6 +1,6 @@
 # Backend Test Harness
 
-This directory contains the test suite for the ATLAS backend, designed to support independent testing of Providers and State Machines.
+This directory contains the test suite for the backend, designed to support independent testing of Providers and State Machines.
 
 ## Structure
 

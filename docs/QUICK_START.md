@@ -1,6 +1,6 @@
 # Developer Quick Start Guide
 
-This guide covers the essential steps to get your local development environment set up for the ATLAS project.
+This guide covers the essential steps to get your local development environment set up.
 
 ## 1. Environment Configuration
 

@@ -94,16 +94,18 @@ export function Sidebar() {
         collapsed ? "w-16" : "w-72"
       )}
     >
-      <div className="flex items-center gap-3 p-4 border-b border-gray-200 min-h-[65px]">
-        {brandLogoUrl && !collapsed && (
-          <img src={brandLogoUrl} alt="Logo" className="w-6 h-6 object-contain" />
-        )}
-        {!collapsed && (
-          <h2 className="text-lg font-semibold text-primary truncate">{brandName}</h2>
-        )}
+      <div className={cn("p-4 border-b border-gray-200 min-h-[65px] flex items-center justify-between", !collapsed && "items-start")}>
+        <div className={cn("flex flex-1 overflow-hidden", collapsed ? "flex-col items-center" : "flex-col gap-2")}>
+          {brandLogoUrl && !collapsed && (
+            <img src={brandLogoUrl} alt="Logo" className="h-8 w-auto object-contain self-start" />
+          )}
+          {!collapsed && (
+            <h2 className="text-sm font-bold text-primary leading-tight">{brandName}</h2>
+          )}
+        </div>
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className={cn("p-1 rounded-md hover:bg-gray-100", collapsed && "mx-auto")}
+          className={cn("p-1 rounded-md hover:bg-gray-100", collapsed && "mx-auto mt-2")}
         >
           {collapsed ? (
             <ChevronRight className="w-5 h-5" />
