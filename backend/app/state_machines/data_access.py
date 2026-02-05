@@ -119,18 +119,81 @@ class DataAccessStateMachine(BaseRequestStateMachine):
         )
 
     # --------------------------------------------------------------------------
-    # State Entry Handlers (Async)
+    # State Entry Handlers (Sync and Async)
     # --------------------------------------------------------------------------
+
+    def on_enter_manager_approval(self):
+        """Execute sync tasks when entering manager_approval state."""
+        # Create approval task
+        self.create_approval_task("manager")
 
     async def on_enter_manager_approval_async(self):
         """Execute async tasks when entering manager_approval state."""
+        # TODO: Integrate with Identity provider to get manager
         # Notification is handled by base class approval creation
         pass
 
+    def on_enter_data_owner_approval(self):
+        """Execute sync tasks when entering data_owner_approval state."""
+        # Create approval task
+        self.create_approval_task("data_owner")
+
     async def on_enter_data_owner_approval_async(self):
         """Execute async tasks when entering data_owner_approval state."""
+        # TODO: Get object owner after the design is complete
+        logger.info(f"[{self.request.id}] on_enter_data_owner_approval_async CALLED")
+        # Fetch data owner from Unity Catalog and store in context
+        ctx = self.request.state_context or {}
+
+        # Only fetch if not already set
+        if not ctx.get("data_owner_email"):
+            from app.core.config import settings
+            from app.providers.databricks.client import DatabricksProvider
+
+            # Get dataset from context
+            dataset = ctx.get("dataset")
+
+            if dataset:
+                try:
+                    logger.info(f"[{self.request.id}] Fetching data owner for dataset '{dataset}'")
+
+                    provider = DatabricksProvider(
+                        host=settings.DATABRICKS_HOST,
+                        token=settings.DATABRICKS_TOKEN,
+                        client_id=settings.DATABRICKS_CLIENT_ID,
+                        client_secret=settings.DATABRICKS_CLIENT_SECRET,
+                        config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID}
+                    )
+
+                    # Infer asset type from dataset format and fetch owner
+                    parts = dataset.split(".")
+                    if len(parts) == 1:
+                        owner = await provider.get_asset_owner("catalog", dataset)
+                    elif len(parts) == 2:
+                        owner = await provider.get_asset_owner("schema", dataset)
+                    elif len(parts) == 3:
+                        owner = await provider.get_asset_owner("table", dataset)
+                    else:
+                        logger.warning(f"[{self.request.id}] Invalid dataset format: {dataset}")
+                        owner = None
+
+                    if owner:
+                        logger.info(f"[{self.request.id}] Found data owner: {owner}")
+                        ctx["data_owner_email"] = owner
+                        self.request.state_context = ctx
+                        self.db.commit()
+
+                        # Send notification to data owner (with idempotency check)
+                        if not has_fact(self.db, self.request.id, "data_owner_notified"):
+                            await self._send_data_owner_notification(owner)
+                            add_fact(self.db, self.request.id, "data_owner_notified", {"owner_email": owner}, actor="system")
+                    else:
+                        logger.warning(f"[{self.request.id}] Could not determine data owner for {dataset}")
+
+                except Exception as e:
+                    logger.error(f"[{self.request.id}] Error fetching data owner: {str(e)}")
+
         # Notification is handled by base class approval creation
-        pass
 
     async def on_enter_provisioning_async(self):
         """Execute async tasks for provisioning state."""
@@ -267,3 +330,32 @@ class DataAccessStateMachine(BaseRequestStateMachine):
             "failed": "Failed"
         }
         return display_names.get(state_id, super()._get_state_display_name(state_id))
+
+    async def _send_data_owner_notification(self, owner_email: str):
+        """Send notification to data owner about pending approval request."""
+        ctx = self.request.state_context or {}
+        requester = ctx.get("requested_by", "Unknown")
+        requester_email = ctx.get("requested_by_email", "")
+        asset_name = ctx.get("asset_name", "Unknown asset")
+        asset_type = ctx.get("asset_type", "asset")
+        access_level = ctx.get("access_level", "access")
+        justification = ctx.get("justification", "No justification provided")
+
+        subject = f"Data Access Approval Required: {asset_name}"
+        body = f"""Hello,
+
+A data access request requires your approval as the owner of {asset_type} '{asset_name}'.
+
+Request Details:
+- Requested by: {requester} ({requester_email})
+- Asset: {asset_name}
+- Access Level: {access_level}
+- Justification: {justification}
+
+Please review and approve or reject this request in the ATLAS portal.
+
+Request ID: {self.request.id}
+"""
+
+        logger.info(f"[{self.request.id}] Sending approval notification to data owner: {owner_email}")
+        await self._send_notification(subject=subject, body=body, to_email=owner_email)

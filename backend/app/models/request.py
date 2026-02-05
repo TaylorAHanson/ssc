@@ -11,6 +11,7 @@ class RequestStatus(str, Enum):
     """Request status enumeration."""
     PENDING = "pending"
     MANAGER_APPROVAL = "manager_approval"
+    DATA_OWNER_APPROVAL = "data_owner_approval"
     TRAINING_PENDING = "training_pending"
     PROVISIONING = "provisioning"
     COMPLETED = "completed"

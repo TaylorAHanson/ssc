@@ -395,9 +395,15 @@ class BaseRequestStateMachine(StateMachine):
 
     async def execute_tasks(self):
         """Runs the async handler for the current state."""
-        handler = getattr(self, f"on_enter_{self.current_state.id}_async", None)
+        handler_name = f"on_enter_{self.current_state.id}_async"
+        logger.info(f"[{self.request.id}] execute_tasks() - Looking for handler: {handler_name}")
+        handler = getattr(self, handler_name, None)
+        logger.info(f"[{self.request.id}] execute_tasks() - Handler found: {handler}, callable: {callable(handler) if handler else False}")
         if handler and callable(handler):
+            logger.info(f"[{self.request.id}] execute_tasks() - Calling async handler: {handler_name}")
             await handler()
+        else:
+            logger.info(f"[{self.request.id}] execute_tasks() - No async handler for state: {self.current_state.id}")
 
     def _call_on_enter_hooks(self, previous_state: str, new_state: str):
         """Calls synchronous on_enter hooks, including auto-generated approval ones."""
