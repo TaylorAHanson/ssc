@@ -11,7 +11,7 @@ The Self-Service Center is a **Databricks App** that runs on the Databricks plat
 - **State Machines** handle the orchestration of compound and atomic workflows, calling **Providers** to execute actions.
 - **Providers** abstract external systems and infrastructure (Terraform, IDP, GitHub, Databricks, etc.) and are used by both Agent Tools and State Machines.
 - **Workers** perform long-running tasks, such as polling for external events or executing external commands.
-- **Database** stores state and facts about the system.
+- **Database** stores the immutable history of **Facts** from which the system state is derived.
 
 ## Architecture Hierarchy
 
@@ -26,25 +26,28 @@ graph TD
         Exec["execute_workflow Tool"]
     end
     
-    SM["State Machine Layer"]
-    Workers["Workers Layer (Async)"]
+    subgraph WorkerFlow ["Worker Flow (Async)"]
+        Workers["Workers Layer (Async)"]
+        SM["State Machine Layer"]
+    end
+
     Providers["Providers Layer"]
     DB[("Database (Lakebase)")]
 
+    %% Flow 1: Records Request
     UI --> API
     API --> Agent
-    
     Agent --> AgentTools
+    Exec -->|Records Request| DB
     
-    Exec -->|Triggers| SM
+    %% Flow 2: Execution
+    Workers -->|Queries for Work| DB
+    Workers --> SM
+    SM --> Providers
+    Providers -->|Append Facts| DB
     
+    %% Informational Tools
     Tools --> Providers
-    
-    SM -->|Persist| DB
-    SM --> Workers
-    Workers --> Providers
-    
-    Providers -->|Add Facts| DB
 ```
 
 ## Critical Architecture Requirements
@@ -66,14 +69,12 @@ Databricks Apps are not designed to handle heavy lifting. **All heavy lifting mu
 
 **Solution**: Workers Layer - Async task processing for long-running operations that calls APIs and services to perform the heavy lifting.
 
-### 3. State Persistence
-State machines must persist to database. If container restarts during a Terraform apply, state must be recoverable.
+### 3. Fact-Based State Reconstruction
+State machines must be resilient to restarts. If a container restarts during a long-running operation, the system must be able to resume exactly where it left off.
 
-**Solution**: Lakebase (PostgreSQL-based database) with state locking mechanism. Lakebase provides ACID transactions and standard PostgreSQL features for reliable state persistence.
+**Solution**: State is not treated as a static, mutable property in the database. Instead, the current state of any request is **derived at runtime** from a sequence of immutable facts (Events).
 
-State should not be treated as a static, mutable property. To ensure consistency across restarts and failures, the current state must be derivable from a sequence of immutable facts.
-
-**Solution**: Re-executable state machines - rather than storing an explicit status string, the system re-evaluates the state machine logic against the history of recorded facts and external system state to determine the next transition.
+**Solution**: **Re-executable State Machines** - rather than relying on a stored status string, the system re-evaluates the state machine logic against the full history of recorded facts and external system state to determine the current state and the next valid transition. This ensures that the system is always self-consistent and self-healing.
 
 ### 4. Human-in-the-Loop
 Approvals break continuous flow. State machines must pause and wait for external events.
@@ -89,10 +90,10 @@ Tools and providers will fail, especially Terraform operations. Infrastructure p
 
 ### Agent-Driven Workflows (Instruction-Based)
 
-For **Compound Workflows** and **Atomic Workflows**, we are moving away from static UI forms in favor of an **Agent-Driven** approach, even for administrators.
+For **Compound Workflows** and **Atomic Workflows**, we leverage an **Agent-Driven** approach, even for administrators.
 
 **Concept**:
-Instead of hardcoding a form for every new workflow, we define the workflow requirements in a **Markdown Instruction File** specific to that workflow. The Agent reads this file and conducts the "form filling" via natural language conversation. 
+Instead of hardcoding a form or ticket category for every new workflow, we define the workflow requirements in a **Markdown Instruction File** specific to that workflow. The Agent reads this file and conducts the "form filling" via natural language conversation. 
 
 **Components**:
 1.  **Instruction Files** (`backend/app/agents/instructions/*.md`):
@@ -103,7 +104,7 @@ Instead of hardcoding a form for every new workflow, we define the workflow requ
 2.  **Generic Execution Tool** (`execute_workflow`):
     -   A single, reusable tool: `execute_workflow(workflow_type: str, parameters: Dict[str, Any])`.
     -   The `parameters` argument effectively replaces the static form fields.
-    -   The Agent populates `parameters` based on the data gathered during the chat.
+    -   The Agent populates `parameters` based on the data gathered during the chat as defined in the instruction file.
 
 3.  **Flow**:
     -   User: "I need to onboard a new project."
@@ -115,24 +116,22 @@ Instead of hardcoding a form for every new workflow, we define the workflow requ
 
 **Important**: Each unique workflow type (e.g., "create_catalog", "onboard_project") MUST have its own dedicated State Machine class. Do not reuse generic state machines for distinct business processes. This ensures that the logic for each workflow is isolated, testable, and independently evolvable.
 
-This allows "Business Users" to essentially have a concierge experience without needing to navigate complex UI forms. 
-
-**TO CONSIDER:** having a sinlge generic tool for executing workflows may not work as predictably as having a specific execute_workflow_xyz tool for each workflow.
+**TO CONSIDER:** having a sinlge generic tool for executing workflows may not work as predictably as having a specific execute_workflow_xyz tool for each workflow. Future testing may reveal this to be the case but there are some benefits to having a single tool since agents can be overloaded with too many tools.
 
 ### Tool Usage Patterns
 
 We distinguish between **Agent Tools** and **System Actions**:
 
 - **Agent Tools** (`app/tools`):
-  - **Purpose**: Information gathering, validation, and "safe" actions for the LLM.
-  - **User**: The Agent (LLM).
+  - **Purpose**: Information gathering, validation, and "safe" actions for the LLM to take. These are generally read-only operations.
+  - **Used By**: The Agent (LLM).
   - **Format**: Follow MCP schema (name, description, input_schema).
   - **Examples**: `DoesCatalogExistTool`, `SearchUserEntitlementsTool`.
   - **Restriction**: Agents should NOT have tools for major state mutations (e.g., "Provision Workspace", "Send Notification"). Those are deterministic outcomes handled by the State Machine.
 
 - **System Actions** (State Machine Logic):
   - **Purpose**: Deterministic execution of business logic (provisioning, notifications, access grants).
-  - **User**: The State Machine.
+  - **Used By**: The State Machine.
   - **Implementation**: State Machines call **Providers** directly (e.g., `self.notification_provider.send_email()`). They do NOT use the `app/tools` wrappers.
   - **Why**: Avoids "tool" bloat and keeps logical flow clear. The Agent doesn't decide to send an email; the State Machine does it because the state changed.
 
@@ -146,41 +145,36 @@ Providers encapsulate all interaction with external systems:
 - **System-Specific Logic** - Terraform commands, API calls, shell commands
 - **Error Handling** - Translate system errors to domain errors
 
-**Databricks Integration Preference**:
-- **Always prefer the Databricks Python SDK** (`databricks-sdk`) over direct REST API calls
-- The SDK provides type safety, better error handling, and automatic retry logic
-- Use `WorkspaceClient` from `databricks.sdk` for workspace operations
-- Use SDK methods for Unity Catalog, SQL warehouses, clusters, and other Databricks services
-- Only use REST API calls when the SDK doesn't support a specific feature
-- The SDK handles authentication, connection pooling, and rate limiting automatically
-
 ## Contributing Tools & Providers
 
 ### Adding a New Provider
 
-0. **Create the Provider Folder**: Create a new folder as `app/providers/<system>`. 
-    - Include a `client.py` file that implements the provider class.
-    - Include a `__init__.py` file to make the folder a package.
-    - Include a `README.md` file to document the provider.
-    - Optionally include a `requirements.txt` file to list the provider's dependencies, if any.
-1.  **Create Provider Class**: Implement `BaseProvider` in `app/providers/<system>/client.py`.
-2.  **Implement Health Check**: Implement `health_check()` to verify connectivity.
-3.  **Add Methods**: Add methods that abstract system-specific operations.
+1.  **Define Interface**: Create a new file in `app/providers/[name]/client.py`.
+2.  **Inherit from Base**: Use `BaseProvider` from `app/providers/base.py`.
+3.  **Implement Health Check**: Implement the `health_check()` method to verify connectivity and credentials.
+4.  **Implement Business Methods**: Add methods for interacting with the external system (e.g., `create_repo`, `grant_access`).
+5.  **Use Base Functionality**:
+    - `self.config`: Access provider-specific configuration passed during initialization.
+    - `get_config(key, default)`: Safely retrieve configuration values.
+    - Standardized initialization pattern for consistent provider setup.
 4.  **Error Handling**: Wrap system errors in `RetryableError` or `PermanentError`.
-5.  **Configuration**: Use `self.config` for credentials. See [Configuration & Settings](#configuration--settings) for more information.
+5.  **Configuration**: Use `self.config` for credentials. See [Configuration & Settings](#configuration--settings) for more information on secret and setting lineage.
 
 
 ### Adding a New Tool
 
 All tools should be implemented using the **FastMCP** pattern (introduced in Feb 2026), which uses decorators instead of class inheritance. This is significantly simpler and more robust.
 
-1.  **Create Tool File**: Create a new file in `app/tools/<domain>/<tool_name>.py`.
-2.  **Define Input Schema**: Create a Pydantic model for the tool arguments.
-3.  **Implement & Decorate**: Write an async function decorated with `@tool`.
+### Adding a New Tool
 
-**Template**:
-```python
-# app/tools/domain/my_tool.py
+1.  **Define Input Schema**: Create a Pydantic model for tool arguments.
+2.  **Use @tool Decorator**: Decorate your async function with `@tool` from `app/tools/mcp.py`.
+3.  **Implement Logic**: Use appropriate providers to accomplish the task.
+4.  **Register Tool**: Add the tool function to `AVAILABLE_TOOLS` in `app/tools/__init__.py`.
+5.  **Use Base Functionality**:
+    - **Pydantic Validation**: Automatic argument validation and type safety via `args_schema`.
+    - **MCP Integration**: The `@tool` decorator handles metadata, description, and registration for LLM consumption.
+    - **Standard Exceptions**: Use `RetryableError` or `PermanentError` for consistent error propagation to the state machine.
 from typing import Dict, Any
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
@@ -204,6 +198,75 @@ async def my_tool_name(arg1: str) -> Dict[str, Any]:
 
 4.  **Register Tool**: Import and add the tool function to `AVAILABLE_TOOLS` in `app/tools/__init__.py`.
 
+### Adding a New State Machine
+
+State machines orchestrate business logic and manage the lifecycle of a request. Follow these steps to add a new one:
+
+### Adding a New State Machine
+
+1.  **Identify Request Type**: Add a new value to `RequestType` in `app/models/request.py`.
+2.  **Inherit from Base**: Create a class that inherits from `BaseRequestStateMachine`.
+3.  **Define States and Transitions**: Use the `statemachine` library syntax to define states and events.
+4.  **Override Mappings**: Update `STATE_COMPLETION_FACTS`, `STATE_LOG_FACTS`, and `STATUS_MAPPING` as needed.
+5.  **Implement Logic Hooks**: Implement `on_enter_<state>` for synchronous logic or `on_enter_<state>_async` for asynchronous side effects (calling providers).
+6.  **Register in Factory**: Add the new state machine to `get_state_machine` in `app/state_machines/factory.py`.
+7.  **Leverage Base Reusability**:
+    - **Automated Reconcile/Tick**: The base class handles the core loop, state persistence (`save()`), and transition attempts.
+    - **UI View Generation**: `to_state_machine_state()` automatically builds the frontend-ready timeline and logs.
+    - **Approval Orchestration**: Use `create_approval_task()` to handle standardized approval workflows.
+    - **Notification Helpers**: Use `_send_notification()` for standardized user communication.
+    - **Fact-Based Properties**: Easily check for events using built-in properties like `has_manager_approval`.
+    - **Workflow Chaining**: Use `spawn_child_request()` to trigger and track child workflows.
+
+**Template**:
+```python
+# app/state_machines/my_workflow.py
+from statemachine import State
+from app.state_machines.base import BaseRequestStateMachine
+from app.models.request import RequestStatus
+
+class MyWorkflowStateMachine(BaseRequestStateMachine):
+    # Define States
+    pending = State("Pending", initial=True)
+    processing = State("Processing")
+    completed = State("Completed", final=True)
+    
+    # Define Transitions
+    submit = pending.to(processing)
+    finish = processing.to(completed)
+
+    # State -> Fact mappings for UI and Poller
+    STATE_COMPLETION_FACTS = {
+        **BaseRequestStateMachine.STATE_COMPLETION_FACTS,
+        "processing": "work_performed",
+    }
+
+    STATUS_MAPPING = {
+        **BaseRequestStateMachine.STATUS_MAPPING,
+        "processing": RequestStatus.PROVISIONING,
+    }
+
+    async def on_enter_processing_async(self):
+        """Execute async work when entering the processing state."""
+        # Use Providers to perform work
+        # Mark progress by adding facts
+        add_fact(self.db, self.request.id, "work_performed", {})
+        # self.finish() # Trigger transition if needed
+```
+
+7.  **Register Request Type**: Ensure the new request type is added to `RequestType` enum in `app/models/request.py`.
+8.  **Update Factory**:
+```python
+# app/state_machines/factory.py
+from app.state_machines.my_workflow import MyWorkflowStateMachine
+
+def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMachine:
+    # ...
+    if r_type == RequestType.MY_NEW_WORKFLOW:
+        return MyWorkflowStateMachine(request, db)
+    # ...
+```
+
 ## Configuration & Settings
 
 The application uses a centralized configuration system built on `pydantic-settings`. This ensures strict type validation, default values, and a single source of truth for all application settings. Both app.yaml and .env files feed into this system, but we don't access them directly. Instead, we access the configuration through the `settings` object. This is done by importing `settings` from `app.core.config`.
@@ -225,16 +288,15 @@ Settings are loaded in the following order of precedence:
 
 ### Adding a New Setting
 
-1.  **Define in `config.py`**: Add the field to the `Settings` class.
-    ```python
-    class Settings(BaseSettings):
-        ...
-        # New API Provider
-        MY_PROVIDER_API_KEY: str = ""  # SECRET: Set in .env, and app.yaml
-        MY_PROVIDER_TIMEOUT: int = 30
-    ```
-2.  **Update `.env.example`**: If it's a required secret, add it to `.env.example`.
-3.  **Use in Code**: Access via the global `settings` object.
+### Adding a New Setting
+
+1.  **Add to Settings Class**: Add a new field to the `Settings` class in `app/core/config.py`.
+2.  **Define Type and Default**: Use Pydantic types; default values are optional.
+3.  **Leverage Base Reusability**:
+    - **Env Variable Mapping**: Automatic mapping from environment variables (e.g., `MY_SETTING_NAME` -> `my_setting_name`).
+    - **Validation**: Automatic type conversion and validation on startup.
+    - **Secret Handling**: Use `SecretStr` for sensitive values to prevent accidental logging.
+    - **Global Access**: Once added, the setting is available globally via the `settings` object.
     ```python
     from app.core.config import settings
     
@@ -266,109 +328,7 @@ class MyNewProvider(BaseProvider):
             # raise ValueError("MY_PROVIDER_API_KEY is required")
 ```
 
-## Directory Structure
 
-```
-backend/
-├── .env
-├── .env.example
-├── ARCHITECTURE.md
-├── GOVERNANCE.md
-├── TOOLS.md
-├── app/
-│   ├── main.py                    # FastAPI application entry point
-│   │
-│   ├── agents/                    # Agent system
-│   │   ├── __init__.py
-│   │   ├── content_registry.py    # Registry for content
-│   │   ├── forms_registry.py      # Registry for forms
-│   │   ├── prompts.py             # Agent prompts
-│   │   ├── instructions/          # Agent instructions (markdown files)
-│   │   └── tools/                 # Agent-specific tools
-│   │
-│   ├── api/                       # API endpoints
-│   │   └── v1/
-│   │       ├── __init__.py
-│   │       ├── admin.py
-│   │       ├── agent.py
-│   │       ├── approvals.py
-│   │       ├── content.py
-│   │       ├── delegations.py
-│   │       ├── requests.py
-│   │       └── workspaces/
-│   │
-│   ├── content/                   # Static content/markdown
-│   │
-│   ├── core/                      # Core configuration
-│   │   ├── __init__.py
-│   │   ├── config.py              # Application settings
-│   │   ├── exceptions.py          # Custom exceptions
-│   │   └── retry.py               # Retry utilities
-│   │
-│   ├── db/                        # Database models
-│   │   ├── __init__.py
-│   │   ├── approval.py
-│   │   ├── base.py
-│   │   ├── event.py
-│   │   ├── request.py
-│   │   └── session.py
-│   │
-│   ├── forms/                     # Form definitions
-│   │
-│   ├── model_serving/             # Databricks Model Serving
-│   │   ├── __init__.py
-│   │   ├── agent_llm.py
-│   │   └── client.py
-│   │
-│   ├── models/                    # Pydantic models
-│   │   ├── __init__.py
-│   │   └── request.py
-│   │
-│   ├── providers/                 # External system providers
-│   │   ├── __init__.py
-│   │   ├── base.py
-│   │   ├── databricks/
-│   │   ├── github/
-│   │   ├── idp/
-│   │   ├── notifications/
-│   │   ├── sql/
-│   │   └── terraform/
-│   │
-│   ├── services/                  # Business logic services
-│   │   ├── __init__.py
-│   │   └── request_service.py
-│   │
-│   ├── state_machines/            # State machine orchestration
-│   │   ├── __init__.py
-│   │   ├── base.py
-│   │   ├── data_access.py
-│   │   ├── factory.py
-│   │   ├── facts.py
-│   │   ├── github_repo_creation.py
-│   │   ├── lock.py
-│   │   ├── persistence.py
-│   │   ├── project_onboarding.py
-│   │   ├── service_principal.py
-│   │   ├── simple_platform_admin.py
-│   │   ├── workspace_access.py
-│   │   └── workspace_provision.py
-│   │
-│   ├── tools/                     # System tools
-│   │   ├── __init__.py
-│   │   ├── base.py
-│   │   └── catalog_existence.py
-│   │
-│   └── workers/                   # Async workers
-│       ├── __init__.py
-│       ├── poller.py
-│       └── tasks/
-│
-├── requirements.txt
-├── edas_hub.db
-├── migrate_db.py
-├── test.db
-└── test_api.db
-```
 
 ## Layer Detailed Implementation
 
@@ -378,11 +338,12 @@ backend/
 
 **Characteristics**:
 - Encapsulate authentication, connection management, and system-specific APIs
-- Provide clean, domain-focused interfaces
-- **Handle retries at provider level** - Immediate retries for transient errors
+- Provide clean, domain-focused interfaces via specialized providers
+- Inherit from `BaseProvider` (minimal interface for configuration and health checks)
+- **Handle retries at provider level** - Immediate retries for transient errors using `tenacity`
 - **Error classification** - Distinguish retryable vs permanent errors
 - Handle timeouts, error translation
-- Can be swapped out (e.g., Terraform → Pulumi) without changing tools
+- Can be swapped out (e.g., Terraform → Pulumi) without changing state machine logic
 
 **Provider-Level Retry Logic**:
 
@@ -570,10 +531,10 @@ The Agent layer exposes its capabilities via the **Model Context Protocol (MCP)*
 - **Alembic** - Database migrations
 
 **Critical Requirements**:
-- **State Persistence**: State machines must be persisted to survive container restarts
-- **State Locking**: Prevent concurrent state transitions (idempotency)
-- **Event Tracking**: Track state transitions and events for audit
-- **ACID Transactions**: PostgreSQL provides ACID guarantees for state updates
+- **Fact Persistence**: All significant events (approvals, provisioning starts, completions) must be persisted as immutable facts.
+- **State Reconstruction**: The system must be able to rebuild the state machine's context by replaying facts from the database.
+- **State Locking**: Prevent concurrent state transitions and ensure fact-recording atomicity.
+- **ACID Transactions**: PostgreSQL provides ACID guarantees to ensure facts are recorded reliably.
 
 **Database Schema** (PostgreSQL Tables):
 
@@ -590,10 +551,11 @@ class RequestModel(Base):
     type = Column(String)  # RequestType enum
     title = Column(String)
     status = Column(String)  # Current state (State Machine reads/writes this)
+    requester_email = Column(String, nullable=True)  # Who created the request
     state_context = Column(JSON)  # Stores variables (workspace_name, config, etc.)
     
     # State locking for idempotency
-    locked_by = Column(String, nullable=True)  # Worker ID (e.g., 'arq@worker-1')
+    locked_by = Column(String, nullable=True)  # Worker ID (e.g., 'poll-worker-hostname-12345')
     locked_until = Column(DateTime, nullable=True)  # Lock expiration timestamp
     
     # Timestamps
@@ -602,21 +564,30 @@ class RequestModel(Base):
     
     # State machine state
     current_state = Column(String)  # Current state ID
-    
-    # Visual state fields (parallel_paths, completed_states, active_states) 
-    # are derived at runtime by the State Machine class based on DB facts 
-    # (approvals, training status, etc.) and not strictly persisted 
-    # to these columns during transitions to avoid desynchronization.
     parallel_paths = Column(JSON)
     completed_states = Column(JSON)
     active_states = Column(JSON)
     
     # Failure tracking
-    failure_count = Column(Integer, default=0)  # Number of failures
-    last_failure = Column(DateTime, nullable=True)  # Last failure timestamp
-    last_error = Column(JSON, nullable=True)  # Last error details
-    retry_count = Column(Integer, default=0)  # Current retry attempt
-    max_retries = Column(Integer, default=3)  # Maximum retries allowed
+    failure_count = Column(Integer, default=0)
+    last_failure = Column(DateTime, nullable=True)
+    last_error = Column(JSON, nullable=True)
+    retry_count = Column(Integer, default=0)
+    max_retries = Column(Integer, default=3)
+    
+    # User-Agent Conversation
+    conversation = Column(JSON, nullable=True)
+    
+    # Training flags
+    requires_training = Column(Boolean, default=False)
+    training_completed = Column(Boolean, default=False)
+    
+    # Environment
+    environment = Column(String, nullable=True)
+    
+    # Hierarchy (Compound Workflows)
+    parent_id = Column(String, ForeignKey("requests.id"), nullable=True)
+    root_id = Column(String, ForeignKey("requests.id"), nullable=True)
     
     # Relationships
     approvals = relationship("ApprovalModel", back_populates="request")
@@ -634,7 +605,11 @@ class ApprovalModel(Base):
     status = Column(String)  # 'pending', 'approved', 'rejected', 'delegated'
     approved_by = Column(String, nullable=True)
     approved_at = Column(DateTime, nullable=True)
+    rejected_by = Column(String, nullable=True)
+    rejected_at = Column(DateTime, nullable=True)
     rejection_note = Column(String, nullable=True)
+    delegated_to = Column(String, nullable=True)
+    delegated_to_email = Column(String, nullable=True)
     created_at = Column(DateTime)
     updated_at = Column(DateTime)
     
@@ -656,7 +631,7 @@ class FailureModel(Base):
     
     id = Column(String, primary_key=True)
     request_id = Column(String, ForeignKey("requests.id"))
-    task_id = Column(String)  # ARQ task ID
+    task_id = Column(String)  # Worker/task ID
     failure_type = Column(String)  # 'provider_error', 'tool_error', 'timeout', 'validation_error'
     error_message = Column(String)
     error_details = Column(JSON)  # Full error stack trace, context
@@ -761,8 +736,9 @@ def heartbeat_lock(db: Session, request_id: str, worker_id: str, timeout_minutes
    - For each request:
      - Acquires lock (5 min timeout for normal, 30 min for provisioning)
      - Loads state machine from DB
-     - **Calls `state_machine.tick()`** - State machine handles ALL logic
-     - Saves state back to DB if changed
+     - **Calls `state_machine.tick()`** - Handles transitions and synchronous entry hooks
+     - Saves state back to DB if changed or status sync needed
+     - **Calls `state_machine.execute_tasks()`** - Runs asynchronous `on_enter` hooks
      - Releases lock
    - On error: Handles retryable vs permanent errors, logs failures
 
@@ -770,17 +746,17 @@ def heartbeat_lock(db: Session, request_id: str, worker_id: str, timeout_minutes
 - Finds requests to process
 - Acquires/releases locks
 - Calls `state_machine.tick()`
+- Calls `state_machine.execute_tasks()`
 - Saves state if changed
 
-All business logic (reconciliation, transitions, fact conversion, state processing) lives in the state machine.
+All business logic (reconciliation, transitions, fact conversion, state processing) lives in the state machine via transitions and `on_enter` hooks.
 
 **Key Features**:
 - **State Locking**: Prevents concurrent processing of same request
-- **Lock Heartbeat**: For long-running operations (e.g., Terraform), worker periodically extends lock expiration to prevent premature expiration
+- **Lock Heartbeat**: For long-running operations (e.g., Terraform), worker periodically extends lock expiration
 - **Parallel Processing**: Processes multiple requests concurrently (configurable limit)
 - **Error Handling**: Distinguishes retryable vs permanent errors
 - **Retry Logic**: Tracks retry count, exponential backoff on next poll cycle
-- **Long-Running Tasks**: Extended lock timeout (30 min) + heartbeat for provisioning operations
 - **Self-Healing**: Expired locks allow recovery from stuck workers
 
 **Configuration** (in `app/core/config.py`):
@@ -818,26 +794,28 @@ Retries happen at multiple levels:
 async def process_single_request(semaphore, request_id):
     """Process a single request with locking and error handling."""
     async with semaphore:
-        # Acquire lock
+        # Load request and acquire lock
         if not acquire_lock(db, request_id, worker_id, lock_timeout):
             return  # Another worker is processing
-        
+
         try:
             # Load state machine
             sm = load_state_machine(request, db)
             
-            # Let state machine handle ALL logic
+            # Let state machine handle ALL logic (reconciliation & transitions)
             changed = sm.tick()
             
             # Save if state changed
             if changed:
                 save_state_machine(db, request, sm)
                 db.commit()
+            
+            # Execute tasks (side effects)
+            await sm.execute_tasks()
+            
         except RetryableError as e:
-            # Handle retryable errors
             await _handle_retryable_error(db, request, e, worker_id)
         except PermanentError as e:
-            # Handle permanent errors
             await _handle_permanent_error(db, request, e, worker_id)
 ```
 
@@ -846,175 +824,55 @@ async def process_single_request(semaphore, request_id):
 **Purpose**: Orchestrate complex business logic, handle state transitions, and ensure idempotency.
 
 **Responsibility**:
-- **Fact-Based Decision Making**: Transitions are determined by deriving the current state from a sequence of immutable facts (Events) rather than just the previous status.
-- **Side Effects**: Directly calls **Providers** to execute actions (e.g., provisioning infrastructure).
+- **Fact-Based Decision Making**: Transitions are determined by deriving the current state from a sequence of immutable facts (Events).
+- **Side Effects**: Directly calls **Providers** to execute actions (e.g., provisioning infrastructure) via async hooks.
 - **Process Orchestration**: Manages the lifecycle of a request, including approvals, long-running tasks, and sub-tasks.
 
-**Complex Flow Architecture**:
+**Core Logic (`tick` loop)**:
 
-To handle sophisticated enterprise workflows (e.g., "Onboard a new Project" which requires approvals, a GitHub repo, and a Databricks workspace), we use the following patterns:
+The polling worker calls `tick()` periodically. The state machine re-evaluates its state based on facts and processes the current state.
 
-#### 1. Hierarchical (Compound) Workflows
-**Problem**: Large, monolithic state machines are brittle and hard to test. A single "Onboarding" state machine would become unmanageable if it tried to handle the nuances of repo creation, workspace provisioning, and group management simultaneously.
-
-**Solution**: **Parent-Child Request Model**.
-- **Parent Request** (e.g., `PROJECT_ONBOARDING`): Acts as the "Conductor". It tracks the overall progress and defines the high-level steps.
-- **Child Requests** (e.g., `GITHUB_REPO_CREATION`, `WORKSPACE_PROVISION`): Atomic units of work with their own independent state machines.
-- **Mechanism**:
-  - The Parent SM's `tick()` method evaluates its state.
-  - It calls `spawn_child_request()` to create a dependent task.
-  - It waits for the Child Request to reach a `completed` state (checking the DB).
-  - Once the child completes, the Parent records a fact (e.g., `repo_created`) and transitions to the next step.
-
-```mermaid
-graph TD
-    Parent[Project Onboarding SM] -->|Spawns| Child1[GitHub Repo SM]
-    Parent -->|Spawns| Child2[Workspace SM]
-    
-    Child1 -->|Success| Fact1(Repo Created Fact)
-    Child2 -->|Success| Fact2(Workspace Provisioned Fact)
-    
-    Fact1 --> Parent
-    Fact2 --> Parent
-    
-    Parent -->|All Facts Present| Done[Completed]
-```
-
-#### 2. Fact-Based Dynamic Routing
-**Problem**: Linear flows are insufficient for logic like "If cost > $1000, require VP approval, else Skip".
-
-**Solution**: **Guard Clauses on Transitions**.
-- Transitions are not just `State A -> State B`. They are `State A + Facts -> State B`.
-- The State Machine's `tick()` method re-evaluates available transitions every cycle.
-- **Example Logic**:
-  ```python
-  def _try_transitions(self):
-      # Dynamic Routing based on facts
-      if self.current_state == "cost_check":
-          cost = self.get_fact("cost_estimate")
-          if cost > 1000:
-              if not self.has_fact("vp_approval"):
-                  self.transition_to("vp_approval_required")
-              else:
-                  self.transition_to("provisioning")
-          else:
-              self.transition_to("provisioning")
-  ```
-
-#### 3. Idempotency & Re-entrancy
-**Problem**: A worker process might crash or complete a task but fail to save the state, leading to a retry. We must ensure we don't provision the same resource twice.
-
-**Solution**: **Check-then-Act**.
-- **Idempotent Actions**: Before calling `create_workspace`, the State Machine checks `remote_workspace_exists`.
-- **Fact Recording**: Successful actions are immediately recorded as Facts in the DB.
-- **State Recovery**: On restart, the State Machine rebuilds its context from the DB Facts. If `workspace_created` fact exists, it skips the provisioning step.
-
-#### 4. Failure Recovery & Compensation
-**Problem**: If Step 3 of a flow fails (e.g., Workspace provisioned, but User addition failed), we must decide whether to Retry, Fail, or Rollback.
-
-**Solution**:
-- **Retryable Errors**: Handled automatically by the Worker (exponential backoff).
-- **Permanent Failures**:
-  - Transition to a `failed` state.
-  - **Compensation**: "Rollback" states can be defined to undo previous actions (e.g., `delete_partial_resources`).
-  - **Manual Intervention**: The system can pause in a `failed` state, allowing an Admin to fix the issue (e.g., update bad config) and then manually trigger a "Resume" or "Retry" transition via the UI.
-        finally:
-            release_lock(db, request_id)
-
+```python
 # app/state_machines/base.py
 class BaseRequestStateMachine(StateMachine):
     def tick(self) -> bool:
         """Process one tick - handles all business logic."""
-        # 1. Reconcile state from facts
-        target_state = self.reconcile()
-        if target_state:
-            self._transition_to_state(target_state)
+        initial_state = self.current_state.id
         
-        # 2. Process current state
-        self._process_current_state()
+        # 1. Try transitions based on available facts
+        # Each transition has a 'cond="has_fact_name"' guard
+        self._try_transitions()
         
-        # 3. Re-reconcile after processing (in case facts changed)
-        target_state = self.reconcile()
-        if target_state:
-            self._transition_to_state(target_state)
-        
-        return changed
+        # 2. Handle state entry hooks
+        if self.current_state.id != initial_state:
+            logger.info(f"[{self.request.id}] Transition: {initial_state} -> {self.current_state.id}")
+            self._call_on_enter_hooks(initial_state, self.current_state.id)
+            return True # State changed
+            
+        return False
 ```
-
-**Separation of Concerns**:
-- **Poller**: Finds requests, acquires locks, calls `tick()`, saves state, handles errors
-- **State Machine**: All business logic - reconciliation, fact conversion, transitions, state processing
-
-**Benefits of Polling Approach**:
-- **Simpler**: No Redis/ARQ dependency, fewer moving parts
-- **Self-Healing**: Expired locks automatically recover from stuck workers
-- **Observable**: All state in database, easy to debug
-- **Sufficient**: Works well for low-to-moderate volume
-- **Database-Centric**: Single source of truth (database)
-
-### State Machine Layer (`app/state_machines/`)
-
-**Purpose**: Orchestrate complex workflows and execute business logic step-by-step.
-
-**Key Features**:
-- **Fact-Based State Calculation**: State is calculated from immutable facts (events) rather than stored directly. This makes the system self-healing - if a process crashes, the next poll reconciles state from facts.
-- **Hybrid Approach**: Facts are the source of truth, but state is memoized (cached) in the database for performance. The `reconcile()` method snaps state to match facts.
-- **Dynamic State Calculation**: Visual state (parallel paths, active nodes) is calculated on-the-fly based on database facts (approvals, training status) rather than being hardcoded or manually updated in the DB.
-- **Persistent Core State**: Only the core `current_state` and mapped `status` are persisted to the database as a cache/memoization.
-- **State Locking**: Prevents concurrent transitions.
-- **Wait-for-Event**: Pauses workflow for human approvals.
-- **Factory Pattern**: A factory selects the appropriate State Machine implementation based on the `RequestType`.
 
 **Fact-Based Architecture**:
 
-The system uses a **Hybrid Fact-Based Approach** that combines the benefits of both stored state and fact-based calculation:
+The system uses a **Hybrid Fact-Based Approach**:
 
-1. **Facts as Source of Truth**: Immutable events (facts) stored in the `events` table represent what has actually happened:
-   - `request_submitted` - Request was submitted
-   - `approval_received` - Approval was received (with approval_type, approved_by)
-   - `training_completed` - Training was completed
-   - `workspace_created` - Workspace was created (with workspace_id, workspace_url)
-   - `provisioning_started` - Provisioning began
-   - `provisioning_completed` - Provisioning finished
-   - `request_rejected` - Request was rejected
+1. **Facts as Source of Truth**: Immutable events stored in the `events` table represent what has actually happened:
+   - `request_submitted`, `approval_received`, `training_completed`, `workspace_created`, `provisioning_started`, etc.
 
-2. **State as Memoized Cache**: The `status` and `current_state` columns are cached values for performance:
-   - Updated by `reconcile()` method based on facts
-   - Used for filtering queries (e.g., "find all pending requests")
-   - Can be out of sync temporarily (will be corrected on next reconcile)
+2. **State as Memoized Cache**: The `status` and `current_state` columns in the `requests` table are cached values updated after transitions.
 
-3. **Reconcile Pattern**: Every poll cycle:
-   - Calls `reconcile()` which checks facts and determines target state
-   - If target state differs from current state, transitions to match
-   - This makes the system self-healing - if Terraform succeeds but DB update fails, next poll sees `workspace_created` fact and skips ahead
+3. **Self-Healing Reconciliation**:
+   - Every `tick()`, `_try_transitions()` re-evaluates guards against the latest facts.
+   - If an action (e.g., Terraform) succeeded but the state wasn't updated (e.g., due to a crash), the next `tick()` will see the `workspace_created` fact and automatically transition the state forward.
 
-4. **Idempotency Guards**: Tools check facts before executing:
-   - `create_workspace()` checks for `workspace_created` fact
-   - If fact exists, skips creation and returns existing workspace
-   - This prevents duplicate operations and handles partial failures
+4. **Idempotency Guards**: State machine actions check facts before execution:
+   - `if has_fact(self.db, self.request.id, "workspace_created"): return`
+   - This prevents duplicate side effects and handles partial failures.
 
-**Benefits**:
-- **Self-Healing**: If a process crashes mid-operation, next poll reconciles from facts
-- **Audit Trail**: Complete history of what happened (facts are immutable)
-- **Reduced Race Conditions**: No "Read-Modify-Write" on status column - just append facts
-- **Idempotent Operations**: Tools check facts before executing
-- **Performance**: State column used for filtering, facts used for truth
-
-**Implementations**:
-- `WorkspaceProvisionStateMachine`: For workspace creation (Manager Approval -> Training -> Provisioning)
-- `DataAccessStateMachine`: For data access (Data Owner Approval -> Provisioning)
-- `ServicePrincipalStateMachine`: For SP creation (Platform Admin Approval -> Provisioning)
-- `WorkspaceAccessStateMachine`: For access to existing workspaces
-- `GithubRepoCreationStateMachine`: For GitHub repo creation
-
-**Responsibilities**:
-- Manage request lifecycle states
-- Orchestrate parallel execution paths (approval, training, provisioning)
-- Call tools in sequence to complete tasks
-- Handle state transitions and validation
-- Coordinate between different workflow paths
-- **Persist state to database after each transition**
-- **Wait for external events (approvals) before continuing**
+**Key Features**:
+- **Hierarchical (Compound) Workflows**: Parent state machines can spawn child requests and wait for their completion facts.
+- **Fail-Back & Compensation**: Rollback states can be defined to undo previous actions on permanent failure.
+- **Manual Intervention**: Admins can record facts manually to "unstick" or "resume" workflows.
 
 **State Machine Actions**:
 State machine actions are orchestrated sequences that call multiple tools:
@@ -1055,50 +913,81 @@ Orchestrators coordinate multiple actions and tools:
 - `data_access.py` - Orchestrates data access request workflow
 - `service_principal.py` - Orchestrates service principal creation workflow
 
+#### State Machine Action Pattern
+
+State machine actions orchestrate multiple tools:
+
+```python
+# app/state_machines/actions/provisioning.py
+from app.tools.databricks.workspace import create_workspace
+from app.tools.databricks.access import grant_access
+from app.tools.notifications import send_notification
+
+async def provision_workspace(request_id: str, config: dict) -> dict:
+    """Orchestrate workspace provisioning."""
+    
+    # Step 1: Create workspace
+    workspace = await create_workspace(
+        name=config["name"],
+        config=config["workspace_config"]
+    )
+    
+    # Step 2: Grant access
+    await grant_access(
+        user=config["requested_by"],
+        resource=f"workspace:{workspace['id']}",
+        permissions=config["permissions"]
+    )
+    
+    # Step 3: Notify user
+    await send_notification(
+        user=config["requested_by"],
+        message=f"Workspace {workspace['name']} has been provisioned",
+        type="success"
+    )
+    
+    return workspace
+```
+
 **Flow Example (Workspace Provisioning with Fact-Based Approach)**:
 1. Request created → State saved to DB with `status='pending'` (memoized cache)
 2. Polling worker (runs every 5 seconds) finds pending request
-3. Worker acquires lock → Loads state machine → Calls `reconcile()`
-   - `reconcile()` checks facts: No facts yet → stays in `pending`
+3. Worker acquires lock → Loads state machine → Calls `tick()`
+   - `tick()` checks facts: No facts yet → stays in `pending`
    - Records fact: `request_submitted` → Transitions to `manager_approval`
+   - **Transition triggers `on_enter_manager_approval`**: creates approval task
    - Saves state to DB (memoized cache): `status='manager_approval'`
 4. Worker releases lock → **Pauses** (waiting for approval fact)
 5. Manager approves via Admin Dashboard → API: `POST /api/v1/requests/{request_id}/approve`
    - Records fact: `approval_received` with `{approval_type: 'manager', approved_by: 'manager_123'}`
-   - **Records fact**: `approval_received` with `{approval_type: 'manager', approved_by: 'manager_123'}`
    - Returns: "Approval recorded. State will be updated by poller."
 6. Polling worker (next cycle, ~5 seconds later):
-   - Acquires lock → Loads state machine → Calls `reconcile()`
-   - `reconcile()` checks facts: Sees `approval_received` fact
+   - Acquires lock → Loads state machine → Calls `tick()`
+   - `tick()` checks facts: Sees `approval_received` fact
    - Calculates target state: `training_pending` (if training required) or `provisioning`
    - Transitions to target state → Saves state (memoized cache)
 7. If training required:
    - User completes training → API: `POST /api/v1/requests/{request_id}/complete-training`
    - Records fact: `training_completed`
-   - Next poll cycle: `reconcile()` sees fact → Transitions to `provisioning`
+   - Next poll cycle: `tick()` sees fact → Transitions to `terraform_planning`
 8. Worker processes provisioning (long-running, lock held for 30 minutes):
-   - Calls `create_workspace()` tool
-   - **Idempotency Guard**: Tool checks facts - `has_fact('workspace_created')?`
-     - If yes: Returns existing workspace (self-healing - workspace already exists)
-     - If no: Proceeds with creation
-   - Records fact: `provisioning_started`
-   - **Step 1: Terraform Apply** (takes 5-15 min)
-     - If succeeds: Records fact: `workspace_created` with `{workspace_id, workspace_url}`
-     - If fails: Records fact: `provisioning_failed` with `{error}`
-   - **Step 2: Databricks Setup**
-     - If workspace already exists (fact check), skips
-   - Records fact: `provisioning_completed`
+   - **Transition triggers `on_enter_terraform_planning_async`**
+   - Poller calls `execute_tasks()` which runs the async hook
+   - **Idempotency Guard**: Hook checks facts - `has_fact('terraform_plan_started')?`
+     - If yes: Returns (already started)
+     - If no: Proceeds with plan
+   - Records fact: `terraform_plan_started`
    - Releases lock
 9. Next poll cycle:
-   - `reconcile()` checks facts: Sees `workspace_created` and `provisioning_completed`
+   - `tick()` checks facts: Sees `terraform_plan_received`
    - Calculates target state: `completed`
    - Transitions to `completed` → Saves state (memoized cache)
 10. **Self-Healing Example**: If Terraform succeeds but worker crashes before recording fact:
-    - Next poll: `reconcile()` doesn't see `workspace_created` fact
-    - Tool checks cloud provider: Workspace exists!
-    - Tool records fact: `workspace_created` (with workspace details)
-    - Next poll: `reconcile()` sees fact → Transitions to `completed`
-    - **No duplicate creation** - tool's idempotency guard prevents it
+    - Next poll: `tick()` doesn't see `provisioning_completed` fact
+    - Hook checks cloud provider: Resource exists!
+    - Hook records fact: `provisioning_completed` (with details)
+    - Next poll: `tick()` sees fact → Transitions to `completed`
+    - **No duplicate creation** - hook's idempotency guard prevents it
 
 ### API Layer (`app/api/`)
 
@@ -1139,406 +1028,7 @@ Orchestrators coordinate multiple actions and tools:
 - State machines may call services for complex operations
 - Services may call tools for low-level operations
 
-## Data Flow Examples
 
-### Example 1: User Requests Data Access (Agent Flow)
-
-```
-User Query: "I need access to sales_catalog.revenue schema"
-    ↓
-Agent processes query
-    ↓
-Agent calls: check_exists("schema", "revenue", parent_catalog="sales_catalog")
-    ↓
-Tool: check_exists(...)
-    ↓
-    Provider: databricks_provider.execute_sql("SHOW SCHEMAS IN sales_catalog LIKE 'revenue'")
-        └─ Uses: Databricks Python SDK (WorkspaceClient.statement_execution)
-    ↓
-Agent receives: exists=True
-    ↓
-Agent calls: search_user_entitlements(user_email, "schema", "sales_catalog.revenue")
-    ↓
-Tool: search_user_entitlements(...)
-    ↓
-    Provider: databricks_provider.execute_sql("SELECT * FROM entitlements WHERE ...")
-        └─ Uses: Databricks Python SDK (WorkspaceClient.statement_execution)
-    ↓
-Agent receives: has_access=False
-    ↓
-Agent asks follow-up questions
-    ↓
-Agent routes to: /paas/request-access (with prefill data)
-```
-
-### Example 2: Workspace Provisioning (Async State Machine Flow)
-
-```
-1. API: POST /api/v1/requests/ (create request)
-   ↓
-   - Save to DB: status='pending', state_context={...}
-   - Return: 201 Created, {request_id, status: 'pending'}
-   ↓
-2. Frontend: Polls GET /api/v1/requests/{request_id}/status
-   ↓
-3. Polling Worker: (runs every 5 seconds)
-   ↓
-   - Queries DB for pending requests
-   - Finds request with status='pending'
-   - Acquires lock: UPDATE requests SET locked_by='poll-worker-1' WHERE id=...
-   - Loads state machine from DB
-   - Executes: state_machine.submit() (transitions to 'manager_approval')
-   - Saves state: status='manager_approval'
-   - Releases lock
-   ↓
-4. State Machine: PAUSED at 'manager_approval' (waiting for approval)
-   ↓
-5. Manager: Approves via Admin Dashboard
-   ↓
-   - API: POST /api/v1/requests/{request_id}/approve
-   - Updates approval record in DB: status='approved'
-   ↓
-6. Polling Worker: (next poll cycle, ~5 seconds later)
-   ↓
-   - Queries DB, finds request with approved approval
-   - Acquires lock
-   - Loads state machine
-   - Executes: state_machine.approve_manager() (transitions to 'training_pending')
-   - Saves state: status='training_pending'
-   - Releases lock
-   ↓
-7. User: Completes training
-   ↓
-   - API: POST /api/v1/requests/{request_id}/complete-training
-   - Updates request: training_completed=True
-   ↓
-8. Polling Worker: (next poll cycle)
-   ↓
-   - Finds request with training_completed=True
-   - Acquires lock (with extended 30-min timeout for provisioning)
-   - Executes: state_machine.complete_training() (transitions to 'provisioning')
-   - Saves state: status='provisioning'
-   - Starts provisioning (long-running, lock held for 30 minutes)
-   ↓
-9. Provisioning (LONG-RUNNING: 10-20 minutes, lock held)
-   ↓
-   - Tool: create_workspace(name, config)
-     ├─ Provider: terraform_provider.apply(workspace_config)
-     │     └─ Executes: terraform apply (5-15 minutes)
-     ├─ Provider: databricks_provider.create_workspace(workspace_id, config)
-     │     └─ Uses: Databricks Python SDK (WorkspaceClient) (2-5 minutes)
-     └─ Provider: idp_provider.grant_permission(user, workspace, permissions)
-           └─ Calls: IDP API
-   - Periodically updates: state_context.progress = {...}
-   - On completion: state_machine.finish_provisioning() (transitions to 'completed')
-   - Saves state: status='completed'
-   - Releases lock
-   ↓
-10. Frontend: Polls status → Sees status='completed'
-```
-
-### Example 3: Service Principal Creation (State Machine + Providers)
-
-```
-Request created → State machine initialized
-    ↓
-State: platform_admin_approval
-    ↓
-Approval received → State transition
-    ↓
-State: provisioning
-    ↓
-Tool: create_service_principal(name, config)
-    ↓
-    ├─ Provider: idp_provider.create_service_principal(name, config)
-    │     └─ Calls: IDP API endpoint
-    ├─ Provider: idp_provider.create_api_key(principal_id, name)
-    │     └─ Calls: IDP API endpoint
-    └─ Provider: databricks_provider.grant_access(principal_id, resources, permissions)
-          └─ Uses: Databricks Python SDK (WorkspaceClient.permissions)
-    ↓
-Tool: scaffold_github_repo(name, template, config)
-    ↓
-    ├─ Provider: github_provider.create_from_template(template, name, config)
-    │     └─ Calls: GitHub API
-    └─ Provider: github_provider.run_shell_command("gh repo set-default-branch ...")
-          └─ Executes: GitHub CLI commands
-    ↓
-All tools succeed → State: completed
-```
-
-### Example 4: Check for Duplicate Request (Agent + Tools)
-
-```
-User Query: "I need access to sales_catalog"
-    ↓
-Agent calls: check_request_history(user_email, "catalog_schema_table_access", {...})
-    ↓
-Tool: check_request_history(...)
-    ↓
-    Provider: sql_provider.execute_query("SELECT * FROM requests WHERE ...")
-        └─ Queries: Application database
-    ↓
-Tool returns: existing_request_id="req-123", status="pending"
-    ↓
-Agent responds: "You already have a pending request for this. Would you like to edit that request instead?"
-```
-
-## Implementation Patterns
-
-### Provider Implementation Pattern
-
-Providers abstract external systems:
-
-```python
-# app/providers/terraform/client.py
-from app.providers.base import BaseProvider
-import subprocess
-import json
-
-class TerraformProvider(BaseProvider):
-    """Terraform provider for infrastructure provisioning."""
-    
-    def __init__(self, workspace_dir: str, backend_config: dict):
-        self.workspace_dir = workspace_dir
-        self.backend_config = backend_config
-    
-    async def apply(self, config: dict, variables: dict = None) -> dict:
-        """Apply Terraform configuration."""
-        # Write Terraform files
-        self._write_tf_files(config)
-        
-        # Run terraform init
-        await self._run_command(["terraform", "init"])
-        
-        # Run terraform apply
-        result = await self._run_command([
-            "terraform", "apply",
-            "-auto-approve",
-            *self._format_variables(variables or {})
-        ])
-        
-        # Parse output
-        return self._parse_output(result)
-    
-    async def _run_command(self, cmd: list) -> dict:
-        """Run Terraform command."""
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=self.workspace_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-        return {"stdout": stdout.decode(), "stderr": stderr.decode(), "returncode": process.returncode}
-```
-
-**Databricks Provider Example** (using Python SDK):
-
-```python
-# app/providers/databricks/client.py
-from app.providers.base import BaseProvider
-from databricks.sdk import WorkspaceClient
-from databricks.sdk.core import Config
-from app.core.exceptions import RetryableError, PermanentError
-
-class DatabricksProvider(BaseProvider):
-    """Databricks provider using Python SDK (preferred over REST API)."""
-    
-    def __init__(self, host: str, token: str, config: Optional[Dict[str, Any]] = None):
-        super().__init__(config)
-        self.host = host
-        self.token = token
-        # Use Databricks Python SDK instead of REST API
-        self.client = WorkspaceClient(
-            host=host,
-            token=token
-        )
-    
-    async def execute_sql(self, query: str, warehouse: str = None) -> Dict[str, Any]:
-        """Execute SQL query using SDK."""
-        try:
-            # Use SDK's statement execution API
-            statement = self.client.statement_execution.execute_statement(
-                warehouse_id=warehouse,
-                statement=query,
-                wait_timeout="30s"
-            )
-            return {"result": statement.result, "status": statement.status}
-        except Exception as e:
-            raise RetryableError(f"SQL execution failed: {str(e)}")
-    
-    async def create_catalog(self, name: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create Unity Catalog catalog using SDK."""
-        try:
-            # Use SDK's catalog API
-            catalog = self.client.catalogs.create(
-                name=name,
-                comment=config.get("comment"),
-                properties=config.get("properties", {})
-            )
-            return {"catalog_name": catalog.name, "id": catalog.id}
-        except Exception as e:
-            raise RetryableError(f"Catalog creation failed: {str(e)}")
-    
-    async def grant_access(self, principal: str, resource: str, permissions: list) -> bool:
-        """Grant access using SDK."""
-        try:
-            # Use SDK's permissions API
-            self.client.permissions.update(
-                request_object_type=resource.split(":")[0],  # e.g., "catalog"
-                request_object_id=resource.split(":")[1],   # e.g., catalog name
-                access_control_list=[
-                    {
-                        "principal": principal,
-                        "permissions": permissions
-                    }
-                ]
-            )
-            return True
-        except Exception as e:
-            raise RetryableError(f"Access grant failed: {str(e)}")
-```
-
-**Key Points**:
-- Always use `WorkspaceClient` from `databricks.sdk` instead of making REST API calls
-- The SDK provides type-safe methods for all Databricks operations
-- SDK handles authentication, retries, and error handling automatically
-- Only fall back to REST API if SDK doesn't support a specific feature
-
-### Tool Implementation Pattern
-
-Tools use providers to accomplish business tasks:
-
-```python
-# app/tools/workspace.py
-from app.tools.base import BaseTool
-from app.providers.terraform import TerraformProvider
-from app.providers.databricks import DatabricksProvider
-from app.providers.idp import IDPProvider
-from app.providers.notifications import NotificationProvider
-
-class CreateWorkspaceTool(BaseTool):
-    """Create a Databricks workspace."""
-    
-    def __init__(self):
-        self.terraform = TerraformProvider(...)
-        self.databricks = DatabricksProvider(...)
-        self.idp = IDPProvider(...)
-        self.notifications = NotificationProvider(...)
-    
-    async def execute(
-        self,
-        name: str,
-        environment: str,
-        config: dict,
-        requested_by: str
-    ) -> dict:
-        """Create workspace using providers."""
-        
-        # Step 1: Provision infrastructure via Terraform
-        tf_config = self._build_terraform_config(name, environment, config)
-        tf_result = await self.terraform.apply(tf_config, variables=config)
-        
-        workspace_id = tf_result["workspace_id"]
-        
-        # Step 2: Configure Databricks workspace
-        db_result = await self.databricks.create_workspace(
-            workspace_id=workspace_id,
-            config=config["databricks_config"]
-        )
-        
-        # Step 3: Grant access to requester
-        await self.idp.grant_permission(
-            principal_id=requested_by,
-            resource=f"workspace:{workspace_id}",
-            permissions=config.get("permissions", ["user"])
-        )
-        
-        # Step 4: Notify user
-        await self.notifications.send_email(
-            to=requested_by,
-            subject=f"Workspace {name} has been provisioned",
-            body=f"Your workspace is ready at {db_result['url']}"
-        )
-        
-        return {
-            "workspace_id": workspace_id,
-            "workspace_url": db_result["url"],
-            "status": "completed"
-        }
-```
-
-### Validation Tool Example
-
-```python
-# app/tools/validation.py
-from app.tools.base import BaseTool
-from app.providers.databricks import DatabricksProvider
-
-class CheckExistsTool(BaseTool):
-    """Check if a resource exists."""
-    
-    def __init__(self):
-        self.databricks = DatabricksProvider(...)
-    
-    async def execute(
-        self,
-        resource_type: str,
-        resource_name: str,
-        parent_catalog: str = None,
-        parent_schema: str = None,
-        fuzzy_match: bool = True
-    ) -> dict:
-        # Build SQL query based on resource type
-        query = self._build_query(resource_type, resource_name, parent_catalog, parent_schema)
-        
-        # Use Databricks provider to execute SQL
-        result = await self.databricks.execute_sql(query)
-        
-        # Process and return
-        return {
-            "exists": len(result) > 0,
-            "exact_match": ...,
-            "similar_names": ... if fuzzy_match else []
-        }
-```
-
-## State Machine Action Pattern
-
-State machine actions orchestrate multiple tools:
-
-```python
-# app/state_machines/actions/provisioning.py
-from app.tools.databricks.workspace import create_workspace
-from app.tools.databricks.access import grant_access
-from app.tools.notifications import send_notification
-
-async def provision_workspace(request_id: str, config: dict) -> dict:
-    """Orchestrate workspace provisioning."""
-    
-    # Step 1: Create workspace
-    workspace = await create_workspace(
-        name=config["name"],
-        config=config["workspace_config"]
-    )
-    
-    # Step 2: Grant access
-    await grant_access(
-        user=config["requested_by"],
-        resource=f"workspace:{workspace['id']}",
-        permissions=config["permissions"]
-    )
-    
-    # Step 3: Notify user
-    await send_notification(
-        user=config["requested_by"],
-        message=f"Workspace {workspace['name']} has been provisioned",
-        type="success"
-    )
-    
-    return workspace
-```
 
 ## Key Design Decisions
 
