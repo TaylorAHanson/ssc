@@ -1,5 +1,5 @@
 """
-FastAPI main application entry point for ATLAS backend.
+FastAPI main application entry point for backend.
 
 This application runs as a Databricks App.
 """
@@ -125,7 +125,7 @@ async def health():
     
     return {
         "status": "healthy",
-        "service": "atlas-api",
+        "service": "api",
         "platform": "Databricks App",
         "database_type": db_type,
         "database_url": masked_url,
@@ -152,7 +152,7 @@ if STATIC_DIR.exists():
         index_path = STATIC_DIR / "index.html"
         if index_path.exists():
             return FileResponse(str(index_path))
-        return {"status": "ok", "message": "ATLAS API", "frontend": "index.html not found"}
+        return {"status": "ok", "message": "API", "frontend": "index.html not found"}
 else:
     logger.info("Static directory not found - running in API-only mode")
     
@@ -161,7 +161,7 @@ else:
         """Health check endpoint (API-only mode)."""
         return {
             "status": "ok",
-            "message": "ATLAS API is running",
+            "message": "API is running",
             "platform": "Databricks App",
             "version": settings.VERSION,
             "frontend": "Not deployed - static directory not found"

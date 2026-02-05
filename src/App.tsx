@@ -19,7 +19,7 @@ import { ProtectedRoute } from './components/auth/ProtectedRoute';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
-  const fetchBranding = useBrandingStore((state) => state.fetchBranding);
+  const { fetchBranding, hasLoaded } = useBrandingStore();
   const fetchCurrentUser = useUserStore((state) => state.fetchCurrentUser);
   const hydrated = useUserStore((state) => state.hydrated);
 
@@ -30,6 +30,10 @@ function App() {
       fetchCurrentUser();
     }
   }, [fetchBannerMessage, fetchBranding, fetchCurrentUser, hydrated]);
+
+  if (!hasLoaded) {
+    return null; // Don't render anything until branding is loaded to prevent flash
+  }
 
   return (
     <BrowserRouter>

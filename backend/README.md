@@ -1,6 +1,4 @@
-# ATLAS Backend
-
-FastAPI backend for ATLAS (Agentic Control Tower for Lakehouse Automation & Self‑Service Experience), a self-service portal for Databricks.
+# Backend
 
 📖 **For architecture details, see [ARCHITECTURE.md](./ARCHITECTURE.md)**
 

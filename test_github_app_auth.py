@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Test script to verify GitHub App authentication.
-Run: python test_github_app_auth.py ~/Downloads/atlas-infra-bot.*.pem
+Run: python test_github_app_auth.py ~/Downloads/self-service-infra-bot.*.pem
 """
 import sys
 import time
@@ -109,7 +109,7 @@ def test_github_app_auth(pem_file_path: str):
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python test_github_app_auth.py <path-to-pem-file>")
-        print("Example: python test_github_app_auth.py ~/Downloads/atlas-infra-bot.2026-01-31.private-key.pem")
+        print("Example: python test_github_app_auth.py ~/Downloads/self-service-infra-bot.2026-01-31.private-key.pem")
         sys.exit(1)
     
     pem_path = sys.argv[1]
