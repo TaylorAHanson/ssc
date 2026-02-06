@@ -1090,9 +1090,6 @@ export function Home() {
               {brandName}
             </h1>
           </div>
-          <p className="text-lg text-gray-600 max-w-xl mx-auto">
-            Your intelligent assistant for {brandName} self-service requests.
-          </p>
         </div>
 
         <div className="relative">

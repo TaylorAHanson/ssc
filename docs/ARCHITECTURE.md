@@ -175,6 +175,8 @@ All tools should be implemented using the **FastMCP** pattern (introduced in Feb
     - **Pydantic Validation**: Automatic argument validation and type safety via `args_schema`.
     - **MCP Integration**: The `@tool` decorator handles metadata, description, and registration for LLM consumption.
     - **Standard Exceptions**: Use `RetryableError` or `PermanentError` for consistent error propagation to the state machine.
+
+```
 from typing import Dict, Any
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
@@ -196,13 +198,9 @@ async def my_tool_name(arg1: str) -> Dict[str, Any]:
     return await provider.do_something(arg1)
 ```
 
-4.  **Register Tool**: Import and add the tool function to `AVAILABLE_TOOLS` in `app/tools/__init__.py`.
-
 ### Adding a New State Machine
 
 State machines orchestrate business logic and manage the lifecycle of a request. Follow these steps to add a new one:
-
-### Adding a New State Machine
 
 1.  **Identify Request Type**: Add a new value to `RequestType` in `app/models/request.py`.
 2.  **Inherit from Base**: Create a class that inherits from `BaseRequestStateMachine`.
@@ -327,7 +325,6 @@ class MyNewProvider(BaseProvider):
             # OR raise error if strictly required for startup
             # raise ValueError("MY_PROVIDER_API_KEY is required")
 ```
-
 
 
 ## Layer Detailed Implementation
@@ -874,79 +871,54 @@ The system uses a **Hybrid Fact-Based Approach**:
 - **Fail-Back & Compensation**: Rollback states can be defined to undo previous actions on permanent failure.
 - **Manual Intervention**: Admins can record facts manually to "unstick" or "resume" workflows.
 
-**State Machine Actions**:
-State machine actions are orchestrated sequences that call multiple tools:
-- **Approval Actions** (`actions/approval.py`):
-  - `check_approval_requirements()` → Uses `tools.entitlements.check_approval_requirements`
-  - `notify_approvers()` → Uses `tools.notifications.send_notification` (async task)
-  - `wait_for_approval()` → **Pauses state machine, waits for API callback**
+**State Machine Hooks (Side Effects)**:
+State machines execute side effects (e.g., calling cloud APIs) via async hooks that interact directly with **Providers**:
 
-- **Provisioning Actions** (`actions/provisioning.py`):
-  - `provision_workspace()` → Calls `tools.workspace.create_workspace` (async task)
-  - `setup_permissions()` → Calls `tools.access.grant_access`
-  - `configure_networking()` → Calls `tools.networking.configure`
-
-- **Training Actions** (`actions/training.py`):
-  - `check_training_status()` → Queries training system
-  - `notify_training_required()` → Uses `tools.notifications.send_notification` (async task)
-  - `wait_for_training()` → **Pauses state machine, waits for training completion event**
-
-- **Error Handling Actions** (`actions/error_handling.py`):
-  - `handle_retryable_error(error, context)` → Logs error, increments retry count, schedules retry
-  - `handle_permanent_error(error, context)` → Moves to failed state, notifies user
-  - `rollback_operation(operation_type, context)` → Rolls back failed operation
-  - `notify_failure(failure_type, error_message)` → Sends failure notifications
+- **Approval Hooks**:
+  - `on_enter_<state>`: Sync hook to create approval records in the database.
+  - `_send_notification()`: Helper to notify approvers via email/Slack.
+- **Async Execution Hooks**:
+  - `on_enter_<state>_async`: Triggered by the worker after a transition.
+  - Calls `Provider.apply()` or `Provider.run()` to perform heavyweight work.
+  - Records **Facts** to mark progress and completion for idempotency.
+- **Error Handling Hooks**:
+  - `on_error`: Handles mapping between provider-level retries and state-level failures.
 
 **Wait-for-Event Pattern**:
 
 When state machine enters a state that requires human action (approval, training), it:
 1. Saves state to database with `status='manager_approval'` (or `'training_pending'`)
 2. Triggers notification action (async)
-3. **Pauses** - Does not automatically transition
+3. **Pauses** - Does not automatically transition. 
 4. Waits for API callback: `POST /api/v1/requests/{request_id}/approve` or `/complete-training`
 5. Polling worker (next cycle) detects approval → Processes transition automatically
 6. Worker processes transition → State machine continues
 
-**Orchestrators**:
-Orchestrators coordinate multiple actions and tools:
-- `workspace_provision.py` - Orchestrates full workspace provisioning workflow
-- `data_access.py` - Orchestrates data access request workflow
-- `service_principal.py` - Orchestrates service principal creation workflow
+#### Direct Provider Usage Pattern
 
-#### State Machine Action Pattern
-
-State machine actions orchestrate multiple tools:
+State machine hooks interact directly with providers to fulfill business requirements:
 
 ```python
-# app/state_machines/actions/provisioning.py
-from app.tools.databricks.workspace import create_workspace
-from app.tools.databricks.access import grant_access
-from app.tools.notifications import send_notification
+# app/state_machines/workspace_provision.py
+from app.providers.terraform.client import TerraformProvider
+from app.state_machines.facts import add_fact
 
-async def provision_workspace(request_id: str, config: dict) -> dict:
-    """Orchestrate workspace provisioning."""
+async def on_enter_terraform_applying_async(self):
+    """Orchestrate workspace provisioning directly via provider."""
+    provider = self._get_provider() # Standardized provider initialization
     
-    # Step 1: Create workspace
-    workspace = await create_workspace(
-        name=config["name"],
-        config=config["workspace_config"]
+    # Step 1: Execute Infrastructure Apply
+    # Provider handles low-level retry and network logic
+    result = await provider.apply(request_id=self.request.id)
+    
+    # Step 2: Record architectural fact for reconciliation
+    add_fact(
+        self.db, 
+        self.request.id, 
+        "terraform_apply_started", 
+        {"commit_sha": result.get("sha")}, 
+        actor="system"
     )
-    
-    # Step 2: Grant access
-    await grant_access(
-        user=config["requested_by"],
-        resource=f"workspace:{workspace['id']}",
-        permissions=config["permissions"]
-    )
-    
-    # Step 3: Notify user
-    await send_notification(
-        user=config["requested_by"],
-        message=f"Workspace {workspace['name']} has been provisioned",
-        type="success"
-    )
-    
-    return workspace
 ```
 
 **Flow Example (Workspace Provisioning with Fact-Based Approach)**:
@@ -1012,52 +984,6 @@ async def provision_workspace(request_id: str, config: dict) -> dict:
 3. API calls `services.request_service.create_request()`
 4. Service creates state machine and initializes workflow
 5. API returns request object to frontend
-
-### Services Layer (`app/services/`)
-
-**Purpose**: Business logic that can be shared between API endpoints and state machines.
-
-**Responsibilities**:
-- Request lifecycle management
-- Approval workflow logic
-- Entitlement management
-- Data validation and transformation
-
-**Usage**:
-- API endpoints call services for business logic
-- State machines may call services for complex operations
-- Services may call tools for low-level operations
-
-
-
-## Key Design Decisions
-
-1. **Providers abstract external systems** - All external system interaction goes through providers
-2. **Tools are system-agnostic** - Tools don't know about Terraform, GitHub, IDP directly
-3. **Tools are stateless** - No internal state, can be called from anywhere
-4. **Agents use tools for information** - Agents don't execute workflows, they gather info
-5. **State machines orchestrate workflows** - State machines call tools in sequence to complete tasks
-6. **State is persisted** - State machines save to database after each transition
-7. **State is locked** - Prevents concurrent transitions, ensures idempotency
-8. **Long-running operations are async** - Terraform, provisioning run in background workers
-9. **API returns 202 Accepted** - For async operations, frontend polls for status
-10. **Wait-for-event pattern** - State machines pause for human approvals, resume on API callback
-11. **API endpoints are thin** - Delegate to services, which may use tools or state machines
-12. **Services contain business logic** - Shared between API and state machines
-13. **Clear separation** - Each layer has a distinct responsibility
-14. **Easy to swap providers** - Change Terraform → Pulumi by swapping provider, tools unchanged
-15. **Testable** - Mock providers for testing tools without external dependencies
-16. **Prefer Databricks Python SDK** - Always use `databricks-sdk` (WorkspaceClient) over REST API calls for Databricks operations. SDK provides type safety, better error handling, and automatic retries. Only use REST API when SDK doesn't support a feature (e.g., Model Serving endpoints).
-
-## Benefits of Provider Abstraction
-
-1. **System Agnostic Tools**: Tools don't care if we use Terraform or Pulumi
-2. **Easy Migration**: Swap providers without changing tools
-3. **Testability**: Mock providers for unit testing tools
-4. **Centralized Auth**: All authentication handled in providers
-5. **Error Translation**: Providers translate system errors to domain errors
-6. **Connection Management**: Providers handle retries, timeouts, connection pooling
-7. **Consistent Interface**: All providers follow same interface pattern
 
 ## Failure Handling Architecture
 
@@ -1143,6 +1069,22 @@ State machine includes failure states:
   - Mark as resolved
   - Cancel request
 
+## Future Considerations
+
+- **Provider Registry**: Central registry for provider discovery and configuration
+- **Provider Middleware**: Logging, metrics, retry logic at provider level
+- **Provider Versioning**: Support for provider versioning and backward compatibility
+- **Tool Registry**: Central registry for tool discovery and documentation
+- **Tool Middleware**: Additional middleware layer for tools (caching, rate limiting)
+- **Multi-Provider Support**: Support for multiple providers of same type (e.g., multiple IDPs)
+- **State Machine Visualization**: Real-time state visualization for debugging
+- **Task Monitoring**: Dashboard for monitoring async task progress
+- **Failure Analytics**: Dashboard for failure rates, common errors, retry success rates
+- **Automatic Recovery**: Self-healing mechanisms for common failure patterns
+- **Circuit Breaker Pattern**: Temporarily disable failing providers to prevent cascade failures
+- **Health Checks**: Monitor provider health and automatically failover
+- **Proactive Agentic Monitoring**: run without a user to provide proactive monitoring of system health and issues
+
 ## Implementation Requirements
 
 ### Required Dependencies
@@ -1205,34 +1147,6 @@ Add to `requirements.txt`:
    - Tables created via Alembic migrations
    - Standard PostgreSQL connection (psycopg2/asyncpg)
    - ACID transactions for state management
-
-### API Endpoints
-
-**New Endpoints Needed**:
-- `POST /api/v1/requests/{request_id}/approve` - Approval callback
-- `POST /api/v1/requests/{request_id}/reject` - Rejection callback
-- `POST /api/v1/requests/{request_id}/complete-training` - Training completion callback
-- `GET /api/v1/requests/{request_id}/status` - Polling endpoint for status
-- `GET /api/v1/requests/{request_id}/failures` - Get failure history
-- `POST /api/v1/requests/{request_id}/retry` - Manually retry failed request
-- `POST /api/v1/requests/{request_id}/cancel` - Cancel request
-- `GET /api/v1/requests/failed` - List all failed requests (admin)
-
-## Future Considerations
-
-- **Provider Registry**: Central registry for provider discovery and configuration
-- **Provider Middleware**: Logging, metrics, retry logic at provider level
-- **Provider Versioning**: Support for provider versioning and backward compatibility
-- **Tool Registry**: Central registry for tool discovery and documentation
-- **Tool Middleware**: Additional middleware layer for tools (caching, rate limiting)
-- **Multi-Provider Support**: Support for multiple providers of same type (e.g., multiple IDPs)
-- **State Machine Visualization**: Real-time state visualization for debugging
-- **Task Monitoring**: Dashboard for monitoring async task progress
-- **Failure Analytics**: Dashboard for failure rates, common errors, retry success rates
-- **Automatic Recovery**: Self-healing mechanisms for common failure patterns
-- **Circuit Breaker Pattern**: Temporarily disable failing providers to prevent cascade failures
-- **Health Checks**: Monitor provider health and automatically failover
-- **Proactive Agentic Monitoring**: run without a user to provide proactive monitoring of system health and issues
 
 ## Feature Management / Disabling Features
 
