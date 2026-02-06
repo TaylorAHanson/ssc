@@ -150,12 +150,23 @@ class DataAccessStateMachine(BaseRequestStateMachine):
             from app.core.config import settings
             from app.providers.databricks.client import DatabricksProvider
 
-            # Get dataset from context
-            dataset = ctx.get("dataset")
+            # Get asset_name and asset_type from context
+            asset_name = ctx.get("asset_name")
+            asset_type = ctx.get("asset_type")
 
-            if dataset:
+            # If asset_type not provided, infer from asset_name format
+            if asset_name and not asset_type:
+                parts = asset_name.split(".")
+                if len(parts) == 1:
+                    asset_type = "catalog"
+                elif len(parts) == 2:
+                    asset_type = "schema"
+                elif len(parts) == 3:
+                    asset_type = "table"
+
+            if asset_name and asset_type:
                 try:
-                    logger.info(f"[{self.request.id}] Fetching data owner for dataset '{dataset}'")
+                    logger.info(f"[{self.request.id}] Fetching data owner for {asset_type} '{asset_name}'")
 
                     provider = DatabricksProvider(
                         host=settings.DATABRICKS_HOST,
@@ -165,17 +176,7 @@ class DataAccessStateMachine(BaseRequestStateMachine):
                         config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID}
                     )
 
-                    # Infer asset type from dataset format and fetch owner
-                    parts = dataset.split(".")
-                    if len(parts) == 1:
-                        owner = await provider.get_asset_owner("catalog", dataset)
-                    elif len(parts) == 2:
-                        owner = await provider.get_asset_owner("schema", dataset)
-                    elif len(parts) == 3:
-                        owner = await provider.get_asset_owner("table", dataset)
-                    else:
-                        logger.warning(f"[{self.request.id}] Invalid dataset format: {dataset}")
-                        owner = None
+                    owner = await provider.get_asset_owner(asset_type, asset_name)
 
                     if owner:
                         logger.info(f"[{self.request.id}] Found data owner: {owner}")
@@ -188,7 +189,7 @@ class DataAccessStateMachine(BaseRequestStateMachine):
                             await self._send_data_owner_notification(owner)
                             add_fact(self.db, self.request.id, "data_owner_notified", {"owner_email": owner}, actor="system")
                     else:
-                        logger.warning(f"[{self.request.id}] Could not determine data owner for {dataset}")
+                        logger.warning(f"[{self.request.id}] Could not determine data owner for {asset_name}")
 
                 except Exception as e:
                     logger.error(f"[{self.request.id}] Error fetching data owner: {str(e)}")
