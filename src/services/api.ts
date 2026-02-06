@@ -139,7 +139,7 @@ export async function listForms(): Promise<FormInfo[]> {
  * Get a specific form schema.
  */
 export async function getForm(formPath: string, version?: string): Promise<FormSchemaResponse> {
-  const url = new URL(`${API_BASE_URL}/admin/forms${formPath}`);
+  const url = new URL(`${API_BASE_URL}/admin/forms${formPath}`, window.location.origin);
   if (version) {
     url.searchParams.set('version', version);
   }
@@ -222,7 +222,7 @@ export async function listContent(): Promise<ContentInfo[]> {
 }
 
 export async function getContent(filename: string, version?: string, params?: Record<string, string>): Promise<Record<string, any> | any[]> {
-  const url = new URL(`${API_BASE_URL}/content/content/${filename}`);
+  const url = new URL(`${API_BASE_URL}/content/content/${filename}`, window.location.origin);
   if (version) {
     url.searchParams.set('version', version);
   }
@@ -450,7 +450,7 @@ export async function rejectRequest(requestId: string, reason?: string): Promise
 }
 
 export async function getApprovals(status?: string): Promise<Approval[]> {
-  const url = new URL(`${API_BASE_URL}/approvals`);
+  const url = new URL(`${API_BASE_URL}/approvals`, window.location.origin);
   if (status) {
     url.searchParams.set('status', status);
   }
@@ -485,7 +485,7 @@ export async function completeTraining(requestId: string): Promise<void> {
  * Delegation Management API
  */
 export async function getDelegations(delegatorEmail?: string, delegateeEmail?: string): Promise<Delegation[]> {
-  const url = new URL(`${API_BASE_URL}/delegations`);
+  const url = new URL(`${API_BASE_URL}/delegations`, window.location.origin);
   if (delegatorEmail) {
     url.searchParams.set('delegator_email', delegatorEmail);
   }
@@ -644,7 +644,7 @@ export async function deleteSubscription(id: string): Promise<void> {
 }
 
 export async function listExecutions(subscriptionId?: string): Promise<ExecutionSummary[]> {
-  const url = new URL(`${API_BASE_URL}/reports/executions`);
+  const url = new URL(`${API_BASE_URL}/reports/executions`, window.location.origin);
   if (subscriptionId) {
     url.searchParams.set('subscription_id', subscriptionId);
   }

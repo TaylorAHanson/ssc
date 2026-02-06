@@ -114,6 +114,8 @@ npm ci --silent
 rm -rf dist
 
 # Set VITE_API_BASE_URL for the build - must be relative for deployed apps
+# MSYS_NO_PATHCONV=1 prevents Git Bash on Windows from converting "/api/v1" to "C:/Program Files/Git/api/v1"
+export MSYS_NO_PATHCONV=1
 export VITE_API_BASE_URL="/api/v1"
 echo "  Building with VITE_API_BASE_URL=${VITE_API_BASE_URL}"
 npm run build
