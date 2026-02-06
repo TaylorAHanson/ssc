@@ -71,8 +71,23 @@ async def spa_fallback_handler(request: Request, exc):
 
 @app.on_event("startup")
 async def startup_event():
-    """Start background tasks."""
+    """Start background tasks and initialize DB."""
     logger.info("Application starting up...")
+    
+    # Initialize DB (Seed Roles)
+    try:
+        from app.db.init_db import init_db
+        from app.db.session import get_session_local
+        
+        db = get_session_local()()
+        try:
+            init_db(db)
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        # We don't stop startup, but we log strictly
+        
     logger.info("Starting background poller task...")
     task = asyncio.create_task(start_poller())
     logger.info(f"Background poller task created: {task}")

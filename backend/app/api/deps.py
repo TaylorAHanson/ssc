@@ -80,22 +80,9 @@ def get_current_user(
         logger.info(f"User {MOCK_USER_EMAIL} not found. Bootstrapping default admin user...")
         
         try:
-            # 1. Ensure Roles exist
-            from app.db.user import RoleModel
-            import uuid
-            
-            roles = [
-                {"id": "role_platform_admin", "name": "platform_admin", "description": "Full system access"},
-                {"id": "role_governance_admin", "name": "governance_admin", "description": "Governance and policy management"},
-                {"id": "role_security_admin", "name": "security_admin", "description": "Security auditing and access control"},
-                {"id": "role_finance_admin", "name": "finance_admin", "description": "Budget and cost management"},
-                {"id": "role_business_user", "name": "business_user", "description": "Standard business user access"},
-            ]
-            
-            for role_data in roles:
-                if not db.query(RoleModel).filter(RoleModel.name == role_data["name"]).first():
-                    db.add(RoleModel(**role_data))
-            db.commit()
+            # 1. Ensure Roles exist - NOW HANDLED BY startup_event -> init_db
+            # We assume roles are already seeded.
+
 
             # 2. Create Admin User
             user = UserModel(
