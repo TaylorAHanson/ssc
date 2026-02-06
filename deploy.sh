@@ -18,6 +18,11 @@ while [[ $# -gt 0 ]]; do
       shift # past argument
       shift # past value
       ;;
+    --brand)
+      BRAND="$2"
+      shift # past argument
+      shift # past value
+      ;;
     *)
       POSITIONAL_ARGS+=("$1") # save positional arg
       shift # past argument
@@ -27,15 +32,39 @@ done
 
 set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 
-# Usage: ./deploy.sh [target] [dev_user] [debug] --profile <profile>
+# Usage: ./deploy.sh [target] [dev_user] [debug] --profile <profile> --brand <qualcomm>
 TARGET=${1:-local}
 DEV_USER=${2:-}
-# Handle debug flag if passed as positional arg or env var
 DEBUG_MODE=${3:-false}
+
+# Handle cleanup for brand switching
+cleanup() {
+    if [ -n "$BRAND_SWAPPED" ]; then
+        echo "Reverting brand configuration..."
+        mv backend/app.yaml backend/app."$BRAND".yaml
+        mv backend/app.yaml.bak backend/app.yaml
+        echo "Reverted to original app.yaml"
+    fi
+}
+trap cleanup EXIT
 
 # Configuration
 BUNDLE_NAME="atlas"
 VALID_TARGETS="local dev stage prod"
+
+# Handle Brand Switching
+BRAND_SWAPPED=""
+if [ -n "$BRAND" ] && [ "$BRAND" = "qualcomm" ]; then
+    if [ -f "backend/app.qualcomm.yaml" ]; then
+        echo "Switching to Qualcomm brand configuration..."
+        mv backend/app.yaml backend/app.yaml.bak
+        mv backend/app.qualcomm.yaml backend/app.yaml
+        BRAND_SWAPPED="true"
+    else
+        echo "Error: backend/app.qualcomm.yaml not found"
+        exit 1
+    fi
+fi
 
 # Validate target
 if ! echo "$VALID_TARGETS" | grep -qw "$TARGET"; then

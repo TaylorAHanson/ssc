@@ -618,7 +618,7 @@ export function Home() {
         <div className="text-center mb-6 relative z-10">
           <div className="flex items-center justify-center gap-3 mb-3">
             {brandLogoUrl ? (
-              <img src={brandLogoUrl} alt="Logo" className="h-10 w-auto object-contain rounded-xl" />
+              <img src={brandLogoUrl} alt="Logo" className="max-h-12 max-w-[150px] w-auto h-auto object-contain rounded-md" />
             ) : (
               <div className="p-2 bg-primary rounded-xl shadow-md">
                 <Sparkles className="w-5 h-5 text-white" />
@@ -1080,7 +1080,7 @@ export function Home() {
         <div className="text-center mb-8">
           <div className="flex items-center justify-center gap-3 mb-6">
             {brandLogoUrl ? (
-              <img src={brandLogoUrl} alt="Logo" className="h-16 w-auto object-contain rounded-2xl" />
+              <img src={brandLogoUrl} alt="Logo" className="max-h-16 max-w-[200px] w-auto h-auto object-contain rounded-2xl" />
             ) : (
               <div className="p-3 bg-gradient-to-br from-primary to-primary/80 rounded-2xl shadow-lg">
                 <Sparkles className="w-8 h-8 text-white" />
