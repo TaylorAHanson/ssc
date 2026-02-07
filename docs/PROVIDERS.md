@@ -1,4 +1,4 @@
-# ATLAS Provider Functions
+# Provider Functions
 
 This document outlines the provider functions that perform actions and state changes in the infrastructure. These functions are invoked by the agent via the `ExecuteWorkflow` tool.
 

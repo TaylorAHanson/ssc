@@ -9,30 +9,30 @@ env:
   # Database Configuration (Lakebase - PostgreSQL)
   # Password is fetched automatically from Databricks secrets using the app's service principal
   - name: DATABASE_HOST
-    value: "instance-83344571-9f1d-49b2-a400-f0eda63bfcda.database.cloud.databricks.com"
+    value: ""
   - name: DATABASE_PORT
     value: "5432"
   - name: DATABASE_NAME
-    value: "databricks_postgres"
+    value: ""
   - name: DATABASE_USER
-    value: "edas_app"
+    value: ""
   
   # Infrastructure Repository (Terraform GitOps)
   - name: INFRA_REPO_URL
-    value: "https://github.com/databricks-field-eng/fe-agentic-self-service-terraform"
+    value: ""
   - name: INFRA_REPO_BRANCH
     value: "main"
   - name: DEFAULT_ENVIRONMENT
     value: "dev"
   - name: GIT_USERNAME
-    value: "ATLAS Bot"
+    value: "EDHSSC Bot"
   - name: GIT_EMAIL
-    value: "atlas-bot@databricks.com"
+    value: "todo@email.com"
   
   # GitHub PAT Authentication (fallback, works with IP allowlist)
   # Fetched at runtime from Databricks secrets
   - name: GIT_TOKEN_SECRET_SCOPE
-    value: "atlas-hub"
+    value: "edhssc-hub"
   - name: GIT_TOKEN_SECRET_KEY
     value: "github-pat"
   
@@ -41,15 +41,15 @@ env:
   - name: GITHUB_APP_ID
     value: ""
   - name: GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE
-    value: "atlas-hub"
+    value: "edhssc-hub"
   - name: GITHUB_APP_PRIVATE_KEY_SECRET_KEY
     value: "github-app-private-key"
 
   # Databricks Configuration
   - name: DATABRICKS_WAREHOUSE_ID
-    value: "5c5e40da3caf812c"
+    value: "be96f593c35b5dd9"
   - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
-    value: databricks-gemini-3-flash
+    value: databricks-gemini-2-5-flash
   - name: AGENT_ENABLED
     value: "true"
   - name: AGENT_MAX_ITERATIONS
@@ -73,25 +73,25 @@ env:
   - name: API_V1_PREFIX
     value: "/api/v1"
   - name: PROJECT_NAME
-    value: "ATLAS"
+    value: "EDH Self-Service Center"
   - name: LOG_LEVEL
     value: "INFO"
   - name: BRAND_NAME
-    value: "ATLAS"
+    value: "EDH Self-Service Center"
   - name: BRAND_COLOR_PRIMARY
-    value: "#FF3621"
+    value: "#3253DC"
   - name: BRAND_COLOR_SECONDARY
-    value: "#1B5162"
+    value: "#000000"
   - name: BRAND_COLOR_INFO
-    value: "#1B5162"
+    value: "#3253DC"
   - name: BRAND_COLOR_ALERT
-    value: "#98102A"
+    value: "#D32F2F"
   - name: BRAND_COLOR_WARNING
-    value: "#FFAB00"
+    value: "#FFC107"
   - name: BRAND_COLOR_SUCCESS
-    value: "#00A972"
+    value: "#388E3C"
   - name: BRAND_LOGO_URL
-    value: ""
+    value: "https://upload.wikimedia.org/wikipedia/commons/f/fc/Qualcomm-Logo.svg"
   - name: NOTIFICATION_EMAIL_SMTP_HOST
     value: ""
   - name: NOTIFICATION_EMAIL_SMTP_PORT

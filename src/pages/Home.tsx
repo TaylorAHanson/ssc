@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Sparkles, ArrowRight, Send, ExternalLink, ChevronDown, Shield, BarChart3, Activity,
-  Database, Box, Server, CheckCircle, TrendingUp, AlertTriangle, FileText, Lock, Search, Info
+  Sparkles, ArrowRight, Send, ExternalLink, ChevronDown, Shield, BarChart3,
+  Database, Box, Server, TrendingUp, Activity, FileText, Info
 } from 'lucide-react';
 
 import { Textarea } from '../components/ui/textarea';
@@ -12,7 +12,7 @@ import { callAgent } from '../services/api';
 import { useUserStore } from '../stores/userStore';
 import type { UserPersona } from '../types';
 
-type AgentMode = 'Self Service Agent' | 'Governance' | 'FinOps' | 'Data Quality';
+type AgentMode = 'Self Service Agent' | 'Governance' | 'FinOps';
 
 const AGENT_SUGGESTIONS: Record<AgentMode, { label: string; query: string }[]> = {
   'Self Service Agent': [
@@ -37,11 +37,6 @@ const AGENT_SUGGESTIONS: Record<AgentMode, { label: string; query: string }[]> =
     { label: 'Tagging compliance', query: "Which users are out of compliance with the tagging policy?" },
     { label: 'Cost trends', query: "Show monthly cost trend by department" },
     { label: 'Idle clusters', query: "Identify idle clusters that can be terminated" }
-  ],
-  'Data Quality': [
-    { label: 'Quality drops', query: "Do we see any large drops in quality over the last 24 hours?" },
-    { label: 'Schema drift', query: "List tables with schema drift in the last week" },
-    { label: 'Freshness check', query: "Check freshness of gold-tier tables in the production catalog" }
   ]
 };
 
@@ -102,25 +97,27 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
   ],
   'Governance': [
     {
-      title: 'Compliance & Security',
-      icon: <Lock className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
-        { title: 'Policy Review', description: 'Request a formal policy review', query: "I need to request a policy review for my project" },
-        { title: 'Security Baseline', description: 'Check workspace security standards', query: "Check if my workspace meets security baselines" }
-      ]
-    },
-    {
-      title: 'Data Stewardship',
+      title: 'Compliance Audit',
       icon: <Shield className="w-5 h-5" />,
       colorClass: 'text-primary',
       hoverBorderClass: 'hover:border-primary/50',
       hoverTextClass: 'group-hover:text-primary',
       items: [
-        { title: 'Assign Owner', description: 'Update data asset ownership', query: "I need to assign a new owner to a catalog" },
-        { title: 'Data Classification', description: 'Apply PII or sensitivity tags', query: "I need to classify sensitive data in my schema" }
+        { title: 'Overprovisioned Admins', description: 'Find users with excessive access', query: "Which users are overprovisioned?" },
+        { title: 'Orphaned Assets', description: 'Resources with deleted owners', query: "Identify assets owned by deleted users or service principals" },
+        { title: 'Missing Owners', description: 'Catalogs without assignment', query: "Find catalogs and schemas that do not have an owner" }
+      ]
+    },
+    {
+      title: 'Activity Monitoring',
+      icon: <Activity className="w-5 h-5" />,
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
+      items: [
+        { title: 'Failed Logins', description: 'Count failed attempts last 24h', query: "Count failed logins in the last 24 hours" },
+        { title: 'Unique Users', description: 'Daily active user count', query: "How many unique users accessed the platform today?" },
+        { title: 'Admin Changes', description: 'Recent privilege grants', query: "Show recent administrative changes to groups or permissions" }
       ]
     },
     {
@@ -143,65 +140,20 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
       hoverBorderClass: 'hover:border-primary/50',
       hoverTextClass: 'group-hover:text-primary',
       items: [
-        { title: 'Usage Forecast', description: 'Predict future spending', query: "What is my predicted spend for next month?" },
+        { title: 'Top Spending', description: 'Highest cost workspaces', query: "Which workspaces are the most expensive?" },
+        { title: 'Forecast Spend', description: 'Predict future monthly cost', query: "What is my predicted spend for next month?" },
         { title: 'Department Billing', description: 'Breakdown by cost center', query: "Show me the cost breakdown by department" }
       ]
     },
     {
-      title: 'Budgeting',
+      title: 'Resource Efficiency',
       icon: <TrendingUp className="w-5 h-5" />,
       colorClass: 'text-primary',
       hoverBorderClass: 'hover:border-primary/50',
       hoverTextClass: 'group-hover:text-primary',
       items: [
-        { title: 'Set Budget Alert', description: 'Get notified of overages', query: "I want to set a cost alert for my workspace" },
-        { title: 'Budget Review', description: 'Compare actual vs. planned', query: "Review my team's budget performance" }
-      ]
-    },
-    {
-      title: 'Optimization',
-      icon: <CheckCircle className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
         { title: 'Idle Clusters', description: 'Terminate unused compute', query: "Identify idle clusters I can safely terminate" },
-        { title: 'Spot Instances', description: 'Analyze spot adoption', query: "Show me my spot instance savings report" }
-      ]
-    }
-  ],
-  'Data Quality': [
-    {
-      title: 'Health Checks',
-      icon: <Activity className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
-        { title: 'Schema Validation', description: 'Detect structural drift', query: "Check for schema drift in my bronze tables" },
-        { title: 'Null Check Report', description: 'Monitor field completeness', query: "Show me the null-value report for my core tables" }
-      ]
-    },
-    {
-      title: 'Monitoring',
-      icon: <Search className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
-        { title: 'Pipeline SLA', description: 'Track data arrival times', query: "Are my production pipelines meeting SLAs?" },
-        { title: 'Data Freshness', description: 'Verify update frequency', query: "Check freshness of my dashboard source tables" }
-      ]
-    },
-    {
-      title: 'Validation',
-      icon: <AlertTriangle className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
-        { title: 'Range Checks', description: 'Verify value constraints', query: "Run value range validation on my transaction data" },
-        { title: 'Cross-Source Sync', description: 'Compare with source systems', query: "Validate my lakehouse data against the source DB" }
+        { title: 'Tagging Compliance', description: 'Resources missing mandatory tags', query: "Which users are out of compliance with the tagging policy?" }
       ]
     }
   ]
@@ -210,15 +162,13 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
 const MODE_ICONS: Record<AgentMode, React.ReactNode> = {
   'Self Service Agent': <Sparkles className="w-3.5 h-3.5" />,
   'Governance': <Shield className="w-3.5 h-3.5" />,
-  'FinOps': <BarChart3 className="w-3.5 h-3.5" />,
-  'Data Quality': <Activity className="w-3.5 h-3.5" />
+  'FinOps': <BarChart3 className="w-3.5 h-3.5" />
 };
 
 const MODE_PERMISSIONS: Record<AgentMode, UserPersona[]> = {
   'Self Service Agent': ['Platform Admin', 'Business User', 'Governance Admin', 'Finance Admin', 'Security Admin'],
   'Governance': ['Platform Admin', 'Governance Admin', 'Security Admin'],
-  'FinOps': ['Platform Admin', 'Finance Admin'],
-  'Data Quality': ['Platform Admin', 'Governance Admin']
+  'FinOps': ['Platform Admin', 'Finance Admin']
 };
 
 // Determine which form route to use based on conversation (fallback only for error cases)
@@ -668,7 +618,7 @@ export function Home() {
         <div className="text-center mb-6 relative z-10">
           <div className="flex items-center justify-center gap-3 mb-3">
             {brandLogoUrl ? (
-              <img src={brandLogoUrl} alt="Logo" className="w-10 h-10 object-contain rounded-xl" />
+              <img src={brandLogoUrl} alt="Logo" className="max-h-12 max-w-[150px] w-auto h-auto object-contain rounded-md" />
             ) : (
               <div className="p-2 bg-primary rounded-xl shadow-md">
                 <Sparkles className="w-5 h-5 text-white" />
@@ -774,7 +724,7 @@ export function Home() {
                             disabled={isProcessing}
                             className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 h-10"
                           >
-                            <Send className="w-4 h-4" />
+                            <Send className="w-4 h-4 text-white" />
                           </Button>
                           <Button
                             type="button"
@@ -1061,7 +1011,7 @@ export function Home() {
                         {isProcessing ? (
                           <div className="w-4 h-4 rounded-full border-2 border-primary/20 border-t-primary animate-spin" />
                         ) : (
-                          <Send className="w-4 h-4" />
+                          <Send className="w-4 h-4 text-white" />
                         )}
                       </Button>
                       <Button
@@ -1130,7 +1080,7 @@ export function Home() {
         <div className="text-center mb-8">
           <div className="flex items-center justify-center gap-3 mb-6">
             {brandLogoUrl ? (
-              <img src={brandLogoUrl} alt="Logo" className="w-16 h-16 object-contain rounded-2xl" />
+              <img src={brandLogoUrl} alt="Logo" className="max-h-16 max-w-[200px] w-auto h-auto object-contain rounded-2xl" />
             ) : (
               <div className="p-3 bg-gradient-to-br from-primary to-primary/80 rounded-2xl shadow-lg">
                 <Sparkles className="w-8 h-8 text-white" />
@@ -1140,9 +1090,6 @@ export function Home() {
               {brandName}
             </h1>
           </div>
-          <p className="text-lg text-gray-600 max-w-xl mx-auto">
-            Your intelligent assistant for {brandName} self-service requests.
-          </p>
         </div>
 
         <div className="relative">
@@ -1184,7 +1131,7 @@ export function Home() {
                     {isProcessing ? (
                       <span className="animate-pulse px-3">Processing...</span>
                     ) : (
-                      <ArrowRight className="w-4 h-4" />
+                      <ArrowRight className="w-4 h-4 text-white" />
                     )}
                   </Button>
                 </div>

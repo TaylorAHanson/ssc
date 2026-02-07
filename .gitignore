@@ -48,3 +48,6 @@ test.db
 *.tfstate
 *.tfstate.backup
 .terraform/
+
+# Static files
+backend/static/

@@ -1,4 +1,4 @@
-# ATLAS - Quick Reference Card
+# Quick Reference Card
 
 ## Deployment Commands
 

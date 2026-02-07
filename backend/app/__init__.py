@@ -1,2 +1,2 @@
-# ATLAS Backend Application
+# Backend Application
 
