@@ -28,13 +28,19 @@ async def execute_workflow(workflow_type: str, parameters: Dict[str, Any], conve
         request_id = f"req-{str(uuid.uuid4())}"
         
         # Create Request
+        # Add user email to state_context for state machine usage (e.g., granting access)
+        state_context_with_email = {
+            **parameters,
+            "requested_by_email": user_email
+        }
+
         request = RequestModel(
             id=request_id,
             type=workflow_type,
             title=f"Agent Request: {workflow_type}",
             status="pending",
             current_state="pending",
-            state_context=parameters,
+            state_context=state_context_with_email,
             conversation=conversation_history,  # Save chat history
             requester_email=user_email,  # Set requester for permission filtering
             created_at=datetime.utcnow(),
