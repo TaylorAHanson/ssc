@@ -348,29 +348,47 @@ class DatabricksProvider(BaseProvider):
             # First grant USE CATALOG on parent catalog, then schema permissions
             if len(parts) >= 2:
                 catalog_name = parts[0]
+                schema_name = parts[1]  # Just the schema name without catalog prefix
                 statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog_name}` TO `{principal}`")
-            privileges = privilege_map["schema"].get(access_level, "USE SCHEMA")
-            statements.append(f"GRANT {privileges} ON SCHEMA `{asset_name}` TO `{principal}`")
+                privileges = privilege_map["schema"].get(access_level, "USE SCHEMA")
+                # Use catalog.schema format for schema grants
+                statements.append(f"GRANT {privileges} ON SCHEMA `{catalog_name}`.`{schema_name}` TO `{principal}`")
+            else:
+                # Fallback if parts parsing fails
+                privileges = privilege_map["schema"].get(access_level, "USE SCHEMA")
+                statements.append(f"GRANT {privileges} ON SCHEMA `{asset_name}` TO `{principal}`")
 
         elif asset_type == "table":
             # Grant USE CATALOG, USE SCHEMA, then table permissions
             if len(parts) >= 3:
                 catalog_name = parts[0]
-                schema_name = f"{parts[0]}.{parts[1]}"
+                schema_name = parts[1]
+                table_name = parts[2]
                 statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog_name}` TO `{principal}`")
-                statements.append(f"GRANT USE SCHEMA ON SCHEMA `{schema_name}` TO `{principal}`")
-            privileges = privilege_map["table"].get(access_level, "SELECT")
-            statements.append(f"GRANT {privileges} ON TABLE `{asset_name}` TO `{principal}`")
+                statements.append(f"GRANT USE SCHEMA ON SCHEMA `{catalog_name}`.`{schema_name}` TO `{principal}`")
+                privileges = privilege_map["table"].get(access_level, "SELECT")
+                # Use catalog.schema.table format for table grants
+                statements.append(f"GRANT {privileges} ON TABLE `{catalog_name}`.`{schema_name}`.`{table_name}` TO `{principal}`")
+            else:
+                # Fallback if parts parsing fails
+                privileges = privilege_map["table"].get(access_level, "SELECT")
+                statements.append(f"GRANT {privileges} ON TABLE `{asset_name}` TO `{principal}`")
 
         elif asset_type == "volume":
             # Grant USE CATALOG, USE SCHEMA, then volume permissions
             if len(parts) >= 3:
                 catalog_name = parts[0]
-                schema_name = f"{parts[0]}.{parts[1]}"
+                schema_name = parts[1]
+                volume_name = parts[2]
                 statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog_name}` TO `{principal}`")
-                statements.append(f"GRANT USE SCHEMA ON SCHEMA `{schema_name}` TO `{principal}`")
-            privileges = privilege_map["volume"].get(access_level, "READ VOLUME")
-            statements.append(f"GRANT {privileges} ON VOLUME `{asset_name}` TO `{principal}`")
+                statements.append(f"GRANT USE SCHEMA ON SCHEMA `{catalog_name}`.`{schema_name}` TO `{principal}`")
+                privileges = privilege_map["volume"].get(access_level, "READ VOLUME")
+                # Use catalog.schema.volume format for volume grants
+                statements.append(f"GRANT {privileges} ON VOLUME `{catalog_name}`.`{schema_name}`.`{volume_name}` TO `{principal}`")
+            else:
+                # Fallback if parts parsing fails
+                privileges = privilege_map["volume"].get(access_level, "READ VOLUME")
+                statements.append(f"GRANT {privileges} ON VOLUME `{asset_name}` TO `{principal}`")
 
         return statements
 

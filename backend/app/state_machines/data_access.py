@@ -182,7 +182,13 @@ class DataAccessStateMachine(BaseRequestStateMachine):
                         logger.info(f"[{self.request.id}] Found data owner: {owner}")
                         ctx["data_owner_email"] = owner
                         self.request.state_context = ctx
+
+                        # Force SQLAlchemy to detect JSON field changes (works for SQLite and Lakebase)
+                        from sqlalchemy.orm.attributes import flag_modified
+                        flag_modified(self.request, "state_context")
                         self.db.commit()
+                        self.db.refresh(self.request)
+                        logger.info(f"[{self.request.id}] Persisted data_owner_email to database")
 
                         # Send notification to data owner (with idempotency check)
                         if not has_fact(self.db, self.request.id, "data_owner_notified"):
