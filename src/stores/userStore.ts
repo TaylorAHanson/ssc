@@ -52,7 +52,15 @@ export const useUserStore = create<UserState>()(
             activeRoleOverride: null,
 
             toggleDevMode: async () => {
-                set((state) => ({ isDevMode: !state.isDevMode }));
+                const nextIsDevMode = !get().isDevMode;
+                let nextRoleOverride = get().activeRoleOverride;
+
+                // Auto-select Platform Admin if enabling dev mode and no override selected
+                if (nextIsDevMode && !nextRoleOverride) {
+                    nextRoleOverride = 'platform_admin';
+                }
+
+                set({ isDevMode: nextIsDevMode, activeRoleOverride: nextRoleOverride });
                 await get().fetchCurrentUser();
             },
 

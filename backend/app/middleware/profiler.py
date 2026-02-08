@@ -8,6 +8,9 @@ logger = logging.getLogger(__name__)
 
 class PyinstrumentMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        if request.url.path.startswith("/mcp"):
+            return await call_next(request)
+
         if request.query_params.get("profile") == "true":
             profiler = Profiler(interval=0.001)
             profiler.start()

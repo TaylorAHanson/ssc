@@ -1,18 +1,19 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from app.tools.self_service.get_schema_list import GetSchemaListTool
-from app.tools.self_service.get_table_list import GetTableListTool
+from app.tools.self_service.get_schema_list import get_schema_list
+from app.tools.self_service.get_table_list import get_table_list
 from app.core.exceptions import RetryableError
 
 class MockSchema:
-    def __init__(self, name, comment=None, catalog_name="main", owner="owner"):
+    def __init__(self, name, comment=None, catalog_name="main", owner="owner", properties=None):
         self.name = name
         self.comment = comment
         self.catalog_name = catalog_name
         self.owner = owner
+        self.properties = properties
 
 class MockTable:
-    def __init__(self, name, comment=None, table_type="MANAGED", catalog_name="main", schema_name="default", owner="owner"):
+    def __init__(self, name, comment=None, table_type="MANAGED", catalog_name="main", schema_name="default", owner="owner", properties=None):
         self.name = name
         self.comment = comment
         # Simulate enum or object with string representation
@@ -23,18 +24,21 @@ class MockTable:
         self.catalog_name = catalog_name
         self.schema_name = schema_name
         self.owner = owner
+        self.properties = properties
 
 class TestGetSchemaListTool:
     @pytest.fixture
     def tool(self):
+        return get_schema_list
+    
+    @pytest.fixture
+    def mock_provider(self):
         with patch("app.tools.self_service.get_schema_list.DatabricksProvider") as MockProvider:
-            tool = GetSchemaListTool()
-            tool._provider = MockProvider.return_value
-            return tool
+            yield MockProvider.return_value
 
     @pytest.mark.asyncio
-    async def test_execute_success(self, tool):
-        tool.provider.client.schemas.list.return_value = [
+    async def test_execute_success(self, tool, mock_provider):
+        mock_provider.client.schemas.list.return_value = [
             MockSchema("schema1", "comment1"),
             MockSchema("schema2")
         ]
@@ -43,19 +47,21 @@ class TestGetSchemaListTool:
         
         assert result["count"] == 2
         assert result["schemas"][0]["name"] == "schema1"
-        tool.provider.client.schemas.list.assert_called_with(catalog_name="main")
+        mock_provider.client.schemas.list.assert_called_with(catalog_name="main")
 
 class TestGetTableListTool:
     @pytest.fixture
     def tool(self):
+        return get_table_list
+    
+    @pytest.fixture
+    def mock_provider(self):
         with patch("app.tools.self_service.get_table_list.DatabricksProvider") as MockProvider:
-            tool = GetTableListTool()
-            tool._provider = MockProvider.return_value
-            return tool
+            yield MockProvider.return_value
 
     @pytest.mark.asyncio
-    async def test_execute_success(self, tool):
-        tool.provider.client.tables.list.return_value = [
+    async def test_execute_success(self, tool, mock_provider):
+        mock_provider.client.tables.list.return_value = [
             MockTable("table1", "c1", "MANAGED"),
             MockTable("view1", "c2", "VIEW")
         ]
@@ -65,4 +71,4 @@ class TestGetTableListTool:
         assert result["count"] == 2
         assert result["tables"][0]["name"] == "table1"
         assert result["tables"][1]["table_type"] == "VIEW"
-        tool.provider.client.tables.list.assert_called_with(catalog_name="main", schema_name="default")
+        mock_provider.client.tables.list.assert_called_with(catalog_name="main", schema_name="default")

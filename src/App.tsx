@@ -4,6 +4,7 @@ import { Layout } from './components/layout/Layout';
 import { Home } from './pages/Home';
 import { Requests } from './pages/Requests';
 import { Admin } from './pages/Admin';
+import { TrainingUpload } from './pages/admin/TrainingUpload';
 import { Approvals } from './pages/Approvals';
 import { Training } from './pages/Training';
 import { Events } from './pages/Events';
@@ -18,7 +19,7 @@ import { ProtectedRoute } from './components/auth/ProtectedRoute';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
-  const fetchBranding = useBrandingStore((state) => state.fetchBranding);
+  const { fetchBranding, hasLoaded } = useBrandingStore();
   const fetchCurrentUser = useUserStore((state) => state.fetchCurrentUser);
   const hydrated = useUserStore((state) => state.hydrated);
 
@@ -29,6 +30,10 @@ function App() {
       fetchCurrentUser();
     }
   }, [fetchBannerMessage, fetchBranding, fetchCurrentUser, hydrated]);
+
+  if (!hasLoaded) {
+    return null; // Don't render anything until branding is loaded to prevent flash
+  }
 
   return (
     <BrowserRouter>
@@ -51,6 +56,14 @@ function App() {
             element={
               <ProtectedRoute allowedPersonas={['Platform Admin']}>
                 <AdminReports />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/training"
+            element={
+              <ProtectedRoute allowedPersonas={['Platform Admin']}>
+                <TrainingUpload />
               </ProtectedRoute>
             }
           />

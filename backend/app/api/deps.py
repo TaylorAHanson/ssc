@@ -4,9 +4,11 @@ API dependencies.
 from fastapi import Depends, HTTPException, status, Header
 from typing import Generator, Optional
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from app.db.session import get_db
 from app.db.user import UserModel
 import logging
+from app.providers.github.client import GitHubProvider
 
 logger = logging.getLogger(__name__)
 from app.core.config import settings
@@ -78,22 +80,9 @@ def get_current_user(
         logger.info(f"User {MOCK_USER_EMAIL} not found. Bootstrapping default admin user...")
         
         try:
-            # 1. Ensure Roles exist
-            from app.db.user import RoleModel
-            import uuid
-            
-            roles = [
-                {"id": "role_platform_admin", "name": "platform_admin", "description": "Full system access"},
-                {"id": "role_governance_admin", "name": "governance_admin", "description": "Governance and policy management"},
-                {"id": "role_security_admin", "name": "security_admin", "description": "Security auditing and access control"},
-                {"id": "role_finance_admin", "name": "finance_admin", "description": "Budget and cost management"},
-                {"id": "role_business_user", "name": "business_user", "description": "Standard business user access"},
-            ]
-            
-            for role_data in roles:
-                if not db.query(RoleModel).filter(RoleModel.name == role_data["name"]).first():
-                    db.add(RoleModel(**role_data))
-            db.commit()
+            # 1. Ensure Roles exist - NOW HANDLED BY startup_event -> init_db
+            # We assume roles are already seeded.
+
 
             # 2. Create Admin User
             user = UserModel(
@@ -111,6 +100,13 @@ def get_current_user(
             db.refresh(user)
             logger.info(f"Successfully bootstrapped user: {user.email}")
             
+        except IntegrityError:
+            db.rollback()
+            logger.warning(f"Race condition detected during bootstrap for {MOCK_USER_EMAIL}. Fetching existing user.")
+            user = db.query(UserModel).filter(UserModel.email == MOCK_USER_EMAIL).first()
+            if not user:
+                raise HTTPException(status_code=500, detail="User creation failed due to race condition, but user could not be retrieved.")
+
         except Exception as e:
             logger.error(f"Failed to bootstrap admin user: {e}")
             # If bootstrap fails, fall back to raising 401
@@ -148,6 +144,7 @@ def get_current_user(
             # Detach user from session to prevent this ephemeral change from affecting
             # the DB or other queries in this session (like GET /users list).
             db.expunge(user)
+            db.expunge(target_role)
             
             # Create a clone ensuring we don't mutate DB session object permanently
             # But UserModel is an ORM object...
@@ -190,3 +187,14 @@ def require_any_role(role_names: list[str]):
             )
         return user
     return version_checker
+
+async def get_github_provider() -> GitHubProvider:
+    """
+    Dependency to get a GitHub provider instance.
+    Uses GITHUB_TOKEN and GITHUB_ORG from settings.
+    """
+    async with GitHubProvider(
+        token=settings.GITHUB_TOKEN,
+        org=settings.GITHUB_ORG
+    ) as github:
+        yield github

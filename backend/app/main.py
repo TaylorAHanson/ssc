@@ -1,5 +1,5 @@
 """
-FastAPI main application entry point for ATLAS backend.
+FastAPI main application entry point for backend.
 
 This application runs as a Databricks App.
 """
@@ -71,8 +71,23 @@ async def spa_fallback_handler(request: Request, exc):
 
 @app.on_event("startup")
 async def startup_event():
-    """Start background tasks."""
+    """Start background tasks and initialize DB."""
     logger.info("Application starting up...")
+    
+    # Initialize DB (Seed Roles)
+    try:
+        from app.db.init_db import init_db
+        from app.db.session import get_session_local
+        
+        db = get_session_local()()
+        try:
+            init_db(db)
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        # We don't stop startup, but we log strictly
+        
     logger.info("Starting background poller task...")
     task = asyncio.create_task(start_poller())
     logger.info(f"Background poller task created: {task}")
@@ -94,7 +109,17 @@ app.add_middleware(AuthMiddleware)
 app.add_middleware(PyinstrumentMiddleware)
 
 # Include API routes
+# Include API routes
 app.include_router(api_router, prefix="/api/v1")
+
+# Mount MCP Server (SSE)
+# This enables external agents to connect via /mcp/sse
+try:
+    from app.mcp_server import mcp
+    app.mount("/mcp", mcp.sse_app())
+    logger.info("Mounted MCP Server at /mcp")
+except Exception as e:
+    logger.warning(f"Failed to mount MCP Server: {e}")
 
 
 @app.get("/health")
@@ -115,7 +140,7 @@ async def health():
     
     return {
         "status": "healthy",
-        "service": "atlas-api",
+        "service": "api",
         "platform": "Databricks App",
         "database_type": db_type,
         "database_url": masked_url,
@@ -142,7 +167,7 @@ if STATIC_DIR.exists():
         index_path = STATIC_DIR / "index.html"
         if index_path.exists():
             return FileResponse(str(index_path))
-        return {"status": "ok", "message": "ATLAS API", "frontend": "index.html not found"}
+        return {"status": "ok", "message": "API", "frontend": "index.html not found"}
 else:
     logger.info("Static directory not found - running in API-only mode")
     
@@ -151,7 +176,7 @@ else:
         """Health check endpoint (API-only mode)."""
         return {
             "status": "ok",
-            "message": "ATLAS API is running",
+            "message": "API is running",
             "platform": "Databricks App",
             "version": settings.VERSION,
             "frontend": "Not deployed - static directory not found"

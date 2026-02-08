@@ -56,7 +56,7 @@ class NotificationProvider(BaseProvider):
                 return True
 
             msg = MIMEMultipart("alternative")
-            msg['From'] = smtp_user or "noreply@atlas.com"
+            msg['From'] = smtp_user or "noreply@databricks.com"
             msg['To'] = to
             msg['Subject'] = subject
             

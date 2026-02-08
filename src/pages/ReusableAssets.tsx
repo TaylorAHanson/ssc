@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useAssetStore } from '../stores/assetStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -17,7 +17,8 @@ import {
   Video,
   Link as LinkIcon,
   Calendar,
-  Send
+  Send,
+  Loader2
 } from 'lucide-react';
 import { format } from 'date-fns';
 import type { DesignPattern, AssetLink } from '../types';
@@ -47,6 +48,9 @@ const COMMON_TAGS = [
 
 export function ReusableAssets() {
   const designPatterns = useAssetStore((state) => state.designPatterns);
+  const isLoading = useAssetStore((state) => state.isLoading);
+  const error = useAssetStore((state) => state.error);
+  const fetchDesignPatterns = useAssetStore((state) => state.fetchDesignPatterns);
   const addDesignPattern = useAssetStore((state) => state.addDesignPattern);
   const addComment = useAssetStore((state) => state.addComment);
   const incrementViewCount = useAssetStore((state) => state.incrementViewCount);
@@ -56,6 +60,11 @@ export function ReusableAssets() {
   const [showSubmissionForm, setShowSubmissionForm] = useState(false);
   const [selectedPattern, setSelectedPattern] = useState<DesignPattern | null>(null);
   const [newComment, setNewComment] = useState('');
+
+  // Fetch on mount
+  useEffect(() => {
+    fetchDesignPatterns();
+  }, [fetchDesignPatterns]);
 
   // Submission form state
   const [submissionForm, setSubmissionForm] = useState({
@@ -261,65 +270,81 @@ export function ReusableAssets() {
       </div>
 
       {/* Design Patterns Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filteredPatterns.map((pattern) => (
-          <Card
-            key={pattern.id}
-            className="hover:shadow-lg transition-shadow cursor-pointer"
-            onClick={() => handleViewPattern(pattern)}
-          >
-            <CardHeader>
-              <div className="flex items-start justify-between">
-                <CardTitle className="text-lg">{pattern.title}</CardTitle>
-                <Github className="w-5 h-5 text-gray-400 flex-shrink-0" />
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="text-sm text-gray-600 line-clamp-3">{pattern.description}</p>
+      {isLoading ? (
+        <div className="flex flex-col items-center justify-center py-20 space-y-4">
+          <Loader2 className="w-10 h-10 animate-spin text-primary" />
+          <p className="text-gray-500 font-medium">Loading templates from GitHub...</p>
+        </div>
+      ) : error ? (
+        <Card className="bg-red-50 border-red-200">
+          <CardContent className="p-12 text-center space-y-4">
+            <p className="text-red-800 font-medium">{error}</p>
+            <Button onClick={() => fetchDesignPatterns()} variant="outline" className="border-red-300 text-red-800 hover:bg-red-100">
+              Try Again
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {filteredPatterns.map((pattern) => (
+            <Card
+              key={pattern.id}
+              className="hover:shadow-lg transition-shadow cursor-pointer"
+              onClick={() => handleViewPattern(pattern)}
+            >
+              <CardHeader>
+                <div className="flex items-start justify-between">
+                  <CardTitle className="text-lg">{pattern.title}</CardTitle>
+                  <Github className="w-5 h-5 text-gray-400 flex-shrink-0" />
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-gray-600 line-clamp-3">{pattern.description}</p>
 
-              <div className="flex flex-wrap gap-2">
-                {pattern.tags.slice(0, 3).map((tag) => (
-                  <span
-                    key={tag}
-                    className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium"
-                  >
-                    {tag}
-                  </span>
-                ))}
-                {pattern.tags.length > 3 && (
-                  <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium">
-                    +{pattern.tags.length - 3}
-                  </span>
-                )}
-              </div>
+                <div className="flex flex-wrap gap-2">
+                  {pattern.tags.slice(0, 3).map((tag) => (
+                    <span
+                      key={tag}
+                      className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                  {pattern.tags.length > 3 && (
+                    <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium">
+                      +{pattern.tags.length - 3}
+                    </span>
+                  )}
+                </div>
 
-              <div className="flex items-center justify-between text-xs text-gray-500 pt-2 border-t border-gray-200">
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-1">
-                    <User className="w-3 h-3" />
-                    <span>{pattern.author}</span>
+                <div className="flex items-center justify-between text-xs text-gray-500 pt-2 border-t border-gray-200">
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-1">
+                      <User className="w-3 h-3" />
+                      <span>{pattern.author}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Users className="w-3 h-3" />
+                      <span>{pattern.team}</span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    <Users className="w-3 h-3" />
-                    <span>{pattern.team}</span>
+                    <Eye className="w-3 h-3" />
+                    <span>{pattern.viewCount}</span>
                   </div>
                 </div>
-                <div className="flex items-center gap-1">
-                  <Eye className="w-3 h-3" />
-                  <span>{pattern.viewCount}</span>
+
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <Calendar className="w-3 h-3" />
+                  <span>{format(new Date(pattern.createdAt), 'MMM d, yyyy')}</span>
                 </div>
-              </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
-              <div className="flex items-center gap-2 text-xs text-gray-500">
-                <Calendar className="w-3 h-3" />
-                <span>{format(new Date(pattern.createdAt), 'MMM d, yyyy')}</span>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {filteredPatterns.length === 0 && (
+      {!isLoading && !error && filteredPatterns.length === 0 && (
         <Card>
           <CardContent className="p-12 text-center">
             <p className="text-gray-600">No design patterns found matching your criteria.</p>

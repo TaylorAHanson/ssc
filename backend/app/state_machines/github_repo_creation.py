@@ -32,25 +32,68 @@ class GithubRepoCreationStateMachine(BaseRequestStateMachine):
         """Execute repository creation tasks."""
         if self.current_state.id == "provisioning":
             if not self.has_repo_created:
-                from app.tools.github import ScaffoldGitHubRepoTool
+                from app.providers.github.client import GitHubProvider
+                from app.core.config import settings
                 from datetime import datetime
+                import traceback
                 
                 # Mark provisioning as started if not already marked
                 if not has_fact(self.db, self.request.id, "provisioning_started"):
                     add_fact(self.db, self.request.id, "provisioning_started", {"started_at": datetime.utcnow().isoformat()}, actor="system")
                     self.db.commit()
                 
-                logger.info(f"[{self.request.id}] Executing ScaffoldGitHubRepoTool...")
-                tool = ScaffoldGitHubRepoTool()
-                result = await tool.execute(**(self.request.state_context or {}))
+                logger.info(f"[{self.request.id}] Provisioning GitHub repository...")
                 
-                if result.get("status") == "completed":
-                    add_fact(self.db, self.request.id, "repo_created", {
-                        "repo_url": result.get("repo_url"),
-                        "repo_name": result.get("repo_name")
+                try:
+                    ctx = self.request.state_context or {}
+                    repo_name = ctx.get("repo_name")
+                    description = ctx.get("description", "")
+                    visibility = ctx.get("visibility", "private")
+                    template = ctx.get("template")
+                    
+                    if not repo_name:
+                        raise ValueError("repo_name is required in state_context")
+
+                    # Use GitHubProvider directly
+                    async with GitHubProvider(
+                        token=settings.GITHUB_TOKEN or settings.get_git_token(),
+                        org=settings.GITHUB_ORG
+                    ) as github:
+                        
+                        config = {
+                            "description": description,
+                            "private": visibility == "private"
+                        }
+                        
+                        if template and template.lower() != "none":
+                            logger.info(f"[{self.request.id}] Creating repo '{repo_name}' from template '{template}'")
+                            result = await github.create_from_template(template, repo_name, config)
+                        else:
+                            logger.info(f"[{self.request.id}] Creating blank repo '{repo_name}'")
+                            result = await github.create_repo(repo_name, config)
+                        
+                        if result:
+                            add_fact(self.db, self.request.id, "repo_created", {
+                                "repo_url": result.get("html_url"),
+                                "repo_name": repo_name,
+                                "full_name": result.get("full_name")
+                            }, actor="system")
+                            
+                            add_fact(self.db, self.request.id, "provisioning_completed", {
+                                "completed_at": datetime.utcnow().isoformat()
+                            }, actor="system")
+                            
+                            self.db.commit()
+                            logger.info(f"[{self.request.id}] Repository created successfully: {result.get('html_url')}")
+                
+                except Exception as e:
+                    logger.error(f"[{self.request.id}] GitHub provisioning failed: {str(e)}")
+                    logger.error(traceback.format_exc())
+                    add_fact(self.db, self.request.id, "provisioning_failed", {
+                        "error": str(e),
+                        "failed_at": datetime.utcnow().isoformat()
                     }, actor="system")
                     self.db.commit()
-                    logger.info(f"[{self.request.id}] Repository created successfully: {result.get('repo_url')}")
 
     def _process_current_state(self) -> bool:
         """
@@ -61,10 +104,11 @@ class GithubRepoCreationStateMachine(BaseRequestStateMachine):
         # Handle provisioning state - check if repo already exists
         if self.current_state.id == "provisioning":
             if has_fact(self.db, self.request.id, "repo_created"):
-                # Repo already exists, mark provisioning as completed
+                # Repo already exists, mark provisioning as completed if not already done
                 if not has_fact(self.db, self.request.id, "provisioning_completed"):
                     logger.info(f"Repository already exists for request {self.request.id}, marking complete")
                     add_fact(self.db, self.request.id, "provisioning_completed", {}, actor="system")
                     # Will reconcile to completed on next tick
+                    changed = True
         
         return changed
