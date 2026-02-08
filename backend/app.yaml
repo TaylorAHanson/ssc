@@ -8,14 +8,19 @@ command:
 env:
   # Database Configuration (Lakebase - PostgreSQL)
   # Password is fetched automatically from Databricks secrets using the app's service principal
+  # Get DATABASE_HOST from: terraform output lakebase_read_write_dns
   - name: DATABASE_HOST
-    value: "instance-83344571-9f1d-49b2-a400-f0eda63bfcda.database.cloud.databricks.com"
+    value: "instance-c77ef127-eeca-44f5-80ba-76b800757462.database.cloud.databricks.com"
   - name: DATABASE_PORT
     value: "5432"
   - name: DATABASE_NAME
     value: "databricks_postgres"
   - name: DATABASE_USER
-    value: "edas_app"
+    value: "atlas_app"
+  - name: DATABASE_SECRET_SCOPE
+    value: "atlas-hub"
+  - name: DATABASE_SECRET_KEY
+    value: "lakebase-password"
   
   # Infrastructure Repository (Terraform GitOps)
   - name: INFRA_REPO_URL
