@@ -46,7 +46,7 @@ def get_database_url() -> str:
     
     # Check for Postgres/Lakebase config
     host = settings.DATABASE_HOST
-    user = "edas_app"  # 🔥 HARDCODED: Force native Postgres role
+    user = settings.DATABASE_USER or "atlas_app"  # Native Postgres role
     name = settings.DATABASE_NAME
     password = None
     
@@ -80,8 +80,10 @@ def get_database_url() -> str:
                 from databricks.sdk import WorkspaceClient
                 import base64
                 sdk = WorkspaceClient()
-                logger.info("Attempting to fetch password from Databricks Secret Scope...")
-                secret_value = sdk.secrets.get_secret(scope="edas-hub", key="lakebase-password")
+                scope = settings.DATABASE_SECRET_SCOPE
+                key = settings.DATABASE_SECRET_KEY
+                logger.info(f"Attempting to fetch password from Databricks Secret Scope ({scope}/{key})...")
+                secret_value = sdk.secrets.get_secret(scope=scope, key=key)
                 if secret_value and secret_value.value:
                     raw_value = secret_value.value
                     # Check if value is base64 encoded and decode if needed
@@ -146,24 +148,24 @@ def get_database_url() -> str:
     
     # If running in Databricks, try to use a persistent path
     if os.environ.get("DATABRICKS_RUNTIME_VERSION") or os.environ.get("DATABRICKS_HOST"):
-        persistent_dir = "/tmp/edas_hub_data"  # Default fallback
+        persistent_dir = "/tmp/atlas_hub_data"  # Default fallback
         
         # Try to find the user's workspace path
         for env_var in ["USER", "DATABRICKS_USER", "OWNER"]:
             db_user = os.environ.get(env_var)
             if db_user:
-                persistent_dir = f"/Workspace/Users/{db_user}/edas_hub_data"
+                persistent_dir = f"/Workspace/Users/{db_user}/atlas_hub_data"
                 break
         
         try:
             os.makedirs(persistent_dir, exist_ok=True)
-            db_path = os.path.join(persistent_dir, "edas_hub.db")
+            db_path = os.path.join(persistent_dir, "atlas_hub.db")
             logger.info(f"Using persistent SQLite database at: {db_path}")
             return f"sqlite:///{db_path}"
         except Exception as e:
             logger.warning(f"Could not create persistent directory {persistent_dir}: {e}. Falling back to local.")
     
-    db_path = os.path.join(base_dir, "edas_hub.db")
+    db_path = os.path.join(base_dir, "atlas_hub.db")
     return f"sqlite:///{db_path}"
 
 
