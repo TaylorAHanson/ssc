@@ -52,7 +52,7 @@ env:
 
   # Databricks Configuration
   - name: DATABRICKS_WAREHOUSE_ID
-    value: "5c5e40da3caf812c"
+    value: "14b25bcc9c131636"
   - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
     value: databricks-gemini-2-5-flash  
   - name: AGENT_ENABLED
