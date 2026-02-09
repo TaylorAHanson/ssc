@@ -102,12 +102,22 @@ async def process_open_requests():
         # Find requests that need processing (not completed/rejected/failed)
         # and are not locked (or lock has expired)
         now = datetime.utcnow()
+        # Process pending requests AND failed requests that might be recoverable
+        # Failed requests in non-terminal states (like terraform_applying) may have
+        # success facts that can transition them to completed
+        terminal_states = {"completed", "rejected", "failed"}
+        
         requests = db.query(RequestModel).filter(
-            RequestModel.status.notin_([
-                RequestStatus.COMPLETED.value, 
-                RequestStatus.REJECTED.value,
-                "failed"
-            ]),
+            or_(
+                # Normal pending requests
+                RequestModel.status.notin_([
+                    RequestStatus.COMPLETED.value, 
+                    RequestStatus.REJECTED.value,
+                    "failed"
+                ]),
+                # Failed requests NOT in terminal states (may be recoverable)
+                (RequestModel.status == "failed") & (RequestModel.current_state.notin_(terminal_states))
+            ),
             # Only process requests that are not locked or have expired locks
             or_(
                 RequestModel.locked_by.is_(None),
