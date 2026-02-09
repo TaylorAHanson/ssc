@@ -32,7 +32,7 @@ import traceback
 logger = logging.getLogger(__name__)
 
 # States that require GitOps volume polling
-TERRAFORM_POLLING_STATES = {"terraform_planning", "terraform_applying"}
+TERRAFORM_POLLING_STATES = {"terraform_planning", "awaiting_approval", "terraform_applying"}
 
 # Generate unique worker ID
 _worker_id = f"poll-worker-{socket.gethostname()}-{os.getpid()}"
@@ -406,6 +406,18 @@ async def _check_gitops_volume_status(db: Session, request: RequestModel):
                     "plan_output": status.get("plan_output", ""),
                     "source": "volume_poll"
                 })
+                
+                # If PR is already merged, that's the platform admin approval
+                # The merge action IS the approval - no separate approval step needed
+                if pr_state == "merged" and not has_fact(db, request.id, "approval_received", approval_type="platform_admin"):
+                    logger.info(f"[{request.id}] PR already merged - adding platform admin approval")
+                    add_fact(db, request.id, "approval_received", {
+                        "approval_type": "platform_admin",
+                        "approved": True,
+                        "pr_url": pr_url,
+                        "source": "volume_poll"
+                    })
+                
                 db.commit()
             
             # Edge case: apply already failed but we missed the plan_received transition
@@ -434,6 +446,49 @@ async def _check_gitops_volume_status(db: Session, request: RequestModel):
                         "error": error_msg,
                         "source": "volume_poll_recovery"
                     })
+                db.commit()
+        
+        # Check for PR merge while awaiting approval
+        elif request.current_state == "awaiting_approval":
+            pr_state = status.get("pr_state")
+            pr_url = status.get("pr_url")
+            
+            # If PR was merged, that's the platform admin approval
+            if pr_state == "merged" and not has_fact(db, request.id, "approval_received", approval_type="platform_admin"):
+                logger.info(f"[{request.id}] PR merged while awaiting approval - adding platform admin approval")
+                add_fact(db, request.id, "approval_received", {
+                    "approval_type": "platform_admin",
+                    "approved": True,
+                    "pr_url": pr_url,
+                    "source": "volume_poll"
+                })
+                db.commit()
+            
+            # Edge case: apply already completed or failed while waiting for approval
+            elif pr_state in ("applied", "apply_failed") or status.get("apply_success") is not None:
+                logger.warning(f"[{request.id}] Apply already ran while awaiting approval - fast-forwarding")
+                
+                # Add approval fact if missing
+                if not has_fact(db, request.id, "approval_received", approval_type="platform_admin"):
+                    add_fact(db, request.id, "approval_received", {
+                        "approval_type": "platform_admin",
+                        "approved": True,
+                        "source": "volume_poll_recovery"
+                    })
+                
+                # Add apply result fact
+                if not has_fact(db, request.id, "terraform_apply_received"):
+                    if status.get("apply_success") is True or pr_state == "applied":
+                        add_fact(db, request.id, "terraform_apply_received", {
+                            "status": "success",
+                            "source": "volume_poll_recovery"
+                        })
+                    else:
+                        add_fact(db, request.id, "terraform_apply_received", {
+                            "status": "failure",
+                            "error": status.get("error", "Apply failed"),
+                            "source": "volume_poll_recovery"
+                        })
                 db.commit()
         
         # Check for apply completion
