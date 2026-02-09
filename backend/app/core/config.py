@@ -193,7 +193,9 @@ class Settings(BaseSettings):
     # When GITOPS_MODE is "volume", requests are written to a Unity Catalog Volume
     # and a GitHub Actions workflow polls the volume to create PRs
     GITOPS_MODE: str = "volume"  # "volume" (recommended) or "direct" (requires Git access)
-    GITOPS_VOLUME_PATH: str = "/Volumes/atlas_dev_catalog/atlas/gitops_requests"  # UC Volume path
+    # Use a UC path (e.g. /Volumes/catalog/schema/gitops_requests) when running ON Databricks.
+    # For local dev or non-Databricks runs, use a local directory (e.g. ./gitops_volume or /tmp/gitops_volume).
+    GITOPS_VOLUME_PATH: str = "/Volumes/atlas_dev_catalog/atlas/gitops_requests"  # UC or local path
     
     # GitHub App Authentication (blocked by org IP allowlist, kept for future)
     GITHUB_APP_ID: str = "" # GitHub App ID

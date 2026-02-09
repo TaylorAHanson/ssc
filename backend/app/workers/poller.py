@@ -3,6 +3,8 @@ Polling worker for processing request state machine transitions.
 
 This worker polls the database for pending requests and processes them
 in parallel with proper locking, error handling, and retry logic.
+
+Also polls the GitOps volume for status updates on Terraform requests.
 """
 import asyncio
 import logging
@@ -28,6 +30,9 @@ from app.workers.tasks.sync_calendar import sync_calendar_task
 import traceback
 
 logger = logging.getLogger(__name__)
+
+# States that require GitOps volume polling
+TERRAFORM_POLLING_STATES = {"terraform_planning", "terraform_applying"}
 
 # Generate unique worker ID
 _worker_id = f"poll-worker-{socket.gethostname()}-{os.getpid()}"
@@ -346,6 +351,94 @@ async def _heartbeat_lock_loop(request_id: str, timeout_minutes: int):
         raise
 
 
+async def _check_gitops_volume_status(db: Session, request: RequestModel):
+    """
+    Check the GitOps volume for status updates and add facts if needed.
+    
+    This bridges the volume-based GitOps flow with the app's fact-based state machine.
+    When GitHub Actions updates the volume status, this function detects the changes
+    and adds the appropriate facts to trigger state transitions.
+    
+    Only processes requests that came from this app (have status files in the volume).
+    Manual PRs in the Terraform repo won't have status files, so they're ignored.
+    """
+    from app.state_machines.facts import has_fact, add_fact
+    
+    # Only poll for requests in terraform states
+    if request.current_state not in TERRAFORM_POLLING_STATES:
+        return
+    
+    # Only poll if GitOps mode is "volume"
+    gitops_mode = getattr(settings, 'GITOPS_MODE', 'volume')
+    if gitops_mode != "volume":
+        return
+    
+    try:
+        from app.providers.terraform.volume_provider import VolumeGitOpsProvider
+        
+        # Initialize the volume provider
+        provider = VolumeGitOpsProvider(
+            volume_path=getattr(settings, 'GITOPS_VOLUME_PATH', '/Volumes/atlas_dev_catalog/atlas/gitops_requests'),
+            environment=getattr(settings, 'DEFAULT_ENVIRONMENT', 'dev')
+        )
+        
+        # Get status from volume
+        status = await provider.get_status(request.id)
+        
+        if not status:
+            logger.debug(f"[{request.id}] No volume status found yet")
+            return
+        
+        logger.debug(f"[{request.id}] Volume status: {status}")
+        
+        # Check for plan completion (PR created)
+        if request.current_state == "terraform_planning":
+            pr_state = status.get("pr_state")
+            pr_url = status.get("pr_url")
+            
+            # If PR is created (open or merged), plan is complete
+            if pr_state in ("open", "merged") and not has_fact(db, request.id, "terraform_plan_received"):
+                logger.info(f"[{request.id}] Volume shows PR created (state={pr_state}), adding terraform_plan_received fact")
+                add_fact(db, request.id, "terraform_plan_received", {
+                    "status": "success",
+                    "pr_url": pr_url,
+                    "pr_state": pr_state,
+                    "plan_output": status.get("plan_output", ""),
+                    "source": "volume_poll"
+                })
+                db.commit()
+        
+        # Check for apply completion
+        elif request.current_state == "terraform_applying":
+            apply_success = status.get("apply_success")
+            pr_state = status.get("pr_state")
+            
+            # If apply succeeded (marked as applied)
+            if (apply_success is True or pr_state == "applied") and not has_fact(db, request.id, "terraform_apply_received"):
+                logger.info(f"[{request.id}] Volume shows apply complete, adding terraform_apply_received fact")
+                add_fact(db, request.id, "terraform_apply_received", {
+                    "status": "success",
+                    "apply_output": status.get("apply_output", ""),
+                    "source": "volume_poll"
+                })
+                db.commit()
+            
+            # Check for apply failure (apply_success: false OR pr_state: apply_failed OR error present)
+            elif (apply_success is False or pr_state == "apply_failed" or status.get("error")) and not has_fact(db, request.id, "terraform_apply_received"):
+                error_msg = status.get("error", "Terraform apply failed. Check the GitHub Actions logs for details.")
+                logger.warning(f"[{request.id}] Volume shows apply failed: {error_msg}")
+                add_fact(db, request.id, "terraform_apply_received", {
+                    "status": "failure",
+                    "error": error_msg,
+                    "source": "volume_poll"
+                })
+                db.commit()
+                
+    except Exception as e:
+        # Don't fail the whole processing if volume polling fails
+        logger.warning(f"[{request.id}] Failed to check volume status: {e}")
+
+
 async def _process_request_state_machine(db, request: RequestModel):
     """
     Process state machine - delegate all logic to the state machine.
@@ -372,6 +465,10 @@ async def _process_request_state_machine(db, request: RequestModel):
     if facts:
         fact_summary = {f.event_type: getattr(f, 'event_data', {}) for f in facts}
         logger.debug(f"[{request.id}] Relevant facts: {fact_summary}")
+    
+    # Check GitOps volume for status updates before tick()
+    # This adds facts if the volume shows PR created or apply complete
+    await _check_gitops_volume_status(db, request)
     
     # Let the state machine handle all logic
     logger.debug(f"[{request.id}] Calling state machine tick()...")

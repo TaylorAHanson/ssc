@@ -43,6 +43,9 @@ class ServicePrincipalStateMachine(BaseRequestStateMachine):
     # Applying -> Completed
     finish_applying = terraform_applying.to(completed, cond="has_terraform_apply_success")
     
+    # Apply can fail
+    apply_failed = terraform_applying.to(failed, cond="has_terraform_apply_failed")
+    
     reject = (
         pending.to(rejected, cond="has_request_rejected") |
         terraform_planning.to(rejected, cond="has_request_rejected") |
@@ -185,4 +188,8 @@ class ServicePrincipalStateMachine(BaseRequestStateMachine):
         
     @property
     def has_terraform_apply_success(self) -> bool:
-        return has_fact(self.db, self.request.id, "terraform_apply_received")
+        return has_fact(self.db, self.request.id, "terraform_apply_received", status="success")
+    
+    @property
+    def has_terraform_apply_failed(self) -> bool:
+        return has_fact(self.db, self.request.id, "terraform_apply_received", status="failure")
