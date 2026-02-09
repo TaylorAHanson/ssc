@@ -175,11 +175,17 @@
 │  │  │ (static files) │  │    └──────────────────────┘                              │
 │  │  └────────────────┘  │                                                          │
 │  └──────────────────────┘    ┌──────────────────────┐                              │
-│                              │   Lakebase (Future)  │                              │
-│  App Service Principal ──────┤   or SQLite (Dev)    │                              │
+│                              │   Lakebase           │                              │
+│  App Service Principal ──────┤   (PostgreSQL)       │                              │
 │  (auto-created by App)       │   - requests table   │                              │
 │                              │   - approvals table  │                              │
-│                              │   - events table     │                              │
+│  Secret Scope: atlas-hub     │   - events table     │                              │
+│   - github-pat               └──────────────────────┘                              │
+│   - lakebase-password                                                              │
+│                              ┌──────────────────────┐                              │
+│                              │ Terraform Infra Repo │                              │
+│                              │ (GitOps)             │                              │
+│                              │ - Pushed via PAT     │                              │
 │                              └──────────────────────┘                              │
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -248,17 +254,17 @@ Configure these for **each environment** (Settings → Environments → [env]):
 
 ### For Each Environment (dev, prod)
 
-#### 1. Create Service Principal (Account Console)
+#### 1. Create CI/CD Service Principal (Account Console)
 
 ```bash
 # Via Databricks Account Console:
 # 1. Go to User Management → Service Principals
-# 2. Create new SP: "edas-hub-{env}-cicd"
+# 2. Create new SP: "atlas-{env}-cicd"
 # 3. Generate OAuth secret
 # 4. Note Client ID and Secret
 ```
 
-#### 2. Grant Service Principal Permissions (Workspace)
+#### 2. Grant CI/CD Service Principal Permissions (Workspace)
 
 ```sql
 -- In Databricks SQL or via Terraform
@@ -306,6 +312,101 @@ GRANT SELECT ON TABLE *.*.* TO `edas-hub-{env}-cicd`;
 git push origin develop  # → deploys to development
 git push origin main     # → deploys to production
 ```
+
+#### 6. Post-Deployment: Configure App Service Principal
+
+> **IMPORTANT**: The Databricks App creates its own service principal automatically when deployed. This "App SP" (also called "Ops SP") needs additional permissions to access secrets and resources.
+
+After the first deployment completes:
+
+1. **Find the App's Service Principal**:
+   - Go to **Databricks Workspace → Compute → Apps**
+   - Click on your app (e.g., `atlas-dev`)
+   - Go to **Permissions** tab
+   - Note the auto-created service principal (e.g., `app-xxxx-xxxx-xxxx`)
+
+2. **Create a GitHub Personal Access Token (PAT)**:
+   - Go to **GitHub** → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
+   - Click **Generate new token (classic)**
+   - Name: `atlas-infra-bot`
+   - Expiration: 90 days (set a reminder to rotate)
+   - Scopes: Select **`repo`** (Full control of private repositories)
+   - Click **Generate token** and **copy immediately**
+
+3. **Create Secret Scope and Add Secrets**:
+   ```python
+   from databricks.sdk import WorkspaceClient
+   
+   w = WorkspaceClient()
+   
+   # Create secret scope (if not exists)
+   try:
+       w.secrets.create_scope(scope="atlas-hub")
+   except Exception as e:
+       print(f"Scope may already exist: {e}")
+   
+   # Add GitHub PAT - REPLACE with your actual token!
+   w.secrets.put_secret(
+       scope="atlas-hub",
+       key="github-pat",
+       string_value="ghp_xxxxxxxxxxxx"  # Your ACTUAL PAT from step 2
+   )
+   
+   # Add Lakebase password - REPLACE with actual password!
+   w.secrets.put_secret(
+       scope="atlas-hub",
+       key="lakebase-password",
+       string_value="your_actual_password"  # Password for atlas_app role
+   )
+   ```
+
+4. **Grant App SP Access to Secret Scope**:
+   ```python
+   from databricks.sdk import WorkspaceClient
+   from databricks.sdk.service.workspace import AclPermission
+   
+   w = WorkspaceClient()
+   
+   # Grant READ access to the app's service principal
+   # Replace with your App SP's application ID from step 1
+   w.secrets.put_acl(
+       scope="atlas-hub",
+       principal="<APP_SP_APPLICATION_ID>",
+       permission=AclPermission.READ
+   )
+   
+   # Verify ACLs
+   for acl in w.secrets.list_acls(scope="atlas-hub"):
+       print(f"  {acl.principal}: {acl.permission}")
+   ```
+
+5. **Grant App SP Access to Lakebase** (if using Lakebase):
+   - Go to **Databricks Workspace → SQL Editor → Lakebase**
+   - Click on your Lakebase instance → **Permissions**
+   - Add the App SP with **Can Use** permission
+
+6. **Grant App SP Access to Model Serving** (if using LLM):
+   - Go to **Serving** → Your endpoint → **Permissions**
+   - Add the App SP with **Can Query** permission
+
+7. **Restart the App** to pick up new permissions:
+   - Go to **Apps** → Your app → **Stop** → **Start**
+
+### Summary: What's Manual vs Automated
+
+| Task | When | Who |
+|------|------|-----|
+| Create CI/CD Service Principal | Before first deploy | Admin |
+| Configure GitHub secrets/variables | Before first deploy | Admin |
+| First deployment | Automated via CI/CD | GitHub Actions |
+| App SP creation | Automatic (by Databricks) | Databricks |
+| Create GitHub PAT | After first deploy | Admin (GitHub) |
+| Create secret scope | After first deploy | Admin |
+| Add secrets (github-pat, lakebase-password) | After first deploy | Admin |
+| Grant App SP access to secret scope | After first deploy | Admin |
+| Grant App SP access to Lakebase | After first deploy | Admin |
+| Grant App SP access to Model Serving | After first deploy | Admin |
+| Restart app | After granting permissions | Admin |
 
 ---
 

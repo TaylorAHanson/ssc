@@ -22,11 +22,13 @@ env:
   - name: DATABASE_SECRET_KEY
     value: "lakebase-password"
   
-  # Infrastructure Repository (Terraform GitOps)
-  - name: INFRA_REPO_URL
-    value: "https://github.com/databricks-field-eng/fe-agentic-self-service-terraform"
-  - name: INFRA_REPO_BRANCH
-    value: "main"
+  # Infrastructure GitOps Settings
+  # Mode: "volume" (recommended) writes to UC Volume, GitHub Actions creates PRs
+  #       "direct" pushes directly to Git (requires GitHub network access)
+  - name: GITOPS_MODE
+    value: "volume"
+  - name: GITOPS_VOLUME_PATH
+    value: "/Volumes/atlas_dev_catalog/atlas/gitops_requests"
   - name: DEFAULT_ENVIRONMENT
     value: "dev"
   - name: GIT_USERNAME
@@ -34,15 +36,17 @@ env:
   - name: GIT_EMAIL
     value: "atlas-bot@databricks.com"
   
-  # GitHub PAT Authentication (fallback, works with IP allowlist)
-  # Fetched at runtime from Databricks secrets
+  # Direct Git Mode Settings (only used when GITOPS_MODE=direct)
+  - name: INFRA_REPO_URL
+    value: "https://github.com/databricks-field-eng/fe-agentic-self-service-terraform"
+  - name: INFRA_REPO_BRANCH
+    value: "main"
   - name: GIT_TOKEN_SECRET_SCOPE
     value: "atlas-hub"
   - name: GIT_TOKEN_SECRET_KEY
     value: "github-pat"
   
-  # GitHub App Authentication (atlas-infra-bot) - blocked by org IP allowlist
-  # Kept for future use if IP allowlist is updated
+  # GitHub App Authentication - blocked by org IP allowlist, kept for future
   - name: GITHUB_APP_ID
     value: ""
   - name: GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE
