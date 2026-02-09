@@ -507,11 +507,10 @@ async def _process_request_state_machine(db, request: RequestModel):
     # We do this every time to ensure the database matches the state machine's internal view
     # even if no state transition occurred (e.g. manual status resets)
     if changed or request.status != sm.get_mapped_status().value:
-        if request.status != "failed":
-            logger.info(f"[{request.id}] Syncing state machine status: {request.status} -> {sm.get_mapped_status().value}")
-            save_state_machine(db, request, sm)
-            db.commit()
-            logger.info(f"[{request.id}] Saved state machine - Current state: {sm.current_state.id}, Status: {request.status}")
+        logger.info(f"[{request.id}] Syncing state machine status: {request.status} -> {sm.get_mapped_status().value}")
+        save_state_machine(db, request, sm)
+        db.commit()
+        logger.info(f"[{request.id}] Saved state machine - Current state: {sm.current_state.id}, Status: {request.status}")
     else:
         logger.debug(f"[{request.id}] No state change or status sync needed (still in {initial_state})")
     
