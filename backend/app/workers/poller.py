@@ -422,8 +422,9 @@ async def _check_gitops_volume_status(db: Session, request: RequestModel):
                         "pr_state": "merged",  # It was merged since apply ran
                         "source": "volume_poll_recovery"
                     })
-                if not has_fact(db, request.id, "platform_admin_approval"):
-                    add_fact(db, request.id, "platform_admin_approval", {
+                if not has_fact(db, request.id, "approval_received", approval_type="platform_admin"):
+                    add_fact(db, request.id, "approval_received", {
+                        "approval_type": "platform_admin",
                         "approved": True,
                         "source": "volume_poll_recovery"
                     })
