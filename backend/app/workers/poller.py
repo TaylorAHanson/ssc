@@ -379,7 +379,7 @@ async def _check_gitops_volume_status(db: Session, request: RequestModel):
         # Initialize the volume provider
         provider = VolumeGitOpsProvider(
             volume_path=getattr(settings, 'GITOPS_VOLUME_PATH', '/Volumes/atlas_dev_catalog/atlas/gitops_requests'),
-            environment=getattr(settings, 'DEFAULT_ENVIRONMENT', 'dev')
+            config={"environment": getattr(settings, 'DEFAULT_ENVIRONMENT', 'dev')}
         )
         
         # Get status from volume
