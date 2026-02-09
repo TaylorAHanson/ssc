@@ -5,27 +5,34 @@ This provider writes infrastructure requests to a Unity Catalog Volume instead o
 directly pushing to Git. A GitHub Actions workflow polls the volume and creates PRs.
 
 This architecture avoids IP allowlist issues where the Databricks App cannot reach GitHub.
+
+Note: Uses Databricks SDK Files API since UC Volumes are not FUSE-mounted in Databricks Apps.
 """
 from typing import Dict, Any, Optional
 from app.providers.base import BaseProvider
 from app.core.exceptions import RetryableError, PermanentError
 from app.core.retry import retry_on_retryable
-import os
 import json
 import logging
 import yaml
 from datetime import datetime
-from pathlib import Path
+from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
 
+def get_workspace_client():
+    """Get a WorkspaceClient instance."""
+    from databricks.sdk import WorkspaceClient
+    return WorkspaceClient()
+
+
 class VolumeGitOpsProvider(BaseProvider):
     """
-    Volume-based GitOps provider.
+    Volume-based GitOps provider using Databricks SDK Files API.
     
     Instead of pushing directly to Git, this provider:
-    1. Writes request YAML files to a Unity Catalog Volume
+    1. Writes request YAML files to a Unity Catalog Volume via SDK
     2. A GitHub Actions workflow polls the volume and creates PRs
     3. Status updates are written back to the volume
     
@@ -57,21 +64,64 @@ class VolumeGitOpsProvider(BaseProvider):
         self.environment = self.config.get("environment", "dev")
         self.username = self.config.get("git_username", "ATLAS Bot")
         self.email = self.config.get("git_email", "atlas-bot@databricks.com")
-        
-        # Ensure directories exist
-        self._ensure_directories()
-        
+        self._client = None
+
         logger.info(f"VolumeGitOpsProvider initialized: volume={self.volume_path}, env={self.environment}")
+
+    @property
+    def client(self):
+        """Lazy-load the WorkspaceClient."""
+        if self._client is None:
+            self._client = get_workspace_client()
+        return self._client
     
-    def _ensure_directories(self):
-        """Create the directory structure if it doesn't exist."""
-        dirs = ["pending", "processing", "completed", "status"]
-        for d in dirs:
-            dir_path = Path(self.volume_path) / d
-            try:
-                dir_path.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                logger.warning(f"Could not create directory {dir_path}: {e}")
+    def _write_file(self, path: str, content: str):
+        """Write content to a file in the volume using Databricks SDK Files API."""
+        try:
+            self.client.files.upload(
+                file_path=path,
+                contents=BytesIO(content.encode('utf-8')),
+                overwrite=True
+            )
+            logger.debug(f"Wrote file: {path}")
+        except Exception as e:
+            logger.error(f"Failed to write file {path}: {e}")
+            raise
+    
+    def _read_file(self, path: str) -> Optional[str]:
+        """Read content from a file in the volume using Databricks SDK Files API."""
+        try:
+            response = self.client.files.download(file_path=path)
+            content = response.contents.read().decode('utf-8')
+            return content
+        except Exception as e:
+            logger.debug(f"Failed to read file {path}: {e}")
+            return None
+    
+    def _file_exists(self, path: str) -> bool:
+        """Check if a file exists in the volume."""
+        try:
+            self.client.files.get_status(file_path=path)
+            return True
+        except Exception:
+            return False
+    
+    def _list_files(self, directory: str) -> list:
+        """List files in a directory in the volume."""
+        try:
+            result = self.client.files.list_directory_contents(directory_path=directory)
+            return [f.path for f in result]
+        except Exception as e:
+            logger.debug(f"Failed to list directory {directory}: {e}")
+            return []
+    
+    def _delete_file(self, path: str):
+        """Delete a file from the volume."""
+        try:
+            self.client.files.delete(file_path=path)
+            logger.debug(f"Deleted file: {path}")
+        except Exception as e:
+            logger.warning(f"Failed to delete file {path}: {e}")
     
     @retry_on_retryable(max_attempts=3)
     async def plan(self, request_id: str, target_file: str, content: Dict[str, Any], commit_message: str) -> Dict[str, Any]:
@@ -107,10 +157,10 @@ class VolumeGitOpsProvider(BaseProvider):
                 "action": "plan"  # plan = create PR, apply = merge PR
             }
             
-            # Write to pending directory
-            pending_file = Path(self.volume_path) / "pending" / f"{request_id}.yaml"
-            with open(pending_file, "w") as f:
-                yaml.dump(request_data, f, default_flow_style=False)
+            # Write to pending directory using SDK
+            pending_file = f"{self.volume_path}/pending/{request_id}.yaml"
+            yaml_content = yaml.dump(request_data, default_flow_style=False)
+            self._write_file(pending_file, yaml_content)
             
             logger.info(f"Request {request_id} written to {pending_file}")
             
@@ -118,7 +168,7 @@ class VolumeGitOpsProvider(BaseProvider):
                 "success": True,
                 "status": "pending",
                 "message": "Request submitted. Waiting for GitHub Actions to create PR.",
-                "pending_file": str(pending_file)
+                "pending_file": pending_file
             }
             
         except Exception as e:
@@ -149,9 +199,8 @@ class VolumeGitOpsProvider(BaseProvider):
             status["apply_requested"] = True
             status["apply_requested_at"] = datetime.utcnow().isoformat()
             
-            status_file = Path(self.volume_path) / "status" / f"{request_id}.json"
-            with open(status_file, "w") as f:
-                json.dump(status, f, indent=2)
+            status_file = f"{self.volume_path}/status/{request_id}.json"
+            self._write_file(status_file, json.dumps(status, indent=2))
             
             logger.info(f"Apply requested for {request_id}")
             
@@ -178,16 +227,16 @@ class VolumeGitOpsProvider(BaseProvider):
         - apply_output: Terraform apply output (if available)
         - error: Error message (if failed)
         """
-        status_file = Path(self.volume_path) / "status" / f"{request_id}.json"
+        status_file = f"{self.volume_path}/status/{request_id}.json"
+        content = self._read_file(status_file)
         
-        if not status_file.exists():
+        if not content:
             return None
         
         try:
-            with open(status_file, "r") as f:
-                return json.load(f)
+            return json.loads(content)
         except Exception as e:
-            logger.error(f"Failed to read status for {request_id}: {e}")
+            logger.error(f"Failed to parse status for {request_id}: {e}")
             return None
     
     async def get_resource(self, target_file: str) -> Optional[Dict[str, Any]]:
@@ -197,15 +246,16 @@ class VolumeGitOpsProvider(BaseProvider):
         This checks pending, processing, and completed directories.
         """
         for status_dir in ["pending", "processing", "completed"]:
-            # Try to find by target_file in the request content
-            dir_path = Path(self.volume_path) / status_dir
-            if not dir_path.exists():
-                continue
-                
-            for file_path in dir_path.glob("*.yaml"):
+            dir_path = f"{self.volume_path}/{status_dir}"
+            files = self._list_files(dir_path)
+            
+            for file_path in files:
+                if not file_path.endswith('.yaml'):
+                    continue
                 try:
-                    with open(file_path, "r") as f:
-                        data = yaml.safe_load(f)
+                    content = self._read_file(file_path)
+                    if content:
+                        data = yaml.safe_load(content)
                         if data.get("target_file") == target_file:
                             return data.get("content")
                 except Exception:
@@ -216,15 +266,25 @@ class VolumeGitOpsProvider(BaseProvider):
     async def health_check(self) -> bool:
         """Check if the volume is accessible."""
         try:
-            pending_dir = Path(self.volume_path) / "pending"
-            return pending_dir.exists()
+            # Try to list the pending directory
+            pending_dir = f"{self.volume_path}/pending"
+            self._list_files(pending_dir)
+            return True
         except Exception:
             return False
     
     def list_pending_requests(self) -> list:
         """List all pending request IDs."""
-        pending_dir = Path(self.volume_path) / "pending"
-        if not pending_dir.exists():
-            return []
+        pending_dir = f"{self.volume_path}/pending"
+        files = self._list_files(pending_dir)
         
-        return [f.stem for f in pending_dir.glob("*.yaml")]
+        # Extract request IDs from file paths
+        request_ids = []
+        for f in files:
+            if f.endswith('.yaml'):
+                # Extract filename without extension
+                filename = f.split('/')[-1]
+                request_id = filename.replace('.yaml', '')
+                request_ids.append(request_id)
+        
+        return request_ids
