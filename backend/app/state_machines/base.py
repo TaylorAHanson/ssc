@@ -140,7 +140,8 @@ class BaseRequestStateMachine(StateMachine):
         """Attempts to execute available transitions based on guard conditions."""
         possible_triggers = [
             'submit', 'reject', 'approve_manager', 'approve_owner', 
-            'approve_admin', 'auto_approve', 'complete_training', 'finish_provisioning'
+            'approve_admin', 'auto_approve', 'complete_training', 'finish_provisioning',
+            'finish_planning', 'finish_applying', 'apply_failed'  # GitOps/Terraform transitions
         ]
         
         for trigger in possible_triggers:
