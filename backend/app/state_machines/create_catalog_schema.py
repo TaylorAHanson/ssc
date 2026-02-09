@@ -40,6 +40,9 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
     # After apply is triggered, we wait for callback (apply received)
     finish_applying = terraform_applying.to(completed, cond="has_terraform_apply_success")
     
+    # Apply can fail
+    apply_failed = terraform_applying.to(failed, cond="has_terraform_apply_failed")
+    
     reject = (
         pending.to(rejected, cond="has_request_rejected") |
         terraform_planning.to(rejected, cond="has_request_rejected") |
@@ -241,15 +244,20 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
     @property
     def has_terraform_apply_success(self) -> bool:
         """Check if we received the apply callback with success."""
-        # We need to check the detail of the fact to ensure it was success, not failure
-        # For simplicity in this `has_fact` helper wrapper, we assume if the fact exists and state machine hasn't failed, it's good?
-        # Actually `has_fact` just checks existence. 
-        # Ideally we should verify status="success" in the fact data.
-        # But `has_fact` returns boolean. 
-        # Let's assume on failure, we would have transitioned to 'failed' if we had a "terraform_apply_failed" check.
-        # Here we just look for "terraform_apply_received".
-        # A more robust implementation would inspect the fact data.
-        return has_fact(self.db, self.request.id, "terraform_apply_received")
+        return has_fact(self.db, self.request.id, "terraform_apply_received", status="success")
+    
+    @property
+    def has_terraform_apply_failed(self) -> bool:
+        """Check if apply failed."""
+        return has_fact(self.db, self.request.id, "terraform_apply_received", status="failure")
 
     def on_enter_completed(self):
         pass
+    
+    def on_enter_failed(self):
+        """Handle transition to failed state."""
+        # Get the error from the fact
+        from app.state_machines.facts import get_fact_data
+        fact_data = get_fact_data(self.db, self.request.id, "terraform_apply_received", default={})
+        error_msg = fact_data.get("error", "Unknown error")
+        logger.error(f"[{self.request.id}] Terraform apply failed: {error_msg}")
