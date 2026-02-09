@@ -7,6 +7,7 @@ from statemachine import State
 from app.state_machines.base import BaseRequestStateMachine
 from app.state_machines.facts import has_fact, add_fact
 from app.providers.terraform.client import TerraformProvider
+from app.providers.terraform.volume_provider import VolumeGitOpsProvider
 from app.core.config import settings
 from app.core.exceptions import PermanentError
 import logging
@@ -81,25 +82,42 @@ class WorkspaceProvisionStateMachine(BaseRequestStateMachine):
         super().__init__(request, db_session)
 
     def _get_provider(self):
-        """Lazy load provider."""
-        repo_url = settings.INFRA_REPO_URL
-        if not repo_url:
-            logger.warning("INFRA_REPO_URL not set.")
+        """Lazy load provider based on GITOPS_MODE setting."""
+        gitops_mode = settings.GITOPS_MODE or "volume"
+        
+        if gitops_mode == "volume":
+            volume_path = settings.GITOPS_VOLUME_PATH
+            if not volume_path:
+                raise PermanentError("GITOPS_VOLUME_PATH not set for volume mode.")
             
-        return TerraformProvider(
-            repo_url=repo_url,
-            branch=settings.INFRA_REPO_BRANCH or "main",
-            config={
-                "git_username": settings.GIT_USERNAME,
-                "git_email": settings.GIT_EMAIL,
-                "ssh_key_path": settings.GIT_SSH_KEY_PATH,
-                "git_token": settings.get_git_token(),  # Fetch at runtime if needed
-                # GitHub App authentication (preferred)
-                "github_app_id": settings.GITHUB_APP_ID,
-                "github_app_private_key": settings.get_github_app_private_key(),  # Fetch at runtime if needed
-                "github_app_installation_id": settings.GITHUB_APP_INSTALLATION_ID,
-            }
-        )
+            logger.info(f"Using VolumeGitOpsProvider with path: {volume_path}")
+            return VolumeGitOpsProvider(
+                volume_path=volume_path,
+                config={
+                    "environment": settings.DEFAULT_ENVIRONMENT or "dev",
+                    "git_username": settings.GIT_USERNAME,
+                    "git_email": settings.GIT_EMAIL,
+                }
+            )
+        else:
+            repo_url = settings.INFRA_REPO_URL
+            if not repo_url:
+                logger.warning("INFRA_REPO_URL not set.")
+                
+            logger.info(f"Using TerraformProvider with repo: {repo_url}")
+            return TerraformProvider(
+                repo_url=repo_url,
+                branch=settings.INFRA_REPO_BRANCH or "main",
+                config={
+                    "git_username": settings.GIT_USERNAME,
+                    "git_email": settings.GIT_EMAIL,
+                    "ssh_key_path": settings.GIT_SSH_KEY_PATH,
+                    "git_token": settings.get_git_token(),
+                    "github_app_id": settings.GITHUB_APP_ID,
+                    "github_app_private_key": settings.get_github_app_private_key(),
+                    "github_app_installation_id": settings.GITHUB_APP_INSTALLATION_ID,
+                }
+            )
 
     async def on_enter_terraform_planning_async(self):
         """Execute async tasks for terraform_planning state."""

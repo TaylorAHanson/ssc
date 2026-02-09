@@ -179,7 +179,7 @@ class Settings(BaseSettings):
     TERRAFORM_TEMPLATE_DIR: str = ""  # Path to Terraform template directory (defaults to project root/terrarform_temp)
     
     # Terraform GitOps Settings
-    INFRA_REPO_URL: str = "" # URL of the infrastructure git repository
+    INFRA_REPO_URL: str = "" # URL of the infrastructure git repository (used for direct Git mode)
     INFRA_REPO_BRANCH: str = "main" # Main branch for infrastructure repo
     DEFAULT_ENVIRONMENT: str = "dev" # Default environment for GitOps (dev, staging, prod)
     GIT_USERNAME: str = "ATLAS Bot"
@@ -188,6 +188,12 @@ class Settings(BaseSettings):
     GIT_TOKEN: str = "" # GitHub personal access token for HTTPS auth (fallback)
     GIT_TOKEN_SECRET_SCOPE: str = ""  # Databricks secret scope for PAT
     GIT_TOKEN_SECRET_KEY: str = ""  # Secret key name for PAT
+    
+    # Volume-based GitOps Settings (recommended - avoids IP allowlist issues)
+    # When GITOPS_MODE is "volume", requests are written to a Unity Catalog Volume
+    # and a GitHub Actions workflow polls the volume to create PRs
+    GITOPS_MODE: str = "volume"  # "volume" (recommended) or "direct" (requires Git access)
+    GITOPS_VOLUME_PATH: str = "/Volumes/atlas_dev_catalog/atlas/gitops_requests"  # UC Volume path
     
     # GitHub App Authentication (blocked by org IP allowlist, kept for future)
     GITHUB_APP_ID: str = "" # GitHub App ID
