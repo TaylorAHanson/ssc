@@ -145,8 +145,14 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
 
         params = self.request.state_context or {}
         asset_type = params.get("type", "").lower()
-        name = params.get("name")
-        catalog = params.get("catalog", "main")
+        name = params.get("name") or params.get("schema_name")
+        # Support multiple possible key names for catalog
+        catalog = (
+            params.get("catalog") or 
+            params.get("parent_catalog") or 
+            params.get("catalog_name") or 
+            "atlas_dev_catalog"  # Safe default instead of "main"
+        )
         environment = params.get("environment", settings.DEFAULT_ENVIRONMENT or "dev")
         
         if not name:
