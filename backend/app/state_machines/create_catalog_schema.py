@@ -150,6 +150,7 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
         catalog = (
             params.get("catalog") or 
             params.get("parent_catalog") or 
+            params.get("parent") or  # Agent sometimes uses "parent"
             params.get("catalog_name") or 
             "atlas_dev_catalog"  # Safe default instead of "main"
         )
