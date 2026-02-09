@@ -407,6 +407,33 @@ async def _check_gitops_volume_status(db: Session, request: RequestModel):
                     "source": "volume_poll"
                 })
                 db.commit()
+            
+            # Edge case: apply already failed but we missed the plan_received transition
+            # This can happen if the app wasn't polling when the PR was created/merged
+            elif pr_state == "apply_failed" or status.get("apply_success") is False:
+                logger.warning(f"[{request.id}] Volume shows apply_failed but request still in planning - fast-forwarding to failed")
+                error_msg = status.get("error", "Terraform apply failed before app could track it")
+                
+                # Add both facts to transition: planning -> awaiting_approval -> applying -> failed
+                if not has_fact(db, request.id, "terraform_plan_received"):
+                    add_fact(db, request.id, "terraform_plan_received", {
+                        "status": "success",
+                        "pr_url": pr_url,
+                        "pr_state": "merged",  # It was merged since apply ran
+                        "source": "volume_poll_recovery"
+                    })
+                if not has_fact(db, request.id, "platform_admin_approval"):
+                    add_fact(db, request.id, "platform_admin_approval", {
+                        "approved": True,
+                        "source": "volume_poll_recovery"
+                    })
+                if not has_fact(db, request.id, "terraform_apply_received"):
+                    add_fact(db, request.id, "terraform_apply_received", {
+                        "status": "failure",
+                        "error": error_msg,
+                        "source": "volume_poll_recovery"
+                    })
+                db.commit()
         
         # Check for apply completion
         elif request.current_state == "terraform_applying":
