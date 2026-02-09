@@ -232,8 +232,20 @@ class BaseRequestStateMachine(StateMachine):
     def save(self):
         """Persists state and status to DB."""
         self.request.current_state = self.current_state.id
-        if self.request.status != "failed":
-            self.request.status = self.get_mapped_status().value
+        
+        # Update status based on state machine's mapped status
+        # Only preserve "failed" status if we're in an actual terminal failure state
+        new_status = self.get_mapped_status().value
+        terminal_failure_states = {"failed", "rejected"}
+        
+        if self.request.status == "failed" and self.current_state.id not in terminal_failure_states:
+            # State machine recovered from failure - update status
+            self.request.status = new_status
+        elif self.request.status != "failed":
+            # Normal case - update status
+            self.request.status = new_status
+        # else: keep "failed" status for terminal failure states
+        
         self.request.updated_at = datetime.utcnow()
 
     def get_mapped_status(self) -> RequestStatus:
