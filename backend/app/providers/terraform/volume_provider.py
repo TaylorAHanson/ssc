@@ -123,6 +123,35 @@ class VolumeGitOpsProvider(BaseProvider):
         except Exception as e:
             logger.warning(f"Failed to delete file {path}: {e}")
     
+    def _get_resource_name(self, content: Dict[str, Any]) -> str:
+        """Extract resource name from content for YAML file naming."""
+        return content.get("name", "unknown")
+    
+    def _find_existing_yaml(self, resource_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Find existing YAML for a resource in pending/, processing/, or completed/ folders.
+        Returns the content if found, None otherwise.
+        """
+        for folder in ["pending", "processing", "completed"]:
+            file_path = f"{self.volume_path}/{folder}/{resource_name}.yaml"
+            content = self._read_file(file_path)
+            if content:
+                try:
+                    data = yaml.safe_load(content)
+                    data["_source_folder"] = folder
+                    data["_source_path"] = file_path
+                    return data
+                except Exception:
+                    continue
+        return None
+    
+    def _move_file(self, source: str, dest: str):
+        """Move a file by copying then deleting."""
+        content = self._read_file(source)
+        if content:
+            self._write_file(dest, content)
+            self._delete_file(source)
+    
     @retry_on_retryable(max_attempts=3)
     async def plan(self, request_id: str, target_file: str, content: Dict[str, Any], commit_message: str) -> Dict[str, Any]:
         """
@@ -142,7 +171,24 @@ class VolumeGitOpsProvider(BaseProvider):
             commit_message: Message for the git commit
         """
         try:
+            resource_name = self._get_resource_name(content)
+            
+            # Check for existing YAML (for updates)
+            existing = self._find_existing_yaml(resource_name)
+            if existing:
+                # Merge with existing content
+                logger.info(f"Found existing YAML for {resource_name}, merging changes")
+                existing_content = existing.get("content", {})
+                # Merge properties (new values override old)
+                merged_content = self._merge_content(existing_content, content)
+                content = merged_content
+                
+                # If in completed/, we need to move back to pending
+                if existing.get("_source_folder") == "completed":
+                    self._delete_file(existing["_source_path"])
+            
             # Create request file with metadata
+            # Use resource name for file, not request ID
             request_data = {
                 "request_id": request_id,
                 "target_file": target_file,
@@ -157,23 +203,37 @@ class VolumeGitOpsProvider(BaseProvider):
                 "action": "plan"  # plan = create PR, apply = merge PR
             }
             
-            # Write to pending directory using SDK
-            pending_file = f"{self.volume_path}/pending/{request_id}.yaml"
+            # Write to pending directory using resource name (not request ID)
+            pending_file = f"{self.volume_path}/pending/{resource_name}.yaml"
             yaml_content = yaml.dump(request_data, default_flow_style=False)
             self._write_file(pending_file, yaml_content)
             
-            logger.info(f"Request {request_id} written to {pending_file}")
+            logger.info(f"Request {request_id} for resource {resource_name} written to {pending_file}")
             
             return {
                 "success": True,
                 "status": "pending",
                 "message": "Request submitted. Waiting for GitHub Actions to create PR.",
-                "pending_file": pending_file
+                "pending_file": pending_file,
+                "resource_name": resource_name
             }
             
         except Exception as e:
             logger.error(f"Failed to write request {request_id}: {e}")
             raise RetryableError(f"Failed to write request: {e}")
+    
+    def _merge_content(self, existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge new content into existing, handling nested properties."""
+        result = existing.copy()
+        
+        for key, value in new.items():
+            if key == "properties" and "properties" in result:
+                # Merge properties dict
+                result["properties"] = {**result.get("properties", {}), **value}
+            else:
+                result[key] = value
+        
+        return result
     
     @retry_on_retryable(max_attempts=3)
     async def apply(self, request_id: str) -> Dict[str, Any]:
@@ -288,3 +348,196 @@ class VolumeGitOpsProvider(BaseProvider):
                 request_ids.append(request_id)
         
         return request_ids
+    
+    @retry_on_retryable(max_attempts=3)
+    async def grant_access(
+        self, 
+        request_id: str, 
+        resource_type: str,
+        resource_name: str, 
+        catalog: str,
+        principal: str, 
+        privileges: list,
+        commit_message: str
+    ) -> Dict[str, Any]:
+        """
+        Add grants to an existing resource.
+        
+        Finds the existing YAML, adds the grant, and moves to pending for apply.
+        
+        Args:
+            request_id: Unique request identifier
+            resource_type: Type of resource (schema, catalog, table)
+            resource_name: Name of the resource
+            catalog: Catalog containing the resource
+            principal: User, group, or service principal to grant access to
+            privileges: List of privileges to grant (e.g., ["USE_SCHEMA", "SELECT"])
+            commit_message: Message for the git commit
+        """
+        try:
+            # Find existing YAML
+            existing = self._find_existing_yaml(resource_name)
+            
+            if not existing:
+                # Resource doesn't exist yet - create new YAML with just grants
+                logger.info(f"No existing YAML for {resource_name}, creating new with grants")
+                content = {
+                    "resource_type": resource_type,
+                    "name": resource_name,
+                    "properties": {
+                        "catalog": catalog,
+                        "grants": [{"principal": principal, "privileges": privileges}]
+                    }
+                }
+            else:
+                # Merge grants into existing content
+                logger.info(f"Found existing YAML for {resource_name}, adding grants")
+                content = existing.get("content", {})
+                
+                # Initialize grants list if not present
+                if "properties" not in content:
+                    content["properties"] = {}
+                if "grants" not in content["properties"]:
+                    content["properties"]["grants"] = []
+                
+                # Check if principal already has grants
+                grants = content["properties"]["grants"]
+                existing_grant = next((g for g in grants if g.get("principal") == principal), None)
+                
+                if existing_grant:
+                    # Merge privileges (add new ones, keep existing)
+                    existing_privs = set(existing_grant.get("privileges", []))
+                    new_privs = set(privileges)
+                    existing_grant["privileges"] = list(existing_privs | new_privs)
+                else:
+                    # Add new grant entry
+                    grants.append({"principal": principal, "privileges": privileges})
+                
+                # Remove from completed folder if needed
+                if existing.get("_source_folder") == "completed":
+                    self._delete_file(existing["_source_path"])
+            
+            # Create request data
+            target_file = f"envs/{self.environment}/resources/pending/{resource_name}.yaml"
+            request_data = {
+                "request_id": request_id,
+                "target_file": target_file,
+                "content": content,
+                "commit_message": commit_message,
+                "environment": self.environment,
+                "author": {"name": self.username, "email": self.email},
+                "submitted_at": datetime.utcnow().isoformat(),
+                "action": "plan"
+            }
+            
+            # Write to pending
+            pending_file = f"{self.volume_path}/pending/{resource_name}.yaml"
+            self._write_file(pending_file, yaml.dump(request_data, default_flow_style=False))
+            
+            logger.info(f"Grant access for {resource_name} written to {pending_file}")
+            
+            return {
+                "success": True,
+                "status": "pending",
+                "message": f"Grant access request submitted for {resource_name}",
+                "resource_name": resource_name
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to grant access for {resource_name}: {e}")
+            raise RetryableError(f"Failed to grant access: {e}")
+    
+    @retry_on_retryable(max_attempts=3)
+    async def revoke_access(
+        self, 
+        request_id: str, 
+        resource_type: str,
+        resource_name: str, 
+        catalog: str,
+        principal: str, 
+        privileges: list = None,
+        commit_message: str = None
+    ) -> Dict[str, Any]:
+        """
+        Revoke grants from an existing resource.
+        
+        Finds the existing YAML, removes the grant, and moves to pending for apply.
+        
+        Args:
+            request_id: Unique request identifier
+            resource_type: Type of resource (schema, catalog, table)
+            resource_name: Name of the resource
+            catalog: Catalog containing the resource
+            principal: User, group, or service principal to revoke access from
+            privileges: Specific privileges to revoke (None = revoke all)
+            commit_message: Message for the git commit
+        """
+        try:
+            # Find existing YAML
+            existing = self._find_existing_yaml(resource_name)
+            
+            if not existing:
+                raise PermanentError(f"No existing resource found for {resource_name}")
+            
+            content = existing.get("content", {})
+            
+            if "properties" not in content or "grants" not in content.get("properties", {}):
+                raise PermanentError(f"No grants found for {resource_name}")
+            
+            grants = content["properties"]["grants"]
+            
+            # Find the grant for this principal
+            grant_idx = next((i for i, g in enumerate(grants) if g.get("principal") == principal), None)
+            
+            if grant_idx is None:
+                raise PermanentError(f"No grants found for principal {principal} on {resource_name}")
+            
+            if privileges:
+                # Remove specific privileges
+                existing_privs = set(grants[grant_idx].get("privileges", []))
+                remaining_privs = existing_privs - set(privileges)
+                
+                if remaining_privs:
+                    grants[grant_idx]["privileges"] = list(remaining_privs)
+                else:
+                    # No privileges left, remove the entire grant
+                    del grants[grant_idx]
+            else:
+                # Remove all privileges for this principal
+                del grants[grant_idx]
+            
+            # Remove from completed folder if needed
+            if existing.get("_source_folder") == "completed":
+                self._delete_file(existing["_source_path"])
+            
+            # Create request data
+            target_file = f"envs/{self.environment}/resources/pending/{resource_name}.yaml"
+            request_data = {
+                "request_id": request_id,
+                "target_file": target_file,
+                "content": content,
+                "commit_message": commit_message or f"Revoke access from {principal} on {resource_name}",
+                "environment": self.environment,
+                "author": {"name": self.username, "email": self.email},
+                "submitted_at": datetime.utcnow().isoformat(),
+                "action": "plan"
+            }
+            
+            # Write to pending
+            pending_file = f"{self.volume_path}/pending/{resource_name}.yaml"
+            self._write_file(pending_file, yaml.dump(request_data, default_flow_style=False))
+            
+            logger.info(f"Revoke access for {resource_name} written to {pending_file}")
+            
+            return {
+                "success": True,
+                "status": "pending", 
+                "message": f"Revoke access request submitted for {resource_name}",
+                "resource_name": resource_name
+            }
+            
+        except PermanentError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to revoke access for {resource_name}: {e}")
+            raise RetryableError(f"Failed to revoke access: {e}")
