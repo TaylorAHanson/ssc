@@ -144,7 +144,8 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
              return
 
         params = self.request.state_context or {}
-        asset_type = params.get("type", "").lower()
+        action = params.get("action", "create").lower()  # create, grant, revoke
+        asset_type = params.get("type", "schema").lower()
         name = params.get("name") or params.get("schema_name")
         # Support multiple possible key names for catalog
         catalog = (
@@ -160,22 +161,60 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
              raise PermanentError("Asset name is required")
 
         try:
-            logger.info(f"Starting Terraform Plan for {self.request.id}")
+            logger.info(f"Starting Terraform Plan for {self.request.id} (action: {action})")
             provider = self._get_provider()
             
-            # Construct YAML content matching the Terraform repo format
-            content = self._generate_yaml_spec(asset_type, name, catalog, params)
+            if action == "grant":
+                # Grant access to an existing resource
+                principal = params.get("principal")
+                privileges = params.get("privileges", ["USE_SCHEMA", "SELECT"])
+                
+                if not principal:
+                    raise PermanentError("Principal is required for grant action")
+                
+                await provider.grant_access(
+                    request_id=self.request.id,
+                    resource_type=asset_type,
+                    resource_name=name,
+                    catalog=catalog,
+                    principal=principal,
+                    privileges=privileges,
+                    commit_message=f"Grant {privileges} to {principal} on {name}"
+                )
             
-            # Path structure: envs/{env}/resources/{name}.yaml
-            target_file = f"envs/{environment}/resources/{name}.yaml"
+            elif action == "revoke":
+                # Revoke access from an existing resource
+                principal = params.get("principal")
+                privileges = params.get("privileges")  # None = revoke all
+                
+                if not principal:
+                    raise PermanentError("Principal is required for revoke action")
+                
+                await provider.revoke_access(
+                    request_id=self.request.id,
+                    resource_type=asset_type,
+                    resource_name=name,
+                    catalog=catalog,
+                    principal=principal,
+                    privileges=privileges,
+                    commit_message=f"Revoke access from {principal} on {name}"
+                )
             
-            # This creates the branch and pushes it
-            await provider.plan(
-                request_id=self.request.id,
-                target_file=target_file,
-                content=content,
-                commit_message=f"Plan: {asset_type} {name} in {catalog}"
-            )
+            else:
+                # Default: create new resource
+                # Construct YAML content matching the Terraform repo format
+                content = self._generate_yaml_spec(asset_type, name, catalog, params)
+                
+                # Path structure: envs/{env}/resources/{name}.yaml
+                target_file = f"envs/{environment}/resources/{name}.yaml"
+                
+                # This creates the branch and pushes it
+                await provider.plan(
+                    request_id=self.request.id,
+                    target_file=target_file,
+                    content=content,
+                    commit_message=f"Plan: {asset_type} {name} in {catalog}"
+                )
             
             # Record fact that we started
             add_fact(self.db, self.request.id, "terraform_plan_started", {}, actor="system")
