@@ -311,7 +311,7 @@ export function RequestStateList({ request }: { request: Request }) {
                               ) : fact.type === 'workspace_created' ? (
                                 <>: <span className="font-mono bg-gray-100 px-1 rounded">{fact.data.workspace_url}</span></>
                               ) : fact.type === 'approval_received' ? (
-                                <>: <span>Approved by <span className="font-medium">{fact.data.actor}</span></span></>
+                                <>: <span>Approved by <span className="font-medium">{fact.data.approved_by || fact.data.actor}</span></span></>
                               ) : fact.type === 'provisioning_failed' ? (
                                 <>: <span className="text-red-600 font-medium">Failed: {fact.data.error}</span></>
                               ) : fact.type === 'request_rejected' ? (
