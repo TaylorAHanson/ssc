@@ -172,7 +172,7 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
                 if not principal:
                     raise PermanentError("Principal is required for grant action")
                 
-                await provider.grant_access(
+                result = await provider.grant_access(
                     request_id=self.request.id,
                     resource_type=asset_type,
                     resource_name=name,
@@ -181,6 +181,25 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
                     privileges=privileges,
                     commit_message=f"Grant {privileges} to {principal} on {name}"
                 )
+                
+                # Check if access already exists
+                if result.get("status") == "no_change":
+                    logger.info(f"No change needed for grant request: {result.get('message')}")
+                    # Mark as complete immediately - no Terraform action needed
+                    add_fact(self.db, self.request.id, "terraform_plan_received", {
+                        "status": "no_change",
+                        "message": result.get("message"),
+                        "existing_privileges": result.get("existing_privileges", [])
+                    }, actor="system")
+                    add_fact(self.db, self.request.id, "approval_received", {
+                        "approval_type": "platform_admin",
+                        "note": "Auto-approved: no changes required"
+                    }, actor="system")
+                    add_fact(self.db, self.request.id, "terraform_apply_received", {
+                        "status": "success",
+                        "message": result.get("message")
+                    }, actor="system")
+                    return
             
             elif action == "revoke":
                 # Revoke access from an existing resource
@@ -190,7 +209,7 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
                 if not principal:
                     raise PermanentError("Principal is required for revoke action")
                 
-                await provider.revoke_access(
+                result = await provider.revoke_access(
                     request_id=self.request.id,
                     resource_type=asset_type,
                     resource_name=name,
@@ -199,6 +218,25 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
                     privileges=privileges,
                     commit_message=f"Revoke access from {principal} on {name}"
                 )
+                
+                # Check if nothing to revoke
+                if result.get("status") == "no_change":
+                    logger.info(f"No change needed for revoke request: {result.get('message')}")
+                    # Mark as complete immediately - no Terraform action needed
+                    add_fact(self.db, self.request.id, "terraform_plan_received", {
+                        "status": "no_change",
+                        "message": result.get("message"),
+                        "existing_privileges": result.get("existing_privileges", [])
+                    }, actor="system")
+                    add_fact(self.db, self.request.id, "approval_received", {
+                        "approval_type": "platform_admin",
+                        "note": "Auto-approved: no changes required"
+                    }, actor="system")
+                    add_fact(self.db, self.request.id, "terraform_apply_received", {
+                        "status": "success",
+                        "message": result.get("message")
+                    }, actor="system")
+                    return
             
             else:
                 # Default: create new resource

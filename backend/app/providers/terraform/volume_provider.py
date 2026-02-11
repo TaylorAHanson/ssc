@@ -450,11 +450,25 @@ class VolumeGitOpsProvider(BaseProvider):
                 existing_grant = next((g for g in grants if g.get("principal") == principal), None)
                 
                 if existing_grant:
-                    # Merge privileges (add new ones, keep existing)
+                    # Check if all requested privileges already exist
                     existing_privs = set(existing_grant.get("privileges", []))
                     new_privs = set(privileges)
+                    
+                    if new_privs.issubset(existing_privs):
+                        # All requested privileges already exist - no change needed
+                        logger.info(f"All privileges {privileges} already exist for {principal} on {resource_name}")
+                        return {
+                            "success": True,
+                            "status": "no_change",
+                            "message": f"Access already exists: {principal} already has {list(new_privs)} on {resource_name}",
+                            "resource_name": resource_name,
+                            "existing_privileges": list(existing_privs)
+                        }
+                    
+                    # Merge privileges (add new ones, keep existing)
                     existing_grant["privileges"] = list(existing_privs | new_privs)
-                    logger.info(f"Merged privileges for {principal}: {existing_grant['privileges']}")
+                    added_privs = new_privs - existing_privs
+                    logger.info(f"Adding new privileges {list(added_privs)} for {principal} (already had: {list(existing_privs)})")
                 else:
                     # Add new grant entry
                     grants.append({"principal": principal, "privileges": privileges})
@@ -547,16 +561,33 @@ class VolumeGitOpsProvider(BaseProvider):
             if privileges:
                 # Remove specific privileges
                 existing_privs = set(grants[grant_idx].get("privileges", []))
-                remaining_privs = existing_privs - set(privileges)
+                privs_to_revoke = set(privileges)
+                
+                # Check if any of the requested privileges actually exist
+                actual_revokes = existing_privs & privs_to_revoke
+                if not actual_revokes:
+                    logger.info(f"None of the privileges {privileges} exist for {principal} on {resource_name}")
+                    return {
+                        "success": True,
+                        "status": "no_change",
+                        "message": f"Privileges {list(privs_to_revoke)} don't exist for {principal} on {resource_name}",
+                        "resource_name": resource_name,
+                        "existing_privileges": list(existing_privs)
+                    }
+                
+                remaining_privs = existing_privs - privs_to_revoke
                 
                 if remaining_privs:
                     grants[grant_idx]["privileges"] = list(remaining_privs)
+                    logger.info(f"Revoking {list(actual_revokes)} from {principal}, remaining: {list(remaining_privs)}")
                 else:
                     # No privileges left, remove the entire grant
                     del grants[grant_idx]
+                    logger.info(f"Revoking all privileges from {principal} on {resource_name}")
             else:
                 # Remove all privileges for this principal
                 del grants[grant_idx]
+                logger.info(f"Removing all grants for {principal} on {resource_name}")
             
             # Remove from completed folder if needed
             if existing.get("_source_folder") == "completed":
