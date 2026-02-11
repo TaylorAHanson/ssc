@@ -86,10 +86,22 @@ function ProvisioningProgress({ progress }: { progress: NonNullable<Request['sta
 
 export function RequestStateList({ request }: { request: Request }) {
   const fetchApprovals = useRequestStore((state) => state.fetchApprovals);
+  const fetchRequests = useRequestStore((state) => state.fetchRequests);
 
   useEffect(() => {
     fetchApprovals();
-  }, [fetchApprovals]);
+    
+    // Poll for request updates every 5 seconds when viewing details
+    // This ensures we catch state transitions in real-time
+    const isActive = !['completed', 'failed', 'rejected'].includes(request.status);
+    if (isActive) {
+      const pollInterval = setInterval(() => {
+        fetchRequests();
+      }, 5000);
+      
+      return () => clearInterval(pollInterval);
+    }
+  }, [fetchApprovals, fetchRequests, request.status]);
 
   // Collect all states to display
   let steps: { id: string; name: string; status: string; type?: string; order: number; completedAt?: string; facts?: any[] }[] = [];
@@ -362,6 +374,13 @@ export function Requests() {
 
   useEffect(() => {
     fetchRequests();
+    
+    // Poll for updates every 10 seconds to catch state transitions
+    const pollInterval = setInterval(() => {
+      fetchRequests();
+    }, 10000);
+    
+    return () => clearInterval(pollInterval);
   }, [fetchRequests]);
 
 
