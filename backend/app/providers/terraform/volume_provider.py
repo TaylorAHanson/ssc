@@ -128,6 +128,47 @@ class VolumeGitOpsProvider(BaseProvider):
         """Extract resource name from content for YAML file naming."""
         return content.get("name", "unknown")
     
+    def check_access(self, resource_name: str, principal: str = None) -> Dict[str, Any]:
+        """
+        Check existing grants for a resource.
+        
+        Args:
+            resource_name: Name of the resource to check
+            principal: Optional - if provided, check grants for this specific principal
+            
+        Returns:
+            Dict with:
+                - exists: bool - whether the resource exists
+                - grants: list - list of grants on the resource
+                - principal_grants: list - privileges for the specified principal (if provided)
+        """
+        existing = self._find_existing_yaml(resource_name)
+        
+        if not existing:
+            return {
+                "exists": False,
+                "grants": [],
+                "principal_grants": [],
+                "message": f"Resource '{resource_name}' not found"
+            }
+        
+        content = existing.get("content", {})
+        grants = content.get("properties", {}).get("grants", [])
+        
+        result = {
+            "exists": True,
+            "grants": grants,
+            "resource_name": resource_name,
+            "catalog": content.get("properties", {}).get("catalog", "unknown")
+        }
+        
+        if principal:
+            principal_grant = next((g for g in grants if g.get("principal") == principal), None)
+            result["principal_grants"] = principal_grant.get("privileges", []) if principal_grant else []
+            result["has_grants"] = bool(principal_grant)
+        
+        return result
+    
     def _find_existing_yaml(self, resource_name: str) -> Optional[Dict[str, Any]]:
         """
         Find existing YAML for a resource in pending/, processing/, or completed/ folders.

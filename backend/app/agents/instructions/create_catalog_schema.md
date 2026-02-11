@@ -44,6 +44,14 @@
     *   Schema: `USE_SCHEMA`, `CREATE_TABLE`, `SELECT`, `MODIFY`
     *   Catalog: `USE_CATALOG`, `CREATE_SCHEMA`
 
+### Pre-Check (REQUIRED)
+**Before granting access, you MUST call `check_resource_access` to verify current grants.**
+
+If the principal already has the requested privileges, inform the user:
+> "I checked and {principal} already has {privileges} access to {resource_name}. No action is needed."
+
+Do NOT create a request if access already exists.
+
 ### Execution
 ```json
 {
@@ -68,6 +76,14 @@
 2.  **Catalog**: Which catalog contains it (for schemas)?
 3.  **Principal**: Who should lose access?
 4.  **Privileges**: Which specific permissions to revoke? (or omit to revoke all)
+
+### Pre-Check (REQUIRED)
+**Before revoking access, you MUST call `check_resource_access` to verify current grants.**
+
+If the principal doesn't have the specified privileges, inform the user:
+> "I checked and {principal} doesn't have {privileges} access to {resource_name}. No action is needed."
+
+Do NOT create a request if there's nothing to revoke.
 
 ### Execution
 ```json
