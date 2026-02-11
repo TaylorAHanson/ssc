@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional
 from app.providers.base import BaseProvider
 from app.core.exceptions import RetryableError, PermanentError
 from app.core.retry import retry_on_retryable
+import copy
 import json
 import logging
 import yaml
@@ -130,8 +131,14 @@ class VolumeGitOpsProvider(BaseProvider):
     def _find_existing_yaml(self, resource_name: str) -> Optional[Dict[str, Any]]:
         """
         Find existing YAML for a resource in pending/, processing/, or completed/ folders.
-        Returns the content if found, None otherwise.
+        
+        Searches in two ways:
+        1. By filename: {resource_name}.yaml (new naming convention)
+        2. By content: looks for YAMLs where content.name == resource_name (old req-id naming)
+        
+        Returns the full YAML data if found, None otherwise.
         """
+        # First, try direct filename match (new naming convention)
         for folder in ["pending", "processing", "completed"]:
             file_path = f"{self.volume_path}/{folder}/{resource_name}.yaml"
             content = self._read_file(file_path)
@@ -140,9 +147,37 @@ class VolumeGitOpsProvider(BaseProvider):
                     data = yaml.safe_load(content)
                     data["_source_folder"] = folder
                     data["_source_path"] = file_path
+                    logger.debug(f"Found existing YAML by filename: {file_path}")
                     return data
                 except Exception:
                     continue
+        
+        # Second, search by content name (for old req-id.yaml naming convention)
+        logger.debug(f"Searching for {resource_name} by content in all YAML files")
+        for folder in ["pending", "processing", "completed"]:
+            dir_path = f"{self.volume_path}/{folder}"
+            try:
+                files = self._list_files(dir_path)
+                for file_path in files:
+                    if not file_path.endswith('.yaml'):
+                        continue
+                    content = self._read_file(file_path)
+                    if content:
+                        try:
+                            data = yaml.safe_load(content)
+                            # Check if the content.name matches the resource we're looking for
+                            yaml_content = data.get("content", {})
+                            if yaml_content.get("name") == resource_name:
+                                data["_source_folder"] = folder
+                                data["_source_path"] = file_path
+                                logger.info(f"Found existing YAML by content name: {file_path}")
+                                return data
+                        except Exception:
+                            continue
+            except Exception as e:
+                logger.debug(f"Error listing {dir_path}: {e}")
+                continue
+        
         return None
     
     def _move_file(self, source: str, dest: str):
@@ -390,13 +425,23 @@ class VolumeGitOpsProvider(BaseProvider):
                     }
                 }
             else:
-                # Merge grants into existing content
+                # Merge grants into existing content - preserve ALL existing properties
                 logger.info(f"Found existing YAML for {resource_name}, adding grants")
-                content = existing.get("content", {})
+                
+                # Deep copy to avoid modifying the original
+                content = copy.deepcopy(existing.get("content", {}))
+                
+                logger.debug(f"Existing content for {resource_name}: {content}")
+                
+                # Initialize properties if not present
+                if "properties" not in content:
+                    content["properties"] = {"catalog": catalog}
+                
+                # Ensure catalog is set (preserve existing or use provided)
+                if "catalog" not in content["properties"]:
+                    content["properties"]["catalog"] = catalog
                 
                 # Initialize grants list if not present
-                if "properties" not in content:
-                    content["properties"] = {}
                 if "grants" not in content["properties"]:
                     content["properties"]["grants"] = []
                 
@@ -409,9 +454,13 @@ class VolumeGitOpsProvider(BaseProvider):
                     existing_privs = set(existing_grant.get("privileges", []))
                     new_privs = set(privileges)
                     existing_grant["privileges"] = list(existing_privs | new_privs)
+                    logger.info(f"Merged privileges for {principal}: {existing_grant['privileges']}")
                 else:
                     # Add new grant entry
                     grants.append({"principal": principal, "privileges": privileges})
+                    logger.info(f"Added new grant for {principal}: {privileges}")
+                
+                logger.debug(f"Final content for {resource_name}: {content}")
                 
                 # Remove from completed folder if needed
                 if existing.get("_source_folder") == "completed":
@@ -479,7 +528,10 @@ class VolumeGitOpsProvider(BaseProvider):
             if not existing:
                 raise PermanentError(f"No existing resource found for {resource_name}")
             
-            content = existing.get("content", {})
+            # Deep copy to preserve all existing properties
+            content = copy.deepcopy(existing.get("content", {}))
+            
+            logger.debug(f"Existing content for revoke on {resource_name}: {content}")
             
             if "properties" not in content or "grants" not in content.get("properties", {}):
                 raise PermanentError(f"No grants found for {resource_name}")

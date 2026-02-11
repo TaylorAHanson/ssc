@@ -1,0 +1,1330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ATLAS Pitch Deck</title>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --db-red: #FF3621;
+            --db-red-dark: #E62E1B;
+            --db-black: #1B1B1B;
+            --db-gray: #454545;
+            --db-light-gray: #F5F5F5;
+            --db-white: #FFFFFF;
+            --db-orange: #FF6B35;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--db-light-gray);
+            padding: 30px;
+        }
+        
+        .instructions {
+            max-width: 1000px;
+            margin: 0 auto 30px;
+            background: var(--db-black);
+            color: white;
+            padding: 20px 30px;
+            border-radius: 12px;
+            font-size: 14px;
+        }
+        .instructions strong { color: var(--db-red); }
+        
+        .slide {
+            max-width: 1000px;
+            margin: 0 auto 40px;
+            background: var(--db-white);
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            overflow: hidden;
+            aspect-ratio: 16/9;
+            position: relative;
+        }
+        
+        .slide-number {
+            position: absolute;
+            bottom: 20px;
+            right: 30px;
+            color: #999;
+            font-size: 14px;
+        }
+
+        /* ============ SLIDE 1: Title ============ */
+        .slide-1 {
+            background: linear-gradient(135deg, var(--db-black) 0%, #2a2a2a 100%);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 60px 80px;
+        }
+        .slide-1 .top-badges {
+            position: absolute;
+            top: 35px;
+            right: 50px;
+            display: flex;
+            gap: 10px;
+        }
+        .slide-1 .badge {
+            background: var(--db-red);
+            color: white;
+            padding: 10px 18px;
+            border-radius: 25px;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        .slide-1 .accent-line {
+            width: 80px;
+            height: 5px;
+            background: var(--db-red);
+            margin-bottom: 25px;
+            border-radius: 3px;
+        }
+        .slide-1 h1 {
+            color: var(--db-white);
+            font-size: 44px;
+            font-weight: 700;
+            line-height: 1.15;
+            margin-bottom: 15px;
+        }
+        .slide-1 h1 span { color: var(--db-red); }
+        .slide-1 .subtitle {
+            color: rgba(255,255,255,0.75);
+            font-size: 20px;
+            font-weight: 400;
+            max-width: 650px;
+            line-height: 1.4;
+        }
+        .slide-1 .team-info {
+            position: absolute;
+            bottom: 40px;
+            left: 80px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .slide-1 .team-label {
+            color: rgba(255,255,255,0.5);
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .slide-1 .team-members {
+            display: flex;
+            gap: 8px;
+        }
+        .slide-1 .team-member {
+            background: rgba(255,255,255,0.1);
+            color: rgba(255,255,255,0.9);
+            padding: 8px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .slide-1 .bottom-visual {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 350px;
+            height: 180px;
+            background: linear-gradient(135deg, transparent 0%, rgba(255,54,33,0.12) 100%);
+            border-top-left-radius: 180px;
+        }
+
+        /* ============ SLIDE 2: The Challenge ============ */
+        .slide-2 {
+            padding: 35px 50px;
+            display: flex;
+            flex-direction: column;
+        }
+        .slide-2 .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .slide-2 .header-icon {
+            width: 40px;
+            height: 40px;
+            background: #FEE2E2;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+        .slide-2 h2 {
+            color: var(--db-black);
+            font-size: 26px;
+            font-weight: 700;
+        }
+        .slide-2 h2 span { color: var(--db-red); }
+        
+        .challenge-container {
+            display: flex;
+            gap: 25px;
+            flex: 1;
+        }
+        .challenge-left {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .challenge-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            background: var(--db-light-gray);
+            padding: 12px 16px;
+            border-radius: 10px;
+            border-left: 4px solid var(--db-red);
+        }
+        .challenge-item .icon { font-size: 18px; }
+        .challenge-item .text {
+            flex: 1;
+        }
+        .challenge-item h4 {
+            color: var(--db-black);
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 3px;
+        }
+        .challenge-item p {
+            color: var(--db-gray);
+            font-size: 10px;
+            line-height: 1.35;
+        }
+        
+        .challenge-right {
+            width: 280px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .persona-card {
+            background: var(--db-light-gray);
+            border-radius: 12px;
+            padding: 12px 14px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .persona-icon {
+            width: 38px;
+            height: 38px;
+            background: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            flex-shrink: 0;
+        }
+        .persona-text h4 {
+            color: var(--db-black);
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .persona-text p {
+            color: var(--db-gray);
+            font-size: 9px;
+            line-height: 1.3;
+        }
+
+        /* ============ SLIDE 3: The Solution ============ */
+        .slide-3 {
+            padding: 35px 50px;
+            display: flex;
+            flex-direction: column;
+        }
+        .slide-3 .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+        .slide-3 .header-icon {
+            width: 40px;
+            height: 40px;
+            background: #DCFCE7;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+        .slide-3 h2 {
+            color: var(--db-black);
+            font-size: 26px;
+            font-weight: 700;
+        }
+        .slide-3 h2 span { color: var(--db-red); }
+        .slide-3 .tagline {
+            color: var(--db-gray);
+            font-size: 13px;
+            margin-left: auto;
+            font-style: italic;
+        }
+        
+        .solution-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+        .solution-card {
+            background: var(--db-light-gray);
+            border-radius: 12px;
+            padding: 14px 12px;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        .solution-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.08);
+        }
+        .solution-card .card-icon {
+            width: 40px;
+            height: 40px;
+            margin: 0 auto 8px;
+            background: white;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .solution-card h4 {
+            color: var(--db-black);
+            font-size: 11px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .solution-card p {
+            color: var(--db-gray);
+            font-size: 9px;
+            line-height: 1.3;
+        }
+        
+        .spectrum-bar {
+            background: linear-gradient(90deg, #E8F5E9 0%, #FFF8E1 50%, #FFEBEE 100%);
+            border-radius: 10px;
+            padding: 12px 25px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: relative;
+        }
+        .spectrum-bar::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 70px;
+            right: 70px;
+            height: 3px;
+            background: linear-gradient(90deg, #4CAF50, #FF9800, #F44336);
+            border-radius: 2px;
+            transform: translateY(-50%);
+            z-index: 0;
+        }
+        .spectrum-item {
+            text-align: center;
+            z-index: 1;
+            background: white;
+            padding: 6px 12px;
+            border-radius: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .spectrum-item .emoji { font-size: 14px; margin-bottom: 2px; }
+        .spectrum-item span { font-size: 10px; font-weight: 500; color: var(--db-black); }
+
+        /* ============ SLIDE 4: How It Works ============ */
+        .slide-4 {
+            padding: 40px 50px;
+            display: flex;
+            flex-direction: column;
+        }
+        .slide-4 .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .slide-4 .header-icon {
+            width: 40px;
+            height: 40px;
+            background: #E0E7FF;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+        .slide-4 h2 {
+            color: var(--db-black);
+            font-size: 26px;
+            font-weight: 700;
+        }
+        .slide-4 h2 span { color: var(--db-red); }
+        
+        .how-flow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            flex: 1;
+        }
+        .flow-step {
+            background: var(--db-light-gray);
+            border-radius: 14px;
+            padding: 20px 16px;
+            text-align: center;
+            width: 140px;
+        }
+        .flow-step.active {
+            background: var(--db-red);
+            color: white;
+        }
+        .flow-step .step-icon {
+            width: 45px;
+            height: 45px;
+            margin: 0 auto 10px;
+            background: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+        }
+        .flow-step.active .step-icon {
+            background: rgba(255,255,255,0.2);
+        }
+        .flow-step h4 {
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .flow-step.active h4 { color: white; }
+        .flow-step p {
+            font-size: 10px;
+            color: var(--db-gray);
+            line-height: 1.3;
+        }
+        .flow-step.active p { color: rgba(255,255,255,0.8); }
+        .flow-arrow {
+            font-size: 20px;
+            color: #ccc;
+        }
+
+        /* ============ SLIDE 5: Impact ============ */
+        .slide-5 {
+            padding: 40px 50px;
+            display: flex;
+            flex-direction: column;
+        }
+        .slide-5 .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 25px;
+        }
+        .slide-5 .header-icon {
+            width: 40px;
+            height: 40px;
+            background: #FEF3C7;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+        .slide-5 h2 {
+            color: var(--db-black);
+            font-size: 26px;
+            font-weight: 700;
+        }
+        .slide-5 h2 span { color: var(--db-red); }
+        
+        .impact-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            flex: 1;
+            align-content: center;
+        }
+        .impact-card {
+            background: var(--db-white);
+            border: 2px solid var(--db-light-gray);
+            border-radius: 14px;
+            padding: 20px 16px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            transition: all 0.3s;
+        }
+        .impact-card:hover {
+            border-color: var(--db-red);
+            transform: translateY(-4px);
+            box-shadow: 0 10px 30px rgba(255,54,33,0.1);
+        }
+        .impact-card .metric-icon {
+            width: 45px;
+            height: 45px;
+            background: linear-gradient(135deg, var(--db-red), var(--db-orange));
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            margin-bottom: 12px;
+        }
+        .impact-card .metric-value {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--db-black);
+            line-height: 1;
+        }
+        .impact-card .metric-unit {
+            font-size: 14px;
+            color: var(--db-red);
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .impact-card .metric-label {
+            font-size: 10px;
+            color: var(--db-gray);
+            line-height: 1.35;
+        }
+
+        /* ============ SLIDE 6: Call to Action ============ */
+        .slide-6 {
+            background: var(--db-black);
+            display: flex;
+            padding: 40px 55px;
+        }
+        .slide-6-left {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .slide-6 .accent-line {
+            width: 50px;
+            height: 4px;
+            background: var(--db-red);
+            margin-bottom: 16px;
+            border-radius: 2px;
+        }
+        .slide-6 h2 {
+            color: var(--db-white);
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            line-height: 1.2;
+        }
+        .slide-6 h2 span { color: var(--db-red); }
+        .slide-6 .cta-text {
+            color: rgba(255,255,255,0.7);
+            font-size: 14px;
+            line-height: 1.5;
+            max-width: 400px;
+            margin-bottom: 20px;
+        }
+        .takeaway-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            max-width: 420px;
+        }
+        .takeaway-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: rgba(255,255,255,0.85);
+            font-size: 11px;
+            background: rgba(255,255,255,0.05);
+            padding: 8px 12px;
+            border-radius: 6px;
+        }
+        .takeaway-item .check {
+            width: 18px;
+            height: 18px;
+            background: var(--db-red);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 9px;
+            flex-shrink: 0;
+        }
+        
+        .slide-6-right {
+            width: 260px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        .cta-box {
+            background: linear-gradient(135deg, var(--db-red), var(--db-orange));
+            border-radius: 16px;
+            padding: 28px 24px;
+            text-align: center;
+            color: white;
+        }
+        .cta-box .icon { font-size: 36px; margin-bottom: 12px; }
+        .cta-box h3 { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+        .cta-box p { font-size: 11px; opacity: 0.9; line-height: 1.4; }
+
+        /* ============ SLIDE: ATLAS Interface ============ */
+        .slide-interface {
+            background: var(--db-light-gray);
+            padding: 35px 50px;
+            display: flex;
+            flex-direction: column;
+        }
+        .slide-interface h2 {
+            text-align: center;
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--db-black);
+            margin-bottom: 8px;
+        }
+        .slide-interface h2 span { color: var(--db-red); }
+        .slide-interface .subtitle {
+            text-align: center;
+            color: var(--db-red);
+            font-size: 16px;
+            margin-bottom: 20px;
+        }
+        
+        .interface-mockup {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .interface-header {
+            background: var(--db-black);
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .interface-logo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: white;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .interface-logo .db-icon {
+            width: 24px;
+            height: 24px;
+            background: var(--db-red);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+        .interface-nav {
+            display: flex;
+            gap: 15px;
+            color: rgba(255,255,255,0.7);
+            font-size: 12px;
+        }
+        .interface-user {
+            width: 28px;
+            height: 28px;
+            background: var(--db-red);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .interface-body {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 30px;
+        }
+        .greeting-text {
+            font-size: 26px;
+            font-weight: 600;
+            color: var(--db-black);
+            margin-bottom: 25px;
+        }
+        .search-box {
+            width: 100%;
+            max-width: 550px;
+            background: var(--db-light-gray);
+            border-radius: 10px;
+            padding: 14px 20px;
+            margin-bottom: 20px;
+        }
+        .search-placeholder {
+            color: #999;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+        .search-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .search-action {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            background: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            color: var(--db-gray);
+        }
+        
+        .quick-actions {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .quick-action {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 20px;
+            padding: 8px 16px;
+            font-size: 12px;
+            color: var(--db-gray);
+        }
+        .quick-action.active {
+            background: var(--db-light-gray);
+            border-color: var(--db-gray);
+        }
+        
+        .example-cards {
+            display: flex;
+            gap: 15px;
+            width: 100%;
+            max-width: 700px;
+        }
+        .example-card {
+            flex: 1;
+            background: var(--db-light-gray);
+            border-radius: 10px;
+            padding: 14px;
+        }
+        .example-card-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 10px;
+            color: var(--db-gray);
+            margin-bottom: 6px;
+        }
+        .example-card-header .dot {
+            width: 6px;
+            height: 6px;
+            background: var(--db-red);
+            border-radius: 50%;
+        }
+        .example-card h4 {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--db-black);
+        }
+
+        /* ============ SLIDE: Architecture ============ */
+        .slide-arch {
+            background: var(--db-light-gray);
+            padding: 35px 50px;
+            display: flex;
+            flex-direction: column;
+        }
+        .slide-arch h2 {
+            text-align: center;
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--db-black);
+            margin-bottom: 25px;
+        }
+        .slide-arch h2 span { color: var(--db-red); }
+        
+        .arch-comparison {
+            display: flex;
+            gap: 30px;
+            flex: 1;
+            position: relative;
+        }
+        .arch-comparison::before {
+            content: '';
+            position: absolute;
+            top: 10%;
+            bottom: 10%;
+            left: 50%;
+            width: 2px;
+            background: #ddd;
+            border-style: dashed;
+        }
+        
+        .arch-side {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .arch-side-title {
+            font-size: 18px;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 15px;
+            color: var(--db-black);
+        }
+        
+        .arch-platform {
+            background: white;
+            border-radius: 14px;
+            padding: 18px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+            flex: 1;
+        }
+        .arch-platform-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+            color: var(--db-red);
+            font-weight: 600;
+            font-size: 13px;
+        }
+        .arch-platform-header .icon {
+            width: 20px;
+            height: 20px;
+            background: var(--db-red);
+            border-radius: 4px;
+        }
+        
+        .arch-layer {
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-bottom: 8px;
+            font-size: 11px;
+            font-weight: 500;
+            text-align: center;
+        }
+        .arch-layer.atlas {
+            background: var(--db-red);
+            color: white;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .arch-layer.dark {
+            background: var(--db-black);
+            color: white;
+        }
+        .arch-layer.light {
+            background: var(--db-light-gray);
+            color: var(--db-black);
+        }
+        .arch-layer.coral {
+            background: #FFCCC7;
+            color: var(--db-black);
+        }
+        
+        .arch-layer-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .arch-layer-row .arch-layer {
+            flex: 1;
+            margin-bottom: 0;
+        }
+        
+        .arch-benefits {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 12px;
+        }
+        .arch-benefit {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+        .arch-benefit .icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+        .arch-benefit .icon.good { background: #D1FAE5; }
+        .arch-benefit .icon.bad { background: #FEE2E2; }
+        .arch-benefit span {
+            font-size: 10px;
+            color: var(--db-gray);
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="instructions">
+        <strong>📸 How to capture:</strong> Use Cmd+Shift+4 (Mac) or Win+Shift+S (Windows) to screenshot each slide. Each slide is 16:9 ratio - perfect for PowerPoint.
+    </div>
+
+    <!-- SLIDE 1: Title -->
+    <div class="slide slide-1">
+        <div class="top-badges">
+            <div class="badge">Databricks Apps</div>
+            <div class="badge">GenAI</div>
+            <div class="badge">Lakebase</div>
+        </div>
+        <div class="accent-line"></div>
+        <h1>Unified Lakehouse Experience<br><span>Agentic Self-Service</span></h1>
+        <p class="subtitle">Your intelligent companion for everything Lakehouse—from access requests to architecture guidance, training to troubleshooting.</p>
+        <div class="team-info">
+            <span class="team-label">Team ATLAS</span>
+            <div class="team-members">
+                <span class="team-member">Molly</span>
+                <span class="team-member">Lok</span>
+                <span class="team-member">Taylor</span>
+                <span class="team-member">Srikanth</span>
+                <span class="team-member">Rohan</span>
+            </div>
+        </div>
+        <div class="bottom-visual"></div>
+        <div class="slide-number">1</div>
+    </div>
+
+    <!-- SLIDE 2: The Challenge -->
+    <div class="slide slide-2">
+        <div class="header">
+            <div class="header-icon">⚠️</div>
+            <h2>The <span>Challenge</span></h2>
+        </div>
+        <div class="challenge-container">
+            <div class="challenge-left">
+                <div class="challenge-item">
+                    <span class="icon">📋</span>
+                    <div class="text">
+                        <h4>Ticket-Driven Operations</h4>
+                        <p>Every request—access, workspace, permissions—goes through a queue. Platform teams are overwhelmed.</p>
+                    </div>
+                </div>
+                <div class="challenge-item">
+                    <span class="icon">🎓</span>
+                    <div class="text">
+                        <h4>Scattered Knowledge</h4>
+                        <p>Training materials, code snippets, best practices live in silos. Users don't know where to look.</p>
+                    </div>
+                </div>
+                <div class="challenge-item">
+                    <span class="icon">❓</span>
+                    <div class="text">
+                        <h4>No Single Source of Truth</h4>
+                        <p>Questions about governance, architecture, or "am I doing this right?" have no clear answer path.</p>
+                    </div>
+                </div>
+                <div class="challenge-item">
+                    <span class="icon">📊</span>
+                    <div class="text">
+                        <h4>Blind Spots in Observability</h4>
+                        <p>Usage patterns, policy enforcement, and platform health lack unified visibility.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="challenge-right">
+                <div class="persona-card">
+                    <div class="persona-icon">👨‍💻</div>
+                    <div class="persona-text">
+                        <h4>Data Engineers</h4>
+                        <p>"I just need a schema, why is this taking a week?"</p>
+                    </div>
+                </div>
+                <div class="persona-card">
+                    <div class="persona-icon">🏗️</div>
+                    <div class="persona-text">
+                        <h4>Architects</h4>
+                        <p>"Is this the right pattern for our use case?"</p>
+                    </div>
+                </div>
+                <div class="persona-card">
+                    <div class="persona-icon">📈</div>
+                    <div class="persona-text">
+                        <h4>Executives</h4>
+                        <p>"What's our platform adoption rate?"</p>
+                    </div>
+                </div>
+                <div class="persona-card">
+                    <div class="persona-icon">💼</div>
+                    <div class="persona-text">
+                        <h4>Business Users</h4>
+                        <p>"How do I even get started?"</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="slide-number">2</div>
+    </div>
+
+    <!-- SLIDE 3: The Solution -->
+    <div class="slide slide-3">
+        <div class="header">
+            <div class="header-icon">💡</div>
+            <h2>Introducing <span>ATLAS</span></h2>
+            <span class="tagline">Your One-Stop Lakehouse Companion</span>
+        </div>
+        <div class="solution-grid">
+            <div class="solution-card">
+                <div class="card-icon">🚀</div>
+                <h4>Self-Service Provisioning</h4>
+                <p>Workspaces, schemas, access grants—request via chat, deployed in minutes.</p>
+            </div>
+            <div class="solution-card">
+                <div class="card-icon">🎓</div>
+                <h4>Training & Enablement</h4>
+                <p>Personalized learning paths, tutorials, and onboarding guidance.</p>
+            </div>
+            <div class="solution-card">
+                <div class="card-icon">💻</div>
+                <h4>Code Snippets & Patterns</h4>
+                <p>Best practice templates, reference architectures, ready to use.</p>
+            </div>
+            <div class="solution-card">
+                <div class="card-icon">❓</div>
+                <h4>Platform Q&A</h4>
+                <p>"Is this the right approach?" Get instant, contextual answers.</p>
+            </div>
+            <div class="solution-card">
+                <div class="card-icon">📊</div>
+                <h4>Observability</h4>
+                <p>Usage dashboards, cost insights, adoption metrics at a glance.</p>
+            </div>
+            <div class="solution-card">
+                <div class="card-icon">🔒</div>
+                <h4>Policy Enforcement</h4>
+                <p>Governance baked in. Every action is audited and compliant.</p>
+            </div>
+            <div class="solution-card">
+                <div class="card-icon">🏗️</div>
+                <h4>Architecture Guidance</h4>
+                <p>Design reviews, pattern validation, "is this right?" answers.</p>
+            </div>
+            <div class="solution-card">
+                <div class="card-icon">🤖</div>
+                <h4>Agentic Automation</h4>
+                <p>AI-driven workflows that act on your behalf with oversight.</p>
+            </div>
+        </div>
+        <div class="spectrum-bar">
+            <div class="spectrum-item">
+                <div class="emoji">🔑</div>
+                <span>Give me access</span>
+            </div>
+            <div class="spectrum-item">
+                <div class="emoji">📚</div>
+                <span>Help me learn</span>
+            </div>
+            <div class="spectrum-item">
+                <div class="emoji">✅</div>
+                <span>Am I doing this right?</span>
+            </div>
+            <div class="spectrum-item">
+                <div class="emoji">🏢</div>
+                <span>Provision my workspace</span>
+            </div>
+        </div>
+        <div class="slide-number">3</div>
+    </div>
+
+    <!-- SLIDE 4: ATLAS Interface -->
+    <div class="slide slide-interface">
+        <h2>Accessed via <span>ATLAS</span></h2>
+        <p class="subtitle">The unified self-service experience for the Lakehouse</p>
+        
+        <div class="interface-mockup">
+            <div class="interface-header">
+                <div class="interface-logo">
+                    <div class="db-icon">◆</div>
+                    databricks
+                </div>
+                <div class="interface-nav">
+                    <span>ATLAS</span>
+                </div>
+                <div class="interface-user">R</div>
+            </div>
+            <div class="interface-body">
+                <div class="greeting-text">What would you like to do today?</div>
+                <div class="search-box">
+                    <div class="search-placeholder">Ask ATLAS anything about the Lakehouse...</div>
+                    <div class="search-actions">
+                        <div class="search-action">🔍 Search</div>
+                        <div class="search-action">💬 Ask</div>
+                        <div class="search-action">⚡ Request</div>
+                    </div>
+                </div>
+                <div class="quick-actions">
+                    <div class="quick-action active">For you</div>
+                    <div class="quick-action">🚀 Provisioning</div>
+                    <div class="quick-action">🎓 Training</div>
+                    <div class="quick-action">💻 Code</div>
+                    <div class="quick-action">❓ Q&A</div>
+                </div>
+                <div class="example-cards">
+                    <div class="example-card">
+                        <div class="example-card-header"><div class="dot"></div>Provisioning</div>
+                        <h4>Create a new schema in my catalog</h4>
+                    </div>
+                    <div class="example-card">
+                        <div class="example-card-header"><div class="dot"></div>Training</div>
+                        <h4>Show me Delta Lake best practices</h4>
+                    </div>
+                    <div class="example-card">
+                        <div class="example-card-header"><div class="dot"></div>Q&A</div>
+                        <h4>How do I set up Unity Catalog?</h4>
+                    </div>
+                    <div class="example-card">
+                        <div class="example-card-header"><div class="dot"></div>Access</div>
+                        <h4>Request access to sales_data</h4>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="slide-number">4</div>
+    </div>
+
+    <!-- SLIDE 5: Architecture -->
+    <div class="slide slide-arch">
+        <h2>Your self-service, governance, and enablement <span>in one place</span></h2>
+        
+        <div class="arch-comparison">
+            <div class="arch-side">
+                <div class="arch-side-title">With ATLAS</div>
+                <div class="arch-platform">
+                    <div class="arch-platform-header">
+                        <div class="icon"></div>
+                        Databricks Platform
+                    </div>
+                    <div class="arch-layer atlas">🤖 ATLAS - Agentic Self-Service</div>
+                    <div class="arch-layer dark">AI/BI Dashboards & Genie</div>
+                    <div class="arch-layer-row">
+                        <div class="arch-layer light">Data Engineering</div>
+                        <div class="arch-layer light">Data Warehouse</div>
+                        <div class="arch-layer light">AI and ML</div>
+                    </div>
+                    <div class="arch-layer-row">
+                        <div class="arch-layer coral">Provisioning</div>
+                        <div class="arch-layer coral">Unity Catalog</div>
+                        <div class="arch-layer coral">Governance</div>
+                    </div>
+                    <div class="arch-layer coral">All your data + All your users</div>
+                </div>
+                <div class="arch-benefits">
+                    <div class="arch-benefit">
+                        <div class="icon good">✓</div>
+                        <span>One place for<br>self-service</span>
+                    </div>
+                    <div class="arch-benefit">
+                        <div class="icon good">✓</div>
+                        <span>One place for<br>enablement</span>
+                    </div>
+                    <div class="arch-benefit">
+                        <div class="icon good">✓</div>
+                        <span>One place for<br>governance</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="arch-side">
+                <div class="arch-side-title">Without ATLAS</div>
+                <div style="display: flex; gap: 15px; flex: 1;">
+                    <div class="arch-platform" style="flex: 1;">
+                        <div class="arch-platform-header">
+                            <div class="icon"></div>
+                            Databricks Platform
+                        </div>
+                        <div class="arch-layer dark">AI/BI Dashboards</div>
+                        <div class="arch-layer-row">
+                            <div class="arch-layer light">Data Eng</div>
+                            <div class="arch-layer light">DW</div>
+                        </div>
+                        <div class="arch-layer-row">
+                            <div class="arch-layer coral">Unity Catalog</div>
+                        </div>
+                        <div class="arch-layer coral">Your data</div>
+                    </div>
+                    <div style="display: flex; align-items: center; font-size: 24px; color: #ccc;">→</div>
+                    <div class="arch-platform" style="flex: 1;">
+                        <div class="arch-platform-header" style="color: var(--db-gray);">
+                            Other Tools
+                        </div>
+                        <div class="arch-layer light">Ticketing Systems</div>
+                        <div class="arch-layer light">Wiki / Docs</div>
+                        <div class="arch-layer light">Manual Provisioning</div>
+                        <div class="arch-layer light">Scattered Training</div>
+                    </div>
+                </div>
+                <div class="arch-benefits">
+                    <div class="arch-benefit">
+                        <div class="icon bad">✗</div>
+                        <span>Multiple tools<br>for requests</span>
+                    </div>
+                    <div class="arch-benefit">
+                        <div class="icon bad">✗</div>
+                        <span>Scattered<br>knowledge</span>
+                    </div>
+                    <div class="arch-benefit">
+                        <div class="icon bad">✗</div>
+                        <span>Manual<br>governance</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="slide-number">5</div>
+    </div>
+
+    <!-- SLIDE 6: How It Works -->
+    <div class="slide slide-4">
+        <div class="header">
+            <div class="header-icon">⚙️</div>
+            <h2>How It <span>Works</span></h2>
+        </div>
+        <div class="how-flow">
+            <div class="flow-step">
+                <div class="step-icon">💬</div>
+                <h4>Ask</h4>
+                <p>Describe what you need in natural language</p>
+            </div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step active">
+                <div class="step-icon">🤖</div>
+                <h4>ATLAS</h4>
+                <p>AI understands intent, routes intelligently</p>
+            </div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step">
+                <div class="step-icon">✅</div>
+                <h4>Approve</h4>
+                <p>Human-in-loop for sensitive actions</p>
+            </div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step">
+                <div class="step-icon">⚡</div>
+                <h4>Execute</h4>
+                <p>Automated, audited, governed</p>
+            </div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step">
+                <div class="step-icon">🎉</div>
+                <h4>Deliver</h4>
+                <p>Answer, access, or resource ready</p>
+            </div>
+        </div>
+        <div class="slide-number">6</div>
+    </div>
+
+    <!-- SLIDE 7: Impact -->
+    <div class="slide slide-5">
+        <div class="header">
+            <div class="header-icon">📈</div>
+            <h2>Real-World <span>Impact</span></h2>
+        </div>
+        <div class="impact-grid">
+            <div class="impact-card">
+                <div class="metric-icon">⏱️</div>
+                <div class="metric-value">95%</div>
+                <div class="metric-unit">Faster</div>
+                <div class="metric-label">Request to provisioning: weeks → minutes</div>
+            </div>
+            <div class="impact-card">
+                <div class="metric-icon">🤖</div>
+                <div class="metric-value">80%</div>
+                <div class="metric-unit">Less Overhead</div>
+                <div class="metric-label">Routine requests automated, admins freed</div>
+            </div>
+            <div class="impact-card">
+                <div class="metric-icon">🚀</div>
+                <div class="metric-value">10x</div>
+                <div class="metric-unit">Faster Onboarding</div>
+                <div class="metric-label">Time to first query dramatically reduced</div>
+            </div>
+            <div class="impact-card">
+                <div class="metric-icon">🔒</div>
+                <div class="metric-value">100%</div>
+                <div class="metric-unit">Audited</div>
+                <div class="metric-label">Every action tracked, governed, compliant</div>
+            </div>
+        </div>
+        <div class="slide-number">7</div>
+    </div>
+
+    <!-- SLIDE 8: Call to Action -->
+    <div class="slide slide-6">
+        <div class="slide-6-left">
+            <div class="accent-line"></div>
+            <h2>From Ticket Queues to<br><span>Intelligent Self-Service</span></h2>
+            <p class="cta-text">
+                Empower every user—data engineers, architects, executives, and business users—to move at the speed of thought. Governed. Audited. Automated.
+            </p>
+            <div class="takeaway-grid">
+                <div class="takeaway-item">
+                    <div class="check">✓</div>
+                    <span>Agentic UX via Databricks Apps</span>
+                </div>
+                <div class="takeaway-item">
+                    <div class="check">✓</div>
+                    <span>Stateful governance with Lakebase</span>
+                </div>
+                <div class="takeaway-item">
+                    <div class="check">✓</div>
+                    <span>Training & enablement built-in</span>
+                </div>
+                <div class="takeaway-item">
+                    <div class="check">✓</div>
+                    <span>Seamless Terraform integration</span>
+                </div>
+                <div class="takeaway-item">
+                    <div class="check">✓</div>
+                    <span>Observability & insights</span>
+                </div>
+                <div class="takeaway-item">
+                    <div class="check">✓</div>
+                    <span>End-to-end: access → architecture</span>
+                </div>
+            </div>
+        </div>
+        <div class="slide-6-right">
+            <div class="cta-box">
+                <div class="icon">🚀</div>
+                <h3>Ready to Transform?</h3>
+                <p>Let's discuss how ATLAS can accelerate your Lakehouse ROI.</p>
+            </div>
+        </div>
+        <div class="slide-number">8</div>
+    </div>
+
+</body>
+</html>
