@@ -11,7 +11,12 @@ The Self-Service Center is a **Databricks App** that runs on the Databricks plat
 - **State Machines** handle the orchestration of compound and atomic workflows, calling **Providers** to execute actions.
 - **Providers** abstract external systems and infrastructure (Terraform, IDP, GitHub, Databricks, etc.) and are used by both Agent Tools and State Machines.
 - **Workers** perform long-running tasks, such as polling for external events or executing external commands.
-- **Database** stores the immutable history of **Facts** from which the system state is derived.
+- **Database** stores persistent data, like the immutable history of **Facts** from which the system state is derived.
+
+### Frameworks
+- **FastAPI** - Web framework for building APIs.
+- **FastMCP** - Web framework for building LLM Agents.
+- **React** - Web framework for building user interfaces.
 
 ## Architecture Hierarchy
 
@@ -63,6 +68,10 @@ All requests, including those from administrators, must pass through the Agent (
 Infrastructure operations (Terraform, Databricks) can take 5-20 minutes. **State machine transitions cannot happen in blocking HTTP requests.** 
 
 **Solution**: Polling worker that checks the database every 5 seconds and processes pending requests in parallel with proper locking. 
+
+Blocking HTTP requests will saturate the web host and cause performance issues. 
+
+**Solution**: Use asyncio to perform async operations whenever possible. [(Burger restaurant example)](https://fastapi.tiangolo.com/async/#concurrency-and-burgers)
 
 ### 2. Heavy Lifting
 Databricks Apps are not designed to handle heavy lifting. **All heavy lifting must be handled by external services.**
@@ -163,8 +172,7 @@ Providers encapsulate all interaction with external systems:
 
 ### Adding a New Tool
 
-All tools should be implemented using the **FastMCP** pattern (introduced in Feb 2026), which uses decorators instead of class inheritance. This is significantly simpler and more robust.
-
+All tools should be implemented using the **FastMCP** pattern, which uses decorators instead of class inheritance. 
 ### Adding a New Tool
 
 1.  **Define Input Schema**: Create a Pydantic model for tool arguments.

@@ -19,6 +19,14 @@ class RequestService:
         """
         Create a new request and initialize state machine.
         """
+        # Double check enum validation (Pydantic does this, but being explicit)
+        if not isinstance(request_data.type, RequestType):
+            try:
+                # Try to cast/validate if it's a string
+                request_data.type = RequestType(request_data.type)
+            except ValueError:
+                raise ValueError(f"Invalid request type: {request_data.type}")
+
         request_id = f"req-{uuid.uuid4()}"
         
         # Create minimal database model first (needed for SM init)

@@ -141,8 +141,18 @@ async def handle_conversation(
 
         # Extract mode from context first to filter tools
         agent_mode = "self_service"
-        if request.context and "mode" in request.context:
-            agent_mode = request.context.get("mode", "self_service")
+        if request.context:
+            raw_mode = request.context.get("mode") or request.context.get("agent_mode", "self_service")
+            # Normalize mode strings from frontend (e.g., 'Self Service Agent' -> 'self_service')
+            mode_map = {
+                "self service agent": "self_service",
+                "self_service": "self_service",
+                "governance": "governance",
+                "finops": "finops"
+            }
+            agent_mode = mode_map.get(str(raw_mode).lower(), "self_service")
+        
+        logger.info(f"Resolved agent mode: {agent_mode} (from raw: {request.context.get('mode') or request.context.get('agent_mode') if request.context else 'None'})")
 
         # Filter tools by user permissions AND mode
         visible_tools = []
@@ -191,6 +201,10 @@ async def handle_conversation(
         obo_token = None
         if hasattr(req, "state") and hasattr(req.state, "token"):
             obo_token = req.state.token
+            if obo_token:
+                logger.info(f"Agent Endpoint: Found OBO token in request state (len={len(obo_token)})")
+            else:
+                logger.info("Agent Endpoint: No OBO token in request state")
             
         # Run agent
         result = await runner.run(

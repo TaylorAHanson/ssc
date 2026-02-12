@@ -32,6 +32,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Check both X-Forwarded-Access-Token and Authorization header
         obo_token = request.headers.get("X-Forwarded-Access-Token")
         
+        # DEBUG: Precise check for standard OBO header
+        if obo_token:
+            logger.debug(f"AuthMiddleware: OBO Token found in standard header. Length: {len(obo_token)}")
+        else:
+            logger.debug("AuthMiddleware: OBO Token HEADER MISSING in standard location (X-Forwarded-Access-Token). If this is local dev, this is expected.")
+        
         # Fallback to mock token for local dev if configured and no header present
         if not obo_token and settings.MOCK_USER_TOKEN:
              obo_token = settings.MOCK_USER_TOKEN

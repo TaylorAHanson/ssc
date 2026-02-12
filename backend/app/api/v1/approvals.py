@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional, List
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.db.request import ApprovalModel, RequestModel
+from app.db import ApprovalModel, RequestModel
 from app.models.request import Approval, RequestType, ApprovalType
 from app.api.deps import get_current_user
 from app.db.user import UserModel

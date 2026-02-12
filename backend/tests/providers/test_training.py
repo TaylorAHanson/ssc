@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 from app.providers.training.client import TrainingProvider
-from app.models.training import TrainingCompletionModel
+from app.db.training import TrainingCompletionModel
 from datetime import datetime
 
 def test_ingest_training_csv_success():

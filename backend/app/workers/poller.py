@@ -15,7 +15,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from app.db.session import get_lakebase_session, get_engine, reset_database_connection
 from app.db.base import Base
-from app.db.request import RequestModel, FailureModel
+from app.db import RequestModel, FailureModel
 from app.state_machines.persistence import load_state_machine, save_state_machine
 from app.state_machines.lock import acquire_lock, release_lock, heartbeat_lock
 from app.models.request import RequestStatus, RequestType
@@ -364,7 +364,7 @@ async def _process_request_state_machine(db, request: RequestModel):
     logger.debug(f"[{request.id}] Loaded state machine - Current state: {initial_state}")
     
     # Log relevant facts for debugging
-    from app.db.request import EventModel
+    from app.db import EventModel
     facts = db.query(EventModel).filter(
         EventModel.request_id == request.id,
         EventModel.event_type.in_(["request_submitted", "approval_received", "training_completed", "workspace_created", "provisioning_started", "request_rejected"])

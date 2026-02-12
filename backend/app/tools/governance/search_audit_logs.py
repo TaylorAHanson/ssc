@@ -19,7 +19,7 @@ class SearchAuditLogsInput(BaseModel):
 
 @tool(
     name="search_audit_logs",
-    description="""Searches system.access.audit for specific actions, actors, or targets.
+    description="""Searches system.access.audit for specific actions, actors, or targets. This can be used to get counts of events happening, like users logging in or a count of usage of a specific feature.
 Supports aggregations like COUNT and GROUP BY to answer analytical questions.
 
 Table Schema for system.access.audit:

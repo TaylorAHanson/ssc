@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.db.session import get_lakebase_session
-from app.db.request import ApprovalModel, RequestModel
+from app.db import ApprovalModel, RequestModel
 from sqlalchemy import or_
 
 class SearchApprovalsInput(BaseModel):

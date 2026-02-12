@@ -103,7 +103,7 @@ def reset_db():
     try:
         # Import all models to ensure they are registered with Base
         from app.db.base import Base
-        from app.db.request import RequestModel, ApprovalModel, EventModel, FailureModel, DelegationModel
+        from app.db import RequestModel, ApprovalModel, EventModel, FailureModel, DelegationModel
         from app.db.session import get_engine
         
         engine = get_engine()
@@ -121,7 +121,7 @@ def seed_db():
     """Seed the database with initial data."""
     try:
         from app.db.session import get_session_local
-        from app.db.request import RequestModel
+        from app.db import RequestModel
         from app.models.request import RequestType, RequestStatus
         from datetime import datetime, timedelta
         import uuid

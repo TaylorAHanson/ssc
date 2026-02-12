@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from statemachine import StateMachine, State
 from app.models.request import RequestStatus, RequestType, StateMachineState
-from app.db.request import ApprovalModel, RequestModel
+from app.db import ApprovalModel, RequestModel
 from app.state_machines.facts import has_fact, get_latest_fact, add_fact
 from sqlalchemy.orm import Session
 import logging
@@ -300,7 +300,7 @@ class BaseRequestStateMachine(StateMachine):
         return fact.created_at if fact else None
 
     def _get_state_facts(self, state_id: str) -> List[Dict[str, Any]]:
-        from app.db.request import EventModel
+        from app.db import EventModel
         
         # Only show facts for completed or active states
         if not self._is_state_completed(state_id) and self.current_state.id != state_id:

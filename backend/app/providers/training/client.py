@@ -4,7 +4,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
-from app.models.training import TrainingCompletionModel
+from app.db.training import TrainingCompletionModel
 from app.agents.content_registry import get_content
 
 logger = logging.getLogger(__name__)

@@ -6,10 +6,10 @@ import fastapi
 from fastapi.responses import JSONResponse
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from app.models.request import Request, RequestCreate, RequestUpdate, StateMachineState, RequestStatus
+from app.models.request import Request, RequestCreate, RequestUpdate, StateMachineState, RequestStatus, RequestType
 from app.services.request_service import RequestService
 from app.db.session import get_db
-from app.db.request import ApprovalModel, RequestModel
+from app.db import ApprovalModel, RequestModel
 from app.state_machines.persistence import load_state_machine
 from app.state_machines.facts import add_fact
 from datetime import datetime
@@ -45,6 +45,13 @@ async def get_requests(
     for req in requests:
         # Dynamically calculate state machine view
         try:
+            # Handle invalid types by skipping - prevents whole page crash
+            try:
+                r_type = RequestType(req.type)
+            except ValueError:
+                logger.error(f"Skipping request {req.id} with invalid type: {req.type}")
+                continue
+
             sm = load_state_machine(req, db)
             sm_state = sm.to_state_machine_state()
         except Exception as e:
@@ -66,7 +73,7 @@ async def get_requests(
         
         response_list.append(Request(
             id=req.id,
-            type=req.type,
+            type=r_type,
             title=req.title,
             status=request_status,
             createdAt=req.created_at,
@@ -331,3 +338,4 @@ async def complete_training(
         "message": "Training completion recorded. State will be updated by poller.",
         "request_id": request.id
     }
+

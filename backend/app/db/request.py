@@ -63,40 +63,7 @@ class RequestModel(Base):
     failures = relationship("FailureModel", back_populates="request", cascade="all, delete-orphan")
 
 
-class ApprovalModel(Base):
-    """Approval database model."""
-    __tablename__ = "approvals"
-    
-    id = Column(String, primary_key=True)
-    request_id = Column(String, ForeignKey("requests.id"), nullable=False)
-    approval_type = Column(String)  # 'manager', 'data_owner', 'platform_admin', etc.
-    requested_by = Column(String)
-    requested_by_email = Column(String)
-    status = Column(String)  # 'pending', 'approved', 'rejected', 'delegated'
-    approved_by = Column(String, nullable=True)
-    approved_at = Column(DateTime, nullable=True)
-    rejected_by = Column(String, nullable=True)
-    rejected_at = Column(DateTime, nullable=True)
-    rejection_note = Column(String, nullable=True)
-    delegated_to = Column(String, nullable=True)
-    delegated_to_email = Column(String, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-    
-    request = relationship("RequestModel", back_populates="approvals")
 
-
-class EventModel(Base):
-    """Event tracking database model."""
-    __tablename__ = "events"
-    
-    id = Column(String, primary_key=True)
-    request_id = Column(String, ForeignKey("requests.id"), nullable=False)
-    event_type = Column(String)  # 'state_transition', 'approval', 'notification', etc.
-    event_data = Column(JSON)  # Event-specific data
-    created_at = Column(DateTime, server_default=func.now())
-    
-    request = relationship("RequestModel", back_populates="events")
 
 
 class FailureModel(Base):

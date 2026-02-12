@@ -6,12 +6,13 @@ from typing import Generator, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from app.db.session import get_db
-from app.db.user import UserModel
+from app.core.config import settings
+import uuid
 import logging
+from app.db.user import UserModel, RoleModel
 from app.providers.github.client import GitHubProvider
 
 logger = logging.getLogger(__name__)
-from app.core.config import settings
 
 # Mock user for development - in production this would verify JWT/OAuth
 from fastapi import Request
@@ -54,9 +55,6 @@ def get_current_user(
     # If a valid Databricks user comes in but isn't in our DB, we should create them.
     if not user and user_email != MOCK_USER_EMAIL:
          logger.info(f"User {user_email} not found in DB. Auto-provisioning...")
-         from app.db.user import RoleModel
-         import uuid
-         
          # Default role for new users is 'business_user'
          default_role = db.query(RoleModel).filter(RoleModel.name == "business_user").first()
          roles = [default_role] if default_role else []
@@ -74,49 +72,8 @@ def get_current_user(
          db.refresh(new_user)
          return new_user
 
-    # Existing Logic for Mock Admin bootstrapping (only applies if we are indeed using mock email)
-    if not user and user_email == MOCK_USER_EMAIL:
-        # Bootstrap default admin user if missing (fix for "chicken and egg" problem)
-        logger.info(f"User {MOCK_USER_EMAIL} not found. Bootstrapping default admin user...")
-        
-        try:
-            # 1. Ensure Roles exist - NOW HANDLED BY startup_event -> init_db
-            # We assume roles are already seeded.
-
-
-            # 2. Create Admin User
-            user = UserModel(
-                id=str(uuid.uuid4()),
-                email=MOCK_USER_EMAIL,
-                full_name="System Admin",
-                is_active=True
-            )
-            
-            # Assign all roles
-            user.roles = db.query(RoleModel).all()
-            
-            db.add(user)
-            db.commit()
-            db.refresh(user)
-            logger.info(f"Successfully bootstrapped user: {user.email}")
-            
-        except IntegrityError:
-            db.rollback()
-            logger.warning(f"Race condition detected during bootstrap for {MOCK_USER_EMAIL}. Fetching existing user.")
-            user = db.query(UserModel).filter(UserModel.email == MOCK_USER_EMAIL).first()
-            if not user:
-                raise HTTPException(status_code=500, detail="User creation failed due to race condition, but user could not be retrieved.")
-
-        except Exception as e:
-            logger.error(f"Failed to bootstrap admin user: {e}")
-            # If bootstrap fails, fall back to raising 401
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Could not validate credentials and bootstrap failed: {str(e)}"
-            )
-            
     if not user:
-         raise HTTPException(status_code=401, detail="User not found")
+         raise HTTPException(status_code=401, detail=f"User {user_email} not found in database. Root cause: possible sync or bootstrap error.")
             
     # DEV FEATURE: Role Override
     # STRICTLY for local development. This allows the UI to simulate other roles.
@@ -137,7 +94,7 @@ def get_current_user(
         if not target_role:
              # If user doesn't have it, maybe fetch from DB (simulating "Login As")
              # Or just construct a fake role object if we want to simulate roles the user DOESN'T have
-             from app.db.user import RoleModel
+
              target_role = db.query(RoleModel).filter(RoleModel.name == x_dev_role_override).first()
         
         if target_role:

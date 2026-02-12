@@ -1,5 +1,9 @@
 """
-Request data models.
+Request API models (Pydantic).
+
+These models are used for API request/response validation and serialization.
+They define the shape of data exposed to the frontend and external consumers.
+For database persistence models (SQLAlchemy), see `app.db.request`.
 """
 from typing import Optional, List, Dict, Any
 from datetime import datetime
