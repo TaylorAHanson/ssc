@@ -47,16 +47,26 @@ def get_current_user(
     user = db.query(UserModel).filter(UserModel.email == user_email).first()
     
     if user:
-         logger.info(f"DEBUG: Found user in DB. ID: {user.id}, Roles: {[r.name for r in user.roles]}")
+         logger.info(f"DEBUG: Found user in DB. ID: {user.id}, Roles: {[r.name for r in user.roles if r]}")
     else:
          logger.info(f"DEBUG: User not found in DB for email: '{user_email}'")
     
     # Handling for New Users (Just-in-Time Provisioning)
     # If a valid Databricks user comes in but isn't in our DB, we should create them.
+    # EXCEPTION: We do NOT auto-provision the mock admin user here to avoid race conditions.
+    # The mock admin user must be seeded by init_db.py at startup.
     if not user:
+         if user_email == MOCK_USER_EMAIL:
+             # If mock user is missing, it's a system setup error, not a JIT case.
+             logger.error(f"Mock user {user_email} not found in database. Seeding failed or DB corrupted.")
+             raise HTTPException(
+                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+                 detail="System not initialized. Mock user missing."
+             )
+
          logger.info(f"User {user_email} not found in DB. Auto-provisioning...")
-         # Default role for new users is 'business_user', but mock user gets 'platform_admin'
-         target_role_name = "platform_admin" if user_email == MOCK_USER_EMAIL else "business_user"
+         # Default role for new users is 'business_user'
+         target_role_name = "business_user"
          default_role = db.query(RoleModel).filter(RoleModel.name == target_role_name).first()
          roles = [default_role] if default_role else []
          
@@ -68,10 +78,20 @@ def get_current_user(
              is_active=True,
              roles=roles
          )
-         db.add(new_user)
-         db.commit()
-         db.refresh(new_user)
-         return new_user
+         try:
+             db.add(new_user)
+             db.commit()
+             db.refresh(new_user)
+             return new_user
+         except (IntegrityError, Exception) as e:
+             logger.warning(f"Race condition detected during user provisioning for {user_email}: {e}")
+             db.rollback()
+             # Fetch the user that was just created by another process
+             existing_user = db.query(UserModel).filter(UserModel.email == user_email).first()
+             if existing_user:
+                 return existing_user
+             # If still not found, re-raise
+             raise e
 
     if not user:
          raise HTTPException(status_code=401, detail=f"User {user_email} not found in database. Root cause: possible sync or bootstrap error.")

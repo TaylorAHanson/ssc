@@ -44,17 +44,26 @@ def init_db(db: Session) -> None:
     
     if not admin_user:
         logger.info(f"Seeding admin user: {admin_email}")
-        admin_user = UserModel(
-            id=str(uuid.uuid4()),
-            email=admin_email,
-            full_name="System Admin",
-            is_active=True
-        )
-        # Assign all roles
-        admin_user.roles = db.query(RoleModel).all()
-        db.add(admin_user)
-        db.commit()
-        db.refresh(admin_user)
-        logger.info(f"Admin user {admin_email} seeded successfully.")
+        try:
+             admin_user = UserModel(
+                 id=str(uuid.uuid4()),
+                 email=admin_email,
+                 full_name="System Admin",
+                 is_active=True
+             )
+             db.add(admin_user)
+             db.flush() # Flush to get ID if needed, but here we set it manually.
+                        # Flush helps check for integrity errors early.
+             
+             # Assign all roles
+             all_roles = db.query(RoleModel).all()
+             admin_user.roles = all_roles
+             
+             db.commit()
+             db.refresh(admin_user)
+             logger.info(f"Admin user {admin_email} seeded successfully.")
+        except Exception as e:
+             logger.warning(f"Failed to seed admin user (might already exist): {e}")
+             db.rollback()
     else:
         logger.debug(f"Admin user {admin_email} already exists.")

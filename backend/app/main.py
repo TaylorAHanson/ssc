@@ -77,7 +77,13 @@ async def startup_event():
     # Initialize DB (Seed Roles)
     try:
         from app.db.init_db import init_db
-        from app.db.session import get_session_local
+        from app.db.session import get_session_local, get_engine
+        from app.db.base import Base
+        
+        # Create Tables (ensure models are loaded via init_db import or explicit import)
+        # init_db imports UserModel/RoleModel, so metadata should be populated
+        engine = get_engine()
+        Base.metadata.create_all(bind=engine)
         
         db = get_session_local()()
         try:
