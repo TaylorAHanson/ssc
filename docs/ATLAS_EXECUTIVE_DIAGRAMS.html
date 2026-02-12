@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ATLAS - Executive Diagrams</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: white;
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: rgba(255,255,255,0.8);
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        .diagram-section {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            margin-bottom: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+        }
+        .diagram-title {
+            font-size: 1.5em;
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+            font-weight: 600;
+        }
+        .instructions {
+            background: #f0f7ff;
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            border-left: 4px solid #3b82f6;
+            font-size: 0.9em;
+            color: #1e40af;
+        }
+
+        /* Before/After Flow Diagram */
+        .flow-comparison {
+            display: flex;
+            gap: 30px;
+            align-items: stretch;
+        }
+        .flow-section {
+            flex: 1;
+            padding: 30px;
+            border-radius: 16px;
+        }
+        .flow-before {
+            background: linear-gradient(180deg, #fef2f2 0%, #fee2e2 100%);
+            border: 2px solid #fca5a5;
+        }
+        .flow-after {
+            background: linear-gradient(180deg, #f0fdf4 0%, #dcfce7 100%);
+            border: 2px solid #86efac;
+        }
+        .flow-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.3em;
+            font-weight: 600;
+            margin-bottom: 25px;
+        }
+        .flow-before .flow-header { color: #dc2626; }
+        .flow-after .flow-header { color: #16a34a; }
+        
+        .flow-steps {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .flow-step {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 12px 16px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .step-icon {
+            font-size: 1.8em;
+            width: 50px;
+            text-align: center;
+        }
+        .step-content {
+            flex: 1;
+        }
+        .step-title {
+            font-weight: 600;
+            color: #333;
+        }
+        .step-desc {
+            font-size: 0.85em;
+            color: #666;
+        }
+        .step-time {
+            font-size: 0.8em;
+            color: #999;
+            font-style: italic;
+        }
+        .flow-arrow {
+            font-size: 1.5em;
+            text-align: center;
+            color: #999;
+            margin: 5px 0;
+        }
+
+        /* Architecture Diagram */
+        .arch-container {
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+        }
+        .arch-row {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+        }
+        .arch-box {
+            padding: 20px 30px;
+            border-radius: 16px;
+            text-align: center;
+            min-width: 150px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .arch-box:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+        }
+        .arch-icon {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        .arch-label {
+            font-weight: 600;
+            color: #333;
+        }
+        .arch-sublabel {
+            font-size: 0.8em;
+            color: #666;
+        }
+        .arch-users {
+            background: linear-gradient(135deg, #dbeafe, #bfdbfe);
+            border: 2px solid #93c5fd;
+        }
+        .arch-atlas {
+            background: linear-gradient(135deg, #fed7aa, #fdba74);
+            border: 2px solid #fb923c;
+        }
+        .arch-databricks {
+            background: linear-gradient(135deg, #d1fae5, #a7f3d0);
+            border: 2px solid #6ee7b7;
+        }
+        .arch-connector {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #9ca3af;
+            font-size: 1.5em;
+        }
+        .arch-connector span {
+            background: #f3f4f6;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.7em;
+            color: #6b7280;
+        }
+
+        /* Value Props */
+        .value-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+        }
+        .value-card {
+            background: linear-gradient(180deg, #f8fafc, #f1f5f9);
+            border-radius: 16px;
+            padding: 25px 20px;
+            text-align: center;
+            border: 1px solid #e2e8f0;
+            transition: all 0.3s;
+        }
+        .value-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.1);
+            border-color: #3b82f6;
+        }
+        .value-icon {
+            font-size: 3em;
+            margin-bottom: 15px;
+        }
+        .value-metric {
+            font-size: 2em;
+            font-weight: 700;
+            color: #3b82f6;
+            margin-bottom: 5px;
+        }
+        .value-label {
+            font-weight: 600;
+            color: #334155;
+            margin-bottom: 8px;
+        }
+        .value-desc {
+            font-size: 0.85em;
+            color: #64748b;
+        }
+
+        /* Journey Flow */
+        .journey-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 0;
+        }
+        .journey-step {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex: 1;
+        }
+        .journey-icon-wrapper {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2em;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        .journey-step:nth-child(1) .journey-icon-wrapper { background: #dbeafe; }
+        .journey-step:nth-child(2) .journey-icon-wrapper { background: #fef3c7; }
+        .journey-step:nth-child(3) .journey-icon-wrapper { background: #d1fae5; }
+        .journey-step:nth-child(4) .journey-icon-wrapper { background: #ede9fe; }
+        .journey-step:nth-child(5) .journey-icon-wrapper { background: #fce7f3; }
+        
+        .journey-label {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .journey-desc {
+            font-size: 0.8em;
+            color: #666;
+            text-align: center;
+            max-width: 120px;
+        }
+        .journey-arrow {
+            font-size: 2em;
+            color: #d1d5db;
+            margin: 0 -10px;
+        }
+
+        /* Metrics Comparison */
+        .metrics-comparison {
+            display: flex;
+            gap: 40px;
+        }
+        .metrics-column {
+            flex: 1;
+        }
+        .metric-row {
+            display: flex;
+            align-items: center;
+            padding: 15px 0;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .metric-label {
+            flex: 1;
+            font-weight: 500;
+            color: #475569;
+        }
+        .metric-value {
+            font-weight: 700;
+            font-size: 1.1em;
+            padding: 5px 15px;
+            border-radius: 20px;
+        }
+        .metric-bad {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+        .metric-good {
+            background: #dcfce7;
+            color: #16a34a;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 ATLAS</h1>
+        <p class="subtitle">AI-Powered Self-Service for Data Teams</p>
+
+        <div class="instructions">
+            💡 <strong>To capture for PowerPoint:</strong> Use Cmd+Shift+4 (Mac) or Snipping Tool (Windows) to screenshot each diagram section
+        </div>
+
+        <!-- Diagram 1: Before vs After -->
+        <div class="diagram-section">
+            <div class="diagram-title">The Transformation</div>
+            <div class="flow-comparison">
+                <div class="flow-section flow-before">
+                    <div class="flow-header">
+                        ❌ Before ATLAS
+                    </div>
+                    <div class="flow-steps">
+                        <div class="flow-step">
+                            <div class="step-icon">👤</div>
+                            <div class="step-content">
+                                <div class="step-title">User needs a schema</div>
+                                <div class="step-desc">Data engineer needs access to new data</div>
+                            </div>
+                        </div>
+                        <div class="flow-arrow">↓</div>
+                        <div class="flow-step">
+                            <div class="step-icon">📧</div>
+                            <div class="step-content">
+                                <div class="step-title">Submit ticket</div>
+                                <div class="step-desc">Email or ServiceNow request</div>
+                            </div>
+                        </div>
+                        <div class="flow-arrow">↓</div>
+                        <div class="flow-step">
+                            <div class="step-icon">⏳</div>
+                            <div class="step-content">
+                                <div class="step-title">Wait for admin</div>
+                                <div class="step-desc">Platform team reviews manually</div>
+                                <div class="step-time">2-5 days</div>
+                            </div>
+                        </div>
+                        <div class="flow-arrow">↓</div>
+                        <div class="flow-step">
+                            <div class="step-icon">⚙️</div>
+                            <div class="step-content">
+                                <div class="step-title">Manual provisioning</div>
+                                <div class="step-desc">Admin creates resources by hand</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flow-section flow-after">
+                    <div class="flow-header">
+                        ✅ With ATLAS
+                    </div>
+                    <div class="flow-steps">
+                        <div class="flow-step">
+                            <div class="step-icon">👤</div>
+                            <div class="step-content">
+                                <div class="step-title">User needs a schema</div>
+                                <div class="step-desc">Same requirement, different experience</div>
+                            </div>
+                        </div>
+                        <div class="flow-arrow">↓</div>
+                        <div class="flow-step">
+                            <div class="step-icon">💬</div>
+                            <div class="step-content">
+                                <div class="step-title">Chat with AI</div>
+                                <div class="step-desc">"Create schema sales_data for my team"</div>
+                            </div>
+                        </div>
+                        <div class="flow-arrow">↓</div>
+                        <div class="flow-step">
+                            <div class="step-icon">🤖</div>
+                            <div class="step-content">
+                                <div class="step-title">AI processes request</div>
+                                <div class="step-desc">Validates, routes for approval</div>
+                                <div class="step-time">Seconds</div>
+                            </div>
+                        </div>
+                        <div class="flow-arrow">↓</div>
+                        <div class="flow-step">
+                            <div class="step-icon">⚡</div>
+                            <div class="step-content">
+                                <div class="step-title">Auto-provisioned</div>
+                                <div class="step-desc">GitOps deploys infrastructure</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Diagram 2: User Journey -->
+        <div class="diagram-section">
+            <div class="diagram-title">The User Journey</div>
+            <div class="journey-container">
+                <div class="journey-step">
+                    <div class="journey-icon-wrapper">💬</div>
+                    <div class="journey-label">Ask</div>
+                    <div class="journey-desc">Describe what you need in plain English</div>
+                </div>
+                <div class="journey-arrow">→</div>
+                <div class="journey-step">
+                    <div class="journey-icon-wrapper">🤖</div>
+                    <div class="journey-label">Understand</div>
+                    <div class="journey-desc">AI interprets your request</div>
+                </div>
+                <div class="journey-arrow">→</div>
+                <div class="journey-step">
+                    <div class="journey-icon-wrapper">✅</div>
+                    <div class="journey-label">Approve</div>
+                    <div class="journey-desc">Routed to the right approver</div>
+                </div>
+                <div class="journey-arrow">→</div>
+                <div class="journey-step">
+                    <div class="journey-icon-wrapper">⚙️</div>
+                    <div class="journey-label">Deploy</div>
+                    <div class="journey-desc">Automated infrastructure</div>
+                </div>
+                <div class="journey-arrow">→</div>
+                <div class="journey-step">
+                    <div class="journey-icon-wrapper">🎉</div>
+                    <div class="journey-label">Use</div>
+                    <div class="journey-desc">Start working immediately</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Diagram 3: Simple Architecture -->
+        <div class="diagram-section">
+            <div class="diagram-title">How It Works</div>
+            <div class="arch-container">
+                <div class="arch-row">
+                    <div class="arch-box arch-users">
+                        <div class="arch-icon">👥</div>
+                        <div class="arch-label">Data Teams</div>
+                        <div class="arch-sublabel">Engineers • Scientists • Analysts</div>
+                    </div>
+                </div>
+                <div class="arch-connector">
+                    <span>Natural Language</span>
+                </div>
+                <div class="arch-row">
+                    <div class="arch-box arch-atlas">
+                        <div class="arch-icon">🤖</div>
+                        <div class="arch-label">ATLAS</div>
+                        <div class="arch-sublabel">AI Agent • Workflows • Governance</div>
+                    </div>
+                </div>
+                <div class="arch-connector">
+                    <span>Automated Provisioning</span>
+                </div>
+                <div class="arch-row">
+                    <div class="arch-box arch-databricks">
+                        <div class="arch-icon">🗄️</div>
+                        <div class="arch-label">Catalogs</div>
+                        <div class="arch-sublabel">Unity Catalog</div>
+                    </div>
+                    <div class="arch-box arch-databricks">
+                        <div class="arch-icon">📊</div>
+                        <div class="arch-label">Warehouses</div>
+                        <div class="arch-sublabel">SQL Compute</div>
+                    </div>
+                    <div class="arch-box arch-databricks">
+                        <div class="arch-icon">🔐</div>
+                        <div class="arch-label">Access</div>
+                        <div class="arch-sublabel">Grants & Roles</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Diagram 4: Value Metrics -->
+        <div class="diagram-section">
+            <div class="diagram-title">The Impact</div>
+            <div class="value-grid">
+                <div class="value-card">
+                    <div class="value-icon">⏱️</div>
+                    <div class="value-metric">95%</div>
+                    <div class="value-label">Faster</div>
+                    <div class="value-desc">Provisioning time reduced from days to minutes</div>
+                </div>
+                <div class="value-card">
+                    <div class="value-icon">🤖</div>
+                    <div class="value-metric">24/7</div>
+                    <div class="value-label">Available</div>
+                    <div class="value-desc">AI assistant always ready to help</div>
+                </div>
+                <div class="value-card">
+                    <div class="value-icon">📋</div>
+                    <div class="value-metric">100%</div>
+                    <div class="value-label">Audited</div>
+                    <div class="value-desc">Every action tracked automatically</div>
+                </div>
+                <div class="value-card">
+                    <div class="value-icon">🔒</div>
+                    <div class="value-metric">Built-in</div>
+                    <div class="value-label">Governance</div>
+                    <div class="value-desc">Compliance baked into every workflow</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Diagram 5: Before/After Metrics -->
+        <div class="diagram-section">
+            <div class="diagram-title">Before & After Comparison</div>
+            <div class="metrics-comparison">
+                <div class="metrics-column">
+                    <div class="metric-row">
+                        <div class="metric-label">⏱️ Time to Provision</div>
+                        <div class="metric-value metric-bad">Days</div>
+                    </div>
+                    <div class="metric-row">
+                        <div class="metric-label">👤 Admin Involvement</div>
+                        <div class="metric-value metric-bad">Every Request</div>
+                    </div>
+                    <div class="metric-row">
+                        <div class="metric-label">📊 Audit Trail</div>
+                        <div class="metric-value metric-bad">Manual</div>
+                    </div>
+                    <div class="metric-row">
+                        <div class="metric-label">🔐 Governance</div>
+                        <div class="metric-value metric-bad">Ad-hoc</div>
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; font-size: 3em; color: #3b82f6;">→</div>
+                <div class="metrics-column">
+                    <div class="metric-row">
+                        <div class="metric-label">⏱️ Time to Provision</div>
+                        <div class="metric-value metric-good">Minutes</div>
+                    </div>
+                    <div class="metric-row">
+                        <div class="metric-label">👤 Admin Involvement</div>
+                        <div class="metric-value metric-good">Exceptions Only</div>
+                    </div>
+                    <div class="metric-row">
+                        <div class="metric-label">📊 Audit Trail</div>
+                        <div class="metric-value metric-good">Automatic</div>
+                    </div>
+                    <div class="metric-row">
+                        <div class="metric-label">🔐 Governance</div>
+                        <div class="metric-value metric-good">Built-in</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</body>
+</html>

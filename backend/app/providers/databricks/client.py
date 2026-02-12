@@ -184,15 +184,514 @@ class DatabricksProvider(BaseProvider):
             if "TEMPORARILY_UNAVAILABLE" in str(e):
                 raise RetryableError(f"SQL execution temporarily unavailable: {str(e)}")
             raise RetryableError(f"SQL execution failed: {str(e)}")
-    
 
-        """Grant access to resource."""
+    @retry_on_retryable(max_attempts=3)
+    async def grant_access(
+        self,
+        asset_type: str,
+        asset_name: str,
+        principal: str,
+        access_level: str
+    ) -> Dict[str, Any]:
+        """
+        Grant access to a Unity Catalog asset using the Grants API.
+
+        Args:
+            asset_type: Type of asset (catalog, schema, table, volume)
+            asset_name: Full name of the asset (e.g., "my_catalog.my_schema.my_table")
+            principal: User or group to grant access to (email or group name)
+            access_level: Level of access (read, write, manage)
+
+        Returns:
+            Dictionary with grant result details
+        """
+        from databricks.sdk.service.catalog import SecurableType, PermissionsChange, Privilege
+
         try:
-            # TODO: Implement access grant via Databricks API
-            raise NotImplementedError("Access grant not yet implemented")
+            # Map asset_type to SecurableType
+            securable_type_map = {
+                "catalog": SecurableType.CATALOG,
+                "schema": SecurableType.SCHEMA,
+                "table": SecurableType.TABLE,
+                "volume": SecurableType.VOLUME,
+            }
+
+            securable_type = securable_type_map.get(asset_type.lower())
+            if not securable_type:
+                raise PermanentError(f"Invalid asset_type: {asset_type}. Must be one of: catalog, schema, table, volume")
+
+            # Map access_level to privileges
+            # Unity Catalog privilege hierarchy:
+            # - read: SELECT (for tables), USE_CATALOG/USE_SCHEMA (for catalogs/schemas)
+            # - write: SELECT + MODIFY
+            # - manage: ALL_PRIVILEGES
+            privilege_map = {
+                "read": self._get_read_privileges(asset_type),
+                "write": self._get_write_privileges(asset_type),
+                "manage": [Privilege.ALL_PRIVILEGES],
+            }
+
+            privileges = privilege_map.get(access_level.lower())
+            if not privileges:
+                raise PermanentError(f"Invalid access_level: {access_level}. Must be one of: read, write, manage")
+
+            logger.info(f"Granting {access_level} access on {asset_type} '{asset_name}' to {principal}")
+
+            # Use SQL GRANT statements for reliable cross-type support
+            grant_statements = self._build_grant_sql(asset_type.lower(), asset_name, principal, access_level.lower())
+
+            for sql in grant_statements:
+                logger.info(f"Executing: {sql}")
+                await self.execute_sql(sql)
+
+            logger.info(f"Successfully granted {access_level} access on {asset_name} to {principal}")
+
+            return {
+                "success": True,
+                "asset_type": asset_type,
+                "asset_name": asset_name,
+                "principal": principal,
+                "access_level": access_level,
+                "privileges_granted": [str(p) for p in privileges]
+            }
+
+        except PermanentError:
+            raise
         except Exception as e:
-            raise RetryableError(f"Access grant failed: {str(e)}")
-    
+            error_str = str(e)
+            # Classify errors
+            if "NOT_FOUND" in error_str:
+                raise PermanentError(f"Asset not found: {asset_name}")
+            if "PERMISSION_DENIED" in error_str:
+                raise PermanentError(f"Permission denied to grant access on {asset_name}: {error_str}")
+            if "INVALID_PARAMETER" in error_str or "INVALID_STATE" in error_str:
+                raise PermanentError(f"Invalid grant request: {error_str}")
+            if "TEMPORARILY_UNAVAILABLE" in error_str or "RATE_LIMIT" in error_str:
+                raise RetryableError(f"Temporarily unavailable: {error_str}")
+            raise RetryableError(f"Failed to grant access: {error_str}")
+
+    def _get_read_privileges(self, asset_type: str) -> list:
+        """Get the privileges needed for read access based on asset type."""
+        from databricks.sdk.service.catalog import Privilege
+
+        if asset_type.lower() == "catalog":
+            return [Privilege.USE_CATALOG]
+        elif asset_type.lower() == "schema":
+            return [Privilege.USE_SCHEMA]
+        elif asset_type.lower() in ["table", "volume"]:
+            return [Privilege.SELECT]
+        return [Privilege.SELECT]
+
+    def _get_write_privileges(self, asset_type: str) -> list:
+        """Get the privileges needed for write access based on asset type."""
+        from databricks.sdk.service.catalog import Privilege
+
+        if asset_type.lower() == "catalog":
+            return [Privilege.USE_CATALOG, Privilege.CREATE_SCHEMA]
+        elif asset_type.lower() == "schema":
+            return [Privilege.USE_SCHEMA, Privilege.CREATE_TABLE, Privilege.CREATE_VOLUME]
+        elif asset_type.lower() == "table":
+            return [Privilege.SELECT, Privilege.MODIFY]
+        elif asset_type.lower() == "volume":
+            return [Privilege.READ_VOLUME, Privilege.WRITE_VOLUME]
+        return [Privilege.SELECT, Privilege.MODIFY]
+
+    def _build_grant_sql(self, asset_type: str, asset_name: str, principal: str, access_level: str) -> list:
+        """
+        Build SQL GRANT statements for Unity Catalog access.
+
+        For schema access, this grants USE CATALOG on parent catalog first,
+        then grants schema-level permissions.
+
+        Args:
+            asset_type: catalog, schema, table, or volume
+            asset_name: Full name (e.g., "catalog.schema" or "catalog.schema.table")
+            principal: User email or group name
+            access_level: read, write, or manage
+
+        Returns:
+            List of SQL GRANT statements to execute in order
+        """
+        statements = []
+        parts = asset_name.split(".")
+
+        # Privilege mapping
+        privilege_map = {
+            "catalog": {
+                "read": "USE CATALOG",
+                "write": "USE CATALOG, CREATE SCHEMA",
+                "manage": "ALL PRIVILEGES",
+            },
+            "schema": {
+                "read": "USE SCHEMA",
+                "write": "USE SCHEMA, CREATE TABLE, CREATE VIEW, CREATE FUNCTION",
+                "manage": "ALL PRIVILEGES",
+            },
+            "table": {
+                "read": "SELECT",
+                "write": "SELECT, MODIFY",
+                "manage": "ALL PRIVILEGES",
+            },
+            "volume": {
+                "read": "READ VOLUME",
+                "write": "READ VOLUME, WRITE VOLUME",
+                "manage": "ALL PRIVILEGES",
+            },
+        }
+
+        if asset_type == "catalog":
+            # Just grant on catalog
+            privileges = privilege_map["catalog"].get(access_level, "USE CATALOG")
+            statements.append(f"GRANT {privileges} ON CATALOG `{asset_name}` TO `{principal}`")
+
+        elif asset_type == "schema":
+            # First grant USE CATALOG on parent catalog, then schema permissions
+            if len(parts) >= 2:
+                catalog_name = parts[0]
+                schema_name = parts[1]  # Just the schema name without catalog prefix
+                statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog_name}` TO `{principal}`")
+                privileges = privilege_map["schema"].get(access_level, "USE SCHEMA")
+                # Use catalog.schema format for schema grants
+                statements.append(f"GRANT {privileges} ON SCHEMA `{catalog_name}`.`{schema_name}` TO `{principal}`")
+            else:
+                # Fallback if parts parsing fails
+                privileges = privilege_map["schema"].get(access_level, "USE SCHEMA")
+                statements.append(f"GRANT {privileges} ON SCHEMA `{asset_name}` TO `{principal}`")
+
+        elif asset_type == "table":
+            # Grant USE CATALOG, USE SCHEMA, then table permissions
+            if len(parts) >= 3:
+                catalog_name = parts[0]
+                schema_name = parts[1]
+                table_name = parts[2]
+                statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog_name}` TO `{principal}`")
+                statements.append(f"GRANT USE SCHEMA ON SCHEMA `{catalog_name}`.`{schema_name}` TO `{principal}`")
+                privileges = privilege_map["table"].get(access_level, "SELECT")
+                # Use catalog.schema.table format for table grants
+                statements.append(f"GRANT {privileges} ON TABLE `{catalog_name}`.`{schema_name}`.`{table_name}` TO `{principal}`")
+            else:
+                # Fallback if parts parsing fails
+                privileges = privilege_map["table"].get(access_level, "SELECT")
+                statements.append(f"GRANT {privileges} ON TABLE `{asset_name}` TO `{principal}`")
+
+        elif asset_type == "volume":
+            # Grant USE CATALOG, USE SCHEMA, then volume permissions
+            if len(parts) >= 3:
+                catalog_name = parts[0]
+                schema_name = parts[1]
+                volume_name = parts[2]
+                statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog_name}` TO `{principal}`")
+                statements.append(f"GRANT USE SCHEMA ON SCHEMA `{catalog_name}`.`{schema_name}` TO `{principal}`")
+                privileges = privilege_map["volume"].get(access_level, "READ VOLUME")
+                # Use catalog.schema.volume format for volume grants
+                statements.append(f"GRANT {privileges} ON VOLUME `{catalog_name}`.`{schema_name}`.`{volume_name}` TO `{principal}`")
+            else:
+                # Fallback if parts parsing fails
+                privileges = privilege_map["volume"].get(access_level, "READ VOLUME")
+                statements.append(f"GRANT {privileges} ON VOLUME `{asset_name}` TO `{principal}`")
+
+        return statements
+
+    async def get_user_email_from_id(self, user_id: str) -> Optional[str]:
+        """
+        Get user email from Databricks user ID.
+
+        Args:
+            user_id: Databricks user ID (UUID)
+
+        Returns:
+            User email or None if not found
+        """
+        try:
+            # Use the SDK to get user details
+            user = await asyncio.to_thread(self.client.users.get, user_id)
+            if user and hasattr(user, 'emails') and user.emails:
+                # emails is a list of EmailObject, get the primary one
+                for email in user.emails:
+                    if hasattr(email, 'primary') and email.primary:
+                        return email.value
+                # If no primary, return the first email
+                return user.emails[0].value if user.emails else None
+            elif user and hasattr(user, 'user_name'):
+                # Fallback to username if emails not available
+                return user.user_name
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get user email for ID {user_id}: {str(e)}")
+            return None
+
+    async def get_asset_owner(self, asset_type: str, asset_name: str) -> Optional[str]:
+        """
+        Get the owner of a Unity Catalog asset.
+
+        Args:
+            asset_type: Type of asset (catalog, schema, table, volume)
+            asset_name: Full name of the asset (e.g., "catalog.schema" for schema, "catalog.schema.table" for table)
+
+        Returns:
+            Owner email/username or None if not found
+        """
+        try:
+            asset_type_lower = asset_type.lower()
+
+            # For schema/table/volume, split the name to properly qualify the DESCRIBE query
+            parts = asset_name.split(".")
+
+            if asset_type_lower == "catalog":
+                # Catalog: just the catalog name
+                query = f"DESCRIBE CATALOG EXTENDED `{asset_name}`"
+            elif asset_type_lower == "schema":
+                # Schema: should be catalog.schema format
+                # DESCRIBE SCHEMA needs: DESCRIBE SCHEMA catalog.schema
+                if len(parts) >= 2:
+                    catalog = parts[0]
+                    schema = parts[1]
+                    query = f"DESCRIBE SCHEMA EXTENDED {catalog}.{schema}"
+                else:
+                    logger.warning(f"Invalid schema name format: {asset_name}. Expected catalog.schema")
+                    return None
+            elif asset_type_lower == "table":
+                # Table: should be catalog.schema.table format
+                if len(parts) >= 3:
+                    catalog = parts[0]
+                    schema = parts[1]
+                    table = parts[2]
+                    query = f"DESCRIBE TABLE EXTENDED {catalog}.{schema}.{table}"
+                else:
+                    logger.warning(f"Invalid table name format: {asset_name}. Expected catalog.schema.table")
+                    return None
+            elif asset_type_lower == "volume":
+                # Volume: should be catalog.schema.volume format
+                if len(parts) >= 3:
+                    catalog = parts[0]
+                    schema = parts[1]
+                    volume = parts[2]
+                    query = f"DESCRIBE VOLUME EXTENDED {catalog}.{schema}.{volume}"
+                else:
+                    logger.warning(f"Invalid volume name format: {asset_name}. Expected catalog.schema.volume")
+                    return None
+            else:
+                logger.warning(f"Unknown asset_type for owner lookup: {asset_type}")
+                return None
+
+            logger.info(f"Fetching owner for {asset_type} '{asset_name}' using query: {query}")
+            result = await self.execute_sql(query)
+
+            # Parse the result to find Owner field
+            # DESCRIBE EXTENDED returns rows in different formats depending on asset type:
+            # - Tables: ["col_name", "data_type", "comment"]
+            # - Schemas/Catalogs: ["database_description_item", "database_description_value"]
+            # Look for a row where the first column is "Owner"
+            for row in result.get("rows", []):
+                if isinstance(row, dict):
+                    # Try different column name patterns
+                    col_name = (row.get("col_name") or
+                               row.get("database_description_item") or
+                               row.get("key") or
+                               row.get("name"))
+
+                    data_value = (row.get("data_type") or
+                                 row.get("database_description_value") or
+                                 row.get("value"))
+
+                    if col_name and str(col_name).strip().lower() == "owner":
+                        owner = str(data_value).strip()
+                        logger.info(f"Found owner for {asset_name}: {owner}")
+                        return owner if owner else None
+
+            logger.warning(f"Owner not found in DESCRIBE output for {asset_name}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to get owner for {asset_type} '{asset_name}': {str(e)}")
+            return None
+
+    async def find_object_owner(self, object_type: str, object_name: str) -> Dict[str, Any]:
+        """
+        Find the owner of a Databricks object.
+
+        Args:
+            object_type: Type of object (catalog, schema, table, job, dashboard, notebook, genie_space)
+            object_name: Full name or ID of the object
+
+        Returns:
+            Dictionary with owner information and status
+        """
+        try:
+            if object_type == "catalog":
+                return await self._find_catalog_owner(object_name)
+            elif object_type == "schema":
+                return await self._find_schema_owner(object_name)
+            elif object_type == "table":
+                return await self._find_table_owner(object_name)
+            elif object_type == "job":
+                return await self._find_job_owner(object_name)
+            elif object_type == "dashboard":
+                return await self._find_dashboard_owner(object_name)
+            elif object_type == "notebook":
+                return await self._find_notebook_owner(object_name)
+            elif object_type == "genie_space":
+                return await self._find_genie_space_owner(object_name)
+            else:
+                return {
+                    "found": False,
+                    "message": f"Finding owner for '{object_type}' is not yet implemented. Supported types: catalog, schema, table, job, dashboard, notebook, genie_space.",
+                    "object_type": object_type,
+                    "object_name": object_name
+                }
+        except Exception as e:
+            return {
+                "found": False,
+                "message": f"Failed to find owner for {object_type} '{object_name}': {str(e)}",
+                "object_type": object_type,
+                "object_name": object_name
+            }
+
+    async def _find_catalog_owner(self, name: str) -> Dict[str, Any]:
+        """Find owner of a catalog."""
+        try:
+            cat = await asyncio.to_thread(self.client.catalogs.get, name)
+            return {
+                "found": True,
+                "owner": cat.owner or "Unknown",
+                "object_type": "catalog",
+                "object_name": name
+            }
+        except Exception as e:
+            return {
+                "found": False,
+                "message": f"Catalog not found: {str(e)}",
+                "object_type": "catalog",
+                "object_name": name
+            }
+
+    async def _find_schema_owner(self, full_name: str) -> Dict[str, Any]:
+        """Find owner of a schema."""
+        try:
+            schema = await asyncio.to_thread(self.client.schemas.get, full_name)
+            return {
+                "found": True,
+                "owner": schema.owner or "Unknown",
+                "object_type": "schema",
+                "object_name": full_name
+            }
+        except Exception as e:
+            return {
+                "found": False,
+                "message": f"Schema not found: {str(e)}",
+                "object_type": "schema",
+                "object_name": full_name
+            }
+
+    async def _find_table_owner(self, full_name: str) -> Dict[str, Any]:
+        """Find owner of a table."""
+        try:
+            table = await asyncio.to_thread(self.client.tables.get, full_name)
+            return {
+                "found": True,
+                "owner": table.owner or "Unknown",
+                "object_type": "table",
+                "object_name": full_name
+            }
+        except Exception as e:
+            return {
+                "found": False,
+                "message": f"Table not found: {str(e)}",
+                "object_type": "table",
+                "object_name": full_name
+            }
+
+    async def _find_job_owner(self, job_id: str) -> Dict[str, Any]:
+        """Find owner of a job."""
+        try:
+            job_id_int = int(job_id)
+            job = await asyncio.to_thread(self.client.jobs.get, job_id_int)
+            owner = job.creator_user_name or "Unknown"
+            return {
+                "found": True,
+                "owner": owner,
+                "object_type": "job",
+                "object_name": job_id,
+                "details": {"name": job.settings.name if job.settings else "Unknown"}
+            }
+        except Exception as e:
+            return {
+                "found": False,
+                "message": f"Job not found or error: {str(e)}",
+                "object_type": "job",
+                "object_name": job_id
+            }
+
+    async def _find_dashboard_owner(self, dashboard_id: str) -> Dict[str, Any]:
+        """Find owner of a dashboard."""
+        try:
+            dash = await asyncio.to_thread(self.client.lakeview.get, dashboard_id)
+            return {
+                "found": True,
+                "owner": "Unknown (Dashboard found)",
+                "object_type": "dashboard",
+                "object_name": dashboard_id,
+                "details": {"display_name": dash.display_name}
+            }
+        except Exception as e:
+            return {
+                "found": False,
+                "message": f"Dashboard not found: {str(e)}",
+                "object_type": "dashboard",
+                "object_name": dashboard_id
+            }
+
+    async def _find_notebook_owner(self, path: str) -> Dict[str, Any]:
+        """Find owner of a notebook."""
+        try:
+            info = await asyncio.to_thread(self.client.workspace.get_status, path)
+
+            # Heuristic: /Users/<email>/...
+            if path.startswith("/Users/"):
+                parts = path.split('/')
+                if len(parts) > 2:
+                    return {
+                        "found": True,
+                        "owner": parts[2],
+                        "object_type": "notebook",
+                        "object_name": path,
+                        "details": {"heuristic": "Path-based"}
+                    }
+
+            return {
+                "found": True,
+                "owner": "Unknown (Shared Path)",
+                "object_type": "notebook",
+                "object_name": path,
+                "message": "Located in shared path, owner cannot be determined by path alone."
+            }
+        except Exception as e:
+            return {
+                "found": False,
+                "message": f"Notebook not found: {str(e)}",
+                "object_type": "notebook",
+                "object_name": path
+            }
+
+    async def _find_genie_space_owner(self, space_id: str) -> Dict[str, Any]:
+        """Find owner of a Genie space."""
+        try:
+            space = await asyncio.to_thread(self.client.genie.spaces.get, space_id)
+            return {
+                "found": True,
+                "owner": "Unknown (Genie Space found)",
+                "object_type": "genie_space",
+                "object_name": space_id,
+                "details": {"name": getattr(space, "name", "Unknown")}
+            }
+        except Exception as e:
+            return {
+                "found": False,
+                "message": f"Genie Space not found: {str(e)}",
+                "object_type": "genie_space",
+                "object_name": space_id
+            }
+
     async def health_check(self) -> bool:
         """Check if Databricks is accessible."""
         try:

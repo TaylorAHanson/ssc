@@ -8,20 +8,27 @@ command:
 env:
   # Database Configuration (Lakebase - PostgreSQL)
   # Password is fetched automatically from Databricks secrets using the app's service principal
+  # Get DATABASE_HOST from: terraform output lakebase_read_write_dns
   - name: DATABASE_HOST
-    value: "instance-83344571-9f1d-49b2-a400-f0eda63bfcda.database.cloud.databricks.com"
+    value: "instance-c77ef127-eeca-44f5-80ba-76b800757462.database.cloud.databricks.com"
   - name: DATABASE_PORT
     value: "5432"
   - name: DATABASE_NAME
     value: "databricks_postgres"
   - name: DATABASE_USER
-    value: "edas_app"
+    value: "atlas_app"
+  - name: DATABASE_SECRET_SCOPE
+    value: "atlas-hub"
+  - name: DATABASE_SECRET_KEY
+    value: "lakebase-password"
   
-  # Infrastructure Repository (Terraform GitOps)
-  - name: INFRA_REPO_URL
-    value: "https://github.com/databricks-field-eng/fe-agentic-self-service-terraform"
-  - name: INFRA_REPO_BRANCH
-    value: "main"
+  # Infrastructure GitOps Settings
+  # Mode: "volume" (recommended) writes to UC Volume, GitHub Actions creates PRs
+  #       "direct" pushes directly to Git (requires GitHub network access)
+  - name: GITOPS_MODE
+    value: "volume"
+  - name: GITOPS_VOLUME_PATH
+    value: "/Volumes/atlas_dev_catalog/atlas/gitops_requests"
   - name: DEFAULT_ENVIRONMENT
     value: "dev"
   - name: GIT_USERNAME
@@ -29,15 +36,17 @@ env:
   - name: GIT_EMAIL
     value: "atlas-bot@databricks.com"
   
-  # GitHub PAT Authentication (fallback, works with IP allowlist)
-  # Fetched at runtime from Databricks secrets
+  # Direct Git Mode Settings (only used when GITOPS_MODE=direct)
+  - name: INFRA_REPO_URL
+    value: "https://github.com/databricks-field-eng/fe-agentic-self-service-terraform"
+  - name: INFRA_REPO_BRANCH
+    value: "main"
   - name: GIT_TOKEN_SECRET_SCOPE
     value: "atlas-hub"
   - name: GIT_TOKEN_SECRET_KEY
     value: "github-pat"
   
-  # GitHub App Authentication (atlas-infra-bot) - blocked by org IP allowlist
-  # Kept for future use if IP allowlist is updated
+  # GitHub App Authentication - blocked by org IP allowlist, kept for future
   - name: GITHUB_APP_ID
     value: ""
   - name: GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE
@@ -47,9 +56,9 @@ env:
 
   # Databricks Configuration
   - name: DATABRICKS_WAREHOUSE_ID
-    value: "5c5e40da3caf812c"
+    value: "14b25bcc9c131636"
   - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
-    value: databricks-gemini-3-flash
+    value: databricks-gemini-2-5-flash  
   - name: AGENT_ENABLED
     value: "true"
   - name: AGENT_MAX_ITERATIONS

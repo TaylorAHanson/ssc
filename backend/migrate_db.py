@@ -3,7 +3,7 @@ import sqlite3
 import os
 
 # Path to DB
-db_path = "backend/edas_hub.db"
+db_path = "backend/atlas_hub.db"
 
 if not os.path.exists(db_path):
     print(f"Database {db_path} not found. Skipping migration (will be created fresh).")

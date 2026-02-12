@@ -165,6 +165,8 @@ Developer creates PR: develop → main
 
 ## First-Time Setup Checklist
 
+### Pre-Deployment (Before First Deploy)
+
 - [ ] Create GitHub repository
 - [ ] Create Service Principal for CI/CD deployments
 - [ ] Grant Service Principal admin access to workspace
@@ -175,6 +177,84 @@ Developer creates PR: develop → main
 - [ ] Set up branch protection for `develop`
 - [ ] Set up branch protection for `main`
 - [ ] Test deployment with a PR to develop
+
+### Post-Deployment (After First Deploy)
+
+> **IMPORTANT**: The Databricks App creates its own service principal automatically. 
+> This "App SP" needs additional permissions that can only be configured AFTER deployment.
+
+- [ ] Find the App's auto-created Service Principal (Apps → Your App → Permissions)
+- [ ] Create secret scope `atlas-hub` (if not created by Terraform)
+- [ ] Add `github-pat` secret (GitHub PAT with repo access for GitOps)
+- [ ] Add `lakebase-password` secret (Lakebase app role password)
+- [ ] Grant App SP `READ` access to `atlas-hub` secret scope
+- [ ] Grant App SP `Can Use` access to Lakebase instance
+- [ ] Grant App SP `Can Query` access to Model Serving endpoint
+- [ ] Restart the app to pick up new permissions
+
+### Post-Deployment Commands
+
+Run these in a Databricks notebook as a workspace admin:
+
+```python
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.workspace import AclPermission
+
+w = WorkspaceClient()
+
+# 1. Create secret scope (if needed)
+try:
+    w.secrets.create_scope(scope="atlas-hub")
+    print("Created secret scope: atlas-hub")
+except Exception as e:
+    print(f"Scope already exists or error: {e}")
+
+# 2. Add required secrets
+# IMPORTANT: Replace with ACTUAL values, not placeholders!
+
+# GitHub PAT - Create at: GitHub → Settings → Developer settings → Personal access tokens
+# Required scopes: repo (for private repo access)
+w.secrets.put_secret(
+    scope="atlas-hub", 
+    key="github-pat", 
+    string_value="ghp_your_actual_token_here"  # REPLACE WITH REAL PAT!
+)
+print("Added github-pat secret")
+
+# Lakebase password - The password for the atlas_app PostgreSQL role
+w.secrets.put_secret(
+    scope="atlas-hub", 
+    key="lakebase-password", 
+    string_value="your_lakebase_password"  # REPLACE WITH REAL PASSWORD!
+)
+print("Added lakebase-password secret")
+
+# 3. Grant App SP access to secrets
+# Find your App SP ID: Apps → Your App → Permissions → Note the SP application ID
+APP_SP_ID = "your-app-sp-application-id"  # REPLACE!
+w.secrets.put_acl(scope="atlas-hub", principal=APP_SP_ID, permission=AclPermission.READ)
+print(f"Granted READ access to {APP_SP_ID}")
+
+# 4. Verify secrets and ACLs
+print("\nSecrets in atlas-hub:")
+for s in w.secrets.list_secrets(scope="atlas-hub"):
+    print(f"  - {s.key}")
+
+print("\nACLs for atlas-hub:")
+for acl in w.secrets.list_acls(scope="atlas-hub"):
+    print(f"  {acl.principal}: {acl.permission}")
+```
+
+### Creating the GitHub PAT
+
+1. Go to **GitHub** → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
+2. Click **Generate new token (classic)**
+3. Name: `atlas-infra-bot` (or similar)
+4. Expiration: Set as appropriate (90 days recommended, set a reminder)
+5. Scopes: Select **`repo`** (Full control of private repositories)
+6. Click **Generate token**
+7. **Copy immediately** - token is only shown once!
+8. Store in the secret scope using the command above
 
 ## Troubleshooting
 

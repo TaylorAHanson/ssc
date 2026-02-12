@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ATLAS Diagrams for PowerPoint</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #FF3621;
+            text-align: center;
+        }
+        h2 {
+            color: #1B5162;
+            border-bottom: 2px solid #FF3621;
+            padding-bottom: 10px;
+            margin-top: 60px;
+        }
+        .diagram-container {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin: 20px 0;
+        }
+        .instructions {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #ffc107;
+        }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>🚀 ATLAS - Diagrams for PowerPoint</h1>
+    
+    <div class="instructions">
+        <strong>How to use:</strong> Right-click on each diagram → "Save image as..." or take a screenshot (Cmd+Shift+4 on Mac)
+    </div>
+
+    <!-- Diagram 1: Before State (Problem) -->
+    <h2>Slide 2: The Challenge (Before ATLAS)</h2>
+    <div class="diagram-container">
+        <div class="mermaid">
+flowchart LR
+    subgraph Before["❌ Before ATLAS - Manual Process"]
+        U["👤 Data User"]
+        T["📧 Email/Ticket"]
+        A["👨‍💻 Platform Admin"]
+        R["📝 Manual Review"]
+        P["⚙️ Manual Provisioning"]
+        D[("🗄️ Databricks")]
+        W["⏳ Days Later..."]
+        
+        U --> T
+        T --> A
+        A --> R
+        R --> P
+        P --> D
+        D --> W
+        W --> U
+    end
+    
+    style Before fill:#ffebee,stroke:#c62828
+    style A fill:#ffcdd2,stroke:#c62828
+    style W fill:#ffcdd2,stroke:#c62828
+        </div>
+    </div>
+
+    <!-- Diagram 2: After State (Solution) -->
+    <h2>Slide 3: The Solution (With ATLAS)</h2>
+    <div class="diagram-container">
+        <div class="mermaid">
+flowchart LR
+    subgraph After["✅ With ATLAS - AI-Powered Self-Service"]
+        U["👤 Data User"]
+        C["💬 Chat Interface"]
+        AI["🤖 AI Agent"]
+        A["✅ Auto-Approval"]
+        TF["📦 GitOps"]
+        D[("🗄️ Unity Catalog")]
+        M["⚡ Minutes!"]
+        
+        U --> C
+        C --> AI
+        AI --> A
+        A --> TF
+        TF --> D
+        D --> M
+        M --> U
+    end
+    
+    style After fill:#e8f5e9,stroke:#2e7d32
+    style AI fill:#c8e6c9,stroke:#2e7d32
+    style M fill:#a5d6a7,stroke:#2e7d32
+        </div>
+    </div>
+
+    <!-- Diagram 3: Architecture -->
+    <h2>Slide 3: ATLAS Architecture (Simplified)</h2>
+    <div class="diagram-container">
+        <div class="mermaid">
+flowchart TB
+    subgraph Users["👥 Users"]
+        U1["Data Engineers"]
+        U2["Data Scientists"]
+        U3["Analysts"]
+    end
+    
+    subgraph ATLAS["🚀 ATLAS Platform"]
+        UI["💬 Chat UI<br/>React"]
+        Agent["🤖 AI Agent<br/>LLM-Powered"]
+        WF["⚙️ Workflow Engine<br/>State Machines"]
+        Prov["📦 Providers<br/>GitOps + SDK"]
+    end
+    
+    subgraph Databricks["☁️ Databricks"]
+        UC["🗄️ Unity Catalog"]
+        WH["📊 SQL Warehouse"]
+        WS["🏢 Workspaces"]
+    end
+    
+    U1 & U2 & U3 --> UI
+    UI --> Agent
+    Agent --> WF
+    WF --> Prov
+    Prov --> UC & WH & WS
+    
+    style ATLAS fill:#fff3e0,stroke:#ff9800
+    style Agent fill:#ffe0b2,stroke:#ff9800
+    style Databricks fill:#e3f2fd,stroke:#1976d2
+        </div>
+    </div>
+
+    <!-- Diagram 4: Value Pillars -->
+    <h2>Slide 4: Value & Impact</h2>
+    <div class="diagram-container">
+        <div class="mermaid">
+flowchart LR
+    subgraph Value["💎 ATLAS Value Proposition"]
+        A["⏱️<br/>Minutes<br/>Not Days"]
+        B["🤖<br/>AI-First<br/>Automation"]
+        C["📋<br/>Complete<br/>Audit Trail"]
+        D["🔒<br/>Built-in<br/>Governance"]
+    end
+    
+    style Value fill:#e8eaf6,stroke:#3f51b5
+    style A fill:#c5cae9,stroke:#3f51b5
+    style B fill:#c5cae9,stroke:#3f51b5
+    style C fill:#c5cae9,stroke:#3f51b5
+    style D fill:#c5cae9,stroke:#3f51b5
+        </div>
+    </div>
+
+    <!-- Diagram 5: Before/After Comparison -->
+    <h2>Slide 4: Before vs After (Alternative)</h2>
+    <div class="diagram-container">
+        <div class="mermaid">
+flowchart LR
+    subgraph Before["❌ Before"]
+        B1["📧 Tickets"]
+        B2["⏳ Days/Weeks"]
+        B3["👤 Admin Bottleneck"]
+        B4["📝 Manual Audit"]
+    end
+    
+    Arrow["→<br/>ATLAS<br/>→"]
+    
+    subgraph After["✅ After"]
+        A1["💬 Chat"]
+        A2["⚡ Minutes"]
+        A3["🤖 AI-Powered"]
+        A4["📊 Auto Audit"]
+    end
+    
+    Before --> Arrow --> After
+    
+    style Before fill:#ffebee,stroke:#c62828
+    style After fill:#e8f5e9,stroke:#2e7d32
+    style Arrow fill:#fff3e0,stroke:#ff9800
+        </div>
+    </div>
+
+    <!-- Diagram 6: GitOps Flow -->
+    <h2>Bonus: GitOps Workflow</h2>
+    <div class="diagram-container">
+        <div class="mermaid">
+sequenceDiagram
+    participant U as 👤 User
+    participant A as 🤖 ATLAS
+    participant G as 📦 GitHub
+    participant T as ⚙️ Terraform
+    participant D as 🗄️ Databricks
+
+    U->>A: "Create schema sales_data"
+    A->>A: AI validates request
+    A->>G: Create PR with YAML
+    G->>T: Trigger terraform plan
+    T-->>G: Plan output
+    A->>U: "Awaiting approval"
+    U->>A: Approve
+    A->>G: Merge PR
+    G->>T: Trigger terraform apply
+    T->>D: Create schema + grants
+    A->>U: "✅ Schema created!"
+        </div>
+    </div>
+
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                curve: 'basis',
+                padding: 20
+            }
+        });
+    </script>
+</body>
+</html>

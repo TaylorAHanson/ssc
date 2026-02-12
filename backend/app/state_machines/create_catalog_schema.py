@@ -4,6 +4,7 @@ from app.state_machines.base import BaseRequestStateMachine
 from app.models.request import RequestStatus
 from app.core.exceptions import PermanentError
 from app.providers.terraform.client import TerraformProvider
+from app.providers.terraform.volume_provider import VolumeGitOpsProvider
 from app.core.config import settings
 from app.state_machines.facts import has_fact, add_fact
 import logging
@@ -39,6 +40,9 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
     # After apply is triggered, we wait for callback (apply received)
     finish_applying = terraform_applying.to(completed, cond="has_terraform_apply_success")
     
+    # Apply can fail
+    apply_failed = terraform_applying.to(failed, cond="has_terraform_apply_failed")
+    
     reject = (
         pending.to(rejected, cond="has_request_rejected") |
         terraform_planning.to(rejected, cond="has_request_rejected") |
@@ -71,25 +75,44 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
         super().__init__(request, db_session)
         
     def _get_provider(self):
-        """Lazy load provider."""
-        repo_url = settings.INFRA_REPO_URL
-        if not repo_url:
-            logger.warning("INFRA_REPO_URL not set.")
+        """Lazy load provider based on GITOPS_MODE setting."""
+        gitops_mode = settings.GITOPS_MODE or "volume"
+        
+        if gitops_mode == "volume":
+            # Volume-based GitOps (recommended - avoids IP allowlist issues)
+            volume_path = settings.GITOPS_VOLUME_PATH
+            if not volume_path:
+                raise PermanentError("GITOPS_VOLUME_PATH not set for volume mode.")
             
-        return TerraformProvider(
-            repo_url=repo_url,
-            branch=settings.INFRA_REPO_BRANCH or "main",
-            config={
-                "git_username": settings.GIT_USERNAME,
-                "git_email": settings.GIT_EMAIL,
-                "ssh_key_path": settings.GIT_SSH_KEY_PATH,
-                "git_token": settings.get_git_token(),  # Fetch at runtime if needed
-                # GitHub App authentication (preferred)
-                "github_app_id": settings.GITHUB_APP_ID,
-                "github_app_private_key": settings.get_github_app_private_key(),  # Fetch at runtime if needed
-                "github_app_installation_id": settings.GITHUB_APP_INSTALLATION_ID,
-            }
-        )
+            logger.info(f"Using VolumeGitOpsProvider with path: {volume_path}")
+            return VolumeGitOpsProvider(
+                volume_path=volume_path,
+                config={
+                    "environment": settings.DEFAULT_ENVIRONMENT or "dev",
+                    "git_username": settings.GIT_USERNAME,
+                    "git_email": settings.GIT_EMAIL,
+                }
+            )
+        else:
+            # Direct Git mode (requires network access to GitHub)
+            repo_url = settings.INFRA_REPO_URL
+            if not repo_url:
+                logger.warning("INFRA_REPO_URL not set.")
+                
+            logger.info(f"Using TerraformProvider with repo: {repo_url}")
+            return TerraformProvider(
+                repo_url=repo_url,
+                branch=settings.INFRA_REPO_BRANCH or "main",
+                config={
+                    "git_username": settings.GIT_USERNAME,
+                    "git_email": settings.GIT_EMAIL,
+                    "ssh_key_path": settings.GIT_SSH_KEY_PATH,
+                    "git_token": settings.get_git_token(),
+                    "github_app_id": settings.GITHUB_APP_ID,
+                    "github_app_private_key": settings.get_github_app_private_key(),
+                    "github_app_installation_id": settings.GITHUB_APP_INSTALLATION_ID,
+                }
+            )
 
     async def on_enter_terraform_planning_async(self):
         """Execute async tasks for terraform_planning state."""
@@ -121,31 +144,115 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
              return
 
         params = self.request.state_context or {}
-        asset_type = params.get("type", "").lower()
-        name = params.get("name")
-        catalog = params.get("catalog", "main")
+        action = params.get("action", "create").lower()  # create, grant, revoke
+        asset_type = params.get("type", "schema").lower()
+        name = params.get("name") or params.get("schema_name")
+        # Support multiple possible key names for catalog
+        catalog = (
+            params.get("catalog") or 
+            params.get("parent_catalog") or 
+            params.get("parent") or  # Agent sometimes uses "parent"
+            params.get("catalog_name") or 
+            "atlas_dev_catalog"  # Safe default instead of "main"
+        )
         environment = params.get("environment", settings.DEFAULT_ENVIRONMENT or "dev")
         
         if not name:
              raise PermanentError("Asset name is required")
 
         try:
-            logger.info(f"Starting Terraform Plan for {self.request.id}")
+            logger.info(f"Starting Terraform Plan for {self.request.id} (action: {action})")
             provider = self._get_provider()
             
-            # Construct YAML content matching the Terraform repo format
-            content = self._generate_yaml_spec(asset_type, name, catalog, params)
+            if action == "grant":
+                # Grant access to an existing resource
+                principal = params.get("principal")
+                privileges = params.get("privileges", ["USE_SCHEMA", "SELECT"])
+                
+                if not principal:
+                    raise PermanentError("Principal is required for grant action")
+                
+                result = await provider.grant_access(
+                    request_id=self.request.id,
+                    resource_type=asset_type,
+                    resource_name=name,
+                    catalog=catalog,
+                    principal=principal,
+                    privileges=privileges,
+                    commit_message=f"Grant {privileges} to {principal} on {name}"
+                )
+                
+                # Check if access already exists
+                if result.get("status") == "no_change":
+                    logger.info(f"No change needed for grant request: {result.get('message')}")
+                    # Mark as complete immediately - no Terraform action needed
+                    add_fact(self.db, self.request.id, "terraform_plan_received", {
+                        "status": "no_change",
+                        "message": result.get("message"),
+                        "existing_privileges": result.get("existing_privileges", [])
+                    }, actor="system")
+                    add_fact(self.db, self.request.id, "approval_received", {
+                        "approval_type": "platform_admin",
+                        "note": "Auto-approved: no changes required"
+                    }, actor="system")
+                    add_fact(self.db, self.request.id, "terraform_apply_received", {
+                        "status": "success",
+                        "message": result.get("message")
+                    }, actor="system")
+                    return
             
-            # Path structure: envs/{env}/resources/{name}.yaml
-            target_file = f"envs/{environment}/resources/{name}.yaml"
+            elif action == "revoke":
+                # Revoke access from an existing resource
+                principal = params.get("principal")
+                privileges = params.get("privileges")  # None = revoke all
+                
+                if not principal:
+                    raise PermanentError("Principal is required for revoke action")
+                
+                result = await provider.revoke_access(
+                    request_id=self.request.id,
+                    resource_type=asset_type,
+                    resource_name=name,
+                    catalog=catalog,
+                    principal=principal,
+                    privileges=privileges,
+                    commit_message=f"Revoke access from {principal} on {name}"
+                )
+                
+                # Check if nothing to revoke
+                if result.get("status") == "no_change":
+                    logger.info(f"No change needed for revoke request: {result.get('message')}")
+                    # Mark as complete immediately - no Terraform action needed
+                    add_fact(self.db, self.request.id, "terraform_plan_received", {
+                        "status": "no_change",
+                        "message": result.get("message"),
+                        "existing_privileges": result.get("existing_privileges", [])
+                    }, actor="system")
+                    add_fact(self.db, self.request.id, "approval_received", {
+                        "approval_type": "platform_admin",
+                        "note": "Auto-approved: no changes required"
+                    }, actor="system")
+                    add_fact(self.db, self.request.id, "terraform_apply_received", {
+                        "status": "success",
+                        "message": result.get("message")
+                    }, actor="system")
+                    return
             
-            # This creates the branch and pushes it
-            await provider.plan(
-                request_id=self.request.id,
-                target_file=target_file,
-                content=content,
-                commit_message=f"Plan: {asset_type} {name} in {catalog}"
-            )
+            else:
+                # Default: create new resource
+                # Construct YAML content matching the Terraform repo format
+                content = self._generate_yaml_spec(asset_type, name, catalog, params)
+                
+                # Path structure: envs/{env}/resources/{name}.yaml
+                target_file = f"envs/{environment}/resources/{name}.yaml"
+                
+                # This creates the branch and pushes it
+                await provider.plan(
+                    request_id=self.request.id,
+                    target_file=target_file,
+                    content=content,
+                    commit_message=f"Plan: {asset_type} {name} in {catalog}"
+                )
             
             # Record fact that we started
             add_fact(self.db, self.request.id, "terraform_plan_started", {}, actor="system")
@@ -221,15 +328,20 @@ class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
     @property
     def has_terraform_apply_success(self) -> bool:
         """Check if we received the apply callback with success."""
-        # We need to check the detail of the fact to ensure it was success, not failure
-        # For simplicity in this `has_fact` helper wrapper, we assume if the fact exists and state machine hasn't failed, it's good?
-        # Actually `has_fact` just checks existence. 
-        # Ideally we should verify status="success" in the fact data.
-        # But `has_fact` returns boolean. 
-        # Let's assume on failure, we would have transitioned to 'failed' if we had a "terraform_apply_failed" check.
-        # Here we just look for "terraform_apply_received".
-        # A more robust implementation would inspect the fact data.
-        return has_fact(self.db, self.request.id, "terraform_apply_received")
+        return has_fact(self.db, self.request.id, "terraform_apply_received", status="success")
+    
+    @property
+    def has_terraform_apply_failed(self) -> bool:
+        """Check if apply failed."""
+        return has_fact(self.db, self.request.id, "terraform_apply_received", status="failure")
 
     def on_enter_completed(self):
         pass
+    
+    def on_enter_failed(self):
+        """Handle transition to failed state."""
+        # Get the error from the fact
+        from app.state_machines.facts import get_fact_data
+        fact_data = get_fact_data(self.db, self.request.id, "terraform_apply_received", default={})
+        error_msg = fact_data.get("error", "Unknown error")
+        logger.error(f"[{self.request.id}] Terraform apply failed: {error_msg}")

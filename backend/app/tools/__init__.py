@@ -3,6 +3,7 @@ from app.tools.self_service.get_catalog_list import get_catalog_list
 from app.tools.self_service.get_schema_list import get_schema_list
 from app.tools.self_service.get_table_list import get_table_list
 from app.tools.execute_workflow import execute_workflow
+from app.tools.check_resource_access import check_resource_access
 from app.tools.self_service.search_requests import search_requests
 from app.tools.self_service.search_approvals import search_approvals
 from app.tools.self_service.search_user_entitlements import search_user_entitlements
@@ -34,6 +35,7 @@ AVAILABLE_TOOLS = [
     get_schema_list,
     get_table_list,
     execute_workflow,
+    check_resource_access,
     search_requests,
     search_approvals,
     search_user_entitlements,
