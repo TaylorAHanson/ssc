@@ -53,10 +53,11 @@ def get_current_user(
     
     # Handling for New Users (Just-in-Time Provisioning)
     # If a valid Databricks user comes in but isn't in our DB, we should create them.
-    if not user and user_email != MOCK_USER_EMAIL:
+    if not user:
          logger.info(f"User {user_email} not found in DB. Auto-provisioning...")
-         # Default role for new users is 'business_user'
-         default_role = db.query(RoleModel).filter(RoleModel.name == "business_user").first()
+         # Default role for new users is 'business_user', but mock user gets 'platform_admin'
+         target_role_name = "platform_admin" if user_email == MOCK_USER_EMAIL else "business_user"
+         default_role = db.query(RoleModel).filter(RoleModel.name == target_role_name).first()
          roles = [default_role] if default_role else []
          
          new_user = UserModel(
