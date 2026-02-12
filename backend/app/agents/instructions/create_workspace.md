@@ -3,13 +3,16 @@
 **Goal**: Provision a new Databricks Workspace.
 
 ## Information to Gather
-1.  **Workspace Name**: The desired name for the workspace.
-    *   *Validation*: Must be globally unique, alphanumeric with hyphens. pattern: `^[a-z0-9-]+$`
-    *   *Naming Convention*: Typically `{team}-{env}-{region}` (e.g., `finance-prod-eastus`).
+1.  **Business Domain**: The specific business unit or domain this workspace will serve (e.g., `legal`, `finance`, `hr`, `marketing`, `product`, `sales`, `engineering`).
 2.  **Environment**: Target environment.
-    *   *Options*: `dev`, `test`, `stage`, `prod`.
-3.  **Region**: Cloud region.
-    *   *Default*: `eastus2` (unless specified otherwise).
+    *   *Options*: `dev`, `test`, `stage`, `prod`, or `all` (for all environments).
+3.  **Justification**: A detailed reason for needing a *new* workspace.
+    *   *Analysis Logic*: A new workspace is only valid for **new business domain onboarding**. If the user is part of an existing domain that already has a workspace, push them to request access to that existing workspace instead. If the justification is weak or doesn't align with domain onboarding, challenge it.
+4.  **Workspace Name**: This is hardcoded to a specific format. Do NOT ask the user for the name.
+    *   *Format*: `ws-{business_domain}-{environment}` (e.g., `ws-finance-prod`).
+
+## Requirements
+*   **Training**: Note that the user will need to complete the **Platform Administration** training path before the workspace can be fully provisioned. Offer a link to that training path in the response.
 
 ## Execution
 Call `execute_workflow` with:
@@ -17,9 +20,11 @@ Call `execute_workflow` with:
 {
   "workflow_type": "workspace_provision",
   "parameters": {
-    "workspace_name": "...",
+    "business_domain": "...",
     "environment": "...",
-    "region": "..."
+    "justification": "...",
+    "workspace_name": "ws-{business_domain}-{environment}",
+    "region": "eastus2"
   }
 }
 ```

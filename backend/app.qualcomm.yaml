@@ -49,7 +49,7 @@ env:
   - name: DATABRICKS_WAREHOUSE_ID
     value: "be96f593c35b5dd9"
   - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
-    value: databricks-gemini-2-5-flash
+    value: databricks-gemini-3-flash
   - name: AGENT_ENABLED
     value: "true"
   - name: AGENT_MAX_ITERATIONS

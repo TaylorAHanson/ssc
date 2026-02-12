@@ -7,7 +7,7 @@ State is calculated from facts, not stored directly.
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
-from app.db.request import EventModel, RequestModel
+from app.db import EventModel, RequestModel
 import uuid
 import logging
 

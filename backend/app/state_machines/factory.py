@@ -65,7 +65,7 @@ def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMac
     elif r_type == RequestType.REPORT_EXECUTION:
         from app.state_machines.report_execution import ReportExecutionStateMachine
         return ReportExecutionStateMachine(request, db)
-    
+
     # Fallback / Default for others (implement specific ones as needed)
     raise ValueError(f"No state machine implemented for request type: {r_type}")
 

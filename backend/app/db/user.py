@@ -38,5 +38,5 @@ class UserModel(Base):
     roles = relationship("RoleModel", secondary=user_roles, back_populates="users")
 
     def has_role(self, role_name: str) -> bool:
-        """Check if user has a specific role."""
-        return any(role.name == role_name for role in self.roles)
+        """Check if user has a specific role. platform_admin has all roles."""
+        return any(role.name in [role_name, "platform_admin"] for role in self.roles)

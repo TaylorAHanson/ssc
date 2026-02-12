@@ -381,7 +381,7 @@ export function Home() {
         query: initialQuery,
         conversation_history: [], // First message, no history
         context: {
-          agent_mode: agentMode
+          mode: agentMode
         },
       });
 
@@ -491,7 +491,7 @@ export function Home() {
         })),
         context: {
           ...conversationState.context,
-          agent_mode: agentMode
+          mode: agentMode
         },
       });
 

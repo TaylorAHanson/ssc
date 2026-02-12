@@ -1,6 +1,8 @@
 from sqlalchemy.orm import Session
-from app.db.user import RoleModel
+from app.db.user import UserModel, RoleModel
 import logging
+import uuid
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,3 +36,34 @@ def init_db(db: Session) -> None:
         logger.info(f"Database initialization complete. Seeded {roles_created} roles.")
     else:
         logger.info("Database initialization complete. All roles already exist.")
+
+    # 2. SEED ADMIN USER
+    # We use the same email as deps.py for local dev fallback
+    admin_email = "admin@qualcomm.com"
+    admin_user = db.query(UserModel).filter(UserModel.email == admin_email).first()
+    
+    if not admin_user:
+        logger.info(f"Seeding admin user: {admin_email}")
+        try:
+             admin_user = UserModel(
+                 id=str(uuid.uuid4()),
+                 email=admin_email,
+                 full_name="System Admin",
+                 is_active=True
+             )
+             db.add(admin_user)
+             db.flush() # Flush to get ID if needed, but here we set it manually.
+                        # Flush helps check for integrity errors early.
+             
+             # Assign all roles
+             all_roles = db.query(RoleModel).all()
+             admin_user.roles = all_roles
+             
+             db.commit()
+             db.refresh(admin_user)
+             logger.info(f"Admin user {admin_email} seeded successfully.")
+        except Exception as e:
+             logger.warning(f"Failed to seed admin user (might already exist): {e}")
+             db.rollback()
+    else:
+        logger.debug(f"Admin user {admin_email} already exists.")

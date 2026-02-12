@@ -1,4 +1,4 @@
-from app.db.request import ApprovalModel
+from app.db import ApprovalModel
 from datetime import datetime
 import uuid
 import random

@@ -10,5 +10,29 @@
     "type": "Webinar",
     "attendees": 0,
     "joinLink": "https://meet.google.com/nhy-qats-kmb"
+  },
+  {
+    "id": "4e15d4ff7fobgbcu7cfkg79g3s@google.com",
+    "title": "My Test Event",
+    "description": "",
+    "date": "2026-02-17T00:00:00+00:00",
+    "time": "12:00 AM",
+    "duration": "24 hours",
+    "location": "TBD",
+    "type": "Webinar",
+    "attendees": 0,
+    "joinLink": null
+  },
+  {
+    "id": "7a6huku5uubilho5s02hraa413@google.com",
+    "title": "Office Hours",
+    "description": "",
+    "date": "2026-02-25T17:30:00-07:00",
+    "time": "05:30 PM",
+    "duration": "50 minutes",
+    "location": "TBD",
+    "type": "Office Hours",
+    "attendees": 0,
+    "joinLink": null
   }
 ]

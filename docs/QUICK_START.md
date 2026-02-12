@@ -21,6 +21,16 @@ Edit `.env` and configure the following key sections:
 - You can access the app at `http://localhost:5173` or the API at `http://localhost:8000`. 
 - All logs are written to `backend.log` and `frontend.log` in the root directory.
 
+### Use tools
+
+#### API Documentation
+- **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`
+
+#### Profiling with pyinstrument
+http://localhost:5173/api/v1/any-endpoint-here?profile=true
+
+
 ### (Optional) Setup Mailpit (Email Testing)
 We use **Mailpit** to capture emails sent by the application during development.
 

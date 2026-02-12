@@ -16,7 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy.orm import Session
 from app.db.session import get_lakebase_session
-from app.db.request import RequestModel, ApprovalModel, EventModel, FailureModel
+from app.db import RequestModel, ApprovalModel, EventModel, FailureModel
 from app.models.request import RequestType, RequestCreate, Environment
 from app.services.request_service import RequestService
 

@@ -9,8 +9,8 @@ on:
       - develop
 
 env:
-  APP_NAME: edas-hub-dev
-  WORKSPACE_PATH: /Workspace/Shared/apps/edas-hub-dev
+  APP_NAME: atlas-dev
+  WORKSPACE_PATH: /Workspace/Shared/apps/atlas-dev
 
 jobs:
   build-and-deploy:
@@ -80,7 +80,7 @@ jobs:
           # Check if app exists, create if not
           if ! databricks apps get ${{ env.APP_NAME }} > /dev/null 2>&1; then
             echo "Creating app ${{ env.APP_NAME }}..."
-            databricks apps create ${{ env.APP_NAME }} --description "EDAS Hub - Development Environment"
+            databricks apps create ${{ env.APP_NAME }} --description "Atlas - Development Environment"
           fi
           
           # Deploy

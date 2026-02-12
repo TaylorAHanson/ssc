@@ -144,6 +144,7 @@ class AgentRunner:
                             
                         # Inject OBO token if provided
                         if obo_token:
+                            logger.info(f"AgentRunner: Injecting OBO token into tool {fn_name}")
                             fn_args["_obo_token"] = obo_token
                         
                         # Inject user identity for tools that need it (e.g., execute_workflow)

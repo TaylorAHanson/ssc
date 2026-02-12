@@ -93,27 +93,46 @@ if [ -n "$PROFILE" ]; then
     PROFILE_FLAG="-p $PROFILE"
 fi
 
-echo "============================================"
-echo "Atlas App Deployment (DABs)"
-echo "============================================"
-
-echo "Target Environment: $TARGET"
-echo "Profile: ${PROFILE:-DEFAULT}"
-if [ "$TARGET" = "local" ]; then
-    echo "Dev User: $DEV_USER"
+# Determine App Name Slug (basename)
+APP_SLUG="atlas"
+if [ -n "$BRAND" ]; then
+    APP_SLUG="$BRAND"
 fi
-echo "Debug Mode: $DEBUG_MODE"
+
+# Determine Full App Name based on Target and Slug
+if [ "$TARGET" = "local" ]; then
+    APP_NAME="${APP_SLUG}-local-${DEV_USER}"
+elif [ "$TARGET" = "dev" ]; then
+    APP_NAME="${APP_SLUG}-dev"
+elif [ "$TARGET" = "stage" ]; then
+    APP_NAME="${APP_SLUG}-stage"
+elif [ "$TARGET" = "prod" ]; then
+    APP_NAME="${APP_SLUG}-prod"
+else
+    APP_NAME="${APP_SLUG}-${TARGET}"
+fi
+
+# Convert slug to uppercase for display (Bash 3.2 compatible)
+DISPLAY_SLUG=$(echo "$APP_SLUG" | tr '[:lower:]' '[:upper:]')
+
+echo "============================================"
+echo "$DISPLAY_SLUG APP DEPLOYMENT (DABs)"
+echo "============================================"
+echo "App Name: $APP_NAME"
+echo "Bundle Resource ID: $BUNDLE_NAME (Internal)"
 echo "============================================"
 echo ""
 
 # Step 1: Build frontend
-echo "[1/3] Building frontend..."
+echo "[1/3] Building frontend ($APP_SLUG)..."
 npm ci --silent
 
 # Clean previous build
 rm -rf dist
 
 # Set VITE_API_BASE_URL for the build - must be relative for deployed apps
+# MSYS_NO_PATHCONV=1 prevents Git Bash on Windows from converting "/api/v1" to "C:/Program Files/Git/api/v1"
+export MSYS_NO_PATHCONV=1
 export VITE_API_BASE_URL="/api/v1"
 echo "  Building with VITE_API_BASE_URL=${VITE_API_BASE_URL}"
 npm run build
@@ -132,18 +151,21 @@ echo "Frontend built and copied to backend/static"
 
 # Step 2: Deploy bundle resources
 echo ""
-echo "[2/3] Deploying bundle resources..."
+echo "[2/3] Deploying bundle resources ($APP_SLUG)..."
+
+# Pass app_name variable to override databricks.yml defaults
+VAR_FLAGS="--var app_name=$APP_NAME"
 
 if [ "$DEBUG_MODE" = "true" ]; then
     echo "Running with debug mode enabled"
-    if databricks bundle deploy --debug -t "$TARGET" $PROFILE_FLAG; then
+    if databricks bundle deploy --debug -t "$TARGET" $PROFILE_FLAG $VAR_FLAGS; then
         echo "Bundle deployment successful"
     else
         echo "Bundle deployment failed"
         exit 1
     fi
 else
-    if databricks bundle deploy -t "$TARGET" $PROFILE_FLAG; then
+    if databricks bundle deploy -t "$TARGET" $PROFILE_FLAG $VAR_FLAGS; then
         echo "Bundle deployment successful"
     else
         echo "Bundle deployment failed"
@@ -151,19 +173,63 @@ else
     fi
 fi
 
+# Update App Scopes (Workaround for Terraform/Bundle limitations)
+# This ensures OBO token has necessary permissions
+echo ""
+echo "[2.5/3] Configuring App Scopes..."
+echo "Updating scopes for app: $APP_NAME"
+
+# Broad dev set of scopes based on architecture needs
+SCOPES_LIST='[
+  "sql", "sql.statement-execution", "sql.warehouses",
+  "files.files",
+  "workspace.secrets", "workspace.repos",
+  "vectorsearch.vector-search-endpoints",
+  "iam.current-user", "iam.users", "iam.groups",
+  "jobs.jobs", "pipelines.pipelines",
+  "serving.serving-endpoints", "serving.serving-endpoints-data-plane",
+  "compute.clusters"
+]'
+# Wrap in object for update command
+SCOPES_JSON="{\"user_api_scopes\": $SCOPES_LIST}"
+
+# Check if update is needed to avoid unnecessary restarts
+echo "Checking current scopes..."
+CURRENT_SCOPES=$(databricks apps get "$APP_NAME" 2>/dev/null | jq -c '.effective_user_api_scopes | sort' || echo "null")
+TARGET_SCOPES=$(echo "$SCOPES_LIST" | jq -c 'sort')
+
+if [ "$CURRENT_SCOPES" != "$TARGET_SCOPES" ]; then
+    echo "↻ Scopes have changed. Updating and Restarting..."
+    echo "  Current: $CURRENT_SCOPES"
+    echo "  Target:  $TARGET_SCOPES"
+
+    if databricks apps update "$APP_NAME" --json "$SCOPES_JSON" $PROFILE_FLAG; then
+        echo "✓ App scopes updated successfully"
+        
+        # Restart is only needed if we changed scopes
+        echo "[2.6/3] Restarting App Container..."
+        echo "Forces the container to recycle and pick up the new Identity Token."
+        databricks apps restart "$APP_NAME" || echo "⚠️ App restart failed (might be stopped)"
+    else
+        echo "⚠️ Failed to update app scopes."
+    fi
+else
+    echo "✓ Scopes are up to date. Skipping update and restart."
+fi
+
 # Step 3: Run the app (deploys source code and starts it)
 echo ""
-echo "[3/3] Running app (deploying source code and starting)..."
+echo "[3/3] Running app (deploying source code and starts it)..."
 
 if [ "$DEBUG_MODE" = "true" ]; then
-    if databricks bundle run "$BUNDLE_NAME" --debug -t "$TARGET" $PROFILE_FLAG; then
+    if databricks bundle run "$BUNDLE_NAME" --debug -t "$TARGET" $PROFILE_FLAG $VAR_FLAGS; then
         echo "App run successful"
     else
         echo "App run failed"
         exit 1
     fi
 else
-    if databricks bundle run "$BUNDLE_NAME" -t "$TARGET" $PROFILE_FLAG; then
+    if databricks bundle run "$BUNDLE_NAME" -t "$TARGET" $PROFILE_FLAG $VAR_FLAGS; then
         echo "App run successful"
     else
         echo "App run failed"
