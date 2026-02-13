@@ -2,8 +2,6 @@
 
 Use this template as your primary guide when creating a new state machine. Copy this file to `backend/app/state_machines/your_machine_name/plan.md` and fill it out before writing code. This serves as a design document, implementation checklist, and reference for agents and future developers.
 
-> **Why this matters**: State machines are the core of our business logic. They must be resilient to server restarts (idempotent), traceable (fact-based), and scalable (async processing). A well-designed state machine handles failures gracefully and always knows "what happens next."
-
 ## 1. Metadata
 Fill in the information below
 - **Name**: `[Name]StateMachine`
@@ -72,6 +70,7 @@ Justification:
     - *Naming*: Use snake_case for IDs (e.g., `provisioning_workspace`).
 - [ ] Define transitions (e.g., `submit = pending.to(processing)`).
     - *Tip*: Transitions are "atomic" moves. Logic should happen *during* the transition or *after* entering the new state.
+    - *Automation*: The `BaseRequestStateMachine` automatically discovers and attempts to trigger these transitions on every tick. You do **not** need to manually register them.
 
 ### Step 3: Configuration Mappings
 - [ ] Override `STATE_COMPLETION_FACTS`.
@@ -101,7 +100,7 @@ This is where the work happens. The base class's `tick()` method calls these hoo
 
 ## 5. Reusable Components (Cheatsheet)
 
-The `BaseRequestStateMachine` provides "magic" helpers to make your life easier:
+The `BaseRequestStateMachine` provides "magic" helpers to make your life easier. Use these, don't reinvent the wheel.
 
 - **Approvals Logic**:
   - `self.create_approval_task("manager")` - Creates a `pending` record in the `approvals` table.

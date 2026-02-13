@@ -71,26 +71,7 @@ class ReportExecutionStateMachine(BaseRequestStateMachine):
     }
 
     
-    def _try_transitions(self):
-        """Attempts to execute available transitions."""
-        # Try base transitions first (submit, reject, etc.)
-        super()._try_transitions()
-        
-        # Try report-specific transitions
-        triggers = ['prompts_done', 'assembly_done', 'distribute_done']
-        
-        for trigger in triggers:
-            func = getattr(self, trigger, None)
-            if not func: continue
-            
-            try:
-                state_before = self.current_state.id
-                func()
-                if self.current_state.id != state_before:
-                    logger.info(f"[{self.request.id}] Triggered '{trigger}': {state_before} -> {self.current_state.id}")
-                    break
-            except Exception:
-                pass 
+
 
     # --------------------------------------------------------------------------
     # Facts & Properties

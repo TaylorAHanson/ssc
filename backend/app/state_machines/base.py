@@ -137,14 +137,32 @@ class BaseRequestStateMachine(StateMachine):
         return False
 
     def _try_transitions(self):
-        """Attempts to execute available transitions based on guard conditions."""
-        possible_triggers = [
-            'submit', 'reject', 'approve_manager', 'approve_owner', 
-            'approve_admin', 'auto_approve', 'complete_training', 'finish_provisioning',
-            'finish_planning', 'finish_applying', 'apply_failed'  # GitOps/Terraform transitions
-        ]
+        """
+        Attempts to execute available transitions based on guard conditions.
         
-        for trigger in possible_triggers:
+        Dynamically discovers all outgoing transitions from the current state and attempts
+        to fire their events. This avoids hardcoding triggers in the base class.
+        """
+        # Get all transitions starting from the current state
+        # Note: python-statemachine stores transitions in the State object
+        # but the specific attribute path might vary by version. 
+        # Using the standard public API where possible.
+        
+        current_state_obj = self.current_state
+        
+        # We need to find the event names (triggers) associated with these transitions.
+        # Introspection showed we can access transitions via .transitions
+        
+        if not hasattr(current_state_obj, 'transitions'):
+            return
+
+        # Collect unique event names to try
+        triggers_to_try = set()
+        for transition in current_state_obj.transitions:
+            if hasattr(transition, 'event'):
+                 triggers_to_try.add(transition.event)
+        
+        for trigger in triggers_to_try:
             func = getattr(self, trigger, None)
             if not func: continue
             
