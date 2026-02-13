@@ -1,0 +1,52 @@
+name: Publish Branded Version
+
+on:
+  push:
+    branches:
+      - develop
+
+permissions:
+  contents: write
+
+jobs:
+  publish-branded:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Need full history to push to another branch? Actually 1 is fine if we force push a new branch state
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare Branded Branch
+        run: |
+          # Create a new branch state from current HEAD
+          # We don't care about the history of the branded branch, we want it to mirror develop state
+          git checkout -b version/qualcomm/develop
+
+      - name: Apply Branding Filter
+        run: |
+          chmod +x ./scripts/generate_branded_version.sh
+          ./scripts/generate_branded_version.sh .
+
+      - name: Commit and Push
+        run: |
+          git add .
+          
+          # Check if there are changes (files deleted)
+          if git diff --staged --quiet; then
+            echo "No branded files found to remove. Pushing current state."
+            # Even if no files removed, we still might be ahead/behind the remote version branch,
+            # so we proceed to push the current state of develop (which is now confirmed clean/matching).
+            # But we need a commit to push? 
+            # If we created a branch from HEAD, and made no changes, we are at HEAD.
+          else
+             git commit -m "chore: generate branded version [skip ci]"
+          fi
+
+          # Force push to the target branch
+          git push -f origin version/qualcomm/develop

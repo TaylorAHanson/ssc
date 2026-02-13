@@ -14,5 +14,6 @@ trigger: always_on
 - For troubleshooting, you may tail the logs at backend.log or frontend.log. This is especially helpful for python errors or for getting log statements. Always check backend.log before finishing up, since there may be errors preventing fastApi from starting.
 
 ## Gotchas
-- If you create temporary scripts to test things or check things, remember this runs as a venv and you won't be able to run locally without that.
+- If you create temporary scripts to test things or check things, remember this project runs inside a venv and most libraries aren't natively installed
 - Don't hardcode the app name or use the app name in any variable naming. There are environment settings prefixed by BRANDING_ that should be used instead. See backend/app/core/config.py for more details.
+
