@@ -1,7 +1,7 @@
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from app.state_machines.report_execution import ReportExecutionStateMachine
+from app.state_machines.reporting.state_machine import ReportExecutionStateMachine
 from app.db.request import RequestModel
 from app.models.request import RequestType
 
