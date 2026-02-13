@@ -50,7 +50,7 @@ async def test_on_enter_distribute_async_sends_html_email(mock_db, sample_reques
     sm = ReportExecutionStateMachine(sample_request, mock_db)
     
     # Mock NotificationProvider
-    with patch("app.state_machines.report_execution.NotificationProvider") as MockProvider:
+    with patch("app.state_machines.reporting.state_machine.NotificationProvider") as MockProvider:
         mock_instance = MockProvider.return_value
         mock_instance.send_email = AsyncMock(return_value=True)
         
@@ -104,7 +104,7 @@ async def test_on_enter_execute_prompts_async_uses_runner(mock_db, sample_reques
     
     sm = ReportExecutionStateMachine(sample_request, mock_db)
     
-    with patch("app.state_machines.report_execution.AgentRunner") as MockRunner:
+    with patch("app.state_machines.reporting.state_machine.AgentRunner") as MockRunner:
         mock_instance = MockRunner.return_value
         mock_instance.run = AsyncMock(return_value={
             "content": "<table>Results</table>",
