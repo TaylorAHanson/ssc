@@ -69,7 +69,7 @@ jobs:
       - name: Run tests
         run: |
           cd backend
-          pytest tests/ -v --tb=short || echo "Tests completed"
+          pytest tests/ -v --tb=short
 
   security-check:
     runs-on: ubuntu-latest
