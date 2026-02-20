@@ -97,8 +97,7 @@ def test_github_repo_from_template(db_session):
     harness.tick(request.id)
     harness.assert_state(request.id, "provisioning")
     
-    with patch("app.providers.github.client.GitHubProvider") as MockProvider, \
-         patch("app.core.config.settings") as mock_settings:
+    with patch("app.providers.github.client.GitHubProvider") as MockProvider:
         
         mock_github = AsyncMock()
         MockProvider.return_value.__aenter__.return_value = mock_github

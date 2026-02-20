@@ -92,7 +92,7 @@ export function Training() {
         totalCount: courses.length
       };
     });
-  }, [allTracks]);
+  }, [allTracks, completedCourseIds, pendingCourseIds]);
 
   // Combined filtering
   const filteredTracks = useMemo(() => {

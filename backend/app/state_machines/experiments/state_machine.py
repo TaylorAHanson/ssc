@@ -84,7 +84,12 @@ class CampaignStateMachine(BaseRequestStateMachine):
     # Training -> Running (Auto-transition when 'training_completed' fact appears)
     complete_training = training_pending.to(running, cond="has_training_completed")
     
-    finish = running.to(completed)
+    finish = running.to(completed, cond="has_campaign_finished")
+
+    @property
+    def has_campaign_finished(self) -> bool:
+        from app.state_machines.facts import has_fact
+        return has_fact(self.db, self.request.id, "campaign_finished")
     
     # Facts - Simplified for experiment
     STATE_COMPLETION_FACTS = {

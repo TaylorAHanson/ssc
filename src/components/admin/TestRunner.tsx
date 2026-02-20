@@ -45,9 +45,10 @@ export function TestRunner() {
         try {
             const data = await api.runTests(path);
             setOutput(data);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('Failed to run tests:', err);
-            setError(err.response?.data?.detail || err.message || 'Failed to run tests');
+            const errorMsg = err instanceof Error ? err.message : 'Failed to run tests';
+            setError((err as any)?.response?.data?.detail || errorMsg);
         } finally {
             setIsRunning(false);
         }
@@ -60,8 +61,8 @@ export function TestRunner() {
         try {
             await api.resetDb();
             setDbMessage({ type: 'success', text: 'Database reset successfully.' });
-        } catch (err: any) {
-            setDbMessage({ type: 'error', text: err.message });
+        } catch (err: unknown) {
+            setDbMessage({ type: 'error', text: err instanceof Error ? err.message : 'Unknown error' });
         } finally {
             setIsResetting(false);
         }
@@ -73,8 +74,8 @@ export function TestRunner() {
         try {
             await api.seedDb();
             setDbMessage({ type: 'success', text: 'Database seeded successfully.' });
-        } catch (err: any) {
-            setDbMessage({ type: 'error', text: err.message });
+        } catch (err: unknown) {
+            setDbMessage({ type: 'error', text: err instanceof Error ? err.message : 'Unknown error' });
         } finally {
             setIsSeeding(false);
         }

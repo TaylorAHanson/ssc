@@ -28,7 +28,7 @@ class TestSearchRequestsTool:
     async def test_search_by_id(self, tool, db_session):
         with patch("app.tools.self_service.search_requests.get_lakebase_session", return_value=db_session):
             # Seed data
-            req = RequestFactory.create(db_session, id="req-123-abc", title="Target")
+            RequestFactory.create(db_session, id="req-123-abc", title="Target")
             RequestFactory.create(db_session, id="req-456-def", title="Other")
             
             # Execute

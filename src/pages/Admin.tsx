@@ -53,6 +53,7 @@ export function Admin() {
   // Dashboard requests search and sort state
 
   // Load content on tab change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (activeTab === 'content-manager') {
       loadContentFiles();
@@ -115,7 +116,7 @@ export function Admin() {
       let content;
       try {
         content = JSON.parse(contentData);
-      } catch (e) {
+      } catch {
         throw new Error('Invalid JSON format');
       }
 

@@ -58,8 +58,16 @@ async def test_campaign_workflow_experiment(db_session: Session):
     
     print(f"DEBUG: Created Campaign {campaign.id}")
     
-    # 2. Start Campaign (Pending -> Running)
-    # The tick will transition to Running and spawn children
+    # 2. Start Campaign (Pending -> Training Pending)
+    # The tick will transition to Training Pending
+    harness.tick(campaign.id)
+    harness.assert_state(campaign.id, "training_pending")
+
+    # 2.5 Add training completed fact (Training Pending -> Running)
+    from app.state_machines.facts import add_fact
+    add_fact(db_session, campaign.id, "training_completed", {}, actor="system")
+
+    # Tick again to move to Running and spawn children
     harness.tick(campaign.id)
     harness.assert_state(campaign.id, "running")
     

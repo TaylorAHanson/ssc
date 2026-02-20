@@ -85,7 +85,7 @@ export function AdminReports() {
         try {
             await deleteSubscription(id);
             await loadData();
-        } catch (err) {
+        } catch {
             setError('Failed to delete subscription');
         }
     };

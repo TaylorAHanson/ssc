@@ -332,6 +332,7 @@ export function Home() {
   }, [conversationState?.messages, conversationState?.currentQuestionIndex]);
 
   // Focus input when conversation starts
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (conversationState && !conversationState.showConfirmation) {
       setTimeout(() => inputRef.current?.focus(), 100);
