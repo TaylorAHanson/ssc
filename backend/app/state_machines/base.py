@@ -505,8 +505,8 @@ class BaseRequestStateMachine(StateMachine):
         ).all()
 
     def all_children_completed(self) -> bool:
-        """Check if all child requests are completed."""
+        """Check if all child requests are completed. Returns False if no children."""
         children = self.get_children()
-        if not children: return True
+        if not children: return False # Must have children to be completed in compound workflows
         return all(c.status in ["completed", "rejected", "failed"] for c in children)
 

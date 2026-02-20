@@ -58,8 +58,12 @@ echo "Comparing and syncing changes into $TARGET_DIR..."
 # We ignore errors in case there are no tracked files yet
 git ls-files -z | xargs -0 rm -f 2>/dev/null || true
 
-# 2. Copy the new contents over, ignoring any nested .git directories
-rsync -a --exclude='.git/' "$SYNC_SRC" .
+# 2. Copy the new contents over (excluding any .git directories just in case)
+# Since rsync isn't available by default in Git Bash (Windows), we use standard cp and a subshell with dotglob
+(
+    shopt -s dotglob
+    cp -r "$SYNC_SRC"/* . 2>/dev/null || true
+)
 
 echo ""
 echo "Sync complete!"

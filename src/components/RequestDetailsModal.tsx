@@ -65,8 +65,9 @@ export function RequestDetailsModal({ request, onClose, RequestStateList }: Requ
                         <div className="space-y-4">
                             {request.conversation && request.conversation.length > 0 ? (
                                 request.conversation.map((message, idx) => {
-                                    const isUser = message.type === 'user' || (message as any).role === 'user';
-                                    const isAgent = message.type === 'agent' || (message as any).role === 'assistant' || (message as any).role === 'agent';
+                                    const msgObj = message as unknown as Record<string, unknown>;
+                                    const isUser = message.type === 'user' || msgObj.role === 'user';
+                                    const isAgent = message.type === 'agent' || msgObj.role === 'assistant' || msgObj.role === 'agent';
 
                                     return (
                                         <div
