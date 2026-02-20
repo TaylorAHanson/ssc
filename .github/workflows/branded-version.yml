@@ -31,7 +31,7 @@ jobs:
       - name: Apply Branding Filter
         run: |
           chmod +x ./scripts/generate_branded_version.sh
-          ./scripts/generate_branded_version.sh .
+          ./scripts/generate_branded_version.sh qualcomm .
 
       - name: Commit and Push
         run: |
