@@ -7,6 +7,13 @@ if [ "$#" -lt 1 ]; then
     exit 1
 fi
 
+if [ -d "$1" ]; then
+    echo "Error: The first argument must be the brand name, not a directory."
+    echo "Usage: $0 <brand_name> [target_dir]"
+    echo "Example: $0 qualcomm ."
+    exit 1
+fi
+
 BRAND_NAME="$1"
 TARGET_DIR="${2:-.}"
 
