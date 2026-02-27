@@ -3,6 +3,7 @@ import { Bell, X, Settings } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useRequestStore } from '../../stores/requestStore';
 import { useUserStore } from '../../stores/userStore';
+import { AppSwitcher } from './AppSwitcher';
 
 export function Header() {
   const pendingCount = useRequestStore((state) => state.getPendingApprovalsCount());
@@ -68,6 +69,7 @@ export function Header() {
         )}
         {!showBanner && <div className="flex-1" />}
         <div className="flex items-center gap-4">
+          <AppSwitcher />
           <Link
             to="/approvals"
             className="relative p-2 rounded-md hover:bg-gray-100 cursor-pointer transition-colors"

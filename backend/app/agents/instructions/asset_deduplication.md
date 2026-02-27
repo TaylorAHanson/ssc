@@ -97,3 +97,15 @@ If `fingerprint` is enabled and consistent, boost final similarity or “overrid
 6) **report_run** (SQL/Notebook)
 - Produce a Markdown/HTML summary with top BLOCKER and WARN items.
 - Optional: refresh a Databricks SQL dashboard.
+
+## Execution
+Call `execute_workflow` with:
+```json
+{
+  "workflow_type": "asset_deduplication",
+  "parameters": {
+    "target_catalog": "...",
+    "reference_catalog": "..."
+  }
+}
+```

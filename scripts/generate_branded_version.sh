@@ -33,14 +33,28 @@ find "$TARGET_DIR" -type f -not -path '*/.git/*' -print0 | while IFS= read -r -d
     fi
 done
 
-APP_YAML_SRC="$TARGET_DIR/backend/app.${BRAND_NAME}.yaml"
-APP_YAML_DEST="$TARGET_DIR/backend/app.yaml"
+# Define pairs of source -> destination templates using a simple space-delimited string
+# Format: "source_suffix:destination"
+# We inject the BRAND_NAME into the source filename automatically
+MAPPINGS=(
+    "backend/app.${BRAND_NAME}.yaml:backend/app.yaml"
+    "databricks.${BRAND_NAME}.yml:databricks.yml"
+    "deploy.${BRAND_NAME}.sh:deploy.sh"
+)
 
-if [ -f "$APP_YAML_SRC" ]; then
-    echo "Moving $APP_YAML_SRC to $APP_YAML_DEST"
-    mv "$APP_YAML_SRC" "$APP_YAML_DEST"
-else
-    echo "Warning: Brand config file $APP_YAML_SRC not found."
-fi
+for mapping in "${MAPPINGS[@]}"; do
+    SRC_SUFFIX="${mapping%%:*}"
+    DEST_SUFFIX="${mapping##*:}"
+    
+    SRC_FILE="$TARGET_DIR/$SRC_SUFFIX"
+    DEST_FILE="$TARGET_DIR/$DEST_SUFFIX"
+    
+    if [ -f "$SRC_FILE" ]; then
+        echo "Moving $SRC_FILE to $DEST_FILE"
+        mv "$SRC_FILE" "$DEST_FILE"
+    else
+        echo "Warning: Branded file $SRC_FILE not found."
+    fi
+done
 
 echo "Branded version generation complete."

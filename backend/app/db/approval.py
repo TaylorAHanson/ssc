@@ -1,7 +1,7 @@
 """
 Approval database models.
 """
-from sqlalchemy import Column, String, DateTime, ForeignKey
+from sqlalchemy import Column, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.base import Base
@@ -15,7 +15,7 @@ class ApprovalModel(Base):
     approval_type = Column(String)  # 'manager', 'data_owner', 'platform_admin', etc.
     requested_by = Column(String)
     requested_by_email = Column(String)
-    status = Column(String)  # 'pending', 'approved', 'rejected', 'delegated'
+    status = Column(String)  # 'pending', 'approved', 'rejected', 'delegated', 'superseded'
     approved_by = Column(String, nullable=True)
     approved_at = Column(DateTime, nullable=True)
     rejected_by = Column(String, nullable=True)
@@ -23,6 +23,7 @@ class ApprovalModel(Base):
     rejection_note = Column(String, nullable=True)
     delegated_to = Column(String, nullable=True)
     delegated_to_email = Column(String, nullable=True)
+    superseded_note = Column(Text, nullable=True)  # Set when parameters are edited & approval is superseded
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     

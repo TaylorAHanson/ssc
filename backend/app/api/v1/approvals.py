@@ -9,8 +9,51 @@ from app.db import ApprovalModel, RequestModel
 from app.models.request import Approval, RequestType, ApprovalType
 from app.api.deps import get_current_user
 from app.db.user import UserModel
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Keys excluded from the editable workflow parameters view.
+# These are internal/system fields that should not surface to approvers.
+_EXCLUDED_PARAM_KEYS = {"requested_by", "requested_by_email"}
+
+
+def _get_workflow_params(state_context: dict | None) -> dict:
+    """Return a filtered view of state_context safe for approver consumption.
+    
+    Excludes internal tracking fields (requested_by, requested_by_email,
+    and any key starting with '_').
+    """
+    if not state_context:
+        return {}
+    return {
+        k: v for k, v in state_context.items()
+        if k not in _EXCLUDED_PARAM_KEYS and not k.startswith("_")
+    }
+
+
+def _map_approval(approval_model: ApprovalModel, request_model: RequestModel) -> Approval:
+    """Map an ApprovalModel + RequestModel to an Approval Pydantic response."""
+    return Approval(
+        id=approval_model.id,
+        requestId=approval_model.request_id,
+        requestTitle=request_model.title,
+        requestType=request_model.type,
+        approvalType=approval_model.approval_type,
+        requestedBy=approval_model.requested_by,
+        requestedByEmail=approval_model.requested_by_email or "",
+        status=approval_model.status,
+        createdAt=approval_model.created_at,
+        updatedAt=approval_model.updated_at,
+        rejectionNote=approval_model.rejection_note,
+        delegatedTo=approval_model.delegated_to,
+        delegatedToEmail=approval_model.delegated_to_email,
+        supersededNote=approval_model.superseded_note,
+        requestConversation=request_model.conversation,
+        workflowParameters=_get_workflow_params(request_model.state_context),
+    )
 
 
 @router.get("", response_model=List[Approval])
@@ -33,28 +76,7 @@ async def get_approvals(
         query = query.filter(ApprovalModel.status == status)
         
     results = query.all()
-    
-    # Map to Pydantic model
-    approvals = []
-    for approval_model, request_model in results:
-        approvals.append(Approval(
-            id=approval_model.id,
-            requestId=approval_model.request_id,
-            requestTitle=request_model.title,
-            requestType=request_model.type,
-            approvalType=approval_model.approval_type,
-            requestedBy=approval_model.requested_by,
-            requestedByEmail=approval_model.requested_by_email or "",
-            status=approval_model.status,
-            createdAt=approval_model.created_at,
-            updatedAt=approval_model.updated_at,
-            rejectionNote=approval_model.rejection_note,
-            delegatedTo=approval_model.delegated_to,
-            delegatedToEmail=approval_model.delegated_to_email,
-            requestConversation=request_model.conversation
-        ))
-        
-    return approvals
+    return [_map_approval(am, rm) for am, rm in results]
 
 
 @router.get("/{approval_id}", response_model=Approval)
@@ -80,20 +102,6 @@ async def get_approval(
            approval_model.delegated_to_email != current_user.email:
             raise HTTPException(status_code=403, detail="Not authorized to view this approval")
         
-    approval_model, request_model = result
-    
-    return Approval(
-        id=approval_model.id,
-        requestId=approval_model.request_id,
-        requestTitle=request_model.title,
-        requestType=request_model.type,
-        approvalType=approval_model.approval_type,
-        requestedBy=approval_model.requested_by,
-        requestedByEmail=approval_model.requested_by_email or "",
-        status=approval_model.status,
-        createdAt=approval_model.created_at,
-        updatedAt=approval_model.updated_at,
-        rejectionNote=approval_model.rejection_note,
-        delegatedTo=approval_model.delegated_to,
-        delegatedToEmail=approval_model.delegated_to_email
-    )
+    return _map_approval(approval_model, request_model)
+
+

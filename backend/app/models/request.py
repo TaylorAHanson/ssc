@@ -39,6 +39,8 @@ class RequestType(str, Enum):
     SIMPLE_EMAIL = "simple_email"
     CAMPAIGN = "campaign"
     REPORT_EXECUTION = "report_execution"
+    ENFORCEMENT_SENTINEL = "enforcement_sentinel"
+    ASSET_DEDUPLICATION = "asset_deduplication"
 
 
 class Environment(str, Enum):
@@ -85,7 +87,12 @@ class StateMachineState(BaseModel):
 
 
 class Approval(BaseModel):
-    """Approval model."""
+    """Approval model.
+    
+    status values: 'pending', 'approved', 'rejected', 'delegated', 'superseded'
+    A 'superseded' approval means the platform admin chose to edit parameters instead
+    of approving/rejecting. The new parameters will trigger a fresh plan run.
+    """
     id: str
     requestId: str
     requestTitle: str
@@ -99,7 +106,11 @@ class Approval(BaseModel):
     rejectionNote: Optional[str] = None
     delegatedTo: Optional[str] = None
     delegatedToEmail: Optional[str] = None
+    supersededNote: Optional[str] = None
     requestConversation: Optional[List[Dict[str, Any]]] = None
+    # Workflow input parameters (filtered state_context — excludes internal keys).
+    # Displayed to approvers so they can review what the workflow will execute with.
+    workflowParameters: Optional[Dict[str, Any]] = None
 
 
 class Request(BaseModel):
