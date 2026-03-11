@@ -52,6 +52,7 @@ The Sentinel enforces the following policies. Each policy has a unique `policy_i
 | `mlflow_bloat` | Undocumented MLflow Experiments | 🔵 LOW | Domain workspaces | List experiments; filter for `last_run > 30 days`, no linked registered model | Archive experiment | 30 days stale |
 | `temp_tables` | Untracked Temporary Tables | 🟡 MEDIUM | All | SQL: `SHOW TABLES IN schema` filtered by `_temp` or `_test` suffix | `DROP TABLE` | > 7 days old |
 | `over_provisioned_warehouses` | Over-provisioned SQL Warehouses | 🟡 MEDIUM | All | List warehouses with `auto_stop_mins=null` or > 120, and queue depth = 0 | `warehouses.stop` or set `auto_stop_mins=30` | Utilization < 5% |
+| `temporary_admins` | Temporary Admins | 🟡 HIGH | All | List users given temporary admin permissions and compare against TTL | `users.remove_admin` | TTL Exceeded |
 
 ---
 

@@ -930,7 +930,7 @@ export function Home() {
                           const agentMsg: ChatMessage = {
                             id: (Date.now() + 1).toString(),
                             type: 'agent',
-                            content: agentResponse.message || "I understand. Let me help you with that.",
+                            content: agentResponse.message || "Failure to generate response",
                             timestamp: new Date(),
                           };
 

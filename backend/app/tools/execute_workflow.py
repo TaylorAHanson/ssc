@@ -5,6 +5,7 @@ from app.db.session import get_lakebase_session
 from app.db.request import RequestModel
 from datetime import datetime
 import uuid
+from app.state_machines.facts import add_fact
 
 class ExecuteWorkflowInput(BaseModel):
     workflow_type: str = Field(..., description="The type of workflow to execute (e.g., project_onboarding)")
@@ -48,6 +49,10 @@ async def execute_workflow(workflow_type: str, parameters: Dict[str, Any], conve
         )
         
         db.add(request)
+        
+        # Add 'request_submitted' fact to trigger the state machine immediately
+        add_fact(db, request_id, "request_submitted", {}, actor="agent")
+        
         db.commit()
         
         return {

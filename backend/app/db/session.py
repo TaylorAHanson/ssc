@@ -21,7 +21,7 @@ _connection_verified = False
 def reset_database_connection():
     """Reset database engine and session factory (useful if credentials change)."""
     global _engine, _SessionLocal, _connection_verified
-    logger.warning("🔄 Resetting database connection...")
+    logger.warning("Resetting database connection...")
     if _engine:
         _engine.dispose()
     _engine = None
@@ -39,9 +39,8 @@ def get_database_url() -> str:
     # If a full DATABASE_URL is provided, use it directly
     # WARNING: This bypasses all our logic - log it prominently
     if settings.DATABASE_URL:
-        logger.warning(f"⚠️ DATABASE_URL env var is set - using it directly!")
-        logger.warning(f"⚠️ First 50 chars: {settings.DATABASE_URL[:50]}...")
-        print(f"⚠️ DATABASE_URL ENV VAR DETECTED - bypassing native postgres logic!", flush=True)
+        logger.warning(f"DATABASE_URL env var is set - using it directly!")
+        logger.warning(f"First 50 chars: {settings.DATABASE_URL[:50]}...")
         return settings.DATABASE_URL
     
     # Check for Postgres/Lakebase config
@@ -55,13 +54,13 @@ def get_database_url() -> str:
     for pg_var in ["PGUSER", "PGPASSWORD", "PGHOST", "PGPORT", "PGDATABASE", "PGOPTIONS"]:
         old_val = os.environ.pop(pg_var, None)
         if old_val:
-            logger.warning(f"🧹 Cleared {pg_var} env var (was: {old_val[:20] if pg_var != 'PGPASSWORD' else '***'}...)")
+            logger.warning(f"Cleared {pg_var} env var (was: {old_val[:20] if pg_var != 'PGPASSWORD' else '***'}...)")
     
     # DEBUG: Print what we're using
-    print(f"=== DATABASE SETTINGS DEBUG ===", flush=True)
-    print(f"⚠️ FORCING DB USER = {user}", flush=True)
-    print(f"settings.DATABASE_HOST = {host}", flush=True)
-    print(f"settings.DATABASE_NAME = {name}", flush=True)
+    logger.debug(f"=== DATABASE SETTINGS DEBUG ===")
+    logger.debug(f"FORCING DB USER = {user}")
+    logger.debug(f"settings.DATABASE_HOST = {host}")
+    logger.debug(f"settings.DATABASE_NAME = {name}")
     
     # Try to get password/token for Lakebase authentication
     if host and user and name:
@@ -92,18 +91,18 @@ def get_database_url() -> str:
                         # If decode succeeds and looks like a valid password, use it
                         if decoded.isprintable() and len(decoded) > 0:
                             password = decoded
-                            logger.info(f"✅ Got password from Secret Scope (base64 decoded, length: {len(password)})")
+                            logger.info(f"Got password from Secret Scope (base64 decoded, length: {len(password)})")
                         else:
                             password = raw_value
-                            logger.info(f"✅ Got password from Secret Scope (raw, length: {len(password)})")
+                            logger.info(f"Got password from Secret Scope (raw, length: {len(password)})")
                     except:
                         # Not base64, use raw value
                         password = raw_value
-                        logger.info(f"✅ Got password from Secret Scope (raw, length: {len(password)})")
+                        logger.info(f"Got password from Secret Scope (raw, length: {len(password)})")
                 else:
                     logger.error("Secret value was empty!")
             except Exception as e:
-                logger.error(f"❌ Failed to fetch secret: {type(e).__name__}: {e}")
+                logger.error(f"Failed to fetch secret: {type(e).__name__}: {e}")
         
         # Method 2: Use DATABASE_PASSWORD from environment (for local dev only)
         if not password:
@@ -130,7 +129,7 @@ def get_database_url() -> str:
             
             # CRITICAL: Log the final URL structure (without password) for debugging
             safe_url = f"postgresql://{safe_user}:***@{host}:{settings.DATABASE_PORT}/{name}?sslmode=require"
-            print(f"🔗 FINAL DATABASE URL (safe): {safe_url}", flush=True)
+            logger.debug(f"FINAL DATABASE URL (safe): {safe_url}")
             logger.info(f"=== LAKEBASE CONNECTION ===")
             logger.info(f"  Host: {host}")
             logger.info(f"  User: {user} (encoded: {safe_user})")

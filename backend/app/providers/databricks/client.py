@@ -11,6 +11,8 @@ from databricks.sdk.core import Config
 import logging
 import asyncio
 import time
+import base64
+from databricks.sdk.service import jobs, workspace
 
 logger = logging.getLogger(__name__)
 
@@ -699,4 +701,119 @@ class DatabricksProvider(BaseProvider):
             return self.client is not None
         except:
             return False
+
+    async def import_notebook(self, local_path: str, remote_path: str) -> bool:
+        """
+        Import a local Python file as a Databricks Notebook.
+        
+        Args:
+            local_path: Path to the local .py file
+            remote_path: Target path in Databricks workspace (e.g. /Shared/jobs/my_notebook)
+            
+        Returns:
+            True if successful
+        """
+        try:
+            with open(local_path, "r") as f:
+                content = f.read()
+            
+            # Encode content as base64 for the SDK
+            content_base64 = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+            
+            logger.info(f"Importing notebook: {local_path} -> {remote_path}")
+            
+            # Ensure parent directory exists
+            remote_dir = os.path.dirname(remote_path)
+            if remote_dir and remote_dir != "/":
+                await asyncio.to_thread(self.client.workspace.mkdirs, remote_dir)
+                
+            await asyncio.to_thread(
+                self.client.workspace.import_,
+                path=remote_path,
+                format=workspace.ImportFormat.SOURCE,
+                language=workspace.Language.PYTHON,
+                content=content_base64,
+                overwrite=True
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to import notebook: {str(e)}")
+            raise RetryableError(f"Failed to import notebook: {str(e)}")
+
+    async def submit_notebook_job(
+        self, 
+        notebook_path: str, 
+        parameters: Dict[str, str],
+        run_name: str = "One-time Job Run"
+    ) -> str:
+        """
+        Submit a one-time Databricks job run using a notebook.
+        
+        Args:
+            notebook_path: Path to the notebook in Databricks workspace
+            parameters: Dictionary of parameters to pass to the notebook
+            run_name: Name of the run
+            
+        Returns:
+            run_id of the submitted run
+        """
+        try:
+            logger.info(f"Submitting notebook job: {notebook_path} with params {parameters}")
+            
+            # Use the SDK to submit a one-time run
+            run = await asyncio.to_thread(
+                self.client.jobs.submit,
+                run_name=run_name,
+                tasks=[
+                    jobs.SubmitTask(
+                        task_key="main",
+                        notebook_task=jobs.NotebookTask(
+                            notebook_path=notebook_path,
+                            base_parameters=parameters
+                        )
+                        # No hardcoded new_cluster here - Databricks will use serverless compute
+                    )
+                ]
+            )
+            
+            logger.info(f"Successfully submitted job run: {run.run_id}")
+            return str(run.run_id)
+        except Exception as e:
+            error_msg = f"Failed to submit notebook job: {str(e)}"
+            logger.error(error_msg)
+            raise RetryableError(error_msg)
+
+    async def get_run_status(self, run_id: str) -> Dict[str, Any]:
+        """
+        Get the status of a Databricks job run.
+        
+        Args:
+            run_id: The ID of the job run
+            
+        Returns:
+            Dictionary with state and error information
+        """
+        try:
+            run_id_int = int(run_id)
+            run = await asyncio.to_thread(self.client.jobs.get_run, run_id_int)
+            
+            state = run.state
+            status = {
+                "life_cycle_state": state.life_cycle_state.value,
+                "result_state": state.result_state.value if state.result_state else None,
+                "state_message": state.state_message,
+                "is_active": state.life_cycle_state in [
+                    jobs.RunLifeCycleState.PENDING,
+                    jobs.RunLifeCycleState.RUNNING,
+                    jobs.RunLifeCycleState.BLOCKED,
+                    jobs.RunLifeCycleState.QUEUED
+                ],
+                "is_completed": state.life_cycle_state == jobs.RunLifeCycleState.TERMINATED,
+                "is_successful": state.result_state == jobs.RunResultState.SUCCESS if state.result_state else False
+            }
+            
+            return status
+        except Exception as e:
+            logger.error(f"Failed to get run status for {run_id}: {str(e)}")
+            raise RetryableError(f"Failed to get run status: {str(e)}")
 
