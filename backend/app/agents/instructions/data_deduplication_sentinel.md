@@ -14,7 +14,9 @@ Before executing the workflow, ensure you have the following information from th
 |---|-----------|----------|---------|-------|
 | 1 | **Target Catalog** | ✅ Yes | — | The catalog to scan for potential duplicates. |
 | 2 | **Reference Catalog** | ✅ Yes | `enterprise_certified` | The "Golden" catalog to compare against. |
-| 3 | **Title** | ❌ Optional | "Deduplication Scan: {target}" | A descriptive title for the request. |
+| 3 | **Results Table** | ❌ Optional | `main.governance.uc_similarity_matches` | The fully qualified table (catalog.schema.table) to write results to. |
+| 4 | **Email Notification** | ❌ Optional | — | Email address to send the final deduplication report to. |
+| 5 | **Title** | ❌ Optional | "Deduplication Scan: {target}" | A descriptive title for the request. |
 
 > **Agent Note**: If the user doesn't provide a reference catalog, suggest `enterprise_certified` or ask which catalog represents the certified "truth".
 
@@ -47,6 +49,8 @@ Once you have gathered the required catalogs, call the `execute_workflow` tool w
   "parameters": {
     "target_catalog": "user_provided_target",
     "reference_catalog": "user_provided_reference",
+    "results_table": "user_provided_catalog.schema.table",
+    "email": "user@example.com",
     "title": "Data Deduplication Sentinel Scan"
   }
 }
@@ -71,5 +75,4 @@ The workflow automatically uses the following methods:
 The Data Deduplication Sentinel is a **Governance Pipeline**. Unlike provisioning workflows, it does not require human-in-the-loop approvals before execution. Once `execute_workflow` is called, it moves directly to job submission and status polling.
 
 Result data is persisted to:
-- `governance.uc_similarity_assets`: Snapshot of asset metadata.
-- `governance.uc_similarity_matches`: Scored pairs with detailed explanations.
+- The fully qualified table specified in `results_table` (defaults to `main.governance.uc_similarity_matches`). This table contains the scored pairs with detailed explanations.
