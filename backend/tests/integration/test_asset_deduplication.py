@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+from unittest.mock import patch, AsyncMock
 from sqlalchemy.orm import Session
 from app.models.request import RequestType, RequestStatus
 from tests.factories.request_factory import RequestFactory
@@ -10,11 +11,17 @@ from app.state_machines.factory import get_state_machine
 # Async test marker
 pytestmark = pytest.mark.asyncio
 
-async def test_asset_deduplication_job_submission(db_session: Session):
+@patch("app.state_machines.asset_deduplication.state_machine.DatabricksProvider")
+async def test_asset_deduplication_job_submission(mock_provider_class, db_session: Session):
     """
     Verifies that the AssetDeduplication workflow transitions to job_submitted
     and attempts to submit a Databricks job.
     """
+    # Setup mock provider instance
+    mock_provider = mock_provider_class.return_value
+    mock_provider.import_notebook = AsyncMock(return_value=True)
+    mock_provider.submit_notebook_job = AsyncMock(return_value="test_run_id_123")
+
     harness = StateMachineTestHarness(db_session)
     
     # 1. Create Deduplication Request
