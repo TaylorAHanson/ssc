@@ -48,7 +48,7 @@ export function TestRunner() {
         } catch (err: unknown) {
             console.error('Failed to run tests:', err);
             const errorMsg = err instanceof Error ? err.message : 'Failed to run tests';
-            setError((err as any)?.response?.data?.detail || errorMsg);
+            setError((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || errorMsg);
         } finally {
             setIsRunning(false);
         }

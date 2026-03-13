@@ -29,7 +29,7 @@ const getDate = (daysFromToday: number, hours: number = 9, minutes: number = 0) 
 };
 
 // Helper function to convert API event data to Event interface
-const convertApiEventToEvent = (apiEvent: any): Event => {
+const convertApiEventToEvent = (apiEvent: Omit<Event, 'date'> & { date: string }): Event => {
   return {
     ...apiEvent,
     date: new Date(apiEvent.date),
@@ -314,7 +314,7 @@ export function Events() {
       setError(null);
       // Use _t as a cache-buster instead of version to avoid backend version lookup
       const cacheBuster = isRefresh ? String(Date.now()) : undefined;
-      const apiEvents = await getContent('events.json', undefined, cacheBuster ? { _t: cacheBuster } : undefined) as any[];
+      const apiEvents = await getContent('events.json', undefined, cacheBuster ? { _t: cacheBuster } : undefined) as Array<Omit<Event, 'date'> & { date: string }>;
 
       if (!Array.isArray(apiEvents)) {
         throw new Error('API returned invalid data format for events');
@@ -322,9 +322,10 @@ export function Events() {
 
       const convertedEvents = apiEvents.map(convertApiEventToEvent);
       setEvents(convertedEvents);
-    } catch (err: any) {
-      console.error('Failed to load events:', err);
-      setError(err.message || 'Failed to load events');
+    } catch (err: unknown) {
+      const errorObj = err as Error;
+      console.error('Failed to load events:', errorObj);
+      setError(errorObj.message || 'Failed to load events');
 
       // Fallback to mock events ONLY if in dev mode
       if (isDevMode) {

@@ -108,7 +108,7 @@ export function Approvals() {
       setNewDelegateEmail('');
       setStartDate('');
       setEndDate('');
-    } catch (error) {
+    } catch {
       alert('Failed to add delegation');
     }
   };
@@ -139,7 +139,7 @@ export function Approvals() {
     try {
       if (actionType === 'edit') {
         // Coerce string values back to their original types where possible
-        const coerced: Record<string, any> = {};
+        const coerced: Record<string, unknown> = {};
         Object.entries(editParams).forEach(([k, v]) => {
           try { coerced[k] = JSON.parse(v); } catch { coerced[k] = v; }
         });

@@ -284,7 +284,7 @@ export function Home() {
       try {
         const parsedState = JSON.parse(savedState);
         if (parsedState.messages) {
-          parsedState.messages = parsedState.messages.map((m: any) => ({
+          parsedState.messages = parsedState.messages.map((m: Omit<ChatMessage, 'timestamp'> & { timestamp: string }) => ({
             ...m,
             timestamp: new Date(m.timestamp)
           }));

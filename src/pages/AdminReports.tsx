@@ -140,7 +140,7 @@ export function AdminReports() {
     const getCronDescription = (cron: string) => {
         try {
             return cronstrue.toString(cron);
-        } catch (e) {
+        } catch {
             return 'Invalid cron expression';
         }
     };
