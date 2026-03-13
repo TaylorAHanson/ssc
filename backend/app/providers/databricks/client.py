@@ -814,6 +814,9 @@ class DatabricksProvider(BaseProvider):
             
             return status
         except Exception as e:
-            logger.error(f"Failed to get run status for {run_id}: {str(e)}")
-            raise RetryableError(f"Failed to get run status: {str(e)}")
+            error_msg = str(e)
+            logger.error(f"Failed to get run status for {run_id}: {error_msg}")
+            if "does not exist" in error_msg:
+                raise PermanentError(f"Run {run_id} does not exist.")
+            raise RetryableError(f"Failed to get run status: {error_msg}")
 

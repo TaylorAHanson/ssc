@@ -58,6 +58,19 @@ interface DiscoveryColumn {
 const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
   'Self Service Agent': [
     {
+      title: 'Data Access',
+      icon: <Database className="w-5 h-5" />,
+      colorClass: 'text-primary',
+      hoverBorderClass: 'hover:border-primary/50',
+      hoverTextClass: 'group-hover:text-primary',
+      items: [
+        { title: 'Request Data Access', description: 'Access via Catalog, Schema, or Table', query: "I need to request access to a dataset" },
+        { title: 'REST API Access', description: 'Programmatic data access', query: "I need REST API access to data" },
+        { title: 'My Groups', description: 'What groups am I in?', query: "What groups am I in?" },
+        { title: 'My Current Access', description: 'What access do I have now?', query: "What access do I have now?" },
+      ]
+    },
+    {
       title: 'Enterprise Data',
       icon: <Database className="w-5 h-5" />,
       colorClass: 'text-primary',
@@ -65,8 +78,8 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
       hoverTextClass: 'group-hover:text-primary',
       items: [
         { title: 'Discover Enterprise Data', description: 'Search and explore data assets', query: "I want to discover enterprise data" },
-        { title: 'Request Data Access', description: 'Access via Catalog, Schema, or Table', query: "I need to request access to a dataset" },
         { title: 'Marketplace Certification', description: 'Certify assets for broader consumption', query: "I need to certify a dataset for the marketplace" },
+        { title: 'Learn About Data Quality', description: 'Find out how data quality is managed and how you can use it', query: "I want to learn about data quality" },
       ]
     },
     {
@@ -81,17 +94,6 @@ const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
         { title: 'Create Catalog or Schema', description: 'Create new data containers', query: "I need to create a new catalog or schema" },
         { title: 'Service Principal', description: 'For external apps, automation, and CI/CD pipelines', query: "I need a service principal for CI/CD" },
         { title: 'GitHub Repository', description: 'Create a new code repository', query: "I need to create a new GitHub repository" }
-      ]
-    },
-    {
-      title: 'Data Services',
-      icon: <Server className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
-        { title: 'REST API Access', description: 'Programmatic data access', query: "I need REST API access to data" },
-        { title: 'Batch Data Access', description: 'High-volume data transfer', query: "I need batch data access via Delta Sharing" }
       ]
     }
   ],
@@ -1201,7 +1203,7 @@ export function Home() {
                             className={`relative p-2.5 rounded-xl border border-gray-200 hover:shadow-md hover:bg-white/80 transition-all duration-200 text-left group ${column.hoverBorderClass}`}
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <div className={`text-sm font-medium text-gray-900 transition-colors ${column.hoverTextClass}`}>{item.title}</div>
+                              <div className={`text-[13px] font-medium text-gray-900 transition-colors ${column.hoverTextClass}`}>{item.title}</div>
                               <div className="relative group/info">
                                 <Info className="w-4 h-4 text-gray-400 hover:text-gray-600 transition-colors" />
                                 {/* Tooltip */}

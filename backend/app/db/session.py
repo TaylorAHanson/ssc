@@ -175,10 +175,11 @@ def get_engine():
         database_url = get_database_url()
         
         if database_url.startswith("sqlite"):
+            is_memory = ":memory:" in database_url
             _engine = create_engine(
                 database_url,
                 connect_args={"check_same_thread": False},
-                poolclass=StaticPool,
+                poolclass=StaticPool if is_memory else NullPool,
                 echo=False
             )
         else:

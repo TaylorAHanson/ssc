@@ -42,6 +42,7 @@ from app.providers.databricks.client import DatabricksProvider
 from app.models.request import RequestStatus
 
 from app.core.config import settings
+from app.core.exceptions import PermanentError, RetryableError
 
 logger = logging.getLogger(__name__)
 
@@ -185,8 +186,20 @@ class AssetDeduplicationStateMachine(BaseRequestStateMachine):
                             "failed_at": datetime.utcnow().isoformat()
                         }, actor="system")
                         self.mark_failed()
+            except PermanentError as e:
+                logger.error(f"[{self.request.id}] Permanent error polling job status: {str(e)}")
+                add_fact(self.db, self.request.id, "job_failed", {
+                    "run_id": run_id,
+                    "error": str(e),
+                    "failed_at": datetime.utcnow().isoformat()
+                }, actor="system")
+                self.mark_failed()
+            except RetryableError as e:
+                logger.error(f"[{self.request.id}] Retryable error polling job status: {str(e)}")
+                # We leave it in job_submitted to retry polling later
+                raise
             except Exception as e:
-                logger.error(f"[{self.request.id}] Error polling job status: {str(e)}")
+                logger.error(f"[{self.request.id}] Unexpected error polling job status: {str(e)}")
                 # We leave it in job_submitted to retry polling later
 
     def _process_current_state(self) -> bool:
