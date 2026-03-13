@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Sparkles, ArrowRight, Send, ExternalLink, ChevronDown, Shield, BarChart3,
-  Database, Box, Server, TrendingUp, Activity, FileText, Info
+  Database, Box, TrendingUp, Activity, FileText, Info
 } from 'lucide-react';
 
 import { Textarea } from '../components/ui/textarea';

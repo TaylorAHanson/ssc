@@ -47,7 +47,7 @@ export function Training() {
       try {
         setLoading(true);
         // Fetch both tracks and status
-        const { tracks, completed_codes } = await getTrainingStatus() as any;
+        const { tracks, completed_codes } = await getTrainingStatus() as { tracks: PersonaPath[], completed_codes: string[] };
 
         setAllTracks(tracks || []);
 
@@ -76,7 +76,7 @@ export function Training() {
       };
 
       const groupToCourses = (group?: Course[]) =>
-        (group || []).map(c => ({ ...c, status: getStatus(c.id) as any }));
+        (group || []).map(c => ({ ...c, status: getStatus(c.id) as CourseWithStatus['status'] }));
 
       const courses = [
         ...groupToCourses(path.fundamentals),

@@ -148,7 +148,7 @@ export function AdminDashboard() {
 
     // --- Filtering & Sorting Logic ---
     const filteredAndSortedRequests = useMemo(() => {
-        let result = requests.filter(r => {
+        const result = requests.filter(r => {
             const matchesSearch =
                 r.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
                 r.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -163,7 +163,7 @@ export function AdminDashboard() {
                 if (key === 'currentState') {
                     rValue = getCurrentStateName(r).toLowerCase();
                 } else {
-                    rValue = String((r as any)[key] || '').toLowerCase();
+                    rValue = String((r as unknown as Record<string, unknown>)[key] || '').toLowerCase();
                 }
                 if (!rValue.includes(value.toLowerCase())) return false;
             }
@@ -172,8 +172,8 @@ export function AdminDashboard() {
 
         if (sortConfig) {
             result.sort((a, b) => {
-                let aValue: any = (a as any)[sortConfig.key];
-                let bValue: any = (b as any)[sortConfig.key];
+                let aValue: string | number = (a as unknown as Record<string, string | number>)[sortConfig.key];
+                let bValue: string | number = (b as unknown as Record<string, string | number>)[sortConfig.key];
 
                 if (sortConfig.key === 'timeInState') {
                     aValue = getTimeInState(a);

@@ -609,8 +609,8 @@ export function Requests() {
                 ) : (
                   <div className="space-y-4">
                     {selectedRequest.conversation?.map((message, idx) => {
-                      const isUser = message.type === 'user' || (message as any).role === 'user';
-                      const isAgent = message.type === 'agent' || (message as any).role === 'assistant' || (message as any).role === 'agent';
+                      const isUser = message.type === 'user' || (message as {role?: string}).role === 'user';
+                      const isAgent = message.type === 'agent' || (message as {role?: string}).role === 'assistant' || (message as {role?: string}).role === 'agent';
 
                       return (
                         <div
