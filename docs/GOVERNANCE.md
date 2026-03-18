@@ -1,90 +1,66 @@
-# Governance Framework
+# Self-Service Governance Framework
 
 ## Overview
-This project is designed to empower employees with self-service access to data and infrastructure while maintaining a rigorous security and governance posture. This framework is built upon the **Databricks Well-Architected Framework** and the **Databricks AI Governance Framework (DAGF)**, balancing agility with the principles of least privilege, cost optimization, and data integrity.
+This platform is designed to empower employees with self-service access to data and infrastructure while maintaining a rigorous security and governance posture. Balancing agility with the principles of least privilege, cost optimization, and data integrity requires a multi-layered governance approach.
+
+We operate on the principle of **Least Privilege by Default**, augmented by intelligent automation. Rather than relying solely on manual reviews—which create bottlenecks—our governance model uses a three-tier defense system to guide, enforce, and audit actions across the platform.
 
 ---
 
-## 1. Intelligent Self-Service & Agentic Governance
-We operate on the principle of **Least Privilege by Default**, augmented by an **AI-Driven Agentic Layer**. The agent acts as the first line of defense and a "Governance Coach," ensuring that users are guided toward the most efficient and compliant path.
 
-### The Role of the AI Agent
-Our intelligent agent provides continuous governance and FinOps support by:
-*   **Intent Investigation**: Probing user requests (e.g., "Why do you need Admin access?") to downgrade them to the appropriate least-privilege role (e.g., "Contributor" or "Data Reader").
-*   **FinOps Guardrails**: Identifying high-cost requests (like large clusters, PROD provisioning, or expensive SQL Warehouses) and suggesting more cost-effective alternatives (e.g., serverless compute, autoscaling).
-*   **Justification Refinement**: Ensuring every request includes a "Rock Solid," clear, and logical business reason that a manager can actually approve, preventing "rubber-stamping" and ensuring auditability.
-*   **Policy Guarding**: Real-time checking of requests against established Governance and Security policies before they even reach a human reviewer.
+## The Three Layers of Governance
 
-### Just-in-Time (JIT) & Granular Entitlements
-Instead of broad, persistent administrative roles, this facilitates granular access:
-*   **3-Level Namespace**: All data access is governed via Unity Catalog using the `catalog.schema.table` structure.
-*   **Attribute-Based Access Control (ABAC)**: Where possible, access is determined by user attributes (department, project) rather than manual assignment.
-*   **Time-Bound Access**: Temporary access is preferred for troubleshooting or one-time analysis, with automated revocation.
+Governance in the Self-Service Center is not a single gateway, but a continuous, multi-layered process designed to be unobtrusive for safe actions and highly restrictive for risky ones. 
+
+![Governance](./governance-diagram.png)
 
 ---
 
-## 2. Approval Guardrails & Risk-Based Workflows
-To maintain control without becoming a bottleneck, we categorize requests based on risk levels defined in our Center of Excellence (CoE) policies.
+### Layer 1: The AI Agent (Proactive Guidance & Chokepoint)
+The AI Agent serves as the mandatory first point of contact and primary governance chokepoint for all requests. By placing the LLM in front of the execution layer, we intercept and shape intent before any infrastructure changes occur.
 
-### Low-Risk (Automated)
-*   Access to public or internal-only non-sensitive datasets.
-*   Standard developer-tier workspace access with restricted **Cluster Policies**.
-*   Requests that match the user's existing cost-center and project scope.
+*   **Intent Investigation**: The Agent acts as a "Governance Coach," probing user requests (e.g., "Why do you need Admin access?") to downgrade them to the appropriate least-privilege role.
+*   **Justification Refinement**: The Agent forces users to provide a "Rock Solid," logical business reason before allowing a request to proceed to approval.
+*   **Cost & Policy Guarding**: The Agent identifies high-cost requests (like large clusters or PROD provisioning) and suggests cost-effective alternatives (e.g., serverless) based on real-time policy checks.
+*   **Asset Discovery**: Before allowing a user to request new data or pipelines, the Agent proactively searches existing catalogs and marketplaces, suggesting reusable assets to prevent duplication.
 
-### High-Risk (Human-in-the-Loop)
-*   **Production Environment Access**: Any request involving `PROD` environments requires explicit manager and platform admin approval.
-*   **Sensitive Data**: Access to PII, HR, or Finance-restricted catalogs requires data owner sign-off and may trigger additional privacy reviews.
-*   **Administrative Roles**: Requests for "Workspace Admin" or "Account Admin" are heavily scrutinized and require specific expiration dates.
+** Important Note **
+This is a non-deterministic layer of governance. The agent can make mistakes. It is not a replacement for the deterministic governance of the State Machine Conditions. It is a helpful assistant that can help users make better decisions and shift best practices to the left.
 
----
+### Layer 2: State Machine Conditions (Proactive Enforcement)
+Once the Agent gathers the required parameters and intent, the request is handed off to isolated, workflow-specific State Machines. This layer enforces deterministic business rules and approval structures.
 
-## 3. Preventing Data Proliferation & Agentic Discovery
-A core goal of this project is to prevent "Data Swamps" where multiple copies of the same dataset exist. We follow the Databricks principle of **Unifying Data and AI Governance**.
+*   **Deterministic Guardrails**: State Machines enforce deterministic business rules and approval structures.
+*   **Risk-Based Routing**: State Machines categorize requests by risk level. Low-risk operations (e.g., standard dev workspace access) are fully automated. High-risk operations (e.g., cross-environment access or PROD provisioning) automatically pause (`wait_for_event` pattern) and route to Data Owners or Platform Admins for explicit human-in-the-loop sign-off.
+*   **Immutable Fact-Tracking**: Every step, parameter, and approval is recorded as an immutable fact. State Machines use this history to determine the next valid action, ensuring no compliance step can be bypassed.
+*   **Standardized Tagging**: The State Machine enforces mandatory FinOps tagging (`CostCenter`, `Project`, `Owner`) on all newly provisioned resources.
 
-### Agentic Data Overlap Prevention
-The agent intervenes during the request process to maintain data integrity:
-*   **Intelligent Lookup**: When a user describes their data needs, the agent performs a lookup against the **Unity Catalog** and **Marketplace** to suggest existing sources, preventing duplicate ingestion.
-*   **Asset Promotion**: The agent proactively suggests **Reusable Assets** and **Templates** (e.g., ETL pipelines, Power BI templates, or Feature Store entries) that are already available.
-*   **Lineage Awareness**: The agent uses data lineage to explain the "provenance" of data, helping users understand if they are requesting raw, silver, or gold-certified data.
-*   **Proactive Join Suggestions**: If a user requests access to two disparate datasets, the agent may suggest existing "Certified Joins" or common keys used by other teams, preventing incorrect data merging.
+### Layer 3: Reactive Enforcers (Continuous Audit, Reporting, & Clean-up)
+The final layer exists to catch drift, uncover unauthorized changes, and continuously prune the platform of unused or redundant assets.
 
-### Discoverability Over Duplication
-*   **Unity Catalog**: The single source of truth for all metadata. Users are encouraged to search UC before requesting new storage.
-*   **Delta Sharing**: Secure, live access to data in-place across workspaces and organizations, eliminating the need for ETL-based copying.
-*   **Certified Data**: The "Marketplace Certification" process identifies authoritative datasets. Users must prioritize "Gold"/"Platinum" certified data for production reporting.
+*   **Enforcement Sentinels**: Background processes that constantly scan Enterprise workspaces, identifying and automatically deleting unauthorized objects based on strict posture rules.
+*   **Asset Deduplication**: Scheduled jobs that scan newly created tables and pipelines to flag highly similar clones (e.g., >90% similarity) as blockers, preventing data swamps.
+*   **Entitlement Audits & Revocation**: Agents periodically run "Justification Audits" cross-referencing granted access with project status, and "Entitlement Nudges" confirming with admins if broad privileges are still necessary. Time-bound (JIT) access is automatically revoked when the window expires.
 
 ---
 
-## 4. Cost Management & FinOps Discipline
-Governance includes financial responsibility. We treat cost management as an operational requirement, supported by agentic oversight.
+## What We Allow (And What We Don't)
 
-### FinOps Standards
-*   **Governed Tagging**: All resources (workspaces, clusters, warehouses) must be tagged with mandatory keys: `CostCenter`, `Project`, `Environment`, and `Owner`. The agent enforces these during the request flow.
-*   **Compute Policies**: Standardized cluster policies are applied to prevent over-provisioning (e.g., enforcing auto-termination, limiting instance types).
+To maintain control without stifling innovation, we apply different governance postures across our namespace and environment paradigms.
 
-### Agentic FinOps Oversight
-*   **Cost Anomaly Alerts**: The agent monitors daily usage trends and proactively notifies owners if a specific request or workspace shows a sudden, unexplained cost spike.
-*   **Optimization Recommendations**: Periodically, the agent reviews active clusters and suggests moving from "Personal" compute to "Shared" or "SQL Warehouses" for more efficient resource utilization.
-*   **Zombie Resource Identification**: The agent flags resources that are provisioned but show zero queries or jobs for 30+ days, suggesting decommissioning.
+### Self-Service Governance Permissions Matrix
 
----
+This matrix demonstrates how limits and agentic guardrails are applied across different workspace types.
 
-## 5. AI Governance & Responsible AI
-As we scale AI capabilities, this project follows the **Databricks AI Governance Framework (DAGF)** with agent-guided oversight:
-*   **Model Governance**: All ML models must be registered in the Unity Catalog Model Registry with clear ownership and lineage.
-*   **Feature Store Reuse**: The agent proactively checks the Feature Store during "Create Model" inquiries to prevent redundant feature engineering.
-*   **Monitoring**: Promoting the use of Lakehouse Monitoring for data and model drift. The agent can summarize drift reports and suggest retraining triggers.
+![Permissions Matrix](./permission-matrix.png)
 
----
-
-## 6. Agent-Augmented Continuous Audit & Compliance
-Governance is an ongoing cycle of monitoring and refinement, moving from manual checks to proactive agentic oversight.
-
-### Proactive Compliance Monitoring
-*   **Entitlement "Nudges"**: The agent periodically reaches out to users with high-privilege access (e.g. `OWNER` or `ADMIN`) to verify if that access is still required for their current project.
-*   **Justification Auditing**: The agent cross-references active access with original business justifications. If a project is marked as "Completed" in Jira/System, the agent flags the associated access for review.
-*   **Security Posture Improvement**: The agent identifies users with unrotated API keys or over-provisioned permissions and guides them through the remediation process.
-
-### Operational Logging
-*   **Audit Logging**: Every action in the application (request, approval, provisioning) is logged and stored in a system table for compliance reviews.
-*   **Orphaned Permission Cleanup**: Automated monthly reviews to identify and remove access for users who have changed roles or left the company.
+| Action / Capability | Enterprise Workspaces (`enterprise-{env}`) | Domain Workspaces (`supply-chain-{env}`) | Ad Hoc Workspaces (`adhoc-{env}`) | Governance Enforcement Mechanism & Approvers |
+| :--- | :--- | :--- | :--- | :--- |
+| **Workspace Lifecycle** | Persistent | Persistent | **90-Day Maximum** (May be extended via approval) | **Lifecycle Management**: Ad Hoc workspaces are scheduled for deletion via State Machines upon expiration to prevent resource sprawl. |
+| **Cross-Environment Access** (e.g., Dev requesting Prod data) | Blocked | Blocked | Blocked | **Catalog Binding**: Unity Catalog enforces environment isolation by binding catalogs to specific workspace environments, preventing cross-environment access at the infrastructure level. |
+| **Data Asset Creation** (Tables, Views) | Allowed (Highly Curated / Certified only) | Allowed (Full Autonomy) | Allowed (Temporary / Sandbox) | **Data Certification**: The Agent proactively searches Unity Catalog to suggest existing assets and flags duplicate data. Production datasets must pass a Data Certification Review to receive a "Gold" or "Certified" badge in the Marketplace. |
+| **Compute / Object Creation** (Pipelines, Jobs) | Strictly Governed (Higher envs controlled by CI/CD only) | Allowed | Allowed | **CI/CD Enforcement**: In Enterprise PROD/STG environments, direct creation is blocked; any rogue jobs created outside the CI/CD pipeline are automatically killed by the Enforcement Sentinel. |
+| **Build & Register ML Models** | Restricted | Allowed | Sandboxed | **Responsible AI Guardrails**: Models must be registered in the UC Model Registry. The Agent checks the Feature Store to prevent redundant feature engineering. The FinOps Sentinel actively monitors for unused models and serving endpoints to prevent wasted spend. |
+| **Host Databricks Apps & Genie Spaces** | Blocked by Default (Strict Posture) | Allowed (Moderate Posture) | Allowed (for prototyping) | **Enforcement Sentinel**: The Sentinel constantly scans Enterprise workspaces and automatically deletes unauthorized apps. |
+| **Workspace & Compute Provisioning** | Restricted via Allow List | Allowed (with limits) | Allowed (Strict budget limits) | **FinOps Guardrails**: Enforces mandatory tagging (`CostCenter`, `Owner`) and standard compute policies to prevent over-provisioning. |
+| **Privileged Exceptions / Admin Access** | Allowed (Hardcoded in Terraform) | Allowed (Hardcoded in Terraform) | N/A | **Infrastructure as Code (IaC)**: Broad admin roles are heavily scrutinized and hardcoded directly in the foundational Terraform repository. |

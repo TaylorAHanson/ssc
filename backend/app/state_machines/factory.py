@@ -53,6 +53,16 @@ def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMac
         from app.state_machines.reporting.state_machine import ReportExecutionStateMachine
         return ReportExecutionStateMachine(request, db)
 
+    # Lazy import for Enforcement Sentinel
+    if r_type == RequestType.ENFORCEMENT_SENTINEL:
+        from app.state_machines.enforcement_sentinel.state_machine import EnforcementSentinelStateMachine
+        return EnforcementSentinelStateMachine(request, db)
+
+    # Lazy import for Asset Deduplication
+    if r_type == RequestType.ASSET_DEDUPLICATION:
+        from app.state_machines.asset_deduplication.state_machine import AssetDeduplicationStateMachine
+        return AssetDeduplicationStateMachine(request, db)
+
     # Fallback / Default for others (implement specific ones as needed)
     raise ValueError(f"No state machine implemented for request type: {r_type}")
 

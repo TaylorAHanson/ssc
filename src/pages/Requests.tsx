@@ -9,7 +9,7 @@ import type { Request } from '../types';
 
 import { formatDistanceToNow, differenceInHours } from 'date-fns';
 
-export const parseUtcDate = (dateString: string) => {
+const parseUtcDate = (dateString: string) => {
   if (!dateString) return new Date();
   // If string doesn't end with Z and doesn't have timezone offset, assume UTC and append Z
   if (!dateString.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(dateString)) {
@@ -104,7 +104,7 @@ export function RequestStateList({ request }: { request: Request }) {
   }, [fetchApprovals, fetchRequests, request.status]);
 
   // Collect all states to display
-  let steps: { id: string; name: string; status: string; type?: string; order: number; completedAt?: string; facts?: any[] }[] = [];
+  let steps: { id: string; name: string; status: string; type?: string; order: number; completedAt?: string; facts?: { type: string; timestamp: string; data: Record<string, string> }[] }[] = [];
 
 
   // Use the new linear states structure
@@ -609,8 +609,8 @@ export function Requests() {
                 ) : (
                   <div className="space-y-4">
                     {selectedRequest.conversation?.map((message, idx) => {
-                      const isUser = message.type === 'user' || (message as any).role === 'user';
-                      const isAgent = message.type === 'agent' || (message as any).role === 'assistant' || (message as any).role === 'agent';
+                      const isUser = message.type === 'user' || (message as {role?: string}).role === 'user';
+                      const isAgent = message.type === 'agent' || (message as {role?: string}).role === 'assistant' || (message as {role?: string}).role === 'agent';
 
                       return (
                         <div

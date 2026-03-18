@@ -157,9 +157,9 @@ async def handle_conversation(
         # Filter tools by user permissions AND mode
         visible_tools = []
         for tool in AGENT_TOOLS:
-            # Mode-based filtering
-            if tool.name == "execute_workflow" and agent_mode != "self_service":
-                continue
+            # Mode-based filtering (Removed restriction on execute_workflow to allow Governance/FinOps workflows)
+            # if tool.name == "execute_workflow" and agent_mode != "self_service":
+            #     continue
 
             # Role-based filtering
             allowed = True

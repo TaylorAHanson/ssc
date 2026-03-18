@@ -339,3 +339,117 @@ async def complete_training(
         "request_id": request.id
     }
 
+
+from pydantic import BaseModel as _PydanticBase
+
+class EditParametersRequest(_PydanticBase):
+    parameters: dict
+    note: Optional[str] = None
+
+
+@router.post("/{request_id}/edit-parameters", status_code=status.HTTP_200_OK)
+async def edit_parameters(
+    request_id: str,
+    body: EditParametersRequest,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Edit the workflow input parameters for a request and restart execution.
+
+    This is an ADDITIVE operation — no facts are deleted. Instead:
+    1. A `parameters_edited` fact is recorded as an immutable temporal boundary.
+    2. The pending approval is marked `superseded` (its history is preserved).
+    3. The state_context is updated with the new parameters.
+    4. The lock is cleared so the poller picks it up immediately.
+
+    The poller calls tick() → detects `has_parameters_edited=True` → transitions
+    through `parameters_updated` → back to `terraform_planning` → fresh plan runs.
+
+    Requires: platform_admin role.
+    Only valid when current_state is in the SM's get_editable_states() list.
+    """
+    from app.state_machines.persistence import load_state_machine
+
+    if not current_user.has_role("platform_admin"):
+        raise HTTPException(status_code=403, detail="Only platform admins can edit workflow parameters")
+
+    request_model = db.query(RequestModel).filter(RequestModel.id == request_id).first()
+    if not request_model:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    try:
+        sm = load_state_machine(request_model, db)
+    except Exception as e:
+        logger.error(f"[edit-parameters] Failed to load state machine for {request_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load state machine")
+
+    editable_states = sm.get_editable_states()
+    if request_model.current_state not in editable_states:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Cannot edit parameters in state '{request_model.current_state}'. "
+                f"Edit is only allowed in: {editable_states}"
+            )
+        )
+
+    old_params = (request_model.state_context or {}).copy()
+
+    # Never allow editing internal identity fields via this endpoint
+    _BLOCKED = {"requested_by", "requested_by_email"}
+    sanitized = {k: v for k, v in body.parameters.items() if k not in _BLOCKED}
+
+    # Merge (non-destructive — keys not in payload are preserved)
+    updated_context = old_params.copy()
+    updated_context.update(sanitized)
+    request_model.state_context = updated_context
+
+    # Record the immutable audit fact. This timestamp becomes the temporal boundary
+    # that separates prior execution facts from the current run.
+    add_fact(
+        db, request_id, "parameters_edited",
+        {
+            "edited_by": current_user.email,
+            "note": body.note or "",
+            "old_params": {k: v for k, v in old_params.items() if k not in _BLOCKED},
+            "new_params": sanitized,
+        },
+        actor=current_user.email
+    )
+
+    # Supersede any pending approvals — generated for old parameters.
+    # NOT deleted: the history of what happened is preserved.
+    pending_approvals = db.query(ApprovalModel).filter(
+        ApprovalModel.request_id == request_id,
+        ApprovalModel.status == "pending"
+    ).all()
+
+    for pending in pending_approvals:
+        logger.info(f"[edit-parameters] Superseding approval {pending.id} for request {request_id}")
+        pending.status = "superseded"
+        pending.superseded_note = (
+            f"Superseded by parameter edit from {current_user.email}: {body.note or '(no note)'}"
+        )
+
+    # Release the lock so the poller processes the state transition immediately
+    request_model.locked_by = None
+    request_model.locked_until = None
+    request_model.updated_at = datetime.utcnow()
+
+    db.commit()
+
+    logger.info(
+        f"[edit-parameters] Request {request_id} parameters updated "
+        f"by {current_user.email}. Fields: {list(sanitized.keys())}"
+    )
+
+    return {
+        "status": "parameters_updated",
+        "message": (
+            "Parameters saved. The pending approval has been superseded. "
+            "A new plan will be generated and a fresh approval task created."
+        ),
+        "request_id": request_id,
+        "updated_parameters": list(sanitized.keys()),
+    }

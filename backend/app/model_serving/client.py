@@ -31,6 +31,7 @@ def _get_oauth_token() -> Optional[str]:
     try:
         from databricks.sdk import WorkspaceClient
         # WorkspaceClient auto-detects auth from environment (OAuth in Apps)
+        # It also automatically picks up DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET
         w = WorkspaceClient()
         # Get the auth headers which contain the OAuth token
         headers = w.config.authenticate()
@@ -39,6 +40,12 @@ def _get_oauth_token() -> Optional[str]:
             token = auth_header[7:]  # Remove "Bearer " prefix
             logger.info("Successfully obtained OAuth token via Databricks SDK")
             return token
+        
+        # Fallback if authenticate() doesn't return Bearer token (sometimes happens with M2M)
+        if hasattr(w.config, 'token') and w.config.token:
+            logger.info("Successfully obtained token directly from WorkspaceClient config")
+            return w.config.token
+            
         logger.warning("OAuth token not found in SDK auth headers")
         return None
     except ImportError:
@@ -68,7 +75,37 @@ class ModelServingClient:
         
         if not self.api_key:
             logger.info("No explicit token provided, attempting OAuth via Databricks SDK...")
-            self.api_key = _get_oauth_token()
+            
+            # Temporary fix to quickly fetch a token using the raw DATABRICKS_CLIENT_ID since WorkspaceClient token caching in auth headers is brittle
+            if settings.DATABRICKS_CLIENT_ID and settings.DATABRICKS_CLIENT_SECRET:
+                try:
+                    import os
+                    from databricks.sdk import WorkspaceClient
+                    from databricks.sdk.core import Config
+                    
+                    # Create a manual auth configuration exactly as DatabricksProvider does it implicitly
+                    cfg = Config(
+                        host=self.base_url,
+                        client_id=settings.DATABRICKS_CLIENT_ID,
+                        client_secret=settings.DATABRICKS_CLIENT_SECRET,
+                        auth_type="oauth-m2m"
+                    )
+                    
+                    # Let the config object generate the token headers
+                    auth_headers = cfg.authenticate()
+                    if "Authorization" in auth_headers:
+                        auth_val = auth_headers["Authorization"]
+                        if auth_val.startswith("Bearer "):
+                            self.api_key = auth_val[7:]
+                            logger.info("Successfully fetched fresh OAuth token via Config.authenticate()")
+                            
+                except Exception as e:
+                    logger.error(f"Failed to fetch SP token for Model Serving: {e}")
+            
+            # If that failed, fall back to default OAuth method.
+            # In Databricks Apps, this uses the auto-injected environment token.
+            if not self.api_key:
+                self.api_key = _get_oauth_token()
         
         if not self.api_key:
             raise ValueError(

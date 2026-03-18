@@ -697,6 +697,22 @@ export async function uploadTrainingData(file: File): Promise<{ message: string,
   return response.json();
 }
 
+export async function editRequestParameters(
+  requestId: string,
+  parameters: Record<string, any>,
+  note?: string
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/requests/${requestId}/edit-parameters`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ parameters, note }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to edit parameters: ${response.statusText}`);
+  }
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -709,6 +725,7 @@ export const api = {
   getDelegations,
   createDelegation,
   deleteDelegation,
+  editRequestParameters,
   runTests,
   listTests,
   resetDb,

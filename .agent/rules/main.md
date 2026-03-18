@@ -10,7 +10,7 @@ trigger: always_on
 
 ## Development and Troubleshooting Tools
 - Debugpy is enabled when running via `./dev.sh --debug` but the user needs to click the green play button labelled "Attach to Backend" in the debugging panel. The agent can either do this themselves ask the user to do this to capture variable output rather than inserting debug statements everywhere.
-- In local development, we store a sqllite database at backend/edas_hub.db. You may execute queries on the local database as needed.
+- In local development, we store a sqllite database at backend/atlas_hub.db. You may execute queries on the local database as needed.
 - For troubleshooting, you may tail the logs at backend.log or frontend.log. This is especially helpful for python errors or for getting log statements. Always check backend.log before finishing up, since there may be errors preventing fastApi from starting.
 
 ## Gotchas

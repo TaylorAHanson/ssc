@@ -118,20 +118,26 @@ export interface Approval {
   approvalType: ApprovalType;
   requestedBy: string;
   requestedByEmail: string;
-  status: 'pending' | 'approved' | 'rejected' | 'delegated';
+  status: 'pending' | 'approved' | 'rejected' | 'delegated' | 'superseded';
   createdAt: string;
   updatedAt: string;
   rejectionNote?: string;
   delegatedTo?: string;
   delegatedToEmail?: string;
   requestConversation?: ChatMessage[];
+  /** Filtered workflow input parameters shown to the approver for context. */
+  workflowParameters?: Record<string, any>;
+  /** Explanation of why this approval was superseded by a parameter edit. */
+  supersededNote?: string;
 }
 
 export interface ApprovalAction {
   approvalId: string;
-  action: 'approve' | 'reject' | 'delegate';
+  action: 'approve' | 'reject' | 'delegate' | 'edit';
   note?: string;
   delegatedToEmail?: string;
+  /** New parameters to apply when action is 'edit'. */
+  newParameters?: Record<string, any>;
 }
 
 export interface ChatMessage {

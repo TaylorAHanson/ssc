@@ -97,7 +97,17 @@ You are acting as the standard Self-Service Agent. Your focus is on helping user
 - Suggest Alternatives Instead of just proceeding with a creation request, ask: "I see you're onboarding [Project X]. We already have a workspace for [Department Y], would it be better to join that one instead?" or "I found an existing catalog `dev_sandbox` that might suit your needs."
 - Contextual Reasoning: Use the user's business justification to infer if they are following best practices. If they aren't, gently suggest the standard way of doing things.
 
-#### Workflow Execution Flow
+#### Non-Workflow Requests (The user is just asking a question or looking for information)
+- Sometimes, a user just wants to know something. 
+- Information: Answer questions using your knowledge base (training, docs, reusable assets, etc.) and Community Resources.
+- Learner Intent: If the user wants to learn (e.g., "How do I use SQL?"), refer them to Training or Documentation assets.
+- Cross-Mode Handling: If the user asks for deep financial analysis or security audits, suggest switching to the appropriate specialized mode (FinOps or Governance) to access those dedicated tools.
+"""
+
+
+# Workflow Execution Guidelines (Shared across all modes)
+WORKFLOW_EXECUTION_GUIDELINES = """
+### 5. Workflow Execution Flow
 If the user wants to execute a workflow, follow this process:
 
 Phase A: Data Gathering
@@ -108,12 +118,11 @@ Phase A: Data Gathering
   - If a Compound Workflow (like Onboarding) implies sub-tasks (like Create Workspace), do not ask validatable questions twice.
   - Reuse parameters across the context logic.
 - Questioning Strategy:
-  - **Efficiency First**: Gather all missing information in a single, well-structured response to minimize turns. 
+  - Efficiency First: Gather all missing information in a single, well-structured response to minimize turns. 
   - Do NOT ask one question at a time. Batch them.
   - Use HTML lists (`<ul><li>`) for clarity.
   - Validate answers immediately based on the rules in the instruction file.
-- Order
-  - Always ask for the name before asking for the description.
+- Order: Always ask for the name before asking for the description.
 
 Phase B: Confirmation (CRITICAL)
 - NEVER execute a workflow without explicit confirmation.
@@ -135,12 +144,6 @@ Phase C: Execution
 Phase D: Post-Execution
 - Follow up with resources that the user may want to know about, like training or office hours. Use your intelligence to infer what the user may need. 
 - If the request will take a long time to complete, suggest things to do in the meantime like training or reviewing example code.
-
-#### Non-Workflow Requests (The user is just asking a question or looking for information)
-- Sometimes, a user just wants to know something. 
-- Information: Answer questions using your knowledge base (training, docs, reusable assets, etc.) and Community Resources.
-- Learner Intent: If the user wants to learn (e.g., "How do I use SQL?"), refer them to Training or Documentation assets.
-- Cross-Mode Handling: If the user asks for deep financial analysis or security audits, suggest switching to the appropriate specialized mode (FinOps or Governance) to access those dedicated tools.
 """
 
 
@@ -183,7 +186,7 @@ You have access to the following tools:
         
         content_items = list_content()
         if content_items:
-            content_section = "\n## Community Resources & Content\n"
+            content_section = "\nCommunity Resources & Content\n"
             content_section += "The following resources are available to help users. Use this information to answer questions about training, events, reusable assets, and community links:\n\n"
             
             for item in content_items:
@@ -197,39 +200,38 @@ You have access to the following tools:
         logger = logging.getLogger(__name__)
         logger.warning(f"Failed to load content for prompt: {e}")
     
-    # Load workflow instructions - ONLY for Self-Service Mode
+    # Load workflow instructions - available in ALL modes
     instructions_section = ""
     capabilities_list = []
     
-    if is_self_service:
-        try:
-            import os
-            import re
-            instructions_dir = os.path.join(os.path.dirname(__file__), "instructions")
-            if os.path.exists(instructions_dir):
-                instructions_files = [f for f in os.listdir(instructions_dir) if f.endswith(".md")]
-                if instructions_files:
-                    instructions_section = "\n## Workflow Instructions\nThe following are specific instructions for executing generic workflows. You should follow these scripts when the user's intent matches the goal.\n\n"
-                    
-                    for filename in instructions_files:
-                        path = os.path.join(instructions_dir, filename)
-                        with open(path, "r") as f:
-                            content = f.read()
-                            
-                            # Extract Goal/Description for capabilities list
-                            goal_match = re.search(r'\*\*Goal\*\*: (.*?)(?:\n|$)', content)
-                            if goal_match:
-                                goal = goal_match.group(1).strip()
-                                clean_name = filename.replace('.md', '').replace('_', ' ').title()
-                                capabilities_list.append(f"- {clean_name}: {goal}")
-                            
-                            # Sanitize content before adding to prompt
-                            content = content.replace("**", "")
-                            instructions_section += f"### Instruction File: {filename}\n{content}\n\n"
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Failed to load workflow instructions: {e}")
+    try:
+        import os
+        import re
+        instructions_dir = os.path.join(os.path.dirname(__file__), "instructions")
+        if os.path.exists(instructions_dir):
+            instructions_files = [f for f in os.listdir(instructions_dir) if f.endswith(".md")]
+            if instructions_files:
+                instructions_section = "\nWorkflow Instructions\nThe following are specific instructions for executing generic workflows. You should follow these scripts when the user's intent matches the goal.\n\n"
+                
+                for filename in instructions_files:
+                    path = os.path.join(instructions_dir, filename)
+                    with open(path, "r") as f:
+                        content = f.read()
+                        
+                        # Extract Goal/Description for capabilities list
+                        goal_match = re.search(r'\*\*Goal\*\*: (.*?)(?:\n|$)', content)
+                        if goal_match:
+                            goal = goal_match.group(1).strip()
+                            clean_name = filename.replace('.md', '').replace('_', ' ').title()
+                            capabilities_list.append(f"- {clean_name}: {goal}")
+                        
+                        # Sanitize content before adding to prompt
+                        content = content.replace("**", "")
+                        instructions_section += f"Instruction File: {filename}\n{content}\n\n"
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to load workflow instructions: {e}")
 
     capabilities_section = ""
     if capabilities_list:
@@ -239,6 +241,7 @@ You have access to the following tools:
 
 {CORE_INSTRUCTIONS}
 {mode_instructions}
+{WORKFLOW_EXECUTION_GUIDELINES}
 {tools_section}
 {capabilities_section}
 {instructions_section}

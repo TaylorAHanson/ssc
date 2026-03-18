@@ -1,4 +1,8 @@
 from app.tools.self_service.catalog_existence import does_catalog_exist
+from app.tools.self_service.schema_existence import does_schema_exist
+from app.tools.self_service.table_existence import does_table_exist
+from app.tools.self_service.service_principal_existence import does_service_principal_exist
+from app.tools.self_service.search_idp import search_idp_groups, search_idp_users
 from app.tools.self_service.get_catalog_list import get_catalog_list
 from app.tools.self_service.get_schema_list import get_schema_list
 from app.tools.self_service.get_table_list import get_table_list
@@ -31,6 +35,11 @@ from app.tools.governance.list_workspaces import list_workspaces
 # Registry of available tools
 AVAILABLE_TOOLS = [
     does_catalog_exist,
+    does_schema_exist,
+    does_table_exist,
+    does_service_principal_exist,
+    search_idp_groups,
+    search_idp_users,
     get_catalog_list,
     get_schema_list,
     get_table_list,

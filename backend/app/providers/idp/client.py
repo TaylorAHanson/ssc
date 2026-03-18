@@ -126,6 +126,50 @@ class IDPProvider(BaseProvider):
             return response.status_code == 200
         except:
             return False
+
+    @retry_on_retryable(max_attempts=3)
+    async def search_users(self, query: str) -> Dict[str, Any]:
+        """
+        Search for users in the IDP.
+        Currently mocked for development.
+        """
+        # Mock data
+        mock_users = [
+            {"id": "usr_101", "email": "alice@example.com", "name": "Alice Smith", "department": "Engineering"},
+            {"id": "usr_102", "email": "bob@example.com", "name": "Bob Jones", "department": "Data Science"},
+            {"id": "usr_103", "email": "charlie@example.com", "name": "Charlie Brown", "department": "Finance"}
+        ]
+        
+        # Simple mock filtering
+        results = [u for u in mock_users if query.lower() in u["email"].lower() or query.lower() in u["name"].lower()]
+        
+        return {
+            "query": query,
+            "results": results,
+            "count": len(results)
+        }
+
+    @retry_on_retryable(max_attempts=3)
+    async def search_groups(self, query: str) -> Dict[str, Any]:
+        """
+        Search for groups in the IDP.
+        Currently mocked for development.
+        """
+        # Mock data
+        mock_groups = [
+            {"id": "grp_123", "name": "data-engineering-prod", "description": "Data Engineering Production Access"},
+            {"id": "grp_124", "name": "data-science-dev", "description": "Data Science Development"},
+            {"id": "grp_125", "name": "finance-analysts", "description": "Finance Analytics Team"}
+        ]
+        
+        # Simple mock filtering
+        results = [g for g in mock_groups if query.lower() in g["name"].lower()]
+        
+        return {
+            "query": query,
+            "results": results,
+            "count": len(results)
+        }
     
     async def __aenter__(self):
         return self

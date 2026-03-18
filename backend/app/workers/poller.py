@@ -122,7 +122,9 @@ async def process_open_requests():
             or_(
                 RequestModel.locked_by.is_(None),
                 RequestModel.locked_until < now
-            )
+            ),
+            # Only if we haven't exhausted retry attempts
+            RequestModel.retry_count < RequestModel.max_retries
         ).limit(settings.POLLER_BATCH_SIZE).all()
         
         if not requests:

@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
-import { CheckCircle2, UserPlus, Clock, Check, X, Shield, Database, Badge, Calendar, Trash2, ArrowRight } from 'lucide-react';
+import { CheckCircle2, UserPlus, Clock, Check, X, Shield, Database, Badge, Calendar, Trash2, ArrowRight, Pencil, Settings2, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
 import { api } from '../services/api';
@@ -26,10 +26,12 @@ export function Approvals() {
   const [selectedApproval, setSelectedApproval] = useState<Approval | null>(null);
   const [inspectedRequestId, setInspectedRequestId] = useState<string | null>(null);
   const inspectedRequest = requests.find(r => r.id === inspectedRequestId);
-  const [actionType, setActionType] = useState<'approve' | 'reject' | 'delegate' | null>(null);
+  const [actionType, setActionType] = useState<'approve' | 'reject' | 'delegate' | 'edit' | null>(null);
   const [note, setNote] = useState('');
   const [delegateEmail, setDelegateEmail] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  // Edit-parameters state
+  const [editParams, setEditParams] = useState<Record<string, string>>({});
 
   // New delegation state
   const [showDelegationForm, setShowDelegationForm] = useState(false);
@@ -73,11 +75,21 @@ export function Approvals() {
 
   const completedApprovals = approvals.filter((a) => a.status !== 'pending');
 
-  const handleAction = async (approval: Approval, action: 'approve' | 'reject' | 'delegate') => {
+  const handleAction = async (approval: Approval, action: 'approve' | 'reject' | 'delegate' | 'edit') => {
     setSelectedApproval(approval);
     setActionType(action);
     setNote('');
     setDelegateEmail('');
+    if (action === 'edit' && approval.workflowParameters) {
+      // Pre-populate editor with current parameters (as strings for form inputs)
+      const stringified: Record<string, string> = {};
+      Object.entries(approval.workflowParameters).forEach(([k, v]) => {
+        stringified[k] = typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
+      });
+      setEditParams(stringified);
+    } else {
+      setEditParams({});
+    }
   };
 
   const handleAddDelegation = async () => {
@@ -96,7 +108,7 @@ export function Approvals() {
       setNewDelegateEmail('');
       setStartDate('');
       setEndDate('');
-    } catch (error) {
+    } catch {
       alert('Failed to add delegation');
     }
   };
@@ -119,12 +131,22 @@ export function Approvals() {
     const action: ApprovalAction = {
       approvalId: selectedApproval.id,
       action: actionType,
-      note: actionType === 'reject' ? note : undefined,
+      note: (actionType === 'reject' || actionType === 'edit') ? note : undefined,
       delegatedToEmail: actionType === 'delegate' ? delegateEmail : undefined,
+      newParameters: actionType === 'edit' ? editParams : undefined,
     };
 
     try {
-      await processApproval(action);
+      if (actionType === 'edit') {
+        // Coerce string values back to their original types where possible
+        const coerced: Record<string, unknown> = {};
+        Object.entries(editParams).forEach(([k, v]) => {
+          try { coerced[k] = JSON.parse(v); } catch { coerced[k] = v; }
+        });
+        await api.editRequestParameters(selectedApproval.requestId, coerced, note || undefined);
+      } else {
+        await processApproval(action);
+      }
     } catch (error) {
       console.error('Error processing approval:', error);
     } finally {
@@ -383,11 +405,30 @@ export function Approvals() {
                         <span>Requested {formatInTimeZone(new Date(approval.createdAt), 'America/Los_Angeles', 'PPp zzz')}</span>
                       </p>
                     </div>
+                    {/* Workflow parameters read-only view */}
+                    {approval.workflowParameters && Object.keys(approval.workflowParameters).length > 0 && (
+                      <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1">
+                          <Settings2 className="w-3.5 h-3.5" />
+                          Workflow Parameters
+                        </p>
+                        <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
+                          {Object.entries(approval.workflowParameters).map(([k, v]) => (
+                            <div key={k} className="contents">
+                              <dt className="text-xs text-gray-500 font-medium truncate">{k}</dt>
+                              <dd className="text-xs text-gray-800 font-mono break-all">
+                                {typeof v === 'object' ? JSON.stringify(v) : String(v ?? '')}
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </div>
+                    )}
                   </div>
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button
                     onClick={() => handleAction(approval, 'approve')}
                     className="bg-green-600 hover:bg-green-700 text-white"
@@ -411,6 +452,18 @@ export function Approvals() {
                     <UserPlus className="w-4 h-4 mr-2" />
                     Delegate
                   </Button>
+
+                  {/* Edit & Restart — platform_admin only */}
+                  {userRoles.includes('platform_admin') && approval.approvalType === 'platform_admin' && (
+                    <Button
+                      onClick={() => handleAction(approval, 'edit')}
+                      variant="outline"
+                      className="border-orange-300 text-orange-700 hover:bg-orange-50"
+                    >
+                      <Pencil className="w-4 h-4 mr-2" />
+                      Edit &amp; Restart
+                    </Button>
+                  )}
 
                   <Button
                     onClick={() => {
@@ -457,12 +510,14 @@ export function Approvals() {
                       </p>
                       <p className="flex items-center gap-2">
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${approval.status === 'approved' ? 'bg-green-100 text-green-800' :
-                          approval.status === 'rejected' ? 'bg-red-100 text-red-800' :
-                            'bg-blue-100 text-blue-800'
+                            approval.status === 'rejected' ? 'bg-red-100 text-red-800' :
+                              approval.status === 'superseded' ? 'bg-orange-100 text-orange-800' :
+                                'bg-blue-100 text-blue-800'
                           }`}>
                           {approval.status === 'approved' ? 'Approved' :
                             approval.status === 'rejected' ? 'Rejected' :
-                              'Delegated'}
+                              approval.status === 'superseded' ? 'Superseded by Edit' :
+                                'Delegated'}
                         </span>
                         {approval.delegatedTo && (
                           <span className="text-gray-500">→ {approval.delegatedTo}</span>
@@ -471,6 +526,12 @@ export function Approvals() {
                       {approval.rejectionNote && (
                         <p className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-red-800">
                           <span className="font-medium">Rejection Note:</span> {approval.rejectionNote}
+                        </p>
+                      )}
+                      {approval.supersededNote && (
+                        <p className="mt-2 p-2 bg-orange-50 border border-orange-200 rounded text-orange-800 flex items-start gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                          <span>{approval.supersededNote}</span>
                         </p>
                       )}
                       <p className="text-xs text-gray-500">
@@ -511,12 +572,45 @@ export function Approvals() {
                 {actionType === 'approve' && 'Approve Request'}
                 {actionType === 'reject' && 'Reject Request'}
                 {actionType === 'delegate' && 'Delegate Approval'}
+                {actionType === 'edit' && (
+                  <span className="flex items-center gap-2">
+                    <Pencil className="w-4 h-4 text-orange-500" />
+                    Edit Parameters &amp; Restart
+                  </span>
+                )}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-gray-600">
                 <span className="font-medium">Request:</span> {selectedApproval.requestTitle}
               </p>
+
+              {actionType === 'edit' && (
+                <div className="space-y-3">
+                  <p className="text-xs text-gray-500 flex items-start gap-1.5 bg-orange-50 border border-orange-200 rounded p-2">
+                    <AlertCircle className="w-4 h-4 text-orange-500 shrink-0 mt-0.5" />
+                    Editing parameters will supersede the current approval and restart the Terraform planning phase with the new values.
+                  </p>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Parameters</p>
+                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                    {Object.keys(editParams).length === 0 ? (
+                      <p className="text-sm text-gray-400 italic">No editable parameters available.</p>
+                    ) : (
+                      Object.entries(editParams).map(([key, value]) => (
+                        <div key={key} className="flex items-center gap-2">
+                          <label className="text-xs font-mono text-gray-600 w-40 shrink-0 truncate" title={key}>{key}</label>
+                          <input
+                            type="text"
+                            value={value}
+                            onChange={(e) => setEditParams(prev => ({ ...prev, [key]: e.target.value }))}
+                            className="flex-1 text-xs font-mono border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-orange-400"
+                          />
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
 
               {actionType === 'reject' && (
                 <div>
@@ -528,6 +622,20 @@ export function Approvals() {
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
                     className="w-full min-h-[100px]"
+                  />
+                </div>
+              )}
+
+              {actionType === 'edit' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Note <span className="text-gray-400 font-normal">(optional)</span>
+                  </label>
+                  <Textarea
+                    placeholder="Reason for editing parameters..."
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    className="w-full min-h-[80px]"
                   />
                 </div>
               )}
@@ -553,15 +661,22 @@ export function Approvals() {
               <div className="flex gap-2 pt-4">
                 <Button
                   onClick={submitAction}
-                  disabled={isProcessing || (actionType === 'reject' && !note.trim()) || (actionType === 'delegate' && !delegateEmail.trim())}
+                  disabled={
+                    isProcessing ||
+                    (actionType === 'reject' && !note.trim()) ||
+                    (actionType === 'delegate' && !delegateEmail.trim()) ||
+                    (actionType === 'edit' && Object.keys(editParams).length === 0)
+                  }
                   className={actionType === 'approve' ? 'bg-green-600 hover:bg-green-700' :
                     actionType === 'reject' ? 'bg-red-600 hover:bg-red-700' :
-                      'bg-blue-600 hover:bg-blue-700'}
+                      actionType === 'edit' ? 'bg-orange-500 hover:bg-orange-600' :
+                        'bg-blue-600 hover:bg-blue-700'}
                 >
                   {isProcessing ? 'Processing...' :
                     actionType === 'approve' ? 'Confirm Approval' :
                       actionType === 'reject' ? 'Confirm Rejection' :
-                        'Confirm Delegation'}
+                        actionType === 'edit' ? 'Apply & Restart' :
+                          'Confirm Delegation'}
                 </Button>
                 <Button
                   variant="outline"
@@ -570,6 +685,7 @@ export function Approvals() {
                     setActionType(null);
                     setNote('');
                     setDelegateEmail('');
+                    setEditParams({});
                   }}
                   disabled={isProcessing}
                 >

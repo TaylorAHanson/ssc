@@ -49,7 +49,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Configuration
-BUNDLE_NAME="atlas"
+BUNDLE_NAME="edhssc"
 VALID_TARGETS="local dev stage prod"
 
 # Handle Brand Switching
@@ -94,7 +94,7 @@ if [ -n "$PROFILE" ]; then
 fi
 
 # Determine App Name Slug (basename)
-APP_SLUG="atlas"
+APP_SLUG="edhssc"
 if [ -n "$BRAND" ]; then
     APP_SLUG="$BRAND"
 fi

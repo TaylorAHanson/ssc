@@ -32,7 +32,8 @@ class BaseRequestStateMachine(StateMachine):
         "platform_admin_approval": "approval_received",
         "training_pending": "training_completed",
         "provisioning": "provisioning_completed",
-        "rejected": "request_rejected"
+        "rejected": "request_rejected",
+        "parameters_updated": "parameters_edited",
     }
 
     # Map states to all facts that should be shown in their logs
@@ -43,7 +44,8 @@ class BaseRequestStateMachine(StateMachine):
         "platform_admin_approval": ["approval_received"],
         "training_pending": ["training_completed"],
         "provisioning": ["provisioning_started", "workspace_created", "repo_created", "provisioning_completed", "provisioning_failed"],
-        "rejected": ["request_rejected"]
+        "rejected": ["request_rejected"],
+        "parameters_updated": ["parameters_edited"],
     }
 
     # Map internal states to the top-level RequestStatus enum
@@ -60,6 +62,14 @@ class BaseRequestStateMachine(StateMachine):
 
     # Custom approval configuration: {state_id: {"approval_type": str, "name": str}}
     APPROVAL_NODES = {}
+
+    def get_editable_states(self) -> list:
+        """States from which a platform_admin can trigger Edit & Restart.
+
+        Override this in subclasses that support parameter editing.
+        Returning an empty list (the default) disables the feature for that SM.
+        """
+        return []
 
     # --------------------------------------------------------------------------
     # Lifecycle
@@ -143,26 +153,29 @@ class BaseRequestStateMachine(StateMachine):
         Dynamically discovers all outgoing transitions from the current state and attempts
         to fire their events. This avoids hardcoding triggers in the base class.
         """
-        # Get all transitions starting from the current state
-        # Note: python-statemachine stores transitions in the State object
-        # but the specific attribute path might vary by version. 
-        # Using the standard public API where possible.
-        
         current_state_obj = self.current_state
-        
-        # We need to find the event names (triggers) associated with these transitions.
-        # Introspection showed we can access transitions via .transitions
         
         if not hasattr(current_state_obj, 'transitions'):
             return
+
+        # Transitions that are meant to be called EXPLICITLY by error-handling or
+        # admin-action code paths, never auto-triggered by state reconciliation.
+        # mark_failed: called by exception handlers when a step permanently fails.
+        # reject: called when an approver submits a rejection action.
+        # Any unconditional transition auto-firing here can race against guarded
+        # transitions due to set() ordering being non-deterministic across runs.
+        _EXCLUDED_FROM_AUTO_TRIGGER = {"mark_failed", "reject"}
 
         # Collect unique event names to try
         triggers_to_try = set()
         for transition in current_state_obj.transitions:
             if hasattr(transition, 'event'):
-                 triggers_to_try.add(transition.event)
+                triggers_to_try.add(transition.event)
         
         for trigger in triggers_to_try:
+            if trigger in _EXCLUDED_FROM_AUTO_TRIGGER:
+                continue
+
             func = getattr(self, trigger, None)
             if not func: continue
             
@@ -174,6 +187,7 @@ class BaseRequestStateMachine(StateMachine):
                     break # Single transition per tick
             except Exception:
                 pass # Guard conditions not met
+
 
     def _process_current_state(self) -> bool:
         """Handles background logic required by the current state."""

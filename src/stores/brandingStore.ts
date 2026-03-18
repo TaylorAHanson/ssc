@@ -18,7 +18,7 @@ interface BrandingState {
 }
 
 export const useBrandingStore = create<BrandingState>((set) => ({
-    brandName: 'ATLAS',
+    brandName: 'Self Service Hub',
     brandLogoUrl: defaultLogo,
     brandColorPrimary: '#FF3621',
     brandColorSecondary: '#1B5162',
