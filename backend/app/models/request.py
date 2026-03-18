@@ -41,6 +41,7 @@ class RequestType(str, Enum):
     REPORT_EXECUTION = "report_execution"
     ENFORCEMENT_SENTINEL = "enforcement_sentinel"
     ASSET_DEDUPLICATION = "asset_deduplication"
+    ALLOWLIST_EXCEPTION = "allowlist_exception"
 
 
 class Environment(str, Enum):

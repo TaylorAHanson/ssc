@@ -31,6 +31,7 @@ from app.tools.governance.check_overprovisioning import check_overprovisioned_us
 from app.tools.governance.check_orphans import check_orphaned_assets
 from app.tools.governance.check_quality import check_asset_quality
 from app.tools.governance.list_workspaces import list_workspaces
+from app.tools.governance.policy_tools import evaluate_policy, check_allowlist_status
 
 # Registry of available tools
 AVAILABLE_TOOLS = [
@@ -63,7 +64,9 @@ AVAILABLE_TOOLS = [
     check_github_repo,
     list_github_templates,
     find_owner,
-    check_training_status
+    check_training_status,
+    evaluate_policy,
+    check_allowlist_status
 ]
 
 def get_read_only_tools():

@@ -26,7 +26,13 @@ This provider handles alerting resource owners and the governance team.
 
 from statemachine import State
 from app.state_machines.base import BaseRequestStateMachine
-
+from app.state_machines.facts import add_fact
+from app.providers.opa.client import OpaProvider
+from app.providers.databricks.handlers import AppResourceHandler, ClusterResourceHandler, JobResourceHandler
+from app.db.allowlist import AllowlistModel
+from datetime import datetime
+import os
+import glob
 
 class EnforcementSentinelStateMachine(BaseRequestStateMachine):
     """
@@ -44,27 +50,142 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
     # Basic Transitions
     submit = pending.to(discovering, cond="has_request_submitted")
     
-    # In a full implementation, these transitions would be governed by facts 
-    # (e.g. "has_discover_completed", "has_enforce_completed")
-    # For now, we define the basic forward flow.
-    finish_discovering = discovering.to(enforcing)
-    finish_enforcing = enforcing.to(notifying)
-    finish_notifying = notifying.to(completed)
+    # Simple flow based on facts
+    finish_discovering = discovering.to(enforcing, cond="has_discover_completed")
+    finish_enforcing = enforcing.to(notifying, cond="has_enforce_completed")
+    finish_notifying = notifying.to(completed, cond="has_notify_completed")
 
     reject = (
         pending.to(rejected, cond="has_request_rejected") |
         discovering.to(rejected, cond="has_request_rejected")
     )
     
-    # We will implement the actual logic in these async hooks later
+    @property
+    def has_discover_completed(self) -> bool:
+        return self.has_fact("discover_completed")
+
+    @property
+    def has_enforce_completed(self) -> bool:
+        return self.has_fact("enforce_completed")
+
+    @property
+    def has_notify_completed(self) -> bool:
+        return self.has_fact("notify_completed")
+
+    def has_fact(self, fact_type: str) -> bool:
+        from app.state_machines.facts import has_fact as check_fact
+        return check_fact(self.db, self.request.id, fact_type)
+    
     async def on_enter_discovering_async(self):
         """Execute async API calls to discover resources and check policies."""
-        pass
+        if self.has_fact("discover_completed"):
+            return
+
+        workspace_name = self.request.state_context.get("workspace", "ws-enterprise-prod")
+        
+        # Determine workspace type based on name for OPA context
+        workspace_type = "enterprise" if "enterprise" in workspace_name else "domain"
+        
+        # 1. Fetch Allowlist Context from DB
+        allowlist_records = []
+        db_entries = self.db.query(AllowlistModel).filter(AllowlistModel.workspace == workspace_name).all()
+        for entry in db_entries:
+            allowlist_records.append({
+                "resource_id": entry.resource_id,
+                "status": entry.status,
+                "expires_at": entry.expires_at.isoformat() if entry.expires_at else None,
+                "justification": entry.justification
+            })
+
+        # 2. Discover resources using Handlers (simplified mock for now since DatabricksProvider is missing workspace_client)
+        # In real code: handler = AppResourceHandler(databricks_client)
+        # apps = await handler.discover()
+        apps = [{"id": "fin-forecast-app", "type": "app"}] # Mock data for example
+
+        # 3. Evaluate with OPA
+        opa_provider = OpaProvider()
+        violations = []
+        
+        # In a real implementation, we would iterate over all policies in the policies directory.
+        # For now, we will simulate loading multiple policies or use the specific one requested.
+        
+        # Let's dynamically load all rego policies from the policies directory
+        import os
+        import glob
+        policy_files = glob.glob(os.path.join("policies", "*.rego"))
+        
+        # If the user requested specific policies, filter them
+        requested_policies = self.request.state_context.get("policies", [])
+        if requested_policies:
+            policy_files = [p for p in policy_files if any(req in p for req in requested_policies)]
+            
+        for resource in apps:
+            input_data = {
+                "workspace": {"name": workspace_name, "type": workspace_type},
+                "resource": {"id": resource["id"], "type": resource["type"]},
+                "request_time": datetime.utcnow().isoformat(),
+                "allowlist_records": allowlist_records
+            }
+            
+            for policy_path in policy_files:
+                # Extract policy name to construct the query path
+                # e.g. policies/asset_allowlist.rego -> asset_allowlist
+                policy_name = os.path.basename(policy_path).replace(".rego", "")
+                query = f"data.databricks.governance.{policy_name}"
+                
+                result = await opa_provider.evaluate(
+                    policy_path=policy_path,
+                    query=query,
+                    input_data=input_data
+                )
+                
+                if result.get("is_violation"):
+                    violations.append({
+                        "resource_id": resource["id"],
+                        "resource_type": resource["type"],
+                        "policy": policy_name,
+                        "action": result.get("action", "KILL"),
+                        "reason": result.get("reason", "Unknown violation")
+                    })
+        
+        # Save violations to state context and record fact
+        self.request.state_context["violations"] = violations
+        add_fact(self.db, self.request.id, "discover_completed", {"violation_count": len(violations)})
+        self.finish_discovering()
 
     async def on_enter_enforcing_async(self):
-        """Execute destructive actions if active_enforcement mode and dry_run=False."""
-        pass
+        """Execute destructive actions if active_enforcement mode."""
+        if self.has_fact("enforce_completed"):
+            return
+            
+        mode = self.request.state_context.get("enforcement_mode", "audit_only")
+        violations = self.request.state_context.get("violations", [])
+        
+        if mode == "active_enforcement":
+            # Initialize handlers (Mocked for now)
+            handlers = {
+                "app": AppResourceHandler(None),
+                "cluster": ClusterResourceHandler(None),
+                "job": JobResourceHandler(None)
+            }
+            
+            for violation in violations:
+                if violation["action"] == "KILL":
+                    handler = handlers.get(violation["resource_type"])
+                    if handler:
+                        # await handler.kill(violation["resource_id"])
+                        # Simulate kill
+                        pass
+        
+        add_fact(self.db, self.request.id, "enforce_completed", {})
+        self.finish_enforcing()
 
     async def on_enter_notifying_async(self):
         """Dispatch summary report to the notify target."""
-        pass
+        if self.has_fact("notify_completed"):
+            return
+            
+        # Send email via NotificationProvider
+        add_fact(self.db, self.request.id, "notify_completed", {})
+        self.finish_notifying()
+

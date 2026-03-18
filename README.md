@@ -2,7 +2,15 @@
 
 This is a self-service portal for employees to request access to data and analytics resources.
 
-## Quick Start
+## Project Details
+📖 See [backend/ARCHITECTURE.md](./backend/ARCHITECTURE.md) for architecture details. 
+
+## Environment Setup
+
+### Backend Environment Variables
+
+Create `backend/.env` by renaming `backend/.env.example` and fill in applicable values. 
+- anything prefixed with DATABASE_ is not needed for local development
 
 ### Development (Run Both Frontend and Backend)
 
@@ -22,13 +30,3 @@ This will start:
 - **API Docs** on http://localhost:8000/docs
 
 Press `Ctrl+C` to stop both services.
-
-## Project Details
-📖 See [backend/ARCHITECTURE.md](./backend/ARCHITECTURE.md) for architecture details.
-
-## Environment Setup
-
-### Backend Environment Variables
-
-Create `backend/.env` by renaming `backend/.env.example` and fill in applicable values. 
-- anything prefixed with DATABASE_ is not needed for local development

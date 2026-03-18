@@ -5,7 +5,7 @@ import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
 import { Input } from '../components/ui/input';
 import {
-  Save, Loader2, Clock, RotateCcw, FileText, ToggleLeft, Activity, Search
+  Save, Loader2, Clock, RotateCcw, FileText, ToggleLeft, Activity, Search, ShieldCheck
 } from 'lucide-react';
 import { format } from 'date-fns';
 import {
@@ -17,6 +17,7 @@ import { Switch } from '../components/ui/switch';
 import { TestRunner } from '../components/admin/TestRunner';
 import { Users } from './admin/Users';
 import { AdminDashboard } from './admin/AdminDashboard';
+import { Allowlist } from './admin/Allowlist';
 
 export function Admin() {
   const fetchRequests = useRequestStore((state) => state.fetchRequests);
@@ -27,7 +28,7 @@ export function Admin() {
     fetchApprovals();
   }, [fetchRequests, fetchApprovals]);
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'content-manager' | 'feature-management' | 'test-runner'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'content-manager' | 'feature-management' | 'test-runner' | 'allowlist'>('dashboard');
 
   // Content management state
   const [contentFiles, setContentFiles] = useState<ContentInfo[]>([]);
@@ -341,11 +342,22 @@ export function Admin() {
           <Activity className="w-4 h-4 inline mr-2" />
           Test Runner
         </button>
+        <button
+          onClick={() => setActiveTab('allowlist')}
+          className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'allowlist'
+            ? 'border-b-2 border-primary text-primary'
+            : 'text-gray-600 hover:text-gray-900'
+            }`}
+        >
+          <ShieldCheck className="w-4 h-4 inline mr-2" />
+          Allowlist
+        </button>
       </div>
 
       {activeTab === 'test-runner' && <TestRunner />}
       {activeTab === 'dashboard' && <AdminDashboard />}
       {activeTab === 'users' && <Users />}
+      {activeTab === 'allowlist' && <Allowlist />}
 
       {activeTab === 'content-manager' && (
         <div className="flex gap-6 h-[calc(100vh-200px)]">

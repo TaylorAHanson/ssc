@@ -13,6 +13,23 @@ print(f"Migrating {db_path}...")
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
 
+# Create allowlist table if it doesn't exist
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS allowlist (
+    id TEXT PRIMARY KEY,
+    resource_id TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    workspace TEXT NOT NULL,
+    justification TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    request_id TEXT,
+    approved_by TEXT,
+    expires_at DATETIME,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+)
+''')
+
 # Check if parent_id exists
 cols = [row[1] for row in cursor.execute("PRAGMA table_info(requests)")]
 if "parent_id" not in cols:
