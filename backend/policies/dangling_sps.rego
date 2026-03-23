@@ -6,6 +6,11 @@ import future.keywords.in
 default action := "ALLOW"
 default is_violation := false
 default reason := "Service Principal is active."
+default severity := "NONE"
+
+severity := "CRITICAL" if {
+    is_violation
+}
 
 is_violation if {
     input.resource.type == "service_principal"

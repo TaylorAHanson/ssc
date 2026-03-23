@@ -6,6 +6,11 @@ import future.keywords.in
 default action := "ALLOW"
 default is_violation := false
 default reason := "Notebook is permitted."
+default severity := "NONE"
+
+severity := "CRITICAL" if {
+    is_violation
+}
 
 # Only applies to prod workspaces
 is_violation if {

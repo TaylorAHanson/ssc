@@ -6,6 +6,11 @@ import future.keywords.in
 default action := "ALLOW"
 default is_violation := false
 default reason := "Warehouse is correctly provisioned."
+default severity := "NONE"
+
+severity := "MEDIUM" if {
+    is_violation
+}
 
 is_violation if {
     input.resource.type == "warehouse"

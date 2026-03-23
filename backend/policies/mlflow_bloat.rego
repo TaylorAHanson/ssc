@@ -6,6 +6,11 @@ import future.keywords.in
 default action := "ALLOW"
 default is_violation := false
 default reason := "MLflow experiment is active or linked."
+default severity := "NONE"
+
+severity := "LOW" if {
+    is_violation
+}
 
 is_violation if {
     input.workspace.type == "domain"

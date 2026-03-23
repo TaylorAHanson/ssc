@@ -6,6 +6,11 @@ import future.keywords.in
 default action := "ALLOW"
 default is_violation := false
 default reason := "Job is active or scheduled."
+default severity := "NONE"
+
+severity := "MEDIUM" if {
+    is_violation
+}
 
 # Thresholds
 # All environments: > 45 days idle if unscheduled

@@ -6,6 +6,11 @@ import future.keywords.in
 default action := "ALLOW"
 default is_violation := false
 default reason := "Resource is fully tagged."
+default severity := "NONE"
+
+severity := "HIGH" if {
+    is_violation
+}
 
 # Applies to all workspaces, resources that can be tagged (cluster, warehouse, job)
 taggable_resources := ["cluster", "warehouse", "job"]

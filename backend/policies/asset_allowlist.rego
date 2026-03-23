@@ -7,6 +7,7 @@ import future.keywords.if
 default action := "ALLOW"
 default is_violation := false
 default reason := "Resource is permitted."
+default severity := "NONE"
 
 restricted_environments := ["enterprise", "prod"]
 restricted_assets := ["app", "genie_space", "dashboard", "job", "notebook"]
@@ -19,50 +20,75 @@ is_violation if {
 
 # Find matching allowlist records for this resource
 matching_exceptions := [
-    e | e := input.allowlist_records[_]; 
+    e | e := input.allowlist_records[_];
     e.resource_id == input.resource.id
 ]
 
-# ALLOW: If there is an approved exception that hasn't expired
-action = "SKIPPED_ALLOWLIST" if {
-    is_violation
-    some exception in matching_exceptions
-    exception.status == "approved"
-    
-    # Check expiry
-    # If expires_at is null/missing, it's valid forever. Otherwise it must be in the future.
-    is_valid_expiry(exception, input.request_time)
-}
+# --- Helpers (must not reference `action`; avoids rego_recursion_error) ---
 
-# Provide reason for SKIPPED_ALLOWLIST
-reason = exception.justification if {
-    action == "SKIPPED_ALLOWLIST"
+has_approved_exception if {
+    is_violation
     some exception in matching_exceptions
     exception.status == "approved"
     is_valid_expiry(exception, input.request_time)
 }
 
-# REPRIEVE: If there is a pending request, spare it temporarily
-action = "PENDING_EXCEPTION" if {
+has_pending_exception if {
     is_violation
-    not action == "SKIPPED_ALLOWLIST"
+    not has_approved_exception
     some exception in matching_exceptions
     exception.status == "pending"
 }
 
-reason = "Exception request is pending admin approval." if {
-    action == "PENDING_EXCEPTION"
+# --- Outcomes (exclusive; precedence: approved > pending > kill) ---
+
+action = "SKIPPED_ALLOWLIST" if {
+    has_approved_exception
 }
 
-# KILL: If it's a violation and neither skipped nor pending
+action = "PENDING_EXCEPTION" if {
+    has_pending_exception
+}
+
 action = "KILL" if {
     is_violation
-    not action == "SKIPPED_ALLOWLIST"
-    not action == "PENDING_EXCEPTION"
+    not has_approved_exception
+    not has_pending_exception
+}
+
+# --- Reasons ---
+
+reason = exception.justification if {
+    has_approved_exception
+    some exception in matching_exceptions
+    exception.status == "approved"
+    is_valid_expiry(exception, input.request_time)
+}
+
+reason = "Exception request is pending admin approval." if {
+    has_pending_exception
 }
 
 reason = sprintf("Unauthorized %s resource in %s workspace. No valid exception found.", [input.resource.type, input.workspace.type]) if {
-    action == "KILL"
+    is_violation
+    not has_approved_exception
+    not has_pending_exception
+}
+
+# --- Severity (derive from helpers, not `action`, to keep the graph acyclic) ---
+
+severity := "NONE" if {
+    has_approved_exception
+}
+
+severity := "MEDIUM" if {
+    has_pending_exception
+}
+
+severity := "CRITICAL" if {
+    is_violation
+    not has_approved_exception
+    not has_pending_exception
 }
 
 # Helper to check expiry

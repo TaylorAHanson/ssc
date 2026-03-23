@@ -1,14 +1,23 @@
-import os
 import json
-import subprocess
-import httpx
 import logging
-from typing import Dict, Any
+import os
+import shutil
+import subprocess
+from typing import Any, Dict, Optional
 
+import httpx
+
+from app.core.exceptions import PermanentError, RetryableError
 from app.providers.base import BaseProvider
-from app.core.exceptions import RetryableError, PermanentError
 
 logger = logging.getLogger(__name__)
+
+OPA_SETUP_HINT = (
+    "Open Policy Agent (opa) is not available. Install it (e.g. `brew install opa`) so `opa` is on PATH, "
+    "or set OPA_BINARY_PATH in .env to the executable, or set OPA_URL to a running OPA server "
+    "that already has your Rego bundles loaded. See https://www.openpolicyagent.org/docs/latest/"
+)
+
 
 class OpaProvider(BaseProvider):
     """
@@ -21,6 +30,24 @@ class OpaProvider(BaseProvider):
         self.opa_url = self.config.get("opa_url")
         self.use_local_binary = self.config.get("use_local_binary", True)
         self.policies_dir = self.config.get("policies_dir", "policies")
+        self.opa_binary = self.config.get("opa_binary")
+
+    def _resolve_opa_executable(self) -> Optional[str]:
+        """Return path to the OPA CLI, or None if not found."""
+        configured = (self.opa_binary or "").strip() if self.opa_binary else ""
+        if configured:
+            expanded = os.path.expanduser(configured)
+            if os.path.isfile(expanded):
+                return expanded
+            return None
+        found = shutil.which("opa")
+        return found
+
+    def _require_local_opa(self) -> str:
+        exe = self._resolve_opa_executable()
+        if not exe:
+            raise PermanentError(OPA_SETUP_HINT)
+        return exe
 
     def health_check(self) -> bool:
         if self.opa_url:
@@ -30,12 +57,7 @@ class OpaProvider(BaseProvider):
             except Exception:
                 return False
         elif self.use_local_binary:
-            try:
-                subprocess.run(["opa", "version"], capture_output=True, check=True)
-                return True
-            except FileNotFoundError:
-                logger.error("OPA binary not found in PATH")
-                return False
+            return self._resolve_opa_executable() is not None
         return False
 
     async def evaluate(self, policy_path: str, query: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -67,29 +89,38 @@ class OpaProvider(BaseProvider):
             raise PermanentError(f"OPA server returned error: {e.response.text}")
 
     async def _evaluate_local(self, policy_file: str, query: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        # Create a temporary input file
         import tempfile
-        
-        policy_full_path = os.path.join(os.getcwd(), self.policies_dir, policy_file)
+
+        opa_exe = self._require_local_opa()
+
+        # Accept either "asset_allowlist.rego" or "policies/asset_allowlist.rego"
+        policy_basename = os.path.basename(policy_file)
+        policy_full_path = os.path.join(os.getcwd(), self.policies_dir, policy_basename)
         if not os.path.exists(policy_full_path):
             raise PermanentError(f"Policy file not found: {policy_full_path}")
 
-        with tempfile.NamedTemporaryFile('w', delete=False, suffix='.json') as temp_in:
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as temp_in:
             json.dump(input_data, temp_in)
             temp_in_path = temp_in.name
 
         try:
-            # Run opa eval
             cmd = [
-                "opa", "eval",
-                "-d", policy_full_path,
-                "-i", temp_in_path,
-                "-f", "values",
-                query
+                opa_exe,
+                "eval",
+                "-d",
+                policy_full_path,
+                "-i",
+                temp_in_path,
+                "-f",
+                "values",
+                query,
             ]
-            
-            process = subprocess.run(cmd, capture_output=True, text=True)
-            
+
+            try:
+                process = subprocess.run(cmd, capture_output=True, text=True)
+            except FileNotFoundError as e:
+                raise PermanentError(OPA_SETUP_HINT) from e
+
             if process.returncode != 0:
                 raise PermanentError(f"OPA evaluation failed: {process.stderr}")
                 

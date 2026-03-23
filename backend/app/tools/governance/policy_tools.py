@@ -3,10 +3,12 @@ from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime
 
-from app.tools.mcp import tool
-from app.providers.opa.client import OpaProvider
-from app.db.session import get_lakebase_session
+from app.core.config import settings
+from app.core.exceptions import PermanentError
 from app.db.allowlist import AllowlistModel
+from app.db.session import get_lakebase_session
+from app.providers.opa.client import OpaProvider
+from app.tools.mcp import tool
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +44,7 @@ async def evaluate_policy(workspace: str, resource_type: str, resource_id: str) 
             db.close()
 
         # 2. Evaluate with OPA
-        opa_provider = OpaProvider()
+        opa_provider = OpaProvider(settings.opa_provider_config())
         input_data = {
             "workspace": {"name": workspace, "type": workspace_type},
             "resource": {"id": resource_id, "type": resource_type},
@@ -60,10 +62,14 @@ async def evaluate_policy(workspace: str, resource_type: str, resource_id: str) 
             "allowed": result.get("action") != "KILL",
             "action": result.get("action", "KILL"),
             "reason": result.get("reason", "Unknown violation"),
-            "is_violation": result.get("is_violation", False)
+            "is_violation": result.get("is_violation", False),
+            "severity": result.get("severity"),
         }
+    except PermanentError as e:
+        logger.warning("Policy evaluation unavailable (configuration or OPA): %s", e)
+        return {"error": str(e)}
     except Exception as e:
-        logger.error(f"Error evaluating policy: {e}")
+        logger.error("Error evaluating policy: %s", e)
         return {"error": str(e)}
 
 class CheckAllowlistInput(BaseModel):

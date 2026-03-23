@@ -23,6 +23,7 @@ async def test_opa_provider_local_eval():
     
     assert result.get("is_violation") is True
     assert result.get("action") == "KILL"
+    assert result.get("severity") == "CRITICAL"
     
     # Test with approved exception
     input_data["allowlist_records"] = [
@@ -42,6 +43,7 @@ async def test_opa_provider_local_eval():
     assert result.get("is_violation") is True
     assert result.get("action") == "SKIPPED_ALLOWLIST"
     assert result.get("reason") == "Approved app"
+    assert result.get("severity") == "NONE"
     
     # Test with pending exception
     input_data["allowlist_records"] = [
@@ -60,3 +62,4 @@ async def test_opa_provider_local_eval():
     
     assert result.get("is_violation") is True
     assert result.get("action") == "PENDING_EXCEPTION"
+    assert result.get("severity") == "MEDIUM"

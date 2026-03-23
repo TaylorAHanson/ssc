@@ -6,6 +6,11 @@ import future.keywords.in
 default action := "ALLOW"
 default is_violation := false
 default reason := "User privileges are valid."
+default severity := "NONE"
+
+severity := "HIGH" if {
+    is_violation
+}
 
 is_violation if {
     input.resource.type == "user_grant"
