@@ -21,6 +21,7 @@ import { useUserStore } from '../../stores/userStore';
 import type { UserPersona } from '../../types';
 
 interface NavItem {
+  id: string;
   title: string;
   icon: React.ReactNode;
   path: string;
@@ -30,18 +31,19 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   // Main
-  { title: 'Home', icon: <Home className="w-5 h-5" />, path: '/', group: 'Main' },
-  { title: 'My Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Main' },
-  { title: 'Pending Approvals', icon: <CheckCircle2 className="w-5 h-5" />, path: '/approvals', group: 'Main' },
+  { id: 'home', title: 'Home', icon: <Home className="w-5 h-5" />, path: '/', group: 'Main' },
+  { id: 'my_requests', title: 'My Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Main' },
+  { id: 'pending_approvals', title: 'Pending Approvals', icon: <CheckCircle2 className="w-5 h-5" />, path: '/approvals', group: 'Main' },
 
   // Community - Available to everyone
-  { title: 'Training', icon: <GraduationCap className="w-5 h-5" />, path: '/community/training', group: 'Community' },
-  { title: 'Event Calendar', icon: <Calendar className="w-5 h-5" />, path: '/community/events', group: 'Community' },
-  { title: 'Templates & Assets', icon: <FileText className="w-5 h-5" />, path: '/community/assets', group: 'Community' },
-  { title: 'Community Links', icon: <MessageSquare className="w-5 h-5" />, path: '/community/links', group: 'Community' },
+  { id: 'training', title: 'Training', icon: <GraduationCap className="w-5 h-5" />, path: '/community/training', group: 'Community' },
+  { id: 'event_calendar', title: 'Event Calendar', icon: <Calendar className="w-5 h-5" />, path: '/community/events', group: 'Community' },
+  { id: 'templates_assets', title: 'Templates & Assets', icon: <FileText className="w-5 h-5" />, path: '/community/assets', group: 'Community' },
+  { id: 'community_links', title: 'Community Links', icon: <MessageSquare className="w-5 h-5" />, path: '/community/links', group: 'Community' },
 
   // Admin - Restricted
   {
+    id: 'admin',
     title: 'Admin',
     icon: <Settings className="w-5 h-5" />,
     path: '/admin',
@@ -50,6 +52,7 @@ const navItems: NavItem[] = [
   },
 
   {
+    id: 'reports',
     title: 'Reports',
     icon: <BarChart className="w-5 h-5" />,
     path: '/admin/reports',
@@ -57,6 +60,7 @@ const navItems: NavItem[] = [
     allowedPersonas: ['Platform Admin']
   },
   {
+    id: 'training_upload',
     title: 'Training Upload',
     icon: <Upload className="w-5 h-5" />,
     path: '/admin/training',
@@ -71,10 +75,15 @@ export function Sidebar() {
 
   // Reactive store selectors
   const currentPersona = useUserStore((state) => state.currentPersona);
-  const { brandName, brandLogoUrl } = useBrandingStore();
+  const { brandName, brandLogoUrl, uiTabs } = useBrandingStore();
 
   // Filter items based on current persona
   const filteredItems = navItems.filter(item => {
+    // Check if explicitly disabled in config (if not present or undefined, default to true)
+    if (uiTabs && uiTabs[item.id] === false) {
+      return false;
+    }
+    
     if (!item.allowedPersonas) return true;
     return item.allowedPersonas.includes(currentPersona);
   });

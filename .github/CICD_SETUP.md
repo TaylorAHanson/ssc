@@ -44,16 +44,8 @@ Configure these for **each environment** (Settings → Environments → [env]):
 | `DATABRICKS_HOST` | Variable | Workspace URL | `https://your-workspace.cloud.databricks.com` |
 | `DATABRICKS_CLIENT_ID` | **Secret** | Service Principal Client ID | `00000000-0000-0000-0000-000000000000` |
 | `DATABRICKS_CLIENT_SECRET` | **Secret** | Service Principal Secret | `dose...` |
-| `DATABRICKS_WAREHOUSE_ID` | Variable | SQL Warehouse ID | `abc123def456` |
 
-### Optional (for full app functionality)
-
-| Name | Type | Description | Default |
-|------|------|-------------|---------|
-| `MODEL_SERVING_AGENT_LLM_ENDPOINT` | Variable | LLM endpoint name | `databricks-gemini-2-5-flash` |
-| `MODEL_SERVING_CLASSIFIER_ENDPOINT` | Variable | Classifier endpoint name | (empty) |
-| `GITHUB_ORG` | Variable | GitHub organization name | (empty) |
-| `APP_GITHUB_TOKEN` | **Secret** | GitHub PAT for app operations | (empty) |
+*Note: Application settings like SQL Warehouse IDs and LLM endpoints are now configured in the `variables:` block of `databricks.yml`, rather than GitHub Environments.*
 
 > **Note:** The app uses OAuth automatically inside Databricks Apps, so `DATABRICKS_TOKEN` and `MODEL_SERVING_API_KEY` are **not needed**.
 
@@ -81,12 +73,6 @@ Create a Service Principal for CI/CD:
    - Go to your Workspace → **Settings** → **Identity and access**
    - Add the service principal with **Admin** role (needed to deploy apps)
 
-#### DATABRICKS_WAREHOUSE_ID
-Find in Databricks UI:
-1. Go to **SQL** → **SQL Warehouses**
-2. Click on your warehouse
-3. Copy the **ID** from the connection details
-
 ## Workflow Files
 
 | File | Trigger | Description |
@@ -94,6 +80,7 @@ Find in Databricks UI:
 | `.github/workflows/ci.yml` | PRs to any branch | Lint, type-check, build, test |
 | `.github/workflows/deploy-develop.yml` | PR merged to develop | Deploy to dev environment |
 | `.github/workflows/deploy-main.yml` | PR merged to main | Deploy to production |
+| `.github/workflows/lite-version.yml` | Push to develop | Creates a stripped-down `lite/develop` branch using `configuration.lite.yaml` |
 
 > **Note:** Developers should never push directly to `develop` or `main`. All changes go through pull requests. The deploy workflows trigger automatically when PRs are merged.
 
@@ -168,6 +155,8 @@ Developer creates PR: develop → main
 ### Pre-Deployment (Before First Deploy)
 
 - [ ] Create GitHub repository
+- [ ] Run `./bootstrap.sh` to configure Databricks prerequisites (Secret Scope, Volumes)
+- [ ] Configure `databricks.yml` variables for your environment
 - [ ] Create Service Principal for CI/CD deployments
 - [ ] Grant Service Principal admin access to workspace
 - [ ] Create `development` environment in GitHub
@@ -184,17 +173,14 @@ Developer creates PR: develop → main
 > This "App SP" needs additional permissions that can only be configured AFTER deployment.
 
 - [ ] Find the App's auto-created Service Principal (Apps → Your App → Permissions)
-- [ ] Create secret scope `atlas-hub` (if not created by Terraform)
-- [ ] Add `github-pat` secret (GitHub PAT with repo access for GitOps)
-- [ ] Add `lakebase-password` secret (Lakebase app role password)
 - [ ] Grant App SP `READ` access to `atlas-hub` secret scope
 - [ ] Grant App SP `Can Use` access to Lakebase instance
 - [ ] Grant App SP `Can Query` access to Model Serving endpoint
 - [ ] Restart the app to pick up new permissions
 
-### Post-Deployment Commands
+### Granting App SP Access to Secrets
 
-Run these in a Databricks notebook as a workspace admin:
+Run this in a Databricks notebook as a workspace admin (after the app deploys and you find its ID):
 
 ```python
 from databricks.sdk import WorkspaceClient
@@ -202,44 +188,14 @@ from databricks.sdk.service.workspace import AclPermission
 
 w = WorkspaceClient()
 
-# 1. Create secret scope (if needed)
-try:
-    w.secrets.create_scope(scope="atlas-hub")
-    print("Created secret scope: atlas-hub")
-except Exception as e:
-    print(f"Scope already exists or error: {e}")
-
-# 2. Add required secrets
-# IMPORTANT: Replace with ACTUAL values, not placeholders!
-
-# GitHub PAT - Create at: GitHub → Settings → Developer settings → Personal access tokens
-# Required scopes: repo (for private repo access)
-w.secrets.put_secret(
-    scope="atlas-hub", 
-    key="github-pat", 
-    string_value="ghp_your_actual_token_here"  # REPLACE WITH REAL PAT!
-)
-print("Added github-pat secret")
-
-# Lakebase password - The password for the atlas_app PostgreSQL role
-w.secrets.put_secret(
-    scope="atlas-hub", 
-    key="lakebase-password", 
-    string_value="your_lakebase_password"  # REPLACE WITH REAL PASSWORD!
-)
-print("Added lakebase-password secret")
-
-# 3. Grant App SP access to secrets
 # Find your App SP ID: Apps → Your App → Permissions → Note the SP application ID
 APP_SP_ID = "your-app-sp-application-id"  # REPLACE!
+
+# Grant READ access to the app's service principal
 w.secrets.put_acl(scope="atlas-hub", principal=APP_SP_ID, permission=AclPermission.READ)
 print(f"Granted READ access to {APP_SP_ID}")
 
-# 4. Verify secrets and ACLs
-print("\nSecrets in atlas-hub:")
-for s in w.secrets.list_secrets(scope="atlas-hub"):
-    print(f"  - {s.key}")
-
+# Verify ACLs
 print("\nACLs for atlas-hub:")
 for acl in w.secrets.list_acls(scope="atlas-hub"):
     print(f"  {acl.principal}: {acl.permission}")

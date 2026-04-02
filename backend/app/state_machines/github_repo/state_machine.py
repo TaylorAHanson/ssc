@@ -2,6 +2,8 @@
 GitHub Repository Creation state machine.
 """
 from statemachine import State
+from app.models.request import RequestType
+from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
 from app.state_machines.facts import has_fact, add_fact
 import logging
@@ -9,6 +11,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+@workflow(request_types=RequestType.GITHUB_REPO_CREATION, feature_flag="core")
 class GithubRepoCreationStateMachine(BaseRequestStateMachine):
     
     pending = State("pending", initial=True)

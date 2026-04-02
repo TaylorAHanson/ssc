@@ -1,0 +1,82 @@
+branding:
+  name: "ATLAS"
+  logo_url: ""
+  primary_color: "#FF3621"
+  secondary_color: "#1B5162"
+  info_color: "#1B5162"
+  alert_color: "#98102A"
+  warning_color: "#FFAB00"
+  success_color: "#00A972"
+
+features:
+  core: true
+  governance: true
+  finops: true
+  self_service: true
+  workflows: true
+
+ui:
+  tabs:
+    home: true
+    my_requests: true
+    pending_approvals: true
+    training: true
+    event_calendar: true
+    templates_assets: true
+    community_links: true
+    admin: true
+    reports: true
+    training_upload: true
+
+tools:
+  check_allowlist_status: true
+  check_github_repo: true
+  check_orphaned_assets: true
+  does_catalog_exist: true
+  does_schema_exist: true
+  does_service_principal_exist: true
+  does_table_exist: true
+  evaluate_policy: true
+  execute_workflow: true
+  get_catalog_list: true
+  get_cost_summary: true
+  get_forecasted_spend: true
+  get_resource_efficiency_metrics: true
+  get_schema_list: true
+  get_table_list: true
+  list_github_templates: true
+  list_workspaces: true
+  search_events: true
+  search_requests: true
+  search_idp_groups: true
+  search_idp_users: true
+  check_resource_access: true
+  search_approvals: true
+  search_user_entitlements: true
+  check_tagging_compliance: true
+  check_object_permissions: true
+  audit_user_access: true
+  search_audit_logs: true
+  check_overprovisioned_users: true
+  check_asset_quality: true
+  find_owner: true
+  check_training_status: true
+
+workflows:
+  RequestType.ALLOWLIST_EXCEPTION: true
+  RequestType.ASSET_DEDUPLICATION: true
+  RequestType.BATCH_DATA_ACCESS: true
+  RequestType.CAMPAIGN: true
+  RequestType.CATALOG_SCHEMA_TABLE: true
+  RequestType.CATALOG_SCHEMA_TABLE_ACCESS: true
+  RequestType.DATA_ACCESS_REQUEST: true
+  RequestType.ENFORCEMENT_SENTINEL: true
+  RequestType.GITHUB_REPO_CREATION: true
+  RequestType.MARKETPLACE_CERTIFICATION: true
+  RequestType.PROJECT_ONBOARDING: true
+  RequestType.REPORT_EXECUTION: true
+  RequestType.REST_API_ACCESS: true
+  RequestType.SERVICE_PRINCIPAL: true
+  RequestType.SIMPLE_EMAIL: true
+  RequestType.WORKSPACE_ACCESS: true
+  RequestType.WORKSPACE_PROVISION: true

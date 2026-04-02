@@ -4,6 +4,8 @@ Uses Terraform GitOps provider.
 """
 from typing import Dict, Any
 from statemachine import State
+from app.models.request import RequestType
+from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
 from app.state_machines.facts import has_fact, add_fact
 from app.providers.terraform.client import TerraformProvider
@@ -16,6 +18,7 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+@workflow(request_types=RequestType.SERVICE_PRINCIPAL, feature_flag="core")
 class ServicePrincipalStateMachine(BaseRequestStateMachine):
     """
     State machine for creating a Service Principal via Terraform.

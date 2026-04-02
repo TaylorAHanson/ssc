@@ -6,6 +6,8 @@ from typing import List, Dict, Any
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from statemachine import State
+from app.models.request import RequestType
+from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
 from app.state_machines.facts import add_fact, has_fact, get_latest_fact
 from app.agents.runner import AgentRunner
@@ -17,6 +19,7 @@ import json
 
 logger = logging.getLogger(__name__)
 
+@workflow(request_types=RequestType.REPORT_EXECUTION, feature_flag="finops")
 class ReportExecutionStateMachine(BaseRequestStateMachine):
     """
     Executes a scheduled report:

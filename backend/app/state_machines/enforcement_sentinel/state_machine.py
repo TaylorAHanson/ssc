@@ -39,6 +39,8 @@ from app.providers.databricks.handlers import (
     JobResourceHandler,
 )
 from app.providers.opa.client import OpaProvider
+from app.models.request import RequestType
+from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
 from app.state_machines.enforcement_sentinel.remediation import (
     NON_REMEDIATION_ACTIONS,
@@ -50,6 +52,7 @@ from app.state_machines.facts import add_fact
 
 logger = logging.getLogger(__name__)
 
+@workflow(request_types=RequestType.ENFORCEMENT_SENTINEL, feature_flag="governance")
 class EnforcementSentinelStateMachine(BaseRequestStateMachine):
     """
     State machine for running policy enforcement scans and remediations.

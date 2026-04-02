@@ -14,7 +14,21 @@ from pydantic import field_validator, Field
 from typing import List, Union, Any
 import os
 import json
+import yaml
 
+def load_config_yaml():
+    paths = ["configuration.yaml", "../configuration.yaml"]
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                with open(p, 'r') as f:
+                    return yaml.safe_load(f) or {}
+            except Exception:
+                pass
+    return {}
+
+_yaml_config = load_config_yaml()
+_branding = _yaml_config.get("branding", {})
 
 class Settings(BaseSettings):
     """
@@ -32,16 +46,15 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     
     # Branding Settings
-    # We explicitly pull from os.getenv to ensure they are picked up, 
-    # as sometimes pydantic-settings case sensitivity can be tricky.
-    BRAND_NAME: str = os.getenv("BRAND_NAME", "ATLAS")
-    BRAND_LOGO_URL: str = os.getenv("BRAND_LOGO_URL", "")
-    BRAND_COLOR_PRIMARY: str = os.getenv("BRAND_COLOR_PRIMARY", "#FF3621")
-    BRAND_COLOR_SECONDARY: str = os.getenv("BRAND_COLOR_SECONDARY", "#1B5162")
-    BRAND_COLOR_INFO: str = os.getenv("BRAND_COLOR_INFO", "#1B5162")
-    BRAND_COLOR_ALERT: str = os.getenv("BRAND_COLOR_ALERT", "#98102A")
-    BRAND_COLOR_WARNING: str = os.getenv("BRAND_COLOR_WARNING", "#FFAB00")
-    BRAND_COLOR_SUCCESS: str = os.getenv("BRAND_COLOR_SUCCESS", "#00A972")
+    # Loaded from configuration.yaml with fallback to environment variables
+    BRAND_NAME: str = _branding.get("name", os.getenv("BRAND_NAME", "ATLAS"))
+    BRAND_LOGO_URL: str = _branding.get("logo_url", os.getenv("BRAND_LOGO_URL", ""))
+    BRAND_COLOR_PRIMARY: str = _branding.get("primary_color", os.getenv("BRAND_COLOR_PRIMARY", "#FF3621"))
+    BRAND_COLOR_SECONDARY: str = _branding.get("secondary_color", os.getenv("BRAND_COLOR_SECONDARY", "#1B5162"))
+    BRAND_COLOR_INFO: str = _branding.get("info_color", os.getenv("BRAND_COLOR_INFO", "#1B5162"))
+    BRAND_COLOR_ALERT: str = _branding.get("alert_color", os.getenv("BRAND_COLOR_ALERT", "#98102A"))
+    BRAND_COLOR_WARNING: str = _branding.get("warning_color", os.getenv("BRAND_COLOR_WARNING", "#FFAB00"))
+    BRAND_COLOR_SUCCESS: str = _branding.get("success_color", os.getenv("BRAND_COLOR_SUCCESS", "#00A972"))
     
     # CORS (can be overridden in .env as JSON array or comma-separated)
     # Example in .env: CORS_ORIGINS=["http://localhost:5173","http://localhost:3000"]

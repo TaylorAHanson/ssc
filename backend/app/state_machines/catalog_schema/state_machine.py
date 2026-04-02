@@ -1,5 +1,7 @@
 from typing import Dict, Any, List
 from statemachine import State
+from app.models.request import RequestType
+from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
 from app.models.request import RequestStatus
 from app.core.exceptions import PermanentError
@@ -13,6 +15,7 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+@workflow(request_types=RequestType.CATALOG_SCHEMA_TABLE, feature_flag="core")
 class CreateCatalogSchemaStateMachine(BaseRequestStateMachine):
     """
     State machine for creating a Unity Catalog or Schema.

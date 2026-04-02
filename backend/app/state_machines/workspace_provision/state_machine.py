@@ -4,6 +4,8 @@ Uses Terraform GitOps provider.
 """
 from typing import Dict, Any, List
 from statemachine import State
+from app.models.request import RequestType
+from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
 from app.state_machines.facts import has_fact, add_fact, get_latest_fact
 from app.providers.terraform.client import TerraformProvider
@@ -15,6 +17,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+@workflow(request_types=RequestType.WORKSPACE_PROVISION, feature_flag="core")
 class WorkspaceProvisionStateMachine(BaseRequestStateMachine):
 
     # States

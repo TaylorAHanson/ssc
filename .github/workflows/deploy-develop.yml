@@ -42,7 +42,7 @@ jobs:
           mkdir -p backend/static
           cp -r dist/* backend/static/
 
-      # Use app.yaml from repository - contains all environment configuration
+      # Environment configuration is now defined in databricks.yml
       # including Lakebase database settings, agent config, branding, etc.
 
       - name: Install Databricks CLI
@@ -63,28 +63,21 @@ jobs:
           # CLI will use environment variables automatically for OAuth M2M
           databricks auth describe
 
-      - name: Upload code to Databricks Workspace
+      - name: Deploy Bundle
         env:
           DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
-          databricks workspace import-dir ./backend ${{ env.WORKSPACE_PATH }} --overwrite
+          databricks bundle deploy -t dev --var "app_name=${{ env.APP_NAME }}"
 
-      - name: Deploy App
+      - name: Deploy App Container
         env:
           DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
-          # Check if app exists, create if not
-          if ! databricks apps get ${{ env.APP_NAME }} > /dev/null 2>&1; then
-            echo "Creating app ${{ env.APP_NAME }}..."
-            databricks apps create ${{ env.APP_NAME }} --description "Atlas - Development Environment"
-          fi
-          
-          # Deploy
-          databricks apps deploy ${{ env.APP_NAME }} --source-code-path ${{ env.WORKSPACE_PATH }}
+          databricks apps deploy ${{ env.APP_NAME }}
 
       - name: Get App URL
         env:

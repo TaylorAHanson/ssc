@@ -27,6 +27,8 @@ lineage, volume, and Delta history).
 
 import logging
 from statemachine import State
+from app.models.request import RequestType
+from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,7 @@ from app.core.exceptions import PermanentError, RetryableError
 logger = logging.getLogger(__name__)
 
 
+@workflow(request_types=RequestType.ASSET_DEDUPLICATION, feature_flag="governance")
 class AssetDeduplicationStateMachine(BaseRequestStateMachine):
     """
     State machine for the Near-Duplicate Asset Detection governance pipeline.

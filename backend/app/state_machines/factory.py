@@ -1,26 +1,54 @@
 """
 Factory for creating state machine instances based on request type.
 """
+import pkgutil
+import importlib
+import inspect
+from pathlib import Path
+from sqlalchemy.orm import Session
+import logging
+
 from app.models.request import RequestType
 from app.db.request import RequestModel
-from sqlalchemy.orm import Session
 from app.state_machines.base import BaseRequestStateMachine
-from app.state_machines.workspace_provision.state_machine import WorkspaceProvisionStateMachine
-from app.state_machines.data_access.state_machine import DataAccessStateMachine
-from app.state_machines.service_principal.state_machine import ServicePrincipalStateMachine
-from app.state_machines.workspace_access.state_machine import WorkspaceAccessStateMachine
-from app.state_machines.platform_admin.state_machine import SimplePlatformAdminStateMachine
-from app.state_machines.github_repo.state_machine import GithubRepoCreationStateMachine
-from app.state_machines.project_onboarding.state_machine import ProjectOnboardingStateMachine
-from app.state_machines.catalog_schema.state_machine import CreateCatalogSchemaStateMachine
-from app.state_machines.experiments.state_machine import SimpleEmailStateMachine, CampaignStateMachine
-import logging
+from app.state_machines.decorators import WORKFLOW_REGISTRY
+from app.core.feature_flags import is_feature_enabled, is_workflow_enabled
 
 logger = logging.getLogger(__name__)
 
+# Flag to ensure we only load once
+_WORKFLOWS_LOADED = False
+
+def load_workflows():
+    """Dynamically load all state machines from the state_machines directory."""
+    global _WORKFLOWS_LOADED
+    if _WORKFLOWS_LOADED:
+        return
+        
+    package_dir = Path(__file__).resolve().parent
+    
+    # Walk through all modules in the state_machines directory
+    for _, module_name, is_pkg in pkgutil.walk_packages([str(package_dir)], prefix="app.state_machines."):
+        # Skip base modules
+        if module_name in ("app.state_machines.base", "app.state_machines.factory", "app.state_machines.decorators", "app.state_machines.lock", "app.state_machines.facts"):
+            continue
+            
+        try:
+            # Importing the module will execute the @workflow decorators
+            # and register them in WORKFLOW_REGISTRY
+            importlib.import_module(module_name)
+        except ImportError as e:
+            logger.debug(f"Skipping module {module_name} due to import error: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to load workflows from module {module_name}: {e}")
+            
+    _WORKFLOWS_LOADED = True
 
 def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMachine:
     """Factory to return the appropriate state machine instance."""
+    # Ensure workflows are loaded
+    load_workflows()
+    
     try:
         # Ensure we have a valid enum
         r_type = RequestType(request.type)
@@ -28,46 +56,20 @@ def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMac
         logger.error(f"Invalid request type '{request.type}' for request {request.id}")
         raise ValueError(f"Invalid request type: {request.type}")
     
-    # Mapping of RequestType to StateMachine class (or function that returns instance)
-    SM_MAPPING = {
-        RequestType.WORKSPACE_PROVISION: WorkspaceProvisionStateMachine,
-        RequestType.CATALOG_SCHEMA_TABLE_ACCESS: DataAccessStateMachine,
-        RequestType.BATCH_DATA_ACCESS: DataAccessStateMachine,
-        RequestType.DATA_ACCESS_REQUEST: DataAccessStateMachine,
-        RequestType.SERVICE_PRINCIPAL: ServicePrincipalStateMachine,
-        RequestType.WORKSPACE_ACCESS: WorkspaceAccessStateMachine,
-        RequestType.GITHUB_REPO_CREATION: GithubRepoCreationStateMachine,
-        RequestType.CATALOG_SCHEMA_TABLE: CreateCatalogSchemaStateMachine,
-        RequestType.MARKETPLACE_CERTIFICATION: SimplePlatformAdminStateMachine,
-        RequestType.REST_API_ACCESS: SimplePlatformAdminStateMachine,
-        RequestType.PROJECT_ONBOARDING: ProjectOnboardingStateMachine,
-        RequestType.SIMPLE_EMAIL: SimpleEmailStateMachine,
-        RequestType.CAMPAIGN: CampaignStateMachine,
-    }
+    # Check if workflow is explicitly enabled
+    if not is_workflow_enabled(r_type.value):
+        raise ValueError(f"Workflow '{r_type}' is explicitly disabled in configuration.")
+        
+    # Check if the workflow is registered
+    if r_type in WORKFLOW_REGISTRY:
+        sm_class = WORKFLOW_REGISTRY[r_type]
+        
+        # Check feature flag
+        feature_flag = getattr(sm_class, "_feature_flag", None)
+        if feature_flag and not is_feature_enabled(feature_flag):
+            raise ValueError(f"Workflow '{r_type}' is disabled by feature flag '{feature_flag}'")
+            
+        return sm_class(request, db)
 
-    if r_type in SM_MAPPING:
-        return SM_MAPPING[r_type](request, db)
-
-    # Special handling for ReportExecution (lazy import to avoid circular dep if needed, though arguably could just move imports to top)
-    if r_type == RequestType.REPORT_EXECUTION:
-        from app.state_machines.reporting.state_machine import ReportExecutionStateMachine
-        return ReportExecutionStateMachine(request, db)
-
-    # Lazy import for Enforcement Sentinel
-    if r_type == RequestType.ENFORCEMENT_SENTINEL:
-        from app.state_machines.enforcement_sentinel.state_machine import EnforcementSentinelStateMachine
-        return EnforcementSentinelStateMachine(request, db)
-
-    # Lazy import for Asset Deduplication
-    if r_type == RequestType.ASSET_DEDUPLICATION:
-        from app.state_machines.asset_deduplication.state_machine import AssetDeduplicationStateMachine
-        return AssetDeduplicationStateMachine(request, db)
-
-    # Lazy import for Allowlist Exception
-    if r_type == RequestType.ALLOWLIST_EXCEPTION:
-        from app.state_machines.allowlist_exception.state_machine import AllowlistExceptionStateMachine
-        return AllowlistExceptionStateMachine(request, db)
-
-    # Fallback / Default for others (implement specific ones as needed)
+    # Fallback / Default for others
     raise ValueError(f"No state machine implemented for request type: {r_type}")
-

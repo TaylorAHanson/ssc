@@ -4,6 +4,8 @@ Handles requests for access to Unity Catalog assets (catalogs, schemas, tables, 
 Uses Databricks SDK to grant permissions via Unity Catalog Grants API.
 """
 from statemachine import State
+from app.models.request import RequestType
+from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
 from app.models.request import RequestStatus
 from app.state_machines.facts import has_fact, add_fact
@@ -14,6 +16,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+@workflow(request_types=[RequestType.CATALOG_SCHEMA_TABLE_ACCESS, RequestType.BATCH_DATA_ACCESS, RequestType.DATA_ACCESS_REQUEST], feature_flag="core")
 class DataAccessStateMachine(BaseRequestStateMachine):
     """
     State machine for requesting access to Unity Catalog assets.

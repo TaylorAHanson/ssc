@@ -2,9 +2,12 @@
 Workspace Access state machine.
 """
 from statemachine import State
+from app.models.request import RequestType
+from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
 
 
+@workflow(request_types=RequestType.WORKSPACE_ACCESS, feature_flag="core")
 class WorkspaceAccessStateMachine(BaseRequestStateMachine):
     
     pending = State("pending", initial=True)

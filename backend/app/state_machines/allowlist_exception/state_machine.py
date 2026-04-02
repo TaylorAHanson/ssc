@@ -1,5 +1,7 @@
 import logging
 from statemachine import State
+from app.models.request import RequestType
+from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
 from app.state_machines.facts import add_fact
 from app.db.allowlist import AllowlistModel
@@ -8,6 +10,7 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
+@workflow(request_types=RequestType.ALLOWLIST_EXCEPTION, feature_flag="governance")
 class AllowlistExceptionStateMachine(BaseRequestStateMachine):
     """
     State machine for Allowlist Exception requests.

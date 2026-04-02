@@ -4,6 +4,8 @@ This is a self-service portal for employees to request access to data and analyt
 
 ## Project Details
 📖 See [backend/ARCHITECTURE.md](./backend/ARCHITECTURE.md) for architecture details. 
+📖 See [backend/GOVERNANCE.md](./backend/GOVERNANCE.md) for governance details. 
+
 
 ## Environment Setup
 

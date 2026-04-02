@@ -3,6 +3,7 @@ Project Onboarding compound state machine.
 Orchestrates Workspace Provisioning and GitHub Repo Creation.
 """
 from statemachine import State
+from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
 from app.state_machines.facts import has_fact, add_fact
 from app.models.request import RequestType
@@ -11,6 +12,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+@workflow(request_types=RequestType.PROJECT_ONBOARDING, feature_flag="core")
 class ProjectOnboardingStateMachine(BaseRequestStateMachine):
     
     # States

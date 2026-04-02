@@ -11,6 +11,10 @@ interface BrandingState {
     brandColorAlert: string;
     brandColorWarning: string;
     brandColorSuccess: string;
+    features: Record<string, boolean>;
+    tools: Record<string, boolean>;
+    workflows: Record<string, boolean>;
+    uiTabs: Record<string, boolean>;
     isLoading: boolean;
     hasLoaded: boolean;
     error: string | null;
@@ -26,6 +30,10 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     brandColorAlert: '#98102A',
     brandColorWarning: '#FFAB00',
     brandColorSuccess: '#00A972',
+    features: {},
+    tools: {},
+    workflows: {},
+    uiTabs: {},
     isLoading: false,
     hasLoaded: false,
     error: null,
@@ -42,6 +50,10 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 brandColorAlert: branding.brand_color_alert,
                 brandColorWarning: branding.brand_color_warning,
                 brandColorSuccess: branding.brand_color_success,
+                features: branding.features || {},
+                tools: branding.tools || {},
+                workflows: branding.workflows || {},
+                uiTabs: branding.ui?.tabs || {},
                 isLoading: false,
                 hasLoaded: true,
             });

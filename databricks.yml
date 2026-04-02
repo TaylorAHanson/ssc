@@ -1,7 +1,7 @@
 bundle:
   name: atlas
-  # Require minimum CLI version for Databricks Apps support
-  databricks_cli_version: ">=0.211.0"
+  # Require minimum CLI version for Databricks Apps with app.config support
+  databricks_cli_version: ">=0.283.0"
 
 # Resources
 resources:
@@ -13,8 +13,113 @@ resources:
       # Source code path - Points to backend directory in synced bundle
       source_code_path: "${var.source_code_path}"
 
-      # NOTE: user_api_scopes removed due to Terraform provider bug
-      # Can be configured manually in Databricks UI after deployment
+      # App runtime configuration (Databricks will generate app.yaml from this)
+      config:
+        command:
+          - python
+          - run.py
+        env:
+          - name: DATABASE_HOST
+            value: "${var.database_host}"
+          - name: DATABASE_PORT
+            value: "${var.database_port}"
+          - name: DATABASE_NAME
+            value: "${var.database_name}"
+          - name: DATABASE_USER
+            value: "${var.database_user}"
+          - name: DATABASE_SECRET_SCOPE
+            value: "${var.database_secret_scope}"
+          - name: DATABASE_SECRET_KEY
+            value: "${var.database_secret_key}"
+          - name: GITOPS_MODE
+            value: "${var.gitops_mode}"
+          - name: GITOPS_VOLUME_PATH
+            value: "${var.gitops_volume_path}"
+          - name: DEFAULT_ENVIRONMENT
+            value: "${var.environment}"
+          - name: GIT_USERNAME
+            value: "${var.git_username}"
+          - name: GIT_EMAIL
+            value: "${var.git_email}"
+          - name: INFRA_REPO_URL
+            value: "${var.infra_repo_url}"
+          - name: INFRA_REPO_BRANCH
+            value: "${var.infra_repo_branch}"
+          - name: GIT_TOKEN_SECRET_SCOPE
+            value: "${var.github_pat_secret_scope}"
+          - name: GIT_TOKEN_SECRET_KEY
+            value: "${var.github_pat_secret_key}"
+          - name: GITHUB_APP_ID
+            value: ""
+          - name: GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE
+            value: "atlas-hub"
+          - name: GITHUB_APP_PRIVATE_KEY_SECRET_KEY
+            value: "github-app-private-key"
+          - name: DATABRICKS_WAREHOUSE_ID
+            value: "${var.sql_warehouse_id}"
+          - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
+            value: "${var.model_serving_endpoint}"
+          - name: AGENT_ENABLED
+            value: "true"
+          - name: AGENT_MAX_ITERATIONS
+            value: "10"
+          - name: AGENT_TIMEOUT_SECONDS
+            value: "60"
+          - name: CORS_ORIGINS
+            value: "*"
+          - name: POLLER_INTERVAL_SECONDS
+            value: "5"
+          - name: POLLER_BATCH_SIZE
+            value: "50"
+          - name: POLLER_MAX_CONCURRENT
+            value: "10"
+          - name: POLLER_LOCK_TIMEOUT_MINUTES
+            value: "5"
+          - name: POLLER_LOCK_TIMEOUT_LONG_RUNNING_MINUTES
+            value: "30"
+          - name: POLLER_HEARTBEAT_INTERVAL_SECONDS
+            value: "300"
+          - name: API_V1_PREFIX
+            value: "/api/v1"
+          - name: PROJECT_NAME
+            value: "ATLAS"
+          - name: LOG_LEVEL
+            value: "INFO"
+          - name: NOTIFICATION_EMAIL_SMTP_HOST
+            value: ""
+          - name: NOTIFICATION_EMAIL_SMTP_PORT
+            value: "587"
+          - name: NOTIFICATION_EMAIL_SMTP_USER
+            value: ""
+          - name: NOTIFICATION_EMAIL_SMTP_PASSWORD
+            value: ""
+          - name: NOTIFICATION_SLACK_WEBHOOK_URL
+            value: ""
+          - name: NOTIFICATION_TEAMS_WEBHOOK_URL
+            value: ""
+          - name: EVENT_CALENDAR_URL
+            value: ""
+          - name: EVENT_SYNC_INTERVAL_MINUTES
+            value: "60"
+          - name: BRAND
+            value: "${var.brand}"
+
+      user_api_scopes:
+        - "sql"
+        - "sql.statement-execution"
+        - "sql.warehouses"
+        - "files.files"
+        - "workspace.secrets"
+        - "workspace.repos"
+        - "vectorsearch.vector-search-endpoints"
+        - "iam.current-user"
+        - "iam.users"
+        - "iam.groups"
+        - "jobs.jobs"
+        - "pipelines.pipelines"
+        - "serving.serving-endpoints"
+        - "serving.serving-endpoints-data-plane"
+        - "compute.clusters"
 
       # Permissions for the app itself (who can manage/use the app)
       permissions:
@@ -28,6 +133,7 @@ sync:
   include:
     # Include all backend code
     - backend/**
+    - configuration.yaml
   exclude:
     # Python cache and compiled files
     - backend/__pycache__/**
@@ -60,18 +166,70 @@ sync:
 
 # Variables
 variables:
+  brand:
+    description: "Brand (e.g., atlas, atlas-lite)"
+    default: "ATLAS"
   dev_user:
     description: "Developer username for personal dev instances"
     default: ""
   app_name:
     description: "Application name"
-    default: "atlas"
+    default: "ATLAS"
   environment:
     description: "Environment name (local, dev, stage, prod)"
     default: "local"
   source_code_path:
     description: "Path to source code in workspace"
     default: "./backend"
+  database_host:
+    description: "Lakebase Database Host"
+    default: "instance-c77ef127-eeca-44f5-80ba-76b800757462.database.cloud.databricks.com"
+  database_port:
+    description: "Lakebase Database Port"
+    default: "5432"
+  database_name:
+    description: "Lakebase Database Name"
+    default: "databricks_postgres"
+  database_user:
+    description: "Lakebase Database User"
+    default: "atlas_app"
+  database_secret_scope:
+    description: "Secret scope for lakebase password"
+    default: "atlas-hub"
+  database_secret_key:
+    description: "Secret key for lakebase password"
+    default: "lakebase-password"
+  gitops_mode:
+    description: "GitOps mode (volume or direct)"
+    default: "volume"
+  gitops_volume_path:
+    description: "Unity Catalog Volume path for GitOps requests"
+    default: "/Volumes/atlas_dev_catalog/atlas/gitops_requests"
+  git_username:
+    description: "Username for GitOps commits"
+    default: "ATLAS Bot"
+  git_email:
+    description: "Email for GitOps commits"
+    default: "atlas-bot@databricks.com"
+  infra_repo_url:
+    description: "URL for the infrastructure repository"
+    default: "https://github.com/databricks-field-eng/fe-agentic-self-service-terraform"
+  infra_repo_branch:
+    description: "Branch for the infrastructure repository"
+    default: "main"
+  github_pat_secret_scope:
+    description: "Secret scope for GitHub PAT"
+    default: "atlas-hub"
+  github_pat_secret_key:
+    description: "Secret key for GitHub PAT"
+    default: "github-pat"
+  sql_warehouse_id:
+    description: "Databricks SQL Warehouse ID"
+    lookup:
+      warehouse: "Serverless Starter Warehouse"
+  model_serving_endpoint:
+    description: "Model Serving Endpoint for Agent LLM"
+    default: "databricks-gemini-2-5-flash"
 
 # Target environments
 targets:

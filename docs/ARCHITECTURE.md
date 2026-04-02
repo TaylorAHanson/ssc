@@ -275,7 +275,7 @@ def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMac
 
 ## Configuration & Settings
 
-The application uses a centralized configuration system built on `pydantic-settings`. This ensures strict type validation, default values, and a single source of truth for all application settings. Both app.yaml and .env files feed into this system, but we don't access them directly. Instead, we access the configuration through the `settings` object. This is done by importing `settings` from `app.core.config`.
+The application uses a centralized configuration system built on `pydantic-settings`. This ensures strict type validation, default values, and a single source of truth for all application settings. Both databricks.yml and .env files feed into this system, but we don't access them directly. Instead, we access the configuration through the `settings` object. This is done by importing `settings` from `app.core.config`.
 
 ### Configuration Sources
 
@@ -290,7 +290,7 @@ Settings are loaded in the following order of precedence:
 -   `backend/app/core/config.py`: Defines the `Settings` class / schema. **All new configuration must be added here.**
 -   `backend/.env`: Local secrets and overrides (ignored by git).
 -   `backend/.env.example`: Template for required environment variables. The .env file is not committed to git, so this file is used to document the required environment variables and provide a template for local development.
--   `app.yaml` (Databricks Apps): Defines environment variables for the deployed production environment. This is the primary way to configure the application in production.
+-   `databricks.yml` (Databricks Apps): Defines environment variables for the deployed production environment under `config:`. This is the primary way to configure the application in production.
 
 ### Adding a New Setting
 
@@ -1158,42 +1158,89 @@ Add to `requirements.txt`:
 
 ## Feature Management / Disabling Features
 
-Features (Tools and Workflows) can be manually disabled by modifying the codebase. This is preferred over complex configuration flags to keep the codebase simple.
+Features (Tools, Workflows, UI elements) are conditionally enabled or disabled based on feature flags defined in `configuration.yaml`.
 
-### Disabling Tools
+The architecture uses a decorator-based registry and dynamic auto-discovery rather than hardcoded lists.
 
-To disable a tool, comment it out in the `AVAILABLE_TOOLS` registry in `backend/app/tools/__init__.py`.
+### Disabling/Enabling Tools
 
-**Example:**
-```python
-# backend/app/tools/__init__.py
-
-AVAILABLE_TOOLS = [
-    DoesCatalogExistTool(),
-    # GetCatalogListTool(),  <-- Disabled
-    GetSchemaListTool(),
-    ...
-]
-```
-
-### Disabling Workflows
-
-To disable a workflow, you must prevent the State Machine from being instantiated for that request type. Comment out the mapping in `backend/app/state_machines/factory.py`.
+Tools are dynamically loaded using `importlib` and `pkgutil` from `backend/app/tools`. To configure feature flags for a tool, supply the `feature_flag` argument to the `@tool` decorator.
 
 **Example:**
 ```python
-# backend/app/state_machines/factory.py
+# backend/app/tools/governance/check_quality.py
+from app.tools.mcp import tool
 
-def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMachine:
-    ...
-    if r_type == RequestType.WORKSPACE_PROVISION:
-        return WorkspaceProvisionStateMachine(request, db)
-    
-    # elif r_type == RequestType.PROJECT_ONBOARDING:   <-- Disabled
-    #    return ProjectOnboardingStateMachine(request, db)
+@tool(
+    name="check_asset_quality",
+    description="Check data quality of an asset.",
+    feature_flag="governance" # Must match a flag in configuration.yaml
+)
+async def check_asset_quality(asset_name: str):
     ...
 ```
 
-Optionally, you can also comment out the Enum value in `backend/app/models/request.py` to prevent the API from even validating the request type, though disabling the factory is usually sufficient to stop execution.
+If the `governance` feature flag is set to `false` in `configuration.yaml`, the `check_asset_quality` tool will be silently ignored during startup and will not be available to the LLM.
+
+You can explicitly enable individual tools using the `tools` dictionary in `configuration.yaml` by setting them to `true`. If a tool is set to `false` or missing from the list when the environment variables are generated, it is disabled.
+
+```yaml
+tools:
+  check_asset_quality: true
+  get_forecasted_spend: false
+```
+
+### Disabling/Enabling Workflows
+
+Workflows (State Machines) use a similar dynamic discovery mechanism. Workflows are decorated to link them to their respective `RequestType` and assign feature flags.
+
+**Example:**
+```python
+# backend/app/state_machines/project_onboarding/state_machine.py
+
+@workflow(
+    request_types=RequestType.PROJECT_ONBOARDING,
+    feature_flag="core"
+)
+class ProjectOnboardingStateMachine(BaseRequestStateMachine):
+    ...
+```
+
+If `core` is set to `false`, the workflow will not be registered, and attempts to initiate a `PROJECT_ONBOARDING` request will be handled as unsupported.
+
+You can also explicitly enable individual workflows using the `workflows` dictionary in `configuration.yaml` with the `RequestType` value:
+
+```yaml
+workflows:
+  RequestType.ASSET_DEDUPLICATION: true
+  RequestType.WORKSPACE_PROVISION: true
+```
+
+### Applying Configuration
+The application leverages a clean separation of concerns across four distinct files for deployment and configuration:
+
+1. **`databricks.yml` (The Deployment Layer)**: 
+   - A Databricks Asset Bundle (DAB) configuration file.
+   - Dictates **how** to deploy the code to the workspace (targets, environments, included/excluded files).
+   - This is strictly for the deployment CLI.
+
+2. **`databricks.yml` (The Infrastructure Layer)**:
+   - A Databricks Asset Bundle configuration file.
+   - Dictates **how** the container runs once deployed.
+   - Handles startup commands and maps sensitive infrastructure settings (like Database URLs and Secret Scopes) into environment variables via the `config` block.
+
+3. **`configuration.yaml` (The Business Layer)**:
+   - Our custom configuration file synced to the root of the Databricks App.
+   - Controls the **behavior and appearance** of the application.
+   - Handles branding, UI tab toggles, and enabling/disabling specific LLM tools and workflows.
+   - *Why this is separate from `databricks.yml`:* It allows deployers to completely rebrand and reconfigure the app's features without risking breakage of critical database or infrastructure connection strings.
+
+4. **`backend/app/core/config.py` (The Internal Application Brain)**:
+   - The Python code that loads and merges environment variables (set by `databricks.yml`) and `configuration.yaml` into a single, strongly-typed `settings` object.
+   - Ensures the rest of the backend is shielded from where the settings originated.
+
+When deploying, the deployment script `databricks.yml` syncs the `configuration.yaml` file to the Databricks App bundle. On boot, the Python backend reads `configuration.yaml` using Python's `yaml` parser.
+
+Instead of passing static environment variables down to the frontend UI, the UI fetches its configuration at runtime via the `/api/v1/branding` endpoint and dynamically renders elements, colors, tabs, and logos based on the active backend settings.
 
 

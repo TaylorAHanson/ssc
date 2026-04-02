@@ -3,9 +3,12 @@ Simple Platform Admin state machine.
 Generic state machine for requests requiring only Platform Admin approval.
 """
 from statemachine import State
+from app.models.request import RequestType
+from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
 
 
+@workflow(request_types=[RequestType.MARKETPLACE_CERTIFICATION, RequestType.REST_API_ACCESS], feature_flag="core")
 class SimplePlatformAdminStateMachine(BaseRequestStateMachine):
     """Generic state machine for requests requiring only Platform Admin approval."""
     

@@ -1,11 +1,14 @@
 from datetime import datetime
 from statemachine import State
+from app.models.request import RequestType
+from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
 from app.state_machines.facts import add_fact
 import logging
 
 logger = logging.getLogger(__name__)
 
+@workflow(request_types=RequestType.SIMPLE_EMAIL, feature_flag="core")
 class SimpleEmailStateMachine(BaseRequestStateMachine):
     """
     Atomic Workflow: Sends an email and completes.
@@ -65,6 +68,7 @@ class SimpleEmailStateMachine(BaseRequestStateMachine):
             # Here we might want a 'failed' state, but let's keep it simple.
 
 
+@workflow(request_types=RequestType.CAMPAIGN, feature_flag="core")
 class CampaignStateMachine(BaseRequestStateMachine):
     """
     Compound Workflow: Sends multiple emails via child requests.
