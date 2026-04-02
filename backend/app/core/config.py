@@ -163,6 +163,13 @@ class Settings(BaseSettings):
     AGENT_ENABLED: bool = True
     AGENT_MAX_ITERATIONS: int = 10
     AGENT_TIMEOUT_SECONDS: int = 60
+
+    # Open Policy Agent (governance / Rego)
+    # Empty OPA_URL → local CLI. Install `opa` (brew install opa) or set OPA_BINARY_PATH.
+    # Set OPA_URL (e.g. http://localhost:8181) when policies are loaded on a remote OPA server.
+    OPA_URL: str = ""
+    OPA_BINARY_PATH: str = ""
+    OPA_POLICIES_DIR: str = "policies"
     
     # Calendar Settings
     EVENT_CALENDAR_URL: str = ""
@@ -323,6 +330,16 @@ class Settings(BaseSettings):
         
         return ""
     
+    def opa_provider_config(self) -> dict:
+        """Build kwargs for OpaProvider from application settings."""
+        url = (self.OPA_URL or "").strip()
+        return {
+            "opa_url": url if url else None,
+            "opa_binary": (self.OPA_BINARY_PATH or "").strip() or None,
+            "use_local_binary": not bool(url),
+            "policies_dir": (self.OPA_POLICIES_DIR or "policies").strip(),
+        }
+
     class Config:
         env_file = ".env"
         case_sensitive = True

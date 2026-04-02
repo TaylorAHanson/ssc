@@ -713,6 +713,93 @@ export async function editRequestParameters(
   }
 }
 
+/**
+ * Allowlist API
+ */
+export interface AllowlistEntry {
+  id: string;
+  resource_id: string;
+  resource_type: string;
+  workspace: string;
+  justification: string;
+  status: 'pending' | 'approved' | 'rejected';
+  request_id?: string;
+  approved_by?: string;
+  expires_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AllowlistCreate {
+  resource_id: string;
+  resource_type: string;
+  workspace: string;
+  justification: string;
+  status?: 'pending' | 'approved' | 'rejected';
+  request_id?: string;
+  expires_at?: string;
+}
+
+export interface AllowlistUpdate {
+  justification?: string;
+  status?: 'pending' | 'approved' | 'rejected';
+  expires_at?: string;
+}
+
+export async function getAllowlist(params?: { workspace?: string; resource_type?: string; status?: string }): Promise<AllowlistEntry[]> {
+  const url = new URL(`${API_BASE_URL}/allowlist`, window.location.origin);
+  if (params) {
+    Object.entries(params).forEach(([key, value]) => {
+      if (value) url.searchParams.append(key, value);
+    });
+  }
+  
+  const response = await fetch(url.toString(), {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get allowlist: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function createAllowlistEntry(data: AllowlistCreate): Promise<AllowlistEntry> {
+  const response = await fetch(`${API_BASE_URL}/allowlist`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to create allowlist entry: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function updateAllowlistEntry(id: string, data: AllowlistUpdate): Promise<AllowlistEntry> {
+  const response = await fetch(`${API_BASE_URL}/allowlist/${id}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to update allowlist entry: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function deleteAllowlistEntry(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/allowlist/${id}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to delete allowlist entry: ${response.statusText}`);
+  }
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -731,5 +818,9 @@ export const api = {
   resetDb,
   seedDb,
   getTrainingStatus,
-  uploadTrainingData
+  uploadTrainingData,
+  getAllowlist,
+  createAllowlistEntry,
+  updateAllowlistEntry,
+  deleteAllowlistEntry
 };

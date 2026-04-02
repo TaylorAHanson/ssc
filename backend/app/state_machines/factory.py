@@ -63,6 +63,11 @@ def get_state_machine(request: RequestModel, db: Session) -> BaseRequestStateMac
         from app.state_machines.asset_deduplication.state_machine import AssetDeduplicationStateMachine
         return AssetDeduplicationStateMachine(request, db)
 
+    # Lazy import for Allowlist Exception
+    if r_type == RequestType.ALLOWLIST_EXCEPTION:
+        from app.state_machines.allowlist_exception.state_machine import AllowlistExceptionStateMachine
+        return AllowlistExceptionStateMachine(request, db)
+
     # Fallback / Default for others (implement specific ones as needed)
     raise ValueError(f"No state machine implemented for request type: {r_type}")
 

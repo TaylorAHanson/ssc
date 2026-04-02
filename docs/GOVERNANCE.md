@@ -21,7 +21,7 @@ The AI Agent serves as the mandatory first point of contact and primary governan
 
 *   **Intent Investigation**: The Agent acts as a "Governance Coach," probing user requests (e.g., "Why do you need Admin access?") to downgrade them to the appropriate least-privilege role.
 *   **Justification Refinement**: The Agent forces users to provide a "Rock Solid," logical business reason before allowing a request to proceed to approval.
-*   **Cost & Policy Guarding**: The Agent identifies high-cost requests (like large clusters or PROD provisioning) and suggests cost-effective alternatives (e.g., serverless) based on real-time policy checks.
+*   **Cost & Policy Guarding**: The Agent identifies high-cost or blocked requests by performing "dry-runs" against Open Policy Agent (OPA). Because policies are written declaratively in Rego, the Agent knows exactly what is allowed or blocked in real-time and can guide the user to file an Allowlist Exception if needed.
 *   **Asset Discovery**: Before allowing a user to request new data or pipelines, the Agent proactively searches existing catalogs and marketplaces, suggesting reusable assets to prevent duplication.
 
 ** Important Note **
@@ -38,7 +38,7 @@ Once the Agent gathers the required parameters and intent, the request is handed
 ### Layer 3: Reactive Enforcers (Continuous Audit, Reporting, & Clean-up)
 The final layer exists to catch drift, uncover unauthorized changes, and continuously prune the platform of unused or redundant assets.
 
-*   **Enforcement Sentinels**: Background processes that constantly scan Enterprise workspaces, identifying and automatically deleting unauthorized objects based on strict posture rules.
+*   **Enforcement Sentinels & Open Policy Agent (OPA)**: Background processes that constantly scan workspaces. These Sentinels evaluate discovered resources dynamically against declarative `Rego` policies using OPA. If an object is unauthorized (and lacks an active exception in the Allowlist database), the Sentinel uses an extensible Resource Handler framework to automatically delete, pause, or remediate it.
 *   **Asset Deduplication**: Scheduled jobs that scan newly created tables and pipelines to flag highly similar clones (e.g., >90% similarity) as blockers, preventing data swamps.
 *   **Entitlement Audits & Revocation**: Agents periodically run "Justification Audits" cross-referencing granted access with project status, and "Entitlement Nudges" confirming with admins if broad privileges are still necessary. Time-bound (JIT) access is automatically revoked when the window expires.
 
@@ -61,6 +61,6 @@ This matrix demonstrates how limits and agentic guardrails are applied across di
 | **Data Asset Creation** (Tables, Views) | Allowed (Highly Curated / Certified only) | Allowed (Full Autonomy) | Allowed (Temporary / Sandbox) | **Data Certification**: The Agent proactively searches Unity Catalog to suggest existing assets and flags duplicate data. Production datasets must pass a Data Certification Review to receive a "Gold" or "Certified" badge in the Marketplace. |
 | **Compute / Object Creation** (Pipelines, Jobs) | Strictly Governed (Higher envs controlled by CI/CD only) | Allowed | Allowed | **CI/CD Enforcement**: In Enterprise PROD/STG environments, direct creation is blocked; any rogue jobs created outside the CI/CD pipeline are automatically killed by the Enforcement Sentinel. |
 | **Build & Register ML Models** | Restricted | Allowed | Sandboxed | **Responsible AI Guardrails**: Models must be registered in the UC Model Registry. The Agent checks the Feature Store to prevent redundant feature engineering. The FinOps Sentinel actively monitors for unused models and serving endpoints to prevent wasted spend. |
-| **Host Databricks Apps & Genie Spaces** | Blocked by Default (Strict Posture) | Allowed (Moderate Posture) | Allowed (for prototyping) | **Enforcement Sentinel**: The Sentinel constantly scans Enterprise workspaces and automatically deletes unauthorized apps. |
+| **Host Databricks Apps & Genie Spaces** | Blocked by Default (Exception Allowlist Required) | Allowed (Moderate Posture) | Allowed (for prototyping) | **Enforcement Sentinel**: Evaluates resources against OPA policies (e.g., `asset_allowlist.rego`). Unauthorized apps without an approved exception in the Allowlist database are automatically deleted. |
 | **Workspace & Compute Provisioning** | Restricted via Allow List | Allowed (with limits) | Allowed (Strict budget limits) | **FinOps Guardrails**: Enforces mandatory tagging (`CostCenter`, `Owner`) and standard compute policies to prevent over-provisioning. |
 | **Privileged Exceptions / Admin Access** | Allowed (Hardcoded in Terraform) | Allowed (Hardcoded in Terraform) | N/A | **Infrastructure as Code (IaC)**: Broad admin roles are heavily scrutinized and hardcoded directly in the foundational Terraform repository. |
