@@ -142,6 +142,17 @@ if [ "$TARGET" = "local" ] && [ -n "$DEV_USER" ]; then
     VAR_FLAGS+=("--var" "dev_user=$DEV_USER")
 fi
 
+echo "Looking up 'Serverless Starter Warehouse' ID..."
+# Note: databricks sql-warehouses doesn't exist in newer CLI, it's databricks warehouses
+WAREHOUSE_ID=$(databricks warehouses list --output json $PROFILE_FLAG | python -c "import sys, json; print(next((w['id'] for w in json.load(sys) if w.get('name') == 'Serverless Starter Warehouse'), ''))" 2>/dev/null || echo "")
+
+if [ -n "$WAREHOUSE_ID" ]; then
+    echo "Found Starter Warehouse ID: $WAREHOUSE_ID"
+    VAR_FLAGS+=("--var" "sql_warehouse_id=$WAREHOUSE_ID")
+else
+    echo "Warning: 'Serverless Starter Warehouse' not found. App may fail to query data unless you set it manually."
+fi
+
 if [ "$DEBUG_MODE" = "true" ]; then
     echo "Running with debug mode enabled"
     if databricks bundle deploy --debug -t "$TARGET" $PROFILE_FLAG "${VAR_FLAGS[@]}"; then
