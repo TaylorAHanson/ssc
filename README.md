@@ -1,34 +1,16 @@
-# Self-Service Portal
+# ATLAS: Agentic Control Tower for Lakehouse Automation & Self-Service Experience
 
-This is a self-service portal for employees to request access to data and analytics resources.
+Welcome to ATLAS, the premier self-service automation portal designed to dramatically reduce friction, eliminate bottlenecks, and empower your teams. By abstracting away complex infrastructure management, ATLAS allows your organization to provision workspaces, manage data governance, enforce financial controls, and seamlessly integrate new projects into your data lakehouse—all through an intuitive, AI-assisted interface. 
 
-## Project Details
-📖 See [backend/ARCHITECTURE.md](./backend/ARCHITECTURE.md) for architecture details. 
-📖 See [backend/GOVERNANCE.md](./backend/GOVERNANCE.md) for governance details. 
+With an intelligent conversational agent and a robust suite of approval workflows, ATLAS transforms weeks of IT ticketing into minutes of self-serve action. Experience unified access control, automated repository creation, cost forecasting, and proactive data quality checks, all safely executing under strict organizational guardrails.
 
+---
 
-## Environment Setup
+## Documentation & Guides
 
-### Backend Environment Variables
+Whether you're a platform administrator setting up the infrastructure, a developer looking to contribute, or an architect seeking to understand the system's inner workings, we have dedicated guides to get you started:
 
-Create `backend/.env` by renaming `backend/.env.example` and fill in applicable values. 
-- anything prefixed with DATABASE_ is not needed for local development
-
-### Development (Run Both Frontend and Backend)
-
-The easiest way to run both the frontend and backend together:
-
-```bash
-# Option 1: Use the dev script (recommended)
-./dev.sh
-
-# Option 2: Use npm script
-npm run dev:all
-```
-
-This will start:
-- **Frontend** on http://localhost:5173
-- **Backend API** on http://localhost:8000
-- **API Docs** on http://localhost:8000/docs
-
-Press `Ctrl+C` to stop both services.
+* 📖 **[Developer Quick Start](./docs/DEVELOPER_QUICK_START.md)**: A step-by-step guide for developers to set up a local environment, install dependencies, and run the application locally.
+* 📖 **[Platform Setup Guide](./docs/PLATFORM_SETUP.md)**: Instructions for administrators on how to provision the necessary Databricks infrastructure, setup authentication, and deploy ATLAS to a workspace.
+* 📖 **[Architecture Deep Dive](./docs/ARCHITECTURE.md)**: A comprehensive overview of the ATLAS system architecture, separating the deployment, infrastructure, and application business logic layers.
+* 📖 **[Governance & Policies](./docs/GOVERNANCE.md)**: Details on Open Policy Agent (OPA) integration, data access rules, and automated compliance checks.
