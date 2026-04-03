@@ -1,52 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { LayoutGrid, MonitorDot, Headphones, ExternalLink, FileCode } from 'lucide-react';
+import * as Icons from 'lucide-react';
 import clsx from 'clsx';
-
-// ---------------------------------------------------------------------------
-// App registry — add new apps here in the future
-// ---------------------------------------------------------------------------
-interface AppEntry {
-    id: string;
-    name: string;
-    description: string;
-    /** Lucide icon component */
-    Icon: React.ElementType;
-    /** URL to open — null means "this app" (current) */
-    href: string | null;
-    /** Tailwind / hex color accent for the icon background */
-    accentColor: string;
-    accentBg: string;
-}
-
-const APPS: AppEntry[] = [
-    {
-        id: 'command-center',
-        name: 'Command Center',
-        description: 'Dashboards & widgets',
-        Icon: MonitorDot,
-        href: null, // current app
-        accentColor: '#007BFF',
-        accentBg: '#EBF4FF',
-    },
-    {
-        id: 'self-service',
-        name: 'Self Service Center',
-        description: 'Self Service Center',
-        Icon: Headphones,
-        href: 'https://qualcomm.com/',
-        accentColor: '#00875A',
-        accentBg: '#E3F9F0',
-    },
-    {
-        id: 'third-app',
-        name: 'Third App',
-        description: 'Third App',
-        Icon: FileCode,
-        href: 'https://qualcomm.com/',
-        accentColor: '#00875A',
-        accentBg: '#E3F9F0',
-    },
-];
+import { useBrandingStore } from '../../stores/brandingStore';
 
 // ---------------------------------------------------------------------------
 // Component
@@ -54,6 +9,7 @@ const APPS: AppEntry[] = [
 export const AppSwitcher: React.FC = () => {
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
+    const apps = useBrandingStore((state) => state.uiAppSwitcher);
 
     // Close on outside click
     useEffect(() => {
@@ -79,6 +35,9 @@ export const AppSwitcher: React.FC = () => {
         return () => document.removeEventListener('keydown', handler);
     }, [isOpen]);
 
+    // If no apps configured, don't render the switcher at all
+    if (!apps || apps.length === 0) return null;
+
     return (
         <div ref={containerRef} className="relative">
             {/* Trigger button */}
@@ -93,7 +52,7 @@ export const AppSwitcher: React.FC = () => {
                         : 'text-gray-500 hover:bg-gray-100 hover:text-qualcomm-navy',
                 )}
             >
-                <LayoutGrid className="w-5 h-5" />
+                <Icons.LayoutGrid className="w-5 h-5" />
             </button>
 
             {/* Dropdown panel */}
@@ -115,9 +74,10 @@ export const AppSwitcher: React.FC = () => {
 
                     {/* App grid */}
                     <div className="grid grid-cols-2 gap-1 p-3">
-                        {APPS.map((app) => {
+                        {apps.map((app: any) => {
                             const isCurrent = app.href === null;
-                            const { Icon } = app;
+                            // Dynamically grab the lucide icon component
+                            const Icon = (Icons as any)[app.icon] || Icons.Box;
 
                             const content = (
                                 <div
@@ -131,11 +91,11 @@ export const AppSwitcher: React.FC = () => {
                                     {/* Icon */}
                                     <div
                                         className="w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm transition-transform duration-150 group-hover:scale-105"
-                                        style={{ backgroundColor: app.accentBg }}
+                                        style={{ backgroundColor: app.accent_bg }}
                                     >
                                         <Icon
                                             className="w-6 h-6"
-                                            style={{ color: app.accentColor }}
+                                            style={{ color: app.accent_color }}
                                         />
                                     </div>
 
@@ -163,7 +123,7 @@ export const AppSwitcher: React.FC = () => {
 
                                     {/* External link indicator */}
                                     {!isCurrent && (
-                                        <ExternalLink className="absolute top-2 right-2 w-3 h-3 text-gray-300 group-hover:text-gray-400 transition-colors" />
+                                        <Icons.ExternalLink className="absolute top-2 right-2 w-3 h-3 text-gray-300 group-hover:text-gray-400 transition-colors" />
                                     )}
                                 </div>
                             );
@@ -173,7 +133,7 @@ export const AppSwitcher: React.FC = () => {
                             ) : (
                                 <a
                                     key={app.id}
-                                    href={app.href!}
+                                    href={app.href}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     onClick={() => setIsOpen(false)}

@@ -16,6 +16,28 @@ features:
   workflows: true
 
 ui:
+  app_switcher:
+    - id: "command-center"
+      name: "Command Center"
+      description: "Dashboards & widgets"
+      icon: "MonitorDot"
+      href: null
+      accent_color: "#007BFF"
+      accent_bg: "#EBF4FF"
+    - id: "self-service"
+      name: "Self Service Center"
+      description: "Data access & provisioning"
+      icon: "Headphones"
+      href: "https://qualcomm.com/"
+      accent_color: "#00875A"
+      accent_bg: "#E3F9F0"
+    - id: "third-app"
+      name: "Third App"
+      description: "Another internal app"
+      icon: "FileCode"
+      href: "https://qualcomm.com/"
+      accent_color: "#00875A"
+      accent_bg: "#E3F9F0"
   tabs:
     home: true
     my_requests: true
