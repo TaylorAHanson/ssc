@@ -21,10 +21,9 @@ cp .env.example .env
 ```
 
 **Required secrets in `.env`:**
-- `DATABASE_PASSWORD` - Database password
 - `DATABRICKS_TOKEN` - Databricks API token
 - `MODEL_SERVING_API_KEY` - Model serving API key
-- `DATABASE_HOST`, `DATABASE_USER` - Database connection details
+- `DATABASE_HOST`, `DATABASE_PASSWORD` - (Optional) Lakebase connection details for local testing
 - `DATABRICKS_HOST`, `DATABRICKS_WORKSPACE_URL` - Databricks connection details
 - `MODEL_SERVING_AGENT_LLM_ENDPOINT`, `MODEL_SERVING_CLASSIFIER_ENDPOINT` - Model serving endpoints
 
@@ -127,9 +126,8 @@ See `app/core/config.py` for all available settings.
 ## Troubleshooting
 
 ### Database Connection Issues
-- Verify `.env` has correct `DATABASE_HOST`, `DATABASE_USER`, `DATABASE_PASSWORD`
+- Verify `.env` has correct `DATABASE_HOST` and `DATABASE_PASSWORD` if testing against Lakebase locally.
 - Check database is accessible from your network
-- Verify `DATABASE_NAME` exists
 
 ### Worker Not Processing Requests
 - Worker starts automatically with the API server
