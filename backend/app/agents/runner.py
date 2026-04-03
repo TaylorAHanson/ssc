@@ -124,14 +124,8 @@ class AgentRunner:
                     except:
                         fn_args = {}
                 
-                # Special case for termination tools (like route_to_form) 
-                # though these usually return content, not tool calls in our Gemini setup
-                if fn_name in ["determine_request_type", "generate_follow_up_questions", "validate_answers"]:
-                   final_content = agent_message
-                   final_tool_calls = tool_calls
-                   iteration = self.max_iterations + 1
-                   break
-
+                # Note: No special case termination tools exist. The agent loop breaks naturally when it stops returning tool_calls.
+                
                 matching_tool = next((t for t in self.tools if t.name == fn_name), None)
                 if matching_tool:
                     try:
@@ -139,8 +133,14 @@ class AgentRunner:
                         
                         # Inject conversation history/context for execute_workflow if available
                         if fn_name == "execute_workflow":
-                            # Pass all messages EXCEPT the system prompt to the tool
-                            fn_args["conversation_history"] = [m for m in messages if m.get("role") != "system"]
+                            # Pass all messages EXCEPT the system prompt and tool outputs to prevent DB bloat
+                            history_for_tool = []
+                            for m in messages:
+                                if m.get("role") not in ("system", "tool"):
+                                    # Copy message and strip heavy tool_calls payload
+                                    m_copy = {k: v for k, v in m.items() if k != "tool_calls"}
+                                    history_for_tool.append(m_copy)
+                            fn_args["conversation_history"] = history_for_tool
                             
                         # Inject OBO token if provided
                         if obo_token:
@@ -167,7 +167,11 @@ class AgentRunner:
                         })
                         executed_any = True
             
-            if iteration > self.max_iterations: break
+            if iteration >= self.max_iterations: 
+                logger.warning(f"Hit max iterations ({self.max_iterations}) for query")
+                fallback_msg = "\n\n<em>Note: I've reached my maximum processing limit for this request. If I haven't fully answered your question, please try rephrasing or breaking it down.</em>"
+                final_content = (agent_message + fallback_msg).strip()
+                break
             
             if not executed_any:
                 final_content = agent_message

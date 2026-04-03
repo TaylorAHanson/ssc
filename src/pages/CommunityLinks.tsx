@@ -1,8 +1,8 @@
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Github } from '../components/icons/Github';
 import { 
   BookOpen, 
   GraduationCap, 
-  Github, 
   Settings, 
   BarChart3, 
   DollarSign, 

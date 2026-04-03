@@ -38,9 +38,12 @@ class Settings(BaseSettings):
     Copy .env.example to .env and fill in your values.
     """
     
+    # Environment
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "production")
+    
     # API Settings
     API_V1_PREFIX: str = "/api/v1"
-    PROJECT_NAME: str = "ATLAS API"
+    PROJECT_NAME: str = f"{_branding.get('name', 'ATLAS')} API"
     DESCRIPTION: str = "Agentic Control Tower for Lakehouse Automation & Self-Service Experience"
     VERSION: str = "1.0.0"
     LOG_LEVEL: str = "INFO"

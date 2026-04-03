@@ -17,9 +17,9 @@ export function RequestDetailsModal({ request, onClose, RequestStateList }: Requ
     const [activeTab, setActiveTab] = useState<'status' | 'conversation'>('status');
 
     return (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-100 p-4 animate-in fade-in duration-200">
             <Card className="w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col bg-white shadow-2xl ring-1 ring-black/5 animate-in zoom-in-95 duration-200">
-                <CardHeader className="flex-shrink-0 border-b border-gray-100 flex flex-row items-center justify-between py-4">
+                <CardHeader className="shrink-0 border-b border-gray-100 flex flex-row items-center justify-between py-4">
                     <div className="flex flex-col">
                         <CardTitle className="text-xl font-bold text-gray-900">{request.title}</CardTitle>
                         <p className="text-xs text-gray-500 font-medium uppercase tracking-wider mt-1">

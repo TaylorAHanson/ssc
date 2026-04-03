@@ -344,7 +344,7 @@ export function AdminDashboard() {
                                                         <h4 className="font-semibold text-xs uppercase tracking-wider text-gray-500 mb-2">State Machine</h4>
                                                         <div className="flex gap-2 overflow-x-auto pb-2">
                                                             {req.stateMachine?.states.map(s => (
-                                                                <div key={s.id} className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs border ${s.isActive ? 'bg-blue-100 border-blue-300 text-blue-800 font-medium' :
+                                                                <div key={s.id} className={`shrink-0 px-3 py-1.5 rounded-full text-xs border ${s.isActive ? 'bg-blue-100 border-blue-300 text-blue-800 font-medium' :
                                                                     s.isCompleted ? 'bg-green-50 border-green-200 text-green-700' :
                                                                         'bg-gray-100 border-gray-200 text-gray-400'
                                                                     }`}>

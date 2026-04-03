@@ -60,7 +60,7 @@ export function Header() {
             <p className="text-sm flex-1 font-bold">{bannerData.message}</p>
             <button
               onClick={() => setIsDismissed(true)}
-              className="hover:opacity-70 transition-opacity flex-shrink-0"
+              className="hover:opacity-70 transition-opacity shrink-0"
               aria-label="Dismiss banner"
             >
               <X className="w-4 h-4" />
