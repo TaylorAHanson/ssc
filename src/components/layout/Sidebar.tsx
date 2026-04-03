@@ -119,7 +119,7 @@ export function Sidebar() {
           {collapsed ? (
             <ChevronRight className="w-5 h-5" />
           ) : (
-            <ChevronLeft className="w-5 h-5 flex-shrink-0" />
+            <ChevronLeft className="w-5 h-5 shrink-0" />
           )}
         </button>
       </div>

@@ -238,31 +238,6 @@ async def handle_conversation(
                 title = " ".join([part.replace("-", " ").title() for part in path_parts])
                 form_route = {"path": form_path, "title": title}
                 requires_more_info = False
-
-        if tool_calls:
-            for tool_call in tool_calls:
-                fn_name = tool_call.get("function", {}).get("name", "")
-                fn_args = tool_call.get("function", {}).get("arguments", {})
-                if isinstance(fn_args, str):
-                    try: fn_args = json.loads(fn_args)
-                    except: fn_args = {}
-                
-                if fn_name == "generate_follow_up_questions":
-                    questions_data = fn_args.get("questions", [])
-                    if questions_data:
-                        follow_up_questions = [
-                            FollowUpQuestion(
-                                id=q.get("id", f"q_{i}"),
-                                question=q.get("question", ""),
-                                type=q.get("type", "text"),
-                                options=q.get("options"),
-                                required=q.get("required", True)
-                            )
-                            for i, q in enumerate(questions_data)
-                        ]
-                elif fn_name == "validate_answers":
-                    if fn_args.get("is_complete", False):
-                        requires_more_info = False
         
         return AgentResponse(
             message=agent_message,

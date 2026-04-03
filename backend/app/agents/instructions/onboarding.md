@@ -9,7 +9,7 @@ This is a compound workflow that orchestrates:
 3. Access Granting
 
 ## Information to Gather
-You must gather the following information from the user before executing the workflow. Ask one question at a time.
+You must gather the following information from the user before executing the workflow. Batch your questions to gather multiple pieces of information at once.
 
 1.  **Project Name**: The name of the project.
     *   *Validation*: Must be alphanumeric, no spaces (use hyphens).

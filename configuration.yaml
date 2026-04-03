@@ -1,12 +1,12 @@
 branding:
-  name: "ATLAS"
-  logo_url: ""
-  primary_color: "#FF3621"
-  secondary_color: "#1B5162"
-  info_color: "#1B5162"
-  alert_color: "#98102A"
-  warning_color: "#FFAB00"
-  success_color: "#00A972"
+  name: "EDH Self-Service Center"
+  logo_url: "https://upload.wikimedia.org/wikipedia/commons/f/fc/Qualcomm-Logo.svg"
+  primary_color: "#3253DC"
+  secondary_color: "#000000"
+  info_color: "#3253DC"
+  alert_color: "#D32F2F"
+  warning_color: "#FFC107"
+  success_color: "#388E3C"
 
 features:
   core: true
@@ -32,10 +32,8 @@ tools:
   check_allowlist_status: true
   check_github_repo: true
   check_orphaned_assets: true
-  does_catalog_exist: true
-  does_schema_exist: true
   does_service_principal_exist: true
-  does_table_exist: true
+  get_workflow_instructions: true
   evaluate_policy: true
   execute_workflow: true
   get_catalog_list: true

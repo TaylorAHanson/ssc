@@ -15,5 +15,5 @@ trigger: always_on
 
 ## Gotchas
 - If you create temporary scripts to test things or check things, remember this project runs inside a venv and most libraries aren't natively installed
-- Don't hardcode the app name or use the app name in any variable naming. There are environment settings prefixed by BRANDING_ that should be used instead. See backend/app/core/config.py for more details.
+- Don't hardcode the app name or use the app name in any variable naming. There are branding settings in `configuration.yaml` that should be used instead. See `backend/app/core/config.py` for more details.
 

@@ -11,7 +11,7 @@ cd backend
 cp .env.example .env
 ```
 Edit `.env` and configure the following key sections:
-- **Database**: Defaults to local SQLite (`edas_hub`) if `DATABASE_URL` is empty.
+- **Database**: Defaults to local SQLite (`atlas_hub`) if `DATABASE_URL` is empty.
 - **Databricks**: Required for real infrastructure operations.
 - **Mock User**: Set `MOCK_USER_EMAIL` to your email to simulate logged-in user behavior locally.
 

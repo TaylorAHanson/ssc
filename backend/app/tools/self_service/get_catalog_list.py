@@ -1,22 +1,23 @@
 """
 Tool to list catalogs.
 """
-from typing import Dict, Any
-from pydantic import BaseModel
+from typing import Dict, Any, Optional
+from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.providers.databricks import DatabricksProvider
 from app.core.config import settings
 from app.core.exceptions import RetryableError
+import fnmatch
 
 class GetCatalogListInput(BaseModel):
-    pass
+    name_pattern: Optional[str] = Field(None, description="Optional. Exact name or glob pattern (e.g. '*dev*') to filter catalogs.")
 
 @tool(
     name="get_catalog_list",
-    description="Lists all available catalogs in the Databricks Unity Catalog, including their descriptions and comments. Use this to discover available catalogs or to find similar catalog names if a specific one is not found. NEXT STEP: Use 'get_schema_list' to explore a specific catalog.",
+    description="Lists all available catalogs in the Databricks Unity Catalog, including their descriptions and comments. You can optionally filter by a specific name or pattern to check if a catalog exists. NEXT STEP: Use 'get_schema_list' to explore a specific catalog.",
     args_schema=GetCatalogListInput
 )
-async def get_catalog_list() -> Dict[str, Any]:
+async def get_catalog_list(name_pattern: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetch the list of catalogs along with their descriptions.
     """
@@ -33,6 +34,9 @@ async def get_catalog_list() -> Dict[str, Any]:
         
         catalog_list = []
         for catalog in catalogs:
+            if name_pattern and not fnmatch.fnmatch(catalog.name.lower(), name_pattern.lower()):
+                continue
+                
             catalog_list.append({
                 "name": catalog.name,
                 "comment": catalog.comment or "No description provided",

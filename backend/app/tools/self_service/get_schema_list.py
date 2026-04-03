@@ -1,22 +1,24 @@
 """
 Tool to list schemas.
 """
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.providers.databricks import DatabricksProvider
 from app.core.config import settings
 from app.core.exceptions import RetryableError
+import fnmatch
 
 class GetSchemaListInput(BaseModel):
     catalog_name: str = Field(..., description="Name of the catalog to list schemas for")
+    name_pattern: Optional[str] = Field(None, description="Optional. Exact name or glob pattern (e.g. '*dev*') to filter for a specific schema.")
 
 @tool(
     name="get_schema_list",
-    description="Lists all schemas within a specified catalog in Unity Catalog, including their descriptions/comments. Use this to explore the structure of a catalog. NEXT STEP: Use 'get_table_list' to find datasets within a schema.",
+    description="Lists all schemas within a specified catalog in Unity Catalog, including their descriptions/comments. You can optionally filter by a specific name or pattern to check if a schema exists. NEXT STEP: Use 'get_table_list' to find datasets within a schema.",
     args_schema=GetSchemaListInput
 )
-async def get_schema_list(catalog_name: str) -> Dict[str, Any]:
+async def get_schema_list(catalog_name: str, name_pattern: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetch the list of schemas for a catalog along with their descriptions.
     """
@@ -33,6 +35,9 @@ async def get_schema_list(catalog_name: str) -> Dict[str, Any]:
         
         schema_list = []
         for schema in schemas:
+            if name_pattern and not fnmatch.fnmatch(schema.name.lower(), name_pattern.lower()):
+                continue
+                
             schema_list.append({
                 "name": schema.name,
                 "catalog_name": schema.catalog_name,

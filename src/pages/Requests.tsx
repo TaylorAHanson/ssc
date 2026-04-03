@@ -216,7 +216,7 @@ export function RequestStateList({ request }: { request: Request }) {
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4 flex-1">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${isFailed ? 'bg-alert text-white' :
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${isFailed ? 'bg-alert text-white' :
                     isRejected ? 'bg-alert text-white' :
                       isCompleted ? 'bg-success text-white' :
                         isActive ? 'bg-info text-white' :
@@ -285,7 +285,7 @@ export function RequestStateList({ request }: { request: Request }) {
                 <div className="ml-14 mt-3 space-y-2">
                   {isFailed && request.lastError && (
                     <div className="bg-red-50 border border-red-200 rounded p-3 text-red-800 text-xs flex items-start gap-2">
-                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                      <AlertCircle className="w-4 h-4 shrink-0" />
                       <div>
                         <p className="font-bold mb-1">Error Details</p>
                         <p>{request.lastError.error || 'An unexpected error occurred during this step.'}</p>
@@ -299,7 +299,7 @@ export function RequestStateList({ request }: { request: Request }) {
                       <div className="space-y-1.5">
                         {step.facts.map((fact, fIdx) => (
                           <div key={fIdx} className="flex items-start gap-2 text-xs">
-                            <span className="text-gray-400 font-mono flex-shrink-0">
+                            <span className="text-gray-400 font-mono shrink-0">
                               [{formatInTimeZone(parseUtcDate(fact.timestamp), 'America/Los_Angeles', 'HH:mm:ss')}]
                             </span>
                             <div className="text-gray-700">
@@ -558,7 +558,7 @@ export function Requests() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => navigate('/requests')}>
           <div onClick={(e) => e.stopPropagation()} className="w-full max-w-6xl max-h-[90vh] flex flex-col">
             <Card className="w-full h-full overflow-hidden flex flex-col bg-white">
-              <CardHeader className="flex-shrink-0 border-b border-gray-200">
+              <CardHeader className="shrink-0 border-b border-gray-200">
                 <div className="flex items-start justify-between">
                   <div>
                     <CardTitle>{selectedRequest.title}</CardTitle>

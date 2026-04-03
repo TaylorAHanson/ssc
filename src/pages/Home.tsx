@@ -616,7 +616,7 @@ export function Home() {
     return (
       <div className="flex flex-col h-[calc(100vh-200px)] relative">
         {/* Background gradient */}
-        <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-primary/10 pointer-events-none" />
+        <div className="absolute inset-0 bg-linear-to-br from-primary/5 via-transparent to-primary/10 pointer-events-none" />
 
         <div className="text-center mb-6 relative z-10">
           <div className="flex items-center justify-center gap-3 mb-3">
@@ -635,7 +635,7 @@ export function Home() {
 
         <div className="relative flex-1 flex flex-col">
           {/* Glow effect */}
-          <div className="absolute -inset-1 bg-gradient-to-r from-primary/20 to-primary/10 rounded-3xl blur-xl opacity-30" />
+          <div className="absolute -inset-1 bg-linear-to-r from-primary/20 to-primary/10 rounded-3xl blur-xl opacity-30" />
 
           <div className="relative flex-1 flex flex-col bg-white/80 backdrop-blur-sm rounded-3xl shadow-2xl border border-gray-200/50 overflow-hidden">
             <div className="flex-1 flex flex-col p-6 overflow-hidden">
@@ -669,7 +669,7 @@ export function Home() {
                 {/* Form Link */}
                 {conversationState.showConfirmation && conversationState.formRoute && (
                   <div className="space-y-4 mt-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <div className="bg-gradient-to-br from-blue-50 to-primary/5 border border-blue-200/50 rounded-2xl p-5 shadow-sm">
+                    <div className="bg-linear-to-br from-blue-50 to-primary/5 border border-blue-200/50 rounded-2xl p-5 shadow-sm">
                       <div className="flex items-center justify-between">
                         <div className="flex-1">
                           <Button
@@ -787,7 +787,7 @@ export function Home() {
                           <button
                             key={option}
                             onClick={() => handleAnswerSubmit(currentQuestion.id, option)}
-                            className="w-full text-left px-4 py-3 bg-gray-50 hover:bg-gradient-to-r hover:from-primary/10 hover:to-primary/5 rounded-xl border border-gray-200/50 hover:border-primary/30 transition-all duration-200 hover:shadow-sm text-sm"
+                            className="w-full text-left px-4 py-3 bg-gray-50 hover:bg-linear-to-r hover:from-primary/10 hover:to-primary/5 rounded-xl border border-gray-200/50 hover:border-primary/30 transition-all duration-200 hover:shadow-sm text-sm"
                           >
                             {option}
                           </button>
@@ -813,8 +813,8 @@ export function Home() {
                                 handleAnswerSubmit(currentQuestion.id, updated);
                               }}
                               className={`w-full text-left px-4 py-3 rounded-xl border transition-all duration-200 text-sm ${isSelected
-                                ? 'bg-gradient-to-r from-primary to-primary/90 text-white border-primary shadow-md'
-                                : 'bg-gray-50 hover:bg-gradient-to-r hover:from-primary/10 hover:to-primary/5 border-gray-200/50 hover:border-primary/30 hover:shadow-sm'
+                                ? 'bg-linear-to-r from-primary to-primary/90 text-white border-primary shadow-md'
+                                : 'bg-gray-50 hover:bg-linear-to-r hover:from-primary/10 hover:to-primary/5 border-gray-200/50 hover:border-primary/30 hover:shadow-sm'
                                 }`}
                             >
                               {option}
@@ -1085,11 +1085,11 @@ export function Home() {
             {brandLogoUrl ? (
               <img src={brandLogoUrl} alt="Logo" className="max-h-16 max-w-[200px] w-auto h-auto object-contain rounded-2xl" />
             ) : (
-              <div className="p-3 bg-gradient-to-br from-primary to-primary/80 rounded-2xl shadow-lg">
+              <div className="p-3 bg-linear-to-br from-primary to-primary/80 rounded-2xl shadow-lg">
                 <Sparkles className="w-8 h-8 text-white" />
               </div>
             )}
-            <h1 className="text-5xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
+            <h1 className="text-5xl font-bold bg-linear-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
               {brandName}
             </h1>
           </div>
@@ -1097,13 +1097,13 @@ export function Home() {
 
         <div className="relative">
           {/* Glow effect */}
-          <div className="absolute -inset-1 bg-gradient-to-r from-primary/20 to-primary/10 rounded-3xl blur-xl opacity-30" />
+          <div className="absolute -inset-1 bg-linear-to-r from-primary/20 to-primary/10 rounded-3xl blur-xl opacity-30" />
 
           <div className="relative bg-white/90 backdrop-blur-sm rounded-3xl shadow-xl border border-gray-200/50 overflow-hidden">
             <div className="p-8 md:p-10">
               <form onSubmit={handleInitialSubmit} className="space-y-4">
                 <div className="relative group">
-                  <div className="absolute inset-0 bg-gradient-to-r from-primary/10 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                  <div className="absolute inset-0 bg-linear-to-r from-primary/10 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
                   <Textarea
                     ref={inputRef}
                     placeholder="What do you need to do today?"

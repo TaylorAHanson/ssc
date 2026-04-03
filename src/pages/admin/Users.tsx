@@ -194,7 +194,7 @@ export const Users = () => {
                         `}
                                             >
                                                 <div className={`
-                          w-5 h-5 rounded border flex items-center justify-center flex-shrink-0 mt-0.5 transition-colors
+                          w-5 h-5 rounded border flex items-center justify-center shrink-0 mt-0.5 transition-colors
                           ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-300'}
                         `}>
                                                     {isSelected && <Check className="w-3.5 h-3.5 text-white" />}
@@ -275,7 +275,7 @@ export const Users = () => {
                                                 `}
                                             >
                                                 <div className={`
-                                                    w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors
+                                                    w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors
                                                     ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-300'}
                                                 `}>
                                                     {isSelected && <Check className="w-3 h-3 text-white" />}

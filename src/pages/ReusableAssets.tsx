@@ -3,11 +3,11 @@ import { useAssetStore } from '../stores/assetStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
+import { Github } from '../components/icons/Github';
 import {
   Search,
   Plus,
   X,
-  Github,
   ExternalLink,
   Tag,
   User,

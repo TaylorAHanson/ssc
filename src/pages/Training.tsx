@@ -143,7 +143,7 @@ export function Training() {
       <div className="w-1/3 flex justify-end items-center gap-3">
         {course.unlocks && (
           <div className="flex items-center gap-1.5 bg-purple-50 text-purple-700 px-3 py-1 rounded-full border border-purple-100 max-w-[200px]" title={course.unlocks}>
-            <Unlock className="w-3 h-3 flex-shrink-0" />
+            <Unlock className="w-3 h-3 shrink-0" />
             <span className="text-[10px] font-bold uppercase truncate">Unlocks Access</span>
           </div>
         )}
@@ -205,7 +205,7 @@ export function Training() {
             {activeTrack ? (
               <div className="space-y-8">
                 {/* Track Overview Card */}
-                <Card className="border-0 shadow-sm bg-gradient-to-br from-white to-gray-50 overflow-hidden">
+                <Card className="border-0 shadow-sm bg-linear-to-br from-white to-gray-50 overflow-hidden">
                   <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-white">
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary">
@@ -253,7 +253,7 @@ export function Training() {
                 {/* Legend / Info */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-4 border-t border-gray-100">
                   <div className="flex gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center flex-shrink-0">
+                    <div className="w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center shrink-0">
                       <div className="w-2.5 h-2.5 rounded-full bg-green-500" />
                     </div>
                     <div>
@@ -262,7 +262,7 @@ export function Training() {
                     </div>
                   </div>
                   <div className="flex gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-yellow-50 flex items-center justify-center flex-shrink-0">
+                    <div className="w-8 h-8 rounded-lg bg-yellow-50 flex items-center justify-center shrink-0">
                       <div className="w-2.5 h-2.5 rounded-full bg-yellow-400" />
                     </div>
                     <div>
@@ -271,7 +271,7 @@ export function Training() {
                     </div>
                   </div>
                   <div className="flex gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center flex-shrink-0">
+                    <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
                       <Unlock className="w-4 h-4 text-purple-600" />
                     </div>
                     <div>

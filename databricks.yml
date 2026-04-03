@@ -101,8 +101,6 @@ resources:
             value: ""
           - name: EVENT_SYNC_INTERVAL_MINUTES
             value: "60"
-          - name: BRAND
-            value: "${var.brand}"
 
       user_api_scopes:
         - "sql"
@@ -166,9 +164,6 @@ sync:
 
 # Variables
 variables:
-  brand:
-    description: "Brand (e.g., atlas, atlas-lite)"
-    default: "ATLAS"
   dev_user:
     description: "Developer username for personal dev instances"
     default: ""
@@ -229,7 +224,7 @@ variables:
       warehouse: "Serverless Starter Warehouse"
   model_serving_endpoint:
     description: "Model Serving Endpoint for Agent LLM"
-    default: "databricks-gemini-2-5-flash"
+    default: "databricks-claude-sonnet-4-6"
 
 # Target environments
 targets:
