@@ -16,6 +16,7 @@ features:
   workflows: true
 
 ui:
+  app_switcher: false
   tabs:
     home: true
     my_requests: true

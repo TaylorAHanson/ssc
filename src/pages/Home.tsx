@@ -254,7 +254,19 @@ export function Home() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const { brandName, brandLogoUrl } = useBrandingStore();
+  const { brandName, brandLogoUrl, features } = useBrandingStore();
+
+  const availableModes = (Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).filter(mode => {
+    // 1. Check persona permissions
+    if (!MODE_PERMISSIONS[mode].includes(currentPersona)) return false;
+    
+    // 2. Check feature flags
+    if (mode === 'Self Service Agent' && features?.self_service === false) return false;
+    if (mode === 'Governance' && features?.governance === false) return false;
+    if (mode === 'FinOps' && features?.finops === false) return false;
+    
+    return true;
+  });
   const isInitialized = useUserStore((state) => state.isInitialized);
 
   const adjustHeight = (el: HTMLTextAreaElement) => {
@@ -306,16 +318,21 @@ export function Home() {
     localStorage.setItem('atlas_agent_mode', agentMode);
   }, [conversationState, agentMode]);
 
-  // Reset agent mode only if current persona explicitly FORBIDS it
+  // Reset agent mode only if current persona explicitly FORBIDS it or feature is disabled
   useEffect(() => {
     if (isInitialized && currentPersona && MODE_PERMISSIONS[agentMode]) {
-      if (!MODE_PERMISSIONS[agentMode].includes(currentPersona)) {
-        // If the user's persona doesn't allow this mode, reset to Self Service
-        console.warn(`Resetting mode from ${agentMode} because persona ${currentPersona} does not allow it.`);
+      const isAllowedByPersona = MODE_PERMISSIONS[agentMode].includes(currentPersona);
+      const isAllowedByFeature = 
+        (agentMode === 'Self Service Agent' && features?.self_service !== false) ||
+        (agentMode === 'Governance' && features?.governance !== false) ||
+        (agentMode === 'FinOps' && features?.finops !== false);
+
+      if (!isAllowedByPersona || !isAllowedByFeature) {
+        console.warn(`Resetting mode from ${agentMode} because it is not allowed (persona: ${isAllowedByPersona}, feature: ${isAllowedByFeature}).`);
         setAgentMode('Self Service Agent');
       }
     }
-  }, [currentPersona, agentMode, isInitialized]);
+  }, [currentPersona, agentMode, isInitialized, features]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -754,8 +771,7 @@ export function Home() {
 
                           {showModeDropdown && (
                             <div className="absolute bottom-full left-0 mb-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                              {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[])
-                                .filter(mode => MODE_PERMISSIONS[mode].includes(currentPersona))
+                              {availableModes
                                 .map((mode) => (
                                   <button
                                     key={mode}
@@ -1042,8 +1058,7 @@ export function Home() {
 
                       {showModeDropdown && (
                         <div className="absolute bottom-full left-0 mb-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                          {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[])
-                            .filter(mode => MODE_PERMISSIONS[mode].includes(currentPersona))
+                          {availableModes
                             .map((mode) => (
                               <button
                                 key={mode}
@@ -1155,8 +1170,7 @@ export function Home() {
 
                     {showModeDropdown && (
                       <div className="absolute top-full left-0 mt-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                        {(Object.keys(AGENT_SUGGESTIONS) as AgentMode[])
-                          .filter(mode => MODE_PERMISSIONS[mode].includes(currentPersona))
+                        {availableModes
                           .map((mode) => (
                             <button
                               key={mode}
