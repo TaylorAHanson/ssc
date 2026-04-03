@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+import tailwindcss from 'tailwindcss'
+import autoprefixer from 'autoprefixer'
+
 // Build timestamp to bust cache
 const buildTimestamp = Date.now();
 
@@ -9,7 +12,12 @@ export default defineConfig({
   plugins: [react()],
   base: '/',
   css: {
-    postcss: './postcss.config.js',
+    postcss: {
+      plugins: [
+        tailwindcss(),
+        autoprefixer(),
+      ]
+    },
   },
   define: {
     '__BUILD_TIMESTAMP__': JSON.stringify(buildTimestamp),
