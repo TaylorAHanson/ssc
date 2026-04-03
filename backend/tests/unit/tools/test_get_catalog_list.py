@@ -29,10 +29,8 @@ class TestGetCatalogListTool:
     async def test_properties(self, tool):
         assert tool.name == "get_catalog_list"
         assert "catalog" in tool.description.lower()
-        # With Pydantic v2 / function schema, properties might be empty if no args
         schema = tool.input_schema
-        # If no arguments, it might be empty object
-        assert schema.get("properties", {}) == {}
+        assert "name_pattern" in schema.get("properties", {})
 
     @pytest.mark.asyncio
     async def test_execute_success(self, tool, mock_provider):

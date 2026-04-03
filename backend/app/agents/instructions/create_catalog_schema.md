@@ -13,6 +13,7 @@
     *   If **Catalog**: N/A.
 3.  **Name**: What is the name of the new asset?
     *   *Validation*: Alphanumeric and underscores only.
+    *   *Existence Check (REQUIRED)*: Before calling `execute_workflow`, you MUST use `get_catalog_list` or `get_schema_list` (with the optional pattern filter) to verify the catalog or schema doesn't already exist.
 4.  **Owner**: Who or what team should own this asset?
 5.  **Discovery**: If a user mentions a parent catalog that does not exist, use the `get_catalog_list` tool to find similar or existing catalogs.
 6.  **Comment**: A brief description of the asset's purpose.

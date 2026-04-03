@@ -32,10 +32,8 @@ tools:
   check_allowlist_status: true
   check_github_repo: true
   check_orphaned_assets: true
-  does_catalog_exist: true
-  does_schema_exist: true
   does_service_principal_exist: true
-  does_table_exist: true
+  get_workflow_instructions: true
   evaluate_policy: true
   execute_workflow: true
   get_catalog_list: true

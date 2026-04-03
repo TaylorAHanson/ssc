@@ -16,7 +16,9 @@ on:
 
 jobs:
   lint-and-test-frontend:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: databricks-field-eng-protected-runner-group
+      labels: ubuntu-latest
     name: Frontend Lint & Build
     
     steps:
@@ -42,7 +44,9 @@ jobs:
         run: npm run build
 
   lint-and-test-backend:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: databricks-field-eng-protected-runner-group
+      labels: ubuntu-latest
     name: Backend Lint & Test
     
     steps:
@@ -72,7 +76,9 @@ jobs:
           pytest tests/ -v --tb=short
 
   security-check:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: databricks-field-eng-protected-runner-group
+      labels: ubuntu-latest
     name: Security Check
     
     steps:

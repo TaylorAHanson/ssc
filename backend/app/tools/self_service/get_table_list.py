@@ -1,23 +1,25 @@
 """
 Tool to list tables.
 """
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.providers.databricks import DatabricksProvider
 from app.core.config import settings
 from app.core.exceptions import RetryableError
+import fnmatch
 
 class GetTableListInput(BaseModel):
     catalog_name: str = Field(..., description="Name of the parent catalog")
     schema_name: str = Field(..., description="Name of the schema to list tables for")
+    name_pattern: Optional[str] = Field(None, description="Optional. Exact name or glob pattern (e.g. '*dev*') to filter for a specific table.")
 
 @tool(
     name="get_table_list",
-    description="Lists all tables within a specified catalog and schema in Unity Catalog, including their descriptions/comments. Use this to help users discover specific datasets. NEXT STEP: If the user needs access, proceed to the 'Request Data Access' workflow.",
+    description="Lists all tables within a specified catalog and schema in Unity Catalog, including their descriptions/comments. You can optionally filter by a specific name or pattern to check if a table exists. NEXT STEP: If the user needs access, proceed to the 'Request Data Access' workflow.",
     args_schema=GetTableListInput
 )
-async def get_table_list(catalog_name: str, schema_name: str) -> Dict[str, Any]:
+async def get_table_list(catalog_name: str, schema_name: str, name_pattern: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetch the list of tables for a schema along with their descriptions.
     """
@@ -34,6 +36,9 @@ async def get_table_list(catalog_name: str, schema_name: str) -> Dict[str, Any]:
         
         table_list = []
         for table in tables:
+            if name_pattern and not fnmatch.fnmatch(table.name.lower(), name_pattern.lower()):
+                continue
+                
             table_list.append({
                 "name": table.name,
                 "catalog_name": table.catalog_name,

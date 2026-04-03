@@ -111,9 +111,8 @@ WORKFLOW_EXECUTION_GUIDELINES = """
 If the user wants to execute a workflow, follow this process:
 
 Phase A: Data Gathering
-- Workflow Matching: Always look for a specific Instruction File that matches the user's goal (e.g., "Project Onboarding", "Create Workspace").
-- Strict Adherence: Follow the found "Instruction File" strictly for "Information to Gather".
-- Existence Checks: Before calling `execute_workflow` for creating a catalog or schema, you MUST use `does_catalog_exist` to verify it doesn't already exist.
+- Workflow Matching: Always find the correct workflow from the Capabilities list and use `get_workflow_instructions` to retrieve its exact instructions.
+- Strict Adherence: Follow the retrieved instructions strictly for "Information to Gather".
 - Compound Workflow Efficiency:
   - If a Compound Workflow (like Onboarding) implies sub-tasks (like Create Workspace), do not ask validatable questions twice.
   - Reuse parameters across the context logic.
@@ -211,7 +210,6 @@ You have access to the following tools:
         if os.path.exists(instructions_dir):
             instructions_files = [f for f in os.listdir(instructions_dir) if f.endswith(".md")]
             if instructions_files:
-                instructions_section = "\nWorkflow Instructions\nThe following are specific instructions for executing generic workflows. You should follow these scripts when the user's intent matches the goal.\n\n"
                 
                 for filename in instructions_files:
                     path = os.path.join(instructions_dir, filename)
@@ -222,12 +220,8 @@ You have access to the following tools:
                         goal_match = re.search(r'\*\*Goal\*\*: (.*?)(?:\n|$)', content)
                         if goal_match:
                             goal = goal_match.group(1).strip()
-                            clean_name = filename.replace('.md', '').replace('_', ' ').title()
+                            clean_name = filename.replace('.md', '')
                             capabilities_list.append(f"- {clean_name}: {goal}")
-                        
-                        # Sanitize content before adding to prompt
-                        content = content.replace("**", "")
-                        instructions_section += f"Instruction File: {filename}\n{content}\n\n"
     except Exception as e:
         import logging
         logger = logging.getLogger(__name__)
@@ -235,7 +229,7 @@ You have access to the following tools:
 
     capabilities_section = ""
     if capabilities_list:
-        capabilities_section = "\n## Capabilities & Workflows\nYou can perform the following actions. If a user asks for one of these, find the matching Instruction File and follow it:\n" + "\n".join(capabilities_list) + "\n"
+        capabilities_section = "\n## Capabilities & Workflows\nYou can perform the following workflows. If a user asks for one of these, you MUST use the `get_workflow_instructions` tool to retrieve the specific instructions for that workflow (using the exact internal name listed below) and then strictly follow them:\n" + "\n".join(capabilities_list) + "\n"
 
     return f"""{SYSTEM_PROMPT}
 
@@ -244,7 +238,6 @@ You have access to the following tools:
 {WORKFLOW_EXECUTION_GUIDELINES}
 {tools_section}
 {capabilities_section}
-{instructions_section}
 {content_section}
 """
 
