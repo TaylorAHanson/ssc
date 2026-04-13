@@ -37,6 +37,12 @@ from app.providers.databricks.handlers import (
     AppResourceHandler,
     ClusterResourceHandler,
     JobResourceHandler,
+    SqlWarehouseResourceHandler,
+    DashboardResourceHandler,
+    GenieSpaceResourceHandler,
+    ServicePrincipalResourceHandler,
+    NotebookResourceHandler,
+    VolumeResourceHandler
 )
 from app.providers.opa.client import OpaProvider
 from app.models.request import RequestType
@@ -116,10 +122,39 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                 "justification": entry.justification
             })
 
-        # 2. Discover resources using Handlers (simplified mock for now since DatabricksProvider is missing workspace_client)
-        # In real code: handler = AppResourceHandler(databricks_client)
-        # apps = await handler.discover()
-        apps = [{"id": "fin-forecast-app", "type": "app"}] # Mock data for example
+        # 2. Discover resources using Handlers
+        from app.providers.databricks.client import DatabricksProvider
+        try:
+            provider = DatabricksProvider(
+                host=settings.DATABRICKS_HOST, 
+                client_id=settings.DATABRICKS_CLIENT_ID, 
+                client_secret=settings.DATABRICKS_CLIENT_SECRET
+            )
+            workspace_client = provider.client
+        except Exception as e:
+            logger.error(f"Failed to initialize DatabricksProvider: {e}")
+            self.request.state_context["violations"] = []
+            add_fact(self.db, self.request.id, "discover_completed", {"error": str(e), "violation_count": 0})
+            self.finish_discovering()
+            return
+            
+        handler_classes = [
+            AppResourceHandler,
+            ClusterResourceHandler,
+            JobResourceHandler,
+            SqlWarehouseResourceHandler,
+            DashboardResourceHandler,
+            GenieSpaceResourceHandler,
+            ServicePrincipalResourceHandler,
+            NotebookResourceHandler,
+            VolumeResourceHandler
+        ]
+        
+        discovered_resources = []
+        for handler_class in handler_classes:
+            handler = handler_class(workspace_client)
+            resources = await handler.discover()
+            discovered_resources.extend(resources)
 
         # 3. Evaluate with OPA
         opa_provider = OpaProvider(settings.opa_provider_config())
@@ -136,7 +171,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
         if requested_policies:
             policy_files = [p for p in policy_files if any(req in p for req in requested_policies)]
             
-        for resource in apps:
+        for resource in discovered_resources:
             input_data = {
                 "workspace": {"name": workspace_name, "type": workspace_type},
                 "resource": {"id": resource["id"], "type": resource["type"]},
@@ -180,10 +215,24 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
         violations = self.request.state_context.get("violations", [])
         
         if mode == "active_enforcement":
+            from app.providers.databricks.client import DatabricksProvider
+            provider = DatabricksProvider(
+                host=settings.DATABRICKS_HOST, 
+                client_id=settings.DATABRICKS_CLIENT_ID, 
+                client_secret=settings.DATABRICKS_CLIENT_SECRET
+            )
+            workspace_client = provider.client
+            
             handlers = {
-                "app": AppResourceHandler(None),
-                "cluster": ClusterResourceHandler(None),
-                "job": JobResourceHandler(None),
+                "app": AppResourceHandler(workspace_client),
+                "cluster": ClusterResourceHandler(workspace_client),
+                "job": JobResourceHandler(workspace_client),
+                "sql_warehouse": SqlWarehouseResourceHandler(workspace_client),
+                "dashboard": DashboardResourceHandler(workspace_client),
+                "genie_space": GenieSpaceResourceHandler(workspace_client),
+                "service_principal": ServicePrincipalResourceHandler(workspace_client),
+                "notebook": NotebookResourceHandler(workspace_client),
+                "storage": VolumeResourceHandler(workspace_client),
             }
 
             for violation in violations:

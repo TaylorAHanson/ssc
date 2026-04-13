@@ -8,21 +8,27 @@ import autoprefixer from 'autoprefixer'
 const buildTimestamp = Date.now();
 
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [react()],
-  base: '/',
-  css: {
-    postcss: {
-      plugins: [
-        tailwindcss(),
-        autoprefixer(),
-      ]
+export default defineConfig(({ mode }) => {
+  const apiBaseUrl = mode === 'production' ? '/api/v1' : 'http://localhost:8000/api/v1';
+
+  return {
+    plugins: [react()],
+    base: '/',
+    css: {
+      postcss: {
+        plugins: [
+          tailwindcss(),
+          autoprefixer(),
+        ]
+      },
     },
-  },
-  define: {
-    '__BUILD_TIMESTAMP__': JSON.stringify(buildTimestamp),
-  },
-  build: {
+    define: {
+      '__BUILD_TIMESTAMP__': JSON.stringify(buildTimestamp),
+      'import.meta.env.VITE_API_BASE_URL': JSON.stringify(apiBaseUrl),
+    },
+    build: {
+    outDir: 'backend/static',
+    emptyOutDir: true,
     rollupOptions: {
       output: {
         // Use timestamp in chunk names to bust cache
@@ -31,5 +37,6 @@ export default defineConfig({
         assetFileNames: `assets/[name]-[hash]-${buildTimestamp}.[ext]`,
       },
     },
-  },
+    }
+  }
 })

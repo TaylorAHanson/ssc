@@ -8,6 +8,9 @@ import sys
 import subprocess
 
 def main():
+    # Get absolute path of python executable
+    python_exe = os.path.abspath(sys.executable)
+
     # Get the directory where this script lives
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
@@ -46,7 +49,7 @@ def main():
     req_file = os.path.join(script_dir, "requirements.txt")
     if os.path.exists(req_file):
         print("Installing requirements...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "-r", req_file, "-q"], check=True)
+        subprocess.run([python_exe, "-m", "pip", "install", "-r", req_file, "-q"], check=True)
     
     # Import and run uvicorn
     print("Starting uvicorn server...")

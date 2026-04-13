@@ -44,6 +44,8 @@ async def evaluate_policy(workspace: str, resource_type: str, resource_id: str) 
             db.close()
 
         # 2. Evaluate with OPA
+        import glob
+        import os
         opa_provider = OpaProvider(settings.opa_provider_config())
         input_data = {
             "workspace": {"name": workspace, "type": workspace_type},
@@ -52,18 +54,44 @@ async def evaluate_policy(workspace: str, resource_type: str, resource_id: str) 
             "allowlist_records": allowlist_records
         }
         
-        result = await opa_provider.evaluate(
-            policy_path="asset_allowlist.rego",
-            query="data.databricks.governance.asset_allowlist",
-            input_data=input_data
-        )
+        policy_files = glob.glob(os.path.join("policies", "*.rego"))
+        violations = []
         
+        for policy_path in policy_files:
+            policy_name = os.path.basename(policy_path).replace(".rego", "")
+            query = f"data.databricks.governance.{policy_name}"
+            
+            result = await opa_provider.evaluate(
+                policy_path=policy_path,
+                query=query,
+                input_data=input_data
+            )
+            
+            if result.get("is_violation"):
+                violations.append({
+                    "action": result.get("action", "KILL"),
+                    "reason": result.get("reason", "Unknown violation"),
+                    "severity": result.get("severity"),
+                    "policy": policy_name
+                })
+        
+        if not violations:
+            return {
+                "allowed": True,
+                "action": "ALLOW",
+                "reason": "Resource complied with all policies.",
+                "is_violation": False,
+                "severity": "NONE"
+            }
+            
+        first = violations[0]
         return {
-            "allowed": result.get("action") != "KILL",
-            "action": result.get("action", "KILL"),
-            "reason": result.get("reason", "Unknown violation"),
-            "is_violation": result.get("is_violation", False),
-            "severity": result.get("severity"),
+            "allowed": first["action"] not in ["KILL", "BLOCK", "DELETE"],
+            "action": first["action"],
+            "reason": first["reason"],
+            "is_violation": True,
+            "severity": first["severity"],
+            "all_violations": violations
         }
     except PermanentError as e:
         logger.warning("Policy evaluation unavailable (configuration or OPA): %s", e)

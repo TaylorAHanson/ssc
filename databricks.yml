@@ -17,7 +17,7 @@ resources:
       config:
         command:
           - python
-          - run.py
+          - backend/run.py
         env:
           - name: DATABASE_HOST
             value: "${var.lakebase_host}"
@@ -119,6 +119,16 @@ resources:
 # Sync configuration
 sync:
   include:
+    - package.json
+    - package-lock.json
+    - vite.config.ts
+    - tsconfig.json
+    - tailwind.config.js
+    - postcss.config.js
+    - eslint.config.js
+    - index.html
+    - src/**
+    - public/**
     # Include all backend code
     - backend/**
     - configuration.yaml
@@ -165,7 +175,7 @@ variables:
     default: "local"
   source_code_path:
     description: "Path to source code in workspace"
-    default: "./backend"
+    default: "."
   lakebase_host:
     description: "Lakebase Database Host"
     default: "instance-c77ef127-eeca-44f5-80ba-76b800757462.database.cloud.databricks.com"
@@ -219,7 +229,7 @@ targets:
     variables:
       app_name: "atlas-local-${var.dev_user}"
       environment: "local"
-      source_code_path: "./backend"
+      source_code_path: "."
 
   # Development environment
   dev:
@@ -236,7 +246,7 @@ targets:
     variables:
       app_name: "atlas-dev"
       environment: "dev"
-      source_code_path: "./backend"
+      source_code_path: "."
 
   # Staging environment
   stage:
@@ -253,7 +263,7 @@ targets:
     variables:
       app_name: "atlas-stage"
       environment: "stage"
-      source_code_path: "./backend"
+      source_code_path: "."
 
   # Production environment
   prod:
@@ -270,4 +280,4 @@ targets:
     variables:
       app_name: "atlas-prod"
       environment: "prod"
-      source_code_path: "./backend"
+      source_code_path: "."
