@@ -17,20 +17,10 @@ resources:
       config:
         command:
           - python
-          - run.py
+          - backend/run.py
         env:
           - name: DATABASE_HOST
-            value: "${var.database_host}"
-          - name: DATABASE_PORT
-            value: "${var.database_port}"
-          - name: DATABASE_NAME
-            value: "${var.database_name}"
-          - name: DATABASE_USER
-            value: "${var.database_user}"
-          - name: DATABASE_SECRET_SCOPE
-            value: "${var.database_secret_scope}"
-          - name: DATABASE_SECRET_KEY
-            value: "${var.database_secret_key}"
+            value: "${var.lakebase_host}"
           - name: GITOPS_MODE
             value: "${var.gitops_mode}"
           - name: GITOPS_VOLUME_PATH
@@ -129,6 +119,16 @@ resources:
 # Sync configuration
 sync:
   include:
+    - package.json
+    - package-lock.json
+    - vite.config.ts
+    - tsconfig.json
+    - tailwind.config.js
+    - postcss.config.js
+    - eslint.config.js
+    - index.html
+    - src/**
+    - public/**
     # Include all backend code
     - backend/**
     - configuration.yaml
@@ -175,25 +175,10 @@ variables:
     default: "local"
   source_code_path:
     description: "Path to source code in workspace"
-    default: "./backend"
-  database_host:
+    default: "."
+  lakebase_host:
     description: "Lakebase Database Host"
     default: "instance-c77ef127-eeca-44f5-80ba-76b800757462.database.cloud.databricks.com"
-  database_port:
-    description: "Lakebase Database Port"
-    default: "5432"
-  database_name:
-    description: "Lakebase Database Name"
-    default: "databricks_postgres"
-  database_user:
-    description: "Lakebase Database User"
-    default: "atlas_app"
-  database_secret_scope:
-    description: "Secret scope for lakebase password"
-    default: "atlas-hub"
-  database_secret_key:
-    description: "Secret key for lakebase password"
-    default: "lakebase-password"
   gitops_mode:
     description: "GitOps mode (volume or direct)"
     default: "volume"
@@ -244,7 +229,7 @@ targets:
     variables:
       app_name: "atlas-local-${var.dev_user}"
       environment: "local"
-      source_code_path: "./backend"
+      source_code_path: "."
 
   # Development environment
   dev:
@@ -261,7 +246,7 @@ targets:
     variables:
       app_name: "atlas-dev"
       environment: "dev"
-      source_code_path: "./backend"
+      source_code_path: "."
 
   # Staging environment
   stage:
@@ -278,7 +263,7 @@ targets:
     variables:
       app_name: "atlas-stage"
       environment: "stage"
-      source_code_path: "./backend"
+      source_code_path: "."
 
   # Production environment
   prod:
@@ -295,4 +280,4 @@ targets:
     variables:
       app_name: "atlas-prod"
       environment: "prod"
-      source_code_path: "./backend"
+      source_code_path: "."

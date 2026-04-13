@@ -138,12 +138,11 @@ class Settings(BaseSettings):
         ]
     
     # Database (Lakebase - PostgreSQL)
-    # SECRET: Set in .env file
     DATABASE_URL: str = ""  # Full connection string (alternative to individual components below)
     DATABASE_HOST: str = ""  # SECRET: Set in .env
     DATABASE_PORT: int = 5432
     DATABASE_NAME: str = "databricks_postgres"
-    DATABASE_USER: str = ""  # SECRET: Set in .env
+    DATABASE_USER: str = "atlas_app"
     DATABASE_PASSWORD: str = ""  # SECRET: Set in .env
     DATABASE_SECRET_SCOPE: str = "atlas-hub"  # Databricks secret scope for lakebase password
     DATABASE_SECRET_KEY: str = "lakebase-password"  # Key within secret scope

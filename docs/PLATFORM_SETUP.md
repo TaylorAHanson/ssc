@@ -1,546 +1,132 @@
-# ATLAS - Platform Architecture & Setup Guide
+# ATLAS - Platform Setup Guide
 
-## Developer Contribution Journey
+Welcome to the ATLAS Platform Setup Guide! This document is intended for **Platform Administrators** or **IT Professionals** who are deploying ATLAS into their organization's Databricks environment.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                              DEVELOPER WORKSTATION                                       │
-│                                                                                          │
-│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
-│   │  Local Clone: ~/projects/fe-agentic-self-service/                               │   │
-│   │                                                                                  │   │
-│   │   ├── src/                    (React frontend source)                           │   │
-│   │   ├── backend/                (FastAPI backend source)                          │   │
-│   │   │   ├── app/                                                                  │   │
-│   │   │   │   ├── tools/          ◄── Add new agent tools here                     │   │
-│   │   │   │   ├── agents/                                                           │   │
-│   │   │   │   └── ...                                                               │   │
-│   │   │   └── static/             ◄── Built frontend copied here before deploy     │   │
-│   │   ├── databricks.yml          (Bundle config)                                   │   │
-│   │   └── deploy.sh               (Local deploy script)                             │   │
-│   └─────────────────────────────────────────────────────────────────────────────────┘   │
-│                                                                                          │
-│   Developer Actions:                                                                     │
-│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐             │
-│   │ ./dev.sh    │    │ ./deploy.sh │    │ git push    │    │ git push    │             │
-│   │ (local dev) │    │ dev         │    │ develop     │    │ main        │             │
-│   └──────┬──────┘    └──────┬──────┘    └──────┬──────┘    └──────┬──────┘             │
-│          │                  │                  │                  │                     │
-└──────────┼──────────────────┼──────────────────┼──────────────────┼─────────────────────┘
-           │                  │                  │                  │
-           ▼                  │                  │                  │
-   ┌───────────────┐          │                  │                  │
-   │ localhost:    │          │                  │                  │
-   │ 5173 (FE)     │          │                  │                  │
-   │ 8000 (API)    │          │                  │                  │
-   └───────────────┘          │                  │                  │
-                              │                  │                  │
-           ┌──────────────────┘                  │                  │
-           │                                     │                  │
-           │              ┌──────────────────────┘                  │
-           │              │                                         │
-           │              │              ┌──────────────────────────┘
-           │              │              │
-           ▼              ▼              ▼
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                                      GITHUB                                              │
-│                                                                                          │
-│   ┌───────────────────────────────────────────────────────────────────────────────┐     │
-│   │  Repository: databricks-field-eng/fe-agentic-self-service                     │     │
-│   │                                                                                │     │
-│   │  feature/* ──► PR ──► develop ──────────────────────► PR ──► main            │     │
-│   │                          │                                      │              │     │
-│   │                          │                                      │              │     │
-│   │                          ▼                                      ▼              │     │
-│   │              ┌─────────────────────┐              ┌─────────────────────┐     │     │
-│   │              │ GitHub Actions      │              │ GitHub Actions      │     │     │
-│   │              │ deploy-develop.yml  │              │ deploy-main.yml     │     │     │
-│   │              │                     │              │                     │     │     │
-│   │              │ 1. npm ci           │              │ 1. npm ci           │     │     │
-│   │              │ 2. npm run build    │              │ 2. npm run build    │     │     │
-│   │              │ 3. cp dist→static   │              │ 3. cp dist→static   │     │     │
-│   │              │ 4. deploy app       │              │ 4. deploy app       │     │     │
-│   │              │ 5. databricks CLI   │              │ 5. databricks CLI   │     │     │
-│   │              └──────────┬──────────┘              └──────────┬──────────┘     │     │
-│   │                         │                                    │                │     │
-│   │   Env: development      │              Env: production       │                │     │
-│   │   - CLIENT_ID (secret)  │              - CLIENT_ID (secret)  │                │     │
-│   │   - CLIENT_SECRET       │              - CLIENT_SECRET       │                │     │
-│   │   - HOST (variable)     │              - HOST (variable)     │                │     │
-│   └─────────────────────────┼──────────────────────────────────────┼──────────────┘     │
-│                             │                                      │                    │
-└─────────────────────────────┼──────────────────────────────────────┼────────────────────┘
-                              │ OAuth M2M                            │ OAuth M2M
-                              │ (Service Principal)                  │ (Service Principal)
-                              ▼                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                              DATABRICKS WORKSPACE                                        │
-│                                                                                          │
-│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
-│   │  Workspace Files (where code is uploaded)                                       │   │
-│   │                                                                                  │   │
-│   │  /Workspace/                                                                    │   │
-│   │  ├── Shared/                                                                    │   │
-│   │  │   └── apps/                                                                  │   │
-│   │  │       ├── edas-hub-dev/              ◄── CI/CD: develop branch              │   │
-│   │  │       │   ├── app/                                                           │   │
-│   │  │       │   │   ├── main.py                                                    │   │
-│   │  │       │   │   ├── tools/                                                     │   │
-│   │  │       │   │   └── ...                                                        │   │
-│   │  │       │   ├── static/                (built React app)                       │   │
-│   │  │       │   ├── databricks.yml         (app configuration)                     │   │
-│   │  │       │   └── requirements.txt                                               │   │
-│   │  │       │                                                                      │   │
-│   │  │       └── edas-hub/                  ◄── CI/CD: main branch                 │   │
-│   │  │           └── (same structure)                                               │   │
-│   │  │                                                                              │   │
-│   │  └── Users/                                                                     │   │
-│   │      └── rohan.ahire@company.com/                                              │   │
-│   │          └── .bundle/                                                           │   │
-│   │              └── edas-hub/                                                      │   │
-│   │                  └── dev/               ◄── Local: ./deploy.sh dev             │   │
-│   │                      └── (same structure)                                       │   │
-│   └─────────────────────────────────────────────────────────────────────────────────┘   │
-│                                                                                          │
-│   ┌─────────────────────────────────────────────────────────────────────────────────┐   │
-│   │  Databricks Apps (running instances)                                            │   │
-│   │                                                                                  │   │
-│   │  ┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐     │   │
-│   │  │ edas-hub-dev-rohan  │  │ edas-hub-dev        │  │ edas-hub            │     │   │
-│   │  │ (Personal Dev)      │  │ (Integration)       │  │ (Production)        │     │   │
-│   │  │                     │  │                     │  │                     │     │   │
-│   │  │ Source: Users/      │  │ Source: Shared/     │  │ Source: Shared/     │     │   │
-│   │  │ rohan/.bundle/...   │  │ apps/edas-hub-dev   │  │ apps/edas-hub       │     │   │
-│   │  │                     │  │                     │  │                     │     │   │
-│   │  │ URL: https://       │  │ URL: https://       │  │ URL: https://       │     │   │
-│   │  │ edas-hub-dev-rohan- │  │ edas-hub-dev-       │  │ edas-hub-           │     │   │
-│   │  │ xxx.apps.databricks │  │ xxx.apps.databricks │  │ xxx.apps.databricks │     │   │
-│   │  └─────────────────────┘  └─────────────────────┘  └─────────────────────┘     │   │
-│   └─────────────────────────────────────────────────────────────────────────────────┘   │
-│                                                                                          │
-└──────────────────────────────────────────────────────────────────────────────────────────┘
-```
+## Overview
+
+ATLAS (Agentic Control Tower for Lakehouse Automation & Self-Service Experience) is a full-stack web application that runs directly inside your Databricks workspace using **Databricks Apps**. 
+
+To successfully deploy ATLAS, you will need to complete three distinct phases:
+1. **Infrastructure Preparation:** Running an automated Databricks Notebook to create the required Unity Catalog volumes and secret scopes.
+2. **Configuration:** Customizing the application's appearance and enabling specific features via a configuration file.
+3. **CI/CD Deployment:** Configuring GitHub Actions to automatically securely deploy the application into your workspace.
+
+Once deployed, the Databricks App will automatically provision its own Service Principal to securely interact with your data and infrastructure.
 
 ---
 
-## Deployment Path Summary
+## 1. Prerequisites
 
-| Method | Trigger | Workspace Path | App Name |
-|--------|---------|----------------|----------|
-| `./deploy.sh dev` | Manual (local) | `/Workspace/Users/{you}/.bundle/atlas/dev/` | `atlas-dev-{username}` |
-| Push to `develop` | CI/CD (GitHub Actions) | `/Workspace/Shared/apps/atlas-dev/` | `atlas-dev` |
-| Push to `main` | CI/CD (GitHub Actions) | `/Workspace/Shared/apps/atlas/` | `atlas` |
-
----
-
-## Physical Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────────────┐
-│                                    GITHUB                                            │
-│  ┌─────────────────────────────────────────────────────────────────────────────┐    │
-│  │  Repository: databricks-field-eng/fe-agentic-self-service                   │    │
-│  │                                                                              │    │
-│  │  Branches:                                                                   │    │
-│  │    main ────────► GitHub Actions ────► Deploy to Production                 │    │
-│  │    develop ─────► GitHub Actions ────► Deploy to Development                │    │
-│  │                                                                              │    │
-│  │  Environments (Settings → Environments):                                     │    │
-│  │    ├── development (secrets + variables)                                    │    │
-│  │    └── production  (secrets + variables)                                    │    │
-│  └─────────────────────────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────────────────────┘
-                                         │
-                                         │ OAuth M2M (Service Principal)
-                                         ▼
-┌─────────────────────────────────────────────────────────────────────────────────────┐
-│                              DATABRICKS WORKSPACE                                    │
-│                                                                                      │
-│  ┌──────────────────────┐    ┌──────────────────────┐    ┌────────────────────┐    │
-│  │   Databricks App     │    │   Model Serving      │    │   Unity Catalog    │    │
-│  │   (edas-hub-dev)     │    │   Endpoint           │    │                    │    │
-│  │                      │    │                      │    │   ┌────────────┐   │    │
-│  │  ┌────────────────┐  │    │  Gemini 2.5 Flash    │    │   │ Catalogs   │   │    │
-│  │  │ FastAPI Backend│◄─┼────┼─► (Foundation Model) │    │   │ Schemas    │   │    │
-│  │  │                │  │    │                      │    │   │ Tables     │   │    │
-│  │  │  - Agent API   │  │    └──────────────────────┘    │   └────────────┘   │    │
-│  │  │  - Tools       │──┼────────────────────────────────┼──►  (SDK queries)  │    │
-│  │  │  - Workflows   │  │                                │                    │    │
-│  │  └────────────────┘  │    ┌──────────────────────┐    └────────────────────┘    │
-│  │         │            │    │   SQL Warehouse      │                              │
-│  │  ┌────────────────┐  │    │   (for SQL queries)  │                              │
-│  │  │ React Frontend │  │    │                      │◄─────── (get_catalog_list)   │
-│  │  │ (static files) │  │    └──────────────────────┘                              │
-│  │  └────────────────┘  │                                                          │
-│  └──────────────────────┘    ┌──────────────────────┐                              │
-│                              │   Lakebase           │                              │
-│  App Service Principal ──────┤   (PostgreSQL)       │                              │
-│  (auto-created by App)       │   - requests table   │                              │
-│                              │   - approvals table  │                              │
-│  Secret Scope: atlas-hub     │   - events table     │                              │
-│   - github-pat               └──────────────────────┘                              │
-│   - lakebase-password                                                              │
-│                              ┌──────────────────────┐                              │
-│                              │ Terraform Infra Repo │                              │
-│                              │ (GitOps)             │                              │
-│                              │ - Pushed via PAT     │                              │
-│                              └──────────────────────┘                              │
-└─────────────────────────────────────────────────────────────────────────────────────┘
-```
+Before beginning the installation, ensure you have:
+- [ ] A **GitHub repository** containing the ATLAS source code.
+- [ ] A **Databricks workspace** with Unity Catalog enabled.
+- [ ] **Account-level admin access** (or workspace admin access) to create a Service Principal for GitHub Actions.
+- [ ] A **Databricks Serverless SQL Warehouse** (used by ATLAS to execute backend queries).
+- [ ] A **Model Serving Endpoint** running a Foundation Model (e.g., `databricks-gemini-2-5-flash`).
 
 ---
 
-## Authentication Flow
+## 2. Infrastructure Preparation
 
-```
-┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
-│  GitHub Actions │         │  Databricks CLI │         │  Databricks     │
-│                 │         │                 │         │  Workspace      │
-│  DATABRICKS_    │────────►│  OAuth M2M      │────────►│                 │
-│  CLIENT_ID      │         │  Authentication │         │  - Upload code  │
-│  CLIENT_SECRET  │         │                 │         │  - Deploy app   │
-└─────────────────┘         └─────────────────┘         └─────────────────┘
+ATLAS requires a secret scope and a Unity Catalog Volume to store its configuration and GitOps data. We have provided a Databricks Notebook to automate this process.
 
-┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
-│  Databricks App │         │  Databricks SDK │         │  Model Serving  │
-│  (Runtime)      │         │                 │         │  Unity Catalog  │
-│                 │────────►│  OAuth          │────────►│                 │
-│  App Service    │         │  (Automatic)    │         │  (API calls)    │
-│  Principal      │         │                 │         │                 │
-└─────────────────┘         └─────────────────┘         └─────────────────┘
-```
+### Step 2.1: Run the Installer Notebook
+1. Locate the `installer_notebook.py` file in the root directory of your repository or zip file.
+2. In your Databricks UI, click **Workspace**, navigate to your personal folder, and select **Import**.
+3. Import the `installer_notebook.py` file.
+4. Attach the notebook to a cluster.
+5. Fill out the widget parameters at the top of the notebook:
+   - **Secret Scope Name** (default: `atlas-hub`)
+   - **Catalog, Schema, and Volume Names** (where configuration will be stored)
+   - **GitHub PAT** (Optional: requires `repo` scope if using direct GitOps integrations)
+6. Click **Run All**.
+
+The notebook will automatically create the infrastructure, securely store your secrets, and place a default `configuration.yaml` file into the new volume.
 
 ---
 
-## Platform Setup Guidelines
+## 3. Configuration & Branding
 
-### GitHub Repository Secrets & Variables
+ATLAS is highly customizable. You can control its features, UI tabs, and branding without modifying the core code.
 
-Configure these for **each environment** (Settings → Environments → [env]):
+### Step 3.1: Customize the Application
+1. Open the `configuration.yaml` file located in the root of your repository.
+2. Modify the `branding` section to include your company's name, logo URL, and corporate hex colors.
+3. Enable or disable specific `features`, `tools`, or `workflows` as needed.
 
-| Environment | Type | Name | Example Value | Purpose |
-|-------------|------|------|---------------|---------|
-| development | Variable | `DATABRICKS_HOST` | `https://dev-workspace.cloud.databricks.com` | Workspace URL |
-| development | Secret | `DATABRICKS_CLIENT_ID` | `00000000-0000-...` | Service Principal Client ID |
-| development | Secret | `DATABRICKS_CLIENT_SECRET` | `dose...` | Service Principal secret |
-| production | Variable | `DATABRICKS_HOST` | `https://prod-workspace.cloud.databricks.com` | Workspace URL |
-| production | Secret | `DATABRICKS_CLIENT_ID` | `00000000-0000-...` | Service Principal Client ID |
-| production | Secret | `DATABRICKS_CLIENT_SECRET` | `dose...` | Service Principal secret |
+*Note: If you are using GitHub Actions, you can push these changes to a dedicated configuration branch (e.g., the `lite` version) or modify them directly in your main branch.*
 
-*Note: Warehouse IDs, LLM endpoints, and other configurations are now parameterized in the `variables:` block at the top of `databricks.yml`.*
-
-### Databricks Workspace Resources
-
-| Resource | Name | Purpose | How to Provision |
-|----------|------|---------|------------------|
-| **Service Principal** | `atlas-{env}-cicd` | GitHub Actions deployment | Account Console → User Management |
-| **Databricks App** | `atlas-dev` / `atlas` | Application instance | Auto-created by CI/CD |
-| **SQL Warehouse** | (any serverless warehouse) | Execute SQL queries | Must exist, grant SP access |
-| **Model Serving Endpoint** | Foundation Model API | LLM for agent | Must exist, grant SP "Can Query" |
-
----
-
-## Per-Environment Provisioning Checklist
-
-### Prerequisites (One-time Setup)
-
-- [ ] GitHub repository created
-- [ ] Databricks workspace(s) available
-- [ ] Account-level admin access for Service Principal creation
-
-### For Each Environment (dev, prod)
-
-#### 1. Create CI/CD Service Principal (Account Console)
-
-```bash
-# Via Databricks Account Console:
-# 1. Go to User Management → Service Principals
-# 2. Create new SP: "atlas-{env}-cicd"
-# 3. Generate OAuth secret
-# 4. Note Client ID and Secret
-```
-
-#### 2. Grant CI/CD Service Principal Permissions (Workspace)
-
-```sql
--- In Databricks SQL or via Terraform
-
--- Grant workspace access
--- (Add SP to workspace via Admin Console)
-
--- Grant Unity Catalog permissions (for tools)
-GRANT USE CATALOG ON CATALOG * TO `edas-hub-{env}-cicd`;
-GRANT USE SCHEMA ON SCHEMA *.* TO `edas-hub-{env}-cicd`;
-GRANT SELECT ON TABLE *.*.* TO `edas-hub-{env}-cicd`;
-
--- Grant Model Serving access
--- (Via Serving UI: Endpoint → Permissions → Add SP with "Can Query")
-
--- Grant SQL Warehouse access
--- (Via SQL Warehouses UI: Warehouse → Permissions → Add SP with "Can Use")
-
--- Grant Apps permission (if needed)
--- (SP needs ability to create/deploy apps)
-```
-
-#### 3. Update databricks.yml Variables
-
-At the top of `databricks.yml`, update the `variables` block with your environment-specific settings:
-- `database_host` / user / name / etc.
+### Step 3.2: Update databricks.yml
+Open `databricks.yml` in the root of your repository and update the `variables` block to match your environment:
+- `lakebase_host` (The hostname of your Databricks Lakebase database)
 - `model_serving_endpoint` (e.g., `databricks-gemini-2-5-flash`)
-- `gitops_volume_path` (the Unity Catalog path created in step 4)
-*The `sql_warehouse_id` will automatically resolve to the default "Serverless Starter Warehouse".*
+- `gitops_volume_path` (The Unity Catalog volume path you created in Step 2.1)
 
-#### 4. Run the Bootstrap Script
+---
 
-Before deploying, you must create a secret scope and GitOps Volume. We've provided an interactive script for this:
+## 4. CI/CD Deployment
 
+ATLAS uses GitHub Actions to automate deployments to both Development (`develop` branch) and Production (`main` branch) environments.
+
+### Step 4.1: Create CI/CD Service Principal
+1. Go to the Databricks Account Console → **User Management** → **Service Principals**.
+2. Create a new Service Principal (e.g., `atlas-cicd`).
+3. Generate an OAuth secret and securely note the **Client ID** and **Secret**.
+4. Grant this Service Principal access to your workspace.
+
+### Step 4.2: Grant CI/CD Permissions
+In the Databricks SQL Editor, grant the CI/CD Service Principal the necessary permissions to deploy the app:
+```sql
+GRANT USE CATALOG ON CATALOG * TO `atlas-cicd`;
+GRANT USE SCHEMA ON SCHEMA *.* TO `atlas-cicd`;
+GRANT SELECT ON TABLE *.*.* TO `atlas-cicd`;
+```
+*(You will also need to ensure the Service Principal has "Can Query" access on your Model Serving endpoint, and "Can Use" access on your SQL Warehouse).*
+
+### Step 4.3: Configure GitHub Environments
+1. In your GitHub repository, go to **Settings → Environments**.
+2. Create environments for `development` and `production`.
+3. In each environment, add the following **Secrets**:
+   - `DATABRICKS_CLIENT_ID` = (Your SP Client ID)
+   - `DATABRICKS_CLIENT_SECRET` = (Your SP Secret)
+4. Add the following **Variables**:
+   - `DATABRICKS_HOST` = (e.g., `https://your-workspace.cloud.databricks.com`)
+
+### Step 4.4: Deploy
+Push your code to trigger the GitHub Actions:
 ```bash
-# Runs the Databricks CLI to scaffold secrets and volumes
-./bootstrap.sh
+git push origin develop  # → Deploys the 'atlas-dev' app
+git push origin main     # → Deploys the 'atlas' production app
 ```
 
-You will be prompted for:
-1. Secret scope name (default: `atlas-hub`)
-2. Lakebase password
-3. GitHub PAT (Requires `repo` scope from GitHub Developer Settings)
-4. Catalog, schema, and volume names for the GitOps requests
+---
 
-#### 5. Configure GitHub Environment
+## 5. Post-Deployment Grants
 
-1. Go to **Repository → Settings → Environments**
-2. Create environment (e.g., `development`)
-3. Add secrets:
-   - `DATABRICKS_CLIENT_ID` = SP Client ID
-   - `DATABRICKS_CLIENT_SECRET` = SP Secret
-4. Add variables:
-   - `DATABRICKS_HOST` = Workspace URL
+> **IMPORTANT**: Databricks Apps automatically create their own hidden Service Principal when deployed. This "App SP" needs permission to read the secrets and models you configured earlier.
 
-#### 6. Verify Model Serving Endpoint
+After your first deployment completes successfully:
 
-1. Go to **Serving** in Databricks workspace
-2. Confirm the Foundation Model endpoint exists (e.g., `databricks-gemini-2-5-flash`)
-3. Click on endpoint → **Permissions** → Add Service Principal with "Can Query"
+### Step 5.1: Find the App's Service Principal
+1. Go to **Databricks Workspace → Compute → Apps**.
+2. Click on your deployed app (e.g., `atlas-dev`).
+3. Go to the **Permissions** tab and copy the name of the auto-created service principal (e.g., `app-xxxx-xxxx-xxxx`).
 
-#### 7. Deploy & Test
-
-```bash
-# Trigger deployment by pushing to branch
-git push origin develop  # → deploys to development
-git push origin main     # → deploys to production
-```
-
-#### 8. Post-Deployment: Configure App Service Principal
-
-> **IMPORTANT**: The Databricks App creates its own service principal automatically when deployed. This "App SP" (also called "Ops SP") needs additional permissions to access secrets and resources.
-
-After the first deployment completes:
-
-1. **Find the App's Service Principal**:
-   - Go to **Databricks Workspace → Compute → Apps**
-   - Click on your app (e.g., `atlas-dev`)
-   - Go to **Permissions** tab
-   - Note the auto-created service principal (e.g., `app-xxxx-xxxx-xxxx`)
-
-2. **Grant App SP Access to Secret Scope**:
+### Step 5.2: Grant Secret & Model Access
+1. **Secrets:** Grant READ access to the `atlas-hub` secret scope.
    ```python
    from databricks.sdk import WorkspaceClient
    from databricks.sdk.service.workspace import AclPermission
    
    w = WorkspaceClient()
-   
-   # Grant READ access to the app's service principal
-   # Replace with your App SP's application ID from step 1
    w.secrets.put_acl(
        scope="atlas-hub",
        principal="<APP_SP_APPLICATION_ID>",
        permission=AclPermission.READ
    )
    ```
+2. **Model Serving:** Go to **Serving** → Your endpoint → **Permissions** → Add the App SP with **Can Query**.
+3. **Database:** If using Lakebase, grant the App SP **Can Use** permissions on the Lakebase SQL instance.
 
-3. **Grant App SP Access to Lakebase** (if using Lakebase):
-   - Go to **Databricks Workspace → SQL Editor → Lakebase**
-   - Click on your Lakebase instance → **Permissions**
-   - Add the App SP with **Can Use** permission
-
-4. **Grant App SP Access to Model Serving** (if using LLM):
-   - Go to **Serving** → Your endpoint → **Permissions**
-   - Add the App SP with **Can Query** permission
-
-5. **Restart the App** to pick up new permissions:
-   - Go to **Apps** → Your app → **Stop** → **Start**
-
-### Summary: What's Manual vs Automated
-
-| Task | When | Who |
-|------|------|-----|
-| Create CI/CD Service Principal | Before first deploy | Admin |
-| Run `./bootstrap.sh` | Before first deploy | Admin |
-| Update `databricks.yml` variables | Before first deploy | Developer |
-| Configure GitHub secrets/variables | Before first deploy | Admin |
-| First deployment | Automated via CI/CD | GitHub Actions |
-| App SP creation | Automatic (by Databricks) | Databricks |
-| Grant App SP access to secret scope | After first deploy | Admin |
-| Grant App SP access to Lakebase | After first deploy | Admin |
-| Grant App SP access to Model Serving | After first deploy | Admin |
-| Restart app | After granting permissions | Admin |
-
----
-
-## Environment Configuration Matrix
-
-| Setting | Development | Production |
-|---------|-------------|------------|
-| App Name | `atlas-dev` | `atlas` |
-| CPU | 1 | 2 |
-| Memory | 2048 MB | 4096 MB |
-| Branch | `develop` | `main` |
-| GitHub Environment | `development` | `production` |
-
----
-
-## Local Developer Setup (Bundle Deploy)
-
-For developers to deploy personal app instances without going through CI/CD.
-
-### One-Time Setup (Do Once)
-
-#### 1. Install or Update Databricks CLI
-
-```bash
-# Install (or update if already installed)
-curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
-
-# Verify installation
-databricks --version  # Should be 0.250.0 or higher
-
-# If you need to update an existing installation
-databricks --version  # Check current version
-curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh  # Re-run to update
-```
-
-#### 2. Authenticate to Your Workspace
-
-```bash
-# Login (opens browser for OAuth)
-databricks auth login --host https://your-workspace.cloud.databricks.com
-
-# Verify authentication
-databricks auth describe
-```
-
-#### 3. Set Environment Variables (add to your ~/.zshrc or ~/.bashrc)
-
-```bash
-# Required
-export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
-
-# Optional (needed if app uses SQL queries)
-export DATABRICKS_WAREHOUSE_ID=your-warehouse-id
-
-# Your username for personal app naming (use dashes, not underscores)
-export BUNDLE_VAR_dev_user=your-name  # e.g., "rohan-ahire"
-```
-
-Reload your shell: `source ~/.zshrc`
-
----
-
-### Deploy Your Personal Instance
-
-#### Option A: Using the Deploy Script
-
-```bash
-# Build frontend and deploy to Databricks
-./deploy.sh dev
-```
-
-#### Option B: Using Bundle Commands Directly
-
-```bash
-# Just deploy (assumes frontend already built)
-databricks bundle deploy -t dev --var dev_user=your-name
-
-# Start the app after deployment
-databricks apps start atlas-dev-your-name
-```
-
----
-
-### After Deployment
-
-1. Go to **Databricks Workspace → Compute → Apps**
-2. Find your app: `edas-hub-dev-{your-name}`
-3. Click **Start** to start the compute
-4. Once running, click the **URL** to access your app
-
----
-
-### What the Deploy Script Automates
-
-| Step | Manual | ./deploy.sh |
-|------|--------|-------------|
-| Check Databricks CLI installed | You | Automated |
-| Check authentication | You (one-time) | Validates |
-| Build frontend (`npm run build`) | You | Automated |
-| Copy frontend to `backend/static/` | You | Automated |
-| Run `databricks bundle deploy` | You | Automated |
-
-### What You Must Do Manually
-
-| Step | Why |
-|------|-----|
-| Install Databricks CLI | One-time system setup |
-| Run `databricks auth login` | OAuth requires browser interaction |
-| Set environment variables | Personal configuration |
-| Start app compute (first time) | Databricks requires explicit start |
-
----
-
-### Updating Your Personal App
-
-After making code changes:
-
-```bash
-# Redeploy with your changes
-./deploy.sh dev
-
-# Or just the backend (faster, no frontend rebuild)
-databricks bundle deploy -t dev --var dev_user=your-name
-```
-
----
-
-### Cleaning Up
-
-To delete your personal app:
-
-```bash
-databricks apps delete atlas-dev-your-name
-databricks bundle destroy -t dev --var dev_user=your-name
-```
-
----
-
-### Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| "cannot configure default credentials" | Run `databricks auth login --host $DATABRICKS_HOST` |
-| "App name must contain only lowercase letters, numbers, and dashes" | Use dashes in `dev_user`, not underscores |
-| "active deployment in progress" | Wait for current deployment to finish |
-| "Compute is in stopped state" | Go to Apps UI and click Start |
-
----
-
-## File Reference
-
-| File | Purpose |
-|------|---------|
-| `.github/workflows/deploy-develop.yml` | CI/CD for development |
-| `.github/workflows/deploy-main.yml` | CI/CD for production |
-| `.github/workflows/lite-version.yml` | Generates a stripped-down `lite/develop` branch |
-| `databricks.yml` | Asset Bundle config for local deploys |
-| `deploy.sh` | Helper script for bundle deploy |
-| `backend/app/model_serving/client.py` | OAuth + Model Serving client |
-| `backend/app/tools/__init__.py` | Agent tool registry |
+### Step 5.3: Restart the App
+Go back to **Compute → Apps**, select your app, and click **Stop**, followed by **Start** to apply the new permissions.

@@ -104,50 +104,20 @@ Create a Service Principal for CI/CD:
 
 ## Workflow Diagram
 
-```
-Developer pushes to feature/xyz
-         │
-         ▼
-    ┌─────────┐
-    │   CI    │  ← Lint, build, test
-    └────┬────┘
-         │
-         ▼
-Developer creates PR to develop
-         │
-         ▼
-    ┌─────────┐
-    │   CI    │  ← Runs again on PR
-    └────┬────┘
-         │
-    PR approved & merged
-         │
-         ▼
-    ┌─────────────────┐
-    │ Deploy to Dev   │  ← Automatic on merge
-    └────────┬────────┘
-         │
-         ▼
-    edas-hub-dev deployed
-         │
-         │  (after testing in dev)
-         │
-Developer creates PR: develop → main
-         │
-         ▼
-    ┌─────────┐
-    │   CI    │
-    └────┬────┘
-         │
-    PR approved & merged
-         │
-         ▼
-    ┌─────────────────┐
-    │ Deploy to Prod  │  ← May require approval
-    └────────┬────────┘
-         │
-         ▼
-    edas-hub deployed (production)
+```mermaid
+flowchart TD
+    A["Developer pushes to feature/xyz"] --> B["CI (Lint, build, test)"]
+    B --> C["Developer creates PR to develop"]
+    C --> D["CI (Runs again on PR)"]
+    D --> E["PR approved & merged"]
+    E --> F["Deploy to Dev (Automatic on merge)"]
+    F --> G["atlas-dev deployed"]
+    
+    G -->|after testing in dev| H["Developer creates PR: develop → main"]
+    H --> I["CI"]
+    I --> J["PR approved & merged"]
+    J --> K["Deploy to Prod (May require approval)"]
+    K --> L["atlas deployed (production)"]
 ```
 
 ## First-Time Setup Checklist

@@ -23,8 +23,8 @@ results_table = dbutils.widgets.get("results_table")
 BLOCKER_THRESHOLD = float(dbutils.widgets.get("blocker_threshold"))
 WARN_THRESHOLD = float(dbutils.widgets.get("warn_threshold"))
 
-if not target_catalog or not reference_catalog or not results_table:
-    raise ValueError("target_catalog, reference_catalog, and results_table are required")
+if not target_catalog or not reference_catalog:
+    raise ValueError("target_catalog and reference_catalog are required")
 
 print(f"Running Deduplication Task: Target={target_catalog}, Reference={reference_catalog}, RunID={run_id}")
 
@@ -71,7 +71,8 @@ def get_detailed_metadata(catalog):
         StructField("schema", StringType(), True),
         StructField("table_name", StringType(), True),
         StructField("size_in_bytes", LongType(), True),
-        StructField("num_files", LongType(), True)
+        StructField("num_files", LongType(), True),
+        StructField("created_at", LongType(), True)
     ])
     
     table_rows = base_df.select("schema", "table_name").collect()
@@ -83,17 +84,19 @@ def get_detailed_metadata(catalog):
         
         size_in_bytes = 0
         num_files = 0
+        created_at = None
         
         # Get Size and Files
         try:
-            detail_row = spark.sql(f"SELECT sizeInBytes, numFiles FROM (DESCRIBE DETAIL {full_name})").collect()
+            detail_row = spark.sql(f"SELECT sizeInBytes, numFiles, cast(createdAt as long) as created_at FROM (DESCRIBE DETAIL {full_name})").collect()
             if detail_row:
                 size_in_bytes = detail_row[0][0] or 0
                 num_files = detail_row[0][1] or 0
+                created_at = detail_row[0][2]
         except Exception:
             pass # Ignore views or inaccessible tables
             
-        return (schema_name, table_name, size_in_bytes, num_files)
+        return (schema_name, table_name, size_in_bytes, num_files, created_at)
     
     details_list = []
     # Use max_workers based on number of tables, capped at 20 to avoid overwhelming the driver
@@ -158,7 +161,11 @@ def get_detailed_metadata(catalog):
                   .withColumn("upstreams", F.coalesce(F.col("upstreams"), F.array()))
 
 target_metadata = get_detailed_metadata(target_catalog)
-ref_metadata = get_detailed_metadata(reference_catalog)
+
+if target_catalog == reference_catalog:
+    ref_metadata = target_metadata
+else:
+    ref_metadata = get_detailed_metadata(reference_catalog)
 
 # --- 2. Compute Features ---
 print("Step 2: Computing Features...")
@@ -194,13 +201,19 @@ target_features = target_features.withColumn("schema_hash", F.hash(F.array_join(
 ref_features = ref_features.withColumn("schema_hash", F.hash(F.array_join("col_names_norm", "|")))
 
 # Candidate generation by blocking on num_columns AND schema_hash
-# We also exclude self-matches if target and reference are the same catalog.
+if target_catalog == reference_catalog:
+    # Use strictly less-than to prevent (A,B) and (B,A) symmetric duplicates
+    name_filter = F.col("t.full_name") < F.col("r.full_name")
+else:
+    # Use not-equal for cross-catalog comparisons
+    name_filter = F.col("t.full_name") != F.col("r.full_name")
+
 candidates = target_features.alias("t").join(
     ref_features.alias("r"),
     (F.col("t.num_columns") == F.col("r.num_columns")) & 
     (F.col("t.schema_hash") == F.col("r.schema_hash")),
     "inner"
-).where(F.col("t.full_name") != F.col("r.full_name")) \
+).where(name_filter) \
 .select(
     F.col("t.full_name").alias("target_full_name"),
     F.col("r.full_name").alias("reference_full_name"),
@@ -213,7 +226,9 @@ candidates = target_features.alias("t").join(
     F.col("t.size_in_bytes").alias("t_size"),
     F.col("r.size_in_bytes").alias("r_size"),
     F.col("t.has_clone").alias("t_clone"),
-    F.col("r.has_clone").alias("r_clone")
+    F.col("r.has_clone").alias("r_clone"),
+    F.col("t.created_at").alias("t_created_at"),
+    F.col("r.created_at").alias("r_created_at")
 )
 
 # --- 4. Score Pairs ---
@@ -267,6 +282,16 @@ final_matches_df = scored_df.withColumn("policy_class", F.expr(f"""
     END
 """))
 
+final_matches_df = final_matches_df.withColumn("original_table", F.expr("""
+    CASE 
+        WHEN t_clone = false AND r_clone = true THEN target_full_name
+        WHEN r_clone = false AND t_clone = true THEN reference_full_name
+        WHEN coalesce(t_created_at, 0) > 0 AND coalesce(t_created_at, 0) < coalesce(r_created_at, 0) THEN target_full_name
+        WHEN coalesce(r_created_at, 0) > 0 AND coalesce(r_created_at, 0) < coalesce(t_created_at, 0) THEN reference_full_name
+        ELSE 'Unknown'
+    END
+"""))
+
 final_matches_df = final_matches_df.withColumn("explanation", F.expr("""
     concat(
         'Score breakdown: ',
@@ -282,6 +307,7 @@ final_matches_df = final_matches_df.withColumn("explanation", F.expr("""
 final_matches_df = final_matches_df.select(
     "target_full_name",
     "reference_full_name",
+    "original_table",
     F.col("s_schema").cast("double"),
     F.col("s_desc").cast("double"),
     F.col("s_lineage").cast("double"),
@@ -294,14 +320,26 @@ final_matches_df = final_matches_df.select(
     F.current_timestamp().alias("scored_at")
 )
 
-# Create the governance schema if it doesn't exist
-# We assume the user provides a full table path: catalog.schema.table
-parts = results_table.split(".")
-if len(parts) >= 2:
-    schema_path = ".".join(parts[:-1])
-    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {schema_path}")
+if results_table:
+    # Create the governance schema if it doesn't exist
+    # We assume the user provides a full table path: catalog.schema.table
+    parts = results_table.split(".")
+    if len(parts) >= 2:
+        schema_path = ".".join(parts[:-1])
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {schema_path}")
 
-# Simplified results for demonstration: write as Delta table
-final_matches_df.write.format("delta").mode("append").option("overwriteSchema", "true").saveAsTable(results_table)
-
-print(f"Asset Deduplication Job Completed Successfully. Results written to {results_table}.")
+    # Simplified results for demonstration: write as Delta table
+    final_matches_df.write.format("delta").mode("append").option("overwriteSchema", "true").saveAsTable(results_table)
+    print(f"Asset Deduplication Job Completed Successfully. Results written to {results_table}.")
+else:
+    print("Asset Deduplication Job Completed Successfully. Results (no results_table specified):")
+    
+    # Sort the results by similarity (highest first)
+    display_df = final_matches_df.orderBy(F.col("similarity").desc())
+    
+    # Try to use Databricks native display() for a pretty interactive table, 
+    # fallback to show() if run outside a notebook context
+    try:
+        display(display_df)
+    except NameError:
+        display_df.show(100, truncate=False)
