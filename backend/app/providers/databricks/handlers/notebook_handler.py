@@ -15,9 +15,10 @@ class NotebookResourceHandler(BaseResourceHandler):
                     for obj in self.workspace_client.workspace.list(base_path, recursive=True):
                         if obj.object_type.value == "NOTEBOOK":
                             resources.append({
-                                "id": obj.path,
-                                "type": "notebook",
-                                "owner": "unknown" # Hard to determine accurately without checking ACLs or inferring from /Users path
+                            "id": obj.path,
+                            "type": "notebook",
+                            "owner": "unknown", # Hard to determine accurately without checking ACLs or inferring from /Users path
+                            "tags": {}
                             })
                 except Exception as inner_e:
                     logger.warning(f"Could not list notebooks in {base_path}: {inner_e}")

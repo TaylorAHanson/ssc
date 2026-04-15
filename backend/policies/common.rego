@@ -2,11 +2,12 @@ package databricks.governance.common
 
 import future.keywords.if
 import future.keywords.in
+import future.keywords.contains
 
 # --- Core Violation Check ---
-is_violation(violation_reasons) if {
+is_violation(violation_reasons) = true if {
     count(violation_reasons) > 0
-}
+} else = false
 
 # --- Allowlist Exception Logic ---
 matching_exceptions(allowlist_records, resource_id) := [
@@ -14,19 +15,19 @@ matching_exceptions(allowlist_records, resource_id) := [
     e.resource_id == resource_id
 ]
 
-has_approved_exception(allowlist_records, resource_id, is_viol, request_time) if {
+has_approved_exception(allowlist_records, resource_id, is_viol, request_time) = true if {
     is_viol
     some exception in matching_exceptions(allowlist_records, resource_id)
     exception.status == "approved"
     is_valid_expiry(exception, request_time)
-}
+} else = false
 
-has_pending_exception(allowlist_records, resource_id, is_viol, has_approved) if {
+has_pending_exception(allowlist_records, resource_id, is_viol, has_approved) = true if {
     is_viol
     not has_approved
     some exception in matching_exceptions(allowlist_records, resource_id)
     exception.status == "pending"
-}
+} else = false
 
 is_valid_expiry(exception, current_time) if {
     not exception.expires_at

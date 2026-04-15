@@ -93,11 +93,9 @@ class OpaProvider(BaseProvider):
 
         opa_exe = self._require_local_opa()
 
-        # Accept either "asset_allowlist.rego" or "policies/asset_allowlist.rego"
-        policy_basename = os.path.basename(policy_file)
-        policy_full_path = os.path.join(os.getcwd(), self.policies_dir, policy_basename)
-        if not os.path.exists(policy_full_path):
-            raise PermanentError(f"Policy file not found: {policy_full_path}")
+        policies_dir_path = os.path.join(os.getcwd(), self.policies_dir)
+        if not os.path.exists(policies_dir_path):
+            raise PermanentError(f"Policies directory not found: {policies_dir_path}")
 
         with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as temp_in:
             json.dump(input_data, temp_in)
@@ -108,7 +106,7 @@ class OpaProvider(BaseProvider):
                 opa_exe,
                 "eval",
                 "-d",
-                policy_full_path,
+                policies_dir_path,
                 "-i",
                 temp_in_path,
                 "-f",

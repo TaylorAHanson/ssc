@@ -65,6 +65,23 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
     This bypasses human approvals and acts as an automated pipeline.
     """
     
+    # State UI Configurations
+    STATE_COMPLETION_FACTS = {
+        "pending": "request_submitted",
+        "discovering": "discover_completed",
+        "enforcing": "enforce_completed",
+        "notifying": "notify_completed",
+        "rejected": "request_rejected"
+    }
+
+    STATE_LOG_FACTS = {
+        "pending": ["request_submitted"],
+        "discovering": ["discover_completed"],
+        "enforcing": ["enforce_completed"],
+        "notifying": ["notify_completed"],
+        "rejected": ["request_rejected"]
+    }
+    
     pending = State("pending", initial=True)
     discovering = State("discovering")
     enforcing = State("enforcing")
@@ -107,6 +124,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
             return
 
         workspace_name = self.request.state_context.get("workspace", "ws-enterprise-prod")
+        environment = self.request.state_context.get("environment", "prod")
         
         # Determine workspace type based on name for OPA context
         workspace_type = "enterprise" if "enterprise" in workspace_name else "domain"
@@ -133,7 +151,9 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
             workspace_client = provider.client
         except Exception as e:
             logger.error(f"Failed to initialize DatabricksProvider: {e}")
-            self.request.state_context["violations"] = []
+            ctx = dict(self.request.state_context or {})
+            ctx["violations"] = []
+            self.request.state_context = ctx
             add_fact(self.db, self.request.id, "discover_completed", {"error": str(e), "violation_count": 0})
             self.finish_discovering()
             return
@@ -173,7 +193,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
             
         for resource in discovered_resources:
             input_data = {
-                "workspace": {"name": workspace_name, "type": workspace_type},
+                "workspace": {"name": workspace_name, "type": workspace_type, "environment": environment},
                 "resource": {"id": resource["id"], "type": resource["type"]},
                 "request_time": datetime.utcnow().isoformat(),
                 "allowlist_records": allowlist_records
@@ -202,8 +222,17 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                     })
         
         # Save violations to state context and record fact
-        self.request.state_context["violations"] = violations
-        add_fact(self.db, self.request.id, "discover_completed", {"violation_count": len(violations)})
+        # SQLAlchemy needs a fresh dict assignment or flag_modified to detect changes to JSON columns
+        ctx = dict(self.request.state_context or {})
+        ctx["violations"] = violations
+        self.request.state_context = ctx
+        
+        add_fact(self.db, self.request.id, "discover_completed", {
+            "violation_count": len(violations),
+            "total_resources_scanned": len(discovered_resources),
+            "policies_evaluated": len(policy_files),
+            "total_checks": len(discovered_resources) * len(policy_files)
+        })
         self.finish_discovering()
 
     async def on_enter_enforcing_async(self):

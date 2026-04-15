@@ -3,20 +3,21 @@ package databricks.governance.dashboards_and_sql
 import data.databricks.governance.common
 import future.keywords.if
 import future.keywords.in
+import future.keywords.contains
 
 default action := "ALLOW"
 default is_violation := false
 default reason := "Resource complied with policies."
 default severity := "NONE"
 
-violation_reasons[msg] {
+violation_reasons contains msg if {
     input.resource.type == "dashboard"
     input.resource.uses_embedded_credentials == true
     "ALL_USERS" in input.resource.shared_with
     msg := "Dashboards with embedded credentials must not be shared with 'everyone' (ALL_USERS); they may only be shared with specific groups whose access matches the credential scope."
 }
 
-violation_reasons[msg] {
+violation_reasons contains msg if {
     input.resource.type == "sql_warehouse"
     not input.resource.policy_id
     input.workspace.environment == "prod"

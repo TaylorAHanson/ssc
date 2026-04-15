@@ -8,7 +8,7 @@ class GenieSpaceResourceHandler(BaseResourceHandler):
     async def discover(self) -> List[Dict[str, Any]]:
         resources = []
         try:
-            spaces = self.workspace_client.genie.spaces.list()
+            spaces = self.workspace_client.genie.list_spaces()
             for space in spaces:
                 resources.append({
                     "id": space.id,
@@ -23,7 +23,7 @@ class GenieSpaceResourceHandler(BaseResourceHandler):
         
     async def kill(self, resource_id: str) -> bool:
         try:
-            self.workspace_client.genie.spaces.delete(space_id=resource_id)
+            self.workspace_client.genie.trash_space(space_id=resource_id)
             return True
         except Exception as e:
             logger.error(f"Failed to delete Genie space {resource_id}: {e}")

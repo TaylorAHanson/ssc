@@ -15,7 +15,8 @@ class AppResourceHandler(BaseResourceHandler):
                     "id": app.name,
                     "type": "app",
                     "owner": getattr(app, 'creator', 'unknown'),
-                    "state": getattr(app, 'active_deployment', {}).get('state', 'UNKNOWN')
+                    "state": getattr(app.active_deployment, 'state', 'UNKNOWN') if getattr(app, 'active_deployment', None) else 'UNKNOWN',
+                    "tags": {}
                 })
         except Exception as e:
             logger.error(f"Failed to discover apps: {e}")

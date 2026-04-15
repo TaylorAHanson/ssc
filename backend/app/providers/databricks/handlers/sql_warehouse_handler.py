@@ -8,7 +8,7 @@ class SqlWarehouseResourceHandler(BaseResourceHandler):
     async def discover(self) -> List[Dict[str, Any]]:
         resources = []
         try:
-            warehouses = self.workspace_client.sql.endpoints.list()
+            warehouses = self.workspace_client.warehouses.list()
             for warehouse in warehouses:
                 resources.append({
                     "id": warehouse.id,
@@ -25,7 +25,7 @@ class SqlWarehouseResourceHandler(BaseResourceHandler):
         
     async def kill(self, resource_id: str) -> bool:
         try:
-            self.workspace_client.sql.endpoints.delete(id=resource_id)
+            self.workspace_client.warehouses.delete(id=resource_id)
             return True
         except Exception as e:
             logger.error(f"Failed to delete SQL warehouse {resource_id}: {e}")

@@ -17,7 +17,8 @@ class DashboardResourceHandler(BaseResourceHandler):
                     # Mocking some fields since list might not have full details
                     "owner": getattr(dash, 'creator_user_name', 'unknown'),
                     "uses_embedded_credentials": getattr(dash, 'uses_embedded_credentials', False),
-                    "shared_with": getattr(dash, 'shared_with', [])
+                    "shared_with": getattr(dash, 'shared_with', []),
+                    "tags": {}
                 })
         except Exception as e:
             logger.error(f"Failed to discover dashboards: {e}")

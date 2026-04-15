@@ -11,10 +11,11 @@ class JobResourceHandler(BaseResourceHandler):
             jobs = self.workspace_client.jobs.list()
             for job in jobs:
                 resources.append({
-                    "id": str(job.job_id),
+                            "id": str(job.job_id),
                     "name": job.settings.name,
                     "type": "job",
-                    "owner": getattr(job, 'creator_user_name', 'unknown')
+                    "owner": getattr(job, 'creator_user_name', 'unknown'),
+                    "tags": {t.key: t.value for t in (job.settings.tags if hasattr(job.settings, 'tags') and job.settings.tags else [])} if hasattr(job, 'settings') else {}
                 })
         except Exception as e:
             logger.error(f"Failed to discover jobs: {e}")

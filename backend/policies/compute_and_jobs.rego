@@ -3,13 +3,14 @@ package databricks.governance.compute_and_jobs
 import data.databricks.governance.common
 import future.keywords.if
 import future.keywords.in
+import future.keywords.contains
 
 default action := "ALLOW"
 default is_violation := false
 default reason := "Resource complied with policies."
 default severity := "NONE"
 
-violation_reasons[msg] {
+violation_reasons contains msg if {
     input.resource.type == "cluster"
     input.resource.cluster_type == "interactive"
     input.resource.access_mode == "shared"
@@ -17,19 +18,19 @@ violation_reasons[msg] {
     msg := "Shared interactive clusters are disallowed in production; only single-user or job-only clusters are permitted."
 }
 
-violation_reasons[msg] {
+violation_reasons contains msg if {
     input.resource.type == "cluster"
     not input.resource.policy_id
     msg := "All clusters, warehouses, and serverless compute must be created via cluster/compute policies; unrestricted 'no policy' compute is disabled."
 }
 
-violation_reasons[msg] {
+violation_reasons contains msg if {
     input.resource.type == "job"
     input.resource.failed_consecutively_days > 30
     msg := "Job has failed consecutively for over 30 days."
 }
 
-violation_reasons[msg] {
+violation_reasons contains msg if {
     input.resource.type == "job"
     input.resource.idle_days > 90
     msg := "Job has not been run in over 90 days."
