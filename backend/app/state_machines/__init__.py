@@ -16,6 +16,7 @@ from app.state_machines.platform_admin.state_machine import SimplePlatformAdminS
 from app.state_machines.github_repo.state_machine import GithubRepoCreationStateMachine
 from app.state_machines.project_onboarding.state_machine import ProjectOnboardingStateMachine
 from app.state_machines.catalog_schema.state_machine import CreateCatalogSchemaStateMachine
+from app.state_machines.enforcement_sentinel.state_machine import EnforcementSentinelStateMachine
 
 __all__ = [
     "BaseRequestStateMachine",
@@ -28,4 +29,5 @@ __all__ = [
     "GithubRepoCreationStateMachine",
     "ProjectOnboardingStateMachine",
     "CreateCatalogSchemaStateMachine",
+    "EnforcementSentinelStateMachine",
 ]

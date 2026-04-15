@@ -16,7 +16,8 @@ export type RequestType =
   | 'marketplace_certification'
   | 'rest_api_access'
   | 'batch_data_access'
-  | 'github_repo_creation';
+  | 'github_repo_creation'
+  | 'enforcement_sentinel';
 
 export interface Role {
   id: string;

@@ -15,7 +15,8 @@ class ServicePrincipalResourceHandler(BaseResourceHandler):
                     "name": getattr(sp, 'display_name', getattr(sp, 'application_id', 'unknown')),
                     "type": "service_principal",
                     "active": getattr(sp, 'active', True),
-                    "idle_days": 0 # Would need audit logs to determine accurately
+                    "idle_days": 0, # Would need audit logs to determine accurately
+                    "tags": {}
                 })
         except Exception as e:
             logger.error(f"Failed to discover Service Principals: {e}")

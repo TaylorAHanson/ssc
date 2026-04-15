@@ -14,8 +14,9 @@ class ClusterResourceHandler(BaseResourceHandler):
                     "id": cluster.cluster_id,
                     "name": cluster.cluster_name,
                     "type": "cluster",
-                    "owner": cluster.creator_user_name,
-                    "state": cluster.state.value
+                    "owner": getattr(cluster, 'creator_user_name', 'unknown'),
+                    "state": getattr(cluster.state, 'value', 'UNKNOWN') if hasattr(cluster, 'state') else 'UNKNOWN',
+                    "tags": {k: v for k, v in getattr(cluster, 'custom_tags', {}).items()} if hasattr(cluster, 'custom_tags') else {}
                 })
         except Exception as e:
             logger.error(f"Failed to discover clusters: {e}")

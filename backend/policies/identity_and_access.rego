@@ -3,13 +3,14 @@ package databricks.governance.identity_and_access
 import data.databricks.governance.common
 import future.keywords.if
 import future.keywords.in
+import future.keywords.contains
 
 default action := "ALLOW"
 default is_violation := false
 default reason := "Resource complied with policies."
 default severity := "NONE"
 
-violation_reasons[msg] {
+violation_reasons contains msg if {
     input.resource.type == "personal_access_token"
     input.workspace.type == "enterprise"
     input.workspace.environment == "prod"
@@ -17,7 +18,7 @@ violation_reasons[msg] {
     msg := "Personal access tokens (PATs) are disabled in enterprise prod except for break-glass use."
 }
 
-violation_reasons[msg] {
+violation_reasons contains msg if {
     input.resource.type == "grant"
     input.resource.principal_type == "user"
     input.workspace.environment == "prod"

@@ -20,7 +20,8 @@ class VolumeResourceHandler(BaseResourceHandler):
                             "id": volume.full_name,
                             "type": "storage",
                             "storage_type": "volume",
-                            "owner": volume.owner
+                            "owner": volume.owner,
+                            "tags": {}
                         })
         except Exception as e:
             logger.error(f"Failed to discover Volumes: {e}")

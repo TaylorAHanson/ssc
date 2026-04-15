@@ -10,20 +10,21 @@ async def test_opa_provider_local_eval():
         pytest.skip("OPA binary not found on path, skipping local eval test")
         
     input_data = {
-        "workspace": {"name": "ws-enterprise-prod", "type": "enterprise"},
-        "resource": {"id": "test-app", "type": "app"},
-        "request_time": "2026-03-18T00:00:00Z"
+        "workspace": {"name": "ws-enterprise-prod", "type": "enterprise", "environment": "prod"},
+        "resource": {"id": "test-app", "type": "app", "idle_days": 40},
+        "request_time": "2026-03-18T00:00:00Z",
+        "allowlist_records": []
     }
     
     result = await provider.evaluate(
-        policy_path="policies/asset_allowlist.rego",
-        query="data.databricks.governance.asset_allowlist",
+        policy_path="policies/apps_and_genie.rego",
+        query="data.databricks.governance.apps_and_genie",
         input_data=input_data
     )
     
     assert result.get("is_violation") is True
     assert result.get("action") == "KILL"
-    assert result.get("severity") == "CRITICAL"
+    assert result.get("severity") == "HIGH"
     
     # Test with approved exception
     input_data["allowlist_records"] = [
@@ -35,8 +36,8 @@ async def test_opa_provider_local_eval():
     ]
     
     result = await provider.evaluate(
-        policy_path="policies/asset_allowlist.rego",
-        query="data.databricks.governance.asset_allowlist",
+        policy_path="policies/apps_and_genie.rego",
+        query="data.databricks.governance.apps_and_genie",
         input_data=input_data
     )
     
@@ -55,8 +56,8 @@ async def test_opa_provider_local_eval():
     ]
     
     result = await provider.evaluate(
-        policy_path="policies/asset_allowlist.rego",
-        query="data.databricks.governance.asset_allowlist",
+        policy_path="policies/apps_and_genie.rego",
+        query="data.databricks.governance.apps_and_genie",
         input_data=input_data
     )
     

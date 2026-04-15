@@ -644,7 +644,7 @@ export function Home() {
                 <Sparkles className="w-5 h-5 text-white" />
               </div>
             )}
-            <h1 className="text-3xl font-bold text-gray-900">
+            <h1 className="text-3xl font-bold text-primary">
               {conversationState.context?.title || brandName}
             </h1>
           </div>
@@ -1104,7 +1104,7 @@ export function Home() {
                 <Sparkles className="w-8 h-8 text-white" />
               </div>
             )}
-            <h1 className="text-5xl font-bold bg-linear-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent">
+            <h1 className="text-5xl font-bold text-primary">
               {brandName}
             </h1>
           </div>
