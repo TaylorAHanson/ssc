@@ -405,11 +405,11 @@ export function EnforcementSentinel() {
                                                                     <tr key={idx} className="hover:bg-gray-50">
                                                                         <td className="p-3 px-4 font-mono text-xs text-gray-900">
                                                                             <div className="flex flex-col">
-                                                                                <span className="text-[10px] text-gray-400 uppercase tracking-wider font-sans mb-0.5">{v.resource_type}</span>
+                                                                                <span className="text-[10px] text-gray-700 font-semibold uppercase tracking-wider font-sans mb-0.5">{v.resource_type}</span>
                                                                                 {v.resource_id}
                                                                             </div>
                                                                         </td>
-                                                                        {activeTab === 'all' && <td className="p-3 text-gray-600">{v.policy.replace(/_/g, ' ')}</td>}
+                                                                        {activeTab === 'all' && <td className="p-3 text-gray-700">{v.policy.replace(/_/g, ' ')}</td>}
                                                                         <td className="p-3">
                                                                             <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded-full ${
                                                                                 v.severity === 'CRITICAL' ? 'bg-red-100 text-red-800 border border-red-200' :

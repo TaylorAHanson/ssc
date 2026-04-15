@@ -194,7 +194,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
         for resource in discovered_resources:
             input_data = {
                 "workspace": {"name": workspace_name, "type": workspace_type, "environment": environment},
-                "resource": {"id": resource["id"], "type": resource["type"]},
+                "resource": resource,
                 "request_time": datetime.utcnow().isoformat(),
                 "allowlist_records": allowlist_records
             }
