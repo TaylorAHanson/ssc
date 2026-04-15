@@ -135,10 +135,10 @@ export function EnforcementSentinel() {
 
                             <div className={`flex items-center transition-colors duration-300 rounded-md border ${isEnforcementUnlocked ? 'bg-red-50 border-red-200 shadow-sm' : 'bg-white border-gray-200'}`}>
                                 {!isEnforcementUnlocked ? (
-                                    <Button 
-                                        onClick={() => setIsEnforcementUnlocked(true)} 
-                                        variant="secondary"
-                                        disabled={isRunning}
+                                        <Button 
+                                            onClick={() => setIsEnforcementUnlocked(true)} 
+                                            variant="outline"
+                                            disabled={isRunning}
                                         size="sm"
                                         className="h-8 border-0 bg-transparent hover:bg-gray-100 text-xs"
                                     >
@@ -149,7 +149,7 @@ export function EnforcementSentinel() {
                                     <div className="flex items-center animate-in fade-in slide-in-from-left-2">
                                         <Button 
                                             onClick={() => handleRunSentinel('active_enforcement')} 
-                                            variant="destructive"
+                                            variant="default"
                                             disabled={isRunning}
                                             size="sm"
                                             className="h-8 rounded-r-none text-xs"
@@ -201,7 +201,7 @@ export function EnforcementSentinel() {
                                 </tr>
                             ) : (
                                 sentinelRuns.map(run => {
-                                    const ctx = run.stateContext || run.metadata || run.state_context || {};
+                                    const ctx = (run as any).stateContext || run.metadata || (run as any).state_context || {};
                                     const mode = ctx.enforcement_mode === 'active_enforcement' ? 'Enforcement' : 'Audit Only';
                                     const violations = ctx.violations || [];
                                     
@@ -261,16 +261,16 @@ export function EnforcementSentinel() {
                                 </h2>
                                 <p className="text-sm text-gray-500 mt-1">
                                     {format(parseISO(selectedRun.createdAt), 'MMMM d, yyyy @ HH:mm:ss')} • 
-                                    {(selectedRun.stateContext || selectedRun.metadata || (selectedRun as any).state_context || {}).workspace || 'ws-enterprise-prod'}
+                                    {((selectedRun as any).stateContext || selectedRun.metadata || (selectedRun as any).state_context || {}).workspace || 'ws-enterprise-prod'}
                                 </p>
                             </div>
-                            <Button variant="ghost" size="icon" onClick={() => { setSelectedRunId(null); setActiveTab('all'); }} className="rounded-full hover:bg-gray-100">
+                            <Button variant="ghost" size="sm" onClick={() => { setSelectedRunId(null); setActiveTab('all'); }} className="rounded-full hover:bg-gray-100">
                                 <X className="w-5 h-5 text-gray-500" />
                             </Button>
                         </div>
 
                         {(() => {
-                            const ctx = selectedRun.stateContext || selectedRun.metadata || (selectedRun as any).state_context || {};
+                            const ctx = (selectedRun as any).stateContext || selectedRun.metadata || (selectedRun as any).state_context || {};
                             const violations: any[] = ctx.violations || [];
                             const discoverFact = selectedRun.stateMachine?.states?.flatMap((s: any) => s.facts || []).find((f: any) => f.type === 'discover_completed');
                             
@@ -287,7 +287,16 @@ export function EnforcementSentinel() {
                             }, {});
 
                             const policyGroups = Object.keys(violationsByPolicy).sort();
-                            const activeViolations = activeTab === 'all' ? violations : (violationsByPolicy[activeTab] || []);
+                            
+                            // Sort violations by severity (highest first)
+                            const severityOrder: Record<string, number> = { 'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1, 'NONE': 0 };
+                            const sortViolations = (vList: any[]) => [...vList].sort((a, b) => {
+                                const sevA = severityOrder[a.severity] || 0;
+                                const sevB = severityOrder[b.severity] || 0;
+                                return sevB - sevA;
+                            });
+
+                            const activeViolations = sortViolations(activeTab === 'all' ? violations : (violationsByPolicy[activeTab] || []));
 
                             return (
                                 <div className="flex-1 overflow-y-auto bg-gray-50/50 p-4 md:p-6 flex flex-col gap-6">

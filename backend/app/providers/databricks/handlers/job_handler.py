@@ -15,7 +15,7 @@ class JobResourceHandler(BaseResourceHandler):
                     "name": job.settings.name,
                     "type": "job",
                     "owner": getattr(job, 'creator_user_name', 'unknown'),
-                    "tags": {t.key: t.value for t in (job.settings.tags if hasattr(job.settings, 'tags') and job.settings.tags else [])} if hasattr(job, 'settings') else {}
+                    "tags": dict(job.settings.tags) if hasattr(job, 'settings') and isinstance(getattr(job.settings, 'tags', None), dict) else {getattr(t, 'key', ''): getattr(t, 'value', '') for t in getattr(job.settings, 'tags', [])} if hasattr(job, 'settings') and getattr(job.settings, 'tags', None) else {}
                 })
         except Exception as e:
             logger.error(f"Failed to discover jobs: {e}")
