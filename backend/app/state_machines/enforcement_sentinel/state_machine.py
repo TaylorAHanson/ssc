@@ -42,7 +42,8 @@ from app.providers.databricks.handlers import (
     GenieSpaceResourceHandler,
     ServicePrincipalResourceHandler,
     NotebookResourceHandler,
-    VolumeResourceHandler
+    VolumeResourceHandler,
+    DatasetResourceHandler
 )
 from app.providers.opa.client import OpaProvider
 from app.models.request import RequestType
@@ -167,7 +168,8 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
             GenieSpaceResourceHandler,
             ServicePrincipalResourceHandler,
             NotebookResourceHandler,
-            VolumeResourceHandler
+            VolumeResourceHandler,
+            DatasetResourceHandler
         ]
         
         discovered_resources = []
@@ -211,13 +213,17 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                     input_data=input_data
                 )
                 
-                if result.get("is_violation"):
+                is_violation = result.get("is_violation")
+                action = result.get("action", "KILL")
+                
+                # We record it if it's an actual violation, OR if the action is a proactive enforcement step like CERTIFY
+                if is_violation or action in ["CERTIFY", "UNCERTIFY"]:
                     violations.append({
                         "resource_id": resource["id"],
                         "resource_type": resource["type"],
                         "policy": policy_name,
-                        "action": result.get("action", "KILL"),
-                        "reason": result.get("reason", "Unknown violation"),
+                        "action": action,
+                        "reason": result.get("reason", "Action triggered" if not is_violation else "Unknown violation"),
                         "severity": result.get("severity", "HIGH"),
                     })
         
@@ -251,7 +257,6 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
         )
         workspace_client = provider.client
         
-        from app.providers.databricks.handlers.dataset_handler import DatasetResourceHandler
         from app.db.enforcement_audit import EnforcementAuditModel
         import uuid
         from app.state_machines.enforcement_sentinel.remediation import determine_intended_step

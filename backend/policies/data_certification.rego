@@ -87,13 +87,16 @@ violation_reasons contains msg if {
 # Exceptions do not apply to data certification since it represents a target state.
 is_violation := count(violation_reasons) > 0
 
+sorted_reasons := sort(violation_reasons)
+formatted_reasons := [sprintf("%d. %s", [i + 1, msg]) | some i; msg := sorted_reasons[i]]
+
 action := "UNCERTIFY" if {
     is_violation
 } else := "CERTIFY" if {
     input.resource.certification_eligible
 } else := "ALLOW"
 
-reason := concat(" ", violation_reasons) if {
+reason := concat(" ", formatted_reasons) if {
     is_violation
 } else := "Dataset meets all certification requirements." if {
     input.resource.certification_eligible

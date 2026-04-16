@@ -90,6 +90,96 @@ async def get_requests(
     return response_list
 
 
+from pydantic import BaseModel as _PydanticBase
+
+class PaginatedRequestsResponse(_PydanticBase):
+    items: List[Request]
+    total: int
+
+@router.get("/paginated", response_model=PaginatedRequestsResponse)
+async def get_paginated_requests(
+    skip: int = 0,
+    limit: int = 10,
+    type: Optional[str] = None,
+    search: Optional[str] = None,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get paginated requests with optional filtering and search."""
+    from sqlalchemy import or_
+    
+    query = db.query(RequestModel)
+    
+    if not current_user.has_role("platform_admin"):
+        query = query.filter(RequestModel.requester_email == current_user.email)
+        
+    if type:
+        query = query.filter(RequestModel.type == type)
+        
+    if search:
+        search_term = f"%{search}%"
+        # Search in title, status, environment, ID, or workspace/environment in metadata
+        from sqlalchemy import cast, String
+        
+        # Check if state_context is actually JSONB or just JSON
+        query = query.filter(
+            or_(
+                RequestModel.title.ilike(search_term),
+                RequestModel.status.ilike(search_term),
+                RequestModel.environment.ilike(search_term),
+                RequestModel.id.ilike(search_term),
+                cast(RequestModel.state_context, String).ilike(search_term)
+            )
+        )
+        
+    # Get total count before pagination
+    total = query.count()
+    
+    # Order by newest first
+    requests = query.order_by(RequestModel.created_at.desc()).offset(skip).limit(limit).all()
+    response_list = []
+    
+    for req in requests:
+        try:
+            try:
+                r_type = RequestType(req.type)
+            except ValueError:
+                continue
+
+            sm = load_state_machine(req, db)
+            sm_state = sm.to_state_machine_state()
+        except Exception as e:
+            sm_state = StateMachineState(
+                currentState=req.current_state or "unknown",
+                states=[],
+                currentProgress=None
+            )
+
+        try:
+            request_status = RequestStatus(req.status)
+        except ValueError:
+            request_status = RequestStatus.PENDING
+        
+        response_list.append(Request(
+            id=req.id,
+            type=r_type,
+            title=req.title,
+            status=request_status,
+            createdAt=req.created_at,
+            updatedAt=req.updated_at,
+            stateMachine=sm_state,
+            requiresTraining=req.requires_training,
+            trainingCompleted=req.training_completed,
+            environment=req.environment,
+            requester_email=req.requester_email,
+            lastError=req.last_error,
+            metadata=req.state_context or {},
+            conversation=req.conversation
+        ))
+        
+    return PaginatedRequestsResponse(items=response_list, total=total)
+
+
 @router.get("/{request_id}", response_model=Request)
 async def get_request(
     request_id: str,

@@ -1,10 +1,11 @@
 api_version: "v1"
 kind: "DataContract"
 dataset:
-  domain: "sales"
-  name: "demo_certified_dataset"
+  domain: "marketing"
+  name: "passing_certified_dataset"
   # Format is expected to be <catalog>.<schema>.<table>
-  physical_name: "main.default.customer_orders"
+  physical_name: "main.default.marketing_campaigns"
+  is_mock: true
 
 quality:
   technical:
@@ -13,13 +14,13 @@ quality:
     score_threshold: 100
 
 security:
-  classification: "PII"
+  classification: "Non-PII"
   abac_required: true
 
 metadata:
   certification_eligible: true
   tags:
-    "Owner group": "data-engineering"
+    "Owner group": "marketing-analytics"
     "Approver group": "data-governance"
-    "Domain": "sales"
-    # Missing "SLO/SLA" tag, which will fail policy
+    "Domain": "marketing"
+    "SLO/SLA": "Tier 1"

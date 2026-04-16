@@ -1,14 +1,13 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { ShieldAlert, AlertTriangle, Search, Unlock, Lock, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight } from 'lucide-react';
+import { ShieldAlert, AlertTriangle, Search, Unlock, Lock, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useRequestStore } from '../../stores/requestStore';
-import { useState, useMemo, useEffect } from 'react';
+import { api } from '../../services/api';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { format, parseISO } from 'date-fns';
 
 export function EnforcementSentinel() {
     const addRequest = useRequestStore((state) => state.addRequest);
-    const fetchRequests = useRequestStore((state) => state.fetchRequests);
-    const requests = useRequestStore((state) => state.requests);
     const [isRunning, setIsRunning] = useState(false);
     const [isEnforcementUnlocked, setIsEnforcementUnlocked] = useState(false);
     const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -17,10 +16,48 @@ export function EnforcementSentinel() {
     const [environment, setEnvironment] = useState<'dev' | 'stage' | 'prod'>('prod');
     const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-    // Filter to only get sentinel runs
-    const sentinelRuns = requests
-        .filter(r => r.type === 'enforcement_sentinel')
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    // Server-side pagination and search states
+    const [sentinelRuns, setSentinelRuns] = useState<any[]>([]);
+    const [totalRuns, setTotalRuns] = useState(0);
+    const [page, setPage] = useState(1);
+    const [pageSize] = useState(10);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    const [isLoadingRuns, setIsLoadingRuns] = useState(false);
+
+    // Debounce search query
+    useEffect(() => {
+        const timer = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+        return () => clearTimeout(timer);
+    }, [searchQuery]);
+
+    // Reset page on search change
+    useEffect(() => {
+        setPage(1);
+    }, [debouncedSearch]);
+
+    const fetchSentinelRuns = useCallback(async (isPolling = false) => {
+        if (!isPolling) setIsLoadingRuns(true);
+        try {
+            const skip = (page - 1) * pageSize;
+            const res = await api.getPaginatedRequests({
+                skip,
+                limit: pageSize,
+                type: 'enforcement_sentinel',
+                search: debouncedSearch || undefined
+            });
+            setSentinelRuns(res.items);
+            setTotalRuns(res.total);
+        } catch(e) {
+            console.error('Failed to fetch sentinel runs:', e);
+        } finally {
+            if (!isPolling) setIsLoadingRuns(false);
+        }
+    }, [page, pageSize, debouncedSearch]);
+
+    useEffect(() => {
+        fetchSentinelRuns();
+    }, [fetchSentinelRuns]);
 
     const selectedRun = useMemo(() => sentinelRuns.find(r => r.id === selectedRunId), [sentinelRuns, selectedRunId]);
 
@@ -30,11 +67,11 @@ export function EnforcementSentinel() {
         
         if (hasActiveRuns) {
             const interval = setInterval(() => {
-                fetchRequests();
+                fetchSentinelRuns(true);
             }, 3000);
             return () => clearInterval(interval);
         }
-    }, [sentinelRuns, fetchRequests]);
+    }, [sentinelRuns, fetchSentinelRuns]);
 
     const getRunStatus = (run: any) => {
         const activeState = run.stateMachine?.states?.find((s: any) => s.isActive);
@@ -57,6 +94,13 @@ export function EnforcementSentinel() {
                 workspace: workspace,
                 environment: environment
             });
+            
+            // Instantly refresh the run list to show the newly added run
+            if (page !== 1) {
+                setPage(1); // This triggers useEffect
+            } else {
+                await fetchSentinelRuns(); // Explicitly fetch if already on page 1
+            }
             
             if (mode === 'active_enforcement') {
                 alert('Sentinel run started! Check the requests list on the Dashboard to track progress.');
@@ -209,9 +253,21 @@ export function EnforcementSentinel() {
 
             {/* Previous Runs Table */}
             <Card>
-                <CardHeader>
-                    <CardTitle className="text-lg">Run History</CardTitle>
-                    <CardDescription>View previous enforcement audits, their findings, and executed actions.</CardDescription>
+                <CardHeader className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4">
+                    <div>
+                        <CardTitle className="text-lg">Run History</CardTitle>
+                        <CardDescription>View previous enforcement audits, their findings, and executed actions.</CardDescription>
+                    </div>
+                    <div className="relative w-full md:w-64">
+                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500" />
+                        <input
+                            type="text"
+                            placeholder="Search runs..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="flex h-9 w-full rounded-md border border-input bg-white pl-9 pr-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        />
+                    </div>
                 </CardHeader>
                 <CardContent className="p-0">
                     <table className="w-full text-sm text-left">
@@ -278,6 +334,35 @@ export function EnforcementSentinel() {
                             )}
                         </tbody>
                     </table>
+                    
+                    {/* Pagination Controls */}
+                    {totalRuns > 0 && (
+                        <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50">
+                            <div className="text-xs text-gray-500">
+                                Showing <span className="font-medium">{(page - 1) * pageSize + 1}</span> to <span className="font-medium">{Math.min(page * pageSize, totalRuns)}</span> of <span className="font-medium">{totalRuns}</span> runs
+                            </div>
+                            <div className="flex gap-1">
+                                <Button 
+                                    variant="outline" 
+                                    size="sm" 
+                                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                                    disabled={page === 1 || isLoadingRuns}
+                                    className="h-7 text-xs px-2"
+                                >
+                                    <ChevronLeft className="w-3 h-3 mr-1" /> Prev
+                                </Button>
+                                <Button 
+                                    variant="outline" 
+                                    size="sm" 
+                                    onClick={() => setPage(p => Math.min(Math.ceil(totalRuns / pageSize), p + 1))}
+                                    disabled={page >= Math.ceil(totalRuns / pageSize) || isLoadingRuns}
+                                    className="h-7 text-xs px-2"
+                                >
+                                    Next <ChevronRight className="w-3 h-3 ml-1" />
+                                </Button>
+                            </div>
+                        </div>
+                    )}
                 </CardContent>
             </Card>
 

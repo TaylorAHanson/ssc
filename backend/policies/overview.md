@@ -76,11 +76,9 @@ As detailed in [GOVERNANCE.md](../docs/GOVERNANCE.md), our platform enforces pol
 ```mermaid
 flowchart TD
     A[Enforcement Sentinel Triggered] --> B(DatasetResourceHandler)
-    B --> C[Read OCDS YAML Contracts<br>Extract 'certification_eligible' & thresholds]
+    B --> C[Read Local YAML Contracts<br>Extract 'certification_eligible' & thresholds]
     
-    C --> D{Is Dataset<br>Defined in OCDS?}
-    D -- No --> E[Skip Table]
-    D -- Yes --> F[Fetch Unity Catalog Metadata<br>Descriptions, Grants, Tags]
+    C --> F[Fetch Unity Catalog Metadata<br>Descriptions, Grants, Tags]
     F --> G[Execute Databricks SQL<br>Query TDQ & BDQ Scores]
     
     G --> H[Construct Resource JSON]

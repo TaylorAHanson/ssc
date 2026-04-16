@@ -351,6 +351,22 @@ export async function getRequests(): Promise<Request[]> {
   return response.json();
 }
 
+export async function getPaginatedRequests(params: { skip: number, limit: number, type?: string, search?: string }): Promise<{ items: Request[], total: number }> {
+  const url = new URL(`${API_BASE_URL}/requests/paginated`, window.location.origin);
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined) {
+      url.searchParams.append(k, v.toString());
+    }
+  });
+  const response = await fetch(url.toString(), {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to get paginated requests: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export async function getRequest(requestId: string): Promise<Request> {
   const response = await fetch(`${API_BASE_URL}/requests/${requestId}`, {
     headers: getHeaders()
@@ -742,6 +758,7 @@ export async function deleteAllowlistEntry(id: string): Promise<void> {
 export const api = {
   createRequest,
   getRequests,
+  getPaginatedRequests,
   getRequest,
   approveRequest,
   rejectRequest,
