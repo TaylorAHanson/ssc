@@ -8,6 +8,7 @@ from app.providers.databricks.handlers.genie_space_handler import GenieSpaceReso
 from app.providers.databricks.handlers.service_principal_handler import ServicePrincipalResourceHandler
 from app.providers.databricks.handlers.notebook_handler import NotebookResourceHandler
 from app.providers.databricks.handlers.volume_handler import VolumeResourceHandler
+from app.providers.databricks.handlers.dataset_handler import DatasetResourceHandler
 
 __all__ = [
     "BaseResourceHandler",
@@ -19,5 +20,6 @@ __all__ = [
     "GenieSpaceResourceHandler",
     "ServicePrincipalResourceHandler",
     "NotebookResourceHandler",
-    "VolumeResourceHandler"
+    "VolumeResourceHandler",
+    "DatasetResourceHandler"
 ]

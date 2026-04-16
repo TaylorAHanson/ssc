@@ -66,6 +66,39 @@ As detailed in [GOVERNANCE.md](../docs/GOVERNANCE.md), our platform enforces pol
 - **Genie Spaces Prod Data (High):** Linked to domain workspaces, owned by groups.
 - **Conversational Data Export (Critical):** Direct export of sensitive data blocked.
 
+### 8. Data Certification (`data_certification.rego`)
+- **Data Quality (High):** TDQ and BDQ scores must be 100%.
+- **Metadata Completeness (High):** Catalog, schema, and all column descriptions must exist.
+- **Access Control (High):** RBAC is always required; ABAC must be defined if deemed necessary.
+- **Tagging & Classification (High):** Mandatory tags (Owner group, Approver group, Domain, SLO/SLA) and Data Classification (e.g., PII) must be applied.
+
+#### Data Certification Flow
+```mermaid
+flowchart TD
+    A[Enforcement Sentinel Triggered] --> B(DatasetResourceHandler)
+    B --> C[Read Local YAML Contracts<br>Extract 'certification_eligible' & thresholds]
+    
+    C --> F[Fetch Unity Catalog Metadata<br>Descriptions, Grants, Tags]
+    F --> G[Execute Databricks SQL<br>Query TDQ & BDQ Scores]
+    
+    G --> H[Construct Resource JSON]
+    H --> I[Send to Open Policy Agent<br>data_certification.rego]
+    
+    I --> J{certification_eligible<br>== true?}
+    J -- No --> K[Action: ALLOW<br>'Not seeking certification']
+    
+    J -- Yes --> L{Passes all Quality,<br>Metadata & Tag checks?}
+    L -- No --> M[Action: UNCERTIFY<br>'Fails requirements']
+    L -- Yes --> N[Action: CERTIFY<br>'Meets all requirements']
+    
+    K --> O[Log to enforcement_audit table]
+    M --> P[Delete system.certification_status tag<br>via Databricks SDK]
+    N --> Q[Add system.certification_status = 'certified'<br>via Databricks SDK]
+    
+    P --> O
+    Q --> O
+```
+
 ## How to Contribute
 Adding or editing a policy is straightforward because we use Open Policy Agent (OPA) and the Rego policy language.
 

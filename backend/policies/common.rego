@@ -69,7 +69,12 @@ resolve_reason(is_viol, has_approved, has_pending, allowlist_records, resource_i
     has_pending
 }
 
-resolve_reason(is_viol, has_approved, has_pending, allowlist_records, resource_id, request_time, violation_reasons) = concat("; ", violation_reasons) if {
+format_reasons(reasons) = formatted if {
+    sorted_reasons := sort(reasons)
+    formatted := concat(" ", [sprintf("%d. %s", [i + 1, msg]) | some i; msg := sorted_reasons[i]])
+}
+
+resolve_reason(is_viol, has_approved, has_pending, allowlist_records, resource_id, request_time, violation_reasons) = format_reasons(violation_reasons) if {
     is_viol
     not has_approved
     not has_pending

@@ -90,6 +90,96 @@ async def get_requests(
     return response_list
 
 
+from pydantic import BaseModel as _PydanticBase
+
+class PaginatedRequestsResponse(_PydanticBase):
+    items: List[Request]
+    total: int
+
+@router.get("/paginated", response_model=PaginatedRequestsResponse)
+async def get_paginated_requests(
+    skip: int = 0,
+    limit: int = 10,
+    type: Optional[str] = None,
+    search: Optional[str] = None,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get paginated requests with optional filtering and search."""
+    from sqlalchemy import or_
+    
+    query = db.query(RequestModel)
+    
+    if not current_user.has_role("platform_admin"):
+        query = query.filter(RequestModel.requester_email == current_user.email)
+        
+    if type:
+        query = query.filter(RequestModel.type == type)
+        
+    if search:
+        search_term = f"%{search}%"
+        # Search in title, status, environment, ID, or workspace/environment in metadata
+        from sqlalchemy import cast, String
+        
+        # Check if state_context is actually JSONB or just JSON
+        query = query.filter(
+            or_(
+                RequestModel.title.ilike(search_term),
+                RequestModel.status.ilike(search_term),
+                RequestModel.environment.ilike(search_term),
+                RequestModel.id.ilike(search_term),
+                cast(RequestModel.state_context, String).ilike(search_term)
+            )
+        )
+        
+    # Get total count before pagination
+    total = query.count()
+    
+    # Order by newest first
+    requests = query.order_by(RequestModel.created_at.desc()).offset(skip).limit(limit).all()
+    response_list = []
+    
+    for req in requests:
+        try:
+            try:
+                r_type = RequestType(req.type)
+            except ValueError:
+                continue
+
+            sm = load_state_machine(req, db)
+            sm_state = sm.to_state_machine_state()
+        except Exception as e:
+            sm_state = StateMachineState(
+                currentState=req.current_state or "unknown",
+                states=[],
+                currentProgress=None
+            )
+
+        try:
+            request_status = RequestStatus(req.status)
+        except ValueError:
+            request_status = RequestStatus.PENDING
+        
+        response_list.append(Request(
+            id=req.id,
+            type=r_type,
+            title=req.title,
+            status=request_status,
+            createdAt=req.created_at,
+            updatedAt=req.updated_at,
+            stateMachine=sm_state,
+            requiresTraining=req.requires_training,
+            trainingCompleted=req.training_completed,
+            environment=req.environment,
+            requester_email=req.requester_email,
+            lastError=req.last_error,
+            metadata=req.state_context or {},
+            conversation=req.conversation
+        ))
+        
+    return PaginatedRequestsResponse(items=response_list, total=total)
+
+
 @router.get("/{request_id}", response_model=Request)
 async def get_request(
     request_id: str,
@@ -453,3 +543,106 @@ async def edit_parameters(
         "request_id": request_id,
         "updated_parameters": list(sanitized.keys()),
     }
+
+
+class EnforcementActionRequest(_PydanticBase):
+    resource_id: str
+    resource_type: str
+    action: str
+    policy_name: str
+    reason: Optional[str] = None
+
+
+@router.post("/{request_id}/enforcement-action", status_code=status.HTTP_200_OK)
+async def execute_enforcement_action(
+    request_id: str,
+    body: EnforcementActionRequest,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Execute a specific enforcement action manually (e.g. from audit mode)."""
+    if not current_user.has_role("platform_admin") and not current_user.has_role("governance_admin"):
+        raise HTTPException(status_code=403, detail="Not authorized to execute enforcement actions")
+
+    from app.core.config import settings
+    from app.providers.databricks.client import DatabricksProvider
+    from app.providers.databricks.handlers import (
+        AppResourceHandler, ClusterResourceHandler, JobResourceHandler,
+        SqlWarehouseResourceHandler, DashboardResourceHandler,
+        GenieSpaceResourceHandler, ServicePrincipalResourceHandler,
+        NotebookResourceHandler, VolumeResourceHandler
+    )
+    from app.providers.databricks.handlers.dataset_handler import DatasetResourceHandler
+    from app.db.enforcement_audit import EnforcementAuditModel
+    import uuid
+
+    try:
+        provider = DatabricksProvider(
+            host=settings.DATABRICKS_HOST, 
+            client_id=settings.DATABRICKS_CLIENT_ID, 
+            client_secret=settings.DATABRICKS_CLIENT_SECRET
+        )
+        workspace_client = provider.client
+    except Exception as e:
+        logger.error(f"Failed to init databricks client: {e}")
+        raise HTTPException(status_code=500, detail="Failed to initialize Databricks client")
+
+    handlers = {
+        "app": AppResourceHandler(workspace_client),
+        "cluster": ClusterResourceHandler(workspace_client),
+        "job": JobResourceHandler(workspace_client),
+        "sql_warehouse": SqlWarehouseResourceHandler(workspace_client),
+        "dashboard": DashboardResourceHandler(workspace_client),
+        "genie_space": GenieSpaceResourceHandler(workspace_client),
+        "service_principal": ServicePrincipalResourceHandler(workspace_client),
+        "notebook": NotebookResourceHandler(workspace_client),
+        "storage": VolumeResourceHandler(workspace_client),
+        "table": DatasetResourceHandler(workspace_client),
+    }
+
+    handler = handlers.get(body.resource_type)
+    if not handler:
+        raise HTTPException(status_code=400, detail=f"No handler for resource type: {body.resource_type}")
+
+    action_to_take = body.action.upper()
+    executed_action = f"manual_{action_to_take.lower()}"
+
+    try:
+        if action_to_take == "KILL":
+            await handler.kill(body.resource_id)
+        elif action_to_take == "CERTIFY":
+            if hasattr(handler, "certify"):
+                await handler.certify(body.resource_id)
+            else:
+                raise HTTPException(status_code=400, detail="Handler does not support certify")
+        elif action_to_take == "UNCERTIFY":
+            if hasattr(handler, "uncertify"):
+                await handler.uncertify(body.resource_id)
+            else:
+                raise HTTPException(status_code=400, detail="Handler does not support uncertify")
+        elif action_to_take == "WARN":
+            await handler.warn(body.resource_id, body.reason or "Manual warning")
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported manual action: {action_to_take}")
+            
+        # Log it to the audit table
+        audit_record = EnforcementAuditModel(
+            id=str(uuid.uuid4()),
+            request_id=request_id,
+            resource_id=body.resource_id,
+            resource_type=body.resource_type,
+            policy_name=body.policy_name,
+            severity="MANUAL",
+            intended_action=action_to_take,
+            executed_action=executed_action,
+            reason=f"Manually executed by {current_user.email}. Original reason: {body.reason}"
+        )
+        db.add(audit_record)
+        db.commit()
+        
+    except Exception as e:
+        logger.error(f"Failed to execute manual action {action_to_take} on {body.resource_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to execute action: {str(e)}")
+
+    return {"status": "success", "message": f"Successfully executed {action_to_take} on {body.resource_id}"}
+

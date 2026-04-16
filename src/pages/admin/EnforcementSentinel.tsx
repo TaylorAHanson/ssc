@@ -1,25 +1,63 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { ShieldAlert, AlertTriangle, Search, Unlock, Lock, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight } from 'lucide-react';
+import { ShieldAlert, AlertTriangle, Search, Unlock, Lock, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useRequestStore } from '../../stores/requestStore';
-import { useState, useMemo, useEffect } from 'react';
+import { api } from '../../services/api';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { format, parseISO } from 'date-fns';
 
 export function EnforcementSentinel() {
     const addRequest = useRequestStore((state) => state.addRequest);
-    const fetchRequests = useRequestStore((state) => state.fetchRequests);
-    const requests = useRequestStore((state) => state.requests);
     const [isRunning, setIsRunning] = useState(false);
     const [isEnforcementUnlocked, setIsEnforcementUnlocked] = useState(false);
     const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<string>('all');
     const [workspace, setWorkspace] = useState('ws-enterprise-prod');
     const [environment, setEnvironment] = useState<'dev' | 'stage' | 'prod'>('prod');
+    const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-    // Filter to only get sentinel runs
-    const sentinelRuns = requests
-        .filter(r => r.type === 'enforcement_sentinel')
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    // Server-side pagination and search states
+    const [sentinelRuns, setSentinelRuns] = useState<any[]>([]);
+    const [totalRuns, setTotalRuns] = useState(0);
+    const [page, setPage] = useState(1);
+    const [pageSize] = useState(10);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    const [isLoadingRuns, setIsLoadingRuns] = useState(false);
+
+    // Debounce search query
+    useEffect(() => {
+        const timer = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+        return () => clearTimeout(timer);
+    }, [searchQuery]);
+
+    // Reset page on search change
+    useEffect(() => {
+        setPage(1);
+    }, [debouncedSearch]);
+
+    const fetchSentinelRuns = useCallback(async (isPolling = false) => {
+        if (!isPolling) setIsLoadingRuns(true);
+        try {
+            const skip = (page - 1) * pageSize;
+            const res = await api.getPaginatedRequests({
+                skip,
+                limit: pageSize,
+                type: 'enforcement_sentinel',
+                search: debouncedSearch || undefined
+            });
+            setSentinelRuns(res.items);
+            setTotalRuns(res.total);
+        } catch(e) {
+            console.error('Failed to fetch sentinel runs:', e);
+        } finally {
+            if (!isPolling) setIsLoadingRuns(false);
+        }
+    }, [page, pageSize, debouncedSearch]);
+
+    useEffect(() => {
+        fetchSentinelRuns();
+    }, [fetchSentinelRuns]);
 
     const selectedRun = useMemo(() => sentinelRuns.find(r => r.id === selectedRunId), [sentinelRuns, selectedRunId]);
 
@@ -29,11 +67,11 @@ export function EnforcementSentinel() {
         
         if (hasActiveRuns) {
             const interval = setInterval(() => {
-                fetchRequests();
+                fetchSentinelRuns(true);
             }, 3000);
             return () => clearInterval(interval);
         }
-    }, [sentinelRuns, fetchRequests]);
+    }, [sentinelRuns, fetchSentinelRuns]);
 
     const getRunStatus = (run: any) => {
         const activeState = run.stateMachine?.states?.find((s: any) => s.isActive);
@@ -57,6 +95,13 @@ export function EnforcementSentinel() {
                 environment: environment
             });
             
+            // Instantly refresh the run list to show the newly added run
+            if (page !== 1) {
+                setPage(1); // This triggers useEffect
+            } else {
+                await fetchSentinelRuns(); // Explicitly fetch if already on page 1
+            }
+            
             if (mode === 'active_enforcement') {
                 alert('Sentinel run started! Check the requests list on the Dashboard to track progress.');
             }
@@ -68,6 +113,38 @@ export function EnforcementSentinel() {
             if (mode === 'active_enforcement') {
                 setIsEnforcementUnlocked(false);
             }
+        }
+    };
+
+    const handleExecuteAction = async (runId: string, v: any) => {
+        if (!confirm(`Are you sure you want to manually execute the '${v.action}' action on ${v.resource_type} ${v.resource_id}?`)) return;
+        
+        setActionLoading(v.resource_id);
+        try {
+            // Need to pass the token. Typically auth handles via cookies or we need to add the auth header if the app uses one.
+            // The app uses API requests, which usually are authenticated implicitly if using cookies, or need a token.
+            // Let's just do a normal fetch, relying on standard browser behavior or interceptors if any exist.
+            const res = await fetch(`/api/v1/requests/${runId}/enforcement-action`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    resource_id: v.resource_id,
+                    resource_type: v.resource_type,
+                    action: v.action,
+                    policy_name: v.policy,
+                    reason: v.reason
+                })
+            });
+            
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Failed to execute action');
+            
+            alert(`Success: ${data.message}`);
+        } catch (e: any) {
+            console.error(e);
+            alert(`Error executing action: ${e.message}`);
+        } finally {
+            setActionLoading(null);
         }
     };
 
@@ -176,9 +253,21 @@ export function EnforcementSentinel() {
 
             {/* Previous Runs Table */}
             <Card>
-                <CardHeader>
-                    <CardTitle className="text-lg">Run History</CardTitle>
-                    <CardDescription>View previous enforcement audits, their findings, and executed actions.</CardDescription>
+                <CardHeader className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4">
+                    <div>
+                        <CardTitle className="text-lg">Run History</CardTitle>
+                        <CardDescription>View previous enforcement audits, their findings, and executed actions.</CardDescription>
+                    </div>
+                    <div className="relative w-full md:w-64">
+                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500" />
+                        <input
+                            type="text"
+                            placeholder="Search runs..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="flex h-9 w-full rounded-md border border-input bg-white pl-9 pr-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        />
+                    </div>
                 </CardHeader>
                 <CardContent className="p-0">
                     <table className="w-full text-sm text-left">
@@ -245,6 +334,35 @@ export function EnforcementSentinel() {
                             )}
                         </tbody>
                     </table>
+                    
+                    {/* Pagination Controls */}
+                    {totalRuns > 0 && (
+                        <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50">
+                            <div className="text-xs text-gray-500">
+                                Showing <span className="font-medium">{(page - 1) * pageSize + 1}</span> to <span className="font-medium">{Math.min(page * pageSize, totalRuns)}</span> of <span className="font-medium">{totalRuns}</span> runs
+                            </div>
+                            <div className="flex gap-1">
+                                <Button 
+                                    variant="outline" 
+                                    size="sm" 
+                                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                                    disabled={page === 1 || isLoadingRuns}
+                                    className="h-7 text-xs px-2"
+                                >
+                                    <ChevronLeft className="w-3 h-3 mr-1" /> Prev
+                                </Button>
+                                <Button 
+                                    variant="outline" 
+                                    size="sm" 
+                                    onClick={() => setPage(p => Math.min(Math.ceil(totalRuns / pageSize), p + 1))}
+                                    disabled={page >= Math.ceil(totalRuns / pageSize) || isLoadingRuns}
+                                    className="h-7 text-xs px-2"
+                                >
+                                    Next <ChevronRight className="w-3 h-3 ml-1" />
+                                </Button>
+                            </div>
+                        </div>
+                    )}
                 </CardContent>
             </Card>
 
@@ -313,39 +431,68 @@ export function EnforcementSentinel() {
                                     ) : (
                                         <>
                                             {/* High level info cards */}
-                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                                <Card className="shadow-sm border-gray-200">
-                                                    <CardContent className="p-4 flex flex-col gap-1">
-                                                        <div className="flex items-center text-sm font-medium text-gray-500 mb-1">
-                                                            <FileStack className="w-4 h-4 mr-2" /> Assets Scanned
-                                                        </div>
-                                                        <div className="text-2xl font-bold text-gray-900">{assetsScanned}</div>
-                                                    </CardContent>
-                                                </Card>
-                                                <Card className="shadow-sm border-gray-200">
-                                                    <CardContent className="p-4 flex flex-col gap-1">
-                                                        <div className="flex items-center text-sm font-medium text-gray-500 mb-1">
-                                                            <ShieldCheck className="w-4 h-4 mr-2" /> Policies Evaluated
-                                                        </div>
-                                                        <div className="text-2xl font-bold text-gray-900">{policiesEvaluated}</div>
-                                                    </CardContent>
-                                                </Card>
-                                                <Card className="shadow-sm border-gray-200">
-                                                    <CardContent className="p-4 flex flex-col gap-1">
-                                                        <div className="flex items-center text-sm font-medium text-gray-500 mb-1">
-                                                            <ListChecks className="w-4 h-4 mr-2" /> Total Checks
-                                                        </div>
-                                                        <div className="text-2xl font-bold text-gray-900">{totalChecks}</div>
-                                                    </CardContent>
-                                                </Card>
-                                                <Card className={`shadow-sm border-gray-200 ${vCount > 0 ? 'bg-red-50/50 border-red-100' : 'bg-green-50/50 border-green-100'}`}>
-                                                    <CardContent className="p-4 flex flex-col gap-1">
-                                                        <div className="flex items-center text-sm font-medium text-gray-500 mb-1">
-                                                            <AlertTriangle className={`w-4 h-4 mr-2 ${vCount > 0 ? 'text-red-500' : 'text-green-500'}`} /> Violations
-                                                        </div>
-                                                        <div className={`text-2xl font-bold ${vCount > 0 ? 'text-red-600' : 'text-green-600'}`}>{vCount}</div>
-                                                    </CardContent>
-                                                </Card>
+                                            <div className="flex flex-col gap-4">
+                                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                                    <Card className="shadow-sm border-gray-200">
+                                                        <CardContent className="p-4 flex flex-col gap-1">
+                                                            <div className="flex items-center text-sm font-medium text-gray-500 mb-1">
+                                                                <FileStack className="w-4 h-4 mr-2" /> Assets Scanned
+                                                            </div>
+                                                            <div className="text-2xl font-bold text-gray-900">{assetsScanned}</div>
+                                                        </CardContent>
+                                                    </Card>
+                                                    <Card className="shadow-sm border-gray-200">
+                                                        <CardContent className="p-4 flex flex-col gap-1">
+                                                            <div className="flex items-center text-sm font-medium text-gray-500 mb-1">
+                                                                <ShieldCheck className="w-4 h-4 mr-2" /> Policies Evaluated
+                                                            </div>
+                                                            <div className="text-2xl font-bold text-gray-900">{policiesEvaluated}</div>
+                                                        </CardContent>
+                                                    </Card>
+                                                    <Card className="shadow-sm border-gray-200">
+                                                        <CardContent className="p-4 flex flex-col gap-1">
+                                                            <div className="flex items-center text-sm font-medium text-gray-500 mb-1">
+                                                                <ListChecks className="w-4 h-4 mr-2" /> Total Checks
+                                                            </div>
+                                                            <div className="text-2xl font-bold text-gray-900">{totalChecks}</div>
+                                                        </CardContent>
+                                                    </Card>
+                                                    <Card className={`shadow-sm border-gray-200 ${vCount > 0 ? 'bg-red-50/50 border-red-100' : 'bg-green-50/50 border-green-100'}`}>
+                                                        <CardContent className="p-4 flex flex-col gap-1">
+                                                            <div className="flex items-center text-sm font-medium text-gray-500 mb-1">
+                                                                <AlertTriangle className={`w-4 h-4 mr-2 ${vCount > 0 ? 'text-red-500' : 'text-green-500'}`} /> Total Violations
+                                                            </div>
+                                                            <div className={`text-2xl font-bold ${vCount > 0 ? 'text-red-600' : 'text-green-600'}`}>{vCount}</div>
+                                                        </CardContent>
+                                                    </Card>
+                                                </div>
+                                                
+                                                {/* Severity Breakdown */}
+                                                {vCount > 0 && (
+                                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                                        {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(sev => {
+                                                            const count = violations.filter((v: any) => v.severity === sev).length;
+                                                            const colors = sev === 'CRITICAL' && count > 0 ? 'bg-red-50/30 border-red-100' :
+                                                                           sev === 'HIGH' && count > 0 ? 'bg-orange-50/30 border-orange-100' :
+                                                                           sev === 'MEDIUM' && count > 0 ? 'bg-yellow-50/30 border-yellow-100' :
+                                                                           'bg-white border-gray-200 opacity-60';
+                                                            const textColors = sev === 'CRITICAL' && count > 0 ? 'text-red-600' :
+                                                                               sev === 'HIGH' && count > 0 ? 'text-orange-600' :
+                                                                               sev === 'MEDIUM' && count > 0 ? 'text-yellow-600' :
+                                                                               'text-gray-400';
+                                                            return (
+                                                                <Card key={sev} className={`shadow-sm ${colors}`}>
+                                                                    <CardContent className="p-3 flex flex-col items-center justify-center gap-1">
+                                                                        <div className="flex items-center text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                                                                            {sev}
+                                                                        </div>
+                                                                        <div className={`text-xl font-bold ${textColors}`}>{count}</div>
+                                                                    </CardContent>
+                                                                </Card>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
                                             </div>
 
                                             {/* Detailed Report Section */}
@@ -398,6 +545,9 @@ export function EnforcementSentinel() {
                                                                     <th className="p-3 text-left">Severity</th>
                                                                     <th className="p-3 text-left">Action</th>
                                                                     <th className="p-3 text-left w-1/3">Reason</th>
+                                                                    {selectedRun?.metadata?.enforcement_mode === 'audit_only' && (
+                                                                        <th className="p-3 text-right">Controls</th>
+                                                                    )}
                                                                 </tr>
                                                             </thead>
                                                             <tbody className="divide-y divide-gray-100">
@@ -422,6 +572,21 @@ export function EnforcementSentinel() {
                                                                         </td>
                                                                         <td className="p-3 font-mono text-xs font-bold text-gray-700">{v.action}</td>
                                                                         <td className="p-3 text-xs text-gray-600 break-words leading-relaxed">{v.reason}</td>
+                                                                        {selectedRun?.metadata?.enforcement_mode === 'audit_only' && (
+                                                                            <td className="p-3 text-right">
+                                                                                {['KILL', 'CERTIFY', 'UNCERTIFY'].includes(v.action) && (
+                                                                                    <Button 
+                                                                                        size="sm" 
+                                                                                        variant="outline"
+                                                                                        className="text-xs h-7 px-2 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                                                                                        disabled={actionLoading === v.resource_id}
+                                                                                        onClick={() => handleExecuteAction(selectedRun.id, v)}
+                                                                                    >
+                                                                                        {actionLoading === v.resource_id ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Execute Action'}
+                                                                                    </Button>
+                                                                                )}
+                                                                            </td>
+                                                                        )}
                                                                     </tr>
                                                                 ))}
                                                             </tbody>

@@ -1,0 +1,26 @@
+api_version: "v1"
+kind: "DataContract"
+dataset:
+  domain: "marketing"
+  name: "passing_certified_dataset"
+  # Format is expected to be <catalog>.<schema>.<table>
+  physical_name: "main.default.marketing_campaigns"
+  is_mock: true
+
+quality:
+  technical:
+    score_threshold: 100
+  business:
+    score_threshold: 100
+
+security:
+  classification: "Non-PII"
+  abac_required: true
+
+metadata:
+  certification_eligible: true
+  tags:
+    "Owner group": "marketing-analytics"
+    "Approver group": "data-governance"
+    "Domain": "marketing"
+    "SLO/SLA": "Tier 1"

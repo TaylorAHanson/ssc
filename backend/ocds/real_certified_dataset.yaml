@@ -1,0 +1,26 @@
+api_version: "v1"
+kind: "DataContract"
+dataset:
+  domain: "sales"
+  name: "real_certified_dataset"
+  # Format is expected to be <catalog>.<schema>.<table>
+  physical_name: "taylor_hanson_build_catalog.main.certified_orders"
+  # is_mock is omitted or false
+
+quality:
+  technical:
+    score_threshold: 100
+  business:
+    score_threshold: 100
+
+security:
+  classification: "PII"
+  abac_required: false # Set to false so it passes without needing row filters/column masks
+
+metadata:
+  certification_eligible: true
+  tags:
+    "Owner group": "data-engineering"
+    "Approver group": "data-governance"
+    "Domain": "sales"
+    "SLO/SLA": "Tier 1"

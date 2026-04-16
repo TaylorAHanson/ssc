@@ -37,22 +37,17 @@ def normalize_severity(raw: Any) -> str:
     return "HIGH"
 
 
-def resolve_enforcement_step(mode: str, severity_raw: Any, action: str) -> str:
-    """
-    Decide what the enforcement phase should do for one violation.
-
-    Returns:
-        - ``skip`` — no handler calls (audit mode, allowlist skip, etc.)
-        - ``warn`` — call ``handler.warn`` with policy context
-        - ``kill`` — call ``handler.kill`` (only valid when action is KILL)
-    """
+def determine_intended_step(severity_raw: Any, action: str) -> str:
+    """Determine what action should be taken based on severity and action string, ignoring mode."""
     severity = normalize_severity(severity_raw)
-    if mode != "active_enforcement":
-        return "skip"
     if action in NON_REMEDIATION_ACTIONS:
         return "skip"
     if action == "WARN":
         return "warn"
+    if action == "CERTIFY":
+        return "certify"
+    if action == "UNCERTIFY":
+        return "uncertify"
     if severity in {"NONE", "LOW"}:
         return "warn"
     if severity == "MEDIUM" and action in DESTRUCTIVE_ACTIONS:
@@ -65,6 +60,24 @@ def resolve_enforcement_step(mode: str, severity_raw: Any, action: str) -> str:
     if severity == "MEDIUM":
         return "warn"
     return "skip"
+
+
+def resolve_enforcement_step(mode: str, severity_raw: Any, action: str) -> str:
+    """
+    Decide what the enforcement phase should do for one violation.
+
+    Returns:
+        - ``skip`` — no handler calls (allowlist skip, etc.)
+        - ``audit_skipped`` — would have acted, but skipped due to audit mode
+        - ``warn`` — call ``handler.warn`` with policy context
+        - ``kill`` — call ``handler.kill`` (only valid when action is KILL)
+        - ``certify`` — call ``handler.certify``
+        - ``uncertify`` — call ``handler.uncertify``
+    """
+    intended = determine_intended_step(severity_raw, action)
+    if mode != "active_enforcement" and intended != "skip":
+        return "audit_skipped"
+    return intended
 
 
 def warn_prefix(severity: str, action: str) -> str:
