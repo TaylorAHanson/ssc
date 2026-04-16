@@ -243,61 +243,68 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
         mode = self.request.state_context.get("enforcement_mode", "audit_only")
         violations = self.request.state_context.get("violations", [])
         
-        if mode == "active_enforcement":
-            from app.providers.databricks.client import DatabricksProvider
-            provider = DatabricksProvider(
-                host=settings.DATABRICKS_HOST, 
-                client_id=settings.DATABRICKS_CLIENT_ID, 
-                client_secret=settings.DATABRICKS_CLIENT_SECRET
-            )
-            workspace_client = provider.client
-            
-            handlers = {
-                "app": AppResourceHandler(workspace_client),
-                "cluster": ClusterResourceHandler(workspace_client),
-                "job": JobResourceHandler(workspace_client),
-                "sql_warehouse": SqlWarehouseResourceHandler(workspace_client),
-                "dashboard": DashboardResourceHandler(workspace_client),
-                "genie_space": GenieSpaceResourceHandler(workspace_client),
-                "service_principal": ServicePrincipalResourceHandler(workspace_client),
-                "notebook": NotebookResourceHandler(workspace_client),
-                "storage": VolumeResourceHandler(workspace_client),
-            }
+        from app.providers.databricks.client import DatabricksProvider
+        provider = DatabricksProvider(
+            host=settings.DATABRICKS_HOST, 
+            client_id=settings.DATABRICKS_CLIENT_ID, 
+            client_secret=settings.DATABRICKS_CLIENT_SECRET
+        )
+        workspace_client = provider.client
+        
+        from app.providers.databricks.handlers.dataset_handler import DatasetResourceHandler
+        from app.db.enforcement_audit import EnforcementAuditModel
+        import uuid
+        from app.state_machines.enforcement_sentinel.remediation import determine_intended_step
 
-            for violation in violations:
-                action = violation.get("action", "KILL")
-                severity = violation.get("severity", "HIGH")
-                handler = handlers.get(violation["resource_type"])
+        handlers = {
+            "app": AppResourceHandler(workspace_client),
+            "cluster": ClusterResourceHandler(workspace_client),
+            "job": JobResourceHandler(workspace_client),
+            "sql_warehouse": SqlWarehouseResourceHandler(workspace_client),
+            "dashboard": DashboardResourceHandler(workspace_client),
+            "genie_space": GenieSpaceResourceHandler(workspace_client),
+            "service_principal": ServicePrincipalResourceHandler(workspace_client),
+            "notebook": NotebookResourceHandler(workspace_client),
+            "storage": VolumeResourceHandler(workspace_client),
+            "table": DatasetResourceHandler(workspace_client),
+        }
 
-                if action in NON_REMEDIATION_ACTIONS:
-                    logger.info(
-                        "Enforcement skip (non-remediation action): policy=%s resource=%s action=%s",
+        for violation in violations:
+            action = violation.get("action", "KILL")
+            severity = violation.get("severity", "HIGH")
+            handler = handlers.get(violation["resource_type"])
+
+            if action in NON_REMEDIATION_ACTIONS:
+                logger.info(
+                    "Enforcement skip (non-remediation action): policy=%s resource=%s action=%s",
+                    violation.get("policy"),
+                    violation.get("resource_id"),
+                    action,
+                )
+                # Continue execution to log the skip
+                
+            step = resolve_enforcement_step(mode, severity, action)
+            intended = determine_intended_step(severity, action)
+            executed_action = step
+
+            if step == "skip" or step == "audit_skipped":
+                logger.debug(
+                    "Enforcement %s: policy=%s resource=%s action=%s severity=%s",
+                    step,
+                    violation.get("policy"),
+                    violation.get("resource_id"),
+                    action,
+                    normalize_severity(severity),
+                )
+            elif step == "warn":
+                if not handler:
+                    logger.warning(
+                        "No handler for resource_type=%s; cannot warn for policy=%s",
+                        violation.get("resource_type"),
                         violation.get("policy"),
-                        violation.get("resource_id"),
-                        action,
                     )
-                    continue
-
-                step = resolve_enforcement_step(mode, severity, action)
-
-                if step == "skip":
-                    logger.debug(
-                        "Enforcement skip: policy=%s resource=%s action=%s severity=%s",
-                        violation.get("policy"),
-                        violation.get("resource_id"),
-                        action,
-                        normalize_severity(severity),
-                    )
-                    continue
-
-                if step == "warn":
-                    if not handler:
-                        logger.warning(
-                            "No handler for resource_type=%s; cannot warn for policy=%s",
-                            violation.get("resource_type"),
-                            violation.get("policy"),
-                        )
-                        continue
+                    executed_action = "error_no_handler"
+                else:
                     body = violation.get("reason", "")
                     if action != "WARN":
                         body = f"{warn_prefix(severity, action)} {body}".strip()
@@ -315,16 +322,15 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                             violation.get("resource_id"),
                         )
                     await handler.warn(violation["resource_id"], body)
-                    continue
-
-                if step == "kill":
-                    if not handler:
-                        logger.warning(
-                            "No handler for resource_type=%s; cannot kill for policy=%s",
-                            violation.get("resource_type"),
-                            violation.get("policy"),
-                        )
-                        continue
+            elif step == "kill":
+                if not handler:
+                    logger.warning(
+                        "No handler for resource_type=%s; cannot kill for policy=%s",
+                        violation.get("resource_type"),
+                        violation.get("policy"),
+                    )
+                    executed_action = "error_no_handler"
+                else:
                     logger.info(
                         "Executing KILL for resource=%s policy=%s severity=%s",
                         violation.get("resource_id"),
@@ -332,6 +338,58 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                         normalize_severity(severity),
                     )
                     await handler.kill(violation["resource_id"])
+                    
+            elif step == "certify":
+                if not handler:
+                    logger.warning(
+                        "No handler for resource_type=%s; cannot certify for policy=%s",
+                        violation.get("resource_type"),
+                        violation.get("policy"),
+                    )
+                    executed_action = "error_no_handler"
+                else:
+                    if hasattr(handler, "certify"):
+                        await handler.certify(violation["resource_id"])
+                    else:
+                        executed_action = "error_no_handler_method"
+                        
+            elif step == "uncertify":
+                if not handler:
+                    logger.warning(
+                        "No handler for resource_type=%s; cannot uncertify for policy=%s",
+                        violation.get("resource_type"),
+                        violation.get("policy"),
+                    )
+                    executed_action = "error_no_handler"
+                else:
+                    if hasattr(handler, "uncertify"):
+                        await handler.uncertify(violation["resource_id"])
+                    else:
+                        executed_action = "error_no_handler_method"
+                        
+            # Log to DB
+            try:
+                audit_record = EnforcementAuditModel(
+                    id=str(uuid.uuid4()),
+                    request_id=self.request.id,
+                    resource_id=violation["resource_id"],
+                    resource_type=violation.get("resource_type", "unknown"),
+                    policy_name=violation.get("policy", "unknown"),
+                    severity=normalize_severity(severity),
+                    intended_action=intended,
+                    executed_action=executed_action,
+                    reason=violation.get("reason", "")
+                )
+                self.db.add(audit_record)
+            except Exception as e:
+                logger.error(f"Failed to log enforcement audit: {e}")
+                
+        # Commit all audit logs
+        try:
+            self.db.commit()
+        except Exception as e:
+            logger.error(f"Failed to commit enforcement audit logs: {e}")
+            self.db.rollback()
 
         add_fact(self.db, self.request.id, "enforce_completed", {})
         self.finish_enforcing()

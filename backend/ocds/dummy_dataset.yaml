@@ -1,0 +1,14 @@
+dataset_id: "demo_certified_dataset"
+catalog: "main"
+schema: "default"
+table: "customer_orders"
+certification_eligible: true
+abac_needed: true
+data_classification: "PII"
+tdq_threshold: 100
+bdq_threshold: 100
+tags:
+  "Owner group": "data-engineering"
+  "Approver group": "data-governance"
+  "Domain": "sales"
+  # Missing "SLO/SLA" tag, which will fail policy

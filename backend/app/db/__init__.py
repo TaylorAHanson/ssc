@@ -7,3 +7,4 @@ from app.db.user import UserModel, RoleModel
 from app.db.report_subscription import ReportSubscription
 from app.db.training import TrainingCompletionModel
 from app.db.allowlist import AllowlistModel
+from app.db.enforcement_audit import EnforcementAuditModel

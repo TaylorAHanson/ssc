@@ -453,3 +453,106 @@ async def edit_parameters(
         "request_id": request_id,
         "updated_parameters": list(sanitized.keys()),
     }
+
+
+class EnforcementActionRequest(_PydanticBase):
+    resource_id: str
+    resource_type: str
+    action: str
+    policy_name: str
+    reason: Optional[str] = None
+
+
+@router.post("/{request_id}/enforcement-action", status_code=status.HTTP_200_OK)
+async def execute_enforcement_action(
+    request_id: str,
+    body: EnforcementActionRequest,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Execute a specific enforcement action manually (e.g. from audit mode)."""
+    if not current_user.has_role("platform_admin") and not current_user.has_role("governance_admin"):
+        raise HTTPException(status_code=403, detail="Not authorized to execute enforcement actions")
+
+    from app.core.config import settings
+    from app.providers.databricks.client import DatabricksProvider
+    from app.providers.databricks.handlers import (
+        AppResourceHandler, ClusterResourceHandler, JobResourceHandler,
+        SqlWarehouseResourceHandler, DashboardResourceHandler,
+        GenieSpaceResourceHandler, ServicePrincipalResourceHandler,
+        NotebookResourceHandler, VolumeResourceHandler
+    )
+    from app.providers.databricks.handlers.dataset_handler import DatasetResourceHandler
+    from app.db.enforcement_audit import EnforcementAuditModel
+    import uuid
+
+    try:
+        provider = DatabricksProvider(
+            host=settings.DATABRICKS_HOST, 
+            client_id=settings.DATABRICKS_CLIENT_ID, 
+            client_secret=settings.DATABRICKS_CLIENT_SECRET
+        )
+        workspace_client = provider.client
+    except Exception as e:
+        logger.error(f"Failed to init databricks client: {e}")
+        raise HTTPException(status_code=500, detail="Failed to initialize Databricks client")
+
+    handlers = {
+        "app": AppResourceHandler(workspace_client),
+        "cluster": ClusterResourceHandler(workspace_client),
+        "job": JobResourceHandler(workspace_client),
+        "sql_warehouse": SqlWarehouseResourceHandler(workspace_client),
+        "dashboard": DashboardResourceHandler(workspace_client),
+        "genie_space": GenieSpaceResourceHandler(workspace_client),
+        "service_principal": ServicePrincipalResourceHandler(workspace_client),
+        "notebook": NotebookResourceHandler(workspace_client),
+        "storage": VolumeResourceHandler(workspace_client),
+        "table": DatasetResourceHandler(workspace_client),
+    }
+
+    handler = handlers.get(body.resource_type)
+    if not handler:
+        raise HTTPException(status_code=400, detail=f"No handler for resource type: {body.resource_type}")
+
+    action_to_take = body.action.upper()
+    executed_action = f"manual_{action_to_take.lower()}"
+
+    try:
+        if action_to_take == "KILL":
+            await handler.kill(body.resource_id)
+        elif action_to_take == "CERTIFY":
+            if hasattr(handler, "certify"):
+                await handler.certify(body.resource_id)
+            else:
+                raise HTTPException(status_code=400, detail="Handler does not support certify")
+        elif action_to_take == "UNCERTIFY":
+            if hasattr(handler, "uncertify"):
+                await handler.uncertify(body.resource_id)
+            else:
+                raise HTTPException(status_code=400, detail="Handler does not support uncertify")
+        elif action_to_take == "WARN":
+            await handler.warn(body.resource_id, body.reason or "Manual warning")
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported manual action: {action_to_take}")
+            
+        # Log it to the audit table
+        audit_record = EnforcementAuditModel(
+            id=str(uuid.uuid4()),
+            request_id=request_id,
+            resource_id=body.resource_id,
+            resource_type=body.resource_type,
+            policy_name=body.policy_name,
+            severity="MANUAL",
+            intended_action=action_to_take,
+            executed_action=executed_action,
+            reason=f"Manually executed by {current_user.email}. Original reason: {body.reason}"
+        )
+        db.add(audit_record)
+        db.commit()
+        
+    except Exception as e:
+        logger.error(f"Failed to execute manual action {action_to_take} on {body.resource_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to execute action: {str(e)}")
+
+    return {"status": "success", "message": f"Successfully executed {action_to_take} on {body.resource_id}"}
+
