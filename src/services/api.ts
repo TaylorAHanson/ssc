@@ -792,6 +792,53 @@ export async function getDataAssets(params?: { domain?: string; certified?: bool
   return response.json();
 }
 
+export interface DataContract {
+  id: string;
+  dataset_id: string;
+  yaml_content: string;
+  version: number;
+  is_active: boolean;
+  created_at: string;
+  created_by: string | null;
+}
+
+export async function getDataContracts(): Promise<DataContract[]> {
+  const url = new URL(`${API_BASE_URL}/data-contracts`, window.location.origin);
+  const response = await fetch(url.toString(), {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get data contracts: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getContractHistory(datasetId: string): Promise<DataContract[]> {
+  const url = new URL(`${API_BASE_URL}/data-contracts/${datasetId}`, window.location.origin);
+  const response = await fetch(url.toString(), {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get contract history: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function createDataContract(datasetId: string, yamlContent: string): Promise<DataContract> {
+  const response = await fetch(`${API_BASE_URL}/data-contracts`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ dataset_id: datasetId, yaml_content: yamlContent })
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to create data contract: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -816,5 +863,8 @@ export const api = {
   createAllowlistEntry,
   updateAllowlistEntry,
   deleteAllowlistEntry,
-  getDataAssets
+  getDataAssets,
+  getDataContracts,
+  getContractHistory,
+  createDataContract
 };

@@ -12,19 +12,16 @@ class DatasetResourceHandler(BaseResourceHandler):
     async def discover(self) -> List[Dict[str, Any]]:
         resources = []
         try:
-            # Temporary concept: Read OCDS yaml files
-            ocds_dir = os.path.join(os.getcwd(), "ocds")
-            if not os.path.exists(ocds_dir):
-                logger.warning(f"OCDS directory not found at {ocds_dir}")
-                return []
-                
-            yaml_files = glob.glob(os.path.join(ocds_dir, "*.yaml")) + glob.glob(os.path.join(ocds_dir, "*.yml"))
+            from app.db.session import get_lakebase_session
+            from app.db.data_contract import DataContractModel
             
-            for file_path in yaml_files:
+            db = get_lakebase_session()
+            contracts = db.query(DataContractModel).filter(DataContractModel.is_active == True).all()
+            
+            for contract in contracts:
                 try:
-                    with open(file_path, "r") as f:
-                        dataset_def = yaml.safe_load(f)
-                        
+                    dataset_def = yaml.safe_load(contract.yaml_content)
+                    
                     # Parse Data Contract Standard Structure
                     data_product = dataset_def.get("dataProduct", "unknown")
                     
@@ -53,6 +50,7 @@ class DatasetResourceHandler(BaseResourceHandler):
                     # Base properties from Data Contract
                     resource = {
                         "id": data_product,
+                        "dataset_id": full_name,
                         "type": "table",
                         "certification_eligible": root_custom_props.get("certification_eligible", False),
                         "tdq_threshold": tdq_threshold,
@@ -145,11 +143,15 @@ class DatasetResourceHandler(BaseResourceHandler):
                     resources.append(resource)
                     
                 except Exception as e:
-                    logger.error(f"Failed to parse OCDS file {file_path}: {e}")
+                    logger.error(f"Failed to parse Data Contract {contract.dataset_id}: {e}")
                     
         except Exception as e:
             logger.error(f"Failed during dataset discovery: {e}")
             
+        finally:
+            if 'db' in locals():
+                db.close()
+                
         return resources
         
     async def certify(self, resource_id: str) -> bool:
