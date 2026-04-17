@@ -24,9 +24,10 @@ from app.models.request import RequestStatus, RequestType
 from app.db.report_subscription import ReportSubscription
 from croniter import croniter
 import uuid
-from app.core.config import settings
+from app.core.config import settings, _yaml_config
 from app.core.exceptions import RetryableError, PermanentError
 from app.workers.tasks.sync_calendar import sync_calendar_task
+from app.workers.tasks.sync_data_assets import sync_data_assets_task
 import traceback
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,12 @@ async def start_poller():
             await process_scheduled_reports()
             
             # Sync calendar events
-            await sync_calendar_task()
+            if _yaml_config.get("features", {}).get("calendar", False):
+                await sync_calendar_task()
+            
+            # Sync data assets
+            if _yaml_config.get("features", {}).get("data_discovery", False):
+                await sync_data_assets_task()
 
             consecutive_db_errors = 0  # Reset on success
         except Exception as e:

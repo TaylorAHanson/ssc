@@ -755,6 +755,43 @@ export async function deleteAllowlistEntry(id: string): Promise<void> {
   }
 }
 
+export interface DataAsset {
+  id: string;
+  catalog: string;
+  schema_name: string;
+  table_name: string;
+  type: string;
+  description: string | null;
+  owner: string | null;
+  domain: string | null;
+  tags: string[];
+  certified: boolean;
+  contract_url: string | null;
+  data_quality: any | null;
+  sla: string | null;
+  created_at: string | null;
+  last_synced_at: string;
+}
+
+export async function getDataAssets(params?: { domain?: string; certified?: boolean }): Promise<DataAsset[]> {
+  const url = new URL(`${API_BASE_URL}/data-assets`, window.location.origin);
+  if (params?.domain) {
+    url.searchParams.append('domain', params.domain);
+  }
+  if (params?.certified !== undefined) {
+    url.searchParams.append('certified', String(params.certified));
+  }
+  
+  const response = await fetch(url.toString(), {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get data assets: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -778,5 +815,6 @@ export const api = {
   getAllowlist,
   createAllowlistEntry,
   updateAllowlistEntry,
-  deleteAllowlistEntry
+  deleteAllowlistEntry,
+  getDataAssets
 };

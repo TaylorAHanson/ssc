@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
 import {
-  Save, Loader2, Clock, RotateCcw, FileText, Activity, ShieldCheck, ShieldAlert
+  Save, Loader2, Clock, RotateCcw, FileText, Activity
 } from 'lucide-react';
 import { format } from 'date-fns';
 import {
@@ -14,8 +14,6 @@ import type { ContentInfo, ContentVersionInfo } from '../services/api';
 import { TestRunner } from '../components/admin/TestRunner';
 import { Users } from './admin/Users';
 import { AdminDashboard } from './admin/AdminDashboard';
-import { Allowlist } from './admin/Allowlist';
-import { EnforcementSentinel } from './admin/EnforcementSentinel';
 
 export function Admin() {
   const fetchRequests = useRequestStore((state) => state.fetchRequests);
@@ -26,7 +24,7 @@ export function Admin() {
     fetchApprovals();
   }, [fetchRequests, fetchApprovals]);
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'content-manager' | 'test-runner' | 'allowlist' | 'sentinel'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'content-manager' | 'test-runner'>('dashboard');
 
   // Content management state
   const [contentFiles, setContentFiles] = useState<ContentInfo[]>([]);
@@ -248,33 +246,11 @@ export function Admin() {
           <Activity className="w-4 h-4 inline mr-2" />
           Test Runner
         </button>
-        <button
-          onClick={() => setActiveTab('allowlist')}
-          className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'allowlist'
-            ? 'border-b-2 border-primary text-primary'
-            : 'text-gray-600 hover:text-gray-900'
-            }`}
-        >
-          <ShieldCheck className="w-4 h-4 inline mr-2" />
-          Allowlist
-        </button>
-        <button
-          onClick={() => setActiveTab('sentinel')}
-          className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'sentinel'
-            ? 'border-b-2 border-primary text-primary'
-            : 'text-gray-600 hover:text-gray-900'
-            }`}
-        >
-          <ShieldAlert className="w-4 h-4 inline mr-2" />
-          Sentinel
-        </button>
       </div>
 
       {activeTab === 'test-runner' && <TestRunner />}
       {activeTab === 'dashboard' && <AdminDashboard />}
       {activeTab === 'users' && <Users />}
-      {activeTab === 'allowlist' && <Allowlist />}
-      {activeTab === 'sentinel' && <EnforcementSentinel />}
 
       {activeTab === 'content-manager' && (
         <div className="flex gap-6 h-[calc(100vh-200px)]">

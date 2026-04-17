@@ -12,7 +12,10 @@ import {
   FileText,
   MessageSquare,
   BarChart,
-  Upload
+  Upload,
+  Search,
+  ShieldCheck,
+  ShieldAlert
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -32,14 +35,34 @@ interface NavItem {
 const navItems: NavItem[] = [
   // Main
   { id: 'home', title: 'Home', icon: <Home className="w-5 h-5" />, path: '/', group: 'Main' },
+  { id: 'data_discovery', title: 'Data Discovery', icon: <Search className="w-5 h-5" />, path: '/discovery', group: 'Main' },
   { id: 'my_requests', title: 'My Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Main' },
   { id: 'pending_approvals', title: 'Pending Approvals', icon: <CheckCircle2 className="w-5 h-5" />, path: '/approvals', group: 'Main' },
+  { id: 'reports', title: 'Reports', icon: <BarChart className="w-5 h-5" />, path: '/reports', group: 'Main' },
 
   // Community - Available to everyone
   { id: 'training', title: 'Training', icon: <GraduationCap className="w-5 h-5" />, path: '/community/training', group: 'Community' },
   { id: 'event_calendar', title: 'Event Calendar', icon: <Calendar className="w-5 h-5" />, path: '/community/events', group: 'Community' },
   { id: 'templates_assets', title: 'Templates & Assets', icon: <FileText className="w-5 h-5" />, path: '/community/assets', group: 'Community' },
   { id: 'community_links', title: 'Community Links', icon: <MessageSquare className="w-5 h-5" />, path: '/community/links', group: 'Community' },
+
+  // Governance - Restricted
+  {
+    id: 'allowlist',
+    title: 'Allowlist',
+    icon: <ShieldCheck className="w-5 h-5" />,
+    path: '/governance/allowlist',
+    group: 'Governance',
+    allowedPersonas: ['Platform Admin', 'Governance Admin']
+  },
+  {
+    id: 'sentinel',
+    title: 'Sentinel',
+    icon: <ShieldAlert className="w-5 h-5" />,
+    path: '/governance/sentinel',
+    group: 'Governance',
+    allowedPersonas: ['Platform Admin', 'Governance Admin']
+  },
 
   // Admin - Restricted
   {
@@ -51,14 +74,6 @@ const navItems: NavItem[] = [
     allowedPersonas: ['Platform Admin']
   },
 
-  {
-    id: 'reports',
-    title: 'Reports',
-    icon: <BarChart className="w-5 h-5" />,
-    path: '/admin/reports',
-    group: 'Admin',
-    allowedPersonas: ['Platform Admin']
-  },
   {
     id: 'training_upload',
     title: 'Training Upload',
