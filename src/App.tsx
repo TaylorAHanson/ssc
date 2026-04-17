@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/layout/Layout';
 import { Home } from './pages/Home';
+import { DataDiscovery } from './pages/DataDiscovery';
 import { Requests } from './pages/Requests';
 import { Admin } from './pages/Admin';
 import { Approvals } from './pages/Approvals';
@@ -15,6 +16,9 @@ import { useRequestStore } from './stores/requestStore';
 import { useUserStore } from './stores/userStore';
 
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
+
+import { Allowlist } from './pages/admin/Allowlist';
+import { EnforcementSentinel } from './pages/admin/EnforcementSentinel';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -39,9 +43,11 @@ function App() {
       <Layout>
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route path="/discovery" element={<DataDiscovery />} />
           <Route path="/requests" element={<Requests />} />
           <Route path="/requests/:requestId" element={<Requests />} />
           <Route path="/approvals" element={<Approvals />} />
+          <Route path="/reports" element={<AdminReports />} />
           <Route
             path="/admin"
             element={
@@ -51,10 +57,18 @@ function App() {
             }
           />
           <Route
-            path="/admin/reports"
+            path="/governance/allowlist"
             element={
-              <ProtectedRoute allowedPersonas={['Platform Admin']}>
-                <AdminReports />
+              <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                <Allowlist />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/governance/sentinel"
+            element={
+              <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                <EnforcementSentinel />
               </ProtectedRoute>
             }
           />

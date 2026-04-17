@@ -28,7 +28,12 @@ quality:
     engine: acceldata
     description: "Business logic validation score must be 100%"
     mustBe: 100
-
+  - id: schema_drift
+    type: custom
+    engine: acceldata
+    description: "Schema drift score must be 0%"
+    mustBe: 0
+    
 servers:
   - id: production
     type: databricks

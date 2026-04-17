@@ -6,6 +6,22 @@ import { api } from '../../services/api';
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { format, parseISO } from 'date-fns';
 
+const formatReason = (v: any) => {
+    if (v.violation_reasons && Array.isArray(v.violation_reasons) && v.violation_reasons.length > 0) {
+        if (v.violation_reasons.length === 1) {
+            return v.violation_reasons[0];
+        }
+        return (
+            <ul className="list-disc pl-4 space-y-1 text-left">
+                {v.violation_reasons.map((reason: string, i: number) => (
+                    <li key={i}>{reason}</li>
+                ))}
+            </ul>
+        );
+    }
+    return v.reason;
+};
+
 export function EnforcementSentinel() {
     const addRequest = useRequestStore((state) => state.addRequest);
     const [isRunning, setIsRunning] = useState(false);
@@ -15,6 +31,7 @@ export function EnforcementSentinel() {
     const [workspace, setWorkspace] = useState('ws-enterprise-prod');
     const [environment, setEnvironment] = useState<'dev' | 'stage' | 'prod'>('prod');
     const [actionLoading, setActionLoading] = useState<string | null>(null);
+    const [selectedViolation, setSelectedViolation] = useState<any | null>(null);
 
     // Server-side pagination and search states
     const [sentinelRuns, setSentinelRuns] = useState<any[]>([]);
@@ -294,7 +311,7 @@ export function EnforcementSentinel() {
                                     const mode = ctx.enforcement_mode === 'active_enforcement' ? 'Enforcement' : 'Audit Only';
                                     const violations = ctx.violations || [];
                                     
-                                    const discoverFact = run.stateMachine?.states?.flatMap(s => s.facts || []).find(f => f.type === 'discover_completed');
+                                    const discoverFact = run.stateMachine?.states?.flatMap((s: any) => s.facts || []).find((f: any) => f.type === 'discover_completed');
                                     let vCount = violations.length;
                                     if (discoverFact && discoverFact.data && discoverFact.data.violation_count !== undefined) {
                                         vCount = discoverFact.data.violation_count;
@@ -369,7 +386,7 @@ export function EnforcementSentinel() {
             {/* Modal for run details */}
             {selectedRun && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in">
-                    <div className="bg-white rounded-xl shadow-xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden animate-in slide-in-from-bottom-4">
+                    <div className="bg-white rounded-xl shadow-xl w-full max-w-[95vw] xl:max-w-[1600px] max-h-[95vh] flex flex-col overflow-hidden animate-in slide-in-from-bottom-4">
                         {/* Modal Header */}
                         <div className="flex items-center justify-between p-4 md:p-6 border-b border-gray-100">
                             <div>
@@ -571,18 +588,17 @@ export function EnforcementSentinel() {
                                                                             </span>
                                                                         </td>
                                                                         <td className="p-3 font-mono text-xs font-bold text-gray-700">{v.action}</td>
-                                                                        <td className="p-3 text-xs text-gray-600 break-words leading-relaxed">{v.reason}</td>
+                                                                        <td className="p-3 text-xs text-gray-600 break-words leading-relaxed">{formatReason(v)}</td>
                                                                         {selectedRun?.metadata?.enforcement_mode === 'audit_only' && (
                                                                             <td className="p-3 text-right">
                                                                                 {['KILL', 'CERTIFY', 'UNCERTIFY'].includes(v.action) && (
                                                                                     <Button 
                                                                                         size="sm" 
                                                                                         variant="outline"
-                                                                                        className="text-xs h-7 px-2 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
-                                                                                        disabled={actionLoading === v.resource_id}
-                                                                                        onClick={() => handleExecuteAction(selectedRun.id, v)}
+                                                                                        className="text-xs h-7 px-2 border-blue-200 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                                                                                        onClick={() => setSelectedViolation(v)}
                                                                                     >
-                                                                                        {actionLoading === v.resource_id ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Execute Action'}
+                                                                                        Review and Act
                                                                                     </Button>
                                                                                 )}
                                                                             </td>
@@ -599,6 +615,70 @@ export function EnforcementSentinel() {
                                 </div>
                             );
                         })()}
+                    </div>
+                </div>
+            )}
+            {/* Review and Act Modal */}
+            {selectedViolation && selectedRun && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in">
+                    <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95">
+                        <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-white">
+                            <h3 className="text-lg font-semibold text-gray-900">Review and Act: {selectedViolation.resource_id}</h3>
+                            <Button variant="ghost" size="sm" onClick={() => setSelectedViolation(null)} className="rounded-full hover:bg-gray-100">
+                                <X className="w-5 h-5 text-gray-500" />
+                            </Button>
+                        </div>
+                        <div className="p-6 overflow-y-auto flex-1 space-y-6">
+                            <div className="grid grid-cols-2 gap-4 text-sm bg-gray-50 p-4 rounded-lg border border-gray-100">
+                                <div><span className="font-semibold text-gray-500 block mb-1">Resource Type</span> {selectedViolation.resource_type}</div>
+                                <div><span className="font-semibold text-gray-500 block mb-1">Policy</span> {selectedViolation.policy}</div>
+                                <div>
+                                    <span className="font-semibold text-gray-500 block mb-1">Severity</span>
+                                    <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded-full ${
+                                        selectedViolation.severity === 'CRITICAL' ? 'bg-red-100 text-red-800 border border-red-200' :
+                                        selectedViolation.severity === 'HIGH' ? 'bg-orange-100 text-orange-800 border border-orange-200' :
+                                        selectedViolation.severity === 'MEDIUM' ? 'bg-yellow-100 text-yellow-800 border border-yellow-200' :
+                                        'bg-gray-100 text-gray-800 border border-gray-200'
+                                    }`}>
+                                        {selectedViolation.severity}
+                                    </span>
+                                </div>
+                                <div><span className="font-semibold text-gray-500 block mb-1">Action</span> <span className="font-mono font-bold text-gray-700">{selectedViolation.action}</span></div>
+                                <div className="col-span-2"><span className="font-semibold text-gray-500 block mb-1">Reason</span> <div className="mt-2 text-gray-700 leading-relaxed">{formatReason(selectedViolation)}</div></div>
+                            </div>
+                            
+                            {selectedViolation.input_context && (
+                                <div>
+                                    <h4 className="text-sm font-semibold text-gray-900 mb-2">OPA Input Parameters</h4>
+                                    <div className="text-xs text-gray-500 mb-2">The exact data payload sent to Open Policy Agent (Rego) during the evaluation.</div>
+                                    <pre className="bg-gray-900 p-4 rounded-lg border border-gray-700 text-xs font-mono text-blue-400 overflow-x-auto whitespace-pre-wrap break-words shadow-inner">
+                                        {JSON.stringify(selectedViolation.input_context, null, 2)}
+                                    </pre>
+                                </div>
+                            )}
+                            
+                            <div>
+                                <h4 className="text-sm font-semibold text-gray-900 mb-2">Full Context Data</h4>
+                                <pre className="bg-gray-900 p-4 rounded-lg border border-gray-700 text-xs font-mono text-green-400 overflow-x-auto whitespace-pre-wrap break-words shadow-inner">
+                                    {JSON.stringify(selectedViolation, null, 2)}
+                                </pre>
+                            </div>
+                        </div>
+                        <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3 shrink-0">
+                            <Button variant="outline" onClick={() => setSelectedViolation(null)}>Cancel</Button>
+                            <Button 
+                                variant="default"
+                                disabled={actionLoading === selectedViolation.resource_id}
+                                onClick={async () => {
+                                    await handleExecuteAction(selectedRun.id, selectedViolation);
+                                    setSelectedViolation(null);
+                                }}
+                                className="flex items-center bg-red-600 hover:bg-red-700 text-white"
+                            >
+                                {actionLoading === selectedViolation.resource_id ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                                Execute Action
+                            </Button>
+                        </div>
                     </div>
                 </div>
             )}

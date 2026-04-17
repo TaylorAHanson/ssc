@@ -219,12 +219,14 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                 # We record it if it's an actual violation, OR if the action is a proactive enforcement step like CERTIFY
                 if is_violation or action in ["CERTIFY", "UNCERTIFY"]:
                     violations.append({
-                        "resource_id": resource["id"],
-                        "resource_type": resource["type"],
+                        "resource_id": resource.get("id"),
+                        "resource_type": resource.get("type"),
                         "policy": policy_name,
                         "action": action,
                         "reason": result.get("reason", "Action triggered" if not is_violation else "Unknown violation"),
+                        "violation_reasons": result.get("violation_reasons", []),
                         "severity": result.get("severity", "HIGH"),
+                        "input_context": input_data,
                     })
         
         # Save violations to state context and record fact

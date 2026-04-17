@@ -14,6 +14,8 @@ features:
   finops: true
   self_service: true
   workflows: true
+  data_discovery: true # Turns on the data discovery feature
+  calendar: true # Turns on the calendar feature
 
 ui:
   app_switcher:
@@ -28,18 +30,19 @@ ui:
       name: "Self Service Center"
       description: "Data access & provisioning"
       icon: "Headphones"
-      href: "https://appliedmaterials.com/"
+      href: "https://example.com/"
       accent_color: "#00875A"
       accent_bg: "#E3F9F0"
     - id: "third-app"
       name: "Third App"
       description: "Another internal app"
       icon: "FileCode"
-      href: "https://appliedmaterials.com/"
+      href: "https://example.com/"
       accent_color: "#00875A"
       accent_bg: "#E3F9F0"
   tabs:
     home: true
+    data_discovery: true
     my_requests: true
     pending_approvals: true
     training: true

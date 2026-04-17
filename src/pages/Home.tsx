@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Sparkles, ArrowRight, Send, ExternalLink, ChevronDown, Shield, BarChart3,
   Database, Box, TrendingUp, Activity, FileText, Info
@@ -359,19 +359,17 @@ export function Home() {
   }, [conversationState?.currentQuestionIndex, conversationState?.showConfirmation]);
 
 
-  const handleInitialSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim() || isProcessing) return;
+  const location = useLocation();
 
-    const initialQuery = query.trim();
-    setQuery(''); // Clear input immediately
+  const submitQuery = async (queryText: string) => {
+    if (!queryText.trim() || isProcessing) return;
     setIsProcessing(true);
 
     // Create initial user message
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
       type: 'user',
-      content: initialQuery,
+      content: queryText,
       timestamp: new Date(),
     };
 
@@ -385,7 +383,7 @@ export function Home() {
 
     // Optimistically set state with thinking bubble
     setConversationState({
-      initialQuery,
+      initialQuery: queryText,
       messages: [userMessage, thinkingMessage],
       currentQuestionIndex: 0,
       followUpQuestions: [],
@@ -398,7 +396,7 @@ export function Home() {
     try {
       // Call the real agent endpoint
       const agentResponse = await callAgent({
-        query: initialQuery,
+        query: queryText,
         conversation_history: [], // First message, no history
         context: {
           mode: agentMode
@@ -466,6 +464,23 @@ export function Home() {
 
     setIsProcessing(false);
   };
+
+  const handleInitialSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim() || isProcessing) return;
+    const initialQuery = query.trim();
+    setQuery(''); // Clear input immediately
+    await submitQuery(initialQuery);
+  };
+
+  useEffect(() => {
+    if (location.state?.autoQuery && !isProcessing) {
+      const autoQ = location.state.autoQuery;
+      // Clear the state so it doesn't re-trigger on refresh
+      navigate(location.pathname, { replace: true, state: {} });
+      submitQuery(autoQ);
+    }
+  }, [location.state?.autoQuery, navigate, isProcessing]);
 
   const handleAnswerSubmit = async (questionId: string, answer: string | string[]) => {
     if (!conversationState || isProcessing) return;
