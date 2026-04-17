@@ -48,6 +48,14 @@ const navItems: NavItem[] = [
 
   // Governance - Restricted
   {
+    id: 'certification',
+    title: 'Data Certification',
+    icon: <CheckCircle2 className="w-5 h-5" />,
+    path: '/governance/certification',
+    group: 'Governance',
+    allowedPersonas: ['Platform Admin', 'Governance Admin']
+  },
+  {
     id: 'allowlist',
     title: 'Allowlist',
     icon: <ShieldCheck className="w-5 h-5" />,

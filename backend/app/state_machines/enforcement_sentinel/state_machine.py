@@ -178,6 +178,24 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
             resources = await handler.discover()
             discovered_resources.extend(resources)
 
+        from app.db.data_asset import DataAssetModel
+        for resource in discovered_resources:
+            if resource.get("type") == "table" and "dataset_id" in resource:
+                dataset_id = resource.get("dataset_id")
+                asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
+                if asset:
+                    dq = dict(asset.data_quality or {})
+                    dq["tdq"] = resource.get("tdq_score")
+                    dq["bdq"] = resource.get("bdq_score")
+                    asset.data_quality = dq
+                    self.db.add(asset)
+        
+        try:
+            self.db.commit()
+        except Exception as e:
+            logger.error(f"Failed to commit DataAsset quality updates: {e}")
+            self.db.rollback()
+
         # 3. Evaluate with OPA
         opa_provider = OpaProvider(settings.opa_provider_config())
         violations = []
