@@ -1,26 +1,75 @@
-api_version: "v1"
-kind: "DataContract"
-dataset:
-  domain: "marketing"
-  name: "passing_certified_dataset"
-  # Format is expected to be <catalog>.<schema>.<table>
-  physical_name: "main.default.marketing_campaigns"
-  is_mock: true
+apiVersion: v3.1.0
+kind: DataContract
 
+domain: marketing
+dataProduct: passing_certified_dataset
+version: 1.1.0
+status: active
+id: 42181432-6c55-4ba2-a65f-72344a91553b
+
+description:
+  purpose: Marketing campaign performance data.
+  limitations: Aggregated daily.
+  usage: Campaign ROI analysis.
+  
 quality:
-  technical:
-    score_threshold: 100
-  business:
-    score_threshold: 100
+  - id: technical_dq_threshold
+    type: custom
+    engine: acceldata
+    description: "Technical data quality score must be 100%"
+    mustBe: 100
+  - id: business_dq_threshold
+    type: custom
+    engine: acceldata
+    description: "Business logic validation score must be 100%"
+    mustBe: 100
 
-security:
-  classification: "Non-PII"
-  abac_required: true
+servers:
+  - id: production
+    type: databricks
+    host: prod-workspace.cloud.databricks.com
+    catalog: sales_prod_catalog
+    schema: main
 
-metadata:
-  certification_eligible: true
-  tags:
-    "Owner group": "marketing-analytics"
-    "Approver group": "data-governance"
-    "Domain": "marketing"
-    "SLO/SLA": "Tier 1"
+schema:
+  - id: marketing_campaigns_obj
+    name: marketing_campaigns
+    physicalName: marketing_campaigns
+    physicalType: table
+    businessName: Marketing Campaigns
+    description: Provides campaign performance metrics
+    tags: [ 'marketing', 'campaigns']
+    customProperties:
+      - property: abac_required
+        value: true
+      - property: classification
+        value: Non-PII
+    properties:
+      - id: campaign_id_prop
+        name: campaign_id
+        primaryKey: true
+        logicalType: string
+        description: Unique identifier for the campaign
+
+price:
+  priceAmount: 0.00
+  priceCurrency: USD
+  priceUnit: request  # Meaning "It costs $0 per request"
+
+team:
+  name: marketing-analytics
+  members:
+    - username: thanson
+      role: Owner
+
+customProperties:
+  - property: certification_eligible
+    value: true
+  - property: is_mock
+    value: true
+  - property: databricks_tags
+    value:
+      "Owner group": "marketing-analytics"
+      "Approver group": "data-governance"
+      "Domain": "marketing"
+      "SLO/SLA": "Tier 1"

@@ -26,31 +26,41 @@ class DatasetResourceHandler(BaseResourceHandler):
                         dataset_def = yaml.safe_load(f)
                         
                     # Parse Data Contract Standard Structure
-                    dataset_info = dataset_def.get("dataset", {})
-                    quality_info = dataset_def.get("quality", {})
-                    security_info = dataset_def.get("security", {})
-                    metadata_info = dataset_def.get("metadata", {})
+                    data_product = dataset_def.get("dataProduct", "unknown")
                     
-                    full_name = dataset_info.get("physical_name", "main.default.unknown")
-                    parts = full_name.split(".")
-                    catalog = parts[0] if len(parts) > 0 else "main"
-                    schema = parts[1] if len(parts) > 1 else "default"
-                    table_name = parts[2] if len(parts) > 2 else "unknown"
+                    servers = dataset_def.get("servers", [])
+                    catalog = servers[0].get("catalog", "main") if servers else "main"
+                    schema = servers[0].get("schema", "default") if servers else "default"
                     
-                    tech_quality = quality_info.get("technical", {})
-                    biz_quality = quality_info.get("business", {})
+                    schemas = dataset_def.get("schema", [])
+                    first_schema = schemas[0] if schemas else {}
+                    physical_table = first_schema.get("physicalName", "unknown")
+                    
+                    full_name = f"{catalog}.{schema}.{physical_table}"
+                    
+                    root_custom_props = {prop.get("property"): prop.get("value") for prop in dataset_def.get("customProperties", [])}
+                    schema_custom_props = {prop.get("property"): prop.get("value") for prop in first_schema.get("customProperties", [])}
+                    
+                    quality_rules = dataset_def.get("quality", [])
+                    tdq_threshold = 100
+                    bdq_threshold = 100
+                    for rule in quality_rules:
+                        if rule.get("id") == "technical_dq_threshold":
+                            tdq_threshold = rule.get("mustBe", 100)
+                        elif rule.get("id") == "business_dq_threshold":
+                            bdq_threshold = rule.get("mustBe", 100)
                     
                     # Base properties from Data Contract
                     resource = {
-                        "id": dataset_info.get("name", full_name),
+                        "id": data_product,
                         "type": "table",
-                        "certification_eligible": metadata_info.get("certification_eligible", False),
-                        "tdq_threshold": tech_quality.get("score_threshold", 100),
-                        "bdq_threshold": biz_quality.get("score_threshold", 100),
-                        "abac_needed": security_info.get("abac_required", False),
+                        "certification_eligible": root_custom_props.get("certification_eligible", False),
+                        "tdq_threshold": tdq_threshold,
+                        "bdq_threshold": bdq_threshold,
+                        "abac_needed": schema_custom_props.get("abac_required", False),
                         "abac_defined": False,  # Might be validated dynamically
-                        "data_classification": security_info.get("classification", ""),
-                        "tags": metadata_info.get("tags", {})
+                        "data_classification": schema_custom_props.get("classification", ""),
+                        "tags": root_custom_props.get("databricks_tags", {})
                     }
                     
                     # Fetch TDQ and BDQ scores from Databricks Data Quality results table
@@ -122,9 +132,9 @@ class DatasetResourceHandler(BaseResourceHandler):
                         logger.debug(f"Failed to get tags for table {full_name}: {e}")
                         
                     # Apply mock overrides if requested by the Data Contract (for testing)
-                    if dataset_info.get("is_mock") is True:
-                        resource["tdq_score"] = tech_quality.get("score_threshold", 100)
-                        resource["bdq_score"] = biz_quality.get("score_threshold", 100)
+                    if root_custom_props.get("is_mock") is True:
+                        resource["tdq_score"] = tdq_threshold
+                        resource["bdq_score"] = bdq_threshold
                         resource["catalog_description"] = resource["catalog_description"] or "Mock Catalog Description"
                         resource["schema_description"] = resource["schema_description"] or "Mock Schema Description"
                         resource["all_columns_have_descriptions"] = True
