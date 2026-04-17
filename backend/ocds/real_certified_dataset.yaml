@@ -1,26 +1,97 @@
-api_version: "v1"
-kind: "DataContract"
-dataset:
-  domain: "sales"
-  name: "real_certified_dataset"
-  # Format is expected to be <catalog>.<schema>.<table>
-  physical_name: "taylor_hanson_build_catalog.main.certified_orders"
-  # is_mock is omitted or false
+apiVersion: v3.1.0
+kind: DataContract
+
+domain: sales
+dataProduct: real_certified_dataset
+version: 1.1.0
+status: active
+id: 53581432-6c55-4ba2-a65f-72344a91553a
+
+authoritativeDefinitions:
+- type: canonical
+  url: https://github.com/bitol-io/open-data-contract-standard/blob/main/docs/examples/all/full-example.odcs.yaml
+  description: Canonical URL to the latest version of the contract.
+
+description:
+  purpose: Views built on top of the seller tables.
+  limitations: Data based on seller perspective, no buyer information
+  usage: Predict sales over time
 
 quality:
-  technical:
-    score_threshold: 100
-  business:
-    score_threshold: 100
+  - id: technical_dq_threshold
+    type: custom
+    engine: acceldata
+    description: "Technical data quality score must be 100%"
+    mustBe: 100
+  - id: business_dq_threshold
+    type: custom
+    engine: acceldata
+    description: "Business logic validation score must be 100%"
+    mustBe: 100
 
-security:
-  classification: "PII"
-  abac_required: false # Set to false so it passes without needing row filters/column masks
+servers:
+  - id: production
+    type: databricks
+    host: prod-workspace.cloud.databricks.com
+    catalog: sales_prod_catalog
+    schema: main
 
-metadata:
-  certification_eligible: true
-  tags:
-    "Owner group": "data-engineering"
-    "Approver group": "data-governance"
-    "Domain": "sales"
-    "SLO/SLA": "Tier 1"
+schema:
+  - id: certified_orders_obj
+    name: certified_orders
+    physicalName: certified_orders
+    physicalType: table
+    businessName: Core Sales Metrics
+    description: Provides core sales metrics
+    tags: [ 'sales', 'orders']
+    customProperties:
+      - property: abac_required
+        value: false
+      - property: classification
+        value: PII
+    properties:
+      - id: txn_ref_dt_prop
+        name: transaction_reference_date
+        physicalName: txn_ref_dt
+        primaryKey: false
+        logicalType: date
+        description: Reference date for transaction
+      - id: order_id_prop
+        name: order_id
+        primaryKey: true
+        logicalType: string
+        description: Unique identifier for the order
+
+price:
+  priceAmount: 0.00
+  priceCurrency: USD
+  priceUnit: request  # Meaning "It costs $0 per request"
+
+team:
+  name: data-engineering
+  members:
+    - username: thanson
+      role: Owner
+
+roles:
+  - role: data_engineer
+    access: write
+  - role: sales_analyst
+    access: read
+
+slaProperties:
+  - property: latency
+    value: 1
+    unit: d
+
+customProperties:
+  - property: certification_eligible
+    value: true
+  - property: is_mock
+    value: false
+  - property: databricks_tags
+    value:
+      "Owner group": "data-engineering"
+      "Approver group": "data-governance"
+      "Domain": "sales"
+      "SLO/SLA": "Tier 1"
