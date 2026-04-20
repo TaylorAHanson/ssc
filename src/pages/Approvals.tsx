@@ -60,11 +60,12 @@ export function Approvals() {
   }, [fetchAllData]);
 
   // User roles
-  const userRoles = ['platform_admin', 'data_owner', 'manager'];
+  const userRoles = ['platform_admin', 'data_owner', 'manager', 'governance_admin'];
   const roleLabels: Record<string, string> = {
     platform_admin: 'Platform Admin',
     data_owner: 'Data Owner',
     manager: 'Manager',
+    governance_admin: 'Governance Admin',
   };
 
   // Filter approvals by user's roles
@@ -169,10 +170,15 @@ export function Approvals() {
       'Data access requests for platform_catalog',
       'Catalog/schema/table creation in platform_catalog',
       'Data sharing requests for platform_catalog',
+      'Data certification requests (Data SME Review)',
     ],
     manager: [
       'Workspace provisioning requests (Budget)',
       'Training requirements'
+    ],
+    governance_admin: [
+      'Data certification requests (Governance Admin Review)',
+      'Policy exceptions',
     ]
   };
 

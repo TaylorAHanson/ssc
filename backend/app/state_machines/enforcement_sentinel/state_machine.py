@@ -234,6 +234,15 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                 is_violation = result.get("is_violation")
                 action = result.get("action", "KILL")
                 
+                # Update local DataAsset cache with the latest violations if evaluating data certification
+                if policy_name == "data_certification" and resource.get("type") == "table":
+                    from app.db.data_asset import DataAssetModel
+                    dataset_id = resource.get("dataset_id", resource.get("id"))
+                    asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
+                    if asset:
+                        asset.certification_violations = result.get("violation_reasons", [])
+                        self.db.add(asset)
+                
                 # We record it if it's an actual violation, OR if the action is a proactive enforcement step like CERTIFY or START_CERTIFICATION
                 if is_violation or action in ["CERTIFY", "UNCERTIFY", "START_CERTIFICATION"]:
                     violations.append({

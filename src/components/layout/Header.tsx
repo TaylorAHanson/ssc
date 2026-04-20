@@ -23,6 +23,7 @@ export function Header() {
   const personas = [
     { label: 'Platform Admin', value: 'platform_admin' },
     { label: 'Governance Admin', value: 'governance_admin' },
+    { label: 'Data Owner', value: 'data_owner' },
     { label: 'Security Admin', value: 'security_admin' },
     { label: 'Finance Admin', value: 'finance_admin' },
     { label: 'Business User', value: 'business_user' },

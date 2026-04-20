@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
-import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2 } from 'lucide-react';
+import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { api } from '../../services/api';
 import type { DataAsset } from '../../services/api';
@@ -123,6 +123,9 @@ export function DataCertification() {
   const [isSaving, setIsSaving] = useState(false);
   const [contractHistory, setContractHistory] = useState<DataContract[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  
+  // Violations Modal State
+  const [violationAsset, setViolationAsset] = useState<DataAsset | null>(null);
 
   const fetchHistory = async (datasetId: string) => {
     try {
@@ -315,30 +318,53 @@ export function DataCertification() {
                             </span>
                           ) : ds.contract_url ? (
                             <Link 
-                              to={ds.contract_url.startsWith('/requests') ? ds.contract_url : `/governance/certification?dataset=${ds.id}`}
+                              to={ds.contract_url.startsWith('/requests') ? '/approvals' : `/governance/certification?dataset=${ds.id}`}
                               className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 hover:bg-blue-200 transition-colors"
                             >
-                              {ds.contract_url.startsWith('/requests') ? 'Pending Request \u2192' : 'Pending'}
+                              {ds.contract_url.startsWith('/requests') ? 'Pending Approval \u2192' : 'Pending'}
                             </Link>
-                          ) : (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
-                              Uncertified
+                          ) : tdq === 'N/A' ? (
+                            <span 
+                              className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800"
+                              title="Run Enforcement Sentinel to fetch policy violations and scores"
+                            >
+                              <Info className="w-3 h-3 mr-1" /> Awaiting Scan
                             </span>
+                          ) : (
+                            <div className="group relative inline-block">
+                              <button
+                                onClick={() => ds.certification_violations && ds.certification_violations.length > 0 && setViolationAsset(ds)}
+                                className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800 ${ds.certification_violations && ds.certification_violations.length > 0 ? 'cursor-pointer hover:bg-gray-200 transition-colors' : ''}`}
+                              >
+                                Uncertified
+                                {ds.certification_violations && ds.certification_violations.length > 0 && (
+                                  <AlertCircle className="w-3 h-3 ml-1 text-amber-500" />
+                                )}
+                              </button>
+                            </div>
                           )}
                         </td>
                         <td className="p-3 text-gray-600 whitespace-nowrap">{lastRun}</td>
                         <td className="p-3">
-                          <span className={`font-semibold ${typeof tdq === 'number' ? (tdq >= 90 ? 'text-green-600' : 'text-orange-600') : 'text-gray-400'}`}>
+                          <span className={`font-semibold ${typeof tdq === 'number' ? (tdq >= 90 ? 'text-green-600' : 'text-orange-600') : 'text-gray-400 cursor-help'}`} title={typeof tdq === 'number' ? '' : 'Run Enforcement Sentinel to fetch score'}>
                             {tdq}
                           </span>
                         </td>
                         <td className="p-3">
-                          <span className={`font-semibold ${typeof bdq === 'number' ? (bdq >= 90 ? 'text-green-600' : 'text-orange-600') : 'text-gray-400'}`}>
+                          <span className={`font-semibold ${typeof bdq === 'number' ? (bdq >= 90 ? 'text-green-600' : 'text-orange-600') : 'text-gray-400 cursor-help'}`} title={typeof bdq === 'number' ? '' : 'Run Enforcement Sentinel to fetch score'}>
                             {bdq}
                           </span>
                         </td>
-                        <td className="p-3 text-gray-600">{freshness}</td>
-                        <td className="p-3 text-gray-600">{drift}</td>
+                        <td className="p-3 text-gray-600">
+                          <span className={`${freshness === 'N/A' ? 'text-gray-400 cursor-help' : ''}`} title={freshness === 'N/A' ? 'Run Enforcement Sentinel to fetch' : ''}>
+                            {freshness}
+                          </span>
+                        </td>
+                        <td className="p-3 text-gray-600">
+                          <span className={`${drift === 'N/A' ? 'text-gray-400 cursor-help' : ''}`} title={drift === 'N/A' ? 'Run Enforcement Sentinel to fetch' : ''}>
+                            {drift}
+                          </span>
+                        </td>
                         <td className="p-3 text-right">
                           <Button 
                             variant="outline" 
@@ -460,6 +486,54 @@ export function DataCertification() {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Violations Modal */}
+      {violationAsset && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in" onClick={() => setViolationAsset(null)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl flex flex-col overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-white">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                  <AlertCircle className="w-5 h-5 text-amber-500" />
+                  Policy Violations
+                </h3>
+                <p className="text-xs text-gray-500 mt-1 font-mono">{violationAsset.catalog}.{violationAsset.schema_name}.{violationAsset.table_name}</p>
+              </div>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setViolationAsset(null)}
+                className="w-8 h-8 p-0"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <div className="p-6 bg-gray-50 flex-1 overflow-y-auto max-h-[60vh]">
+              <p className="text-sm text-gray-600 mb-4">
+                This dataset is marked as <code className="bg-gray-200 px-1 rounded text-xs">certification_eligible</code>, but currently fails the following Open Policy Agent (OPA) checks required for certification:
+              </p>
+              <ul className="space-y-3">
+                {violationAsset.certification_violations?.map((v, i) => (
+                  <li key={i} className="flex items-start gap-3 bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
+                    <span className="flex-shrink-0 w-6 h-6 rounded-full bg-red-100 text-red-700 flex items-center justify-center text-xs font-bold mt-0.5">
+                      {i + 1}
+                    </span>
+                    <span className="text-sm text-gray-800 leading-snug pt-0.5">
+                      {v.replace(/^\d+\.\s*/, '')}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-6 p-4 bg-blue-50 text-blue-800 rounded-lg border border-blue-100 text-sm">
+                <p><strong>Next Steps:</strong> Once the data engineering team resolves these issues in Databricks (e.g., by adding missing tags, defining RBAC, or improving data quality scores), the next Enforcement Sentinel run will automatically detect the changes and generate a Data Certification request.</p>
+              </div>
+            </div>
+            <div className="p-4 border-t border-gray-100 bg-white flex justify-end">
+              <Button onClick={() => setViolationAsset(null)}>Close</Button>
             </div>
           </div>
         </div>

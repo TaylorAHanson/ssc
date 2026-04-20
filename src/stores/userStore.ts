@@ -30,6 +30,7 @@ const derivePersona = (user: User | null): UserPersona => {
     if (!user) return 'Business User';
     if (user.roles.some(r => r.name === 'platform_admin')) return 'Platform Admin';
     if (user.roles.some(r => r.name === 'governance_admin')) return 'Governance Admin';
+    if (user.roles.some(r => r.name === 'data_owner')) return 'Data Owner';
     if (user.roles.some(r => r.name === 'security_admin')) return 'Security Admin';
     if (user.roles.some(r => r.name === 'finance_admin')) return 'Finance Admin';
     return 'Business User';

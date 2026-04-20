@@ -52,6 +52,7 @@ class DataAssetModel(Base):
     certified = Column(Boolean, default=False)
     contract_url = Column(String, nullable=True)
     data_quality = Column(JSONType, nullable=True) # e.g. {"freshness": "99%", ...}
+    certification_violations = Column(JSONType, nullable=True) # List of strings explaining why certification failed
     sla = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=True)
     last_synced_at = Column(DateTime, default=datetime.utcnow, nullable=False)

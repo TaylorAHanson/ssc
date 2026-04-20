@@ -105,7 +105,15 @@ async def sync_data_assets_task(force: bool = False):
                     asset.owner = row.get("owner")
                     asset.tags = tags
                     asset.domain = domain
-                    asset.certified = certified
+                    if certified:
+                        asset.certified = True
+                        if asset.contract_url and asset.contract_url.startswith("/requests/"):
+                            asset.contract_url = None
+                    elif asset.contract_url and asset.contract_url.startswith("/requests/"):
+                        # Keep it as is; it might be a pending request or lag in Databricks Information Schema
+                        pass
+                    else:
+                        asset.certified = False
                     
                     created_at_str = row.get("created_at")
                     if created_at_str:
