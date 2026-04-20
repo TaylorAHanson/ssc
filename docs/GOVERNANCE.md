@@ -55,22 +55,21 @@ The Data Certification flow operates in four distinct phases:
    * **Missing Metadata Generation**: During this scan, the job utilizes `dbxmetagen` to automatically generate and apply any missing table and column descriptions in Unity Catalog.
    * If deemed a consumption-ready asset, the job applies the `certification_eligible = true` tag to the table in Unity Catalog.
 
-2. **Enforcement Sentinel (Policy as Code Checklist)**
-   * The Enforcement Sentinel discovers datasets tagged with `certification_eligible = true` and evaluates them against a strict OPA certification checklist:
-     1. **Data Quality**: TDQs and BDQs defined and met.
-     2. **Metadata**: Catalog, schema, and column descriptions exist.
-     3. **Access Control**: ABAC and RBAC defined.
-     4. **Tagging & Classification**: Tags exist with valid values (Owner group, Approver group, Domain, SLO/SLA) and data classification exists (e.g., PII).
-   * If a dataset *meets all technical criteria* but is not yet certified, OPA triggers a `START_CERTIFICATION` action (skipping if an active workflow already exists).
-
-3. **AI Certification (Auto-Generation)**
-   * The Sentinel intercepts the action and calls an AI Agent to auto-generate a draft Open Data Contract Standard (ODCS) YAML file. The agent uses the metadata, tags, and quality scores collected by Sentinel.
+2. **Draft Data Contract (Data Product Definition)**
+   * Users navigate to the UI, select multiple eligible datasets that comprise a logical Data Product, and click 'Draft Contract'.
+   * An AI Agent auto-generates a draft Open Data Contract Standard (ODCS) YAML file spanning all selected datasets, using their Unity Catalog metadata.
    * A new `DATA_CERTIFICATION` state machine request is spawned with this draft contract.
 
+3. **Sentinel Evaluation (Policy as Code)**
+   * The State Machine immediately routes the drafted contract to the Enforcement Sentinel for automated checks.
+   * The Sentinel extracts the list of all tables/views defined in the contract.
+   * It dynamically fetches the latest metadata and quality scores for each table and evaluates them against a strict OPA certification checklist (`data_certification.rego`).
+   * If any table fails the policy checklist, the entire Data Product certification request is automatically rejected, and the owner is notified of the violations to fix.
+
 4. **Certification State Machine (Human Review)**
-   * **Governance Admin Review**: Governance admins review the AI-generated contract to ensure platform and policy compliance.
+   * **Governance Admin Review**: If the Sentinel evaluation passes, governance admins review the AI-generated contract to ensure platform and policy compliance.
    * **Data SME Review**: Subject Matter Experts review the business logic, descriptions, and rules.
-   * **Finalization**: If both reviews pass, the system physically applies the `system.certification_status = 'certified'` tag in Databricks.
+   * **Finalization**: If both reviews pass, the system physically applies the `system.certification_status = 'certified'` tag in Databricks to *every* table defined in the contract.
 
 ```mermaid
 stateDiagram-v2
@@ -84,21 +83,20 @@ stateDiagram-v2
         ApplyTag --> [*]
     }
 
-    state SentinelDiscovery {
-        [*] --> FetchTaggedDatasets : Query DB for eligible assets
-        FetchTaggedDatasets --> EvaluateOPA : Run data_certification.rego
-        EvaluateOPA --> Eligible : Meets ALL Checklist Criteria
-        EvaluateOPA --> NotEligibleYet : Missing criteria (Violations)
-        NotEligibleYet --> [*] : Await manual fixes
+    state ContractDrafting {
+        [*] --> UserSelectsTables : Select datasets for Data Product
+        UserSelectsTables --> AIGeneratesContract : AI drafts combined ODCS YAML
+        AIGeneratesContract --> CreateRequest : Submit DATA_CERTIFICATION
     }
     
-    state AICertification {
-        Eligible --> AIGeneratesContract : AI drafts ODCS YAML
-        AIGeneratesContract --> CreateRequest : Submit DATA_CERTIFICATION
+    state SentinelEvaluation {
+        CreateRequest --> EvaluateOPA : Sentinel runs data_certification.rego
+        EvaluateOPA --> Eligible : All Tables Pass
+        EvaluateOPA --> Rejected : Any Table Fails
     }
 
     state HumanReviewWorkflow {
-        CreateRequest --> AdminReview : Governance Admin
+        Eligible --> AdminReview : Governance Admin
         AdminReview --> SMEReview : Admin Approves
         AdminReview --> Rejected : Admin Rejects
         
@@ -106,8 +104,8 @@ stateDiagram-v2
         SMEReview --> Rejected : SME Rejects
     }
     
-    ExternalDatabricksJob --> SentinelDiscovery : Asynchronous Handoff
-    Approved --> Certified : Apply system tag
+    ExternalDatabricksJob --> ContractDrafting : Asynchronous Handoff
+    Approved --> Certified : Apply system tag to ALL tables in contract
     Rejected --> [*] : Notify Owner
     Certified --> [*]
 ```
@@ -125,7 +123,7 @@ The platform uses Open Policy Agent (OPA) with rules written in Rego to enforce 
 *   **Modifying a Policy:**
     1. Navigate to the relevant `.rego` file.
     2. Update the logic for violation conditions (e.g., adjusting threshold percentages for TDQ/BDQ, adding new required tags).
-    3. Each policy rule evaluates the input context (like workspace and resource metadata) and yields an array of violation objects containing the `action` (e.g., `KILL`, `START_CERTIFICATION`), `reason`, and `severity`.
+    3. Each policy rule evaluates the input context (like workspace and resource metadata) and yields an array of violation objects containing the `action` (e.g., `KILL`, `CERTIFY`), `reason`, and `severity`.
 *   **Applying Changes:** Once a `.rego` file is modified and saved, the backend's OPA evaluation engine will pick up the changes on the next Enforcement Sentinel run. No restart is strictly necessary for the Rego files themselves if they are evaluated dynamically per run, but testing in a lower environment is strongly advised before pushing to production.
 
 ### 2. The Physical Act of Certification

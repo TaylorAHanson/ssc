@@ -79,18 +79,69 @@ def list_data_assets(
         
     return result
 
-@router.post("/sync")
-async def trigger_data_sync():
-    """
-    Manually trigger a force sync of data assets from Databricks.
-    """
-    from app.workers.tasks.sync_data_assets import sync_data_assets_task
+@router.get("/databricks/catalogs")
+def get_databricks_catalogs():
+    """Fetch available catalogs from Databricks Unity Catalog."""
+    from app.providers.databricks import DatabricksProvider
+    from app.core.config import settings
+    from fastapi import HTTPException
+    import logging
+    logger = logging.getLogger(__name__)
+    
     try:
-        await sync_data_assets_task(force=True)
-        return {"status": "success", "message": "Data assets sync completed successfully."}
+        provider = DatabricksProvider(
+            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
+            token=settings.DATABRICKS_TOKEN,
+            client_id=settings.DATABRICKS_CLIENT_ID,
+            client_secret=settings.DATABRICKS_CLIENT_SECRET
+        )
+        catalogs = provider.client.catalogs.list()
+        return [{"name": c.name, "comment": c.comment} for c in catalogs]
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"Manual sync failed: {e}", exc_info=True)
-        from fastapi import HTTPException
+        logger.error(f"Failed to fetch catalogs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/databricks/schemas")
+def get_databricks_schemas(catalog: str):
+    """Fetch available schemas for a given catalog from Databricks."""
+    from app.providers.databricks import DatabricksProvider
+    from app.core.config import settings
+    from fastapi import HTTPException
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        provider = DatabricksProvider(
+            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
+            token=settings.DATABRICKS_TOKEN,
+            client_id=settings.DATABRICKS_CLIENT_ID,
+            client_secret=settings.DATABRICKS_CLIENT_SECRET
+        )
+        schemas = provider.client.schemas.list(catalog_name=catalog)
+        return [{"name": s.name, "comment": s.comment} for s in schemas]
+    except Exception as e:
+        logger.error(f"Failed to fetch schemas for {catalog}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/databricks/tables")
+def get_databricks_tables(catalog: str, schema: str):
+    """Fetch available tables and views for a given catalog and schema from Databricks."""
+    from app.providers.databricks import DatabricksProvider
+    from app.core.config import settings
+    from fastapi import HTTPException
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        provider = DatabricksProvider(
+            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
+            token=settings.DATABRICKS_TOKEN,
+            client_id=settings.DATABRICKS_CLIENT_ID,
+            client_secret=settings.DATABRICKS_CLIENT_SECRET
+        )
+        tables = provider.client.tables.list(catalog_name=catalog, schema_name=schema)
+        # Filter for actual tables or views (type is often 'MANAGED', 'EXTERNAL', 'VIEW')
+        return [{"name": t.name, "type": t.table_type, "comment": t.comment} for t in tables]
+    except Exception as e:
+        logger.error(f"Failed to fetch tables for {catalog}.{schema}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -622,54 +622,6 @@ async def execute_enforcement_action(
                 raise HTTPException(status_code=400, detail="Handler does not support uncertify")
         elif action_to_take == "WARN":
             await handler.warn(body.resource_id, body.reason or "Manual warning")
-        elif action_to_take == "START_CERTIFICATION":
-            from app.db.request import RequestModel
-            from app.models.request import RequestType
-            from sqlalchemy import cast, String
-            
-            # Find the violation context from the sentinel request
-            sentinel_req = db.query(RequestModel).filter(RequestModel.id == request_id).first()
-            violation = {}
-            if sentinel_req and sentinel_req.state_context:
-                violations = sentinel_req.state_context.get("violations", [])
-                for v in violations:
-                    if v.get("resource_id") == body.resource_id and v.get("policy") == body.policy_name:
-                        violation = v
-                        break
-                        
-            resource_context = violation.get("input_context", {}).get("resource", {})
-            dataset_id = resource_context.get("dataset_id", body.resource_id)
-            
-            # Deduplication check
-            existing = db.query(RequestModel).filter(
-                RequestModel.type == RequestType.DATA_CERTIFICATION.value,
-                RequestModel.status.notin_(["completed", "rejected", "failed"]),
-                cast(RequestModel.state_context, String).like(f'%"{dataset_id}"%')
-            ).first()
-            
-            if existing:
-                return {"status": "success", "message": f"Certification request already exists for {dataset_id}."}
-                
-            from app.tools.governance.draft_odcs import draft_odcs_contract
-            from app.tools.execute_workflow import execute_workflow
-            import json
-            
-            # Direct Python execution: Draft ODCS then execute workflow
-            odcs_yaml = await draft_odcs_contract(dataset_id=dataset_id, violations_context=violation)
-            
-            await execute_workflow(
-                workflow_type="data_certification",
-                parameters={
-                    "dataset_id": dataset_id,
-                    "auto_generated": True,
-                    "violations_context": violation,
-                    "odcs_yaml": odcs_yaml
-                },
-                _user_email=current_user.email
-            )
-            
-            executed_action = "manual_start_certification"
-            
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported manual action: {action_to_take}")
             

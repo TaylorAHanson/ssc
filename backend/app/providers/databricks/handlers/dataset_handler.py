@@ -69,12 +69,15 @@ class DatasetResourceHandler(BaseResourceHandler):
                     
                     data_product = dataset_def.get("dataProduct", physical_table)
                     schemas = dataset_def.get("schema", [])
-                    first_schema = schemas[0] if schemas else {}
+                    
+                    # Find the schema definition for THIS specific dataset
+                    this_schema = next((s for s in schemas if s.get("physicalName") == physical_table), schemas[0] if schemas else {})
                     
                     root_custom_props = {prop.get("property"): prop.get("value") for prop in dataset_def.get("customProperties", [])}
-                    schema_custom_props = {prop.get("property"): prop.get("value") for prop in first_schema.get("customProperties", [])}
+                    schema_custom_props = {prop.get("property"): prop.get("value") for prop in this_schema.get("customProperties", [])}
                     
-                    quality_rules = dataset_def.get("quality", [])
+                    # Extract quality rules from this specific schema definition
+                    quality_rules = this_schema.get("quality", [])
                     tdq_threshold = 100
                     bdq_threshold = 100
                     for rule in quality_rules:

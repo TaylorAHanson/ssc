@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
-import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, RefreshCw, ChevronUp, ChevronDown, Filter } from 'lucide-react';
+import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, ChevronUp, ChevronDown, Filter, Plus, Trash2 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { api } from '../../services/api';
 import type { DataAsset } from '../../services/api';
@@ -10,111 +10,29 @@ import { format, parseISO } from 'date-fns';
 import Editor from '@monaco-editor/react';
 import yaml from 'js-yaml';
 
-const DEFAULT_YAML = `apiVersion: v3.1.0
-kind: DataContract
-
-domain: changeme_domain
-dataProduct: changeme_product_name
-version: 1.0.0
-status: active
-id: changeme_contract_id
-
-authoritativeDefinitions:
-- type: canonical
-  url: https://github.com/bitol-io/open-data-contract-standard/blob/main/docs/examples/all/full-example.odcs.yaml
-  description: Canonical URL to the latest version of the contract.
-
-description:
-  purpose: "# CHANGEME: Describe the dataset purpose here."
-  limitations: "# CHANGEME: Any limitations here."
-  usage: "# CHANGEME: Describe how this is used."
-
-quality:
-  - id: technical_dq_threshold
-    type: custom
-    engine: acceldata
-    description: "Technical data quality score must be 100%"
-    mustBe: 100
-  - id: business_dq_threshold
-    type: custom
-    engine: acceldata
-    description: "Business logic validation score must be 100%"
-    mustBe: 100
-  - id: schema_drift
-    type: custom
-    engine: acceldata
-    description: "Schema drift score must be 0%"
-    mustBe: 0
-
-servers:
-  - id: production
-    type: databricks
-    host: prod-workspace.cloud.databricks.com
-    catalog: changeme_catalog
-    schema: changeme_schema
-
-schema:
-  - id: changeme_table_obj
-    name: changeme_table_name
-    physicalName: changeme_table_name
-    physicalType: table
-    businessName: "# CHANGEME: Business Name"
-    description: "# CHANGEME: Provides core metrics"
-    tags: [ 'changeme', 'tags' ]
-    customProperties:
-      - property: abac_required
-        value: false
-      - property: classification
-        value: PII
-    properties:
-      - id: changeme_col_prop
-        name: changeme_col
-        physicalName: changeme_col
-        primaryKey: true
-        logicalType: string
-        description: "# CHANGEME: Unique identifier"
-
-price:
-  priceAmount: 0.00
-  priceCurrency: USD
-  priceUnit: request
-
-team:
-  name: changeme_team_name
-  members:
-    - username: changeme_user
-      role: Owner
-
-roles:
-  - role: data_engineer
-    access: write
-  - role: data_analyst
-    access: read
-
-slaProperties:
-  - property: latency
-    value: 1
-    unit: d
-
-customProperties:
-  - property: is_mock
-    value: false
-`;
-
 export function DataCertification() {
   const [datasets, setDatasets] = useState<DataAsset[]>([]);
   const [contractsMap, setContractsMap] = useState<Record<string, DataContract>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [isSyncing, setIsSyncing] = useState(false);
   const [sortField, setSortField] = useState<'name' | 'tdq' | 'bdq' | 'lastRun' | 'discovered'>('name');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [statusFilter, setStatusFilter] = useState<'all' | 'certified' | 'uncertified' | 'pending' | 'invalid' | 'awaiting'>('all');
+  const [isDrafting, setIsDrafting] = useState(false);
+  const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
+
+  // Drafting Modal Dynamic State
+  const [draftRows, setDraftRows] = useState<Array<{id: number, catalog: string, schema: string, table: string}>>([{id: Date.now(), catalog: '', schema: '', table: ''}]);
+  const [catalogs, setCatalogs] = useState<{name: string}[]>([]);
+  const [schemasMap, setSchemasMap] = useState<Record<string, {name: string}[]>>({});
+  const [tablesMap, setTablesMap] = useState<Record<string, {name: string, type: string}[]>>({});
+  const [isLoadingCatalogs, setIsLoadingCatalogs] = useState(false);
+  const [draftSuccessId, setDraftSuccessId] = useState<string | null>(null);
 
   // Editor State
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState<DataAsset | null>(null);
-  const [yamlContent, setYamlContent] = useState(DEFAULT_YAML);
+  const [yamlContent, setYamlContent] = useState('');
   const [yamlError, setYamlError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [contractHistory, setContractHistory] = useState<DataContract[]>([]);
@@ -122,26 +40,6 @@ export function DataCertification() {
   
   // Violations Modal State
   const [violationAsset, setViolationAsset] = useState<DataAsset | null>(null);
-
-  const handleSync = async () => {
-    setIsSyncing(true);
-    try {
-      await api.triggerDataSync();
-      // Reload assets after sync
-      const [data, contracts] = await Promise.all([
-        api.getDataAssets(),
-        api.getDataContracts()
-      ]);
-      const map: Record<string, DataContract> = {};
-      contracts.forEach(c => map[c.dataset_id] = c);
-      setContractsMap(map);
-      setDatasets(data.filter(d => d.contract_url || d.certified || d.data_quality || (Array.isArray(d.tags) && d.tags.includes('certification_eligible'))));
-    } catch (e: any) {
-      alert(`Failed to sync data assets: ${e.message}`);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
 
   const fetchHistory = async (datasetId: string, contractUrl?: string | null) => {
     try {
@@ -162,13 +60,16 @@ export function DataCertification() {
             console.error('Failed to fetch request for pending contract', reqError);
           }
         }
-        setYamlContent(DEFAULT_YAML);
+        setYamlContent('');
+        setYamlError('No contract content found.');
       } else {
-        setYamlContent(DEFAULT_YAML);
+        setYamlContent('');
+        setYamlError('No contract content found.');
       }
     } catch (e) {
       console.error(e);
-      setYamlContent(DEFAULT_YAML);
+      setYamlContent('');
+      setYamlError('No contract content found.');
     }
   };
 
@@ -180,17 +81,8 @@ export function DataCertification() {
     if (dataset.contract_url) {
       fetchHistory(dataset.id, dataset.contract_url);
     } else {
-      // It's a new contract for this dataset
-      setYamlContent(
-        DEFAULT_YAML
-          .replace(/table_name/g, dataset.table_name)
-          .replace(/main/g, dataset.catalog)
-          .replace(/default/g, dataset.schema_name)
-          .replace(/example_domain/g, dataset.domain || 'example_domain')
-          .replace(/example_product/g, dataset.table_name)
-          .replace(/example_table_obj/g, `${dataset.table_name}_obj`)
-          .replace(/new_contract_id/g, crypto.randomUUID())
-      );
+      setYamlContent('');
+      setYamlError('No existing contract found to edit. Please draft a new contract using the "Add Data Contract" button.');
     }
   };
 
@@ -240,6 +132,66 @@ export function DataCertification() {
 
   useEffect(() => {
     let mounted = true;
+    if (isDraftModalOpen && catalogs.length === 0) {
+      setIsLoadingCatalogs(true);
+      api.getDatabricksCatalogs().then(cats => {
+        if (mounted) setCatalogs(cats);
+      }).catch(console.error).finally(() => {
+        if (mounted) setIsLoadingCatalogs(false);
+      });
+    }
+    return () => { mounted = false; };
+  }, [isDraftModalOpen, catalogs.length]);
+
+  const handleRowChange = async (id: number, field: 'catalog' | 'schema' | 'table', value: string) => {
+    setDraftRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value, ...(field === 'catalog' ? {schema: '', table: ''} : {}), ...(field === 'schema' ? {table: ''} : {}) } : r));
+    
+    if (field === 'catalog' && value && !schemasMap[value]) {
+      try {
+        const schemas = await api.getDatabricksSchemas(value);
+        setSchemasMap(prev => ({...prev, [value]: schemas}));
+      } catch(e) { console.error(e); }
+    } else if (field === 'schema' && value) {
+      const row = draftRows.find(r => r.id === id);
+      const cat = row?.catalog || value.split('.')[0]; // somewhat heuristic
+      if (cat && !tablesMap[`${cat}.${value}`]) {
+        try {
+          const tables = await api.getDatabricksTables(cat, value);
+          setTablesMap(prev => ({...prev, [`${cat}.${value}`]: tables}));
+        } catch(e) { console.error(e); }
+      }
+    }
+  };
+
+  const addDraftRow = () => {
+    setDraftRows(prev => [...prev, { id: Date.now(), catalog: '', schema: '', table: '' }]);
+  };
+
+  const removeDraftRow = (id: number) => {
+    setDraftRows(prev => prev.filter(r => r.id !== id));
+  };
+
+  const handleDraftSubmit = async () => {
+    const validRows = draftRows.filter(r => r.catalog && r.schema && r.table);
+    if (validRows.length === 0) return;
+    
+    const datasetIds = validRows.map(r => `${r.catalog}.${r.schema}.${r.table}`);
+    
+    try {
+      setIsDrafting(true);
+      const res = await api.draftDataContract(datasetIds);
+      setDraftSuccessId(res.request_id);
+      // Wait for user to interact with the success banner
+    } catch (e) {
+      console.error(e);
+      alert("Error drafting contract.");
+    } finally {
+      setIsDrafting(false);
+    }
+  };
+
+  useEffect(() => {
+    let mounted = true;
     async function loadData() {
       try {
         const [data, contracts] = await Promise.all([
@@ -250,7 +202,7 @@ export function DataCertification() {
           const map: Record<string, DataContract> = {};
           contracts.forEach(c => map[c.dataset_id] = c);
           setContractsMap(map);
-          setDatasets(data.filter(d => d.contract_url || d.certified || d.data_quality || (Array.isArray(d.tags) && d.tags.includes('certification_eligible'))));
+          setDatasets(data.filter(d => map[d.id] || d.contract_url));
         }
       } catch (e) {
         console.error('Failed to load data assets for certification', e);
@@ -368,24 +320,15 @@ export function DataCertification() {
                 </div>
               </div>
             </div>
-            <Button
-              onClick={handleSync}
-              disabled={isSyncing}
-              className="flex items-center gap-2"
-              variant="outline"
-            >
-              {isSyncing ? (
-                <span className="flex items-center gap-2">
-                  <div className="w-4 h-4 rounded-full border-2 border-gray-400 border-t-gray-600 animate-spin" />
-                  Syncing...
-                </span>
-              ) : (
-                <span className="flex items-center gap-2">
-                  <RefreshCw className="w-4 h-4" />
-                  Sync Metadata
-                </span>
-              )}
-            </Button>
+            <div className="flex items-center gap-3">
+              <Button
+                onClick={() => setIsDraftModalOpen(true)}
+                className="flex items-center gap-2 bg-primary text-white"
+              >
+                <FileCheck className="w-4 h-4" />
+                Add Data Contract
+              </Button>
+            </div>
           </div>
 
           <div className="overflow-x-auto rounded-lg border border-gray-200">
@@ -579,7 +522,7 @@ export function DataCertification() {
             
             <div className="flex-1 flex overflow-hidden bg-gray-50">
               {showHistory && (
-                <div className="w-64 border-r border-gray-200 bg-white overflow-y-auto p-4">
+                <div className="w-64 shrink-0 border-r border-gray-200 bg-white overflow-y-auto p-4">
                   <h4 className="text-sm font-semibold text-gray-900 mb-4">Version History</h4>
                   <div className="space-y-3">
                     {contractHistory.map(version => (
@@ -685,6 +628,178 @@ export function DataCertification() {
             </div>
             <div className="p-4 border-t border-gray-100 bg-white flex justify-end">
               <Button onClick={() => setViolationAsset(null)}>Close</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Draft Contract Modal */}
+      {isDraftModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in" onClick={() => setIsDraftModalOpen(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-4xl flex flex-col overflow-hidden animate-in zoom-in-95 max-h-[80vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-white shrink-0">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                  <FileCheck className="w-5 h-5 text-blue-600" />
+                  Add Data Contract
+                </h3>
+                <p className="text-xs text-gray-500 mt-1">Select one or more datasets to include in this Data Product contract.</p>
+              </div>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setIsDraftModalOpen(false)}
+                className="w-8 h-8 p-0"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            
+            <div className="p-6 bg-gray-50 flex-1 overflow-y-auto">
+              {draftSuccessId ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center h-full">
+                  <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
+                    <CheckCircle2 className="w-8 h-8 text-green-600" />
+                  </div>
+                  <h4 className="text-xl font-bold text-gray-900 mb-2">Contract Drafted!</h4>
+                  <p className="text-sm text-gray-600 mb-6 max-w-md">
+                    The AI has successfully drafted the Open Data Contract Standard (ODCS) YAML for your selected datasets. 
+                    A new certification workflow has been submitted and is now awaiting review.
+                  </p>
+                  <div className="flex gap-3">
+                    <Button variant="outline" onClick={() => {
+                      setDraftSuccessId(null);
+                      setDraftRows([{ id: Date.now(), catalog: '', schema: '', table: '' }]);
+                    }}>
+                      Draft Another
+                    </Button>
+                    <Link to={`/approvals`}>
+                      <Button className="bg-primary text-white">
+                        Review Pending Contract
+                      </Button>
+                    </Link>
+                  </div>
+                </div>
+              ) : isLoadingCatalogs ? (
+                <div className="flex items-center justify-center py-12 text-gray-500">
+                  <Loader2 className="w-6 h-6 animate-spin mr-2" />
+                  Loading Databricks Catalogs...
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {draftRows.map((row, index) => {
+                    const availableSchemas = schemasMap[row.catalog] || [];
+                    const availableTables = tablesMap[`${row.catalog}.${row.schema}`] || [];
+                    
+                    return (
+                      <div key={row.id} className="flex flex-col sm:flex-row items-start sm:items-center gap-3 bg-white p-3 rounded-lg border border-gray-200 shadow-sm relative">
+                        <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold shrink-0">
+                          {index + 1}
+                        </div>
+                        
+                        <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-3 w-full">
+                          <div>
+                            <select
+                              value={row.catalog}
+                              onChange={(e) => handleRowChange(row.id, 'catalog', e.target.value)}
+                              className="w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-primary focus:ring-primary"
+                            >
+                              <option value="">Select Catalog...</option>
+                              {catalogs.map(c => (
+                                <option key={c.name} value={c.name}>{c.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          
+                          <div>
+                            <select
+                              value={row.schema}
+                              onChange={(e) => handleRowChange(row.id, 'schema', e.target.value)}
+                              disabled={!row.catalog}
+                              className="w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-primary focus:ring-primary disabled:bg-gray-100"
+                            >
+                              <option value="">Select Schema...</option>
+                              {availableSchemas.map(s => (
+                                <option key={s.name} value={s.name}>{s.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          
+                          <div>
+                            <select
+                              value={row.table}
+                              onChange={(e) => handleRowChange(row.id, 'table', e.target.value)}
+                              disabled={!row.schema}
+                              className="w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-primary focus:ring-primary disabled:bg-gray-100"
+                            >
+                              <option value="">Select Table/View...</option>
+                              {availableTables.map(t => (
+                                <option key={t.name} value={t.name}>{t.name} {t.type === 'VIEW' ? '(View)' : ''}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeDraftRow(row.id)}
+                          disabled={draftRows.length === 1}
+                          className="text-red-500 hover:text-red-700 hover:bg-red-50 shrink-0 h-9 w-9 p-0"
+                          title="Remove dataset"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    );
+                  })}
+                  
+                  <div className="pt-2">
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      onClick={addDraftRow}
+                      className="flex items-center gap-2 text-blue-600 border-blue-200 hover:bg-blue-50"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Add another table or view
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-gray-100 bg-white flex justify-between items-center shrink-0">
+              {draftSuccessId ? (
+                <>
+                  <div className="text-sm text-green-600 font-medium flex items-center gap-1">
+                    <CheckCircle2 className="w-4 h-4" /> Successfully submitted Request {draftSuccessId.substring(0, 12)}...
+                  </div>
+                  <Button variant="outline" onClick={() => {
+                    setIsDraftModalOpen(false);
+                    setDraftSuccessId(null);
+                    setDraftRows([{ id: Date.now(), catalog: '', schema: '', table: '' }]);
+                    window.location.reload();
+                  }}>Close</Button>
+                </>
+              ) : (
+                <>
+                  <div className="text-sm text-gray-500">
+                    {draftRows.filter(r => r.catalog && r.schema && r.table).length} valid dataset(s) selected
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setIsDraftModalOpen(false)}>Cancel</Button>
+                    <Button 
+                      onClick={handleDraftSubmit}
+                      disabled={draftRows.filter(r => r.catalog && r.schema && r.table).length === 0 || isDrafting || isLoadingCatalogs}
+                      className="bg-primary text-white flex items-center gap-2"
+                    >
+                      {isDrafting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileCheck className="w-4 h-4" />}
+                      Generate Contract via AI
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

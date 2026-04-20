@@ -48,8 +48,6 @@ def determine_intended_step(severity_raw: Any, action: str) -> str:
         return "certify"
     if action == "UNCERTIFY":
         return "uncertify"
-    if action == "START_CERTIFICATION":
-        return "start_certification"
     if severity in {"NONE", "LOW"}:
         return "warn"
     if severity == "MEDIUM" and action in DESTRUCTIVE_ACTIONS:

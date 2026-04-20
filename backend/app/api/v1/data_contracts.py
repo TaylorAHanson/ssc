@@ -11,6 +11,7 @@ from app.db.session import get_lakebase_session
 from app.db.data_contract import DataContractModel
 from app.db.data_asset import DataAssetModel
 from pydantic import BaseModel
+from app.api.deps import get_current_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -30,6 +31,45 @@ class DataContractResponse(BaseModel):
 class DataContractCreate(BaseModel):
     dataset_id: str
     yaml_content: str
+
+class DraftContractRequest(BaseModel):
+    dataset_ids: List[str]
+
+@router.post("/draft")
+async def draft_new_contract(
+    req: DraftContractRequest, 
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_lakebase_session)
+):
+    from app.tools.governance.draft_odcs import draft_odcs_contract
+    from app.tools.execute_workflow import execute_workflow
+    
+    if not req.dataset_ids:
+        raise HTTPException(status_code=400, detail="Must provide at least one dataset_id")
+        
+    primary_dataset = req.dataset_ids[0]
+    
+    try:
+        odcs_yaml = await draft_odcs_contract._func(dataset_ids=req.dataset_ids)
+        
+        res = await execute_workflow._func(
+            workflow_type="data_certification",
+            parameters={
+                "dataset_id": primary_dataset, 
+                "dataset_ids": req.dataset_ids,
+                "auto_generated": True,
+                "odcs_yaml": odcs_yaml
+            },
+            _user_email=current_user.email 
+        )
+        
+        if not res.get("success"):
+            raise HTTPException(status_code=500, detail=res.get("error", "Unknown error"))
+            
+        return {"status": "success", "request_id": res.get("request_id"), "message": "Drafted ODCS and started workflow."}
+    except Exception as e:
+        logger.error(f"Failed to draft contract: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("", response_model=List[DataContractResponse])
 @router.get("/", response_model=List[DataContractResponse])

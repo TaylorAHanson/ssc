@@ -93,10 +93,6 @@ formatted_reasons := [sprintf("%d. %s", [i + 1, msg]) | some i; msg := sorted_re
 action := "UNCERTIFY" if {
     is_violation
     input.resource.tags["system.certification_status"] == "certified"
-} else := "START_CERTIFICATION" if {
-    not is_violation
-    input.resource.certification_eligible
-    not input.resource.tags["system.certification_status"]
 } else := "ALLOW"
 
 reason := concat(" ", formatted_reasons) if {

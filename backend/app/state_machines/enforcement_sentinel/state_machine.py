@@ -243,8 +243,8 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                         asset.certification_violations = result.get("violation_reasons", [])
                         self.db.add(asset)
                 
-                # We record it if it's an actual violation, OR if the action is a proactive enforcement step like CERTIFY or START_CERTIFICATION
-                if is_violation or action in ["CERTIFY", "UNCERTIFY", "START_CERTIFICATION"]:
+                # We record it if it's an actual violation, OR if the action is a proactive enforcement step like CERTIFY or UNCERTIFY
+                if is_violation or action in ["CERTIFY", "UNCERTIFY"]:
                     violations.append({
                         "resource_id": resource.get("id"),
                         "resource_type": resource.get("type"),
@@ -373,53 +373,6 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                     )
                     await handler.kill(violation["resource_id"])
                     
-            elif step == "start_certification":
-                from app.db.request import RequestModel
-                
-                # Use dataset_id if present, otherwise fallback to resource_id
-                resource_context = violation.get("input_context", {}).get("resource", {})
-                dataset_id = resource_context.get("dataset_id", violation.get("resource_id"))
-                
-                # Deduplication check: check if there's already an active DATA_CERTIFICATION request for this dataset
-                from sqlalchemy import cast, String
-                existing = self.db.query(RequestModel).filter(
-                    RequestModel.type == RequestType.DATA_CERTIFICATION.value,
-                    RequestModel.status.notin_(["completed", "rejected", "failed"]),
-                    cast(RequestModel.state_context, String).like(f'%"{dataset_id}"%')
-                ).first()
-                
-                if existing:
-                    logger.info(
-                        "Skipping START_CERTIFICATION for %s because active request %s exists.",
-                        dataset_id,
-                        existing.id
-                    )
-                    executed_action = "deduplicated_skip"
-                else:
-                    logger.info(
-                        "Starting certification auto-generation for %s via direct function call",
-                        dataset_id
-                    )
-                    
-                    from app.tools.governance.draft_odcs import draft_odcs_contract
-                    from app.tools.execute_workflow import execute_workflow
-                    
-                    # Direct Python execution: Draft ODCS then execute workflow
-                    odcs_yaml = await draft_odcs_contract(dataset_id=dataset_id, violations_context=violation)
-                    
-                    await execute_workflow(
-                        workflow_type="data_certification",
-                        parameters={
-                            "dataset_id": dataset_id,
-                            "auto_generated": True,
-                            "violations_context": violation,
-                            "odcs_yaml": odcs_yaml
-                        },
-                        _user_email="system@governance"
-                    )
-                    
-                    executed_action = "start_certification_created"
-                        
             elif step == "uncertify":
                 if not handler:
                     logger.warning(
