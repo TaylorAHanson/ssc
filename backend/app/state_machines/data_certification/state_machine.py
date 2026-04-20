@@ -78,15 +78,15 @@ class DataCertificationStateMachine(BaseRequestStateMachine):
 
     @property
     def has_evaluation_passed(self) -> bool:
-        from app.state_machines.facts import get_fact
-        fact = get_fact(self.db, self.request.id, "evaluation_completed")
-        return fact and fact.details.get("passed", False)
+        from app.state_machines.facts import get_latest_fact
+        fact = get_latest_fact(self.db, self.request.id, "evaluation_completed")
+        return fact and fact.event_data.get("passed", False)
         
     @property
     def has_evaluation_failed(self) -> bool:
-        from app.state_machines.facts import get_fact
-        fact = get_fact(self.db, self.request.id, "evaluation_completed")
-        return fact and not fact.details.get("passed", True)
+        from app.state_machines.facts import get_latest_fact
+        fact = get_latest_fact(self.db, self.request.id, "evaluation_completed")
+        return fact and not fact.event_data.get("passed", True)
 
     @property
     def has_admin_approved(self) -> bool:
@@ -186,20 +186,16 @@ class DataCertificationStateMachine(BaseRequestStateMachine):
                                 bdq_score = float(response.result.data_array[0][1])
                         except Exception: pass
                         
-                    # Fetch Unity Catalog tags to check if it's eligible
-                    is_eligible = False
+                    # Fetch Unity Catalog tags
                     try:
                         uc_tags = workspace_client.entity_tag_assignments.list(entity_type='tables', entity_name=ds_id)
-                        for tag_assign in uc_tags:
-                            if tag_assign.tag_key == "certification_eligible":
-                                is_eligible = str(tag_assign.tag_value).lower() == "true"
                     except Exception: pass
                         
                     resource = {
                         "id": ds_id,
                         "type": "table",
                         "description": table_info.comment or "",
-                        "certification_eligible": is_eligible,
+                        "has_contract": True,
                         "tdq_score": tdq_score,
                         "bdq_score": bdq_score,
                         "tdq_threshold": tdq_threshold,

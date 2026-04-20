@@ -16,14 +16,14 @@ default severity := "NONE"
 # 1. Data Quality
 violation_reasons contains msg if {
     input.resource.type == "table"
-    input.resource.certification_eligible == true
+    input.resource.has_contract == true
     input.resource.tdq_score < input.resource.tdq_threshold
     msg := sprintf("TDQ (Technical Data Quality) score must be at least %v%% for a certified dataset.", [input.resource.tdq_threshold])
 }
 
 violation_reasons contains msg if {
     input.resource.type == "table"
-    input.resource.certification_eligible == true
+    input.resource.has_contract == true
     input.resource.bdq_score < input.resource.bdq_threshold
     msg := sprintf("BDQ (Business Data Quality) score must be at least %v%% for a certified dataset.", [input.resource.bdq_threshold])
 }
@@ -31,21 +31,21 @@ violation_reasons contains msg if {
 # 2. Metadata exists
 violation_reasons contains msg if {
     input.resource.type == "table"
-    input.resource.certification_eligible == true
+    input.resource.has_contract == true
     not input.resource.catalog_description
     msg := "Catalog description is missing for the certified dataset."
 }
 
 violation_reasons contains msg if {
     input.resource.type == "table"
-    input.resource.certification_eligible == true
+    input.resource.has_contract == true
     not input.resource.schema_description
     msg := "Schema description is missing for the certified dataset."
 }
 
 violation_reasons contains msg if {
     input.resource.type == "table"
-    input.resource.certification_eligible == true
+    input.resource.has_contract == true
     input.resource.all_columns_have_descriptions == false
     msg := "One or more columns are missing descriptions in the certified dataset."
 }
@@ -53,14 +53,14 @@ violation_reasons contains msg if {
 # 3. Access Control exists
 violation_reasons contains msg if {
     input.resource.type == "table"
-    input.resource.certification_eligible == true
+    input.resource.has_contract == true
     input.resource.rbac_defined == false
     msg := "RBAC (Role-Based Access Control) must be defined for a certified dataset."
 }
 
 violation_reasons contains msg if {
     input.resource.type == "table"
-    input.resource.certification_eligible == true
+    input.resource.has_contract == true
     input.resource.abac_needed == true
     input.resource.abac_defined == false
     msg := "ABAC (Attribute-Based Access Control) is marked as needed but is not defined for the certified dataset."
@@ -70,7 +70,7 @@ violation_reasons contains msg if {
 required_tags := {"Owner group", "Approver group", "Domain", "SLO_SLA"}
 violation_reasons contains msg if {
     input.resource.type == "table"
-    input.resource.certification_eligible == true
+    input.resource.has_contract == true
     tag := required_tags[_]
     not input.resource.tags[tag]
     msg := sprintf("Required tag '%v' is missing from the certified dataset.", [tag])
@@ -78,7 +78,7 @@ violation_reasons contains msg if {
 
 violation_reasons contains msg if {
     input.resource.type == "table"
-    input.resource.certification_eligible == true
+    input.resource.has_contract == true
     not input.resource.data_classification
     msg := "Data classification (e.g., PII / No PII) must be defined for a certified dataset."
 }
@@ -98,9 +98,9 @@ action := "UNCERTIFY" if {
 reason := concat(" ", formatted_reasons) if {
     is_violation
 } else := "Dataset meets all technical certification requirements." if {
-    input.resource.certification_eligible
+    input.resource.has_contract
     not input.resource.tags["system.certification_status"]
-} else := "Dataset is not seeking certification or is already certified."
+} else := "Dataset does not have an active contract or is already certified."
 
 severity := "HIGH" if {
     is_violation

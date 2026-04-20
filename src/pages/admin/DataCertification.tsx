@@ -15,7 +15,7 @@ export function DataCertification() {
   const [contractsMap, setContractsMap] = useState<Record<string, DataContract>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortField, setSortField] = useState<'name' | 'tdq' | 'bdq' | 'lastRun' | 'discovered'>('name');
+  const [sortField, setSortField] = useState<'name' | 'tdq' | 'bdq' | 'lastRun' | 'created'>('name');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [statusFilter, setStatusFilter] = useState<'all' | 'certified' | 'uncertified' | 'pending' | 'invalid' | 'awaiting'>('all');
   const [isDrafting, setIsDrafting] = useState(false);
@@ -86,6 +86,29 @@ export function DataCertification() {
     }
   };
 
+  const handleDeleteContract = async (datasetId: string) => {
+    if (!confirm(`Are you sure you want to delete the contract for ${datasetId}? This will remove all contract versions and unset its certified status.`)) {
+      return;
+    }
+    
+    try {
+      await api.deleteDataContract(datasetId);
+      
+      // Reload assets to reflect changes
+      const [data, contracts] = await Promise.all([
+        api.getDataAssets(),
+        api.getDataContracts()
+      ]);
+      const map: Record<string, DataContract> = {};
+      contracts.forEach(c => map[c.dataset_id] = c);
+      setContractsMap(map);
+      setDatasets(data.filter(d => map[d.id] || d.contract_url));
+    } catch (e: any) {
+      console.error('Failed to delete contract', e);
+      alert('Failed to delete contract: ' + e.message);
+    }
+  };
+
   const handleValidate = (value: string | undefined) => {
     const val = value || '';
     setYamlContent(val);
@@ -122,7 +145,7 @@ export function DataCertification() {
       const map: Record<string, DataContract> = {};
       contracts.forEach(c => map[c.dataset_id] = c);
       setContractsMap(map);
-      setDatasets(data.filter(d => d.contract_url || d.certified || d.data_quality || (Array.isArray(d.tags) && d.tags.includes('certification_eligible'))));
+      setDatasets(data.filter(d => d.contract_url || d.certified || d.data_quality));
     } catch (e: any) {
       setYamlError(e.message || 'Failed to save data contract');
     } finally {
@@ -216,7 +239,7 @@ export function DataCertification() {
     return () => { mounted = false; };
   }, []);
 
-  const handleSort = (field: 'name' | 'tdq' | 'bdq' | 'lastRun' | 'discovered') => {
+  const handleSort = (field: 'name' | 'tdq' | 'bdq' | 'lastRun' | 'created') => {
     if (sortField === field) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
     } else {
@@ -225,7 +248,7 @@ export function DataCertification() {
     }
   };
 
-  const getSortIcon = (field: 'name' | 'tdq' | 'bdq' | 'lastRun' | 'discovered') => {
+  const getSortIcon = (field: 'name' | 'tdq' | 'bdq' | 'lastRun' | 'created') => {
     if (sortField !== field) return <ChevronUp className="w-3 h-3 text-gray-300 opacity-0 group-hover:opacity-100" />;
     return sortDirection === 'asc' ? <ChevronUp className="w-3 h-3 text-primary" /> : <ChevronDown className="w-3 h-3 text-primary" />;
   };
@@ -267,7 +290,7 @@ export function DataCertification() {
       } else if (sortField === 'lastRun') {
         valA = a.last_synced_at ? new Date(a.last_synced_at).getTime() : 0;
         valB = b.last_synced_at ? new Date(b.last_synced_at).getTime() : 0;
-      } else if (sortField === 'discovered') {
+      } else if (sortField === 'created') {
         valA = a.created_at ? new Date(a.created_at).getTime() : 0;
         valB = b.created_at ? new Date(b.created_at).getTime() : 0;
       }
@@ -286,7 +309,7 @@ export function DataCertification() {
             Data Certification
           </CardTitle>
           <CardDescription>
-            Manage and review data contracts, data quality metrics (TDQ/BDQ), and certification status for datasets marked as <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">certification_eligible</code>.
+            Manage and review data contracts, data quality metrics (TDQ/BDQ), and certification status for datasets.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -344,9 +367,9 @@ export function DataCertification() {
                   <th className="p-3">Status</th>
                   <th 
                     className="p-3 cursor-pointer hover:bg-gray-100 group transition-colors"
-                    onClick={() => handleSort('discovered')}
+                    onClick={() => handleSort('created')}
                   >
-                    <div className="flex items-center justify-between">Discovered {getSortIcon('discovered')}</div>
+                    <div className="flex items-center justify-between">Created {getSortIcon('created')}</div>
                   </th>
                   <th 
                     className="p-3 cursor-pointer hover:bg-gray-100 group transition-colors"
@@ -389,7 +412,7 @@ export function DataCertification() {
                     const freshness = dq.freshness || 'N/A';
                     const drift = dq.drift || 'N/A';
                     const lastRun = ds.last_synced_at ? format(parseISO(ds.last_synced_at), 'MMM d, HH:mm') : 'Unknown';
-                    const discoveredDate = ds.created_at ? format(parseISO(ds.created_at), 'MMM d, yyyy') : 'Unknown';
+                    const createdDate = ds.created_at ? format(parseISO(ds.created_at), 'MMM d, yyyy') : 'Unknown';
 
                     const contract = contractsMap[ds.id];
                     const isInvalid = contract && contract.yaml_content.toLowerCase().includes('changeme');
@@ -437,7 +460,7 @@ export function DataCertification() {
                             </div>
                           )}
                         </td>
-                        <td className="p-3 text-gray-600 whitespace-nowrap">{discoveredDate}</td>
+                        <td className="p-3 text-gray-600 whitespace-nowrap">{createdDate}</td>
                         <td className="p-3 text-gray-600 whitespace-nowrap">{lastRun}</td>
                         <td className="p-3">
                           <span className={`font-semibold ${typeof tdq === 'number' ? (tdq >= 90 ? 'text-green-600' : 'text-orange-600') : 'text-gray-400 cursor-help'}`} title={typeof tdq === 'number' ? '' : 'Run Enforcement Sentinel to fetch score'}>
@@ -460,15 +483,28 @@ export function DataCertification() {
                           </span>
                         </td>
                         <td className="p-3 text-right">
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
-                            onClick={() => handleEdit(ds)}
-                            className="text-xs h-7 px-2 border-blue-200 text-blue-600 hover:bg-blue-50"
-                          >
-                            <Edit className="w-3 h-3 mr-1" />
-                            Edit Contract
-                          </Button>
+                          <div className="flex items-center justify-end gap-2">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              onClick={() => handleEdit(ds)}
+                              className="text-xs h-7 px-2 border-blue-200 text-blue-600 hover:bg-blue-50"
+                            >
+                              <Edit className="w-3 h-3 mr-1" />
+                              Edit Contract
+                            </Button>
+                            {(contract || ds.contract_url) && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleDeleteContract(ds.id)}
+                                className="text-xs h-7 px-2 border-red-200 text-red-600 hover:bg-red-50"
+                                title="Delete Contract"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </Button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -608,7 +644,7 @@ export function DataCertification() {
             </div>
             <div className="p-6 bg-gray-50 flex-1 overflow-y-auto max-h-[60vh]">
               <p className="text-sm text-gray-600 mb-4">
-                This dataset is marked as <code className="bg-gray-200 px-1 rounded text-xs">certification_eligible</code>, but currently fails the following Open Policy Agent (OPA) checks required for certification:
+                This dataset fails the following Open Policy Agent (OPA) checks required for certification:
               </p>
               <ul className="space-y-3">
                 {violationAsset.certification_violations?.map((v, i) => (

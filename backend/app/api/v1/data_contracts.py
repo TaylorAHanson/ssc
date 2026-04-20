@@ -154,3 +154,32 @@ def create_contract(contract: DataContractCreate, db: Session = Depends(get_lake
     db.commit()
     db.refresh(new_contract)
     return new_contract
+
+@router.delete("/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_contract(
+    dataset_id: str, 
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_lakebase_session)
+):
+    """Delete all versions of a data contract and unset the asset contract_url."""
+    # Check permissions - usually only admins or owners should delete contracts
+    if not current_user.has_role("platform_admin") and not current_user.has_role("governance_admin"):
+        raise HTTPException(status_code=403, detail="Not authorized to delete data contracts")
+        
+    contracts = db.query(DataContractModel).filter(DataContractModel.dataset_id == dataset_id).all()
+    asset = db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
+    
+    if not contracts and not asset:
+        raise HTTPException(status_code=404, detail="Data contract not found")
+        
+    for contract in contracts:
+        db.delete(contract)
+        
+    # Clear the contract_url from the DataAsset if it exists
+    if asset:
+        asset.contract_url = None
+        asset.certified = False
+        db.add(asset)
+        
+    db.commit()
+    return None

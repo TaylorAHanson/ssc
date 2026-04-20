@@ -76,7 +76,7 @@ As detailed in [GOVERNANCE.md](../docs/GOVERNANCE.md), our platform enforces pol
 ```mermaid
 flowchart TD
     A[Enforcement Sentinel Triggered] --> B(DatasetResourceHandler)
-    B --> C[Read Local YAML Contracts<br>Extract 'certification_eligible' & thresholds]
+    B --> C[Read Local YAML Contracts<br>Extract data product info & thresholds]
     
     C --> F[Fetch Unity Catalog Metadata<br>Descriptions, Grants, Tags]
     F --> G[Execute Databricks SQL<br>Query TDQ & BDQ Scores]
@@ -84,8 +84,8 @@ flowchart TD
     G --> H[Construct Resource JSON]
     H --> I[Send to Open Policy Agent<br>data_certification.rego]
     
-    I --> J{certification_eligible<br>== true?}
-    J -- No --> K[Action: ALLOW<br>'Not seeking certification']
+    I --> J{has_contract<br>== true?}
+    J -- No --> K[Action: ALLOW<br>'Does not have an active contract']
     
     J -- Yes --> L{Passes all Quality,<br>Metadata & Tag checks?}
     L -- No --> M[Action: UNCERTIFY<br>'Fails requirements']

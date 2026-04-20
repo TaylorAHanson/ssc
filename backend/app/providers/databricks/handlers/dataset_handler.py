@@ -22,43 +22,12 @@ class DatasetResourceHandler(BaseResourceHandler):
             for contract in contracts:
                 try:
                     dataset_def = yaml.safe_load(contract.yaml_content)
-                    servers = dataset_def.get("servers", [])
-                    catalog = servers[0].get("catalog", "main") if servers else "main"
-                    schema = servers[0].get("schema", "default") if servers else "default"
-                    schemas = dataset_def.get("schema", [])
-                    first_schema = schemas[0] if schemas else {}
-                    physical_table = first_schema.get("physicalName", "unknown")
-                    full_name = f"{catalog}.{schema}.{physical_table}"
+                    full_name = contract.dataset_id
                     contracted_datasets[full_name] = dataset_def
                 except Exception as e:
                     logger.error(f"Failed to parse Data Contract {contract.dataset_id}: {e}")
                     
-            tagged_tables = []
-            try:
-                if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
-                    # For demo purposes we query taylor_hanson_build_catalog, but ideally this would be system.information_schema.table_tags
-                    query = """
-                        SELECT catalog_name, schema_name, table_name 
-                        FROM taylor_hanson_build_catalog.information_schema.table_tags 
-                        WHERE tag_name = 'certification_eligible' AND tag_value = 'true'
-                    """
-                    logger.info("Querying UC for certification_eligible tables...")
-                    response = self.workspace_client.statement_execution.execute_statement(
-                        statement=query,
-                        warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
-                        wait_timeout="30s"
-                    )
-                    
-                    if response.result and response.result.data_array:
-                        for row in response.result.data_array:
-                            full_name = f"{row[0]}.{row[1]}.{row[2]}"
-                            tagged_tables.append(full_name)
-            except Exception as e:
-                logger.error(f"Failed to query Unity Catalog for tagged tables: {e}")
-
-            all_datasets_to_process = set(contracted_datasets.keys()).union(set(tagged_tables))
-            
-            for full_name in all_datasets_to_process:
+            for full_name in contracted_datasets.keys():
                 try:
                     parts = full_name.split(".")
                     if len(parts) != 3:
@@ -86,14 +55,11 @@ class DatasetResourceHandler(BaseResourceHandler):
                         elif rule.get("id") == "business_dq_threshold":
                             bdq_threshold = rule.get("mustBe", 100)
                     
-                    # Whether it is eligible is purely determined by the Unity Catalog tags
-                    is_eligible = full_name in tagged_tables
-                    
                     resource = {
                         "id": data_product,
                         "dataset_id": full_name,
                         "type": "table",
-                        "certification_eligible": is_eligible,
+                        "has_contract": True,
                         "tdq_threshold": tdq_threshold,
                         "bdq_threshold": bdq_threshold,
                         "abac_needed": schema_custom_props.get("abac_required", False),

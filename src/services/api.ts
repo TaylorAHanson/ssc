@@ -853,6 +853,17 @@ export async function draftDataContract(datasetIds: string[]): Promise<{ status:
   return response.json();
 }
 
+export async function deleteDataContract(datasetId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/data-contracts/${datasetId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to delete data contract: ${response.status} ${errorText}`);
+  }
+}
+
 export async function getDatabricksCatalogs(): Promise<{ name: string; comment?: string }[]> {
   const response = await fetch(`${API_BASE_URL}/data-assets/databricks/catalogs`, {
     headers: getHeaders()
@@ -915,6 +926,7 @@ export const api = {
   getContractHistory,
   createDataContract,
   draftDataContract,
+  deleteDataContract,
   getDatabricksCatalogs,
   getDatabricksSchemas,
   getDatabricksTables

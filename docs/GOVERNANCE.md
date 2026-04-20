@@ -53,7 +53,6 @@ The Data Certification flow operates in four distinct phases:
 1. **External Tagging Job (Standalone Databricks Job)**
    * A separate Databricks job runs periodically against production catalogs to differentiate which tables actually need certification, filtering out noise (like `*_raw`, `*_tmp`, or ingestion tables). 
    * **Missing Metadata Generation**: During this scan, the job utilizes `dbxmetagen` to automatically generate and apply any missing table and column descriptions in Unity Catalog.
-   * If deemed a consumption-ready asset, the job applies the `certification_eligible = true` tag to the table in Unity Catalog.
 
 2. **Draft Data Contract (Data Product Definition)**
    * Users navigate to the UI, select multiple eligible datasets that comprise a logical Data Product, and click 'Draft Contract'.
@@ -75,12 +74,9 @@ The Data Certification flow operates in four distinct phases:
 stateDiagram-v2
     state ExternalDatabricksJob {
         [*] --> ScanUC
-        ScanUC --> CheckTag : Is certification_eligible set?
-        CheckTag --> [*] : Yes (Skip)
-        CheckTag --> DetermineEligibility : No (Make judgement)
+        ScanUC --> DetermineEligibility : Make judgement on noise
         DetermineEligibility --> GenerateMissingMetadata : Run dbxmetagen
-        GenerateMissingMetadata --> ApplyTag : Set certification_eligible (true/false)
-        ApplyTag --> [*]
+        GenerateMissingMetadata --> [*]
     }
 
     state ContractDrafting {
@@ -129,7 +125,7 @@ The platform uses Open Policy Agent (OPA) with rules written in Rego to enforce 
 ### 2. The Physical Act of Certification
 Data certification is a formal process that verifies a dataset meets all enterprise standards for quality, security, and documentation.
 
-*   **Triggering the Workflow:** The Enforcement Sentinel automatically discovers eligible datasets (tagged with `certification_eligible = 'true'`) that meet or violate certification criteria. If a dataset lacks a contract, it triggers the `DATA_CERTIFICATION` workflow.
+*   **Triggering the Workflow:** The Enforcement Sentinel automatically discovers eligible datasets (those with an active Data Contract) that meet or violate certification criteria.
 *   **Reviewing a Pending Request:**
     1. Governance Admins navigate to the **Data Certification** tab in the UI.
     2. Datasets pending certification will display a **"Pending Request →"** link. Clicking this navigates to the specific request in the Self-Service Center.
