@@ -52,6 +52,7 @@ The Data Certification flow operates in four distinct phases:
 
 1. **External Tagging Job (Standalone Databricks Job)**
    * A separate Databricks job runs periodically against production catalogs to differentiate which tables actually need certification, filtering out noise (like `*_raw`, `*_tmp`, or ingestion tables). 
+   * **Missing Metadata Generation**: During this scan, the job utilizes `dbxmetagen` to automatically generate and apply any missing table and column descriptions in Unity Catalog.
    * If deemed a consumption-ready asset, the job applies the `certification_eligible = true` tag to the table in Unity Catalog.
 
 2. **Enforcement Sentinel (Policy as Code Checklist)**
@@ -75,32 +76,38 @@ The Data Certification flow operates in four distinct phases:
 stateDiagram-v2
     state ExternalDatabricksJob {
         [*] --> ScanUC
-        ScanUC --> FilterBronzeTmp
-        FilterBronzeTmp --> AIEvaluation : Check Description/Pattern
-        AIEvaluation --> ApplyTag : Set certification_eligible=true
+        ScanUC --> CheckTag : Is certification_eligible set?
+        CheckTag --> [*] : Yes (Skip)
+        CheckTag --> DetermineEligibility : No (Make judgement)
+        DetermineEligibility --> GenerateMissingMetadata : Run dbxmetagen
+        GenerateMissingMetadata --> ApplyTag : Set certification_eligible (true/false)
+        ApplyTag --> [*]
     }
 
     state SentinelDiscovery {
-        ApplyTag --> EvaluateOPA
-        EvaluateOPA --> Eligible : Meets ALL Checklist Criteria AND eligible=true
-        EvaluateOPA --> Ineligible : Missing criteria
+        [*] --> FetchTaggedDatasets : Query DB for eligible assets
+        FetchTaggedDatasets --> EvaluateOPA : Run data_certification.rego
+        EvaluateOPA --> Eligible : Meets ALL Checklist Criteria
+        EvaluateOPA --> NotEligibleYet : Missing criteria (Violations)
+        NotEligibleYet --> [*] : Await manual fixes
     }
     
     state AICertification {
-        Eligible --> AIGeneratesContract : Step 1 - AI drafts ODCS
+        Eligible --> AIGeneratesContract : AI drafts ODCS YAML
         AIGeneratesContract --> CreateRequest : Submit DATA_CERTIFICATION
     }
 
     state HumanReviewWorkflow {
-        CreateRequest --> AdminReview : Step 2 - Governance Admin
+        CreateRequest --> AdminReview : Governance Admin
         AdminReview --> SMEReview : Admin Approves
         AdminReview --> Rejected : Admin Rejects
         
-        SMEReview --> Approved : Step 3 - Data SME Approves
+        SMEReview --> Approved : Data SME Approves
         SMEReview --> Rejected : SME Rejects
     }
     
-    Approved --> Certified : Step 4 - Apply system tag
+    ExternalDatabricksJob --> SentinelDiscovery : Asynchronous Handoff
+    Approved --> Certified : Apply system tag
     Rejected --> [*] : Notify Owner
     Certified --> [*]
 ```

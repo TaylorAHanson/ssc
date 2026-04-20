@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
-import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info } from 'lucide-react';
+import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, RefreshCw, ChevronUp, ChevronDown, Filter } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { api } from '../../services/api';
 import type { DataAsset } from '../../services/api';
@@ -97,16 +97,8 @@ slaProperties:
     unit: d
 
 customProperties:
-  - property: certification_eligible
-    value: true
   - property: is_mock
     value: false
-  - property: databricks_tags
-    value:
-      "Owner group": "changeme_team"
-      "Approver group": "data-governance"
-      "Domain": "changeme_domain"
-      "SLO/SLA": "Tier 1"
 `;
 
 export function DataCertification() {
@@ -114,6 +106,10 @@ export function DataCertification() {
   const [contractsMap, setContractsMap] = useState<Record<string, DataContract>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [sortField, setSortField] = useState<'name' | 'tdq' | 'bdq' | 'lastRun' | 'discovered'>('name');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'certified' | 'uncertified' | 'pending' | 'invalid' | 'awaiting'>('all');
 
   // Editor State
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -127,12 +123,46 @@ export function DataCertification() {
   // Violations Modal State
   const [violationAsset, setViolationAsset] = useState<DataAsset | null>(null);
 
-  const fetchHistory = async (datasetId: string) => {
+  const handleSync = async () => {
+    setIsSyncing(true);
+    try {
+      await api.triggerDataSync();
+      // Reload assets after sync
+      const [data, contracts] = await Promise.all([
+        api.getDataAssets(),
+        api.getDataContracts()
+      ]);
+      const map: Record<string, DataContract> = {};
+      contracts.forEach(c => map[c.dataset_id] = c);
+      setContractsMap(map);
+      setDatasets(data.filter(d => d.contract_url || d.certified || d.data_quality || (Array.isArray(d.tags) && d.tags.includes('certification_eligible'))));
+    } catch (e: any) {
+      alert(`Failed to sync data assets: ${e.message}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const fetchHistory = async (datasetId: string, contractUrl?: string | null) => {
     try {
       const history = await api.getContractHistory(datasetId);
       setContractHistory(history);
       if (history.length > 0) {
         setYamlContent(history[0].yaml_content);
+      } else if (contractUrl && contractUrl.startsWith('/requests/')) {
+        const requestId = contractUrl.split('/').pop();
+        if (requestId) {
+          try {
+            const request = await api.getRequest(requestId);
+            if (request && request.metadata && request.metadata.odcs_yaml) {
+              setYamlContent(request.metadata.odcs_yaml);
+              return;
+            }
+          } catch (reqError) {
+            console.error('Failed to fetch request for pending contract', reqError);
+          }
+        }
+        setYamlContent(DEFAULT_YAML);
       } else {
         setYamlContent(DEFAULT_YAML);
       }
@@ -148,7 +178,7 @@ export function DataCertification() {
     setYamlError(null);
     setShowHistory(false);
     if (dataset.contract_url) {
-      fetchHistory(dataset.id);
+      fetchHistory(dataset.id, dataset.contract_url);
     } else {
       // It's a new contract for this dataset
       setYamlContent(
@@ -234,10 +264,66 @@ export function DataCertification() {
     return () => { mounted = false; };
   }, []);
 
-  const filteredDatasets = datasets.filter(ds => 
-    ds.table_name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    `${ds.catalog}.${ds.schema_name}`.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const handleSort = (field: 'name' | 'tdq' | 'bdq' | 'lastRun' | 'discovered') => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection(field === 'name' ? 'asc' : 'desc');
+    }
+  };
+
+  const getSortIcon = (field: 'name' | 'tdq' | 'bdq' | 'lastRun' | 'discovered') => {
+    if (sortField !== field) return <ChevronUp className="w-3 h-3 text-gray-300 opacity-0 group-hover:opacity-100" />;
+    return sortDirection === 'asc' ? <ChevronUp className="w-3 h-3 text-primary" /> : <ChevronDown className="w-3 h-3 text-primary" />;
+  };
+
+  const getStatus = (ds: DataAsset, contract: DataContract) => {
+    const dq = ds.data_quality || {} as any;
+    const tdq = dq.tdq !== undefined ? dq.tdq : 'N/A';
+    const isInvalid = contract && contract.yaml_content.toLowerCase().includes('changeme');
+
+    if (isInvalid) return 'invalid';
+    if (ds.certified) return 'certified';
+    if (ds.contract_url) return 'pending';
+    if (tdq === 'N/A') return 'awaiting';
+    return 'uncertified';
+  };
+
+  const processedDatasets = datasets
+    .filter(ds => {
+      const matchesSearch = ds.table_name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            `${ds.catalog}.${ds.schema_name}`.toLowerCase().includes(searchTerm.toLowerCase());
+      if (statusFilter === 'all') return matchesSearch;
+      
+      const contract = contractsMap[ds.id];
+      return matchesSearch && getStatus(ds, contract) === statusFilter;
+    })
+    .sort((a, b) => {
+      const dqA = a.data_quality || {} as any;
+      const dqB = b.data_quality || {} as any;
+      
+      let valA: any = a.table_name.toLowerCase();
+      let valB: any = b.table_name.toLowerCase();
+      
+      if (sortField === 'tdq') {
+        valA = dqA.tdq !== undefined && dqA.tdq !== 'N/A' ? Number(dqA.tdq) : -1;
+        valB = dqB.tdq !== undefined && dqB.tdq !== 'N/A' ? Number(dqB.tdq) : -1;
+      } else if (sortField === 'bdq') {
+        valA = dqA.bdq !== undefined && dqA.bdq !== 'N/A' ? Number(dqA.bdq) : -1;
+        valB = dqB.bdq !== undefined && dqB.bdq !== 'N/A' ? Number(dqB.bdq) : -1;
+      } else if (sortField === 'lastRun') {
+        valA = a.last_synced_at ? new Date(a.last_synced_at).getTime() : 0;
+        valB = b.last_synced_at ? new Date(b.last_synced_at).getTime() : 0;
+      } else if (sortField === 'discovered') {
+        valA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        valB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      }
+      
+      if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+      if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
 
   return (
     <div className="space-y-6">
@@ -253,27 +339,90 @@ export function DataCertification() {
         </CardHeader>
         <CardContent>
           <div className="mb-4 flex flex-col md:flex-row gap-4 items-center justify-between">
-            <div className="relative w-full md:w-96">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search by table or location..."
-                className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-primary"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
+            <div className="flex w-full md:w-auto gap-4 flex-1">
+              <div className="relative w-full md:w-96">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search by table or location..."
+                  className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-primary"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+              <div className="relative shrink-0">
+                <div className="flex items-center border border-gray-300 rounded-lg px-3 py-2 bg-white text-sm focus-within:ring-2 focus-within:ring-primary focus-within:border-primary">
+                  <Filter className="w-4 h-4 text-gray-500 mr-2" />
+                  <select 
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as any)}
+                    className="bg-transparent border-none outline-none focus:ring-0 text-gray-700 w-40"
+                  >
+                    <option value="all">All Statuses</option>
+                    <option value="certified">Certified</option>
+                    <option value="pending">Pending Approval</option>
+                    <option value="uncertified">Uncertified</option>
+                    <option value="invalid">Invalid (Changeme)</option>
+                    <option value="awaiting">Awaiting Scan</option>
+                  </select>
+                </div>
+              </div>
             </div>
+            <Button
+              onClick={handleSync}
+              disabled={isSyncing}
+              className="flex items-center gap-2"
+              variant="outline"
+            >
+              {isSyncing ? (
+                <span className="flex items-center gap-2">
+                  <div className="w-4 h-4 rounded-full border-2 border-gray-400 border-t-gray-600 animate-spin" />
+                  Syncing...
+                </span>
+              ) : (
+                <span className="flex items-center gap-2">
+                  <RefreshCw className="w-4 h-4" />
+                  Sync Metadata
+                </span>
+              )}
+            </Button>
           </div>
 
           <div className="overflow-x-auto rounded-lg border border-gray-200">
             <table className="w-full text-sm text-left">
-              <thead className="bg-gray-50 text-gray-700 font-medium border-b border-gray-200">
+              <thead className="bg-gray-50 text-gray-700 font-medium border-b border-gray-200 select-none">
                 <tr>
-                  <th className="p-3 pl-4">Dataset</th>
+                  <th 
+                    className="p-3 pl-4 cursor-pointer hover:bg-gray-100 group transition-colors"
+                    onClick={() => handleSort('name')}
+                  >
+                    <div className="flex items-center justify-between">Dataset {getSortIcon('name')}</div>
+                  </th>
                   <th className="p-3">Status</th>
-                  <th className="p-3">Last Policy Run</th>
-                  <th className="p-3">TDQ</th>
-                  <th className="p-3">BDQ</th>
+                  <th 
+                    className="p-3 cursor-pointer hover:bg-gray-100 group transition-colors"
+                    onClick={() => handleSort('discovered')}
+                  >
+                    <div className="flex items-center justify-between">Discovered {getSortIcon('discovered')}</div>
+                  </th>
+                  <th 
+                    className="p-3 cursor-pointer hover:bg-gray-100 group transition-colors"
+                    onClick={() => handleSort('lastRun')}
+                  >
+                    <div className="flex items-center justify-between">Last Policy Run {getSortIcon('lastRun')}</div>
+                  </th>
+                  <th 
+                    className="p-3 cursor-pointer hover:bg-gray-100 group transition-colors"
+                    onClick={() => handleSort('tdq')}
+                  >
+                    <div className="flex items-center justify-between">TDQ {getSortIcon('tdq')}</div>
+                  </th>
+                  <th 
+                    className="p-3 cursor-pointer hover:bg-gray-100 group transition-colors"
+                    onClick={() => handleSort('bdq')}
+                  >
+                    <div className="flex items-center justify-between">BDQ {getSortIcon('bdq')}</div>
+                  </th>
                   <th className="p-3">Freshness</th>
                   <th className="p-3">Drift</th>
                   <th className="p-3 text-right">Contract</th>
@@ -282,14 +431,14 @@ export function DataCertification() {
               <tbody className="divide-y divide-gray-100 bg-white">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={8} className="p-6 text-center text-gray-500">Loading datasets...</td>
+                    <td colSpan={9} className="p-6 text-center text-gray-500">Loading datasets...</td>
                   </tr>
-                ) : filteredDatasets.length === 0 ? (
+                ) : processedDatasets.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="p-6 text-center text-gray-500">No datasets found.</td>
+                    <td colSpan={9} className="p-6 text-center text-gray-500">No datasets found.</td>
                   </tr>
                 ) : (
-                  filteredDatasets.map(ds => {
+                  processedDatasets.map(ds => {
                     const dq = ds.data_quality || {} as any;
                     
                     const tdq = dq.tdq !== undefined ? dq.tdq : 'N/A';
@@ -297,6 +446,7 @@ export function DataCertification() {
                     const freshness = dq.freshness || 'N/A';
                     const drift = dq.drift || 'N/A';
                     const lastRun = ds.last_synced_at ? format(parseISO(ds.last_synced_at), 'MMM d, HH:mm') : 'Unknown';
+                    const discoveredDate = ds.created_at ? format(parseISO(ds.created_at), 'MMM d, yyyy') : 'Unknown';
 
                     const contract = contractsMap[ds.id];
                     const isInvalid = contract && contract.yaml_content.toLowerCase().includes('changeme');
@@ -344,6 +494,7 @@ export function DataCertification() {
                             </div>
                           )}
                         </td>
+                        <td className="p-3 text-gray-600 whitespace-nowrap">{discoveredDate}</td>
                         <td className="p-3 text-gray-600 whitespace-nowrap">{lastRun}</td>
                         <td className="p-3">
                           <span className={`font-semibold ${typeof tdq === 'number' ? (tdq >= 90 ? 'text-green-600' : 'text-orange-600') : 'text-gray-400 cursor-help'}`} title={typeof tdq === 'number' ? '' : 'Run Enforcement Sentinel to fetch score'}>

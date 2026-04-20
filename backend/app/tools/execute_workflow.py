@@ -50,6 +50,16 @@ async def execute_workflow(workflow_type: str, parameters: Dict[str, Any], conve
         
         db.add(request)
         
+        # Link contract_url for Data Certification
+        if workflow_type == "data_certification":
+            dataset_id = parameters.get("dataset_id")
+            if dataset_id:
+                from app.db.data_asset import DataAssetModel
+                asset = db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
+                if asset:
+                    asset.contract_url = f"/requests/{request_id}"
+                    db.add(asset)
+        
         # Add 'request_submitted' fact to trigger the state machine immediately
         add_fact(db, request_id, "request_submitted", {}, actor="agent")
         

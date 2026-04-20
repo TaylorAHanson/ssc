@@ -78,3 +78,19 @@ def list_data_assets(
         })
         
     return result
+
+@router.post("/sync")
+async def trigger_data_sync():
+    """
+    Manually trigger a force sync of data assets from Databricks.
+    """
+    from app.workers.tasks.sync_data_assets import sync_data_assets_task
+    try:
+        await sync_data_assets_task(force=True)
+        return {"status": "success", "message": "Data assets sync completed successfully."}
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Manual sync failed: {e}", exc_info=True)
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))

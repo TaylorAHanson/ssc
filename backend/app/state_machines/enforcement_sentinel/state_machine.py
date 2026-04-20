@@ -397,33 +397,26 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                     executed_action = "deduplicated_skip"
                 else:
                     logger.info(
-                        "Starting certification auto-generation for %s",
+                        "Starting certification auto-generation for %s via direct function call",
                         dataset_id
                     )
                     
-                    new_req = RequestModel(
-                        id=str(uuid.uuid4()),
-                        type=RequestType.DATA_CERTIFICATION,
-                        title=f"Data Certification: {violation.get('resource_id')}",
-                        status="pending",
-                        requester_email="system@governance",
-                        state_context={
+                    from app.tools.governance.draft_odcs import draft_odcs_contract
+                    from app.tools.execute_workflow import execute_workflow
+                    
+                    # Direct Python execution: Draft ODCS then execute workflow
+                    odcs_yaml = await draft_odcs_contract(dataset_id=dataset_id, violations_context=violation)
+                    
+                    await execute_workflow(
+                        workflow_type="data_certification",
+                        parameters={
                             "dataset_id": dataset_id,
                             "auto_generated": True,
                             "violations_context": violation,
-                            "odcs_yaml": f"domain: unknown\ndataProduct: {violation.get('resource_id')}\nversion: 1.0.0\n"
-                        }
+                            "odcs_yaml": odcs_yaml
+                        },
+                        _user_email="system@governance"
                     )
-                    self.db.add(new_req)
-                    self.db.commit() # commit to get the ID and ensure state machine can find it
-                    
-                    # Update DataAsset to show as Pending in UI
-                    from app.db.data_asset import DataAssetModel
-                    asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
-                    if asset:
-                        asset.contract_url = f"/requests/{new_req.id}"
-                        self.db.add(asset)
-                        self.db.commit()
                     
                     executed_action = "start_certification_created"
                         

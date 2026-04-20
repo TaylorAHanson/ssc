@@ -650,29 +650,24 @@ async def execute_enforcement_action(
             if existing:
                 return {"status": "success", "message": f"Certification request already exists for {dataset_id}."}
                 
-            new_req = RequestModel(
-                id=str(uuid.uuid4()),
-                type=RequestType.DATA_CERTIFICATION,
-                title=f"Data Certification: {body.resource_id}",
-                status="pending",
-                requester_email=current_user.email,
-                state_context={
+            from app.tools.governance.draft_odcs import draft_odcs_contract
+            from app.tools.execute_workflow import execute_workflow
+            import json
+            
+            # Direct Python execution: Draft ODCS then execute workflow
+            odcs_yaml = await draft_odcs_contract(dataset_id=dataset_id, violations_context=violation)
+            
+            await execute_workflow(
+                workflow_type="data_certification",
+                parameters={
                     "dataset_id": dataset_id,
                     "auto_generated": True,
                     "violations_context": violation,
-                    "odcs_yaml": f"domain: unknown\ndataProduct: {body.resource_id}\nversion: 1.0.0\n"
-                }
+                    "odcs_yaml": odcs_yaml
+                },
+                _user_email=current_user.email
             )
-            db.add(new_req)
-            db.commit()
             
-            from app.db.data_asset import DataAssetModel
-            asset = db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
-            if asset:
-                asset.contract_url = f"/requests/{new_req.id}"
-                db.add(asset)
-                db.commit()
-                
             executed_action = "manual_start_certification"
             
         else:

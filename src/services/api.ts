@@ -840,6 +840,18 @@ export async function createDataContract(datasetId: string, yamlContent: string)
   return response.json();
 }
 
+export async function triggerDataSync(): Promise<{ status: string; message: string }> {
+  const response = await fetch(`${API_BASE_URL}/data-assets/sync`, {
+    method: 'POST',
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(errorText || `Failed to sync data assets: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -867,5 +879,6 @@ export const api = {
   getDataAssets,
   getDataContracts,
   getContractHistory,
-  createDataContract
+  createDataContract,
+  triggerDataSync
 };

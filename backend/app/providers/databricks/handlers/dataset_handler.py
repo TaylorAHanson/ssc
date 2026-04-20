@@ -83,8 +83,8 @@ class DatasetResourceHandler(BaseResourceHandler):
                         elif rule.get("id") == "business_dq_threshold":
                             bdq_threshold = rule.get("mustBe", 100)
                     
-                    # If there's no contract, but it was found via tags, it's eligible
-                    is_eligible = True if full_name in tagged_tables else root_custom_props.get("certification_eligible", False)
+                    # Whether it is eligible is purely determined by the Unity Catalog tags
+                    is_eligible = full_name in tagged_tables
                     
                     resource = {
                         "id": data_product,
@@ -96,7 +96,7 @@ class DatasetResourceHandler(BaseResourceHandler):
                         "abac_needed": schema_custom_props.get("abac_required", False),
                         "abac_defined": False,
                         "data_classification": schema_custom_props.get("classification", ""),
-                        "tags": root_custom_props.get("databricks_tags", {})
+                        "tags": {}
                     }
                     
                     # Fetch TDQ and BDQ scores
@@ -144,6 +144,7 @@ class DatasetResourceHandler(BaseResourceHandler):
                         
                     try:
                         uc_tags = self.workspace_client.entity_tag_assignments.list(entity_type='tables', entity_name=full_name)
+                        # Replace the "known" tags from the contract entirely if they are present in Unity Catalog
                         for tag_assign in uc_tags:
                             if tag_assign.tag_key:
                                 resource["tags"][tag_assign.tag_key] = tag_assign.tag_value
