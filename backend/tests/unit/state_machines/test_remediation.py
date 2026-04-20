@@ -11,7 +11,7 @@ from app.state_machines.enforcement_sentinel.remediation import (
 @pytest.mark.parametrize(
     "mode,severity,action,expected",
     [
-        ("audit_only", "CRITICAL", "KILL", "skip"),
+        ("audit_only", "CRITICAL", "KILL", "audit_skipped"),
         ("active_enforcement", "CRITICAL", "SKIPPED_ALLOWLIST", "skip"),
         ("active_enforcement", "CRITICAL", "KILL", "kill"),
         ("active_enforcement", "HIGH", "KILL", "kill"),
