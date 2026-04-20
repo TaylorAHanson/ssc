@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 ROLES = [
     {"id": "role_platform_admin", "name": "platform_admin", "description": "Full system access"},
     {"id": "role_governance_admin", "name": "governance_admin", "description": "Governance and policy management"},
+    {"id": "role_data_owner", "name": "data_owner", "description": "Data SME and ownership"},
     {"id": "role_security_admin", "name": "security_admin", "description": "Security auditing and access control"},
     {"id": "role_finance_admin", "name": "finance_admin", "description": "Budget and cost management"},
     {"id": "role_business_user", "name": "business_user", "description": "Standard business user access"},
