@@ -44,23 +44,66 @@ The final layer exists to catch drift, uncover unauthorized changes, and continu
 
 ---
 
-## What We Allow (And What We Don't)
+## Data Certification Workflow
 
-To maintain control without stifling innovation, we apply different governance postures across our namespace and environment paradigms.
+A key component of our governance framework is the proactive certification of data assets. Governance is uniform across the Enterprise Data Hub (EDH), meaning all eligible production tables must be pushed through certification. To minimize manual entry, we use an AI-assisted, proactive workflow.
 
-### Self-Service Governance Permissions Matrix
+The Data Certification flow operates in four distinct phases:
 
-This matrix demonstrates how limits and agentic guardrails are applied across different workspace types.
+1. **External Tagging Job (Standalone Databricks Job)**
+   * A separate Databricks job runs periodically against production catalogs to differentiate which tables actually need certification, filtering out noise (like `*_raw`, `*_tmp`, or ingestion tables). 
+   * If deemed a consumption-ready asset, the job applies the `certification_eligible = true` tag to the table in Unity Catalog.
 
-![Permissions Matrix](./permission-matrix.png)
+2. **Enforcement Sentinel (Policy as Code Checklist)**
+   * The Enforcement Sentinel discovers datasets tagged with `certification_eligible = true` and evaluates them against a strict OPA certification checklist:
+     1. **Data Quality**: TDQs and BDQs defined and met.
+     2. **Metadata**: Catalog, schema, and column descriptions exist.
+     3. **Access Control**: ABAC and RBAC defined.
+     4. **Tagging & Classification**: Tags exist with valid values (Owner group, Approver group, Domain, SLO/SLA) and data classification exists (e.g., PII).
+   * If a dataset *meets all technical criteria* but is not yet certified, OPA triggers a `START_CERTIFICATION` action (skipping if an active workflow already exists).
 
-| Action / Capability | Enterprise Workspaces (`enterprise-{env}`) | Domain Workspaces (`supply-chain-{env}`) | Ad Hoc Workspaces (`adhoc-{env}`) | Governance Enforcement Mechanism & Approvers |
-| :--- | :--- | :--- | :--- | :--- |
-| **Workspace Lifecycle** | Persistent | Persistent | **90-Day Maximum** (May be extended via approval) | **Lifecycle Management**: Ad Hoc workspaces are scheduled for deletion via State Machines upon expiration to prevent resource sprawl. |
-| **Cross-Environment Access** (e.g., Dev requesting Prod data) | Blocked | Blocked | Blocked | **Catalog Binding**: Unity Catalog enforces environment isolation by binding catalogs to specific workspace environments, preventing cross-environment access at the infrastructure level. |
-| **Data Asset Creation** (Tables, Views) | Allowed (Highly Curated / Certified only) | Allowed (Full Autonomy) | Allowed (Temporary / Sandbox) | **Data Certification**: The Agent proactively searches Unity Catalog to suggest existing assets and flags duplicate data. Production datasets must pass a Data Certification Review to receive a "Gold" or "Certified" badge in the Marketplace. |
-| **Compute / Object Creation** (Pipelines, Jobs) | Strictly Governed (Higher envs controlled by CI/CD only) | Allowed | Allowed | **CI/CD Enforcement**: In Enterprise PROD/STG environments, direct creation is blocked; any rogue jobs created outside the CI/CD pipeline are automatically killed by the Enforcement Sentinel. |
-| **Build & Register ML Models** | Restricted | Allowed | Sandboxed | **Responsible AI Guardrails**: Models must be registered in the UC Model Registry. The Agent checks the Feature Store to prevent redundant feature engineering. The FinOps Sentinel actively monitors for unused models and serving endpoints to prevent wasted spend. |
-| **Host Databricks Apps & Genie Spaces** | Blocked by Default (Exception Allowlist Required) | Allowed (Moderate Posture) | Allowed (for prototyping) | **Enforcement Sentinel**: Evaluates resources against OPA policies (e.g., `asset_allowlist.rego`). Unauthorized apps without an approved exception in the Allowlist database are automatically deleted. |
-| **Workspace & Compute Provisioning** | Restricted via Allow List | Allowed (with limits) | Allowed (Strict budget limits) | **FinOps Guardrails**: Enforces mandatory tagging (`CostCenter`, `Owner`) and standard compute policies to prevent over-provisioning. |
-| **Privileged Exceptions / Admin Access** | Allowed (Hardcoded in Terraform) | Allowed (Hardcoded in Terraform) | N/A | **Infrastructure as Code (IaC)**: Broad admin roles are heavily scrutinized and hardcoded directly in the foundational Terraform repository. |
+3. **AI Certification (Auto-Generation)**
+   * The Sentinel intercepts the action and calls an AI Agent to auto-generate a draft Open Data Contract Standard (ODCS) YAML file. The agent uses the metadata, tags, and quality scores collected by Sentinel.
+   * A new `DATA_CERTIFICATION` state machine request is spawned with this draft contract.
+
+4. **Certification State Machine (Human Review)**
+   * **Governance Admin Review**: Governance admins review the AI-generated contract to ensure platform and policy compliance.
+   * **Data SME Review**: Subject Matter Experts review the business logic, descriptions, and rules.
+   * **Finalization**: If both reviews pass, the system physically applies the `system.certification_status = 'certified'` tag in Databricks.
+
+```mermaid
+stateDiagram-v2
+    state ExternalDatabricksJob {
+        [*] --> ScanUC
+        ScanUC --> FilterBronzeTmp
+        FilterBronzeTmp --> AIEvaluation : Check Description/Pattern
+        AIEvaluation --> ApplyTag : Set certification_eligible=true
+    }
+
+    state SentinelDiscovery {
+        ApplyTag --> EvaluateOPA
+        EvaluateOPA --> Eligible : Meets ALL Checklist Criteria AND eligible=true
+        EvaluateOPA --> Ineligible : Missing criteria
+    }
+    
+    state AICertification {
+        Eligible --> AIGeneratesContract : Step 1 - AI drafts ODCS
+        AIGeneratesContract --> CreateRequest : Submit DATA_CERTIFICATION
+    }
+
+    state HumanReviewWorkflow {
+        CreateRequest --> AdminReview : Step 2 - Governance Admin
+        AdminReview --> SMEReview : Admin Approves
+        AdminReview --> Rejected : Admin Rejects
+        
+        SMEReview --> Approved : Step 3 - Data SME Approves
+        SMEReview --> Rejected : SME Rejects
+    }
+    
+    Approved --> Certified : Step 4 - Apply system tag
+    Rejected --> [*] : Notify Owner
+    Certified --> [*]
+```
+
+---
+

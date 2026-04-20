@@ -234,8 +234,8 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                 is_violation = result.get("is_violation")
                 action = result.get("action", "KILL")
                 
-                # We record it if it's an actual violation, OR if the action is a proactive enforcement step like CERTIFY
-                if is_violation or action in ["CERTIFY", "UNCERTIFY"]:
+                # We record it if it's an actual violation, OR if the action is a proactive enforcement step like CERTIFY or START_CERTIFICATION
+                if is_violation or action in ["CERTIFY", "UNCERTIFY", "START_CERTIFICATION"]:
                     violations.append({
                         "resource_id": resource.get("id"),
                         "resource_type": resource.get("type"),
@@ -364,7 +364,58 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                     )
                     await handler.kill(violation["resource_id"])
                     
-            elif step == "certify":
+            elif step == "start_certification":
+                from app.db.request import RequestModel
+                
+                # Deduplication check: check if there's already an active DATA_CERTIFICATION request for this dataset
+                existing = self.db.query(RequestModel).filter(
+                    RequestModel.type == RequestType.DATA_CERTIFICATION,
+                    RequestModel.status.notin_(["completed", "rejected", "failed"]),
+                    # Compare the dataset_id in the state_context JSON using a raw string match or postgres JSON operators
+                    # In sqlite we might just check if the ID is in the JSON text for simplicity
+                    RequestModel.state_context.cast(str).like(f'%"{violation["resource_id"]}"%')
+                ).first()
+                
+                if existing:
+                    logger.info(
+                        "Skipping START_CERTIFICATION for %s because active request %s exists.",
+                        violation.get("resource_id"),
+                        existing.id
+                    )
+                    executed_action = "deduplicated_skip"
+                else:
+                    logger.info(
+                        "Starting certification auto-generation for %s",
+                        violation.get("resource_id")
+                    )
+                    
+                    # Create the new request
+                    from app.state_machines.factory import create_state_machine
+                    
+                    # Generate a simple blank ODCS document stub for the human workflow to pick up
+                    # In a real scenario, this would call an LLM to auto-generate the contract
+                    resource_id = violation.get("resource_id")
+                    
+                    new_req = RequestModel(
+                        id=str(uuid.uuid4()),
+                        type=RequestType.DATA_CERTIFICATION,
+                        title=f"Data Certification: {resource_id}",
+                        status="pending",
+                        requester_email="system@governance",
+                        state_context={
+                            "dataset_id": resource_id,
+                            "auto_generated": True,
+                            "violations_context": violation,
+                            # Provide a stub contract that the AI 'generated'
+                            "odcs_yaml": f"domain: unknown\ndataProduct: {resource_id.split('.')[-1] if '.' in resource_id else resource_id}\nversion: 1.0.0\n"
+                        }
+                    )
+                    self.db.add(new_req)
+                    self.db.commit() # commit to get the ID and ensure state machine can find it
+                    
+                    # Initialize the new state machine to begin the process
+                    new_sm = create_state_machine(new_req.id, self.db)
+                    executed_action = "start_certification_created"
                 if not handler:
                     logger.warning(
                         "No handler for resource_type=%s; cannot certify for policy=%s",

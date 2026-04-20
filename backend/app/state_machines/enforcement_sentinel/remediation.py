@@ -10,7 +10,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-NON_REMEDIATION_ACTIONS = frozenset({"SKIPPED_ALLOWLIST", "PENDING_EXCEPTION", "ALLOW"})
+NON_REMEDIATION_ACTIONS = frozenset({"SKIPPED_ALLOWLIST", "PENDING_EXCEPTION", "ALLOW", "START_CERTIFICATION"})
 
 # High-impact automated changes; MEDIUM tier blocks these (warn instead).
 DESTRUCTIVE_ACTIONS = frozenset(
@@ -48,6 +48,8 @@ def determine_intended_step(severity_raw: Any, action: str) -> str:
         return "certify"
     if action == "UNCERTIFY":
         return "uncertify"
+    if action == "START_CERTIFICATION":
+        return "start_certification"
     if severity in {"NONE", "LOW"}:
         return "warn"
     if severity == "MEDIUM" and action in DESTRUCTIVE_ACTIONS:
@@ -69,6 +71,7 @@ def resolve_enforcement_step(mode: str, severity_raw: Any, action: str) -> str:
     Returns:
         - ``skip`` — no handler calls (allowlist skip, etc.)
         - ``audit_skipped`` — would have acted, but skipped due to audit mode
+        - ``start_certification`` — create a DATA_CERTIFICATION request via AI auto-generation
         - ``warn`` — call ``handler.warn`` with policy context
         - ``kill`` — call ``handler.kill`` (only valid when action is KILL)
         - ``certify`` — call ``handler.certify``
