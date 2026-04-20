@@ -107,3 +107,36 @@ stateDiagram-v2
 
 ---
 
+## Operations Manual: Governance Administration
+
+This section outlines the operational procedures for Governance Administrators managing policies and data certification workflows.
+
+### 1. Setting and Editing Policies
+The platform uses Open Policy Agent (OPA) with rules written in Rego to enforce governance policies.
+
+*   **Location of Policies:** All policies are located in the `backend/policies/` directory (e.g., `data_certification.rego`).
+*   **Modifying a Policy:**
+    1. Navigate to the relevant `.rego` file.
+    2. Update the logic for violation conditions (e.g., adjusting threshold percentages for TDQ/BDQ, adding new required tags).
+    3. Each policy rule evaluates the input context (like workspace and resource metadata) and yields an array of violation objects containing the `action` (e.g., `KILL`, `START_CERTIFICATION`), `reason`, and `severity`.
+*   **Applying Changes:** Once a `.rego` file is modified and saved, the backend's OPA evaluation engine will pick up the changes on the next Enforcement Sentinel run. No restart is strictly necessary for the Rego files themselves if they are evaluated dynamically per run, but testing in a lower environment is strongly advised before pushing to production.
+
+### 2. The Physical Act of Certification
+Data certification is a formal process that verifies a dataset meets all enterprise standards for quality, security, and documentation.
+
+*   **Triggering the Workflow:** The Enforcement Sentinel automatically discovers eligible datasets (tagged with `certification_eligible = 'true'`) that meet or violate certification criteria. If a dataset lacks a contract, it triggers the `DATA_CERTIFICATION` workflow.
+*   **Reviewing a Pending Request:**
+    1. Governance Admins navigate to the **Data Certification** tab in the UI.
+    2. Datasets pending certification will display a **"Pending Request →"** link. Clicking this navigates to the specific request in the Self-Service Center.
+    3. The request contains the AI-generated draft of the Data Contract (in ODCS YAML format) based on the dataset's metadata.
+*   **Admin and SME Approval:**
+    1. The Governance Admin reviews the request, verifies compliance, and approves it.
+    2. The request then moves to the Data SME (Subject Matter Expert) for a secondary review of business logic and schema descriptions.
+    3. Once both parties approve, the State Machine progresses to the `completed` state.
+*   **Automated Tagging (The "Physical Act"):** Upon reaching the `completed` state, the system automatically executes a Databricks SQL command to apply the `system.certification_status = 'certified'` tag directly to the table in Unity Catalog. The local asset cache is also updated to reflect the new certified status.
+
+### 3. Monitoring and Auditing
+*   **Enforcement Sentinel Runs:** The Sentinel can be run manually via the API or UI to audit the environment immediately.
+*   **Failure Notifications:** If a Sentinel run encounters an error, it is marked as `failed` in the UI, and an email notification is automatically dispatched to the configured governance email group (defined in `configuration.yaml`).
+*   **Audit Logs:** All enforcement actions (and skipped actions) are recorded in the `enforcement_audit` table in the database for compliance reporting.
+

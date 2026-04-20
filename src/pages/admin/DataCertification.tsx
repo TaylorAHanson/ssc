@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
-import { Search, AlertCircle, FileCheck, CheckCircle2, Plus, Edit, X, Save, History, Loader2 } from 'lucide-react';
+import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { api } from '../../services/api';
 import type { DataAsset } from '../../services/api';
@@ -171,14 +172,6 @@ export function DataCertification() {
     }
   };
 
-  const handleCreateContract = () => {
-    setEditingAsset(null);
-    setIsEditorOpen(true);
-    setYamlError(null);
-    setShowHistory(false);
-    setYamlContent(DEFAULT_YAML.replace(/new_contract_id/g, crypto.randomUUID()));
-  };
-
   const handleSave = async () => {
     if (yamlError) return;
     setIsSaving(true);
@@ -204,7 +197,7 @@ export function DataCertification() {
       const map: Record<string, DataContract> = {};
       contracts.forEach(c => map[c.dataset_id] = c);
       setContractsMap(map);
-      setDatasets(data.filter(d => d.contract_url || d.certified || d.data_quality));
+      setDatasets(data.filter(d => d.contract_url || d.certified || d.data_quality || (Array.isArray(d.tags) && d.tags.includes('certification_eligible'))));
     } catch (e: any) {
       setYamlError(e.message || 'Failed to save data contract');
     } finally {
@@ -224,7 +217,7 @@ export function DataCertification() {
           const map: Record<string, DataContract> = {};
           contracts.forEach(c => map[c.dataset_id] = c);
           setContractsMap(map);
-          setDatasets(data.filter(d => d.contract_url || d.certified || d.data_quality));
+          setDatasets(data.filter(d => d.contract_url || d.certified || d.data_quality || (Array.isArray(d.tags) && d.tags.includes('certification_eligible'))));
         }
       } catch (e) {
         console.error('Failed to load data assets for certification', e);
@@ -252,7 +245,7 @@ export function DataCertification() {
             Data Certification
           </CardTitle>
           <CardDescription>
-            Manage and review data contracts, data quality metrics (TDQ/BDQ), and certification status across the platform.
+            Manage and review data contracts, data quality metrics (TDQ/BDQ), and certification status for datasets marked as <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">certification_eligible</code>.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -267,13 +260,6 @@ export function DataCertification() {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
-            <Button 
-              onClick={handleCreateContract}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              <Plus className="w-4 h-4" />
-              Create Contract
-            </Button>
           </div>
 
           <div className="overflow-x-auto rounded-lg border border-gray-200">
@@ -328,9 +314,12 @@ export function DataCertification() {
                               <CheckCircle2 className="w-3 h-3 mr-1" /> Certified
                             </span>
                           ) : ds.contract_url ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                              Pending
-                            </span>
+                            <Link 
+                              to={ds.contract_url.startsWith('/requests') ? ds.contract_url : `/governance/certification?dataset=${ds.id}`}
+                              className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 hover:bg-blue-200 transition-colors"
+                            >
+                              {ds.contract_url.startsWith('/requests') ? 'Pending Request \u2192' : 'Pending'}
+                            </Link>
                           ) : (
                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
                               Uncertified

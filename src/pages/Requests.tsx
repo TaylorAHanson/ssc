@@ -350,6 +350,7 @@ export function Requests() {
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'status' | 'conversation'>('status');
   const [filterStatus, setFilterStatus] = useState<'pending' | 'completed' | 'failed'>('pending');
+  const [isLoading, setIsLoading] = useState(true);
 
   // Derived state: sort and filter
   const filteredRequests = requests
@@ -373,14 +374,20 @@ export function Requests() {
   const selectedRequest = requests.find(r => r.id === selectedRequestId) || null;
 
   useEffect(() => {
-    fetchRequests();
+    let mounted = true;
+    fetchRequests().finally(() => {
+      if (mounted) setIsLoading(false);
+    });
     
     // Poll for updates every 10 seconds to catch state transitions
     const pollInterval = setInterval(() => {
       fetchRequests();
     }, 10000);
     
-    return () => clearInterval(pollInterval);
+    return () => {
+      mounted = false;
+      clearInterval(pollInterval);
+    };
   }, [fetchRequests]);
 
 
@@ -397,7 +404,18 @@ export function Requests() {
   };
 
   // We only show empty state if there are NO requests at all, not just if filter hides them
-  if (requests.length === 0) {
+  if (requests.length === 0 || (requestId && !selectedRequest && !isLoading)) {
+    if (isLoading) {
+      return (
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="flex items-center gap-2 text-gray-500">
+            <Loader2 className="w-5 h-5 animate-spin" />
+            <p>Loading requests...</p>
+          </div>
+        </div>
+      );
+    }
+
     if (requestId) {
       return (
         <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">

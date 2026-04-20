@@ -408,6 +408,14 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                     self.db.add(new_req)
                     self.db.commit() # commit to get the ID and ensure state machine can find it
                     
+                    # Update DataAsset to show as Pending in UI
+                    from app.db.data_asset import DataAssetModel
+                    asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
+                    if asset:
+                        asset.contract_url = f"/requests/{new_req.id}"
+                        self.db.add(asset)
+                        self.db.commit()
+                    
                     executed_action = "start_certification_created"
                         
             elif step == "uncertify":

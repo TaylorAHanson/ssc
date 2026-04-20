@@ -139,6 +139,7 @@ class DataCertificationStateMachine(BaseRequestStateMachine):
                 asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
                 if asset:
                     asset.contract_url = f"/governance/certification?dataset={dataset_id}"
+                    asset.certified = True
                     self.db.add(asset)
                     
             self.db.commit()
