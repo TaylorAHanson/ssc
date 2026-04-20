@@ -233,6 +233,31 @@ async def process_scheduled_reports():
         db.close()
 
 
+async def _send_failure_notification(request: RequestModel, error_message: str):
+    """Send an email notification if an enforcement sentinel request fails."""
+    if request.type != RequestType.ENFORCEMENT_SENTINEL.value:
+        return
+        
+    try:
+        from app.providers.notifications.client import NotificationProvider
+        notifier = NotificationProvider()
+        to_email = settings.GOVERNANCE_EMAIL_GROUP
+        
+        subject = f"[Action Required] Enforcement Sentinel Run Failed: {request.title}"
+        body = (
+            f"An Enforcement Sentinel run failed and requires your attention.<br><br>"
+            f"<b>Request ID:</b> {request.id}<br>"
+            f"<b>Title:</b> {request.title}<br>"
+            f"<b>Error:</b> {error_message}<br><br>"
+            f"Please check the self-service center UI for more details."
+        )
+        
+        # Don't fail the poller if notification fails
+        await notifier.send_email(to=to_email, subject=subject, body=body, is_html=True)
+        logger.info(f"Sent failure notification for sentinel run {request.id} to {to_email}")
+    except Exception as e:
+        logger.error(f"Failed to send failure notification for {request.id}: {e}", exc_info=True)
+
 async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
     """Process a single request with locking and error handling."""
     async with semaphore:  # Limit concurrent processing
@@ -255,6 +280,7 @@ async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
                 # Don't change current_state - keep the last valid state so state machine can still be loaded
                 # The status="failed" indicates failure, not the state
                 db.commit()
+                await _send_failure_notification(request, f"Exceeded max retries ({request.max_retries})")
                 return
             
             # Determine if this is a long-running operation that needs heartbeat
@@ -673,3 +699,5 @@ async def _handle_permanent_error(
     logger.error(
         f"Permanent error for request {request.id}, marked as failed: {error}"
     )
+    
+    await _send_failure_notification(request, str(error))

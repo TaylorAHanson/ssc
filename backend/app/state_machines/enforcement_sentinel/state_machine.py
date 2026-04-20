@@ -368,12 +368,13 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                 from app.db.request import RequestModel
                 
                 # Deduplication check: check if there's already an active DATA_CERTIFICATION request for this dataset
+                from sqlalchemy import cast, String
                 existing = self.db.query(RequestModel).filter(
-                    RequestModel.type == RequestType.DATA_CERTIFICATION,
+                    RequestModel.type == RequestType.DATA_CERTIFICATION.value,
                     RequestModel.status.notin_(["completed", "rejected", "failed"]),
                     # Compare the dataset_id in the state_context JSON using a raw string match or postgres JSON operators
                     # In sqlite we might just check if the ID is in the JSON text for simplicity
-                    RequestModel.state_context.cast(str).like(f'%"{violation["resource_id"]}"%')
+                    cast(RequestModel.state_context, String).like(f'%"{violation["resource_id"]}"%')
                 ).first()
                 
                 if existing:
@@ -388,9 +389,6 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                         "Starting certification auto-generation for %s",
                         violation.get("resource_id")
                     )
-                    
-                    # Create the new request
-                    from app.state_machines.factory import create_state_machine
                     
                     # Generate a simple blank ODCS document stub for the human workflow to pick up
                     # In a real scenario, this would call an LLM to auto-generate the contract
@@ -413,8 +411,6 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                     self.db.add(new_req)
                     self.db.commit() # commit to get the ID and ensure state machine can find it
                     
-                    # Initialize the new state machine to begin the process
-                    new_sm = create_state_machine(new_req.id, self.db)
                     executed_action = "start_certification_created"
                 if not handler:
                     logger.warning(
