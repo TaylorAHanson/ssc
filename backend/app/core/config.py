@@ -29,6 +29,7 @@ def load_config_yaml():
 
 _yaml_config = load_config_yaml()
 _branding = _yaml_config.get("branding", {})
+_notifications = _yaml_config.get("notifications", {})
 
 class Settings(BaseSettings):
     """
@@ -153,7 +154,7 @@ class Settings(BaseSettings):
     DATABRICKS_TOKEN: str = ""  # SECRET: Set in .env
     DATABRICKS_WORKSPACE_URL: str = ""
     DATABRICKS_WAREHOUSE_ID: str = "" # SQL Warehouse ID for running queries
-    DATABRICKS_DATA_QUALITY_TABLE: str = "main.data_quality.results" # Table with data quality scores
+    DATABRICKS_DATA_QUALITY_TABLE: str = "taylor_hanson_build_catalog.main.data_quality_metrics" # Table with data quality scores
     
     # Databricks MWS (Account-level) Settings for Workspace Provisioning
     # SECRET: Set in .env file
@@ -233,6 +234,7 @@ class Settings(BaseSettings):
     IDP_API_KEY: str = ""  # SECRET: Set in .env
     
     # Notification Settings
+    GOVERNANCE_EMAIL_GROUP: str = _notifications.get("governance_email_group", os.getenv("GOVERNANCE_EMAIL_GROUP", "data-governance@example.com"))
     NOTIFICATION_EMAIL_SMTP_HOST: str = ""  # SMTP host for email notifications
     NOTIFICATION_EMAIL_SMTP_PORT: int = 587
     NOTIFICATION_EMAIL_SMTP_USER: str = ""  # SECRET: Set in .env

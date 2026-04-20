@@ -30,7 +30,7 @@ class RequestType(str, Enum):
     CATALOG_SCHEMA_TABLE_ACCESS = "catalog_schema_table_access"
     WORKSPACE_PROVISION = "workspace_provision"
     SERVICE_PRINCIPAL = "service_principal"
-    MARKETPLACE_CERTIFICATION = "marketplace_certification"
+    DATA_CERTIFICATION = "data_certification"
     REST_API_ACCESS = "rest_api_access"
     BATCH_DATA_ACCESS = "batch_data_access"
     GITHUB_REPO_CREATION = "github_repo_creation"

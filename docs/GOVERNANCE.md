@@ -44,23 +44,99 @@ The final layer exists to catch drift, uncover unauthorized changes, and continu
 
 ---
 
-## What We Allow (And What We Don't)
+## Data Certification Workflow
 
-To maintain control without stifling innovation, we apply different governance postures across our namespace and environment paradigms.
+A key component of our governance framework is the proactive certification of data assets. Governance is uniform across the Enterprise Data Hub (EDH), meaning all eligible production tables must be pushed through certification. To minimize manual entry, we use an AI-assisted, proactive workflow.
 
-### Self-Service Governance Permissions Matrix
+The Data Certification flow operates in four distinct phases:
 
-This matrix demonstrates how limits and agentic guardrails are applied across different workspace types.
+1. **External Tagging Job (Standalone Databricks Job)**
+   * A separate Databricks job runs periodically against production catalogs to differentiate which tables actually need certification, filtering out noise (like `*_raw`, `*_tmp`, or ingestion tables). 
+   * If deemed a consumption-ready asset, the job applies the `certification_eligible = true` tag to the table in Unity Catalog.
 
-![Permissions Matrix](./permission-matrix.png)
+2. **Enforcement Sentinel (Policy as Code Checklist)**
+   * The Enforcement Sentinel discovers datasets tagged with `certification_eligible = true` and evaluates them against a strict OPA certification checklist:
+     1. **Data Quality**: TDQs and BDQs defined and met.
+     2. **Metadata**: Catalog, schema, and column descriptions exist.
+     3. **Access Control**: ABAC and RBAC defined.
+     4. **Tagging & Classification**: Tags exist with valid values (Owner group, Approver group, Domain, SLO/SLA) and data classification exists (e.g., PII).
+   * If a dataset *meets all technical criteria* but is not yet certified, OPA triggers a `START_CERTIFICATION` action (skipping if an active workflow already exists).
 
-| Action / Capability | Enterprise Workspaces (`enterprise-{env}`) | Domain Workspaces (`supply-chain-{env}`) | Ad Hoc Workspaces (`adhoc-{env}`) | Governance Enforcement Mechanism & Approvers |
-| :--- | :--- | :--- | :--- | :--- |
-| **Workspace Lifecycle** | Persistent | Persistent | **90-Day Maximum** (May be extended via approval) | **Lifecycle Management**: Ad Hoc workspaces are scheduled for deletion via State Machines upon expiration to prevent resource sprawl. |
-| **Cross-Environment Access** (e.g., Dev requesting Prod data) | Blocked | Blocked | Blocked | **Catalog Binding**: Unity Catalog enforces environment isolation by binding catalogs to specific workspace environments, preventing cross-environment access at the infrastructure level. |
-| **Data Asset Creation** (Tables, Views) | Allowed (Highly Curated / Certified only) | Allowed (Full Autonomy) | Allowed (Temporary / Sandbox) | **Data Certification**: The Agent proactively searches Unity Catalog to suggest existing assets and flags duplicate data. Production datasets must pass a Data Certification Review to receive a "Gold" or "Certified" badge in the Marketplace. |
-| **Compute / Object Creation** (Pipelines, Jobs) | Strictly Governed (Higher envs controlled by CI/CD only) | Allowed | Allowed | **CI/CD Enforcement**: In Enterprise PROD/STG environments, direct creation is blocked; any rogue jobs created outside the CI/CD pipeline are automatically killed by the Enforcement Sentinel. |
-| **Build & Register ML Models** | Restricted | Allowed | Sandboxed | **Responsible AI Guardrails**: Models must be registered in the UC Model Registry. The Agent checks the Feature Store to prevent redundant feature engineering. The FinOps Sentinel actively monitors for unused models and serving endpoints to prevent wasted spend. |
-| **Host Databricks Apps & Genie Spaces** | Blocked by Default (Exception Allowlist Required) | Allowed (Moderate Posture) | Allowed (for prototyping) | **Enforcement Sentinel**: Evaluates resources against OPA policies (e.g., `asset_allowlist.rego`). Unauthorized apps without an approved exception in the Allowlist database are automatically deleted. |
-| **Workspace & Compute Provisioning** | Restricted via Allow List | Allowed (with limits) | Allowed (Strict budget limits) | **FinOps Guardrails**: Enforces mandatory tagging (`CostCenter`, `Owner`) and standard compute policies to prevent over-provisioning. |
-| **Privileged Exceptions / Admin Access** | Allowed (Hardcoded in Terraform) | Allowed (Hardcoded in Terraform) | N/A | **Infrastructure as Code (IaC)**: Broad admin roles are heavily scrutinized and hardcoded directly in the foundational Terraform repository. |
+3. **AI Certification (Auto-Generation)**
+   * The Sentinel intercepts the action and calls an AI Agent to auto-generate a draft Open Data Contract Standard (ODCS) YAML file. The agent uses the metadata, tags, and quality scores collected by Sentinel.
+   * A new `DATA_CERTIFICATION` state machine request is spawned with this draft contract.
+
+4. **Certification State Machine (Human Review)**
+   * **Governance Admin Review**: Governance admins review the AI-generated contract to ensure platform and policy compliance.
+   * **Data SME Review**: Subject Matter Experts review the business logic, descriptions, and rules.
+   * **Finalization**: If both reviews pass, the system physically applies the `system.certification_status = 'certified'` tag in Databricks.
+
+```mermaid
+stateDiagram-v2
+    state ExternalDatabricksJob {
+        [*] --> ScanUC
+        ScanUC --> FilterBronzeTmp
+        FilterBronzeTmp --> AIEvaluation : Check Description/Pattern
+        AIEvaluation --> ApplyTag : Set certification_eligible=true
+    }
+
+    state SentinelDiscovery {
+        ApplyTag --> EvaluateOPA
+        EvaluateOPA --> Eligible : Meets ALL Checklist Criteria AND eligible=true
+        EvaluateOPA --> Ineligible : Missing criteria
+    }
+    
+    state AICertification {
+        Eligible --> AIGeneratesContract : Step 1 - AI drafts ODCS
+        AIGeneratesContract --> CreateRequest : Submit DATA_CERTIFICATION
+    }
+
+    state HumanReviewWorkflow {
+        CreateRequest --> AdminReview : Step 2 - Governance Admin
+        AdminReview --> SMEReview : Admin Approves
+        AdminReview --> Rejected : Admin Rejects
+        
+        SMEReview --> Approved : Step 3 - Data SME Approves
+        SMEReview --> Rejected : SME Rejects
+    }
+    
+    Approved --> Certified : Step 4 - Apply system tag
+    Rejected --> [*] : Notify Owner
+    Certified --> [*]
+```
+
+---
+
+## Operations Manual: Governance Administration
+
+This section outlines the operational procedures for Governance Administrators managing policies and data certification workflows.
+
+### 1. Setting and Editing Policies
+The platform uses Open Policy Agent (OPA) with rules written in Rego to enforce governance policies.
+
+*   **Location of Policies:** All policies are located in the `backend/policies/` directory (e.g., `data_certification.rego`).
+*   **Modifying a Policy:**
+    1. Navigate to the relevant `.rego` file.
+    2. Update the logic for violation conditions (e.g., adjusting threshold percentages for TDQ/BDQ, adding new required tags).
+    3. Each policy rule evaluates the input context (like workspace and resource metadata) and yields an array of violation objects containing the `action` (e.g., `KILL`, `START_CERTIFICATION`), `reason`, and `severity`.
+*   **Applying Changes:** Once a `.rego` file is modified and saved, the backend's OPA evaluation engine will pick up the changes on the next Enforcement Sentinel run. No restart is strictly necessary for the Rego files themselves if they are evaluated dynamically per run, but testing in a lower environment is strongly advised before pushing to production.
+
+### 2. The Physical Act of Certification
+Data certification is a formal process that verifies a dataset meets all enterprise standards for quality, security, and documentation.
+
+*   **Triggering the Workflow:** The Enforcement Sentinel automatically discovers eligible datasets (tagged with `certification_eligible = 'true'`) that meet or violate certification criteria. If a dataset lacks a contract, it triggers the `DATA_CERTIFICATION` workflow.
+*   **Reviewing a Pending Request:**
+    1. Governance Admins navigate to the **Data Certification** tab in the UI.
+    2. Datasets pending certification will display a **"Pending Request →"** link. Clicking this navigates to the specific request in the Self-Service Center.
+    3. The request contains the AI-generated draft of the Data Contract (in ODCS YAML format) based on the dataset's metadata.
+*   **Admin and SME Approval:**
+    1. The Governance Admin reviews the request, verifies compliance, and approves it.
+    2. The request then moves to the Data SME (Subject Matter Expert) for a secondary review of business logic and schema descriptions.
+    3. Once both parties approve, the State Machine progresses to the `completed` state.
+*   **Automated Tagging (The "Physical Act"):** Upon reaching the `completed` state, the system automatically executes a Databricks SQL command to apply the `system.certification_status = 'certified'` tag directly to the table in Unity Catalog. The local asset cache is also updated to reflect the new certified status.
+
+### 3. Monitoring and Auditing
+*   **Enforcement Sentinel Runs:** The Sentinel can be run manually via the API or UI to audit the environment immediately.
+*   **Failure Notifications:** If a Sentinel run encounters an error, it is marked as `failed` in the UI, and an email notification is automatically dispatched to the configured governance email group (defined in `configuration.yaml`).
+*   **Audit Logs:** All enforcement actions (and skipped actions) are recorded in the `enforcement_audit` table in the database for compliance reporting.
+

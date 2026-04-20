@@ -234,8 +234,8 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                 is_violation = result.get("is_violation")
                 action = result.get("action", "KILL")
                 
-                # We record it if it's an actual violation, OR if the action is a proactive enforcement step like CERTIFY
-                if is_violation or action in ["CERTIFY", "UNCERTIFY"]:
+                # We record it if it's an actual violation, OR if the action is a proactive enforcement step like CERTIFY or START_CERTIFICATION
+                if is_violation or action in ["CERTIFY", "UNCERTIFY", "START_CERTIFICATION"]:
                     violations.append({
                         "resource_id": resource.get("id"),
                         "resource_type": resource.get("type"),
@@ -364,19 +364,59 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                     )
                     await handler.kill(violation["resource_id"])
                     
-            elif step == "certify":
-                if not handler:
-                    logger.warning(
-                        "No handler for resource_type=%s; cannot certify for policy=%s",
-                        violation.get("resource_type"),
-                        violation.get("policy"),
+            elif step == "start_certification":
+                from app.db.request import RequestModel
+                
+                # Use dataset_id if present, otherwise fallback to resource_id
+                resource_context = violation.get("input_context", {}).get("resource", {})
+                dataset_id = resource_context.get("dataset_id", violation.get("resource_id"))
+                
+                # Deduplication check: check if there's already an active DATA_CERTIFICATION request for this dataset
+                from sqlalchemy import cast, String
+                existing = self.db.query(RequestModel).filter(
+                    RequestModel.type == RequestType.DATA_CERTIFICATION.value,
+                    RequestModel.status.notin_(["completed", "rejected", "failed"]),
+                    cast(RequestModel.state_context, String).like(f'%"{dataset_id}"%')
+                ).first()
+                
+                if existing:
+                    logger.info(
+                        "Skipping START_CERTIFICATION for %s because active request %s exists.",
+                        dataset_id,
+                        existing.id
                     )
-                    executed_action = "error_no_handler"
+                    executed_action = "deduplicated_skip"
                 else:
-                    if hasattr(handler, "certify"):
-                        await handler.certify(violation["resource_id"])
-                    else:
-                        executed_action = "error_no_handler_method"
+                    logger.info(
+                        "Starting certification auto-generation for %s",
+                        dataset_id
+                    )
+                    
+                    new_req = RequestModel(
+                        id=str(uuid.uuid4()),
+                        type=RequestType.DATA_CERTIFICATION,
+                        title=f"Data Certification: {violation.get('resource_id')}",
+                        status="pending",
+                        requester_email="system@governance",
+                        state_context={
+                            "dataset_id": dataset_id,
+                            "auto_generated": True,
+                            "violations_context": violation,
+                            "odcs_yaml": f"domain: unknown\ndataProduct: {violation.get('resource_id')}\nversion: 1.0.0\n"
+                        }
+                    )
+                    self.db.add(new_req)
+                    self.db.commit() # commit to get the ID and ensure state machine can find it
+                    
+                    # Update DataAsset to show as Pending in UI
+                    from app.db.data_asset import DataAssetModel
+                    asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
+                    if asset:
+                        asset.contract_url = f"/requests/{new_req.id}"
+                        self.db.add(asset)
+                        self.db.commit()
+                    
+                    executed_action = "start_certification_created"
                         
             elif step == "uncertify":
                 if not handler:

@@ -67,7 +67,7 @@ violation_reasons contains msg if {
 }
 
 # 4. Tagging & Classification
-required_tags := {"Owner group", "Approver group", "Domain", "SLO/SLA"}
+required_tags := {"Owner group", "Approver group", "Domain", "SLO_SLA"}
 violation_reasons contains msg if {
     input.resource.type == "table"
     input.resource.certification_eligible == true
@@ -92,15 +92,18 @@ formatted_reasons := [sprintf("%d. %s", [i + 1, msg]) | some i; msg := sorted_re
 
 action := "UNCERTIFY" if {
     is_violation
-} else := "CERTIFY" if {
+    input.resource.tags["system.certification_status"] == "certified"
+} else := "START_CERTIFICATION" if {
     input.resource.certification_eligible
+    not input.resource.tags["system.certification_status"]
 } else := "ALLOW"
 
 reason := concat(" ", formatted_reasons) if {
     is_violation
-} else := "Dataset meets all certification requirements." if {
+} else := "Dataset meets all technical certification requirements." if {
     input.resource.certification_eligible
-} else := "Dataset is not seeking certification."
+    not input.resource.tags["system.certification_status"]
+} else := "Dataset is not seeking certification or is already certified."
 
 severity := "HIGH" if {
     is_violation

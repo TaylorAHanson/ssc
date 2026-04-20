@@ -95,7 +95,7 @@ workflows:
   RequestType.DATA_ACCESS_REQUEST: true
   RequestType.ENFORCEMENT_SENTINEL: true
   RequestType.GITHUB_REPO_CREATION: true
-  RequestType.MARKETPLACE_CERTIFICATION: true
+  RequestType.DATA_CERTIFICATION: true
   RequestType.PROJECT_ONBOARDING: true
   RequestType.REPORT_EXECUTION: true
   RequestType.REST_API_ACCESS: true
@@ -103,3 +103,6 @@ workflows:
   RequestType.SIMPLE_EMAIL: true
   RequestType.WORKSPACE_ACCESS: true
   RequestType.WORKSPACE_PROVISION: true
+
+notifications:
+  governance_email_group: "data-governance@example.com"

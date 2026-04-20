@@ -88,7 +88,7 @@ async def sync_data_assets_task(force: bool = False):
                     # For demo purposes, we can mock domain/certified status here based on tags or randomly
                     # Or just leave them empty for now. We'll set some defaults.
                     domain = "Core" if "Core" in tags else "Analytics"
-                    certified = "Certified" in tags or "certified" in tags
+                    certified = "Certified" in tags or "certified" in tags or "system.certification_status" in tags or "certification_status" in tags
                     
                     asset = db.query(DataAssetModel).filter(DataAssetModel.id == asset_id).first()
                     if not asset:
