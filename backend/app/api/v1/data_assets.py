@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict
 from app.db.session import get_lakebase_session
 from app.db.data_asset import DataAssetModel
 from datetime import datetime
+import json
 
 router = APIRouter()
 
@@ -26,6 +27,7 @@ class DataAssetResponse(BaseModel):
     certified: bool = False
     contract_url: Optional[str] = None
     data_quality: Optional[dict] = None
+    certification_violations: Optional[List[str]] = None
     sla: Optional[str] = None
     created_at: Optional[datetime] = None
     last_synced_at: datetime
@@ -69,6 +71,7 @@ def list_data_assets(
             "certified": asset.certified,
             "contract_url": asset.contract_url,
             "data_quality": asset.data_quality,
+            "certification_violations": asset.certification_violations if isinstance(asset.certification_violations, list) else (json.loads(asset.certification_violations) if isinstance(asset.certification_violations, str) else []),
             "sla": asset.sla,
             "created_at": asset.created_at,
             "last_synced_at": asset.last_synced_at

@@ -32,6 +32,7 @@ export function EnforcementSentinel() {
     const [environment, setEnvironment] = useState<'dev' | 'stage' | 'prod'>('prod');
     const [actionLoading, setActionLoading] = useState<string | null>(null);
     const [selectedViolation, setSelectedViolation] = useState<any | null>(null);
+    const [executedActions, setExecutedActions] = useState<Record<string, { at: string }>>({});
 
     // Server-side pagination and search states
     const [sentinelRuns, setSentinelRuns] = useState<any[]>([]);
@@ -141,7 +142,8 @@ export function EnforcementSentinel() {
             // Need to pass the token. Typically auth handles via cookies or we need to add the auth header if the app uses one.
             // The app uses API requests, which usually are authenticated implicitly if using cookies, or need a token.
             // Let's just do a normal fetch, relying on standard browser behavior or interceptors if any exist.
-            const res = await fetch(`/api/v1/requests/${runId}/enforcement-action`, {
+            const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+            const res = await fetch(`${baseUrl}/requests/${runId}/enforcement-action`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -156,7 +158,10 @@ export function EnforcementSentinel() {
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || 'Failed to execute action');
             
-            alert(`Success: ${data.message}`);
+            setExecutedActions(prev => ({
+                ...prev,
+                [`${runId}-${v.resource_id}-${v.policy}-${v.action}`]: { at: format(new Date(), 'MMM d, HH:mm') }
+            }));
         } catch (e: any) {
             console.error(e);
             alert(`Error executing action: ${e.message}`);
@@ -293,7 +298,7 @@ export function EnforcementSentinel() {
                                 <th className="p-3 pl-4">Run Date</th>
                                 <th className="p-3">Mode</th>
                                 <th className="p-3">Status</th>
-                                <th className="p-3">Violations Found</th>
+                                <th className="p-3">Found</th>
                                 <th className="p-3">Workspace</th>
                                 <th className="p-3 text-right"></th>
                             </tr>
@@ -591,16 +596,30 @@ export function EnforcementSentinel() {
                                                                         <td className="p-3 text-xs text-gray-600 break-words leading-relaxed">{formatReason(v)}</td>
                                                                         {selectedRun?.metadata?.enforcement_mode === 'audit_only' && (
                                                                             <td className="p-3 text-right">
-                                                                                {['KILL', 'CERTIFY', 'UNCERTIFY'].includes(v.action) && (
-                                                                                    <Button 
-                                                                                        size="sm" 
-                                                                                        variant="outline"
-                                                                                        className="text-xs h-7 px-2 border-blue-200 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
-                                                                                        onClick={() => setSelectedViolation(v)}
-                                                                                    >
-                                                                                        Review and Act
-                                                                                    </Button>
-                                                                                )}
+                                                                                {(() => {
+                                                                                    const execKey = `${selectedRun.id}-${v.resource_id}-${v.policy}-${v.action}`;
+                                                                                    const executed = executedActions[execKey];
+                                                                                    if (executed) {
+                                                                                        return (
+                                                                                            <div className="flex flex-col items-end">
+                                                                                                <span className="text-xs font-semibold text-green-600 flex items-center">
+                                                                                                    <CheckCircle2 className="w-3 h-3 mr-1" /> Executed
+                                                                                                </span>
+                                                                                                <span className="text-[10px] text-gray-500">by you on {executed.at}</span>
+                                                                                            </div>
+                                                                                        );
+                                                                                    }
+                                                                                    return ['KILL', 'CERTIFY', 'UNCERTIFY', 'START_CERTIFICATION'].includes(v.action) && (
+                                                                                        <Button 
+                                                                                            size="sm" 
+                                                                                            variant="outline"
+                                                                                            className="text-xs h-7 px-2 border-blue-200 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                                                                                            onClick={() => setSelectedViolation(v)}
+                                                                                        >
+                                                                                            Review and Act
+                                                                                        </Button>
+                                                                                    );
+                                                                                })()}
                                                                             </td>
                                                                         )}
                                                                     </tr>

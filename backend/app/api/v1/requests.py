@@ -622,6 +622,59 @@ async def execute_enforcement_action(
                 raise HTTPException(status_code=400, detail="Handler does not support uncertify")
         elif action_to_take == "WARN":
             await handler.warn(body.resource_id, body.reason or "Manual warning")
+        elif action_to_take == "START_CERTIFICATION":
+            from app.db.request import RequestModel
+            from app.models.request import RequestType
+            from sqlalchemy import cast, String
+            
+            # Find the violation context from the sentinel request
+            sentinel_req = db.query(RequestModel).filter(RequestModel.id == request_id).first()
+            violation = {}
+            if sentinel_req and sentinel_req.state_context:
+                violations = sentinel_req.state_context.get("violations", [])
+                for v in violations:
+                    if v.get("resource_id") == body.resource_id and v.get("policy") == body.policy_name:
+                        violation = v
+                        break
+                        
+            resource_context = violation.get("input_context", {}).get("resource", {})
+            dataset_id = resource_context.get("dataset_id", body.resource_id)
+            
+            # Deduplication check
+            existing = db.query(RequestModel).filter(
+                RequestModel.type == RequestType.DATA_CERTIFICATION.value,
+                RequestModel.status.notin_(["completed", "rejected", "failed"]),
+                cast(RequestModel.state_context, String).like(f'%"{dataset_id}"%')
+            ).first()
+            
+            if existing:
+                return {"status": "success", "message": f"Certification request already exists for {dataset_id}."}
+                
+            new_req = RequestModel(
+                id=str(uuid.uuid4()),
+                type=RequestType.DATA_CERTIFICATION,
+                title=f"Data Certification: {body.resource_id}",
+                status="pending",
+                requester_email=current_user.email,
+                state_context={
+                    "dataset_id": dataset_id,
+                    "auto_generated": True,
+                    "violations_context": violation,
+                    "odcs_yaml": f"domain: unknown\ndataProduct: {body.resource_id}\nversion: 1.0.0\n"
+                }
+            )
+            db.add(new_req)
+            db.commit()
+            
+            from app.db.data_asset import DataAssetModel
+            asset = db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
+            if asset:
+                asset.contract_url = f"/requests/{new_req.id}"
+                db.add(asset)
+                db.commit()
+                
+            executed_action = "manual_start_certification"
+            
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported manual action: {action_to_take}")
             

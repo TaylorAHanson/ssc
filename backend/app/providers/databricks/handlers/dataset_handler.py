@@ -150,6 +150,10 @@ class DatasetResourceHandler(BaseResourceHandler):
                     except Exception:
                         pass
                         
+                    # Fallback for data_classification if not in contract but present in tags
+                    if not resource["data_classification"] and "data_classification" in resource["tags"]:
+                        resource["data_classification"] = resource["tags"]["data_classification"]
+                        
                     if root_custom_props.get("is_mock") is True:
                         resource["tdq_score"] = tdq_threshold
                         resource["bdq_score"] = bdq_threshold

@@ -94,6 +94,7 @@ action := "UNCERTIFY" if {
     is_violation
     input.resource.tags["system.certification_status"] == "certified"
 } else := "START_CERTIFICATION" if {
+    not is_violation
     input.resource.certification_eligible
     not input.resource.tags["system.certification_status"]
 } else := "ALLOW"

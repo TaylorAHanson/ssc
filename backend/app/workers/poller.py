@@ -664,6 +664,7 @@ async def _handle_permanent_error(
 ):
     """Handle a permanent error by marking request as failed."""
     request.status = RequestStatus.FAILED.value
+    request.retry_count = request.max_retries  # Exhaust retries so poller stops picking it up
     # Don't change current_state - keep the last valid state so state machine can still be loaded
     # The status="failed" indicates failure, not the state
     request.last_error = {

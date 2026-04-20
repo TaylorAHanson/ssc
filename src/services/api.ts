@@ -768,6 +768,7 @@ export interface DataAsset {
   certified: boolean;
   contract_url: string | null;
   data_quality: any | null;
+  certification_violations: string[] | null;
   sla: string | null;
   created_at: string | null;
   last_synced_at: string;

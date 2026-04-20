@@ -27,18 +27,31 @@ class DataCertificationStateMachine(BaseRequestStateMachine):
 
     STATE_COMPLETION_FACTS = {
         "pending": "request_submitted",
-        "admin_review": "admin_approved",
-        "sme_review": "sme_approved",
+        "admin_review": "approval_received",
+        "sme_review": "approval_received",
         "completed": "certification_applied",
         "rejected": "request_rejected"
     }
 
     STATE_LOG_FACTS = {
         "pending": ["request_submitted"],
-        "admin_review": ["admin_approved", "request_rejected"],
-        "sme_review": ["sme_approved", "request_rejected"],
+        "admin_review": ["approval_received", "request_rejected"],
+        "sme_review": ["approval_received", "request_rejected"],
         "completed": ["certification_applied"],
         "rejected": ["request_rejected"]
+    }
+
+    STATUS_MAPPING = {
+        "pending": RequestStatus.PENDING,
+        "admin_review": RequestStatus.MANAGER_APPROVAL,
+        "sme_review": RequestStatus.DATA_OWNER_APPROVAL,
+        "completed": RequestStatus.COMPLETED,
+        "rejected": RequestStatus.REJECTED
+    }
+
+    APPROVAL_NODES = {
+        "admin_review": {"approval_type": "governance_admin", "name": "Governance Admin Review"},
+        "sme_review": {"approval_type": "data_owner", "name": "Data SME Review"}
     }
 
     pending = State("pending", initial=True)
@@ -58,11 +71,13 @@ class DataCertificationStateMachine(BaseRequestStateMachine):
 
     @property
     def has_admin_approved(self) -> bool:
-        return self.has_fact("admin_approved")
+        from app.state_machines.facts import has_fact as check_fact
+        return check_fact(self.db, self.request.id, "approval_received", approval_type="governance_admin")
 
     @property
     def has_sme_approved(self) -> bool:
-        return self.has_fact("sme_approved")
+        from app.state_machines.facts import has_fact as check_fact
+        return check_fact(self.db, self.request.id, "approval_received", approval_type="data_owner")
 
     def has_fact(self, fact_type: str) -> bool:
         from app.state_machines.facts import has_fact as check_fact
@@ -71,6 +86,7 @@ class DataCertificationStateMachine(BaseRequestStateMachine):
     def on_enter_admin_review(self):
         """Open a review request for Governance Admins."""
         self.request.status = RequestStatus.MANAGER_APPROVAL # Or generic PENDING/APPROVAL
+        self.create_approval_task("governance_admin")
         self.db.add(self.request)
         self.db.commit()
         # In a real system, send email/slack to governance team here
@@ -78,6 +94,7 @@ class DataCertificationStateMachine(BaseRequestStateMachine):
     def on_enter_sme_review(self):
         """Open a review request for the Data SME / Owner."""
         self.request.status = RequestStatus.DATA_OWNER_APPROVAL
+        self.create_approval_task("data_owner")
         self.db.add(self.request)
         self.db.commit()
         # In a real system, send email/slack to the SME/owner here

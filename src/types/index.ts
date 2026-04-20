@@ -35,7 +35,7 @@ export interface User {
   updated_at: string;
 }
 
-export type UserPersona = 'Platform Admin' | 'Governance Admin' | 'Security Admin' | 'Finance Admin' | 'Business User';
+export type UserPersona = 'Platform Admin' | 'Governance Admin' | 'Data Owner' | 'Security Admin' | 'Finance Admin' | 'Business User';
 
 export type Environment = 'dev' | 'test' | 'stage' | 'prod';
 
