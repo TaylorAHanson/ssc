@@ -102,7 +102,9 @@ class DataCertificationStateMachine(BaseRequestStateMachine):
                 client_secret=settings.DATABRICKS_CLIENT_SECRET
             )
             handler = DatasetResourceHandler(provider.client)
-            await handler.certify(dataset_id)
+            success = await handler.certify(dataset_id)
+            if not success:
+                raise ValueError(f"Databricks SQL failed to certify dataset {dataset_id}")
             logger.info(f"Successfully certified dataset {dataset_id} in Databricks.")
             
             # 2. Record the finalized Data Contract in the Lakebase DB

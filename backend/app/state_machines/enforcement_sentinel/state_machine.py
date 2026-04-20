@@ -367,63 +367,48 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
             elif step == "start_certification":
                 from app.db.request import RequestModel
                 
+                # Use dataset_id if present, otherwise fallback to resource_id
+                resource_context = violation.get("input_context", {}).get("resource", {})
+                dataset_id = resource_context.get("dataset_id", violation.get("resource_id"))
+                
                 # Deduplication check: check if there's already an active DATA_CERTIFICATION request for this dataset
                 from sqlalchemy import cast, String
                 existing = self.db.query(RequestModel).filter(
                     RequestModel.type == RequestType.DATA_CERTIFICATION.value,
                     RequestModel.status.notin_(["completed", "rejected", "failed"]),
-                    # Compare the dataset_id in the state_context JSON using a raw string match or postgres JSON operators
-                    # In sqlite we might just check if the ID is in the JSON text for simplicity
-                    cast(RequestModel.state_context, String).like(f'%"{violation["resource_id"]}"%')
+                    cast(RequestModel.state_context, String).like(f'%"{dataset_id}"%')
                 ).first()
                 
                 if existing:
                     logger.info(
                         "Skipping START_CERTIFICATION for %s because active request %s exists.",
-                        violation.get("resource_id"),
+                        dataset_id,
                         existing.id
                     )
                     executed_action = "deduplicated_skip"
                 else:
                     logger.info(
                         "Starting certification auto-generation for %s",
-                        violation.get("resource_id")
+                        dataset_id
                     )
-                    
-                    # Generate a simple blank ODCS document stub for the human workflow to pick up
-                    # In a real scenario, this would call an LLM to auto-generate the contract
-                    resource_id = violation.get("resource_id")
                     
                     new_req = RequestModel(
                         id=str(uuid.uuid4()),
                         type=RequestType.DATA_CERTIFICATION,
-                        title=f"Data Certification: {resource_id}",
+                        title=f"Data Certification: {violation.get('resource_id')}",
                         status="pending",
                         requester_email="system@governance",
                         state_context={
-                            "dataset_id": resource_id,
+                            "dataset_id": dataset_id,
                             "auto_generated": True,
                             "violations_context": violation,
-                            # Provide a stub contract that the AI 'generated'
-                            "odcs_yaml": f"domain: unknown\ndataProduct: {resource_id.split('.')[-1] if '.' in resource_id else resource_id}\nversion: 1.0.0\n"
+                            "odcs_yaml": f"domain: unknown\ndataProduct: {violation.get('resource_id')}\nversion: 1.0.0\n"
                         }
                     )
                     self.db.add(new_req)
                     self.db.commit() # commit to get the ID and ensure state machine can find it
                     
                     executed_action = "start_certification_created"
-                if not handler:
-                    logger.warning(
-                        "No handler for resource_type=%s; cannot certify for policy=%s",
-                        violation.get("resource_type"),
-                        violation.get("policy"),
-                    )
-                    executed_action = "error_no_handler"
-                else:
-                    if hasattr(handler, "certify"):
-                        await handler.certify(violation["resource_id"])
-                    else:
-                        executed_action = "error_no_handler_method"
                         
             elif step == "uncertify":
                 if not handler:

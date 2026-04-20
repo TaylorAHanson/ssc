@@ -179,11 +179,15 @@ class DatasetResourceHandler(BaseResourceHandler):
         try:
             if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
                 query = f"ALTER TABLE {resource_id} SET TAGS ('system.certification_status' = 'certified')"
-                self.workspace_client.statement_execution.execute_statement(
+                res = self.workspace_client.statement_execution.execute_statement(
                     statement=query,
                     warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
                     wait_timeout="30s"
                 )
+                if res.status.state.value in ("FAILED", "CANCELED", "CLOSED"):
+                    error_msg = res.status.error.message if res.status.error else "Unknown SQL error"
+                    logger.error(f"SQL execution failed to certify dataset: {error_msg}")
+                    return False
                 return True
             else:
                 logger.error("No warehouse_id defined, cannot certify dataset via SQL")
@@ -197,11 +201,15 @@ class DatasetResourceHandler(BaseResourceHandler):
         try:
             if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
                 query = f"ALTER TABLE {resource_id} UNSET TAGS ('system.certification_status')"
-                self.workspace_client.statement_execution.execute_statement(
+                res = self.workspace_client.statement_execution.execute_statement(
                     statement=query,
                     warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
                     wait_timeout="30s"
                 )
+                if res.status.state.value in ("FAILED", "CANCELED", "CLOSED"):
+                    error_msg = res.status.error.message if res.status.error else "Unknown SQL error"
+                    logger.error(f"SQL execution failed to uncertify dataset: {error_msg}")
+                    return False
                 return True
             else:
                 logger.error("No warehouse_id defined, cannot uncertify dataset via SQL")
