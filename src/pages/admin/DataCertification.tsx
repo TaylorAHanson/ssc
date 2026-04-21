@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
-import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info } from 'lucide-react';
+import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, ChevronUp, ChevronDown, Filter, Trash2 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { api } from '../../services/api';
 import type { DataAsset } from '../../services/api';
@@ -10,115 +10,21 @@ import { format, parseISO } from 'date-fns';
 import Editor from '@monaco-editor/react';
 import yaml from 'js-yaml';
 
-const DEFAULT_YAML = `apiVersion: v3.1.0
-kind: DataContract
-
-domain: changeme_domain
-dataProduct: changeme_product_name
-version: 1.0.0
-status: active
-id: changeme_contract_id
-
-authoritativeDefinitions:
-- type: canonical
-  url: https://github.com/bitol-io/open-data-contract-standard/blob/main/docs/examples/all/full-example.odcs.yaml
-  description: Canonical URL to the latest version of the contract.
-
-description:
-  purpose: "# CHANGEME: Describe the dataset purpose here."
-  limitations: "# CHANGEME: Any limitations here."
-  usage: "# CHANGEME: Describe how this is used."
-
-quality:
-  - id: technical_dq_threshold
-    type: custom
-    engine: acceldata
-    description: "Technical data quality score must be 100%"
-    mustBe: 100
-  - id: business_dq_threshold
-    type: custom
-    engine: acceldata
-    description: "Business logic validation score must be 100%"
-    mustBe: 100
-  - id: schema_drift
-    type: custom
-    engine: acceldata
-    description: "Schema drift score must be 0%"
-    mustBe: 0
-
-servers:
-  - id: production
-    type: databricks
-    host: prod-workspace.cloud.databricks.com
-    catalog: changeme_catalog
-    schema: changeme_schema
-
-schema:
-  - id: changeme_table_obj
-    name: changeme_table_name
-    physicalName: changeme_table_name
-    physicalType: table
-    businessName: "# CHANGEME: Business Name"
-    description: "# CHANGEME: Provides core metrics"
-    tags: [ 'changeme', 'tags' ]
-    customProperties:
-      - property: abac_required
-        value: false
-      - property: classification
-        value: PII
-    properties:
-      - id: changeme_col_prop
-        name: changeme_col
-        physicalName: changeme_col
-        primaryKey: true
-        logicalType: string
-        description: "# CHANGEME: Unique identifier"
-
-price:
-  priceAmount: 0.00
-  priceCurrency: USD
-  priceUnit: request
-
-team:
-  name: changeme_team_name
-  members:
-    - username: changeme_user
-      role: Owner
-
-roles:
-  - role: data_engineer
-    access: write
-  - role: data_analyst
-    access: read
-
-slaProperties:
-  - property: latency
-    value: 1
-    unit: d
-
-customProperties:
-  - property: certification_eligible
-    value: true
-  - property: is_mock
-    value: false
-  - property: databricks_tags
-    value:
-      "Owner group": "changeme_team"
-      "Approver group": "data-governance"
-      "Domain": "changeme_domain"
-      "SLO/SLA": "Tier 1"
-`;
-
 export function DataCertification() {
   const [datasets, setDatasets] = useState<DataAsset[]>([]);
   const [contractsMap, setContractsMap] = useState<Record<string, DataContract>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortField, setSortField] = useState<'name' | 'reliability' | 'lastRun' | 'created'>('name');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'certified' | 'uncertified' | 'pending' | 'invalid' | 'awaiting'>('all');
+  const [isSyncingContracts, setIsSyncingContracts] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
   // Editor State
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState<DataAsset | null>(null);
-  const [yamlContent, setYamlContent] = useState(DEFAULT_YAML);
+  const [yamlContent, setYamlContent] = useState('');
   const [yamlError, setYamlError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [contractHistory, setContractHistory] = useState<DataContract[]>([]);
@@ -127,18 +33,35 @@ export function DataCertification() {
   // Violations Modal State
   const [violationAsset, setViolationAsset] = useState<DataAsset | null>(null);
 
-  const fetchHistory = async (datasetId: string) => {
+  const fetchHistory = async (datasetId: string, contractUrl?: string | null) => {
     try {
       const history = await api.getContractHistory(datasetId);
       setContractHistory(history);
       if (history.length > 0) {
         setYamlContent(history[0].yaml_content);
+      } else if (contractUrl && contractUrl.startsWith('/requests/')) {
+        const requestId = contractUrl.split('/').pop();
+        if (requestId) {
+          try {
+            const request = await api.getRequest(requestId);
+            if (request && request.metadata && request.metadata.odcs_yaml) {
+              setYamlContent(request.metadata.odcs_yaml);
+              return;
+            }
+          } catch (reqError) {
+            console.error('Failed to fetch request for pending contract', reqError);
+          }
+        }
+        setYamlContent('');
+        setYamlError('No contract content found.');
       } else {
-        setYamlContent(DEFAULT_YAML);
+        setYamlContent('');
+        setYamlError('No contract content found.');
       }
     } catch (e) {
       console.error(e);
-      setYamlContent(DEFAULT_YAML);
+      setYamlContent('');
+      setYamlError('No contract content found.');
     }
   };
 
@@ -148,19 +71,33 @@ export function DataCertification() {
     setYamlError(null);
     setShowHistory(false);
     if (dataset.contract_url) {
-      fetchHistory(dataset.id);
+      fetchHistory(dataset.id, dataset.contract_url);
     } else {
-      // It's a new contract for this dataset
-      setYamlContent(
-        DEFAULT_YAML
-          .replace(/table_name/g, dataset.table_name)
-          .replace(/main/g, dataset.catalog)
-          .replace(/default/g, dataset.schema_name)
-          .replace(/example_domain/g, dataset.domain || 'example_domain')
-          .replace(/example_product/g, dataset.table_name)
-          .replace(/example_table_obj/g, `${dataset.table_name}_obj`)
-          .replace(/new_contract_id/g, crypto.randomUUID())
-      );
+      setYamlContent('');
+      setYamlError('No existing contract found to edit. Please use the "Sync Data Contracts" button first.');
+    }
+  };
+
+  const handleDeleteContract = async (datasetId: string) => {
+    if (!confirm(`Are you sure you want to delete the contract for ${datasetId}? This will remove all contract versions and unset its certified status.`)) {
+      return;
+    }
+    
+    try {
+      await api.deleteDataContract(datasetId);
+      
+      // Reload assets to reflect changes
+      const [data, contracts] = await Promise.all([
+        api.getDataAssets(),
+        api.getDataContracts()
+      ]);
+      const map: Record<string, DataContract> = {};
+      contracts.forEach(c => map[c.dataset_id] = c);
+      setContractsMap(map);
+      setDatasets(data.filter(d => map[d.id] || d.contract_url));
+    } catch (e: any) {
+      console.error('Failed to delete contract', e);
+      alert('Failed to delete contract: ' + e.message);
     }
   };
 
@@ -200,11 +137,38 @@ export function DataCertification() {
       const map: Record<string, DataContract> = {};
       contracts.forEach(c => map[c.dataset_id] = c);
       setContractsMap(map);
-      setDatasets(data.filter(d => d.contract_url || d.certified || d.data_quality || (Array.isArray(d.tags) && d.tags.includes('certification_eligible'))));
+      setDatasets(data.filter(d => d.contract_url || d.certified || d.data_quality));
     } catch (e: any) {
       setYamlError(e.message || 'Failed to save data contract');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleSyncContracts = async () => {
+    setIsSyncingContracts(true);
+    setSyncMessage(null);
+    try {
+      const res = await api.syncDataContracts();
+      setSyncMessage({ type: 'success', text: `Sync Complete: ${res.message}` });
+      setTimeout(() => setSyncMessage(null), 5000);
+      
+      // Reload assets to reflect changes
+      const [data, contracts] = await Promise.all([
+        api.getDataAssets(),
+        api.getDataContracts()
+      ]);
+      const map: Record<string, DataContract> = {};
+      contracts.forEach(c => map[c.dataset_id] = c);
+      setContractsMap(map);
+      setDatasets(data.filter(d => map[d.id] || d.contract_url));
+      
+    } catch (e: any) {
+      console.error(e);
+      setSyncMessage({ type: 'error', text: e.message || "Error syncing contracts." });
+      setTimeout(() => setSyncMessage(null), 5000);
+    } finally {
+      setIsSyncingContracts(false);
     }
   };
 
@@ -220,7 +184,7 @@ export function DataCertification() {
           const map: Record<string, DataContract> = {};
           contracts.forEach(c => map[c.dataset_id] = c);
           setContractsMap(map);
-          setDatasets(data.filter(d => d.contract_url || d.certified || d.data_quality || (Array.isArray(d.tags) && d.tags.includes('certification_eligible'))));
+          setDatasets(data.filter(d => map[d.id] || d.contract_url));
         }
       } catch (e) {
         console.error('Failed to load data assets for certification', e);
@@ -234,10 +198,63 @@ export function DataCertification() {
     return () => { mounted = false; };
   }, []);
 
-  const filteredDatasets = datasets.filter(ds => 
-    ds.table_name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    `${ds.catalog}.${ds.schema_name}`.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const handleSort = (field: 'name' | 'reliability' | 'lastRun' | 'created') => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection(field === 'name' ? 'asc' : 'desc');
+    }
+  };
+
+  const getSortIcon = (field: 'name' | 'reliability' | 'lastRun' | 'created') => {
+    if (sortField !== field) return <ChevronUp className="w-3 h-3 text-gray-300 opacity-0 group-hover:opacity-100" />;
+    return sortDirection === 'asc' ? <ChevronUp className="w-3 h-3 text-primary" /> : <ChevronDown className="w-3 h-3 text-primary" />;
+  };
+
+  const getStatus = (ds: DataAsset, contract: DataContract) => {
+    const dq = ds.data_quality || {} as any;
+    const rel = dq.failed_rule_count !== undefined ? dq.failed_rule_count : (dq.reliability !== undefined ? dq.reliability : 'N/A');
+    const isInvalid = contract && contract.yaml_content.toLowerCase().includes('changeme');
+
+    if (isInvalid) return 'invalid';
+    if (ds.certified) return 'certified';
+    if (ds.contract_url) return 'pending';
+    if (rel === 'N/A') return 'awaiting';
+    return 'uncertified';
+  };
+
+  const processedDatasets = datasets
+    .filter(ds => {
+      const matchesSearch = ds.table_name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            `${ds.catalog}.${ds.schema_name}`.toLowerCase().includes(searchTerm.toLowerCase());
+      if (statusFilter === 'all') return matchesSearch;
+      
+      const contract = contractsMap[ds.id];
+      return matchesSearch && getStatus(ds, contract) === statusFilter;
+    })
+    .sort((a, b) => {
+      const dqA = a.data_quality || {} as any;
+      const dqB = b.data_quality || {} as any;
+      
+      let valA: any = a.table_name.toLowerCase();
+      let valB: any = b.table_name.toLowerCase();
+      
+      if (sortField === 'reliability') {
+        valA = dqA.failed_rule_count !== undefined ? dqA.failed_rule_count : (dqA.reliability !== undefined && dqA.reliability !== 'N/A' ? Number(dqA.reliability) : -1);
+        valB = dqB.failed_rule_count !== undefined ? dqB.failed_rule_count : (dqB.reliability !== undefined && dqB.reliability !== 'N/A' ? Number(dqB.reliability) : -1);
+      } else if (sortField === 'lastRun') {
+        valA = a.last_synced_at ? new Date(a.last_synced_at).getTime() : 0;
+        valB = b.last_synced_at ? new Date(b.last_synced_at).getTime() : 0;
+      } else if (sortField === 'created') {
+        valA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        valB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      }
+      
+      if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+      if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
 
   return (
     <div className="space-y-6">
@@ -248,32 +265,88 @@ export function DataCertification() {
             Data Certification
           </CardTitle>
           <CardDescription>
-            Manage and review data contracts, data quality metrics (TDQ/BDQ), and certification status for datasets marked as <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">certification_eligible</code>.
+            Manage and review data contracts, data quality metrics (TDQ/BDQ), and certification status for datasets.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="mb-4 flex flex-col md:flex-row gap-4 items-center justify-between">
-            <div className="relative w-full md:w-96">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search by table or location..."
-                className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-primary"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
+            <div className="flex w-full md:w-auto gap-4 flex-1">
+              <div className="relative w-full md:w-96">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search by table or location..."
+                  className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary focus:border-primary"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+              <div className="relative shrink-0">
+                <div className="flex items-center border border-gray-300 rounded-lg px-3 py-2 bg-white text-sm focus-within:ring-2 focus-within:ring-primary focus-within:border-primary">
+                  <Filter className="w-4 h-4 text-gray-500 mr-2" />
+                  <select 
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as any)}
+                    className="bg-transparent border-none outline-none focus:ring-0 text-gray-700 w-40"
+                  >
+                    <option value="all">All Statuses</option>
+                    <option value="certified">Certified</option>
+                    <option value="pending">Pending Approval</option>
+                    <option value="uncertified">Uncertified</option>
+                    <option value="invalid">Invalid (Changeme)</option>
+                    <option value="awaiting">Awaiting Scan</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <Button
+                onClick={handleSyncContracts}
+                disabled={isSyncingContracts}
+                className="flex items-center gap-2 bg-primary text-white disabled:opacity-50"
+              >
+                {isSyncingContracts ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileCheck className="w-4 h-4" />}
+                Sync Data Contracts
+              </Button>
             </div>
           </div>
 
+          {syncMessage && (
+            <div className={`mb-4 p-3 rounded-lg flex items-center gap-2 ${syncMessage.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+              {syncMessage.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+              <span className="text-sm font-medium">{syncMessage.text}</span>
+            </div>
+          )}
+
           <div className="overflow-x-auto rounded-lg border border-gray-200">
             <table className="w-full text-sm text-left">
-              <thead className="bg-gray-50 text-gray-700 font-medium border-b border-gray-200">
+              <thead className="bg-gray-50 text-gray-700 font-medium border-b border-gray-200 select-none">
                 <tr>
-                  <th className="p-3 pl-4">Dataset</th>
+                  <th 
+                    className="p-3 pl-4 cursor-pointer hover:bg-gray-100 group transition-colors"
+                    onClick={() => handleSort('name')}
+                  >
+                    <div className="flex items-center justify-between">Dataset {getSortIcon('name')}</div>
+                  </th>
                   <th className="p-3">Status</th>
-                  <th className="p-3">Last Policy Run</th>
-                  <th className="p-3">TDQ</th>
-                  <th className="p-3">BDQ</th>
+                  <th 
+                    className="p-3 cursor-pointer hover:bg-gray-100 group transition-colors"
+                    onClick={() => handleSort('created')}
+                  >
+                    <div className="flex items-center justify-between">Created {getSortIcon('created')}</div>
+                  </th>
+                  <th 
+                    className="p-3 cursor-pointer hover:bg-gray-100 group transition-colors"
+                    onClick={() => handleSort('lastRun')}
+                  >
+                    <div className="flex items-center justify-between">Last Policy Run {getSortIcon('lastRun')}</div>
+                  </th>
+                  <th 
+                    className="p-3 cursor-pointer hover:bg-gray-100 group transition-colors"
+                    onClick={() => handleSort('reliability')}
+                  >
+                    <div className="flex items-center justify-between">Failed Rules {getSortIcon('reliability')}</div>
+                  </th>
                   <th className="p-3">Freshness</th>
                   <th className="p-3">Drift</th>
                   <th className="p-3 text-right">Contract</th>
@@ -282,21 +355,21 @@ export function DataCertification() {
               <tbody className="divide-y divide-gray-100 bg-white">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={8} className="p-6 text-center text-gray-500">Loading datasets...</td>
+                    <td colSpan={9} className="p-6 text-center text-gray-500">Loading datasets...</td>
                   </tr>
-                ) : filteredDatasets.length === 0 ? (
+                ) : processedDatasets.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="p-6 text-center text-gray-500">No datasets found.</td>
+                    <td colSpan={9} className="p-6 text-center text-gray-500">No datasets found.</td>
                   </tr>
                 ) : (
-                  filteredDatasets.map(ds => {
+                  processedDatasets.map(ds => {
                     const dq = ds.data_quality || {} as any;
                     
-                    const tdq = dq.tdq !== undefined ? dq.tdq : 'N/A';
-                    const bdq = dq.bdq !== undefined ? dq.bdq : 'N/A';
+                    const rel = dq.failed_rule_count !== undefined ? dq.failed_rule_count : (dq.reliability !== undefined ? dq.reliability : 'N/A');
                     const freshness = dq.freshness || 'N/A';
                     const drift = dq.drift || 'N/A';
                     const lastRun = ds.last_synced_at ? format(parseISO(ds.last_synced_at), 'MMM d, HH:mm') : 'Unknown';
+                    const createdDate = ds.created_at ? format(parseISO(ds.created_at), 'MMM d, yyyy') : 'Unknown';
 
                     const contract = contractsMap[ds.id];
                     const isInvalid = contract && contract.yaml_content.toLowerCase().includes('changeme');
@@ -323,7 +396,7 @@ export function DataCertification() {
                             >
                               {ds.contract_url.startsWith('/requests') ? 'Pending Approval \u2192' : 'Pending'}
                             </Link>
-                          ) : tdq === 'N/A' ? (
+                          ) : rel === 'N/A' ? (
                             <span 
                               className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800"
                               title="Run Enforcement Sentinel to fetch policy violations and scores"
@@ -344,15 +417,11 @@ export function DataCertification() {
                             </div>
                           )}
                         </td>
+                        <td className="p-3 text-gray-600 whitespace-nowrap">{createdDate}</td>
                         <td className="p-3 text-gray-600 whitespace-nowrap">{lastRun}</td>
                         <td className="p-3">
-                          <span className={`font-semibold ${typeof tdq === 'number' ? (tdq >= 90 ? 'text-green-600' : 'text-orange-600') : 'text-gray-400 cursor-help'}`} title={typeof tdq === 'number' ? '' : 'Run Enforcement Sentinel to fetch score'}>
-                            {tdq}
-                          </span>
-                        </td>
-                        <td className="p-3">
-                          <span className={`font-semibold ${typeof bdq === 'number' ? (bdq >= 90 ? 'text-green-600' : 'text-orange-600') : 'text-gray-400 cursor-help'}`} title={typeof bdq === 'number' ? '' : 'Run Enforcement Sentinel to fetch score'}>
-                            {bdq}
+                          <span className={`font-semibold ${typeof rel === 'number' ? (rel === 0 ? 'text-green-600' : 'text-red-600') : 'text-gray-400 cursor-help'}`} title={typeof rel === 'number' ? '' : 'Run Enforcement Sentinel to fetch count'}>
+                            {rel}
                           </span>
                         </td>
                         <td className="p-3 text-gray-600">
@@ -366,15 +435,28 @@ export function DataCertification() {
                           </span>
                         </td>
                         <td className="p-3 text-right">
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
-                            onClick={() => handleEdit(ds)}
-                            className="text-xs h-7 px-2 border-blue-200 text-blue-600 hover:bg-blue-50"
-                          >
-                            <Edit className="w-3 h-3 mr-1" />
-                            Edit Contract
-                          </Button>
+                          <div className="flex items-center justify-end gap-2">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              onClick={() => handleEdit(ds)}
+                              className="text-xs h-7 px-2 border-blue-200 text-blue-600 hover:bg-blue-50"
+                            >
+                              <Edit className="w-3 h-3 mr-1" />
+                              Edit Contract
+                            </Button>
+                            {(contract || ds.contract_url) && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleDeleteContract(ds.id)}
+                                className="text-xs h-7 px-2 border-red-200 text-red-600 hover:bg-red-50"
+                                title="Delete Contract"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </Button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -428,7 +510,7 @@ export function DataCertification() {
             
             <div className="flex-1 flex overflow-hidden bg-gray-50">
               {showHistory && (
-                <div className="w-64 border-r border-gray-200 bg-white overflow-y-auto p-4">
+                <div className="w-64 shrink-0 border-r border-gray-200 bg-white overflow-y-auto p-4">
                   <h4 className="text-sm font-semibold text-gray-900 mb-4">Version History</h4>
                   <div className="space-y-3">
                     {contractHistory.map(version => (
@@ -514,7 +596,7 @@ export function DataCertification() {
             </div>
             <div className="p-6 bg-gray-50 flex-1 overflow-y-auto max-h-[60vh]">
               <p className="text-sm text-gray-600 mb-4">
-                This dataset is marked as <code className="bg-gray-200 px-1 rounded text-xs">certification_eligible</code>, but currently fails the following Open Policy Agent (OPA) checks required for certification:
+                This dataset fails the following Open Policy Agent (OPA) checks required for certification:
               </p>
               <ul className="space-y-3">
                 {violationAsset.certification_violations?.map((v, i) => (
@@ -538,6 +620,7 @@ export function DataCertification() {
           </div>
         </div>
       )}
+
     </div>
   );
 }

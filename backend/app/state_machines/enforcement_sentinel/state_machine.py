@@ -145,7 +145,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
         from app.providers.databricks.client import DatabricksProvider
         try:
             provider = DatabricksProvider(
-                host=settings.DATABRICKS_HOST, 
+                host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL, 
                 client_id=settings.DATABRICKS_CLIENT_ID, 
                 client_secret=settings.DATABRICKS_CLIENT_SECRET
             )
@@ -180,13 +180,17 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
 
         from app.db.data_asset import DataAssetModel
         for resource in discovered_resources:
-            if resource.get("type") == "table" and "dataset_id" in resource:
+            if resource.get("type") == "data_product" and "dataset_id" in resource:
                 dataset_id = resource.get("dataset_id")
                 asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
                 if asset:
                     dq = dict(asset.data_quality or {})
-                    dq["tdq"] = resource.get("tdq_score")
-                    dq["bdq"] = resource.get("bdq_score")
+                    # Calculate aggregate failed rules for UI display
+                    total_failed = sum([a.get("failed_rule_count", 0) for a in resource.get("assets", []) if a.get("failed_rule_count", -1) >= 0])
+                    # If any asset failed to fetch (-1), mark as -1
+                    if any(a.get("failed_rule_count", 0) < 0 for a in resource.get("assets", [])):
+                        total_failed = -1
+                    dq["failed_rule_count"] = total_failed
                     asset.data_quality = dq
                     self.db.add(asset)
         
@@ -235,7 +239,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                 action = result.get("action", "KILL")
                 
                 # Update local DataAsset cache with the latest violations if evaluating data certification
-                if policy_name == "data_certification" and resource.get("type") == "table":
+                if policy_name == "data_certification" and resource.get("type") == "data_product":
                     from app.db.data_asset import DataAssetModel
                     dataset_id = resource.get("dataset_id", resource.get("id"))
                     asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
@@ -243,8 +247,8 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                         asset.certification_violations = result.get("violation_reasons", [])
                         self.db.add(asset)
                 
-                # We record it if it's an actual violation, OR if the action is a proactive enforcement step like CERTIFY or START_CERTIFICATION
-                if is_violation or action in ["CERTIFY", "UNCERTIFY", "START_CERTIFICATION"]:
+                # We record it if it's an actual violation, OR if the action is a proactive enforcement step like CERTIFY or UNCERTIFY
+                if is_violation or action in ["CERTIFY", "UNCERTIFY"]:
                     violations.append({
                         "resource_id": resource.get("id"),
                         "resource_type": resource.get("type"),
@@ -280,7 +284,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
         
         from app.providers.databricks.client import DatabricksProvider
         provider = DatabricksProvider(
-            host=settings.DATABRICKS_HOST, 
+            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL, 
             client_id=settings.DATABRICKS_CLIENT_ID, 
             client_secret=settings.DATABRICKS_CLIENT_SECRET
         )
@@ -301,6 +305,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
             "notebook": NotebookResourceHandler(workspace_client),
             "storage": VolumeResourceHandler(workspace_client),
             "table": DatasetResourceHandler(workspace_client),
+            "data_product": DatasetResourceHandler(workspace_client),
         }
 
         for violation in violations:
@@ -373,59 +378,19 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                     )
                     await handler.kill(violation["resource_id"])
                     
-            elif step == "start_certification":
-                from app.db.request import RequestModel
-                
-                # Use dataset_id if present, otherwise fallback to resource_id
-                resource_context = violation.get("input_context", {}).get("resource", {})
-                dataset_id = resource_context.get("dataset_id", violation.get("resource_id"))
-                
-                # Deduplication check: check if there's already an active DATA_CERTIFICATION request for this dataset
-                from sqlalchemy import cast, String
-                existing = self.db.query(RequestModel).filter(
-                    RequestModel.type == RequestType.DATA_CERTIFICATION.value,
-                    RequestModel.status.notin_(["completed", "rejected", "failed"]),
-                    cast(RequestModel.state_context, String).like(f'%"{dataset_id}"%')
-                ).first()
-                
-                if existing:
-                    logger.info(
-                        "Skipping START_CERTIFICATION for %s because active request %s exists.",
-                        dataset_id,
-                        existing.id
+            elif step == "certify":
+                if not handler:
+                    logger.warning(
+                        "No handler for resource_type=%s; cannot certify for policy=%s",
+                        violation.get("resource_type"),
+                        violation.get("policy"),
                     )
-                    executed_action = "deduplicated_skip"
+                    executed_action = "error_no_handler"
                 else:
-                    logger.info(
-                        "Starting certification auto-generation for %s",
-                        dataset_id
-                    )
-                    
-                    new_req = RequestModel(
-                        id=str(uuid.uuid4()),
-                        type=RequestType.DATA_CERTIFICATION,
-                        title=f"Data Certification: {violation.get('resource_id')}",
-                        status="pending",
-                        requester_email="system@governance",
-                        state_context={
-                            "dataset_id": dataset_id,
-                            "auto_generated": True,
-                            "violations_context": violation,
-                            "odcs_yaml": f"domain: unknown\ndataProduct: {violation.get('resource_id')}\nversion: 1.0.0\n"
-                        }
-                    )
-                    self.db.add(new_req)
-                    self.db.commit() # commit to get the ID and ensure state machine can find it
-                    
-                    # Update DataAsset to show as Pending in UI
-                    from app.db.data_asset import DataAssetModel
-                    asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
-                    if asset:
-                        asset.contract_url = f"/requests/{new_req.id}"
-                        self.db.add(asset)
-                        self.db.commit()
-                    
-                    executed_action = "start_certification_created"
+                    if hasattr(handler, "certify"):
+                        await handler.certify(violation["resource_id"])
+                    else:
+                        executed_action = "error_no_handler_method"
                         
             elif step == "uncertify":
                 if not handler:

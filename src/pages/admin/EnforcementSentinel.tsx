@@ -609,7 +609,7 @@ export function EnforcementSentinel() {
                                                                                             </div>
                                                                                         );
                                                                                     }
-                                                                                    return ['KILL', 'CERTIFY', 'UNCERTIFY', 'START_CERTIFICATION'].includes(v.action) && (
+                                                                                    return ['KILL', 'CERTIFY', 'UNCERTIFY'].includes(v.action) && (
                                                                                         <Button 
                                                                                             size="sm" 
                                                                                             variant="outline"

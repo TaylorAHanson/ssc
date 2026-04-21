@@ -840,6 +840,30 @@ export async function createDataContract(datasetId: string, yamlContent: string)
   return response.json();
 }
 
+export async function syncDataContracts(): Promise<{ status: string, message: string }> {
+  const response = await fetch(`${API_BASE_URL}/data-contracts/sync`, {
+    method: 'POST',
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(errorText || `Failed to sync data contracts: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function deleteDataContract(datasetId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/data-contracts/${datasetId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to delete data contract: ${response.status} ${errorText}`);
+  }
+}
+
+
 export const api = {
   createRequest,
   getRequests,
@@ -867,5 +891,7 @@ export const api = {
   getDataAssets,
   getDataContracts,
   getContractHistory,
-  createDataContract
+  createDataContract,
+  syncDataContracts,
+  deleteDataContract
 };

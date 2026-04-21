@@ -16,3 +16,4 @@ class DataContractModel(Base):
     is_active = Column(Boolean, default=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     created_by = Column(String, nullable=True)
+    metadata_hash = Column(String, nullable=True)

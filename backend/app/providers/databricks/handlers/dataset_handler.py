@@ -22,152 +22,114 @@ class DatasetResourceHandler(BaseResourceHandler):
             for contract in contracts:
                 try:
                     dataset_def = yaml.safe_load(contract.yaml_content)
-                    servers = dataset_def.get("servers", [])
-                    catalog = servers[0].get("catalog", "main") if servers else "main"
-                    schema = servers[0].get("schema", "default") if servers else "default"
-                    schemas = dataset_def.get("schema", [])
-                    first_schema = schemas[0] if schemas else {}
-                    physical_table = first_schema.get("physicalName", "unknown")
-                    full_name = f"{catalog}.{schema}.{physical_table}"
+                    full_name = contract.dataset_id
                     contracted_datasets[full_name] = dataset_def
                 except Exception as e:
                     logger.error(f"Failed to parse Data Contract {contract.dataset_id}: {e}")
                     
-            tagged_tables = []
-            try:
-                if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
-                    # For demo purposes we query taylor_hanson_build_catalog, but ideally this would be system.information_schema.table_tags
-                    query = """
-                        SELECT catalog_name, schema_name, table_name 
-                        FROM taylor_hanson_build_catalog.information_schema.table_tags 
-                        WHERE tag_name = 'certification_eligible' AND tag_value = 'true'
-                    """
-                    logger.info("Querying UC for certification_eligible tables...")
-                    response = self.workspace_client.statement_execution.execute_statement(
-                        statement=query,
-                        warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
-                        wait_timeout="30s"
-                    )
-                    
-                    if response.result and response.result.data_array:
-                        for row in response.result.data_array:
-                            full_name = f"{row[0]}.{row[1]}.{row[2]}"
-                            tagged_tables.append(full_name)
-            except Exception as e:
-                logger.error(f"Failed to query Unity Catalog for tagged tables: {e}")
-
-            all_datasets_to_process = set(contracted_datasets.keys()).union(set(tagged_tables))
-            
-            for full_name in all_datasets_to_process:
+            for dp_name, dataset_def in contracted_datasets.items():
                 try:
-                    parts = full_name.split(".")
-                    if len(parts) != 3:
-                        continue
-                    catalog, schema, physical_table = parts
-                    
-                    dataset_def = contracted_datasets.get(full_name, {})
-                    
-                    data_product = dataset_def.get("dataProduct", physical_table)
-                    schemas = dataset_def.get("schema", [])
-                    first_schema = schemas[0] if schemas else {}
-                    
-                    root_custom_props = {prop.get("property"): prop.get("value") for prop in dataset_def.get("customProperties", [])}
-                    schema_custom_props = {prop.get("property"): prop.get("value") for prop in first_schema.get("customProperties", [])}
-                    
-                    quality_rules = dataset_def.get("quality", [])
-                    tdq_threshold = 100
-                    bdq_threshold = 100
-                    for rule in quality_rules:
-                        if rule.get("id") == "technical_dq_threshold":
-                            tdq_threshold = rule.get("mustBe", 100)
-                        elif rule.get("id") == "business_dq_threshold":
-                            bdq_threshold = rule.get("mustBe", 100)
-                    
-                    # If there's no contract, but it was found via tags, it's eligible
-                    is_eligible = True if full_name in tagged_tables else root_custom_props.get("certification_eligible", False)
-                    
+                    # Initialize an aggregated resource for the data product
                     resource = {
-                        "id": data_product,
-                        "dataset_id": full_name,
-                        "type": "table",
-                        "certification_eligible": is_eligible,
-                        "tdq_threshold": tdq_threshold,
-                        "bdq_threshold": bdq_threshold,
-                        "abac_needed": schema_custom_props.get("abac_required", False),
-                        "abac_defined": False,
-                        "data_classification": schema_custom_props.get("classification", ""),
-                        "tags": root_custom_props.get("databricks_tags", {})
+                        "id": dp_name,
+                        "dataset_id": dp_name,
+                        "type": "data_product",
+                        "assets": []
                     }
                     
-                    # Fetch TDQ and BDQ scores
-                    resource["tdq_score"] = 0
-                    resource["bdq_score"] = 0
-                    try:
-                        if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
-                            query = f"SELECT tdq_score, bdq_score FROM {settings.DATABRICKS_DATA_QUALITY_TABLE} WHERE dataset_id = '{full_name}' ORDER BY run_date DESC LIMIT 1"
-                            response = self.workspace_client.statement_execution.execute_statement(
-                                statement=query,
-                                warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
-                                wait_timeout="30s"
-                            )
-                            if response.result and response.result.data_array and len(response.result.data_array) > 0:
-                                resource["tdq_score"] = float(response.result.data_array[0][0])
-                                resource["bdq_score"] = float(response.result.data_array[0][1])
-                    except Exception as e:
-                        logger.error(f"Failed to fetch TDQ/BDQ scores for {full_name} via SQL: {e}")
+                    servers = dataset_def.get("servers", [])
+                    default_catalog = servers[0].get("catalog", "") if servers else ""
+                    default_schema = servers[0].get("schema", "") if servers else ""
                     
-                    # Fetch metadata from Unity Catalog
-                    try:
-                        catalog_info = self.workspace_client.catalogs.get(name=catalog)
-                        resource["catalog_description"] = catalog_info.comment
-                    except Exception:
-                        resource["catalog_description"] = None
+                    schemas = dataset_def.get("schema", [])
+                    
+                    # We will loop through all physical tables and aggregate metadata
+                    for this_schema in schemas:
+                        physical_table = this_schema.get("physicalName")
+                        if not physical_table:
+                            continue
+                            
+                        if "." in physical_table and len(physical_table.split(".")) == 3:
+                            full_name = physical_table
+                            catalog, schema, table = full_name.split(".")
+                        else:
+                            catalog = default_catalog
+                            schema = default_schema
+                            if not catalog or not schema:
+                                continue
+                            full_name = f"{catalog}.{schema}.{physical_table}"
                         
-                    try:
-                        schema_info = self.workspace_client.schemas.get(full_name=f"{catalog}.{schema}")
-                        resource["schema_description"] = schema_info.comment
-                    except Exception:
-                        resource["schema_description"] = None
+                        asset_info = {
+                            "name": full_name,
+                            "type": "table",
+                            "tags": {},
+                            "failed_rule_count": -1,
+                            "catalog_description": None,
+                            "schema_description": None,
+                            "all_columns_have_descriptions": False,
+                            "rbac_defined": False
+                        }
                         
-                    try:
-                        table_info = self.workspace_client.tables.get(full_name=full_name)
-                        columns = table_info.columns or []
-                        resource["all_columns_have_descriptions"] = all(bool(col.comment) for col in columns) if columns else False
-                    except Exception:
-                        resource["all_columns_have_descriptions"] = False
+                        # Get tags for this specific table
+                        try:
+                            uc_tags = self.workspace_client.entity_tag_assignments.list(entity_type='tables', entity_name=full_name)
+                            for tag_assign in uc_tags:
+                                if tag_assign.tag_key:
+                                    asset_info["tags"][tag_assign.tag_key] = tag_assign.tag_value
+                        except Exception:
+                            pass
+                            
+                        reliability_window = asset_info["tags"].get("reliability_window")
+                        if reliability_window:
+                            try:
+                                if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
+                                    query = f"SELECT COUNT(1) FROM {settings.DATABRICKS_ADOC_HISTORY_TABLE} LATERAL VIEW explode(items) as item WHERE assetInfo.assetUid = '{full_name}' AND cast(processed_at as date) >= date_sub(current_date(), {int(reliability_window)}) AND item.resultPercent < item.threshold"
+                                    response = self.workspace_client.statement_execution.execute_statement(
+                                        statement=query,
+                                        warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
+                                        wait_timeout="30s"
+                                    )
+                                    if response.result and response.result.data_array and len(response.result.data_array) > 0 and response.result.data_array[0][0] is not None:
+                                        asset_info["failed_rule_count"] = int(response.result.data_array[0][0])
+                            except Exception as e:
+                                logger.error(f"Failed to fetch failed rule count for {full_name} via SQL: {e}")
                         
-                    try:
-                        grants = self.workspace_client.grants.get(securable_type="table", full_name=full_name)
-                        resource["rbac_defined"] = len(grants.privilege_assignments or []) > 0
-                    except Exception:
-                        resource["rbac_defined"] = False
+                        # Fetch metadata from Unity Catalog
+                        try:
+                            catalog_info = self.workspace_client.catalogs.get(name=catalog)
+                            asset_info["catalog_description"] = catalog_info.comment
+                        except Exception:
+                            asset_info["catalog_description"] = None
+                            
+                        try:
+                            schema_info = self.workspace_client.schemas.get(full_name=f"{catalog}.{schema}")
+                            asset_info["schema_description"] = schema_info.comment
+                        except Exception:
+                            asset_info["schema_description"] = None
+                            
+                        try:
+                            table_info = self.workspace_client.tables.get(full_name=full_name)
+                            if hasattr(table_info, 'table_type') and table_info.table_type:
+                                t_type = str(table_info.table_type.value) if hasattr(table_info.table_type, 'value') else str(table_info.table_type)
+                                asset_info["type"] = "view" if "VIEW" in t_type.upper() else "table"
+                            
+                            columns = table_info.columns or []
+                            asset_info["all_columns_have_descriptions"] = all(bool(col.comment) for col in columns) if columns else False
+                        except Exception:
+                            asset_info["all_columns_have_descriptions"] = False
+                            
+                        try:
+                            grants = self.workspace_client.grants.get(securable_type="table", full_name=full_name)
+                            asset_info["rbac_defined"] = len(grants.privilege_assignments or []) > 0
+                        except Exception:
+                            asset_info["rbac_defined"] = False
                         
-                    try:
-                        uc_tags = self.workspace_client.entity_tag_assignments.list(entity_type='tables', entity_name=full_name)
-                        for tag_assign in uc_tags:
-                            if tag_assign.tag_key:
-                                resource["tags"][tag_assign.tag_key] = tag_assign.tag_value
-                    except Exception:
-                        pass
-                        
-                    # Fallback for data_classification if not in contract but present in tags
-                    if not resource["data_classification"] and "data_classification" in resource["tags"]:
-                        resource["data_classification"] = resource["tags"]["data_classification"]
-                        
-                    if root_custom_props.get("is_mock") is True:
-                        resource["tdq_score"] = tdq_threshold
-                        resource["bdq_score"] = bdq_threshold
-                        resource["catalog_description"] = resource["catalog_description"] or "Mock Catalog Description"
-                        resource["schema_description"] = resource["schema_description"] or "Mock Schema Description"
-                        resource["all_columns_have_descriptions"] = True
-                        resource["rbac_defined"] = True
-                        if resource["abac_needed"]:
-                            resource["abac_defined"] = True
+                        resource["assets"].append(asset_info)
                         
                     resources.append(resource)
                     
                 except Exception as e:
-                    logger.error(f"Failed to process dataset {full_name}: {e}")
+                    logger.error(f"Failed to process dataset {dp_name}: {e}")
                     
         except Exception as e:
             logger.error(f"Failed during dataset discovery: {e}")
@@ -179,10 +141,50 @@ class DatasetResourceHandler(BaseResourceHandler):
         return resources
         
     async def certify(self, resource_id: str) -> bool:
-        logger.info(f"Certifying dataset {resource_id}")
+        logger.info(f"Certifying data product {resource_id}")
         try:
-            if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
-                query = f"ALTER TABLE {resource_id} SET TAGS ('system.certification_status' = 'certified')"
+            if not hasattr(settings, "DATABRICKS_WAREHOUSE_ID") or not settings.DATABRICKS_WAREHOUSE_ID:
+                logger.error("No warehouse_id defined, cannot certify dataset via SQL")
+                return False
+                
+            from app.db.session import get_lakebase_session
+            from app.db.data_contract import DataContractModel
+            import yaml
+            
+            db = get_lakebase_session()
+            contract = db.query(DataContractModel).filter(
+                DataContractModel.dataset_id == resource_id,
+                DataContractModel.is_active == True
+            ).first()
+            db.close()
+            
+            if not contract:
+                logger.error(f"No active contract found for data product {resource_id}")
+                return False
+                
+            dataset_def = yaml.safe_load(contract.yaml_content)
+            servers = dataset_def.get("servers", [])
+            default_catalog = servers[0].get("catalog", "") if servers else ""
+            default_schema = servers[0].get("schema", "") if servers else ""
+            
+            schemas = dataset_def.get("schema", [])
+            success = True
+            
+            for this_schema in schemas:
+                physical_table = this_schema.get("physicalName")
+                if not physical_table:
+                    continue
+                    
+                if "." in physical_table and len(physical_table.split(".")) == 3:
+                    full_name = physical_table
+                else:
+                    catalog = default_catalog
+                    schema = default_schema
+                    if not catalog or not schema:
+                        continue
+                    full_name = f"{catalog}.{schema}.{physical_table}"
+                    
+                query = f"ALTER TABLE {full_name} SET TAGS ('system.certification_status' = 'certified')"
                 res = self.workspace_client.statement_execution.execute_statement(
                     statement=query,
                     warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
@@ -190,21 +192,59 @@ class DatasetResourceHandler(BaseResourceHandler):
                 )
                 if res.status.state.value in ("FAILED", "CANCELED", "CLOSED"):
                     error_msg = res.status.error.message if res.status.error else "Unknown SQL error"
-                    logger.error(f"SQL execution failed to certify dataset: {error_msg}")
-                    return False
-                return True
-            else:
-                logger.error("No warehouse_id defined, cannot certify dataset via SQL")
-                return False
+                    logger.error(f"SQL execution failed to certify {full_name}: {error_msg}")
+                    success = False
+                    
+            return success
         except Exception as e:
             logger.error(f"Failed to certify dataset {resource_id}: {e}")
             return False
 
     async def uncertify(self, resource_id: str) -> bool:
-        logger.info(f"Un-certifying dataset {resource_id}")
+        logger.info(f"Un-certifying data product {resource_id}")
         try:
-            if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
-                query = f"ALTER TABLE {resource_id} UNSET TAGS ('system.certification_status')"
+            if not hasattr(settings, "DATABRICKS_WAREHOUSE_ID") or not settings.DATABRICKS_WAREHOUSE_ID:
+                logger.error("No warehouse_id defined, cannot uncertify dataset via SQL")
+                return False
+                
+            from app.db.session import get_lakebase_session
+            from app.db.data_contract import DataContractModel
+            import yaml
+            
+            db = get_lakebase_session()
+            contract = db.query(DataContractModel).filter(
+                DataContractModel.dataset_id == resource_id,
+                DataContractModel.is_active == True
+            ).first()
+            db.close()
+            
+            if not contract:
+                logger.error(f"No active contract found for data product {resource_id}")
+                return False
+                
+            dataset_def = yaml.safe_load(contract.yaml_content)
+            servers = dataset_def.get("servers", [])
+            default_catalog = servers[0].get("catalog", "") if servers else ""
+            default_schema = servers[0].get("schema", "") if servers else ""
+            
+            schemas = dataset_def.get("schema", [])
+            success = True
+            
+            for this_schema in schemas:
+                physical_table = this_schema.get("physicalName")
+                if not physical_table:
+                    continue
+                    
+                if "." in physical_table and len(physical_table.split(".")) == 3:
+                    full_name = physical_table
+                else:
+                    catalog = default_catalog
+                    schema = default_schema
+                    if not catalog or not schema:
+                        continue
+                    full_name = f"{catalog}.{schema}.{physical_table}"
+                    
+                query = f"ALTER TABLE {full_name} UNSET TAGS ('system.certification_status')"
                 res = self.workspace_client.statement_execution.execute_statement(
                     statement=query,
                     warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
@@ -212,12 +252,10 @@ class DatasetResourceHandler(BaseResourceHandler):
                 )
                 if res.status.state.value in ("FAILED", "CANCELED", "CLOSED"):
                     error_msg = res.status.error.message if res.status.error else "Unknown SQL error"
-                    logger.error(f"SQL execution failed to uncertify dataset: {error_msg}")
-                    return False
-                return True
-            else:
-                logger.error("No warehouse_id defined, cannot uncertify dataset via SQL")
-                return False
+                    logger.error(f"SQL execution failed to uncertify {full_name}: {error_msg}")
+                    success = False
+                    
+            return success
         except Exception as e:
             logger.error(f"Failed to un-certify dataset {resource_id}: {e}")
             return False

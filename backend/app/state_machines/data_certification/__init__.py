@@ -1,1 +1,0 @@
-from app.state_machines.data_certification.state_machine import DataCertificationStateMachine
