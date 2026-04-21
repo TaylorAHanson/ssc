@@ -54,9 +54,10 @@ The Data Certification flow operates in four distinct phases:
    * A separate Databricks job runs periodically against production catalogs to differentiate which tables actually need certification, filtering out noise (like `*_raw`, `*_tmp`, or ingestion tables). 
    * **Missing Metadata Generation**: During this scan, the job utilizes `dbxmetagen` to automatically generate and apply any missing table and column descriptions in Unity Catalog.
 
-2. **Draft Data Contract (Data Product Definition)**
-   * Users navigate to the UI, select multiple eligible datasets that comprise a logical Data Product, and click 'Draft Contract'.
-   * An AI Agent auto-generates a draft Open Data Contract Standard (ODCS) YAML file spanning all selected datasets, using their Unity Catalog metadata.
+2. **Automated Discovery & Contract Drafting (Data Product Definition)**
+   * A discovery job ("Sync Contracts") scans all catalogs, schemas, and tables in Databricks for the `data_set` tag.
+   * Tables sharing the same `data_set` tag value are grouped together into a logical Data Product.
+   * An AI Agent auto-generates or updates a draft Open Data Contract Standard (ODCS) YAML file for this grouped Data Product, merging Unity Catalog metadata while carefully preserving any manual edits from prior versions.
    * A new `DATA_CERTIFICATION` state machine request is spawned with this draft contract.
 
 3. **Sentinel Evaluation (Policy as Code)**
@@ -70,41 +71,89 @@ The Data Certification flow operates in four distinct phases:
    * **Data SME Review**: Subject Matter Experts review the business logic, descriptions, and rules.
    * **Finalization**: If both reviews pass, the system physically applies the `system.certification_status = 'certified'` tag in Databricks to *every* table defined in the contract.
 
+#### Data Certification Flow
 ```mermaid
-stateDiagram-v2
-    state ExternalDatabricksJob {
-        [*] --> ScanUC
-        ScanUC --> DetermineEligibility : Make judgement on noise
-        DetermineEligibility --> GenerateMissingMetadata : Run dbxmetagen
-        GenerateMissingMetadata --> [*]
-    }
-
-    state ContractDrafting {
-        [*] --> UserSelectsTables : Select datasets for Data Product
-        UserSelectsTables --> AIGeneratesContract : AI drafts combined ODCS YAML
-        AIGeneratesContract --> CreateRequest : Submit DATA_CERTIFICATION
-    }
+flowchart TD
+    Z[Discovery Job] -->|Finds tables with 'data_set' tag| Y[AI Generates/Updates ODCS YAML]
+    Y --> C
+    A[Enforcement Sentinel Triggered] --> B(DatasetResourceHandler)
+    B --> C[Read Local YAML Contracts<br>Extract data product info & thresholds]
     
-    state SentinelEvaluation {
-        CreateRequest --> EvaluateOPA : Sentinel runs data_certification.rego
-        EvaluateOPA --> Eligible : All Tables Pass
-        EvaluateOPA --> Rejected : Any Table Fails
-    }
-
-    state HumanReviewWorkflow {
-        Eligible --> AdminReview : Governance Admin
-        AdminReview --> SMEReview : Admin Approves
-        AdminReview --> Rejected : Admin Rejects
-        
-        SMEReview --> Approved : Data SME Approves
-        SMEReview --> Rejected : SME Rejects
-    }
+    C --> F[Fetch Unity Catalog Metadata<br>Descriptions, Grants, Tags, DQ Scores]
     
-    ExternalDatabricksJob --> ContractDrafting : Asynchronous Handoff
-    Approved --> Certified : Apply system tag to ALL tables in contract
-    Rejected --> [*] : Notify Owner
-    Certified --> [*]
+    F --> H[Send aggregated metadata to OPA]
+    
+    H --> L{Passes all Quality,<br>Metadata & Tag checks?}
+    L -- No --> M[Action: UNCERTIFY<br>'Fails requirements']
+    L -- Yes --> N[Action: CERTIFY<br>'Meets all requirements']
+    
+    M --> P[Delete system.certification_status tag<br>via Databricks SDK]
+    N --> Q[Add system.certification_status = 'certified'<br>via Databricks SDK]
+    
+    P --> O[Log to enforcement_audit table]
+    Q --> O
 ```
+
+# Enterprise Databricks Platform Policy Map
+
+## Vision
+This opinionated policy set assumes 100+ workspaces and broad self‑service. Controls are designed as guardrails: they constrain how users build on Databricks, not whether they can build at all. They build on Databricks Security Best Practices, well‑architected guidance, and Unity Catalog governance patterns.
+
+## Governance Architecture
+As detailed above, our platform enforces policies across three layers:
+1. **The AI Agent (Proactive Guidance & Chokepoint):** Intercepts intent, downgrades risk, and performs dry-runs against OPA to guide users before infrastructure changes.
+2. **State Machine Conditions (Proactive Enforcement):** Evaluates deterministic guardrails, triggers human-in-the-loop approvals for high-risk operations, and enforces strict tagging.
+3. **Reactive Enforcers (Continuous Audit):** Background Sentinels continuously evaluate resources against Open Policy Agent (OPA) `.rego` policies to flag, pause, or kill unauthorized assets.
+
+## Severity Scale
+- **Critical** – Must be enforced via platform configuration / automation; exceptions require senior security approval and time‑bound exception records.
+- **High** – Should be enforced via policies & automation where possible; exceptions require documented risk acceptance.
+- **Medium** – Recommended default; deviations allowed with team‑level approval and compensating controls.
+- **Low** – Optimization / hygiene; adopt as capacity allows.
+
+---
+
+## Policy Categories
+
+| Category | Policy Rule | Severity | Enforcement Point | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| **Identity & Access** | Enterprise SSO & MFA | Critical | Platform Config | All human access flows through enterprise SSO; local users disabled. |
+| | SCIM/AIM Provisioning | High | Automation | Users/groups provisioned centrally. |
+| | Separate Admin Accounts | High | Agent/Process | Admins use separate identities for day-to-day work. |
+| | Group-based Access | High | OPA Sentinel | Data access granted to groups, not individuals. |
+| | PAT Restrictions | Critical | Platform Config | PATs allowed only in non-prod (≤ 30 days). Disabled in enterprise prod. |
+| | Secret Management | Critical | OPA Sentinel | Credentials must be stored in approved secret scopes/managers. |
+| **Workspaces & Environments** | Automated Creation | Critical | Automation | Created via account-level automation; manual UI creation disabled. |
+| | Workspace Tiering | High | State Machine | Tagged as dev/test/prod and enterprise/domain/ad-hoc. |
+| | Enterprise Isolation | High | Agent/Process | Enterprise workspaces host only shared platform services. |
+| | Domain Workspaces | High | Architecture | Default home for production data pipelines bound to specific catalogs. |
+| | Ad-Hoc/Sandbox Lifecycles | Medium | Automation | Auto-expire after 30-90 days of inactivity. Small compute policies. |
+| | Network Controls | Critical | Platform Config | Secure network baseline (private connectivity). Public access disabled for prod. |
+| **Compute, Jobs & Automation** | Cluster Policies | Critical | Platform Config | All compute created via cluster/compute policies. "No policy" disabled. |
+| | Interactive Clusters in Prod | High | OPA Sentinel | Shared interactive clusters disallowed in prod. |
+| | Prod Job Ownership | High | OPA Sentinel | Owned by service principals, use version-controlled code. |
+| | Auto-stopping Compute | High | Platform Config | Max idle timeouts enforced. |
+| **Service Principals & Tokens** | SP Ownership | High | State Machine | Clear business owner in central registry. |
+| | SP Scope | Critical | OPA Sentinel | Least privilege; broad "*" grants prohibited in prod. |
+| | SP Lifecycle | High | Automation | Disabled/deleted after 90 days of inactivity. |
+| | Human-owned Tokens | Critical | Agent/Process | Never used for production workloads. |
+| **Data & AI Governance** | Unity Catalog Centralization | Critical | Architecture | UC is the authoritative control plane. |
+| | Catalog Segmentation | High | OPA Sentinel | Segmented by environment and domain. Cross-environment access prohibited. |
+| | Governed Tags / ABAC | Critical | OPA Sentinel | Sensitive data classified and restricted via ABAC. |
+| | DBFS / Local Storage | High | OPA Sentinel | Prod data must not be stored in DBFS/local volumes. |
+| | Data Sharing | Critical | OPA Sentinel | Uses Delta Sharing or clean rooms; direct raw bucket access blocked. |
+| **Dashboards, SQL & BI** | Prod SQL Warehouses | High | Platform Config | Must use compute policies (max size, timeouts, tagging). |
+| | Embedded Credentials | Critical | OPA Sentinel | Dashboards with embedded credentials cannot be shared with ALL_USERS. |
+| | External BI Tools | High | Architecture | Must use service principals/managed identities. |
+| **Apps & Genie Spaces** | Apps in Enterprise Prod | High | OPA Sentinel | Must be on platform allowlist. |
+| | Apps in Domain Prod | High | Agent/Process | Require CI/CD deployment and review. |
+| | App Idle Cleanup | Medium | Automation | Stopped after 30 days inactivity; archived after 60-90 days. |
+| | Genie Spaces Prod Data | High | Architecture | Linked to domain workspaces, owned by groups. |
+| | Conversational Data Export | Critical | Platform Config | Direct export of sensitive data blocked. |
+| **Data Certification** | Data Quality | High | OPA Sentinel | Reliability score over the last 7 days must meet or exceed the contract's threshold. |
+| | Metadata Completeness | High | OPA Sentinel | Catalog, schema, and all column descriptions must exist. |
+| | Access Control | High | OPA Sentinel | RBAC is always required; ABAC must be defined if deemed necessary. |
+| | Tagging & Classification | High | OPA Sentinel | Mandatory tags (Owner group, Approver group, Domain, SLO/SLA) and Data Classification (e.g., PII) must be applied. |
 
 ---
 
@@ -140,4 +189,22 @@ Data certification is a formal process that verifies a dataset meets all enterpr
 *   **Enforcement Sentinel Runs:** The Sentinel can be run manually via the API or UI to audit the environment immediately.
 *   **Failure Notifications:** If a Sentinel run encounters an error, it is marked as `failed` in the UI, and an email notification is automatically dispatched to the configured governance email group (defined in `configuration.yaml`).
 *   **Audit Logs:** All enforcement actions (and skipped actions) are recorded in the `enforcement_audit` table in the database for compliance reporting.
+
+## How to Contribute
+Adding or editing a policy is straightforward because we use Open Policy Agent (OPA) and the Rego policy language.
+
+1. **Add/Edit Policy:** Open the relevant `.rego` file in `backend/policies/` (e.g. `compute_and_jobs.rego`). 
+2. **Add Violation Logic:** Add a new `violation_reasons[msg]` block with your logic. Example:
+   ```rego
+   violation_reasons[msg] {
+       input.resource.type == "job"
+       input.resource.idle_days > 90
+       msg := "Job has not been run in over 90 days."
+   }
+   ```
+3. **Commit:** The Enforcement Sentinel and Agent Policy Tools will dynamically pick up any changes or new `.rego` files automatically. The `common.rego` library handles all the boilerplate for formatting the output and processing allowlist exceptions.
+
+## Future Enhancements
+- **Policy Editing UI:** Build a frontend interface to allow administrators to write, test, and deploy Rego policies directly from the Self-Service Center without modifying the source code.
+- **External OPA Hosting:** Currently, policies are evaluated using a local OPA binary. In the future, this should be moved to a centralized, external OPA Server (e.g. a dedicated container or Databricks Model Serving endpoint) so that other systems and Databricks workspaces can query the exact same central policy definitions.
 
