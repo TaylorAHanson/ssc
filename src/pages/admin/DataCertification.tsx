@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
-import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, ChevronUp, ChevronDown, Filter, Plus, Trash2 } from 'lucide-react';
+import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, ChevronUp, ChevronDown, Filter, Trash2 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { api } from '../../services/api';
 import type { DataAsset } from '../../services/api';
@@ -15,19 +15,11 @@ export function DataCertification() {
   const [contractsMap, setContractsMap] = useState<Record<string, DataContract>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortField, setSortField] = useState<'name' | 'tdq' | 'bdq' | 'lastRun' | 'created'>('name');
+  const [sortField, setSortField] = useState<'name' | 'reliability' | 'lastRun' | 'created'>('name');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [statusFilter, setStatusFilter] = useState<'all' | 'certified' | 'uncertified' | 'pending' | 'invalid' | 'awaiting'>('all');
-  const [isDrafting, setIsDrafting] = useState(false);
-  const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
-
-  // Drafting Modal Dynamic State
-  const [draftRows, setDraftRows] = useState<Array<{id: number, catalog: string, schema: string, table: string}>>([{id: Date.now(), catalog: '', schema: '', table: ''}]);
-  const [catalogs, setCatalogs] = useState<{name: string}[]>([]);
-  const [schemasMap, setSchemasMap] = useState<Record<string, {name: string}[]>>({});
-  const [tablesMap, setTablesMap] = useState<Record<string, {name: string, type: string}[]>>({});
-  const [isLoadingCatalogs, setIsLoadingCatalogs] = useState(false);
-  const [draftSuccessId, setDraftSuccessId] = useState<string | null>(null);
+  const [isSyncingContracts, setIsSyncingContracts] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
   // Editor State
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -82,7 +74,7 @@ export function DataCertification() {
       fetchHistory(dataset.id, dataset.contract_url);
     } else {
       setYamlContent('');
-      setYamlError('No existing contract found to edit. Please draft a new contract using the "Add Data Contract" button.');
+      setYamlError('No existing contract found to edit. Please use the "Sync Data Contracts" button first.');
     }
   };
 
@@ -153,63 +145,30 @@ export function DataCertification() {
     }
   };
 
-  useEffect(() => {
-    let mounted = true;
-    if (isDraftModalOpen && catalogs.length === 0) {
-      setIsLoadingCatalogs(true);
-      api.getDatabricksCatalogs().then(cats => {
-        if (mounted) setCatalogs(cats);
-      }).catch(console.error).finally(() => {
-        if (mounted) setIsLoadingCatalogs(false);
-      });
-    }
-    return () => { mounted = false; };
-  }, [isDraftModalOpen, catalogs.length]);
-
-  const handleRowChange = async (id: number, field: 'catalog' | 'schema' | 'table', value: string) => {
-    setDraftRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value, ...(field === 'catalog' ? {schema: '', table: ''} : {}), ...(field === 'schema' ? {table: ''} : {}) } : r));
-    
-    if (field === 'catalog' && value && !schemasMap[value]) {
-      try {
-        const schemas = await api.getDatabricksSchemas(value);
-        setSchemasMap(prev => ({...prev, [value]: schemas}));
-      } catch(e) { console.error(e); }
-    } else if (field === 'schema' && value) {
-      const row = draftRows.find(r => r.id === id);
-      const cat = row?.catalog || value.split('.')[0]; // somewhat heuristic
-      if (cat && !tablesMap[`${cat}.${value}`]) {
-        try {
-          const tables = await api.getDatabricksTables(cat, value);
-          setTablesMap(prev => ({...prev, [`${cat}.${value}`]: tables}));
-        } catch(e) { console.error(e); }
-      }
-    }
-  };
-
-  const addDraftRow = () => {
-    setDraftRows(prev => [...prev, { id: Date.now(), catalog: '', schema: '', table: '' }]);
-  };
-
-  const removeDraftRow = (id: number) => {
-    setDraftRows(prev => prev.filter(r => r.id !== id));
-  };
-
-  const handleDraftSubmit = async () => {
-    const validRows = draftRows.filter(r => r.catalog && r.schema && r.table);
-    if (validRows.length === 0) return;
-    
-    const datasetIds = validRows.map(r => `${r.catalog}.${r.schema}.${r.table}`);
-    
+  const handleSyncContracts = async () => {
+    setIsSyncingContracts(true);
+    setSyncMessage(null);
     try {
-      setIsDrafting(true);
-      const res = await api.draftDataContract(datasetIds);
-      setDraftSuccessId(res.request_id);
-      // Wait for user to interact with the success banner
-    } catch (e) {
+      const res = await api.syncDataContracts();
+      setSyncMessage({ type: 'success', text: `Sync Complete: ${res.message}` });
+      setTimeout(() => setSyncMessage(null), 5000);
+      
+      // Reload assets to reflect changes
+      const [data, contracts] = await Promise.all([
+        api.getDataAssets(),
+        api.getDataContracts()
+      ]);
+      const map: Record<string, DataContract> = {};
+      contracts.forEach(c => map[c.dataset_id] = c);
+      setContractsMap(map);
+      setDatasets(data.filter(d => map[d.id] || d.contract_url));
+      
+    } catch (e: any) {
       console.error(e);
-      alert("Error drafting contract.");
+      setSyncMessage({ type: 'error', text: e.message || "Error syncing contracts." });
+      setTimeout(() => setSyncMessage(null), 5000);
     } finally {
-      setIsDrafting(false);
+      setIsSyncingContracts(false);
     }
   };
 
@@ -239,7 +198,7 @@ export function DataCertification() {
     return () => { mounted = false; };
   }, []);
 
-  const handleSort = (field: 'name' | 'tdq' | 'bdq' | 'lastRun' | 'created') => {
+  const handleSort = (field: 'name' | 'reliability' | 'lastRun' | 'created') => {
     if (sortField === field) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
     } else {
@@ -248,20 +207,20 @@ export function DataCertification() {
     }
   };
 
-  const getSortIcon = (field: 'name' | 'tdq' | 'bdq' | 'lastRun' | 'created') => {
+  const getSortIcon = (field: 'name' | 'reliability' | 'lastRun' | 'created') => {
     if (sortField !== field) return <ChevronUp className="w-3 h-3 text-gray-300 opacity-0 group-hover:opacity-100" />;
     return sortDirection === 'asc' ? <ChevronUp className="w-3 h-3 text-primary" /> : <ChevronDown className="w-3 h-3 text-primary" />;
   };
 
   const getStatus = (ds: DataAsset, contract: DataContract) => {
     const dq = ds.data_quality || {} as any;
-    const tdq = dq.tdq !== undefined ? dq.tdq : 'N/A';
+    const rel = dq.failed_rule_count !== undefined ? dq.failed_rule_count : (dq.reliability !== undefined ? dq.reliability : 'N/A');
     const isInvalid = contract && contract.yaml_content.toLowerCase().includes('changeme');
 
     if (isInvalid) return 'invalid';
     if (ds.certified) return 'certified';
     if (ds.contract_url) return 'pending';
-    if (tdq === 'N/A') return 'awaiting';
+    if (rel === 'N/A') return 'awaiting';
     return 'uncertified';
   };
 
@@ -281,12 +240,9 @@ export function DataCertification() {
       let valA: any = a.table_name.toLowerCase();
       let valB: any = b.table_name.toLowerCase();
       
-      if (sortField === 'tdq') {
-        valA = dqA.tdq !== undefined && dqA.tdq !== 'N/A' ? Number(dqA.tdq) : -1;
-        valB = dqB.tdq !== undefined && dqB.tdq !== 'N/A' ? Number(dqB.tdq) : -1;
-      } else if (sortField === 'bdq') {
-        valA = dqA.bdq !== undefined && dqA.bdq !== 'N/A' ? Number(dqA.bdq) : -1;
-        valB = dqB.bdq !== undefined && dqB.bdq !== 'N/A' ? Number(dqB.bdq) : -1;
+      if (sortField === 'reliability') {
+        valA = dqA.failed_rule_count !== undefined ? dqA.failed_rule_count : (dqA.reliability !== undefined && dqA.reliability !== 'N/A' ? Number(dqA.reliability) : -1);
+        valB = dqB.failed_rule_count !== undefined ? dqB.failed_rule_count : (dqB.reliability !== undefined && dqB.reliability !== 'N/A' ? Number(dqB.reliability) : -1);
       } else if (sortField === 'lastRun') {
         valA = a.last_synced_at ? new Date(a.last_synced_at).getTime() : 0;
         valB = b.last_synced_at ? new Date(b.last_synced_at).getTime() : 0;
@@ -345,14 +301,22 @@ export function DataCertification() {
             </div>
             <div className="flex items-center gap-3">
               <Button
-                onClick={() => setIsDraftModalOpen(true)}
-                className="flex items-center gap-2 bg-primary text-white"
+                onClick={handleSyncContracts}
+                disabled={isSyncingContracts}
+                className="flex items-center gap-2 bg-primary text-white disabled:opacity-50"
               >
-                <FileCheck className="w-4 h-4" />
-                Add Data Contract
+                {isSyncingContracts ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileCheck className="w-4 h-4" />}
+                Sync Data Contracts
               </Button>
             </div>
           </div>
+
+          {syncMessage && (
+            <div className={`mb-4 p-3 rounded-lg flex items-center gap-2 ${syncMessage.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+              {syncMessage.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+              <span className="text-sm font-medium">{syncMessage.text}</span>
+            </div>
+          )}
 
           <div className="overflow-x-auto rounded-lg border border-gray-200">
             <table className="w-full text-sm text-left">
@@ -379,15 +343,9 @@ export function DataCertification() {
                   </th>
                   <th 
                     className="p-3 cursor-pointer hover:bg-gray-100 group transition-colors"
-                    onClick={() => handleSort('tdq')}
+                    onClick={() => handleSort('reliability')}
                   >
-                    <div className="flex items-center justify-between">TDQ {getSortIcon('tdq')}</div>
-                  </th>
-                  <th 
-                    className="p-3 cursor-pointer hover:bg-gray-100 group transition-colors"
-                    onClick={() => handleSort('bdq')}
-                  >
-                    <div className="flex items-center justify-between">BDQ {getSortIcon('bdq')}</div>
+                    <div className="flex items-center justify-between">Failed Rules {getSortIcon('reliability')}</div>
                   </th>
                   <th className="p-3">Freshness</th>
                   <th className="p-3">Drift</th>
@@ -407,8 +365,7 @@ export function DataCertification() {
                   processedDatasets.map(ds => {
                     const dq = ds.data_quality || {} as any;
                     
-                    const tdq = dq.tdq !== undefined ? dq.tdq : 'N/A';
-                    const bdq = dq.bdq !== undefined ? dq.bdq : 'N/A';
+                    const rel = dq.failed_rule_count !== undefined ? dq.failed_rule_count : (dq.reliability !== undefined ? dq.reliability : 'N/A');
                     const freshness = dq.freshness || 'N/A';
                     const drift = dq.drift || 'N/A';
                     const lastRun = ds.last_synced_at ? format(parseISO(ds.last_synced_at), 'MMM d, HH:mm') : 'Unknown';
@@ -439,7 +396,7 @@ export function DataCertification() {
                             >
                               {ds.contract_url.startsWith('/requests') ? 'Pending Approval \u2192' : 'Pending'}
                             </Link>
-                          ) : tdq === 'N/A' ? (
+                          ) : rel === 'N/A' ? (
                             <span 
                               className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800"
                               title="Run Enforcement Sentinel to fetch policy violations and scores"
@@ -463,13 +420,8 @@ export function DataCertification() {
                         <td className="p-3 text-gray-600 whitespace-nowrap">{createdDate}</td>
                         <td className="p-3 text-gray-600 whitespace-nowrap">{lastRun}</td>
                         <td className="p-3">
-                          <span className={`font-semibold ${typeof tdq === 'number' ? (tdq >= 90 ? 'text-green-600' : 'text-orange-600') : 'text-gray-400 cursor-help'}`} title={typeof tdq === 'number' ? '' : 'Run Enforcement Sentinel to fetch score'}>
-                            {tdq}
-                          </span>
-                        </td>
-                        <td className="p-3">
-                          <span className={`font-semibold ${typeof bdq === 'number' ? (bdq >= 90 ? 'text-green-600' : 'text-orange-600') : 'text-gray-400 cursor-help'}`} title={typeof bdq === 'number' ? '' : 'Run Enforcement Sentinel to fetch score'}>
-                            {bdq}
+                          <span className={`font-semibold ${typeof rel === 'number' ? (rel === 0 ? 'text-green-600' : 'text-red-600') : 'text-gray-400 cursor-help'}`} title={typeof rel === 'number' ? '' : 'Run Enforcement Sentinel to fetch count'}>
+                            {rel}
                           </span>
                         </td>
                         <td className="p-3 text-gray-600">
@@ -669,177 +621,6 @@ export function DataCertification() {
         </div>
       )}
 
-      {/* Draft Contract Modal */}
-      {isDraftModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in" onClick={() => setIsDraftModalOpen(false)}>
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-4xl flex flex-col overflow-hidden animate-in zoom-in-95 max-h-[80vh]" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-white shrink-0">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                  <FileCheck className="w-5 h-5 text-blue-600" />
-                  Add Data Contract
-                </h3>
-                <p className="text-xs text-gray-500 mt-1">Select one or more datasets to include in this Data Product contract.</p>
-              </div>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={() => setIsDraftModalOpen(false)}
-                className="w-8 h-8 p-0"
-              >
-                <X className="w-4 h-4" />
-              </Button>
-            </div>
-            
-            <div className="p-6 bg-gray-50 flex-1 overflow-y-auto">
-              {draftSuccessId ? (
-                <div className="flex flex-col items-center justify-center py-12 text-center h-full">
-                  <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
-                    <CheckCircle2 className="w-8 h-8 text-green-600" />
-                  </div>
-                  <h4 className="text-xl font-bold text-gray-900 mb-2">Contract Drafted!</h4>
-                  <p className="text-sm text-gray-600 mb-6 max-w-md">
-                    The AI has successfully drafted the Open Data Contract Standard (ODCS) YAML for your selected datasets. 
-                    A new certification workflow has been submitted and is now awaiting review.
-                  </p>
-                  <div className="flex gap-3">
-                    <Button variant="outline" onClick={() => {
-                      setDraftSuccessId(null);
-                      setDraftRows([{ id: Date.now(), catalog: '', schema: '', table: '' }]);
-                    }}>
-                      Draft Another
-                    </Button>
-                    <Link to={`/approvals`}>
-                      <Button className="bg-primary text-white">
-                        Review Pending Contract
-                      </Button>
-                    </Link>
-                  </div>
-                </div>
-              ) : isLoadingCatalogs ? (
-                <div className="flex items-center justify-center py-12 text-gray-500">
-                  <Loader2 className="w-6 h-6 animate-spin mr-2" />
-                  Loading Databricks Catalogs...
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {draftRows.map((row, index) => {
-                    const availableSchemas = schemasMap[row.catalog] || [];
-                    const availableTables = tablesMap[`${row.catalog}.${row.schema}`] || [];
-                    
-                    return (
-                      <div key={row.id} className="flex flex-col sm:flex-row items-start sm:items-center gap-3 bg-white p-3 rounded-lg border border-gray-200 shadow-sm relative">
-                        <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold shrink-0">
-                          {index + 1}
-                        </div>
-                        
-                        <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-3 w-full">
-                          <div>
-                            <select
-                              value={row.catalog}
-                              onChange={(e) => handleRowChange(row.id, 'catalog', e.target.value)}
-                              className="w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-primary focus:ring-primary"
-                            >
-                              <option value="">Select Catalog...</option>
-                              {catalogs.map(c => (
-                                <option key={c.name} value={c.name}>{c.name}</option>
-                              ))}
-                            </select>
-                          </div>
-                          
-                          <div>
-                            <select
-                              value={row.schema}
-                              onChange={(e) => handleRowChange(row.id, 'schema', e.target.value)}
-                              disabled={!row.catalog}
-                              className="w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-primary focus:ring-primary disabled:bg-gray-100"
-                            >
-                              <option value="">Select Schema...</option>
-                              {availableSchemas.map(s => (
-                                <option key={s.name} value={s.name}>{s.name}</option>
-                              ))}
-                            </select>
-                          </div>
-                          
-                          <div>
-                            <select
-                              value={row.table}
-                              onChange={(e) => handleRowChange(row.id, 'table', e.target.value)}
-                              disabled={!row.schema}
-                              className="w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-primary focus:ring-primary disabled:bg-gray-100"
-                            >
-                              <option value="">Select Table/View...</option>
-                              {availableTables.map(t => (
-                                <option key={t.name} value={t.name}>{t.name} {t.type === 'VIEW' ? '(View)' : ''}</option>
-                              ))}
-                            </select>
-                          </div>
-                        </div>
-
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeDraftRow(row.id)}
-                          disabled={draftRows.length === 1}
-                          className="text-red-500 hover:text-red-700 hover:bg-red-50 shrink-0 h-9 w-9 p-0"
-                          title="Remove dataset"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    );
-                  })}
-                  
-                  <div className="pt-2">
-                    <Button 
-                      variant="outline" 
-                      size="sm"
-                      onClick={addDraftRow}
-                      className="flex items-center gap-2 text-blue-600 border-blue-200 hover:bg-blue-50"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Add another table or view
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="p-4 border-t border-gray-100 bg-white flex justify-between items-center shrink-0">
-              {draftSuccessId ? (
-                <>
-                  <div className="text-sm text-green-600 font-medium flex items-center gap-1">
-                    <CheckCircle2 className="w-4 h-4" /> Successfully submitted Request {draftSuccessId.substring(0, 12)}...
-                  </div>
-                  <Button variant="outline" onClick={() => {
-                    setIsDraftModalOpen(false);
-                    setDraftSuccessId(null);
-                    setDraftRows([{ id: Date.now(), catalog: '', schema: '', table: '' }]);
-                    window.location.reload();
-                  }}>Close</Button>
-                </>
-              ) : (
-                <>
-                  <div className="text-sm text-gray-500">
-                    {draftRows.filter(r => r.catalog && r.schema && r.table).length} valid dataset(s) selected
-                  </div>
-                  <div className="flex gap-2">
-                    <Button variant="outline" onClick={() => setIsDraftModalOpen(false)}>Cancel</Button>
-                    <Button 
-                      onClick={handleDraftSubmit}
-                      disabled={draftRows.filter(r => r.catalog && r.schema && r.table).length === 0 || isDrafting || isLoadingCatalogs}
-                      className="bg-primary text-white flex items-center gap-2"
-                    >
-                      {isDrafting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileCheck className="w-4 h-4" />}
-                      Generate Contract via AI
-                    </Button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

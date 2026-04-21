@@ -10,7 +10,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-NON_REMEDIATION_ACTIONS = frozenset({"SKIPPED_ALLOWLIST", "PENDING_EXCEPTION", "ALLOW"})
+NON_REMEDIATION_ACTIONS = frozenset({"SKIPPED_ALLOWLIST", "PENDING_EXCEPTION", "ALLOW", "KEEP_UNCERTIFIED", "KEEP_CERTIFIED"})
 
 # High-impact automated changes; MEDIUM tier blocks these (warn instead).
 DESTRUCTIVE_ACTIONS = frozenset(

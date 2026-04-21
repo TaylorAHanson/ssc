@@ -60,37 +60,41 @@ The Data Certification flow operates in four distinct phases:
    * An AI Agent auto-generates or updates a draft Open Data Contract Standard (ODCS) YAML file for this grouped Data Product, merging Unity Catalog metadata while carefully preserving any manual edits from prior versions.
    * A new `DATA_CERTIFICATION` state machine request is spawned with this draft contract.
 
-3. **Sentinel Evaluation (Policy as Code)**
-   * The State Machine immediately routes the drafted contract to the Enforcement Sentinel for automated checks.
-   * The Sentinel extracts the list of all tables/views defined in the contract.
-   * It dynamically fetches the latest metadata and quality scores for each table and evaluates them against a strict OPA certification checklist (`data_certification.rego`).
-   * If any table fails the policy checklist, the entire Data Product certification request is automatically rejected, and the owner is notified of the violations to fix.
-
-4. **Certification State Machine (Human Review)**
-   * **Governance Admin Review**: If the Sentinel evaluation passes, governance admins review the AI-generated contract to ensure platform and policy compliance.
-   * **Data SME Review**: Subject Matter Experts review the business logic, descriptions, and rules.
-   * **Finalization**: If both reviews pass, the system physically applies the `system.certification_status = 'certified'` tag in Databricks to *every* table defined in the contract.
+3. **Sentinel Evaluation & Certification (Automated Policy as Code)**
+   * The newly drafted contract is evaluated by the Enforcement Sentinel during its next run.
+   * The Sentinel dynamically fetches the latest metadata and queries the `adoc_dq_history` table for the specified `reliability_window` (a mandatory tag on the table).
+   * It evaluates the metadata and data quality rules against the strict OPA certification checklist (`data_certification.rego`).
+   * If any table fails the policy checklist (e.g., if there are any failed data quality rules in the history table within the window), the certification is rejected.
+   * If all checks pass, the Sentinel automatically applies the `system.certification_status = 'certified'` tag in Databricks to *every* table defined in the contract.
+   * Human-in-the-loop review is only required during dev/test/stage phases; once a dataset is in production and properly tagged, the process is fully automated.
 
 #### Data Certification Flow
 ```mermaid
 flowchart TD
     Z[Discovery Job] -->|Finds tables with 'data_set' tag| Y[AI Generates/Updates ODCS YAML]
     Y --> C
-    A[Enforcement Sentinel Triggered] --> B(DatasetResourceHandler)
-    B --> C[Read Local YAML Contracts<br>Extract data product info & thresholds]
+    A[Enforcement Sentinel Triggered] --> C[Loop Over YAML Contracts]
     
     C --> F[Fetch Unity Catalog Metadata<br>Descriptions, Grants, Tags, DQ Scores]
     
     F --> H[Send aggregated metadata to OPA]
     
     H --> L{Passes all Quality,<br>Metadata & Tag checks?}
-    L -- No --> M[Action: UNCERTIFY<br>'Fails requirements']
-    L -- Yes --> N[Action: CERTIFY<br>'Meets all requirements']
     
-    M --> P[Delete system.certification_status tag<br>via Databricks SDK]
-    N --> Q[Add system.certification_status = 'certified'<br>via Databricks SDK]
+    L -- No --> M{Currently Certified?}
+    M -- Yes --> M1[Action: UNCERTIFY]
+    M -- No --> M2[Action: KEEP_UNCERTIFIED]
     
-    P --> O[Log to enforcement_audit table]
+    L -- Yes --> N{Currently Certified?}
+    N -- No --> N1[Action: CERTIFY]
+    N -- Yes --> N2[Action: KEEP_CERTIFIED]
+    
+    M1 --> P[Delete system.certification_status tag<br>via Databricks SDK]
+    N1 --> Q[Add system.certification_status = 'certified'<br>via Databricks SDK]
+    
+    M2 --> O[Log to enforcement_audit table]
+    N2 --> O
+    P --> O
     Q --> O
 ```
 
@@ -150,7 +154,7 @@ As detailed above, our platform enforces policies across three layers:
 | | App Idle Cleanup | Medium | Automation | Stopped after 30 days inactivity; archived after 60-90 days. |
 | | Genie Spaces Prod Data | High | Architecture | Linked to domain workspaces, owned by groups. |
 | | Conversational Data Export | Critical | Platform Config | Direct export of sensitive data blocked. |
-| **Data Certification** | Data Quality | High | OPA Sentinel | Reliability score over the last 7 days must meet or exceed the contract's threshold. |
+| **Data Certification** | Data Quality | High | OPA Sentinel | Must have 0 failed rules in `adoc_dq_history` within the `reliability_window` timeframe. |
 | | Metadata Completeness | High | OPA Sentinel | Catalog, schema, and all column descriptions must exist. |
 | | Access Control | High | OPA Sentinel | RBAC is always required; ABAC must be defined if deemed necessary. |
 | | Tagging & Classification | High | OPA Sentinel | Mandatory tags (Owner group, Approver group, Domain, SLO/SLA) and Data Classification (e.g., PII) must be applied. |
@@ -175,15 +179,10 @@ The platform uses Open Policy Agent (OPA) with rules written in Rego to enforce 
 Data certification is a formal process that verifies a dataset meets all enterprise standards for quality, security, and documentation.
 
 *   **Triggering the Workflow:** The Enforcement Sentinel automatically discovers eligible datasets (those with an active Data Contract) that meet or violate certification criteria.
-*   **Reviewing a Pending Request:**
-    1. Governance Admins navigate to the **Data Certification** tab in the UI.
-    2. Datasets pending certification will display a **"Pending Request →"** link. Clicking this navigates to the specific request in the Self-Service Center.
-    3. The request contains the AI-generated draft of the Data Contract (in ODCS YAML format) based on the dataset's metadata.
-*   **Admin and SME Approval:**
-    1. The Governance Admin reviews the request, verifies compliance, and approves it.
-    2. The request then moves to the Data SME (Subject Matter Expert) for a secondary review of business logic and schema descriptions.
-    3. Once both parties approve, the State Machine progresses to the `completed` state.
-*   **Automated Tagging (The "Physical Act"):** Upon reaching the `completed` state, the system automatically executes a Databricks SQL command to apply the `system.certification_status = 'certified'` tag directly to the table in Unity Catalog. The local asset cache is also updated to reflect the new certified status.
+*   **Automated Evaluation:**
+    1. The Sentinel reads the generated Open Data Contract Standard (ODCS) YAML.
+    2. It queries `adoc_dq_history` using the `reliability_window` tag to ensure no data quality rules have failed within that window (`failed_rule_count == 0`).
+*   **Automated Tagging (The "Physical Act"):** If the dataset meets all checks (metadata, RBAC, Data Quality), the Sentinel automatically executes a Databricks SQL command to apply the `system.certification_status = 'certified'` tag directly to the table in Unity Catalog. The local asset cache is also updated to reflect the new certified status. Any human-in-the-loop review is restricted to lower environments (dev/test/stage).
 
 ### 3. Monitoring and Auditing
 *   **Enforcement Sentinel Runs:** The Sentinel can be run manually via the API or UI to audit the environment immediately.

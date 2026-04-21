@@ -7,100 +7,118 @@ import future.keywords.contains
 
 default action := "ALLOW"
 default is_violation := false
-default reason := "Resource complied with policies."
+default reason := "Data product complied with policies."
 default severity := "NONE"
 
 # This policy enforces the Data Certification Checklist.
-# It applies to datasets (e.g. tables) that are certified or seeking certification.
+# It applies to data products containing one or more tables/views.
 
 # 1. Data Quality
 violation_reasons contains msg if {
-    input.resource.type == "table"
-    input.resource.has_contract == true
-    input.resource.tdq_score < input.resource.tdq_threshold
-    msg := sprintf("TDQ (Technical Data Quality) score must be at least %v%% for a certified dataset.", [input.resource.tdq_threshold])
+    input.resource.type == "data_product"
+    some asset in input.resource.assets
+    not asset.tags["reliability_window"]
+    msg := sprintf("The 'reliability_window' tag is required for %v '%v'.", [asset.type, asset.name])
 }
 
 violation_reasons contains msg if {
-    input.resource.type == "table"
-    input.resource.has_contract == true
-    input.resource.bdq_score < input.resource.bdq_threshold
-    msg := sprintf("BDQ (Business Data Quality) score must be at least %v%% for a certified dataset.", [input.resource.bdq_threshold])
+    input.resource.type == "data_product"
+    some asset in input.resource.assets
+    asset.tags["reliability_window"]
+    asset.failed_rule_count < 0
+    msg := sprintf("Failed to fetch data quality rule history within the reliability window for %v '%v'.", [asset.type, asset.name])
+}
+
+violation_reasons contains msg if {
+    input.resource.type == "data_product"
+    some asset in input.resource.assets
+    asset.tags["reliability_window"]
+    asset.failed_rule_count > 0
+    msg := sprintf("Failed data quality rule count is %v within the reliability window for %v '%v'. Must be 0.", [asset.failed_rule_count, asset.type, asset.name])
 }
 
 # 2. Metadata exists
 violation_reasons contains msg if {
-    input.resource.type == "table"
-    input.resource.has_contract == true
-    not input.resource.catalog_description
-    msg := "Catalog description is missing for the certified dataset."
+    input.resource.type == "data_product"
+    some asset in input.resource.assets
+    not asset.catalog_description
+    msg := sprintf("Catalog description is missing for %v '%v'.", [asset.type, asset.name])
 }
 
 violation_reasons contains msg if {
-    input.resource.type == "table"
-    input.resource.has_contract == true
-    not input.resource.schema_description
-    msg := "Schema description is missing for the certified dataset."
+    input.resource.type == "data_product"
+    some asset in input.resource.assets
+    not asset.schema_description
+    msg := sprintf("Schema description is missing for %v '%v'.", [asset.type, asset.name])
 }
 
 violation_reasons contains msg if {
-    input.resource.type == "table"
-    input.resource.has_contract == true
-    input.resource.all_columns_have_descriptions == false
-    msg := "One or more columns are missing descriptions in the certified dataset."
+    input.resource.type == "data_product"
+    some asset in input.resource.assets
+    asset.all_columns_have_descriptions == false
+    msg := sprintf("One or more columns are missing descriptions in %v '%v'.", [asset.type, asset.name])
 }
 
 # 3. Access Control exists
 violation_reasons contains msg if {
-    input.resource.type == "table"
-    input.resource.has_contract == true
-    input.resource.rbac_defined == false
-    msg := "RBAC (Role-Based Access Control) must be defined for a certified dataset."
-}
-
-violation_reasons contains msg if {
-    input.resource.type == "table"
-    input.resource.has_contract == true
-    input.resource.abac_needed == true
-    input.resource.abac_defined == false
-    msg := "ABAC (Attribute-Based Access Control) is marked as needed but is not defined for the certified dataset."
+    input.resource.type == "data_product"
+    some asset in input.resource.assets
+    asset.rbac_defined == false
+    msg := sprintf("RBAC (Role-Based Access Control) must be defined for %v '%v'.", [asset.type, asset.name])
 }
 
 # 4. Tagging & Classification
-required_tags := {"Owner group", "Approver group", "Domain", "SLO_SLA"}
+required_tags := {"owner_group", "approver_group", "domain", "slo_sla"}
 violation_reasons contains msg if {
-    input.resource.type == "table"
-    input.resource.has_contract == true
+    input.resource.type == "data_product"
+    some asset in input.resource.assets
     tag := required_tags[_]
-    not input.resource.tags[tag]
-    msg := sprintf("Required tag '%v' is missing from the certified dataset.", [tag])
+    not asset.tags[tag]
+    msg := sprintf("Required tag '%v' is missing from %v '%v'.", [tag, asset.type, asset.name])
 }
 
 violation_reasons contains msg if {
-    input.resource.type == "table"
-    input.resource.has_contract == true
-    not input.resource.data_classification
-    msg := "Data classification (e.g., PII / No PII) must be defined for a certified dataset."
+    input.resource.type == "data_product"
+    some asset in input.resource.assets
+    not asset.tags["data_classification"]
+    msg := sprintf("Data classification tag (e.g., PII / No PII) must be defined for %v '%v'.", [asset.type, asset.name])
 }
 
 # --- Apply Common Governance Logic ---
-# Exceptions do not apply to data certification since it represents a target state.
 is_violation := count(violation_reasons) > 0
 
 sorted_reasons := sort(violation_reasons)
 formatted_reasons := [sprintf("%d. %s", [i + 1, msg]) | some i; msg := sorted_reasons[i]]
 
+is_currently_certified if {
+    count(input.resource.assets) > 0
+    count([asset | some asset in input.resource.assets; asset.tags["system.certification_status"] == "certified"]) == count(input.resource.assets)
+}
+
 action := "UNCERTIFY" if {
+    input.resource.type == "data_product"
     is_violation
-    input.resource.tags["system.certification_status"] == "certified"
+    is_currently_certified
+} else := "CERTIFY" if {
+    input.resource.type == "data_product"
+    not is_violation
+    not is_currently_certified
+} else := "KEEP_UNCERTIFIED" if {
+    input.resource.type == "data_product"
+    is_violation
+    not is_currently_certified
+} else := "KEEP_CERTIFIED" if {
+    input.resource.type == "data_product"
+    not is_violation
+    is_currently_certified
 } else := "ALLOW"
 
 reason := concat(" ", formatted_reasons) if {
+    input.resource.type == "data_product"
     is_violation
-} else := "Dataset meets all technical certification requirements." if {
-    input.resource.has_contract
-    not input.resource.tags["system.certification_status"]
-} else := "Dataset does not have an active contract or is already certified."
+} else := "Data product meets all technical certification requirements." if {
+    input.resource.type == "data_product"
+} else := "Policy does not apply to this resource type."
 
 severity := "HIGH" if {
     is_violation

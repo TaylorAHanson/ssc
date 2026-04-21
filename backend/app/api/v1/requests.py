@@ -52,8 +52,15 @@ async def get_requests(
                 logger.error(f"Skipping request {req.id} with invalid type: {req.type}")
                 continue
 
-            sm = load_state_machine(req, db)
-            sm_state = sm.to_state_machine_state()
+            if r_type == RequestType.DATA_CERTIFICATION:
+                sm_state = StateMachineState(
+                    currentState=req.current_state or "completed",
+                    states=[],
+                    currentProgress=None
+                )
+            else:
+                sm = load_state_machine(req, db)
+                sm_state = sm.to_state_machine_state()
         except Exception as e:
             # Fallback for corrupted/legacy data
             logger.error(f"ERROR loading SM for {req.id}: {e}", exc_info=True)
@@ -146,8 +153,15 @@ async def get_paginated_requests(
             except ValueError:
                 continue
 
-            sm = load_state_machine(req, db)
-            sm_state = sm.to_state_machine_state()
+            if r_type == RequestType.DATA_CERTIFICATION:
+                sm_state = StateMachineState(
+                    currentState=req.current_state or "completed",
+                    states=[],
+                    currentProgress=None
+                )
+            else:
+                sm = load_state_machine(req, db)
+                sm_state = sm.to_state_machine_state()
         except Exception as e:
             sm_state = StateMachineState(
                 currentState=req.current_state or "unknown",
@@ -207,8 +221,20 @@ async def get_request(
         
     # Dynamically calculate state machine view
     try:
-        sm = load_state_machine(request_model, db)
-        sm_state = sm.to_state_machine_state()
+        try:
+            r_type = RequestType(request_model.type)
+        except ValueError:
+            r_type = None
+
+        if r_type == RequestType.DATA_CERTIFICATION:
+            sm_state = StateMachineState(
+                currentState=request_model.current_state or "completed",
+                states=[],
+                currentProgress=None
+            )
+        else:
+            sm = load_state_machine(request_model, db)
+            sm_state = sm.to_state_machine_state()
     except Exception as e:
         logger.error(f"ERROR loading SM for {request_id}: {e}", exc_info=True)
         sm_state = StateMachineState(
@@ -598,6 +624,7 @@ async def execute_enforcement_action(
         "notebook": NotebookResourceHandler(workspace_client),
         "storage": VolumeResourceHandler(workspace_client),
         "table": DatasetResourceHandler(workspace_client),
+        "data_product": DatasetResourceHandler(workspace_client),
     }
 
     handler = handlers.get(body.resource_type)

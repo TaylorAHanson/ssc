@@ -73,21 +73,19 @@ class AgentLLMClient:
             return self._create_error_response("I didn't receive a response from the model.")
 
         # Log the raw response we receive from invoke_endpoint
-        logger.info(f"=== Raw Response from invoke_endpoint ===")
-        logger.info(f"Type: {type(response)}")
+        logger.debug(f"=== Raw Response from invoke_endpoint ===")
+        logger.debug(f"Type: {type(response)}")
         if isinstance(response, dict):
-            logger.info(f"Keys: {list(response.keys())}")
-            logger.info(f"Full response: {json.dumps(response, indent=2, default=str)[:3000]}")
+            logger.debug(f"Keys: {list(response.keys())}")
         else:
-            logger.info(f"Response value: {response}")
+            logger.debug(f"Response value: {response}")
 
         parsed = self._parse_response(response)
         
         # Log what we're returning
-        logger.info(f"=== Parsed Response ===")
-        logger.info(f"Content type: {type(parsed.get('content'))}")
-        logger.info(f"Content value: {parsed.get('content')}")
-        logger.info(f"Tool calls: {parsed.get('tool_calls')}")
+        logger.debug(f"=== Parsed Response ===")
+        logger.debug(f"Content type: {type(parsed.get('content'))}")
+        logger.debug(f"Tool calls: {parsed.get('tool_calls')}")
         
         return parsed
 

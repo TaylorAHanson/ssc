@@ -145,7 +145,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
         from app.providers.databricks.client import DatabricksProvider
         try:
             provider = DatabricksProvider(
-                host=settings.DATABRICKS_HOST, 
+                host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL, 
                 client_id=settings.DATABRICKS_CLIENT_ID, 
                 client_secret=settings.DATABRICKS_CLIENT_SECRET
             )
@@ -180,13 +180,17 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
 
         from app.db.data_asset import DataAssetModel
         for resource in discovered_resources:
-            if resource.get("type") == "table" and "dataset_id" in resource:
+            if resource.get("type") == "data_product" and "dataset_id" in resource:
                 dataset_id = resource.get("dataset_id")
                 asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
                 if asset:
                     dq = dict(asset.data_quality or {})
-                    dq["tdq"] = resource.get("tdq_score")
-                    dq["bdq"] = resource.get("bdq_score")
+                    # Calculate aggregate failed rules for UI display
+                    total_failed = sum([a.get("failed_rule_count", 0) for a in resource.get("assets", []) if a.get("failed_rule_count", -1) >= 0])
+                    # If any asset failed to fetch (-1), mark as -1
+                    if any(a.get("failed_rule_count", 0) < 0 for a in resource.get("assets", [])):
+                        total_failed = -1
+                    dq["failed_rule_count"] = total_failed
                     asset.data_quality = dq
                     self.db.add(asset)
         
@@ -235,7 +239,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                 action = result.get("action", "KILL")
                 
                 # Update local DataAsset cache with the latest violations if evaluating data certification
-                if policy_name == "data_certification" and resource.get("type") == "table":
+                if policy_name == "data_certification" and resource.get("type") == "data_product":
                     from app.db.data_asset import DataAssetModel
                     dataset_id = resource.get("dataset_id", resource.get("id"))
                     asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
@@ -280,7 +284,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
         
         from app.providers.databricks.client import DatabricksProvider
         provider = DatabricksProvider(
-            host=settings.DATABRICKS_HOST, 
+            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL, 
             client_id=settings.DATABRICKS_CLIENT_ID, 
             client_secret=settings.DATABRICKS_CLIENT_SECRET
         )
@@ -301,6 +305,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
             "notebook": NotebookResourceHandler(workspace_client),
             "storage": VolumeResourceHandler(workspace_client),
             "table": DatasetResourceHandler(workspace_client),
+            "data_product": DatasetResourceHandler(workspace_client),
         }
 
         for violation in violations:
@@ -373,6 +378,20 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                     )
                     await handler.kill(violation["resource_id"])
                     
+            elif step == "certify":
+                if not handler:
+                    logger.warning(
+                        "No handler for resource_type=%s; cannot certify for policy=%s",
+                        violation.get("resource_type"),
+                        violation.get("policy"),
+                    )
+                    executed_action = "error_no_handler"
+                else:
+                    if hasattr(handler, "certify"):
+                        await handler.certify(violation["resource_id"])
+                    else:
+                        executed_action = "error_no_handler_method"
+                        
             elif step == "uncertify":
                 if not handler:
                     logger.warning(

@@ -840,15 +840,14 @@ export async function createDataContract(datasetId: string, yamlContent: string)
   return response.json();
 }
 
-export async function draftDataContract(datasetIds: string[]): Promise<{ status: string, request_id: string, message: string }> {
-  const response = await fetch(`${API_BASE_URL}/data-contracts/draft`, {
+export async function syncDataContracts(): Promise<{ status: string, message: string }> {
+  const response = await fetch(`${API_BASE_URL}/data-contracts/sync`, {
     method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({ dataset_ids: datasetIds })
+    headers: getHeaders()
   });
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(errorText || `Failed to draft data contract: ${response.statusText}`);
+    throw new Error(errorText || `Failed to sync data contracts: ${response.statusText}`);
   }
   return response.json();
 }
@@ -864,38 +863,6 @@ export async function deleteDataContract(datasetId: string): Promise<void> {
   }
 }
 
-export async function getDatabricksCatalogs(): Promise<{ name: string; comment?: string }[]> {
-  const response = await fetch(`${API_BASE_URL}/data-assets/databricks/catalogs`, {
-    headers: getHeaders()
-  });
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(errorText || `Failed to fetch catalogs: ${response.statusText}`);
-  }
-  return response.json();
-}
-
-export async function getDatabricksSchemas(catalog: string): Promise<{ name: string; comment?: string }[]> {
-  const response = await fetch(`${API_BASE_URL}/data-assets/databricks/schemas?catalog=${encodeURIComponent(catalog)}`, {
-    headers: getHeaders()
-  });
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(errorText || `Failed to fetch schemas: ${response.statusText}`);
-  }
-  return response.json();
-}
-
-export async function getDatabricksTables(catalog: string, schema: string): Promise<{ name: string; type: string; comment?: string }[]> {
-  const response = await fetch(`${API_BASE_URL}/data-assets/databricks/tables?catalog=${encodeURIComponent(catalog)}&schema=${encodeURIComponent(schema)}`, {
-    headers: getHeaders()
-  });
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(errorText || `Failed to fetch tables: ${response.statusText}`);
-  }
-  return response.json();
-}
 
 export const api = {
   createRequest,
@@ -925,9 +892,6 @@ export const api = {
   getDataContracts,
   getContractHistory,
   createDataContract,
-  draftDataContract,
-  deleteDataContract,
-  getDatabricksCatalogs,
-  getDatabricksSchemas,
-  getDatabricksTables
+  syncDataContracts,
+  deleteDataContract
 };

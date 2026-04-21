@@ -10,16 +10,95 @@ from app.core.exceptions import RetryableError
 
 logger = logging.getLogger(__name__)
 
+async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]]:
+    provider = DatabricksProvider(
+        host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
+        token=settings.DATABRICKS_TOKEN,
+        client_id=settings.DATABRICKS_CLIENT_ID,
+        client_secret=settings.DATABRICKS_CLIENT_SECRET,
+        config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID}
+    )
+    
+    datasets_metadata = []
+    for dataset_id in dataset_ids:
+        parts = dataset_id.split(".")
+        if len(parts) != 3:
+            logger.warning(f"Invalid dataset_id format: {dataset_id}. Expected catalog.schema.table")
+            continue
+            
+        catalog_name, schema_name, table_name = parts
+        
+        # 1. Fetch Metadata
+        catalog_desc = "unknown"
+        schema_desc = "unknown"
+        tags = {}
+        
+        try:
+            catalog_info = provider.client.catalogs.get(name=catalog_name)
+            catalog_desc = catalog_info.comment or "unknown"
+        except Exception: pass
+            
+        try:
+            schema_info = provider.client.schemas.get(full_name=f"{catalog_name}.{schema_name}")
+            schema_desc = schema_info.comment or "unknown"
+        except Exception: pass
+        
+        table_desc = "unknown"
+        table_type = "TABLE"
+        columns = []
+        try:
+            table_info = provider.client.tables.get(full_name=dataset_id)
+            table_desc = table_info.comment or "unknown"
+            if hasattr(table_info, 'table_type') and table_info.table_type:
+                table_type = str(table_info.table_type.value) if hasattr(table_info.table_type, 'value') else str(table_info.table_type)
+            if table_info.columns:
+                for col in table_info.columns:
+                    columns.append({
+                        "name": col.name,
+                        "type": col.type_text,
+                        "description": col.comment or "No description"
+                    })
+        except Exception: pass
+        
+        try:
+            uc_tags = provider.client.entity_tag_assignments.list(entity_type='tables', entity_name=dataset_id)
+            for tag_assign in uc_tags:
+                if tag_assign.tag_key:
+                    tags[tag_assign.tag_key] = tag_assign.tag_value
+        except Exception: pass
+        
+        datasets_metadata.append({
+            "dataset_id": dataset_id,
+            "catalog": catalog_name,
+            "schema": schema_name,
+            "table": table_name,
+            "catalog_desc": catalog_desc,
+            "schema_desc": schema_desc,
+            "table_desc": table_desc,
+            "table_type": table_type,
+            "tags": tags,
+            "columns": columns
+        })
+        
+    return datasets_metadata
+
 class DraftOdcsInput(BaseModel):
     dataset_ids: List[str] = Field(..., description="The list of fully qualified dataset IDs (e.g., ['catalog.schema.table1', 'catalog.schema.table2'])")
     violations_context: Optional[Dict[str, Any]] = Field(None, description="Optional. The raw OPA violations context indicating what is currently failing certification.")
+    existing_odcs_yaml: Optional[str] = Field(None, description="Optional. Existing ODCS YAML content to preserve manual edits.")
+    pre_fetched_metadata: Optional[List[Dict[str, Any]]] = Field(None, description="Optional. Pre-fetched metadata to avoid duplicate API calls.")
 
 @tool(
     name="draft_odcs_contract",
     description="Drafts an Open Data Contract Standard (ODCS) v3 YAML document for a given set of datasets by fetching their metadata and using AI to generate the combined structure. Important: Always use this tool to generate the 'odcs_yaml' parameter before calling execute_workflow for data_certification.",
     args_schema=DraftOdcsInput
 )
-async def draft_odcs_contract(dataset_ids: List[str], violations_context: Optional[Any] = None) -> str:
+async def draft_odcs_contract(
+    dataset_ids: List[str], 
+    violations_context: Optional[Any] = None, 
+    existing_odcs_yaml: Optional[str] = None,
+    pre_fetched_metadata: Optional[List[Dict[str, Any]]] = None
+) -> str:
     """
     Fetches table metadata for multiple datasets and generates a draft combined ODCS YAML using the AgentLLMClient.
     """
@@ -38,97 +117,32 @@ async def draft_odcs_contract(dataset_ids: List[str], violations_context: Option
         violations_context = {}
         
     try:
-        provider = DatabricksProvider(
-            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-            token=settings.DATABRICKS_TOKEN,
-            client_id=settings.DATABRICKS_CLIENT_ID,
-            client_secret=settings.DATABRICKS_CLIENT_SECRET,
-            config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID}
-        )
-        
-        datasets_metadata = []
-        for dataset_id in dataset_ids:
-            parts = dataset_id.split(".")
-            if len(parts) != 3:
-                logger.warning(f"Invalid dataset_id format: {dataset_id}. Expected catalog.schema.table")
-                continue
-                
-            catalog_name, schema_name, table_name = parts
-            
-            # 1. Fetch Metadata
-            catalog_desc = "unknown"
-            schema_desc = "unknown"
-            tags = {}
-            tdq_score = "unknown"
-            bdq_score = "unknown"
-            
-            try:
-                catalog_info = provider.client.catalogs.get(name=catalog_name)
-                catalog_desc = catalog_info.comment or "unknown"
-            except Exception: pass
-                
-            try:
-                schema_info = provider.client.schemas.get(full_name=f"{catalog_name}.{schema_name}")
-                schema_desc = schema_info.comment or "unknown"
-            except Exception: pass
-            
-            table_desc = "unknown"
-            columns = []
-            try:
-                table_info = provider.client.tables.get(full_name=dataset_id)
-                table_desc = table_info.comment or "unknown"
-                if table_info.columns:
-                    for col in table_info.columns:
-                        columns.append({
-                            "name": col.name,
-                            "type": col.type_text,
-                            "description": col.comment or "No description"
-                        })
-            except Exception: pass
-            
-            try:
-                uc_tags = provider.client.entity_tag_assignments.list(entity_type='tables', entity_name=dataset_id)
-                for tag_assign in uc_tags:
-                    if tag_assign.tag_key:
-                        tags[tag_assign.tag_key] = tag_assign.tag_value
-            except Exception: pass
-            
-            try:
-                if settings.DATABRICKS_WAREHOUSE_ID:
-                    query = f"SELECT tdq_score, bdq_score FROM {settings.DATABRICKS_DATA_QUALITY_TABLE} WHERE dataset_id = '{dataset_id}' ORDER BY run_date DESC LIMIT 1"
-                    response = provider.client.statement_execution.execute_statement(
-                        statement=query,
-                        warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
-                        wait_timeout="30s"
-                    )
-                    if response.result and response.result.data_array and len(response.result.data_array) > 0:
-                        tdq_score = float(response.result.data_array[0][0])
-                        bdq_score = float(response.result.data_array[0][1])
-            except Exception: pass
-            
-            datasets_metadata.append({
-                "dataset_id": dataset_id,
-                "catalog": catalog_name,
-                "schema": schema_name,
-                "table": table_name,
-                "catalog_desc": catalog_desc,
-                "schema_desc": schema_desc,
-                "table_desc": table_desc,
-                "tags": tags,
-                "tdq_score": tdq_score,
-                "bdq_score": bdq_score,
-                "columns": columns
-            })
+        datasets_metadata = pre_fetched_metadata
+        if not datasets_metadata:
+            datasets_metadata = await fetch_datasets_metadata(dataset_ids)
             
         # 2. Call LLM to draft ODCS
         client = AgentLLMClient()
         
+        existing_contract_instructions = ""
+        if existing_odcs_yaml:
+            existing_contract_instructions = f"""
+CRITICAL INSTRUCTION: You are UPDATING an existing Open Data Contract Standard (ODCS) document.
+You MUST preserve all existing manual customizations (descriptions, roles, thresholds, custom properties, slas) EXACTLY as they are in the existing YAML.
+Only ADD new tables or columns found in the Metadata that are missing from the existing YAML. Do NOT overwrite existing human-written descriptions or rules.
+
+EXISTING ODCS YAML TO UPDATE:
+{existing_odcs_yaml}
+"""
+
         prompt = f"""
 You are an expert Data Architect. Generate a valid Open Data Contract Standard (ODCS) v3 YAML document based on the following metadata for one or more datasets.
 Since an ODCS document can represent a Data Product containing multiple datasets, generate a single ODCS YAML where the 'schema' array contains one entry for each dataset.
 Output ONLY the raw YAML, with no markdown formatting or conversational filler.
 
-Metadata for included datasets:
+{existing_contract_instructions}
+
+Metadata for included datasets (includes new or updated information):
 {json.dumps(datasets_metadata, indent=2)}
 
 Known Policy Violations (Fix these in the generated YAML if possible!):
@@ -170,22 +184,6 @@ schema:
     businessName: <generate friendly business name from dataset physical name>
     description: <table description or infer from name>
     tags: <include relevant tags from metadata as list>
-    quality:
-      - id: technical_dq_threshold
-        type: custom
-        engine: acceldata
-        description: "Technical data quality score threshold"
-        mustBe: <infer reasonable threshold (e.g. 90, 95, 100) based on actual TDQ Score for THIS dataset if available, otherwise 100>
-      - id: business_dq_threshold
-        type: custom
-        engine: acceldata
-        description: "Business logic validation score threshold"
-        mustBe: <infer reasonable threshold based on actual BDQ Score for THIS dataset if available, otherwise 100>
-      - id: schema_drift
-        type: custom
-        engine: acceldata
-        description: "Schema drift score must be 0%"
-        mustBe: 0
     customProperties:
       - property: abac_required
         value: false
