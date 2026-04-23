@@ -49,9 +49,17 @@ const navItems: NavItem[] = [
   // Governance - Restricted
   {
     id: 'certification',
-    title: 'Data Certification',
+    title: 'Data Certification (ODCS)',
     icon: <CheckCircle2 className="w-5 h-5" />,
     path: '/governance/certification',
+    group: 'Governance',
+    allowedPersonas: ['Platform Admin', 'Governance Admin']
+  },
+  {
+    id: 'odps',
+    title: 'Data Products (ODPS)',
+    icon: <FileText className="w-5 h-5" />,
+    path: '/governance/odps',
     group: 'Governance',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },

@@ -2,7 +2,7 @@
 API v1 routes.
 """
 from fastapi import APIRouter
-from app.api.v1 import requests, agent, approvals, content, delegations, branding, callbacks, users, reports, github, training, allowlist, data_assets, data_contracts
+from app.api.v1 import requests, agent, approvals, content, delegations, branding, callbacks, users, reports, github, training, allowlist, data_assets, data_contracts, odps
 
 router = APIRouter()
 
@@ -21,6 +21,7 @@ router.include_router(training.router, prefix="/training", tags=["training"])
 router.include_router(allowlist.router, prefix="/allowlist", tags=["allowlist"])
 router.include_router(data_assets.router, prefix="/data-assets", tags=["data-assets"])
 router.include_router(data_contracts.router, prefix="/data-contracts", tags=["data-contracts"])
+router.include_router(odps.router, prefix="/odps", tags=["odps"])
 # Dev/Test routes
 from app.api.v1 import dev
 router.include_router(dev.router, prefix="/dev", tags=["dev"])

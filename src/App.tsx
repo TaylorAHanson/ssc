@@ -20,6 +20,7 @@ import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { Allowlist } from './pages/admin/Allowlist';
 import { EnforcementSentinel } from './pages/admin/EnforcementSentinel';
 import { DataCertification } from './pages/admin/DataCertification';
+import { ODPS } from './pages/admin/ODPS';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -78,6 +79,14 @@ function App() {
             element={
               <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
                 <DataCertification />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/governance/odps"
+            element={
+              <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                <ODPS />
               </ProtectedRoute>
             }
           />
