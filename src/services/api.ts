@@ -863,6 +863,76 @@ export async function deleteDataContract(datasetId: string): Promise<void> {
   }
 }
 
+export interface OdpsDocument {
+  id: string;
+  name: string;
+  yaml_content: string;
+  version: number;
+  is_active: boolean;
+  created_at: string;
+  created_by: string | null;
+}
+
+export async function getOdpsList(): Promise<OdpsDocument[]> {
+  const url = new URL(`${API_BASE_URL}/odps`, window.location.origin);
+  const response = await fetch(url.toString(), {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get ODPS list: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function draftOdps(datasetIds: string[], openapiUrls: string[], name: string): Promise<{ status: string, yaml_content: string }> {
+  const response = await fetch(`${API_BASE_URL}/odps/draft`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ dataset_ids: datasetIds, openapi_urls: openapiUrls, name })
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to draft ODPS: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function saveOdps(name: string, yamlContent: string): Promise<OdpsDocument> {
+  const response = await fetch(`${API_BASE_URL}/odps`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ name, yaml_content: yamlContent })
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to save ODPS: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getOdpsHistory(odpsId: string): Promise<OdpsDocument[]> {
+  const url = new URL(`${API_BASE_URL}/odps/${odpsId}`, window.location.origin);
+  const response = await fetch(url.toString(), {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get ODPS history: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function deleteOdps(odpsId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/odps/${odpsId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to delete ODPS: ${response.status} ${errorText}`);
+  }
+}
 
 export const api = {
   createRequest,
@@ -893,5 +963,10 @@ export const api = {
   getContractHistory,
   createDataContract,
   syncDataContracts,
-  deleteDataContract
+  deleteDataContract,
+  getOdpsList,
+  draftOdps,
+  saveOdps,
+  getOdpsHistory,
+  deleteOdps
 };

@@ -8,7 +8,7 @@ from app.agents.prompts import get_agent_prompt, AGENT_TOOLS
 from app.agents.runner import AgentRunner
 from app.core.config import settings
 from app.api.deps import get_current_user
-from app.db.user import UserModel
+from app.models.user import User
 import logging
 import json
 import re
@@ -123,7 +123,7 @@ async def get_agent_prompt_endpoint(current_user: UserModel = Depends(get_curren
 async def handle_conversation(
     request: ConversationRequest, 
     req: Request,
-    current_user: UserModel = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """Handle a conversation turn with the agent."""
     if not settings.AGENT_ENABLED:
@@ -137,7 +137,7 @@ async def handle_conversation(
         
         # DEBUG: Log user roles to debug visibility issues
         logger.info(f"Current User: {current_user.email}")
-        logger.info(f"Current User Roles: {[r.name for r in current_user.roles]}")
+        logger.info(f"Current User Roles: {current_user.roles}")
 
         # Extract mode from context first to filter tools
         agent_mode = "self_service"
@@ -173,7 +173,7 @@ async def handle_conversation(
         # Build user identity for the runner
         user_identity = {
             "email": current_user.email,
-            "roles": ", ".join([r.name for r in current_user.roles])
+            "roles": ", ".join(current_user.roles)
         }
         
         # Initialize Runner

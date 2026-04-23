@@ -1,70 +1,42 @@
 from sqlalchemy.orm import Session
-from app.db.user import UserModel, RoleModel
+from app.db.role_mapping import RoleMappingModel
 import logging
-import uuid
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Standard roles definition
-ROLES = [
-    {"id": "role_platform_admin", "name": "platform_admin", "description": "Full system access"},
-    {"id": "role_governance_admin", "name": "governance_admin", "description": "Governance and policy management"},
-    {"id": "role_data_owner", "name": "data_owner", "description": "Data SME and ownership"},
-    {"id": "role_security_admin", "name": "security_admin", "description": "Security auditing and access control"},
-    {"id": "role_finance_admin", "name": "finance_admin", "description": "Budget and cost management"},
-    {"id": "role_business_user", "name": "business_user", "description": "Standard business user access"},
+# Default role mappings to seed
+DEFAULT_MAPPINGS = [
+    {"external_role": "admin@qualcomm.com", "internal_role": "Platform Admin"},
+    {"external_role": "platform_admin", "internal_role": "Platform Admin"},
+    {"external_role": "governance_admin", "internal_role": "Governance Admin"},
+    {"external_role": "finance_admin", "internal_role": "Finance Admin"},
+    {"external_role": "security_admin", "internal_role": "Security Admin"},
+    {"external_role": "users", "internal_role": "User"},
 ]
 
 def init_db(db: Session) -> None:
     """
     Initialize database validation data.
-    Ensures that all standard roles exist in the database.
+    Ensures that default role mappings exist.
     """
-    logger.info("Initializing database: Checking roles...")
+    logger.info("Initializing database: Checking role mappings...")
     
-    roles_created = 0
-    for role_data in ROLES:
-        role = db.query(RoleModel).filter(RoleModel.name == role_data["name"]).first()
-        if not role:
-            logger.info(f"Seeding missing role: {role_data['name']}")
-            role = RoleModel(**role_data)
-            db.add(role)
-            roles_created += 1
+    mappings_created = 0
+    for mapping_data in DEFAULT_MAPPINGS:
+        mapping = db.query(RoleMappingModel).filter(
+            RoleMappingModel.external_role == mapping_data["external_role"],
+            RoleMappingModel.internal_role == mapping_data["internal_role"]
+        ).first()
+        
+        if not mapping:
+            logger.info(f"Seeding missing role mapping: {mapping_data['external_role']} -> {mapping_data['internal_role']}")
+            mapping = RoleMappingModel(**mapping_data)
+            db.add(mapping)
+            mappings_created += 1
             
-    if roles_created > 0:
+    if mappings_created > 0:
         db.commit()
-        logger.info(f"Database initialization complete. Seeded {roles_created} roles.")
+        logger.info(f"Database initialization complete. Seeded {mappings_created} role mappings.")
     else:
-        logger.info("Database initialization complete. All roles already exist.")
-
-    # 2. SEED ADMIN USER
-    # We use the same email as deps.py for local dev fallback
-    admin_email = "admin@qualcomm.com"
-    admin_user = db.query(UserModel).filter(UserModel.email == admin_email).first()
-    
-    if not admin_user:
-        logger.info(f"Seeding admin user: {admin_email}")
-        try:
-             admin_user = UserModel(
-                 id=str(uuid.uuid4()),
-                 email=admin_email,
-                 full_name="System Admin",
-                 is_active=True
-             )
-             db.add(admin_user)
-             db.flush() # Flush to get ID if needed, but here we set it manually.
-                        # Flush helps check for integrity errors early.
-             
-             # Assign all roles
-             all_roles = db.query(RoleModel).all()
-             admin_user.roles = all_roles
-             
-             db.commit()
-             db.refresh(admin_user)
-             logger.info(f"Admin user {admin_email} seeded successfully.")
-        except Exception as e:
-             logger.warning(f"Failed to seed admin user (might already exist): {e}")
-             db.rollback()
-    else:
-        logger.debug(f"Admin user {admin_email} already exists.")
+        logger.info("Database initialization complete. Default mappings already exist.")

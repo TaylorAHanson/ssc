@@ -1,75 +1,67 @@
-
 import { useEffect, useState } from 'react';
 import { useUserStore } from '../../stores/userStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { Loader2, Shield, Edit2, Check } from 'lucide-react';
-import type { User } from '../../types';
+import { Loader2, Shield, Edit2, Trash2, Plus, Info } from 'lucide-react';
+import type { RoleMapping } from '../../types';
 
 export const Users = () => {
-    const { users, roles, isLoading, error, fetchUsers, fetchRoles, updateUserRoles, createUser } = useUserStore();
-    const [editingUser, setEditingUser] = useState<User | null>(null);
-    const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
+    const { roleMappings, isLoading, error, fetchRoleMappings, createRoleMapping, updateRoleMapping, deleteRoleMapping } = useUserStore();
+    const [editingMapping, setEditingMapping] = useState<RoleMapping | null>(null);
     const [showAddModal, setShowAddModal] = useState(false);
-    const [newUser, setNewUser] = useState({ email: '', fullName: '' });
-    const [selectedAddRoleIds, setSelectedAddRoleIds] = useState<string[]>([]);
+    const [newMapping, setNewMapping] = useState({ external_role: '', internal_role: 'User' });
     const [isSaving, setIsSaving] = useState(false);
 
+    const availableRoles = [
+        { id: 'Platform Admin', name: 'Platform Admin', description: 'Full access to all system features and settings.' },
+        { id: 'Governance Admin', name: 'Governance Admin', description: 'Can manage data policies, view audit logs, and oversee compliance.' },
+        { id: 'Security Admin', name: 'Security Admin', description: 'Manages security settings, access controls, and security audits.' },
+        { id: 'Finance Admin', name: 'Finance Admin', description: 'Can view cost data, manage budgets, and handle billing.' },
+        { id: 'User', name: 'User', description: 'Standard user access to self-service features.' }
+    ];
+
     useEffect(() => {
-        fetchUsers();
-        fetchRoles();
-    }, [fetchUsers, fetchRoles]);
+        fetchRoleMappings();
+    }, [fetchRoleMappings]);
 
-    const handleEditClick = (user: User) => {
-        setEditingUser(user);
-        setSelectedRoleIds(user.roles.map(r => r.id));
+    const handleEditClick = (mapping: RoleMapping) => {
+        setEditingMapping(mapping);
     };
 
-    const handleRoleToggle = (roleId: string) => {
-        setSelectedRoleIds(prev =>
-            prev.includes(roleId)
-                ? prev.filter(id => id !== roleId)
-                : [...prev, roleId]
-        );
-    };
-
-    const handleAddRoleToggle = (roleId: string) => {
-        setSelectedAddRoleIds(prev =>
-            prev.includes(roleId)
-                ? prev.filter(id => id !== roleId)
-                : [...prev, roleId]
-        );
+    const handleDeleteClick = async (id: number) => {
+        if (confirm('Are you sure you want to delete this role mapping?')) {
+            await deleteRoleMapping(id);
+        }
     };
 
     const handleSave = async () => {
-        if (!editingUser) return;
+        if (!editingMapping) return;
         setIsSaving(true);
         try {
-            await updateUserRoles(editingUser.id, selectedRoleIds);
-            setEditingUser(null);
+            await updateRoleMapping(editingMapping.id, editingMapping.external_role, editingMapping.internal_role);
+            setEditingMapping(null);
         } catch (err) {
-            console.error("Failed to save roles", err);
+            console.error("Failed to save role mapping", err);
         } finally {
             setIsSaving(false);
         }
     };
 
-    const handleAddUser = async () => {
-        if (!newUser.email || !newUser.fullName) return;
+    const handleAddMapping = async () => {
+        if (!newMapping.external_role || !newMapping.internal_role) return;
         setIsSaving(true);
         try {
-            await createUser(newUser.email, newUser.fullName, selectedAddRoleIds);
+            await createRoleMapping(newMapping.external_role, newMapping.internal_role);
             setShowAddModal(false);
-            setNewUser({ email: '', fullName: '' });
-            setSelectedAddRoleIds([]);
+            setNewMapping({ external_role: '', internal_role: 'User' });
         } catch (err) {
-            console.error("Failed to add user", err);
+            console.error("Failed to add role mapping", err);
         } finally {
             setIsSaving(false);
         }
     };
 
-    if (isLoading && users.length === 0) {
+    if (isLoading && roleMappings.length === 0) {
         return (
             <div className="flex justify-center items-center h-64">
                 <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
@@ -81,14 +73,15 @@ export const Users = () => {
         <div className="space-y-6">
             <div className="flex justify-between items-center bg-white p-6 rounded-lg border border-gray-100 shadow-sm">
                 <div>
-                    <h2 className="text-2xl font-bold tracking-tight text-gray-900">User Management</h2>
-                    <p className="text-gray-500">Manage user access and roles.</p>
+                    <h2 className="text-2xl font-bold tracking-tight text-gray-900">Role Mappings</h2>
+                    <p className="text-gray-500">Map external SCIM identities (groups, roles, or users) to internal application roles.</p>
                 </div>
                 <Button
                     onClick={() => setShowAddModal(true)}
                     className="bg-primary text-white hover:opacity-90 transition-opacity"
                 >
-                    Add User
+                    <Plus className="w-4 h-4 mr-2" />
+                    Add Mapping
                 </Button>
             </div>
 
@@ -100,120 +93,103 @@ export const Users = () => {
 
             <Card>
                 <CardHeader>
-                    <CardTitle>Users</CardTitle>
+                    <CardTitle>Active Mappings</CardTitle>
                 </CardHeader>
                 <CardContent>
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm text-left">
                             <thead className="text-xs text-gray-700 uppercase bg-gray-50 border-b">
                                 <tr>
-                                    <th className="px-6 py-3 font-medium">User</th>
-                                    <th className="px-6 py-3 font-medium">Email</th>
-                                    <th className="px-6 py-3 font-medium">Roles</th>
-                                    <th className="px-6 py-3 font-medium">Status</th>
+                                    <th className="px-6 py-3 font-medium">External Identity (SCIM)</th>
+                                    <th className="px-6 py-3 font-medium">Internal Role</th>
                                     <th className="px-6 py-3 font-medium text-right">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {users.map((user) => (
-                                    <tr key={user.id} className="bg-white border-b hover:bg-gray-50 transition-colors">
+                                {roleMappings.map((mapping) => (
+                                    <tr key={mapping.id} className="bg-white border-b hover:bg-gray-50 transition-colors">
                                         <td className="px-6 py-4 font-medium text-gray-900">
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold">
-                                                    {(user.full_name || user.email)[0].toUpperCase()}
+                                            {mapping.external_role}
+                                        </td>
+                                        <td className="px-6 py-4">
+                                            <div className="flex items-center gap-2 group relative">
+                                                <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                                                    {mapping.internal_role}
+                                                </span>
+                                                <Info className="w-4 h-4 text-gray-400 cursor-help" />
+                                                <div className="absolute bottom-full left-0 mb-2 w-64 p-2 bg-gray-900 text-white text-xs rounded-lg shadow-xl opacity-0 translate-y-2 invisible group-hover:opacity-100 group-hover:translate-y-0 group-hover:visible transition-all duration-200 z-50 pointer-events-none">
+                                                    {availableRoles.find(r => r.id === mapping.internal_role)?.description || 'No description available'}
+                                                    <div className="absolute top-full left-4 -mt-1 border-4 border-transparent border-t-gray-900" />
                                                 </div>
-                                                {user.full_name || 'N/A'}
                                             </div>
-                                        </td>
-                                        <td className="px-6 py-4 text-gray-600">{user.email}</td>
-                                        <td className="px-6 py-4">
-                                            <div className="flex flex-wrap gap-1">
-                                                {user.roles.map(role => (
-                                                    <span key={role.id} className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold bg-blue-100 text-blue-800 border border-blue-200">
-                                                        {role.name}
-                                                    </span>
-                                                ))}
-                                                {user.roles.length === 0 && <span className="text-gray-400 italic">No roles</span>}
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            {user.is_active ? (
-                                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-200">
-                                                    Active
-                                                </span>
-                                            ) : (
-                                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200">
-                                                    Inactive
-                                                </span>
-                                            )}
                                         </td>
                                         <td className="px-6 py-4 text-right">
-                                            <Button variant="ghost" size="sm" onClick={() => handleEditClick(user)}>
+                                            <Button variant="ghost" size="sm" onClick={() => handleEditClick(mapping)}>
                                                 <Edit2 className="w-4 h-4 mr-1" /> Edit
+                                            </Button>
+                                            <Button variant="ghost" size="sm" className="text-red-600 hover:text-red-700 hover:bg-red-50" onClick={() => handleDeleteClick(mapping.id)}>
+                                                <Trash2 className="w-4 h-4 mr-1" /> Delete
                                             </Button>
                                         </td>
                                     </tr>
                                 ))}
+                                {roleMappings.length === 0 && (
+                                    <tr>
+                                        <td colSpan={3} className="px-6 py-8 text-center text-gray-500">
+                                            No role mappings found.
+                                        </td>
+                                    </tr>
+                                )}
                             </tbody>
                         </table>
                     </div>
                 </CardContent>
             </Card>
 
-            {/* Edit Roles Modal */}
-            {editingUser && (
+            {/* Edit Mapping Modal */}
+            {editingMapping && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <Card className="w-full max-w-md shadow-xl animate-in fade-in zoom-in-95 duration-200">
                         <CardHeader className="border-b bg-gray-50/50">
                             <CardTitle className="flex items-center gap-2">
                                 <Shield className="w-5 h-5 text-blue-600" />
-                                Manage Roles
+                                Edit Role Mapping
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="p-6 space-y-4">
-                            <div>
-                                <p className="text-sm text-gray-500 mb-1">User</p>
-                                <p className="font-medium text-gray-900">{editingUser.email}</p>
+                            <div className="space-y-1.5">
+                                <label className="text-sm font-medium text-gray-700">External Identity (SCIM)</label>
+                                <input
+                                    type="text"
+                                    value={editingMapping.external_role}
+                                    onChange={(e) => setEditingMapping(prev => prev ? { ...prev, external_role: e.target.value } : null)}
+                                    className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all border-gray-200"
+                                />
                             </div>
 
-                            <div className="space-y-3">
-                                <p className="text-sm font-medium text-gray-700">Assign Roles</p>
-                                <div className="grid gap-2">
-                                    {roles.map(role => {
-                                        const isSelected = selectedRoleIds.includes(role.id);
-                                        return (
-                                            <div
-                                                key={role.id}
-                                                onClick={() => handleRoleToggle(role.id)}
-                                                className={`
-                          flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all
-                          ${isSelected
-                                                        ? 'border-blue-500 bg-blue-50/50 ring-1 ring-blue-500/20'
-                                                        : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
-                                                    }
-                        `}
-                                            >
-                                                <div className={`
-                          w-5 h-5 rounded border flex items-center justify-center shrink-0 mt-0.5 transition-colors
-                          ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-300'}
-                        `}>
-                                                    {isSelected && <Check className="w-3.5 h-3.5 text-white" />}
-                                                </div>
-                                                <div>
-                                                    <p className={`text-sm font-medium ${isSelected ? 'text-blue-900' : 'text-gray-900'}`}>{role.name}</p>
-                                                    <p className="text-xs text-gray-500 mt-0.5">{role.description}</p>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
+                            <div className="space-y-1.5">
+                                <label className="text-sm font-medium text-gray-700">Internal Role</label>
+                                <select
+                                    value={editingMapping.internal_role}
+                                    onChange={(e) => setEditingMapping(prev => prev ? { ...prev, internal_role: e.target.value } : null)}
+                                    className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all border-gray-200 bg-white"
+                                >
+                                    {availableRoles.map(role => (
+                                        <option key={role.id} value={role.id} title={role.description}>
+                                            {role.name}
+                                        </option>
+                                    ))}
+                                </select>
+                                <p className="text-xs text-gray-500 mt-1">
+                                    {availableRoles.find(r => r.id === editingMapping.internal_role)?.description}
+                                </p>
                             </div>
 
                             <div className="flex justify-end gap-3 pt-4 border-t mt-6">
-                                <Button variant="outline" onClick={() => setEditingUser(null)} disabled={isSaving}>
+                                <Button variant="outline" onClick={() => setEditingMapping(null)} disabled={isSaving}>
                                     Cancel
                                 </Button>
-                                <Button onClick={handleSave} disabled={isSaving} className="bg-blue-600 hover:bg-blue-700">
+                                <Button onClick={handleSave} disabled={isSaving || !editingMapping.external_role} className="bg-blue-600 hover:bg-blue-700">
                                     {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                                     Save Changes
                                 </Button>
@@ -222,70 +198,48 @@ export const Users = () => {
                     </Card>
                 </div>
             )}
+
+            {/* Add Mapping Modal */}
             {showAddModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <Card className="w-full max-w-md shadow-xl animate-in fade-in zoom-in-95 duration-200">
                         <CardHeader className="border-b bg-gray-50/50">
                             <CardTitle className="flex items-center gap-2">
                                 <div className="p-1.5 bg-blue-100 rounded-md">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><line x1="19" x2="19" y1="8" y2="14" /><line x1="16" x2="22" y1="11" y2="11" /></svg>
+                                    <Plus className="w-4 h-4 text-blue-600" />
                                 </div>
-                                Add New User
+                                Add Role Mapping
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="p-6 space-y-4">
                             <div className="space-y-4">
                                 <div className="space-y-1.5">
-                                    <label className="text-sm font-medium text-gray-700">Full Name</label>
+                                    <label className="text-sm font-medium text-gray-700">External Identity (SCIM)</label>
                                     <input
                                         type="text"
-                                        value={newUser.fullName}
-                                        onChange={(e) => setNewUser(prev => ({ ...prev, fullName: e.target.value }))}
-                                        placeholder="e.g. Taylor Hanson"
+                                        value={newMapping.external_role}
+                                        onChange={(e) => setNewMapping(prev => ({ ...prev, external_role: e.target.value }))}
+                                        placeholder="e.g. data_engineers_group or user@company.com"
                                         className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all border-gray-200"
                                     />
+                                    <p className="text-xs text-gray-500">The exact name of the group, role, or user email in Databricks SCIM.</p>
                                 </div>
                                 <div className="space-y-1.5">
-                                    <label className="text-sm font-medium text-gray-700">Email Address</label>
-                                    <input
-                                        type="email"
-                                        value={newUser.email}
-                                        onChange={(e) => setNewUser(prev => ({ ...prev, email: e.target.value }))}
-                                        placeholder="user@example.com"
-                                        className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all border-gray-200"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="space-y-3 pt-2">
-                                <p className="text-sm font-medium text-gray-700">Assign Initial Roles</p>
-                                <div className="grid grid-cols-2 gap-2">
-                                    {roles.map(role => {
-                                        const isSelected = selectedAddRoleIds.includes(role.id);
-                                        return (
-                                            <div
-                                                key={role.id}
-                                                onClick={() => handleAddRoleToggle(role.id)}
-                                                className={`
-                                                    flex items-center gap-2 p-2 rounded border cursor-pointer transition-all text-xs
-                                                    ${isSelected
-                                                        ? 'border-blue-500 bg-blue-50/50'
-                                                        : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
-                                                    }
-                                                `}
-                                            >
-                                                <div className={`
-                                                    w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors
-                                                    ${isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-300'}
-                                                `}>
-                                                    {isSelected && <Check className="w-3 h-3 text-white" />}
-                                                </div>
-                                                <span className={isSelected ? 'text-blue-900 font-medium' : 'text-gray-700'}>
-                                                    {role.name}
-                                                </span>
-                                            </div>
-                                        );
-                                    })}
+                                    <label className="text-sm font-medium text-gray-700">Internal Role</label>
+                                    <select
+                                        value={newMapping.internal_role}
+                                        onChange={(e) => setNewMapping(prev => ({ ...prev, internal_role: e.target.value }))}
+                                        className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all border-gray-200 bg-white"
+                                    >
+                                        {availableRoles.map(role => (
+                                            <option key={role.id} value={role.id} title={role.description}>
+                                                {role.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <p className="text-xs text-gray-500 mt-1">
+                                        {availableRoles.find(r => r.id === newMapping.internal_role)?.description}
+                                    </p>
                                 </div>
                             </div>
 
@@ -293,9 +247,9 @@ export const Users = () => {
                                 <Button variant="outline" onClick={() => setShowAddModal(false)} disabled={isSaving}>
                                     Cancel
                                 </Button>
-                                <Button onClick={handleAddUser} disabled={isSaving || !newUser.email || !newUser.fullName} className="bg-primary text-white">
+                                <Button onClick={handleAddMapping} disabled={isSaving || !newMapping.external_role} className="bg-primary text-white">
                                     {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                                    Create User
+                                    Create Mapping
                                 </Button>
                             </div>
                         </CardContent>

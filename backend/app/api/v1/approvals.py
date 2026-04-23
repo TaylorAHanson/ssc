@@ -8,7 +8,7 @@ from app.db.session import get_db
 from app.db import ApprovalModel, RequestModel
 from app.models.request import Approval, RequestType, ApprovalType
 from app.api.deps import get_current_user
-from app.db.user import UserModel
+from app.models.user import User
 import logging
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,8 @@ def _map_approval(approval_model: ApprovalModel, request_model: RequestModel) ->
         approvalType=approval_model.approval_type,
         requestedBy=approval_model.requested_by,
         requestedByEmail=approval_model.requested_by_email or "",
+        assignedToEmail=approval_model.assigned_to_email,
+        assignedToRole=approval_model.assigned_to_role,
         status=approval_model.status,
         createdAt=approval_model.created_at,
         updatedAt=approval_model.updated_at,
@@ -59,18 +61,30 @@ def _map_approval(approval_model: ApprovalModel, request_model: RequestModel) ->
 @router.get("", response_model=List[Approval])
 async def get_approvals(
     status: Optional[str] = None,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get approvals, filtered by user involvement if not an admin."""
     query = db.query(ApprovalModel, RequestModel).join(RequestModel, ApprovalModel.request_id == RequestModel.id)
     
-    # Filter by user involvement if not a platform admin
-    if not current_user.has_role("platform_admin"):
-        query = query.filter(
-            (ApprovalModel.requested_by_email == current_user.email) | 
-            (ApprovalModel.delegated_to_email == current_user.email)
-        )
+    # Build list of role-based approval types the user can see
+    allowed_types = []
+    if current_user.has_role("Platform Admin"):
+        allowed_types.append("platform_admin")
+    if current_user.has_role("Governance Admin"):
+        allowed_types.append("governance_admin")
+    if current_user.has_role("Security Admin"):
+        allowed_types.append("security")
+        allowed_types.append("security_admin")
+    if current_user.has_role("Finance Admin"):
+        allowed_types.append("finance_admin")
+        
+    query = query.filter(
+        (ApprovalModel.assigned_to_email == current_user.email) | 
+        (ApprovalModel.delegated_to_email == current_user.email) |
+        (ApprovalModel.assigned_to_role.in_(current_user.entitlements)) |
+        (ApprovalModel.approval_type.in_(allowed_types))
+    )
     
     if status:
         query = query.filter(ApprovalModel.status == status)
@@ -82,7 +96,7 @@ async def get_approvals(
 @router.get("/{approval_id}", response_model=Approval)
 async def get_approval(
     approval_id: str,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get a specific approval by ID, with permission check."""
@@ -97,10 +111,21 @@ async def get_approval(
     approval_model, request_model = result
     
     # Check permission
-    if not current_user.has_role("platform_admin"):
-        if approval_model.requested_by_email != current_user.email and \
-           approval_model.delegated_to_email != current_user.email:
-            raise HTTPException(status_code=403, detail="Not authorized to view this approval")
+    allowed_types = []
+    if current_user.has_role("Platform Admin"): allowed_types.append("platform_admin")
+    if current_user.has_role("Governance Admin"): allowed_types.append("governance_admin")
+    if current_user.has_role("Security Admin"): 
+        allowed_types.append("security")
+        allowed_types.append("security_admin")
+    if current_user.has_role("Finance Admin"): allowed_types.append("finance_admin")
+        
+    is_assigned = approval_model.assigned_to_email == current_user.email
+    is_delegated = approval_model.delegated_to_email == current_user.email
+    is_role_assigned = approval_model.assigned_to_role in current_user.entitlements
+    is_role_based = approval_model.approval_type in allowed_types
+    
+    if not (is_assigned or is_delegated or is_role_assigned or is_role_based):
+        raise HTTPException(status_code=403, detail="Not authorized to view this approval")
         
     return _map_approval(approval_model, request_model)
 

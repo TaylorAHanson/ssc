@@ -49,9 +49,17 @@ const navItems: NavItem[] = [
   // Governance - Restricted
   {
     id: 'certification',
-    title: 'Data Certification',
+    title: 'Data Certification (ODCS)',
     icon: <CheckCircle2 className="w-5 h-5" />,
     path: '/governance/certification',
+    group: 'Governance',
+    allowedPersonas: ['Platform Admin', 'Governance Admin']
+  },
+  {
+    id: 'odps',
+    title: 'Data Products (ODPS)',
+    icon: <FileText className="w-5 h-5" />,
+    path: '/governance/odps',
     group: 'Governance',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
@@ -77,7 +85,7 @@ const navItems: NavItem[] = [
     id: 'admin',
     title: 'Admin',
     icon: <Settings className="w-5 h-5" />,
-    path: '/admin',
+    path: '/admin/dashboard',
     group: 'Admin',
     allowedPersonas: ['Platform Admin']
   },
@@ -157,7 +165,9 @@ export function Sidebar() {
             )}
             <div className="space-y-1">
               {items.map((item) => {
-                const isActive = location.pathname === item.path;
+                const isActive = item.path === '/admin/dashboard' 
+                  ? location.pathname.startsWith('/admin') && location.pathname !== '/admin/training'
+                  : location.pathname === item.path;
                 return (
                   <Link
                     key={item.path}

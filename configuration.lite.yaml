@@ -28,6 +28,10 @@ ui:
     admin: true
     reports: true
     training_upload: true
+    certification: false
+    odps: false
+    allowlist: false
+    sentinel: false
 
 tools:
   check_allowlist_status: false

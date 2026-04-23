@@ -21,12 +21,11 @@ export function Header() {
 
   // Define personas based on roles
   const personas = [
-    { label: 'Platform Admin', value: 'platform_admin' },
-    { label: 'Governance Admin', value: 'governance_admin' },
-    { label: 'Data Owner', value: 'data_owner' },
-    { label: 'Security Admin', value: 'security_admin' },
-    { label: 'Finance Admin', value: 'finance_admin' },
-    { label: 'Business User', value: 'business_user' },
+    { label: 'Platform Admin', value: 'Platform Admin' },
+    { label: 'Governance Admin', value: 'Governance Admin' },
+    { label: 'Security Admin', value: 'Security Admin' },
+    { label: 'Finance Admin', value: 'Finance Admin' },
+    { label: 'User', value: 'User' },
   ];
 
   const getBannerConfig = (type?: string) => {

@@ -19,10 +19,10 @@ export type RequestType =
   | 'github_repo_creation'
   | 'enforcement_sentinel';
 
-export interface Role {
-  id: string;
-  name: string; // e.g., 'platform_admin'
-  description?: string;
+export interface RoleMapping {
+  id: number;
+  external_role: string;
+  internal_role: string;
 }
 
 export interface User {
@@ -30,12 +30,13 @@ export interface User {
   email: string;
   full_name?: string;
   is_active: boolean;
-  roles: Role[];
-  created_at: string;
-  updated_at: string;
+  roles: string[];
+  created_at?: string;
+  updated_at?: string;
+  entitlements?: string[];
 }
 
-export type UserPersona = 'Platform Admin' | 'Governance Admin' | 'Data Owner' | 'Security Admin' | 'Finance Admin' | 'Business User';
+export type UserPersona = 'Platform Admin' | 'Governance Admin' | 'Security Admin' | 'Finance Admin' | 'User';
 
 export type Environment = 'dev' | 'test' | 'stage' | 'prod';
 
@@ -119,6 +120,8 @@ export interface Approval {
   approvalType: ApprovalType;
   requestedBy: string;
   requestedByEmail: string;
+  assignedToEmail?: string;
+  assignedToRole?: string;
   status: 'pending' | 'approved' | 'rejected' | 'delegated' | 'superseded';
   createdAt: string;
   updatedAt: string;

@@ -3,7 +3,7 @@ from app.providers.opa.client import OpaProvider
 
 @pytest.mark.asyncio
 async def test_opa_provider_local_eval():
-    provider = OpaProvider({"use_local_binary": True})
+    provider = OpaProvider({"use_local_binary": True, "policies_dir": "policies"})
     
     # Check if OPA is installed locally. If not, skip test.
     if not provider.health_check():

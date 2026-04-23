@@ -67,6 +67,27 @@ async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]
                     tags[tag_assign.tag_key] = tag_assign.tag_value
         except Exception: pass
         
+        # 2. Fetch Lineage
+        upstream_tables = set()
+        downstream_tables = set()
+        try:
+            lineage_resp = provider.client.api_client.do(
+                "GET", 
+                f"/api/2.0/lineage-tracking/table-lineage?table_name={dataset_id}&include_entity_lineage=true"
+            )
+            if lineage_resp:
+                for u in lineage_resp.get("upstreams", []):
+                    table_info = u.get("tableInfo")
+                    if table_info and "name" in table_info:
+                        upstream_tables.add(table_info["name"])
+                        
+                for d in lineage_resp.get("downstreams", []):
+                    table_info = d.get("tableInfo")
+                    if table_info and "name" in table_info:
+                        downstream_tables.add(table_info["name"])
+        except Exception as e:
+            logger.warning(f"Failed to fetch lineage for {dataset_id}: {e}")
+        
         datasets_metadata.append({
             "dataset_id": dataset_id,
             "catalog": catalog_name,
@@ -77,7 +98,9 @@ async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]
             "table_desc": table_desc,
             "table_type": table_type,
             "tags": tags,
-            "columns": columns
+            "columns": columns,
+            "upstream_tables": sorted(list(upstream_tables)),
+            "downstream_tables": sorted(list(downstream_tables))
         })
         
     return datasets_metadata
@@ -189,6 +212,10 @@ schema:
         value: false
       - property: classification
         value: PII
+      - property: upstream_tables
+        value: <list of upstream tables from metadata, or []>
+      - property: downstream_tables
+        value: <list of downstream tables from metadata, or []>
     properties:
       # FOREACH column in the Columns metadata for this dataset, generate a property block like this:
       - id: <column name>

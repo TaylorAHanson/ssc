@@ -97,8 +97,8 @@ class DataAccessStateMachine(BaseRequestStateMachine):
 
     # Approval node configuration
     APPROVAL_NODES = {
-        "manager_approval": {"approval_type": "manager", "name": "Manager Approval"},
-        "data_owner_approval": {"approval_type": "data_owner", "name": "Data Owner Approval"}
+        "manager_approval": {"approval_type": "manager", "name": "Manager Approval", "assignee_context_key": "manager_email"},
+        "data_owner_approval": {"approval_type": "data_owner", "name": "Data Owner Approval", "assignee_context_key": "data_owner_email", "assignee_role_key": "data_owner_role"}
     }
 
     # --------------------------------------------------------------------------
@@ -149,7 +149,7 @@ class DataAccessStateMachine(BaseRequestStateMachine):
         ctx = self.request.state_context or {}
 
         # Only fetch if not already set
-        if not ctx.get("data_owner_email"):
+        if not ctx.get("data_owner_role") and not ctx.get("data_owner_email"):
             from app.core.config import settings
             from app.providers.databricks.client import DatabricksProvider
 
@@ -183,7 +183,10 @@ class DataAccessStateMachine(BaseRequestStateMachine):
 
                     if owner:
                         logger.info(f"[{self.request.id}] Found data owner: {owner}")
-                        ctx["data_owner_email"] = owner
+                        if "@" in owner:
+                            ctx["data_owner_email"] = owner
+                        else:
+                            ctx["data_owner_role"] = owner
                         self.request.state_context = ctx
 
                         # Force SQLAlchemy to detect JSON field changes (works for SQLite and Lakebase)

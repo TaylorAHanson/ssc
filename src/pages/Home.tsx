@@ -168,7 +168,7 @@ const MODE_ICONS: Record<AgentMode, React.ReactNode> = {
 };
 
 const MODE_PERMISSIONS: Record<AgentMode, UserPersona[]> = {
-  'Self Service Agent': ['Platform Admin', 'Business User', 'Governance Admin', 'Finance Admin', 'Security Admin'],
+  'Self Service Agent': ['Platform Admin', 'User', 'Governance Admin', 'Finance Admin', 'Security Admin'],
   'Governance': ['Platform Admin', 'Governance Admin', 'Security Admin'],
   'FinOps': ['Platform Admin', 'Finance Admin']
 };
