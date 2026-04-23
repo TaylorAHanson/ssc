@@ -3,7 +3,7 @@ from app.providers.opa.client import OpaProvider
 
 @pytest.mark.asyncio
 async def test_opa_provider_local_eval():
-    provider = OpaProvider({"use_local_binary": True, "policies_dir": "policies"})
+    provider = OpaProvider({"use_local_binary": True, "policies_dir": "backend/policies"})
     
     # Check if OPA is installed locally. If not, skip test.
     if not provider.health_check():
@@ -17,7 +17,7 @@ async def test_opa_provider_local_eval():
     }
     
     result = await provider.evaluate(
-        policy_path="policies/apps_and_genie.rego",
+        policy_path="backend/policies/apps_and_genie.rego",
         query="data.databricks.governance.apps_and_genie",
         input_data=input_data
     )
@@ -36,7 +36,7 @@ async def test_opa_provider_local_eval():
     ]
     
     result = await provider.evaluate(
-        policy_path="policies/apps_and_genie.rego",
+        policy_path="backend/policies/apps_and_genie.rego",
         query="data.databricks.governance.apps_and_genie",
         input_data=input_data
     )
@@ -56,7 +56,7 @@ async def test_opa_provider_local_eval():
     ]
     
     result = await provider.evaluate(
-        policy_path="policies/apps_and_genie.rego",
+        policy_path="backend/policies/apps_and_genie.rego",
         query="data.databricks.governance.apps_and_genie",
         input_data=input_data
     )

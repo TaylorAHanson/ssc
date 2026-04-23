@@ -218,7 +218,13 @@ export function DataCertification() {
     const isInvalid = contract && contract.yaml_content.toLowerCase().includes('changeme');
 
     if (isInvalid) return 'invalid';
-    if (ds.certified) return 'certified';
+    
+    const hasBeenScanned = ds.certification_violations !== null && ds.certification_violations !== undefined;
+    const hasViolations = hasBeenScanned && ds.certification_violations!.length > 0;
+    const isClean = hasBeenScanned && ds.certification_violations!.length === 0;
+
+    if (ds.certified || (contract && isClean)) return 'certified';
+    if (hasViolations) return 'uncertified';
     if (ds.contract_url) return 'pending';
     if (rel === 'N/A') return 'awaiting';
     return 'uncertified';
@@ -378,17 +384,29 @@ export function DataCertification() {
                       <tr key={ds.id} className="hover:bg-gray-50 transition-colors">
                         <td className="p-3 pl-4">
                           <div className="font-medium text-gray-900">{ds.table_name}</div>
-                          <div className="text-xs text-gray-500 font-mono mt-0.5">{ds.catalog}.{ds.schema_name}</div>
+                          <div className="text-xs text-gray-500 font-mono mt-0.5">
+                            {ds.catalog}{ds.schema_name ? `.${ds.schema_name}` : ''}
+                          </div>
                         </td>
                         <td className="p-3">
                           {isInvalid ? (
                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
                               <AlertCircle className="w-3 h-3 mr-1" /> Invalid
                             </span>
-                          ) : ds.certified ? (
+                          ) : (ds.certified || (contract && ds.certification_violations && ds.certification_violations.length === 0)) ? (
                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
                               <CheckCircle2 className="w-3 h-3 mr-1" /> Certified
                             </span>
+                          ) : (ds.certification_violations && ds.certification_violations.length > 0) ? (
+                            <div className="group relative inline-block">
+                              <button
+                                onClick={() => setViolationAsset(ds)}
+                                className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800 cursor-pointer hover:bg-gray-200 transition-colors"
+                              >
+                                Uncertified
+                                <AlertCircle className="w-3 h-3 ml-1 text-amber-500" />
+                              </button>
+                            </div>
                           ) : ds.contract_url ? (
                             <Link 
                               to={ds.contract_url.startsWith('/requests') ? '/approvals' : `/governance/certification?dataset=${ds.id}`}
@@ -404,17 +422,9 @@ export function DataCertification() {
                               <Info className="w-3 h-3 mr-1" /> Awaiting Scan
                             </span>
                           ) : (
-                            <div className="group relative inline-block">
-                              <button
-                                onClick={() => ds.certification_violations && ds.certification_violations.length > 0 && setViolationAsset(ds)}
-                                className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800 ${ds.certification_violations && ds.certification_violations.length > 0 ? 'cursor-pointer hover:bg-gray-200 transition-colors' : ''}`}
-                              >
-                                Uncertified
-                                {ds.certification_violations && ds.certification_violations.length > 0 && (
-                                  <AlertCircle className="w-3 h-3 ml-1 text-amber-500" />
-                                )}
-                              </button>
-                            </div>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                              Uncertified
+                            </span>
                           )}
                         </td>
                         <td className="p-3 text-gray-600 whitespace-nowrap">{createdDate}</td>

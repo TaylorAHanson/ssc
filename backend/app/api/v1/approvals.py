@@ -70,7 +70,8 @@ async def get_approvals(
     # Build list of role-based approval types the user can see
     allowed_types = []
     if current_user.has_role("Platform Admin"):
-        allowed_types.append("platform_admin")
+        # Platform Admins can see all approvals
+        allowed_types.extend(["platform_admin", "manager", "data_owner", "security", "security_admin", "finance_admin", "governance_admin"])
     if current_user.has_role("Governance Admin"):
         allowed_types.append("governance_admin")
     if current_user.has_role("Security Admin"):
@@ -112,7 +113,9 @@ async def get_approval(
     
     # Check permission
     allowed_types = []
-    if current_user.has_role("Platform Admin"): allowed_types.append("platform_admin")
+    if current_user.has_role("Platform Admin"):
+        # Platform Admins can see all approvals
+        allowed_types.extend(["platform_admin", "manager", "data_owner", "security", "security_admin", "finance_admin", "governance_admin"])
     if current_user.has_role("Governance Admin"): allowed_types.append("governance_admin")
     if current_user.has_role("Security Admin"): 
         allowed_types.append("security")
