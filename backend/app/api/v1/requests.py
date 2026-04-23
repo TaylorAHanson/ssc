@@ -17,7 +17,7 @@ import json
 import logging
 
 from app.api.deps import get_current_user
-from app.db.user import UserModel
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ router = APIRouter()
 async def get_requests(
     skip: int = 0,
     limit: int = 100,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all requests."""
@@ -109,7 +109,7 @@ async def get_paginated_requests(
     limit: int = 10,
     type: Optional[str] = None,
     search: Optional[str] = None,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get paginated requests with optional filtering and search."""
@@ -197,7 +197,7 @@ async def get_paginated_requests(
 @router.get("/{request_id}", response_model=Request)
 async def get_request(
     request_id: str,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get a specific request by ID."""
@@ -287,7 +287,7 @@ async def get_request_status(
 @router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_request(
     request_data: RequestCreate,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Create a new request."""
@@ -315,7 +315,7 @@ async def create_request(
 @router.post("/{request_id}/approve", status_code=status.HTTP_200_OK)
 async def approve_request(
     request_id: str,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -360,7 +360,7 @@ async def approve_request(
 async def reject_request(
     request_id: str,
     rejection_data: dict,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -406,7 +406,7 @@ async def reject_request(
 @router.delete("/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_request(
     request_id: str,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Delete a request."""
@@ -467,7 +467,7 @@ class EditParametersRequest(_PydanticBase):
 async def edit_parameters(
     request_id: str,
     body: EditParametersRequest,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -583,7 +583,7 @@ class EnforcementActionRequest(_PydanticBase):
 async def execute_enforcement_action(
     request_id: str,
     body: EnforcementActionRequest,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Execute a specific enforcement action manually (e.g. from audit mode)."""

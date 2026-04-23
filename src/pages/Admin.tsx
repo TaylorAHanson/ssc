@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useRequestStore } from '../stores/requestStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -24,7 +25,15 @@ export function Admin() {
     fetchApprovals();
   }, [fetchRequests, fetchApprovals]);
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'content-manager' | 'test-runner'>('dashboard');
+  const { tab } = useParams<{ tab: string }>();
+  const navigate = useNavigate();
+
+  const validTabs = ['dashboard', 'users', 'content-manager', 'test-runner'];
+  const activeTab = tab && validTabs.includes(tab) ? tab as 'dashboard' | 'users' | 'content-manager' | 'test-runner' : 'dashboard';
+
+  const handleTabChange = (newTab: string) => {
+    navigate(`/admin/${newTab}`);
+  };
 
   // Content management state
   const [contentFiles, setContentFiles] = useState<ContentInfo[]>([]);
@@ -206,7 +215,7 @@ export function Admin() {
       {/* Tabs */}
       <div className="flex gap-2 border-b border-gray-200">
         <button
-          onClick={() => setActiveTab('dashboard')}
+          onClick={() => handleTabChange('dashboard')}
           className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'dashboard'
             ? 'border-b-2 border-primary text-primary'
             : 'text-gray-600 hover:text-gray-900'
@@ -215,7 +224,7 @@ export function Admin() {
           Dashboard
         </button>
         <button
-          onClick={() => setActiveTab('users')}
+          onClick={() => handleTabChange('users')}
           className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'users'
             ? 'border-b-2 border-primary text-primary'
             : 'text-gray-600 hover:text-gray-900'
@@ -227,7 +236,7 @@ export function Admin() {
           </div>
         </button>
         <button
-          onClick={() => setActiveTab('content-manager')}
+          onClick={() => handleTabChange('content-manager')}
           className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'content-manager'
             ? 'border-b-2 border-primary text-primary'
             : 'text-gray-600 hover:text-gray-900'
@@ -237,7 +246,7 @@ export function Admin() {
           Content Manager
         </button>
         <button
-          onClick={() => setActiveTab('test-runner')}
+          onClick={() => handleTabChange('test-runner')}
           className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'test-runner'
             ? 'border-b-2 border-primary text-primary'
             : 'text-gray-600 hover:text-gray-900'

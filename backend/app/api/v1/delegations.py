@@ -10,7 +10,7 @@ from app.db.session import get_db
 from app.db.request import DelegationModel
 from app.models.request import Delegation, DelegationCreate
 from app.api.deps import get_current_user
-from app.db.user import UserModel
+from app.models.user import User
 
 router = APIRouter()
 
@@ -18,7 +18,7 @@ router = APIRouter()
 async def get_delegations(
     delegator_email: Optional[str] = None,
     delegatee_email: Optional[str] = None,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all delegations, optionally filtered by delegator or delegatee."""
@@ -56,7 +56,7 @@ async def get_delegations(
 @router.post("", response_model=Delegation)
 async def create_delegation(
     delegation_in: DelegationCreate,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Create a new delegation."""
@@ -89,7 +89,7 @@ async def create_delegation(
 @router.delete("/{delegation_id}")
 async def delete_delegation(
     delegation_id: str,
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Delete (deactivate) a delegation."""

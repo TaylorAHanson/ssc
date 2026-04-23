@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
-import { FileText, Search, Edit, Trash2, CheckCircle2, AlertCircle, Plus, Loader2, Save, X, History } from 'lucide-react';
+import { FileText, Search, Edit, Trash2, CheckCircle2, AlertCircle, Plus, Loader2, Save, X } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { api } from '../../services/api';
 import type { OdpsDocument, DataContract } from '../../services/api';

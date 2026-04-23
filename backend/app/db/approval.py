@@ -15,6 +15,8 @@ class ApprovalModel(Base):
     approval_type = Column(String)  # 'manager', 'data_owner', 'platform_admin', etc.
     requested_by = Column(String)
     requested_by_email = Column(String)
+    assigned_to_email = Column(String, nullable=True)
+    assigned_to_role = Column(String, nullable=True)
     status = Column(String)  # 'pending', 'approved', 'rejected', 'delegated', 'superseded'
     approved_by = Column(String, nullable=True)
     approved_at = Column(DateTime, nullable=True)

@@ -293,12 +293,28 @@ class BaseRequestStateMachine(StateMachine):
         
         if not exists:
             ctx = self.request.state_context or {}
+            
+            # Find the state ID that corresponds to this approval type to get its config
+            state_config = {}
+            for config in self.APPROVAL_NODES.values():
+                if config.get("approval_type") == approval_type:
+                    state_config = config
+                    break
+                    
+            assignee_key = state_config.get("assignee_context_key")
+            assigned_to_email = ctx.get(assignee_key) if assignee_key else None
+            
+            assignee_role_key = state_config.get("assignee_role_key")
+            assigned_to_role = ctx.get(assignee_role_key) if assignee_role_key else None
+            
             new_approval = ApprovalModel(
                 id=f"app-{datetime.utcnow().timestamp()}",
                 request_id=self.request.id,
                 approval_type=approval_type,
                 requested_by=ctx.get("requested_by", "system"),
                 requested_by_email=ctx.get("requested_by_email", ""),
+                assigned_to_email=assigned_to_email,
+                assigned_to_role=assigned_to_role,
                 status="pending",
                 created_at=datetime.utcnow()
             )

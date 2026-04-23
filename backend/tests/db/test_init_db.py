@@ -1,34 +1,37 @@
+import pytest
 from sqlalchemy.orm import Session
-from app.db.init_db import init_db, ROLES
-from app.db.user import RoleModel
+from app.db.init_db import init_db, DEFAULT_MAPPINGS
+from app.db.role_mapping import RoleMappingModel
 
-def test_init_db_creates_roles(db_session: Session):
-    """Test that init_db creates all defined roles."""
-    # Ensure DB is clean of roles first (depends on fixture scope, but good to be safe)
-    db_session.query(RoleModel).delete()
+def test_init_db_creates_mappings(db_session: Session):
+    """Test that init_db creates all defined default role mappings."""
+    # Ensure DB is clean first
+    db_session.query(RoleMappingModel).delete()
     db_session.commit()
-    
+
     # Run init_db
     init_db(db_session)
-    
-    # Verify all roles exist
-    for role_data in ROLES:
-        role = db_session.query(RoleModel).filter(RoleModel.name == role_data["name"]).first()
-        assert role is not None
-        assert role.description == role_data["description"]
-        
-def test_init_db_is_idempotent(db_session: Session):
-    """Test that running init_db multiple times doesn't create duplicates."""
+
+    # Verify all mappings exist
+    for mapping_data in DEFAULT_MAPPINGS:
+        mapping = db_session.query(RoleMappingModel).filter(
+            RoleMappingModel.external_role == mapping_data["external_role"],
+            RoleMappingModel.internal_role == mapping_data["internal_role"]
+        ).first()
+        assert mapping is not None, f"Mapping {mapping_data['external_role']} missing"
+
+    # Count mappings
+    count = db_session.query(RoleMappingModel).count()
+    assert count == len(DEFAULT_MAPPINGS)
+
+def test_init_db_idempotent(db_session: Session):
+    """Test that running init_db twice does not duplicate records."""
     # Run once
     init_db(db_session)
-    
-    # Count roles
-    initial_count = db_session.query(RoleModel).count()
-    assert initial_count == len(ROLES)
-    
-    # Run again
+    count1 = db_session.query(RoleMappingModel).count()
+
+    # Run twice
     init_db(db_session)
-    
-    # Count should be the same
-    final_count = db_session.query(RoleModel).count()
-    assert final_count == initial_count
+    count2 = db_session.query(RoleMappingModel).count()
+
+    assert count1 == count2

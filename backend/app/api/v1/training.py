@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 from app.db.session import get_db
 from app.api.deps import get_current_user
-from app.db.user import UserModel
+from app.models.user import User
 from app.providers.training.client import TrainingProvider
 import logging
 
@@ -13,7 +13,7 @@ router = APIRouter()
 
 @router.get("/me", response_model=Dict[str, Any])
 async def get_my_training(
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -36,7 +36,7 @@ async def get_my_training(
 @router.post("/upload", response_model=Dict[str, Any])
 async def upload_training_data(
     file: UploadFile = File(...),
-    current_user: UserModel = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """

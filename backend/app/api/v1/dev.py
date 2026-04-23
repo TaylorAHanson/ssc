@@ -10,7 +10,7 @@ from app.api.deps import require_role
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[Depends(require_role("platform_admin"))])
+router = APIRouter(dependencies=[Depends(require_role("Platform Admin"))])
 
 class TestRunRequest(BaseModel):
     path: Optional[str] = None
@@ -129,44 +129,6 @@ def seed_db():
         
         db = get_session_local()()
         try:
-            # Seed Roles
-            from app.db.user import RoleModel, UserModel
-            
-            roles = [
-                {"id": "role_platform_admin", "name": "platform_admin", "description": "Full system access"},
-                {"id": "role_governance_admin", "name": "governance_admin", "description": "Governance and policy management"},
-                {"id": "role_security_admin", "name": "security_admin", "description": "Security auditing and access control"},
-                {"id": "role_finance_admin", "name": "finance_admin", "description": "Budget and cost management"},
-            ]
-            
-            for role_data in roles:
-                if not db.query(RoleModel).filter(RoleModel.name == role_data["name"]).first():
-                    role = RoleModel(**role_data)
-                    db.add(role)
-            
-            db.commit()
-
-            # Seed Admin User
-            admin_email = "admin@qualcomm.com"
-            admin_user = db.query(UserModel).filter(UserModel.email == admin_email).first()
-            
-            if not admin_user:
-                admin_user = UserModel(
-                    id=str(uuid.uuid4()),
-                    email=admin_email,
-                    full_name="System Admin",
-                    is_active=True
-                )
-                db.add(admin_user)
-            
-            # Always ensure admin has all roles
-            all_roles = db.query(RoleModel).all()
-            # Convert list of roles to set of IDs to avoid duplicates if appending, 
-            # but for admin we can just reset the relationship
-            admin_user.roles = all_roles
-            
-            db.commit()
-
             # Create sample requests if none exist
             if db.query(RequestModel).count() == 0:
                 requests = [

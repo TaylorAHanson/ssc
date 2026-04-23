@@ -85,7 +85,7 @@ const navItems: NavItem[] = [
     id: 'admin',
     title: 'Admin',
     icon: <Settings className="w-5 h-5" />,
-    path: '/admin',
+    path: '/admin/dashboard',
     group: 'Admin',
     allowedPersonas: ['Platform Admin']
   },
@@ -165,7 +165,9 @@ export function Sidebar() {
             )}
             <div className="space-y-1">
               {items.map((item) => {
-                const isActive = location.pathname === item.path;
+                const isActive = item.path === '/admin/dashboard' 
+                  ? location.pathname.startsWith('/admin') && location.pathname !== '/admin/training'
+                  : location.pathname === item.path;
                 return (
                   <Link
                     key={item.path}

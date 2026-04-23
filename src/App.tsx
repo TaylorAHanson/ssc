@@ -24,7 +24,7 @@ import { ODPS } from './pages/admin/ODPS';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
-  const { fetchBranding, hasLoaded } = useBrandingStore();
+  const { fetchBranding, hasLoaded, uiTabs } = useBrandingStore();
   const fetchCurrentUser = useUserStore((state) => state.fetchCurrentUser);
   const hydrated = useUserStore((state) => state.hydrated);
 
@@ -52,44 +52,56 @@ function App() {
           <Route path="/reports" element={<AdminReports />} />
           <Route
             path="/admin"
+            element={<Navigate to="/admin/dashboard" replace />}
+          />
+          <Route
+            path="/admin/:tab"
             element={
               <ProtectedRoute allowedPersonas={['Platform Admin']}>
                 <Admin />
               </ProtectedRoute>
             }
           />
-          <Route
-            path="/governance/allowlist"
-            element={
-              <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
-                <Allowlist />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/governance/sentinel"
-            element={
-              <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
-                <EnforcementSentinel />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/governance/certification"
-            element={
-              <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
-                <DataCertification />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/governance/odps"
-            element={
-              <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
-                <ODPS />
-              </ProtectedRoute>
-            }
-          />
+          {uiTabs?.allowlist !== false && (
+            <Route
+              path="/governance/allowlist"
+              element={
+                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                  <Allowlist />
+                </ProtectedRoute>
+              }
+            />
+          )}
+          {uiTabs?.sentinel !== false && (
+            <Route
+              path="/governance/sentinel"
+              element={
+                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                  <EnforcementSentinel />
+                </ProtectedRoute>
+              }
+            />
+          )}
+          {uiTabs?.certification !== false && (
+            <Route
+              path="/governance/certification"
+              element={
+                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                  <DataCertification />
+                </ProtectedRoute>
+              }
+            />
+          )}
+          {uiTabs?.odps !== false && (
+            <Route
+              path="/governance/odps"
+              element={
+                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                  <ODPS />
+                </ProtectedRoute>
+              }
+            />
+          )}
           <Route path="/community/training" element={<Training />} />
           <Route path="/community/events" element={<Events />} />
           <Route path="/community/assets" element={<ReusableAssets />} />

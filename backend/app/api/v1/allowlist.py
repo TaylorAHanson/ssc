@@ -7,7 +7,7 @@ import uuid
 
 from app.api import deps
 from app.db.allowlist import AllowlistModel
-from app.db.user import UserModel
+from app.models.user import User
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ def get_allowlist(
     workspace: str | None = None,
     resource_type: str | None = None,
     status: str | None = None,
-    current_user: UserModel = Depends(deps.get_current_user),
+    current_user: User = Depends(deps.get_current_user),
 ) -> Any:
     """
     Retrieve allowlist entries.
@@ -78,7 +78,7 @@ def get_allowlist(
 def get_allowlist_entry(
     id: str,
     db: Session = Depends(deps.get_db),
-    current_user: UserModel = Depends(deps.get_current_user),
+    current_user: User = Depends(deps.get_current_user),
 ) -> Any:
     """
     Get a specific allowlist entry by ID.
@@ -94,7 +94,7 @@ def create_allowlist_entry(
     *,
     db: Session = Depends(deps.get_db),
     entry_in: AllowlistCreate,
-    current_user: UserModel = Depends(deps.require_role("platform_admin")),
+    current_user: User = Depends(deps.require_role("Platform Admin")),
 ) -> Any:
     """
     Create new allowlist entry. Only accessible to platform admins.
@@ -126,7 +126,7 @@ def update_allowlist_entry(
     db: Session = Depends(deps.get_db),
     id: str,
     entry_in: AllowlistUpdate,
-    current_user: UserModel = Depends(deps.require_role("platform_admin")),
+    current_user: User = Depends(deps.require_role("Platform Admin")),
 ) -> Any:
     """
     Update an allowlist entry. Only accessible to platform admins.
@@ -160,7 +160,7 @@ def delete_allowlist_entry(
     *,
     db: Session = Depends(deps.get_db),
     id: str,
-    current_user: UserModel = Depends(deps.require_role("platform_admin")),
+    current_user: User = Depends(deps.require_role("Platform Admin")),
 ) -> Any:
     """
     Delete an allowlist entry. Only accessible to platform admins.

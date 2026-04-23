@@ -1,5 +1,5 @@
 branding:
-  name: "EDH Self-Service Center"
+  name: "AMD Self-Service Center"
   logo_url: "https://upload.wikimedia.org/wikipedia/commons/f/fc/Qualcomm-Logo.svg"
   primary_color: "#3253DC"
   secondary_color: "#000000"
@@ -52,6 +52,10 @@ ui:
     admin: true
     reports: true
     training_upload: true
+    certification: true
+    odps: true
+    allowlist: true
+    sentinel: true
 
 tools:
   check_allowlist_status: true

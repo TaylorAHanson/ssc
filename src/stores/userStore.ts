@@ -1,20 +1,22 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { User, Role, UserPersona } from '../types';
+import type { User, RoleMapping, UserPersona } from '../types';
 import { userService } from '../services/userService';
 
 interface UserState {
     currentUser: User | null;
     currentPersona: UserPersona;
-    users: User[];
-    roles: Role[];
+    roleMappings: RoleMapping[];
     isLoading: boolean;
     isInitialized: boolean;
     error: string | null;
 
     fetchCurrentUser: () => Promise<void>;
-    fetchUsers: () => Promise<void>;
-    fetchRoles: () => Promise<void>;
+    fetchRoleMappings: () => Promise<void>;
+    createRoleMapping: (externalRole: string, internalRole: string) => Promise<void>;
+    updateRoleMapping: (id: number, externalRole: string, internalRole: string) => Promise<void>;
+    deleteRoleMapping: (id: number) => Promise<void>;
+
     // Dev Mode
     isDevMode: boolean;
     activeRoleOverride: string | null;
@@ -22,27 +24,23 @@ interface UserState {
     setRoleOverride: (role: string | null) => Promise<void>;
     hydrated: boolean;
     setHydrated: (val: boolean) => void;
-    updateUserRoles: (userId: string, roleIds: string[]) => Promise<void>;
-    createUser: (email: string, fullName: string, roleIds?: string[]) => Promise<User>;
 }
 
 const derivePersona = (user: User | null): UserPersona => {
-    if (!user) return 'Business User';
-    if (user.roles.some(r => r.name === 'platform_admin')) return 'Platform Admin';
-    if (user.roles.some(r => r.name === 'governance_admin')) return 'Governance Admin';
-    if (user.roles.some(r => r.name === 'data_owner')) return 'Data Owner';
-    if (user.roles.some(r => r.name === 'security_admin')) return 'Security Admin';
-    if (user.roles.some(r => r.name === 'finance_admin')) return 'Finance Admin';
-    return 'Business User';
+    if (!user) return 'User';
+    if (user.roles.includes('Platform Admin')) return 'Platform Admin';
+    if (user.roles.includes('Governance Admin')) return 'Governance Admin';
+    if (user.roles.includes('Security Admin')) return 'Security Admin';
+    if (user.roles.includes('Finance Admin')) return 'Finance Admin';
+    return 'User';
 };
 
 export const useUserStore = create<UserState>()(
     persist(
         (set, get) => ({
             currentUser: null,
-            currentPersona: 'Business User',
-            users: [],
-            roles: [],
+            currentPersona: 'User',
+            roleMappings: [],
             isLoading: false,
             error: null,
             hydrated: false,
@@ -58,7 +56,7 @@ export const useUserStore = create<UserState>()(
 
                 // Auto-select Platform Admin if enabling dev mode and no override selected
                 if (nextIsDevMode && !nextRoleOverride) {
-                    nextRoleOverride = 'platform_admin';
+                    nextRoleOverride = 'Platform Admin';
                 }
 
                 set({ isDevMode: nextIsDevMode, activeRoleOverride: nextRoleOverride });
@@ -110,44 +108,43 @@ export const useUserStore = create<UserState>()(
                 }
             },
 
-            fetchUsers: async () => {
+            fetchRoleMappings: async () => {
                 try {
                     set({ isLoading: true, error: null });
-                    const users = await userService.getAllUsers();
-                    set({ users, isLoading: false });
+                    const roleMappings = await userService.getRoleMappings();
+                    set({ roleMappings, isLoading: false });
                 } catch (error: any) {
                     set({ error: error.message, isLoading: false });
                 }
             },
 
-            fetchRoles: async () => {
+            createRoleMapping: async (externalRole: string, internalRole: string) => {
                 try {
                     set({ isLoading: true, error: null });
-                    const roles = await userService.getRoles();
-                    set({ roles, isLoading: false });
-                } catch (error: any) {
-                    set({ error: error.message, isLoading: false });
-                }
-            },
-
-            updateUserRoles: async (userId: string, roleIds: string[]) => {
-                try {
-                    set({ isLoading: true, error: null });
-                    await userService.updateUserRoles(userId, roleIds);
-                    await get().fetchUsers();
+                    await userService.createRoleMapping(externalRole, internalRole);
+                    await get().fetchRoleMappings();
                 } catch (error: any) {
                     set({ error: error.message, isLoading: false });
                     throw error;
                 }
             },
 
-            createUser: async (email: string, fullName: string, roleIds: string[] = []) => {
+            updateRoleMapping: async (id: number, externalRole: string, internalRole: string) => {
                 try {
                     set({ isLoading: true, error: null });
-                    const user = await userService.createUser(email, fullName, roleIds);
-                    await get().fetchUsers();
-                    set({ isLoading: false });
-                    return user;
+                    await userService.updateRoleMapping(id, externalRole, internalRole);
+                    await get().fetchRoleMappings();
+                } catch (error: any) {
+                    set({ error: error.message, isLoading: false });
+                    throw error;
+                }
+            },
+
+            deleteRoleMapping: async (id: number) => {
+                try {
+                    set({ isLoading: true, error: null });
+                    await userService.deleteRoleMapping(id);
+                    await get().fetchRoleMappings();
                 } catch (error: any) {
                     set({ error: error.message, isLoading: false });
                     throw error;

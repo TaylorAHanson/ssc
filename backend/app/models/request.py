@@ -101,6 +101,8 @@ class Approval(BaseModel):
     approvalType: str
     requestedBy: str
     requestedByEmail: str
+    assignedToEmail: Optional[str] = None
+    assignedToRole: Optional[str] = None
     status: str
     createdAt: datetime
     updatedAt: datetime

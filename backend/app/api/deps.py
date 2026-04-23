@@ -1,175 +1,134 @@
 """
 API dependencies.
 """
-from fastapi import Depends, HTTPException, status, Header
-from typing import Generator, Optional
+from fastapi import Depends, HTTPException, status, Header, Request
+from typing import Generator, Optional, List, Dict
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 from app.db.session import get_db
 from app.core.config import settings
 import uuid
 import logging
-from app.db.user import UserModel, RoleModel
+from app.models.user import User
+from app.db.role_mapping import RoleMappingModel
 from app.providers.github.client import GitHubProvider
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.core import DatabricksError
 
 logger = logging.getLogger(__name__)
 
-# Mock user for development - in production this would verify JWT/OAuth
-from fastapi import Request
-
 MOCK_USER_EMAIL = "admin@qualcomm.com"
+
+def _get_user_entitlements(user_email: str) -> List[str]:
+    """Fetch SCIM entitlements (groups/roles) using Databricks SDK."""
+    entitlements = [user_email]
+    
+    # Local dev mock fallback: return 'users' per instructions
+    if user_email == MOCK_USER_EMAIL and settings.ENVIRONMENT != "production":
+        entitlements.append("users")
+        return entitlements
+
+    try:
+        w = WorkspaceClient()
+        me = w.current_user.me()
+        
+        if getattr(me, "groups", None):
+            for group in me.groups:
+                if getattr(group, "display", None):
+                    entitlements.append(group.display)
+                    
+        if getattr(me, "roles", None):
+            for role in me.roles:
+                if getattr(role, "value", None):
+                    entitlements.append(role.value)
+                    
+    except DatabricksError as e:
+        logger.warning(f"Failed to fetch Databricks entitlements for {user_email}: {e}")
+    except Exception as e:
+        logger.warning(f"Unexpected error fetching entitlements: {e}")
+
+    return entitlements
+
+def _calculate_roles(db: Session, entitlements: List[str]) -> List[str]:
+    """Calculate internal application roles based on role mappings."""
+    roles = set()
+    
+    if not entitlements:
+        return []
+        
+    mappings = db.query(RoleMappingModel).filter(
+        RoleMappingModel.external_role.in_(entitlements)
+    ).all()
+    
+    for mapping in mappings:
+        roles.add(mapping.internal_role)
+            
+    return list(roles)
 
 def get_current_user(
     request: Request,
     db: Session = Depends(get_db),
     x_dev_role_override: Optional[str] = Header(None, alias="X-Dev-Role-Override")
-) -> UserModel:
+) -> User:
     """
-    Get the current authenticated user.
-    Prioritizes user from Databricks headers (via middleware), 
-    falls back to mock admin for local dev.
+    Get the current authenticated user and calculate roles.
     """
     user_email = None
+    user_name = None
     
-    # Check middleware state first (Databricks Apps)
     if hasattr(request.state, "user") and request.state.user.get("email"):
         user_email = request.state.user["email"]
-        logger.debug(f"get_current_user: Found user in request state: {user_email}")
+        user_name = request.state.user.get("username", user_email)
         
-    # Fallback to mock user if nothing in state (Local Dev)
     if not user_email or user_email == settings.MOCK_USER_EMAIL:
-         # Note: AuthMiddleware might populate mock email if local, 
-         # but let's be explicit about the fallback here too.
          user_email = MOCK_USER_EMAIL
-
-    # Query DB for this user
-    logger.info(f"DEBUG: Querying DB for user email: '{user_email}' (repr: {repr(user_email)})")
-    user = db.query(UserModel).filter(UserModel.email == user_email).first()
-    
-    if user:
-         logger.info(f"DEBUG: Found user in DB. ID: {user.id}, Roles: {[r.name for r in user.roles if r]}")
-    else:
-         logger.info(f"DEBUG: User not found in DB for email: '{user_email}'")
-    
-    # Handling for New Users (Just-in-Time Provisioning)
-    # If a valid Databricks user comes in but isn't in our DB, we should create them.
-    # EXCEPTION: We do NOT auto-provision the mock admin user here to avoid race conditions.
-    # The mock admin user must be seeded by init_db.py at startup.
-    if not user:
-         if user_email == MOCK_USER_EMAIL:
-             # If mock user is missing, it's a system setup error, not a JIT case.
-             logger.error(f"Mock user {user_email} not found in database. Seeding failed or DB corrupted.")
-             raise HTTPException(
-                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                 detail="System not initialized. Mock user missing."
-             )
-
-         logger.info(f"User {user_email} not found in DB. Auto-provisioning...")
-         # Default role for new users is 'business_user'
-         target_role_name = "business_user"
-         default_role = db.query(RoleModel).filter(RoleModel.name == target_role_name).first()
-         roles = [default_role] if default_role else []
+         user_name = "System Admin"
          
-         new_user = UserModel(
-             id=str(uuid.uuid4()),
-             email=user_email,
-             # We might get name from headers if available
-             full_name=request.state.user.get("username", user_email),
-             is_active=True,
-             roles=roles
-         )
-         try:
-             db.add(new_user)
-             db.commit()
-             db.refresh(new_user)
-             return new_user
-         except (IntegrityError, Exception) as e:
-             logger.warning(f"Race condition detected during user provisioning for {user_email}: {e}")
-             db.rollback()
-             # Fetch the user that was just created by another process
-             existing_user = db.query(UserModel).filter(UserModel.email == user_email).first()
-             if existing_user:
-                 return existing_user
-             # If still not found, re-raise
-             raise e
-
-    if not user:
-         raise HTTPException(status_code=401, detail=f"User {user_email} not found in database. Root cause: possible sync or bootstrap error.")
-            
+    entitlements = _get_user_entitlements(user_email)
+    calculated_roles = _calculate_roles(db, entitlements)
+    
+    # Local dev mock fallback: if 'users' in entitlements and local dev, ensure 'Platform Admin' or 'User' is present.
+    if settings.ENVIRONMENT != "production" and "users" in entitlements and not calculated_roles:
+        # Fallback to giving Platform Admin to the mock user if no DB seeding occurred yet
+        calculated_roles = ["Platform Admin"]
+    
     # DEV FEATURE: Role Override
-    # STRICTLY for local development. This allows the UI to simulate other roles.
-    if x_dev_role_override:
-        # Check if we are allowed to use this (e.g. check environment)
-        # For this MVP code, we assume if the header is present and valid role, we honor it
-        # In production, this should be gated behind settings.ENVIRONMENT == "local"
-        
-        logger.info(f"DEV: Overriding role for user {user.email} to {x_dev_role_override}")
-        
-        # Determine target role
-        target_role = None
-        for r in user.roles:
-            if r.name == x_dev_role_override:
-                target_role = r
-                break
-        
-        if not target_role:
-             # If user doesn't have it, maybe fetch from DB (simulating "Login As")
-             # Or just construct a fake role object if we want to simulate roles the user DOESN'T have
-
-             target_role = db.query(RoleModel).filter(RoleModel.name == x_dev_role_override).first()
-        
-        if target_role:
-            # Detach user from session to prevent this ephemeral change from affecting
-            # the DB or other queries in this session (like GET /users list).
-            db.expunge(user)
-            db.expunge(target_role)
+    if x_dev_role_override and settings.ENVIRONMENT != "production":
+        logger.info(f"DEV: Overriding role for user {user_email} to {x_dev_role_override}")
+        calculated_roles = [x_dev_role_override]
             
-            # Create a clone ensuring we don't mutate DB session object permanently
-            # But UserModel is an ORM object...
-            # We just filter the roles list on the instance for this request scope
-            # WARNING: Be careful not to commit this user back to DB!
-            user.roles = [target_role]
-            logger.info(f"DEV: Successfully overrode roles to: {[r.name for r in user.roles]} (User detached from session)")
-        else:
-             logger.warning(f"DEV override requested for '{x_dev_role_override}' but role not found")
-    else:
-        logger.debug(f"DEV: No role override header found. Current roles: {[r.name for r in user.roles]}")
-
+    user = User(
+        id=user_email,
+        email=user_email,
+        full_name=user_name,
+        entitlements=entitlements,
+        roles=calculated_roles
+    )
+    
     return user
 
 def require_role(role_name: str):
-    """
-    Dependency factory to check if user has a specific role.
-    Usage: @router.get("/", dependencies=[Depends(require_role("platform_admin"))])
-    """
-    def version_checker(user: UserModel = Depends(get_current_user)):
+    def checker(user: User = Depends(get_current_user)):
         if not user.has_role(role_name):
-            logger.warning(f"Access denied for user {user.email}: requires role {role_name}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Operation requires role: {role_name}"
             )
         return user
-    return version_checker
+    return checker
 
-def require_any_role(role_names: list[str]):
-    """
-    Dependency factory to check if user has at least one of the specified roles.
-    """
-    def version_checker(user: UserModel = Depends(get_current_user)):
+def require_any_role(role_names: List[str]):
+    def checker(user: User = Depends(get_current_user)):
         if not any(user.has_role(role) for role in role_names):
-            logger.warning(f"Access denied for user {user.email}: requires one of roles {role_names}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Operation requires one of these roles: {', '.join(role_names)}"
             )
         return user
-    return version_checker
+    return checker
 
 async def get_github_provider() -> GitHubProvider:
     """
     Dependency to get a GitHub provider instance.
-    Uses GITHUB_TOKEN and GITHUB_ORG from settings.
     """
     async with GitHubProvider(
         token=settings.GITHUB_TOKEN,

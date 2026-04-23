@@ -81,7 +81,7 @@ async def startup_event():
         from app.db.base import Base
         
         # Create Tables (ensure models are loaded via init_db import or explicit import)
-        # init_db imports UserModel/RoleModel, so metadata should be populated
+        # init_db imports models, so metadata should be populated
         engine = get_engine()
         Base.metadata.create_all(bind=engine)
         
