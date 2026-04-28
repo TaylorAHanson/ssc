@@ -105,6 +105,19 @@ def get_database_url() -> str:
                     endpoint_path = f"projects/{target_project_name}/branches/production/endpoints/primary"
                     logger.info(f"Found matching Lakebase project. Requesting credentials for: {endpoint_path}")
                     
+                    # Fetch databases in this branch to use the database ID as dbname
+                    db_res = sdk.api_client.do("GET", f"/api/2.0/postgres/projects/{target_project_name}/branches/production/databases")
+                    databases = db_res.get("databases", [])
+                    db_id = None
+                    if databases:
+                        # Extract the actual database ID (e.g. db-xxxxxxxx)
+                        # Name format is usually "projects/.../databases/db-xxxx"
+                        db_name_full = databases[0].get("name", "")
+                        db_id = db_name_full.split("/")[-1]
+                        logger.info(f"Auto-discovered Database ID: {db_id}")
+                    else:
+                        logger.warning("Could not find any databases in the production branch!")
+                    
                     # Request the token
                     res = sdk.api_client.do(
                         "POST", 
@@ -123,18 +136,6 @@ def get_database_url() -> str:
             except Exception as e:
                 logger.error(f"Failed to fetch Lakebase OAuth credentials: {type(e).__name__}: {e}")
                 
-        # Method 2: Use DATABASE_PASSWORD from environment (for local dev only)
-        if not password:
-            password = settings.DATABASE_PASSWORD
-            invalid_passwords = ["CHANGE_ME", "{{DATABASE_PASSWORD}}", "", None]
-            is_unresolved_template = password and password.startswith("{{")
-            
-            if password and password not in invalid_passwords and not is_unresolved_template:
-                logger.info(f"Using DATABASE_PASSWORD from environment (length: {len(password)})")
-            else:
-                password = None
-                logger.warning("No valid DATABASE_PASSWORD in environment")
-        
         # Log final configuration
         logger.info(f"Final DB config - Host: {host}, User: {user}, Password set: {password is not None}")
         
@@ -144,23 +145,25 @@ def get_database_url() -> str:
             safe_user = quote_plus(user)
             safe_password = quote_plus(password)
             
-            url = f"postgresql://{safe_user}:{safe_password}@{host}:{settings.DATABASE_PORT}/{name}?sslmode=require"
+            # The database name MUST be the database_id for autoscaling Lakebase!
+            # If the API returned it above, use it; otherwise fallback to DATABASE_NAME
+            db_name_to_use = db_id if db_id else name
+            
+            url = f"postgresql://{safe_user}:{safe_password}@{host}:{settings.DATABASE_PORT}/{db_name_to_use}?sslmode=require"
             
             # CRITICAL: Log the final URL structure (without password) for debugging
-            safe_url = f"postgresql://{safe_user}:***@{host}:{settings.DATABASE_PORT}/{name}?sslmode=require"
+            safe_url = f"postgresql://{safe_user}:***@{host}:{settings.DATABASE_PORT}/{db_name_to_use}?sslmode=require"
             logger.debug(f"FINAL DATABASE URL (safe): {safe_url}")
             logger.info(f"=== LAKEBASE CONNECTION ===")
             logger.info(f"  Host: {host}")
             logger.info(f"  User: {user} (encoded: {safe_user})")
-            logger.info(f"  Database: {name}")
+            logger.info(f"  Database: {db_name_to_use}")
             logger.info(f"  Password length: {len(password)}")
-            logger.info(f"  Settings.DATABASE_USER (IGNORED): {settings.DATABASE_USER}")
             logger.info(f"  Safe URL: {safe_url}")
             return url
         else:
             logger.warning("No valid password/token found for Lakebase. Falling back to SQLite.")
-            logger.warning(f"  Settings.DATABASE_PASSWORD was: {settings.DATABASE_PASSWORD[:30] if settings.DATABASE_PASSWORD else 'None'}...")
-    
+            
     # Fallback to SQLite
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     
