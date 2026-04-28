@@ -6,16 +6,25 @@ bundle:
 # Resources
 resources:
   
-  database_instances:
-    edas_hub_database:
-      name: edas-hub-${var.dev_user}
-      enable_pg_native_login: true   # Required for native Postgres role (edas_app)
-      capacity: CU_2
-      lifecycle:
-        prevent_destroy: true
-      permissions:
-        - level: CAN_USE
-          group_name: users
+  postgres_projects:
+    edas_hub_project:
+      project_id: "edas-hub-${var.dev_user}"
+      display_name: "EDAS Hub ${var.dev_user}"
+      pg_version: 17
+
+  postgres_branches:
+    production_branch:
+      parent: ${resources.postgres_projects.edas_hub_project.id}
+      branch_id: "production"
+      no_expiry: true
+
+  postgres_endpoints:
+    primary_endpoint:
+      parent: ${resources.postgres_branches.production_branch.id}
+      endpoint_id: "primary"
+      endpoint_type: "ENDPOINT_TYPE_READ_WRITE"
+      autoscaling_limit_min_cu: 0.5
+      autoscaling_limit_max_cu: 2
 
   # Apps
   apps:
@@ -32,8 +41,12 @@ resources:
           - python
           - backend/run.py
         env:
+          - name: ENVIRONMENT
+            value: "${var.environment}"
           - name: DATABASE_HOST
             value: "${var.lakebase_host}"
+          - name: DATABASE_INSTANCE_NAME
+            value: "${resources.postgres_projects.edas_hub_project.project_id}"
           - name: GITOPS_MODE
             value: "${var.gitops_mode}"
           - name: GITOPS_VOLUME_PATH

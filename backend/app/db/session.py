@@ -73,37 +73,56 @@ def get_database_url() -> str:
             "database.cloud.databricks.com" in host  # Lakebase host indicates Databricks
         )
         
-        # Method 1: Fetch password from Databricks Secret Scope (for native postgres roles)
+        # Method 1: Fetch short-lived OAuth token via Databricks API for Postgres
         if is_databricks:
             try:
                 from databricks.sdk import WorkspaceClient
-                import base64
+                
                 sdk = WorkspaceClient()
-                scope = settings.DATABASE_SECRET_SCOPE
-                key = settings.DATABASE_SECRET_KEY
-                logger.info(f"Attempting to fetch password from Databricks Secret Scope ({scope}/{key})...")
-                secret_value = sdk.secrets.get_secret(scope=scope, key=key)
-                if secret_value and secret_value.value:
-                    raw_value = secret_value.value
-                    # Check if value is base64 encoded and decode if needed
-                    try:
-                        decoded = base64.b64decode(raw_value).decode('utf-8')
-                        # If decode succeeds and looks like a valid password, use it
-                        if decoded.isprintable() and len(decoded) > 0:
-                            password = decoded
-                            logger.info(f"Got password from Secret Scope (base64 decoded, length: {len(password)})")
-                        else:
-                            password = raw_value
-                            logger.info(f"Got password from Secret Scope (raw, length: {len(password)})")
-                    except:
-                        # Not base64, use raw value
-                        password = raw_value
-                        logger.info(f"Got password from Secret Scope (raw, length: {len(password)})")
+                
+                # The user is the Databricks Service Principal / User running the app
+                # This overrides the default 'atlas_app' native role
+                user = sdk.current_user.me().user_name
+                logger.info(f"Using Databricks Workspace user for Lakebase: {user}")
+                
+                # Fetch all autoscaling projects
+                projects_res = sdk.api_client.do("GET", "/api/2.0/postgres/projects")
+                projects = projects_res.get("projects", [])
+                
+                target_project_name = settings.DATABASE_INSTANCE_NAME
+                matched_project = None
+                
+                if target_project_name:
+                    matched_project = next((p for p in projects if p.get("name", "").endswith(target_project_name)), None)
+                elif projects:
+                    # Auto-discover if only one project or just grab the first one
+                    matched_project = projects[0]
+                    target_project_name = matched_project.get("name")
+                    logger.warning(f"DATABASE_INSTANCE_NAME not set in environment. Auto-discovered project: {target_project_name}")
+                
+                if matched_project and target_project_name:
+                    # Construct the path to the primary endpoint on the production branch
+                    endpoint_path = f"projects/{target_project_name}/branches/production/endpoints/primary"
+                    logger.info(f"Found matching Lakebase project. Requesting credentials for: {endpoint_path}")
+                    
+                    # Request the token
+                    res = sdk.api_client.do(
+                        "POST", 
+                        "/api/2.0/postgres/credentials",
+                        body={"endpoint": endpoint_path}
+                    )
+                    
+                    password = res.get("token")
+                    if password:
+                        logger.info("Successfully acquired short-lived OAuth token for Lakebase.")
+                    else:
+                        logger.error("API returned success but no token was found in the response.")
                 else:
-                    logger.error("Secret value was empty!")
+                    logger.error(f"Could not find any Lakebase projects to connect to.")
+                    
             except Exception as e:
-                logger.error(f"Failed to fetch secret: {type(e).__name__}: {e}")
-        
+                logger.error(f"Failed to fetch Lakebase OAuth credentials: {type(e).__name__}: {e}")
+                
         # Method 2: Use DATABASE_PASSWORD from environment (for local dev only)
         if not password:
             password = settings.DATABASE_PASSWORD
@@ -116,7 +135,7 @@ def get_database_url() -> str:
                 password = None
                 logger.warning("No valid DATABASE_PASSWORD in environment")
         
-        # Log final configuration (NO OAuth fallback - we use native postgres only)
+        # Log final configuration
         logger.info(f"Final DB config - Host: {host}, User: {user}, Password set: {password is not None}")
         
         # If we have all required params, build the PostgreSQL URL

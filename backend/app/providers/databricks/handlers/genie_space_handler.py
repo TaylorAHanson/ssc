@@ -8,7 +8,8 @@ class GenieSpaceResourceHandler(BaseResourceHandler):
     async def discover(self) -> List[Dict[str, Any]]:
         resources = []
         try:
-            spaces = self.workspace_client.genie.list_spaces()
+            response = self.workspace_client.genie.list_spaces()
+            spaces = response.spaces if hasattr(response, 'spaces') and response.spaces is not None else []
             for space in spaces:
                 resources.append({
                     "id": space.id,
