@@ -1,14 +1,27 @@
 bundle:
-  name: atlas
+  name: edh-ssc
   # Require minimum CLI version for Databricks Apps with app.config support
   databricks_cli_version: ">=0.283.0"
 
 # Resources
 resources:
+  
+  database_instances:
+    edas_hub_database:
+      name: edas-hub-${var.dev_user}
+      enable_pg_native_login: true   # Required for native Postgres role (edas_app)
+      capacity: CU_2
+      lifecycle:
+        prevent_destroy: true
+      permissions:
+        - level: CAN_USE
+          group_name: users
+
+  # Apps
   apps:
-    atlas:
+    edh-ssc:
       name: ${var.app_name}
-      description: "ATLAS - Self-service platform for ${var.environment}"
+      description: "edh-ssc - Self-service platform for ${var.environment}"
 
       # Source code path - Points to backend directory in synced bundle
       source_code_path: "${var.source_code_path}"
@@ -39,10 +52,8 @@ resources:
             value: "${var.github_pat_secret_scope}"
           - name: GIT_TOKEN_SECRET_KEY
             value: "${var.github_pat_secret_key}"
-          - name: GITHUB_APP_ID
-            value: ""
           - name: GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE
-            value: "atlas-hub"
+            value: "edh-ssc-hub"
           - name: GITHUB_APP_PRIVATE_KEY_SECRET_KEY
             value: "github-app-private-key"
           - name: DATABRICKS_WAREHOUSE_ID
@@ -72,23 +83,9 @@ resources:
           - name: API_V1_PREFIX
             value: "/api/v1"
           - name: PROJECT_NAME
-            value: "ATLAS"
+            value: "edh-ssc"
           - name: LOG_LEVEL
             value: "INFO"
-          - name: NOTIFICATION_EMAIL_SMTP_HOST
-            value: ""
-          - name: NOTIFICATION_EMAIL_SMTP_PORT
-            value: "587"
-          - name: NOTIFICATION_EMAIL_SMTP_USER
-            value: ""
-          - name: NOTIFICATION_EMAIL_SMTP_PASSWORD
-            value: ""
-          - name: NOTIFICATION_SLACK_WEBHOOK_URL
-            value: ""
-          - name: NOTIFICATION_TEAMS_WEBHOOK_URL
-            value: ""
-          - name: EVENT_CALENDAR_URL
-            value: ""
           - name: EVENT_SYNC_INTERVAL_MINUTES
             value: "60"
 
@@ -97,17 +94,8 @@ resources:
         - "sql.statement-execution"
         - "sql.warehouses"
         - "files.files"
-        - "workspace.secrets"
-        - "workspace.repos"
-        - "vectorsearch.vector-search-endpoints"
-        - "iam.current-user"
-        - "iam.users"
-        - "iam.groups"
-        - "jobs.jobs"
-        - "pipelines.pipelines"
         - "serving.serving-endpoints"
         - "serving.serving-endpoints-data-plane"
-        - "compute.clusters"
 
       # Permissions for the app itself (who can manage/use the app)
       permissions:
@@ -116,11 +104,19 @@ resources:
         - level: CAN_USE
           group_name: "users"
 
+      resources:
+        - name: postgress
+          database:
+            database_name: databricks_postgres
+            instanct_name: ${resources.database_instances.edas_hub_database.name}
+            permission: CAN_CONNECT_AND_CREATE
+
+        
+
 # Sync configuration
 sync:
   include:
     - package.json
-    - package-lock.json
     - vite.config.ts
     - tsconfig.json
     - tailwind.config.js
@@ -166,10 +162,10 @@ sync:
 variables:
   dev_user:
     description: "Developer username for personal dev instances"
-    default: ""
+    default: "taylor"
   app_name:
     description: "Application name"
-    default: "ATLAS"
+    default: "edh-ssc"
   environment:
     description: "Environment name (local, dev, stage, prod)"
     default: "local"
@@ -184,13 +180,13 @@ variables:
     default: "volume"
   gitops_volume_path:
     description: "Unity Catalog Volume path for GitOps requests"
-    default: "/Volumes/atlas_dev_catalog/atlas/gitops_requests"
+    default: "/Volumes/edh-ssc_dev_catalog/edh-ssc/gitops_requests"
   git_username:
     description: "Username for GitOps commits"
-    default: "ATLAS Bot"
+    default: "edh-ssc Bot"
   git_email:
     description: "Email for GitOps commits"
-    default: "atlas-bot@databricks.com"
+    default: "edh-ssc-bot@databricks.com"
   infra_repo_url:
     description: "URL for the infrastructure repository"
     default: "https://github.com/databricks-field-eng/fe-agentic-self-service-terraform"
@@ -199,7 +195,7 @@ variables:
     default: "main"
   github_pat_secret_scope:
     description: "Secret scope for GitHub PAT"
-    default: "atlas-hub"
+    default: "edh-ssc-hub"
   github_pat_secret_key:
     description: "Secret key for GitHub PAT"
     default: "github-pat"
@@ -223,11 +219,11 @@ targets:
         Repo_name: "${bundle.name}"
         deployed_via: "local"
         Environment: "local"
-        Application: "ATLAS Self-Service"
+        Application: "edh-ssc Self-Service"
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     variables:
-      app_name: "atlas-local-${var.dev_user}"
+      app_name: "edh-ssc-local-${var.dev_user}"
       environment: "local"
       source_code_path: "."
 
@@ -240,11 +236,11 @@ targets:
         Repo_name: "${bundle.name}"
         deployed_via: "CICD"
         Environment: "dev"
-        Application: "ATLAS Self-Service"
+        Application: "edh-ssc Self-Service"
     workspace:
       root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
     variables:
-      app_name: "atlas-dev"
+      app_name: "edh-ssc-dev"
       environment: "dev"
       source_code_path: "."
 
@@ -257,11 +253,11 @@ targets:
         Repo_name: "${bundle.name}"
         deployed_via: "CICD"
         Environment: "stage"
-        Application: "ATLAS Self-Service"
+        Application: "edh-ssc Self-Service"
     workspace:
       root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
     variables:
-      app_name: "atlas-stage"
+      app_name: "edh-ssc-stage"
       environment: "stage"
       source_code_path: "."
 
@@ -274,10 +270,10 @@ targets:
         Repo_name: "${bundle.name}"
         deployed_via: "CICD"
         Environment: "prod"
-        Application: "ATLAS Self-Service"
+        Application: "edh-ssc Self-Service"
     workspace:
       root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
     variables:
-      app_name: "atlas-prod"
+      app_name: "edh-ssc-prod"
       environment: "prod"
       source_code_path: "."

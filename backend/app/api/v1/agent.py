@@ -91,7 +91,7 @@ class AgentResponse(BaseModel):
     form_prefill_data: Optional[Dict[str, Any]] = None
 
 @router.get("/tools")
-async def get_agent_tools(current_user: UserModel = Depends(get_current_user)):
+async def get_agent_tools(current_user: User = Depends(get_current_user)):
     """Get list of available agent tools, filtered by user permissions."""
     visible_tools = []
     for tool in AGENT_TOOLS:
@@ -109,7 +109,7 @@ async def get_agent_tools(current_user: UserModel = Depends(get_current_user)):
     return {"tools": visible_tools, "count": len(visible_tools)}
 
 @router.get("/prompt")
-async def get_agent_prompt_endpoint(current_user: UserModel = Depends(get_current_user)):
+async def get_agent_prompt_endpoint(current_user: User = Depends(get_current_user)):
     """Get the agent system prompt and instructions."""
     return {
         "prompt": get_agent_prompt(),
