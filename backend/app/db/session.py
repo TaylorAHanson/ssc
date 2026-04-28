@@ -62,7 +62,8 @@ def get_database_url() -> str:
     logger.debug(f"settings.DATABASE_HOST = {host}")
     logger.debug(f"settings.DATABASE_NAME = {name}")
     
-    # Try to get password/token for Lakebase authentication
+        # Try to get password/token for Lakebase authentication
+    db_id = None
     if host and user and name:
         # Detect if running in Databricks (Apps, Notebooks, or Jobs)
         is_databricks = (
@@ -106,17 +107,21 @@ def get_database_url() -> str:
                     logger.info(f"Found matching Lakebase project. Requesting credentials for: {endpoint_path}")
                     
                     # Fetch databases in this branch to use the database ID as dbname
-                    db_res = sdk.api_client.do("GET", f"/api/2.0/postgres/projects/{target_project_name}/branches/production/databases")
-                    databases = db_res.get("databases", [])
-                    db_id = None
-                    if databases:
-                        # Extract the actual database ID (e.g. db-xxxxxxxx)
-                        # Name format is usually "projects/.../databases/db-xxxx"
-                        db_name_full = databases[0].get("name", "")
-                        db_id = db_name_full.split("/")[-1]
-                        logger.info(f"Auto-discovered Database ID: {db_id}")
-                    else:
-                        logger.warning("Could not find any databases in the production branch!")
+                    try:
+                        db_res = sdk.api_client.do("GET", f"/api/2.0/postgres/projects/{target_project_name}/branches/production/databases")
+                        databases = db_res.get("databases", [])
+                        db_id = None
+                        if databases:
+                            # Extract the actual database ID (e.g. db-xxxxxxxx)
+                            # Name format is usually "projects/.../databases/db-xxxx"
+                            db_name_full = databases[0].get("name", "")
+                            db_id = db_name_full.split("/")[-1]
+                            logger.info(f"Auto-discovered Database ID: {db_id}")
+                        else:
+                            logger.warning("Could not find any databases in the production branch!")
+                    except Exception as db_e:
+                        logger.warning(f"Failed to auto-discover database ID, falling back to name. Error: {db_e}")
+                        db_id = None
                     
                     # Request the token
                     res = sdk.api_client.do(
@@ -171,7 +176,7 @@ def get_database_url() -> str:
     if os.environ.get("DATABRICKS_RUNTIME_VERSION") or os.environ.get("DATABRICKS_HOST"):
         persistent_dir = "/tmp/atlas_hub_data"  # Default fallback
         
-        # Try to find the user's workspace path
+                # Try to find the user's workspace path
         for env_var in ["USER", "DATABRICKS_USER", "OWNER"]:
             db_user = os.environ.get(env_var)
             if db_user:
@@ -185,7 +190,7 @@ def get_database_url() -> str:
             return f"sqlite:///{db_path}"
         except Exception as e:
             logger.warning(f"Could not create persistent directory {persistent_dir}: {e}. Falling back to local.")
-    
+            
     db_path = os.path.join(base_dir, "atlas_hub.db")
     return f"sqlite:///{db_path}"
 

@@ -7,14 +7,14 @@ bundle:
 resources:
   
   postgres_projects:
-    edas_hub_project:
-      project_id: "edas-hub-${var.dev_user}"
-      display_name: "EDAS Hub ${var.dev_user}"
+    edh-ssc-project:
+      project_id: "edh-ssc-${var.environment}"
+      display_name: "edh-ssc ${var.environment}"
       pg_version: 17
 
   postgres_branches:
     production_branch:
-      parent: ${resources.postgres_projects.edas_hub_project.id}
+      parent: ${resources.postgres_projects.edh-ssc-project.id}
       branch_id: "production"
       no_expiry: true
 
@@ -46,7 +46,7 @@ resources:
           - name: DATABASE_HOST
             value: "${var.lakebase_host}"
           - name: DATABASE_INSTANCE_NAME
-            value: "${resources.postgres_projects.edas_hub_project.project_id}"
+            value: "${resources.postgres_projects.edh-ssc-project.project_id}"
           - name: GITOPS_MODE
             value: "${var.gitops_mode}"
           - name: GITOPS_VOLUME_PATH
