@@ -15,9 +15,9 @@ class SqlWarehouseResourceHandler(BaseResourceHandler):
                     "name": warehouse.name,
                     "type": "sql_warehouse",
                     "owner": warehouse.creator_name,
-                    "state": warehouse.state.value,
-                    "policy_id": warehouse.policy_id,
-                    "tags": {t.key: t.value for t in (warehouse.tags.custom_tags if warehouse.tags else [])}
+                    "state": warehouse.state.value if hasattr(warehouse.state, 'value') else str(warehouse.state),
+                    "policy_id": getattr(warehouse, 'policy_id', None) if hasattr(warehouse, 'policy_id') else None,
+                    "tags": {t.key: t.value for t in (warehouse.tags.custom_tags if hasattr(warehouse, 'tags') and warehouse.tags and hasattr(warehouse.tags, 'custom_tags') else [])}
                 })
         except Exception as e:
             logger.error(f"Failed to discover SQL warehouses: {e}")

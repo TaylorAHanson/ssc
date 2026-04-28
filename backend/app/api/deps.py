@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 MOCK_USER_EMAIL = "admin@qualcomm.com"
 
-def _get_user_entitlements(user_email: str) -> List[str]:
+def _get_user_entitlements(user_email: str, obo_token: Optional[str] = None) -> List[str]:
     """Fetch SCIM entitlements (groups/roles) using Databricks SDK."""
     entitlements = [user_email]
     
@@ -28,7 +28,19 @@ def _get_user_entitlements(user_email: str) -> List[str]:
         return entitlements
 
     try:
-        w = WorkspaceClient()
+        if obo_token and settings.DATABRICKS_HOST:
+            # Use OBO token to fetch actual user's groups
+            # Explicitly force auth_type="pat" to avoid "more than one authorization method" error 
+            # when running inside a Databricks App (which injects Service Principal OAuth env vars)
+            w = WorkspaceClient(
+                host=settings.DATABRICKS_HOST, 
+                token=obo_token,
+                auth_type="pat"
+            )
+        else:
+            # Fallback to default auth (which in Apps is the Service Principal)
+            w = WorkspaceClient()
+            
         me = w.current_user.me()
         
         if getattr(me, "groups", None):
@@ -83,7 +95,8 @@ def get_current_user(
          user_email = MOCK_USER_EMAIL
          user_name = "System Admin"
          
-    entitlements = _get_user_entitlements(user_email)
+    obo_token = getattr(request.state, "token", None)
+    entitlements = _get_user_entitlements(user_email, obo_token)
     calculated_roles = _calculate_roles(db, entitlements)
     
     # Local dev mock fallback: if 'users' in entitlements and local dev, ensure 'Platform Admin' or 'User' is present.
