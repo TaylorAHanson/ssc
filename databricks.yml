@@ -108,7 +108,7 @@ resources:
         - name: postgress
           database:
             database_name: databricks_postgres
-            instanct_name: ${resources.database_instances.edas_hub_database.name}
+            instance_name: ${resources.database_instances.edas_hub_database.name}
             permission: CAN_CONNECT_AND_CREATE
 
         
