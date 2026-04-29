@@ -45,6 +45,7 @@ async def start_poller():
     
     # Ensure tables exist (for SQLite dev)
     try:
+        import app.db  # Ensure all models are registered
         engine = get_engine()
         Base.metadata.create_all(bind=engine)
         logger.info("Database tables verified.")

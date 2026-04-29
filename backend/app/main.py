@@ -79,6 +79,7 @@ async def startup_event():
         from app.db.init_db import init_db
         from app.db.session import get_session_local, get_engine
         from app.db.base import Base
+        import app.db  # Ensure all models are imported and registered with Base.metadata
         
         # Create Tables (ensure models are loaded via init_db import or explicit import)
         # init_db imports models, so metadata should be populated
