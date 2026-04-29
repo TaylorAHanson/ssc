@@ -1,7 +1,7 @@
 """
 Database session management for Lakebase (PostgreSQL) and SQLite (Dev).
 """
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import NullPool, StaticPool
 from app.core.config import settings
@@ -238,6 +238,21 @@ def get_engine():
                 poolclass=NullPool,  # Use NullPool for serverless/connection-per-request
                 echo=False,
             )
+            
+            @event.listens_for(_engine, "connect")
+            def on_connect(dbapi_connection, connection_record):
+                cursor = dbapi_connection.cursor()
+                try:
+                    # By default in PG 15+, public schema doesn't allow CREATE
+                    # Create our own schema and use it instead
+                    schema_name = "edh-ssc"
+                    cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}";')
+                    cursor.execute(f'SET search_path TO "{schema_name}";')
+                except Exception as e:
+                    logger.warning(f"Failed to setup schema or search_path: {e}")
+                finally:
+                    cursor.close()
+                    
     return _engine
 
 
