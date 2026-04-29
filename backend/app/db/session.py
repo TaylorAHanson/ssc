@@ -64,81 +64,105 @@ def get_database_url() -> str:
     
     db_id = None
     if host and user and name:
-        # Detect if running in Databricks (Apps, Notebooks, or Jobs)
-        is_databricks = (
-            os.environ.get("DATABRICKS_RUNTIME_VERSION") or 
-            os.environ.get("DATABRICKS_HOST") or
-            os.environ.get("DATABRICKS_INSTANCE_POOL_ID") or
-            os.path.exists("/databricks") or  # Databricks Apps run in /databricks
-            "database.cloud.databricks.com" in host  # Lakebase host indicates Databricks
-        )
-        
-        # Method 1: Fetch short-lived OAuth token via Databricks API for Postgres
-        if is_databricks:
+        if pg_host:
+            logger.info("Using Databricks Apps auto-injected PG variables for Lakebase connection.")
             try:
                 from databricks.sdk import WorkspaceClient
-                
                 sdk = WorkspaceClient()
+                auth_headers = sdk.config.authenticate()
+                if auth_headers and "Authorization" in auth_headers:
+                    password = auth_headers["Authorization"].replace("Bearer ", "")
+                elif hasattr(sdk.config, "token") and sdk.config.token:
+                    password = sdk.config.token
                 
-                # The user is the Databricks Service Principal / User running the app
-                # This overrides the default 'atlas_app' native role
-                user = sdk.current_user.me().user_name
-                logger.info(f"Using Databricks Workspace user for Lakebase: {user}")
-                
-                # Fetch all autoscaling projects
-                projects_res = sdk.api_client.do("GET", "/api/2.0/postgres/projects")
-                projects = projects_res.get("projects", [])
-                
-                target_project_name = settings.DATABASE_INSTANCE_NAME
-                matched_project = None
-                
-                if target_project_name:
-                    matched_project = next((p for p in projects if p.get("name", "").endswith(target_project_name)), None)
-                elif projects:
-                    # Auto-discover if only one project or just grab the first one
-                    matched_project = projects[0]
-                    target_project_name = matched_project.get("name")
-                    logger.warning(f"DATABASE_INSTANCE_NAME not set in environment. Auto-discovered project: {target_project_name}")
-                
-                if matched_project and target_project_name:
-                    # Construct the path to the primary endpoint on the production branch
-                    endpoint_path = f"projects/{target_project_name}/branches/production/endpoints/primary"
-                    logger.info(f"Found matching Lakebase project. Requesting credentials for: {endpoint_path}")
-                    
-                    # Fetch databases in this branch to use the database ID as dbname
-                    try:
-                        db_res = sdk.api_client.do("GET", f"/api/2.0/postgres/projects/{target_project_name}/branches/production/databases")
-                        databases = db_res.get("databases", [])
-                        db_id = None
-                        if databases:
-                            # Extract the actual database ID (e.g. db-xxxxxxxx)
-                            # Name format is usually "projects/.../databases/db-xxxx"
-                            db_name_full = databases[0].get("name", "")
-                            db_id = db_name_full.split("/")[-1]
-                            logger.info(f"Auto-discovered Database ID: {db_id}")
-                        else:
-                            logger.warning("Could not find any databases in the production branch!")
-                    except Exception as db_e:
-                        logger.warning(f"Failed to auto-discover database ID, falling back to name. Error: {db_e}")
-                        db_id = None
-                    
-                    # Request the token
-                    res = sdk.api_client.do(
-                        "POST", 
-                        "/api/2.0/postgres/credentials",
-                        body={"endpoint": endpoint_path}
-                    )
-                    
-                    password = res.get("token")
-                    if password:
-                        logger.info("Successfully acquired short-lived OAuth token for Lakebase.")
-                    else:
-                        logger.error("API returned success but no token was found in the response.")
+                if password:
+                    logger.info("Successfully acquired Databricks OAuth token for Lakebase password.")
                 else:
-                    logger.error(f"Could not find any Lakebase projects to connect to.")
-                    
+                    logger.error("Failed to acquire OAuth token from WorkspaceClient.")
             except Exception as e:
-                logger.error(f"Failed to fetch Lakebase OAuth credentials: {type(e).__name__}: {e}")
+                logger.error(f"Failed to fetch Databricks OAuth token: {type(e).__name__}: {e}")
+        elif settings.DATABASE_PASSWORD:
+            logger.info("Using injected DATABASE_PASSWORD from environment (Resource Binding).")
+            password = settings.DATABASE_PASSWORD
+            # When a resource is bound, Databricks injects the specific DATABASE_USER and DATABASE_NAME too
+            user = settings.DATABASE_USER
+            name = settings.DATABASE_NAME
+        else:
+            # Detect if running in Databricks (Apps, Notebooks, or Jobs)
+            is_databricks = (
+                os.environ.get("DATABRICKS_RUNTIME_VERSION") or 
+                os.environ.get("DATABRICKS_HOST") or
+                os.environ.get("DATABRICKS_INSTANCE_POOL_ID") or
+                os.path.exists("/databricks") or  # Databricks Apps run in /databricks
+                "database.cloud.databricks.com" in host  # Lakebase host indicates Databricks
+            )
+            
+            # Method 1: Fetch short-lived OAuth token via Databricks API for Postgres
+            if is_databricks:
+                try:
+                    from databricks.sdk import WorkspaceClient
+                    
+                    sdk = WorkspaceClient()
+                    
+                    # The user is the Databricks Service Principal / User running the app
+                    # This overrides the default 'atlas_app' native role
+                    user = sdk.current_user.me().user_name
+                    logger.info(f"Using Databricks Workspace user for Lakebase: {user}")
+                    
+                    # Fetch all autoscaling projects
+                    projects_res = sdk.api_client.do("GET", "/api/2.0/postgres/projects")
+                    projects = projects_res.get("projects", [])
+                    
+                    target_project_name = settings.DATABASE_INSTANCE_NAME
+                    matched_project = None
+                    
+                    if target_project_name:
+                        matched_project = next((p for p in projects if p.get("name", "").endswith(target_project_name)), None)
+                    elif projects:
+                        # Auto-discover if only one project or just grab the first one
+                        matched_project = projects[0]
+                        target_project_name = matched_project.get("name")
+                        logger.warning(f"DATABASE_INSTANCE_NAME not set in environment. Auto-discovered project: {target_project_name}")
+                    
+                    if matched_project and target_project_name:
+                        # Construct the path to the primary endpoint on the production branch
+                        endpoint_path = f"projects/{target_project_name}/branches/production/endpoints/primary"
+                        logger.info(f"Found matching Lakebase project. Requesting credentials for: {endpoint_path}")
+                        
+                        # Fetch databases in this branch to use the database ID as dbname
+                        try:
+                            db_res = sdk.api_client.do("GET", f"/api/2.0/postgres/projects/{target_project_name}/branches/production/databases")
+                            databases = db_res.get("databases", [])
+                            db_id = None
+                            if databases:
+                                # Extract the actual database ID (e.g. db-xxxxxxxx)
+                                # Name format is usually "projects/.../databases/db-xxxx"
+                                db_name_full = databases[0].get("name", "")
+                                db_id = db_name_full.split("/")[-1]
+                                logger.info(f"Auto-discovered Database ID: {db_id}")
+                            else:
+                                logger.warning("Could not find any databases in the production branch!")
+                        except Exception as db_e:
+                            logger.warning(f"Failed to auto-discover database ID, falling back to name. Error: {db_e}")
+                            db_id = None
+                        
+                        # Request the token
+                        res = sdk.api_client.do(
+                            "POST", 
+                            "/api/2.0/postgres/credentials",
+                            body={"endpoint": endpoint_path}
+                        )
+                        
+                        password = res.get("token")
+                        if password:
+                            logger.info("Successfully acquired short-lived OAuth token for Lakebase.")
+                        else:
+                            logger.error("API returned success but no token was found in the response.")
+                    else:
+                        logger.error(f"Could not find any Lakebase projects to connect to.")
+                        
+                except Exception as e:
+                    logger.error(f"Failed to fetch Lakebase OAuth credentials: {type(e).__name__}: {e}")
                 
         # Log final configuration
         logger.info(f"Final DB config - Host: {host}, User: {user}, Password set: {password is not None}")
