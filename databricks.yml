@@ -28,6 +28,16 @@ resources:
         env:
           - name: ENVIRONMENT
             value: "${var.environment}"
+          - name: DATABASE_HOST
+            value_from: database
+          - name: DATABASE_PORT
+            value_from: database
+          - name: DATABASE_NAME
+            value_from: database
+          - name: DATABASE_USER
+            value_from: database
+          - name: DATABASE_PASSWORD
+            value_from: database
           - name: GITOPS_MODE
             value: "${var.gitops_mode}"
           - name: GITOPS_VOLUME_PATH
