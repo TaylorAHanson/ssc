@@ -8,7 +8,7 @@ resources:
   
   database_instances:
     edh_ssc_db:
-      name: "edh-ssc-${var.environment}"
+      name: "edh-ssc-${var.environment}-v5"
       enable_pg_native_login: true
       capacity: "CU_1"
       lifecycle:
