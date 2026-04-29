@@ -50,7 +50,7 @@ def main():
     if os.path.exists(req_file):
         print("Installing requirements...")
         subprocess.run([python_exe, "-m", "pip", "install", "-r", req_file, "-q"], check=True)
-    
+        
     # Import and run uvicorn
     print("Starting uvicorn server...")
     import uvicorn

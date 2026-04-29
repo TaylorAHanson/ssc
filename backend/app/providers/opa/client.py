@@ -40,8 +40,19 @@ class OpaProvider(BaseProvider):
             if os.path.isfile(expanded):
                 return expanded
             return None
+            
+        # 1. Try to find a bundled binary first (e.g. backend/bin/opa_linux_amd64)
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        bundled_linux = os.path.join(base_dir, "bin", "opa_linux_amd64")
+        if os.path.isfile(bundled_linux) and os.access(bundled_linux, os.X_OK):
+            return bundled_linux
+            
+        # 2. Try looking in the system PATH
         found = shutil.which("opa")
-        return found
+        if found:
+            return found
+            
+        return None
 
     def _require_local_opa(self) -> str:
         exe = self._resolve_opa_executable()
