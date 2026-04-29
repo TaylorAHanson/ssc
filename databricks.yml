@@ -6,14 +6,16 @@ bundle:
 # Resources
 resources:
   
-  postgres_projects:
-    edh_ssc:
-      project_id: "edh-ssc-${var.environment}"
-      display_name: "edh-ssc ${var.environment}"
-      pg_version: 17
-      default_endpoint_settings:
-        autoscaling_limit_min_cu: 0.5
-        autoscaling_limit_max_cu: 2
+  database_instances:
+    edh_ssc_db:
+      name: "edh-ssc-${var.environment}"
+      enable_pg_native_login: true
+      capacity: "CU_1"
+      lifecycle:
+        prevent_destroy: true
+      permissions:
+        - level: CAN_USE
+          group_name: "users"
 
   # Apps
   apps:
@@ -22,12 +24,11 @@ resources:
       description: "edh-ssc - Self-service platform for ${var.environment}"
       source_code_path: "${var.source_code_path}"
       resources:
-        - name: database
-          description: "A database for the app to be able to connect to and query"
+        - name: postgres
           database:
-            database_name: production
-            instance_name: ${resources.postgres_projects.edh_ssc.project_id}
-            permission: "CAN_CONNECT_AND_CREATE"
+            database_name: databricks_postgres
+            instanct_name: ${resources.database_instances.edh_ssc_db.name}
+            permission: CAN_CONNECT_AND_CREATE
       config:
         command:
           - python
