@@ -1,7 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { ShieldAlert, AlertTriangle, Search, Unlock, Lock, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
-import { useRequestStore } from '../../stores/requestStore';
 import { api } from '../../services/api';
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { format, parseISO } from 'date-fns';
@@ -23,7 +22,6 @@ const formatReason = (v: any) => {
 };
 
 export function EnforcementSentinel() {
-    const addRequest = useRequestStore((state) => state.addRequest);
     const [isRunning, setIsRunning] = useState(false);
     const [isEnforcementUnlocked, setIsEnforcementUnlocked] = useState(false);
     const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
