@@ -21,12 +21,6 @@ resources:
       name: ${var.app_name}
       description: "edh-ssc - Self-service platform for ${var.environment}"
       source_code_path: "${var.source_code_path}"
-      resources:
-        - name: lakebase-db
-          postgres:
-            branch: ${resources.postgres_projects.edh_ssc.id}/branches/production
-            database: ${resources.postgres_projects.edh_ssc.id}/branches/production/databases/databricks_postgres
-            permission: CAN_CONNECT_AND_CREATE
       config:
         command:
           - python
