@@ -34,41 +34,65 @@ class OpaProvider(BaseProvider):
 
     def _resolve_opa_executable(self) -> Optional[str]:
         """Return path to the OPA CLI, or None if not found."""
+        logger.info("[opa-install] Resolving OPA executable...")
         configured = (self.opa_binary or "").strip() if self.opa_binary else ""
         if configured:
+            logger.info(f"[opa-install] Checking configured OPA path: {configured}")
             expanded = os.path.expanduser(configured)
             if os.path.isfile(expanded):
+                logger.info(f"[opa-install] Found OPA at configured path: {expanded}")
                 return expanded
+            logger.warning(f"[opa-install] Configured OPA path {expanded} is not a file.")
             return None
             
         # 1. Try to find a bundled binary first (e.g. backend/bin/opa_linux_amd64)
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         bundled_linux = os.path.join(base_dir, "bin", "opa_linux_amd64")
+        logger.info(f"[opa-install] Checking for bundled OPA binary at: {bundled_linux}")
         
         if os.path.isfile(bundled_linux):
+            logger.info(f"[opa-install] Bundled OPA binary found at {bundled_linux}. Checking executable permissions...")
             # Check if it's already executable
             if os.access(bundled_linux, os.X_OK):
+                logger.info(f"[opa-install] Bundled OPA binary at {bundled_linux} is executable.")
                 return bundled_linux
                 
             # If not executable, it might be in a read-only filesystem (Databricks Apps)
             # Copy it to /tmp and make it executable there
+            logger.info(f"[opa-install] Bundled OPA binary is NOT executable. Copying to /tmp...")
             dest_path = "/tmp/opa_linux_amd64"
             try:
                 import stat
                 if not os.path.exists(dest_path):
+                    logger.info(f"[opa-install] Copying {bundled_linux} to {dest_path}")
                     shutil.copy2(bundled_linux, dest_path)
+                else:
+                    logger.info(f"[opa-install] File already exists at {dest_path}, verifying size...")
+                    if os.path.getsize(bundled_linux) != os.path.getsize(dest_path):
+                        logger.info(f"[opa-install] Size mismatch, overwriting {dest_path}")
+                        shutil.copy2(bundled_linux, dest_path)
+                        
+                logger.info(f"[opa-install] Setting executable permissions on {dest_path}")
                 st = os.stat(dest_path)
                 os.chmod(dest_path, st.st_mode | stat.S_IEXEC)
                 if os.access(dest_path, os.X_OK):
+                    logger.info(f"[opa-install] Successfully made {dest_path} executable. Using it.")
                     return dest_path
+                else:
+                    logger.error(f"[opa-install] Failed to verify executable permissions on {dest_path} after chmod.")
             except Exception as e:
-                logger.warning(f"Failed to copy and make {bundled_linux} executable in /tmp: {e}")
+                logger.warning(f"[opa-install] Failed to copy and make {bundled_linux} executable in /tmp: {e}")
+        else:
+            logger.info(f"[opa-install] Bundled OPA binary NOT found at {bundled_linux}")
             
         # 2. Try looking in the system PATH
+        logger.info("[opa-install] Looking for 'opa' in system PATH...")
         found = shutil.which("opa")
         if found:
+            logger.info(f"[opa-install] Found 'opa' in system PATH at: {found}")
             return found
             
+        logger.error("[opa-install] Could not resolve OPA executable by any method.")
         return None
 
     def _require_local_opa(self) -> str:
