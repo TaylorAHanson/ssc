@@ -21,7 +21,6 @@ resources:
       name: ${var.app_name}
       description: "edh-ssc - Self-service platform for ${var.environment}"
       source_code_path: "${var.source_code_path}"
-      compute_size: MEDIUM
       resources:
         - name: lakebase-db
           postgres:
