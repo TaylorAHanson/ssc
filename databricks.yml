@@ -8,7 +8,7 @@ resources:
   
   postgres_projects:
     edh-ssc-project:
-      project_id: "edh-ssc-${var.environment}"
+      project_id: "edh-ssc-${var.environment}-v2"
       display_name: "edh-ssc ${var.environment}"
       pg_version: 17
 
