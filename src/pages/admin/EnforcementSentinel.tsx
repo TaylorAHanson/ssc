@@ -107,7 +107,7 @@ export function EnforcementSentinel() {
         
         setIsRunning(true);
         try {
-            await addRequest('enforcement_sentinel', `Manual Sentinel Run (${modeLabel})`, environment, {
+            await api.createRequest('enforcement_sentinel' as any, `Manual Sentinel Run (${modeLabel})`, environment, {
                 enforcement_mode: mode,
                 workspace: workspace,
                 environment: environment
@@ -117,7 +117,7 @@ export function EnforcementSentinel() {
             if (page !== 1) {
                 setPage(1); // This triggers useEffect
             } else {
-                await fetchSentinelRuns(); // Explicitly fetch if already on page 1
+                fetchSentinelRuns(); // Explicitly fetch if already on page 1 (don't await so UI unblocks faster)
             }
             
             if (mode === 'active_enforcement') {
@@ -440,7 +440,17 @@ export function EnforcementSentinel() {
 
                             return (
                                 <div className="flex-1 overflow-y-auto bg-gray-50/50 p-4 md:p-6 flex flex-col gap-6">
-                                    {selectedRun.status !== 'completed' && selectedRun.status !== 'failed' && selectedRun.status !== 'rejected' ? (
+                                    {selectedRun.status === 'failed' ? (
+                                        <div className="flex-1 flex flex-col items-center justify-center py-20 text-center">
+                                            <AlertTriangle className="w-16 h-16 text-red-500 mb-6" />
+                                            <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                                                Sentinel Run Failed
+                                            </h3>
+                                            <p className="text-red-600 font-mono text-sm bg-red-50 p-4 rounded-md border border-red-100 max-w-2xl text-left overflow-auto">
+                                                {selectedRun.lastError?.error || 'An unexpected error occurred during the sentinel run. Check the backend logs for details.'}
+                                            </p>
+                                        </div>
+                                    ) : selectedRun.status !== 'completed' && selectedRun.status !== 'rejected' ? (
                                         <div className="flex-1 flex flex-col items-center justify-center py-20 text-center">
                                             <Loader2 className="w-16 h-16 text-blue-500 animate-spin mb-6" />
                                             <h3 className="text-xl font-semibold text-gray-900 mb-2">

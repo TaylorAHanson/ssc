@@ -120,6 +120,9 @@ export function AdminDashboard() {
     };
 
     const getCurrentStateName = (request: Request) => {
+        if (request.status === 'failed') return 'Failed';
+        if (request.status === 'rejected') return 'Rejected';
+        if (request.status === 'completed') return 'Completed';
         const activeState = request.stateMachine?.states?.find(s => s.isActive);
         return activeState ? activeState.name : '-';
     };
