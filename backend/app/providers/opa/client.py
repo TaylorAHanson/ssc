@@ -44,8 +44,25 @@ class OpaProvider(BaseProvider):
         # 1. Try to find a bundled binary first (e.g. backend/bin/opa_linux_amd64)
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         bundled_linux = os.path.join(base_dir, "bin", "opa_linux_amd64")
-        if os.path.isfile(bundled_linux) and os.access(bundled_linux, os.X_OK):
-            return bundled_linux
+        
+        if os.path.isfile(bundled_linux):
+            # Check if it's already executable
+            if os.access(bundled_linux, os.X_OK):
+                return bundled_linux
+                
+            # If not executable, it might be in a read-only filesystem (Databricks Apps)
+            # Copy it to /tmp and make it executable there
+            dest_path = "/tmp/opa_linux_amd64"
+            try:
+                import stat
+                if not os.path.exists(dest_path):
+                    shutil.copy2(bundled_linux, dest_path)
+                st = os.stat(dest_path)
+                os.chmod(dest_path, st.st_mode | stat.S_IEXEC)
+                if os.access(dest_path, os.X_OK):
+                    return dest_path
+            except Exception as e:
+                logger.warning(f"Failed to copy and make {bundled_linux} executable in /tmp: {e}")
             
         # 2. Try looking in the system PATH
         found = shutil.which("opa")
