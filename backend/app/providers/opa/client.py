@@ -85,6 +85,31 @@ class OpaProvider(BaseProvider):
         else:
             logger.info(f"[opa-install] Bundled OPA binary NOT found at {bundled_linux}")
             
+            # 1.5. Fallback: If not found, try downloading it to /tmp
+            dest_path = "/tmp/opa_linux_amd64"
+            if os.path.isfile(dest_path) and os.access(dest_path, os.X_OK):
+                logger.info(f"[opa-install] Found previously downloaded OPA binary at {dest_path}")
+                return dest_path
+                
+            logger.info(f"[opa-install] Attempting to download OPA to {dest_path}...")
+            try:
+                import stat
+                import urllib.request
+                opa_url = "https://openpolicyagent.org/downloads/v0.61.0/opa_linux_amd64_static"
+                urllib.request.urlretrieve(opa_url, dest_path)
+                
+                logger.info(f"[opa-install] Download complete. Setting executable permissions...")
+                st = os.stat(dest_path)
+                os.chmod(dest_path, st.st_mode | stat.S_IEXEC)
+                
+                if os.access(dest_path, os.X_OK):
+                    logger.info(f"[opa-install] Successfully downloaded and prepared OPA at {dest_path}")
+                    return dest_path
+                else:
+                    logger.error(f"[opa-install] Failed to make downloaded OPA executable.")
+            except Exception as e:
+                logger.warning(f"[opa-install] Failed to dynamically download OPA: {e}")
+            
         # 2. Try looking in the system PATH
         logger.info("[opa-install] Looking for 'opa' in system PATH...")
         found = shutil.which("opa")
