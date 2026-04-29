@@ -235,7 +235,9 @@ def get_engine():
         else:
             _engine = create_engine(
                 database_url,
-                poolclass=NullPool,  # Use NullPool for serverless/connection-per-request
+                pool_size=10,
+                max_overflow=20,
+                pool_pre_ping=True,  # checks connection is alive before using it
                 echo=False,
             )
             

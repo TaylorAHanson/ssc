@@ -20,7 +20,7 @@ export function DataDiscovery() {
     async function loadData() {
       setIsLoading(true);
       try {
-        const data = await api.getDataAssets();
+        const data = await api.getDataAssets({ limit: 100 });
         if (mounted) {
           setDatasets(data);
         }

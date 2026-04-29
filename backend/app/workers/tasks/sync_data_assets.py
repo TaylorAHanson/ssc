@@ -2,7 +2,7 @@ import logging
 import asyncio
 from datetime import datetime
 from app.providers.databricks.client import DatabricksProvider
-from app.db.session import get_lakebase_session
+from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
 from app.core.config import settings
 
@@ -66,7 +66,7 @@ async def sync_data_assets_task(force: bool = False):
         rows = result.get("rows", [])
         
         if rows:
-            db = get_lakebase_session()
+            db = next(get_db())
             try:
                 # Upsert records into local SQLite
                 # We'll just update existing and insert new

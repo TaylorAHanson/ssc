@@ -39,8 +39,8 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
   addRequest: async (type, title, environment, metadata) => {
     try {
       await api.createRequest(type, title, environment, metadata);
-      // Refresh requests after adding
-      await get().fetchRequests();
+      // Removed blocking await fetchRequests()
+      get().fetchRequests();
     } catch (error) {
       console.error('Failed to create request:', error);
       throw error;
@@ -54,8 +54,8 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
       set((state) => ({
         requests: state.requests.filter(req => req.id !== id)
       }));
-      // Also fetch to be sure
-      await get().fetchRequests();
+      // Also fetch to be sure (non-blocking)
+      get().fetchRequests();
     } catch (error) {
       console.error('Failed to delete request:', error);
       throw error;
@@ -68,7 +68,7 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
     // Since we don't have a generic PATCH endpoint exposed in the store yet beyond API,
     // we'll keep it simple for now or implement if needed.
     // For now, let's just refresh requests to be safe.
-    await get().fetchRequests();
+    get().fetchRequests();
   },
 
   setBannerMessage: (message) => {

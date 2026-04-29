@@ -12,10 +12,10 @@ class DatasetResourceHandler(BaseResourceHandler):
     async def discover(self) -> List[Dict[str, Any]]:
         resources = []
         try:
-            from app.db.session import get_lakebase_session
+            from app.db.session import get_db
             from app.db.data_contract import DataContractModel
             
-            db = get_lakebase_session()
+            db = next(get_db())
             contracts = db.query(DataContractModel).filter(DataContractModel.is_active == True).all()
             
             contracted_datasets = {}
@@ -147,11 +147,11 @@ class DatasetResourceHandler(BaseResourceHandler):
                 logger.error("No warehouse_id defined, cannot certify dataset via SQL")
                 return False
                 
-            from app.db.session import get_lakebase_session
+            from app.db.session import get_db
             from app.db.data_contract import DataContractModel
             import yaml
             
-            db = get_lakebase_session()
+            db = next(get_db())
             contract = db.query(DataContractModel).filter(
                 DataContractModel.dataset_id == resource_id,
                 DataContractModel.is_active == True
@@ -207,11 +207,11 @@ class DatasetResourceHandler(BaseResourceHandler):
                 logger.error("No warehouse_id defined, cannot uncertify dataset via SQL")
                 return False
                 
-            from app.db.session import get_lakebase_session
+            from app.db.session import get_db
             from app.db.data_contract import DataContractModel
             import yaml
             
-            db = get_lakebase_session()
+            db = next(get_db())
             contract = db.query(DataContractModel).filter(
                 DataContractModel.dataset_id == resource_id,
                 DataContractModel.is_active == True

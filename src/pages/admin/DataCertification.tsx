@@ -88,13 +88,13 @@ export function DataCertification() {
       
       // Reload assets to reflect changes
       const [data, contracts] = await Promise.all([
-        api.getDataAssets(),
+        api.getDataAssets({ limit: 100 }),
         api.getDataContracts()
       ]);
       const map: Record<string, DataContract> = {};
       contracts.forEach(c => map[c.dataset_id] = c);
       setContractsMap(map);
-      setDatasets(data.filter(d => map[d.id] || d.contract_url));
+      setDatasets(data.filter(d => map[d.id] || d.contract_url || d.certified || d.data_quality));
     } catch (e: any) {
       console.error('Failed to delete contract', e);
       alert('Failed to delete contract: ' + e.message);
@@ -131,7 +131,7 @@ export function DataCertification() {
       setIsEditorOpen(false);
       // Reload assets to reflect changes
       const [data, contracts] = await Promise.all([
-        api.getDataAssets(),
+        api.getDataAssets({ limit: 100 }),
         api.getDataContracts()
       ]);
       const map: Record<string, DataContract> = {};
@@ -155,13 +155,13 @@ export function DataCertification() {
       
       // Reload assets to reflect changes
       const [data, contracts] = await Promise.all([
-        api.getDataAssets(),
+        api.getDataAssets({ limit: 100 }),
         api.getDataContracts()
       ]);
       const map: Record<string, DataContract> = {};
       contracts.forEach(c => map[c.dataset_id] = c);
       setContractsMap(map);
-      setDatasets(data.filter(d => map[d.id] || d.contract_url));
+      setDatasets(data.filter(d => map[d.id] || d.contract_url || d.certified || d.data_quality));
       
     } catch (e: any) {
       console.error(e);
@@ -177,14 +177,14 @@ export function DataCertification() {
     async function loadData() {
       try {
         const [data, contracts] = await Promise.all([
-          api.getDataAssets(),
+          api.getDataAssets({ limit: 100 }),
           api.getDataContracts()
         ]);
         if (mounted) {
           const map: Record<string, DataContract> = {};
           contracts.forEach(c => map[c.dataset_id] = c);
           setContractsMap(map);
-          setDatasets(data.filter(d => map[d.id] || d.contract_url));
+          setDatasets(data.filter(d => map[d.id] || d.contract_url || d.certified || d.data_quality));
         }
       } catch (e) {
         console.error('Failed to load data assets for certification', e);

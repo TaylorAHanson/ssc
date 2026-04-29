@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from app.db.session import get_lakebase_session
+from app.db.session import get_db
 from app.db.odps import OdpsModel
 from app.api.deps import get_current_user
 
@@ -38,12 +38,12 @@ class OdpsCreate(BaseModel):
 
 @router.get("", response_model=List[OdpsResponse])
 @router.get("/", response_model=List[OdpsResponse])
-def list_odps(db: Session = Depends(get_lakebase_session)):
+def list_odps(db: Session = Depends(get_db)):
     """List all active ODPS documents."""
     return db.query(OdpsModel).filter(OdpsModel.is_active == True).all()
 
 @router.get("/{odps_id}", response_model=List[OdpsResponse])
-def get_odps_history(odps_id: str, db: Session = Depends(get_lakebase_session)):
+def get_odps_history(odps_id: str, db: Session = Depends(get_db)):
     """Get version history for a specific ODPS document by ID."""
     return db.query(OdpsModel).filter(
         OdpsModel.id == odps_id
@@ -51,7 +51,7 @@ def get_odps_history(odps_id: str, db: Session = Depends(get_lakebase_session)):
 
 @router.post("", response_model=OdpsResponse)
 @router.post("/", response_model=OdpsResponse)
-def save_odps(odps: OdpsCreate, db: Session = Depends(get_lakebase_session), current_user = Depends(get_current_user)):
+def save_odps(odps: OdpsCreate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     """Save a new version of an ODPS document."""
     # Validate YAML
     try:
@@ -90,7 +90,7 @@ def save_odps(odps: OdpsCreate, db: Session = Depends(get_lakebase_session), cur
 @router.post("/draft")
 async def draft_odps(
     request: OdpsDraftRequest, 
-    db: Session = Depends(get_lakebase_session),
+    db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
     """Draft a new ODPS document using LLM based on existing Data Contracts and optional OpenAPI spec."""
@@ -120,7 +120,7 @@ async def draft_odps(
 def delete_odps(
     odps_id: str, 
     current_user = Depends(get_current_user),
-    db: Session = Depends(get_lakebase_session)
+    db: Session = Depends(get_db)
 ):
     """Delete all versions of an ODPS document."""
     if not current_user.has_role("platform_admin") and not current_user.has_role("governance_admin"):

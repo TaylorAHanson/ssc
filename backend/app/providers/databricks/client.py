@@ -125,26 +125,26 @@ class DatabricksProvider(BaseProvider):
                 if (time.time() - start_time) > timeout_seconds:
                     # Cancel query if timed out
                     try:
-                        await asyncio.to_thread(self.client.statement_execution.cancel_execution, statement_id)
+                        await asyncio.to_thread(self.client.statement_execution.cancel_execution, statement_id=statement_id)
                     except:
                         pass
                     raise RetryableError(f"SQL execution timed out after {timeout_seconds}s")
                 
                 # Get status
-                status_resp = await asyncio.to_thread(self.client.statement_execution.get_statement, statement_id)
+                status_resp = await asyncio.to_thread(self.client.statement_execution.get_statement, statement_id=statement_id)
                 state = status_resp.status.state.value # Enum to string
                 
                 if state == "SUCCEEDED":
                     final_response = status_resp
                     break
-                elif state in ["FAILED", "CANCELED", "CLOSED"]:
+                elif state in ("FAILED", "CANCELED", "CLOSED"):
                     error_msg = f"SQL execution failed with state {state}"
                     if status_resp.status.error:
                         error_msg += f": {status_resp.status.error.message}"
                     raise RetryableError(error_msg)
                 else:
-                    # RUNNING, PENDING
-                    await asyncio.sleep(1)
+                    # Wait before polling again
+                    await asyncio.sleep(2)
             
             # Simplified result parsing
             # Extract columns first
