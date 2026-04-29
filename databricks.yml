@@ -15,20 +15,6 @@ resources:
         autoscaling_limit_min_cu: 0.5
         autoscaling_limit_max_cu: 2
 
-  postgres_branches:
-    production:
-      parent: ${resources.postgres_projects.edh_ssc.id}
-      branch_id: production
-      no_expiry: true
-
-  postgres_endpoints:
-    primary:
-      parent: ${resources.postgres_branches.production.id}
-      endpoint_id: primary
-      endpoint_type: ENDPOINT_TYPE_READ_WRITE
-      autoscaling_limit_min_cu: 0.5
-      autoscaling_limit_max_cu: 2
-
   # Apps
   apps:
     edh-ssc:
@@ -39,8 +25,8 @@ resources:
       resources:
         - name: lakebase-db
           postgres:
-            branch: ${resources.postgres_branches.production.id}
-            database: ${resources.postgres_branches.production.id}/databases/databricks_postgres
+            branch: ${resources.postgres_projects.edh_ssc.id}/branches/production
+            database: ${resources.postgres_projects.edh_ssc.id}/branches/production/databases/databricks_postgres
             permission: CAN_CONNECT_AND_CREATE
       config:
         command:
