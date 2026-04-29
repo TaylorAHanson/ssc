@@ -31,7 +31,7 @@ resources:
           - name: DATABASE_HOST
             value: "${var.lakebase_host}"
           - name: DATABASE_INSTANCE_NAME
-            value: "${resources.postgres_projects.edh-ssc-project.project_id}"
+            value: "${resources.postgres_projects.edh_ssc.project_id}"
           - name: GITOPS_MODE
             value: "${var.gitops_mode}"
           - name: GITOPS_VOLUME_PATH
