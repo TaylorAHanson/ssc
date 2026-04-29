@@ -27,7 +27,7 @@ resources:
         - name: postgres
           database:
             database_name: databricks_postgres
-            instanct_name: ${resources.database_instances.edh_ssc_db.name}
+            instance_name: ${resources.database_instances.edh_ssc_db.name}
             permission: CAN_CONNECT_AND_CREATE
       config:
         command:
