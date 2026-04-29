@@ -23,10 +23,11 @@ resources:
       source_code_path: "${var.source_code_path}"
       resources:
         - name: database
+          description: "A database for the app to be able to connect to and query"
           database:
-            instance_name: ${resources.postgres_projects.edh_ssc.project_id}
             database_name: production
-            permission: CAN_CONNECT_AND_CREATE
+            instance_name: ${resources.postgres_projects.edh_ssc.project_id}
+            permission: "CAN_CONNECT_AND_CREATE"
       config:
         command:
           - python
