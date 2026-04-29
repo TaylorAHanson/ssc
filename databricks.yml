@@ -7,35 +7,41 @@ bundle:
 resources:
   
   postgres_projects:
-    edh-ssc-project:
-      project_id: "edh-ssc-${var.environment}-v2"
+    edh_ssc:
+      project_id: "edh-ssc-${var.environment}"
       display_name: "edh-ssc ${var.environment}"
       pg_version: 17
+      default_endpoint_settings:
+        autoscaling_limit_min_cu: 0.5
+        autoscaling_limit_max_cu: 2
 
-  postgres_branches:
-    production_branch:
-      parent: ${resources.postgres_projects.edh-ssc-project.id}
-      branch_id: "production"
-      no_expiry: true
+    postgres_branches:
+      production:
+        parent: ${resources.postgres_projects.edh_ssc.id}
+        branch_id: production
+        no_expiry: true
 
-  postgres_endpoints:
-    primary_endpoint:
-      parent: ${resources.postgres_branches.production_branch.id}
-      endpoint_id: "primary"
-      endpoint_type: "ENDPOINT_TYPE_READ_WRITE"
-      autoscaling_limit_min_cu: 0.5
-      autoscaling_limit_max_cu: 2
+    postgres_endpoints:
+      primary:
+        parent: ${resources.postgres_branches.production.id}
+        endpoint_id: primary
+        endpoint_type: ENDPOINT_TYPE_READ_WRITE
+        autoscaling_limit_min_cu: 0.5
+        autoscaling_limit_max_cu: 2
 
   # Apps
   apps:
     edh-ssc:
       name: ${var.app_name}
       description: "edh-ssc - Self-service platform for ${var.environment}"
-
-      # Source code path - Points to backend directory in synced bundle
       source_code_path: "${var.source_code_path}"
-
-      # App runtime configuration (Databricks will generate app.yaml from this)
+      compute_size: MEDIUM
+      resources:
+        - name: lakebase-db
+          postgres:
+            branch: ${resources.postgres_branches.production.id}
+            database: ${resources.postgres_branches.production.id}/databases/databricks_postgres
+            permission: CAN_CONNECT_AND_CREATE
       config:
         command:
           - python
@@ -107,10 +113,7 @@ resources:
         - "sql.statement-execution"
         - "sql.warehouses"
         - "files.files"
-        - "serving.serving-endpoints"
-        - "serving.serving-endpoints-data-plane"
 
-      # Permissions for the app itself (who can manage/use the app)
       permissions:
         - level: CAN_MANAGE
           user_name: "${workspace.current_user.userName}"
