@@ -21,6 +21,12 @@ resources:
       name: ${var.app_name}
       description: "edh-ssc - Self-service platform for ${var.environment}"
       source_code_path: "${var.source_code_path}"
+      resources:
+        - name: database
+          database:
+            instance_name: ${resources.postgres_projects.edh_ssc.project_id}
+            database_name: production
+            permission: CAN_CONNECT_AND_CREATE
       config:
         command:
           - python
@@ -28,16 +34,6 @@ resources:
         env:
           - name: ENVIRONMENT
             value: "${var.environment}"
-          - name: DATABASE_HOST
-            value_from: database
-          - name: DATABASE_PORT
-            value_from: database
-          - name: DATABASE_NAME
-            value_from: database
-          - name: DATABASE_USER
-            value_from: database
-          - name: DATABASE_PASSWORD
-            value_from: database
           - name: GITOPS_MODE
             value: "${var.gitops_mode}"
           - name: GITOPS_VOLUME_PATH
