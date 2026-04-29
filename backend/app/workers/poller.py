@@ -649,6 +649,15 @@ async def _handle_retryable_error(
         "worker_id": worker_id
     }
     
+    # Check if max retries exceeded
+    if request.retry_count >= request.max_retries:
+        logger.warning(
+            f"Request {request.id} exceeded max retries ({request.max_retries}), "
+            "marking as failed"
+        )
+        request.status = RequestStatus.FAILED.value
+        # Don't change current_state - keep the last valid state so state machine can still be loaded
+    
     # Log failure to failures table
     failure = FailureModel(
         id=f"fail-{datetime.utcnow().timestamp()}",
@@ -663,9 +672,12 @@ async def _handle_retryable_error(
     db.add(failure)
     db.commit()
     
-    logger.warning(
-        f"Retryable error for request {request.id} (attempt {request.retry_count}/{request.max_retries}): {error}"
-    )
+    if request.status == RequestStatus.FAILED.value:
+        await _send_failure_notification(request, f"Exceeded max retries ({request.max_retries}) after error: {error}")
+    else:
+        logger.warning(
+            f"Retryable error for request {request.id} (attempt {request.retry_count}/{request.max_retries}): {error}"
+        )
 
 
 async def _handle_permanent_error(
