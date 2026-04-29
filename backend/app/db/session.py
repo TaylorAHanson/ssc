@@ -44,10 +44,17 @@ def get_database_url() -> str:
         return settings.DATABASE_URL
     
     # Check for Postgres/Lakebase config
-    host = settings.DATABASE_HOST
-    user = settings.DATABASE_USER or "atlas_app"  # Native Postgres role
-    name = settings.DATABASE_NAME
-    password = None
+    # 1. First, check if Databricks Apps auto-injected PG variables
+    pg_host = os.environ.get("PGHOST")
+    pg_user = os.environ.get("PGUSER")
+    pg_name = os.environ.get("PGDATABASE")
+    pg_port = os.environ.get("PGPORT", "5432")
+    
+    host = pg_host or settings.DATABASE_HOST
+    user = pg_user or settings.DATABASE_USER or "atlas_app"  # Native Postgres role
+    name = pg_name or settings.DATABASE_NAME
+    port = pg_port or settings.DATABASE_PORT
+    password = settings.DATABASE_PASSWORD
     
     # Clear ALL env vars that psycopg2/libpq might pick up
     # See: https://www.postgresql.org/docs/current/libpq-envars.html
@@ -59,13 +66,29 @@ def get_database_url() -> str:
     # DEBUG: Print what we're using
     logger.debug(f"=== DATABASE SETTINGS DEBUG ===")
     logger.debug(f"FORCING DB USER = {user}")
-    logger.debug(f"settings.DATABASE_HOST = {host}")
-    logger.debug(f"settings.DATABASE_NAME = {name}")
+    logger.debug(f"HOST = {host}")
+    logger.debug(f"NAME = {name}")
     
-        # Try to get password/token for Lakebase authentication
     db_id = None
     if host and user and name:
-        if settings.DATABASE_PASSWORD:
+        if pg_host:
+            logger.info("Using Databricks Apps auto-injected PG variables for Lakebase connection.")
+            try:
+                from databricks.sdk import WorkspaceClient
+                sdk = WorkspaceClient()
+                auth_headers = sdk.config.authenticate()
+                if auth_headers and "Authorization" in auth_headers:
+                    password = auth_headers["Authorization"].replace("Bearer ", "")
+                elif hasattr(sdk.config, "token") and sdk.config.token:
+                    password = sdk.config.token
+                
+                if password:
+                    logger.info("Successfully acquired Databricks OAuth token for Lakebase password.")
+                else:
+                    logger.error("Failed to acquire OAuth token from WorkspaceClient.")
+            except Exception as e:
+                logger.error(f"Failed to fetch Databricks OAuth token: {type(e).__name__}: {e}")
+        elif settings.DATABASE_PASSWORD:
             logger.info("Using injected DATABASE_PASSWORD from environment (Resource Binding).")
             password = settings.DATABASE_PASSWORD
             # When a resource is bound, Databricks injects the specific DATABASE_USER and DATABASE_NAME too
@@ -161,10 +184,10 @@ def get_database_url() -> str:
             # If the API returned it above, use it; otherwise fallback to DATABASE_NAME
             db_name_to_use = db_id if db_id else name
             
-            url = f"postgresql://{safe_user}:{safe_password}@{host}:{settings.DATABASE_PORT}/{db_name_to_use}?sslmode=require"
+            url = f"postgresql://{safe_user}:{safe_password}@{host}:{port}/{db_name_to_use}?sslmode=require"
             
             # CRITICAL: Log the final URL structure (without password) for debugging
-            safe_url = f"postgresql://{safe_user}:***@{host}:{settings.DATABASE_PORT}/{db_name_to_use}?sslmode=require"
+            safe_url = f"postgresql://{safe_user}:***@{host}:{port}/{db_name_to_use}?sslmode=require"
             logger.debug(f"FINAL DATABASE URL (safe): {safe_url}")
             logger.info(f"=== LAKEBASE CONNECTION ===")
             logger.info(f"  Host: {host}")
