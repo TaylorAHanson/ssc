@@ -6,7 +6,7 @@ from datetime import datetime
 from app.core.config import settings
 from app.core.exceptions import PermanentError
 from app.db.allowlist import AllowlistModel
-from app.db.session import get_lakebase_session
+from app.db.session import get_db
 from app.providers.opa.client import OpaProvider
 from app.tools.mcp import tool
 
@@ -28,7 +28,7 @@ async def evaluate_policy(workspace: str, resource_type: str, resource_id: str) 
         # Determine workspace type based on name for OPA context
         workspace_type = "enterprise" if "enterprise" in workspace else "domain"
         
-        db = get_lakebase_session()
+        db = next(get_db())
         try:
             # 1. Fetch Allowlist Context from DB
             allowlist_records = []
@@ -111,7 +111,7 @@ class CheckAllowlistInput(BaseModel):
 )
 async def check_allowlist_status(resource_id: str, workspace: Optional[str] = None) -> Dict[str, Any]:
     """Query the allowlist database for a specific resource to check its exception status."""
-    db = get_lakebase_session()
+    db = next(get_db())
     try:
         query = db.query(AllowlistModel).filter(AllowlistModel.resource_id == resource_id)
         if workspace:

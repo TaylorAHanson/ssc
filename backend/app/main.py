@@ -95,10 +95,23 @@ async def startup_event():
         logger.error(f"Failed to initialize database: {e}")
         # We don't stop startup, but we log strictly
         
-    logger.info("Starting background poller task...")
-    task = asyncio.create_task(start_poller())
-    logger.info(f"Background poller task created: {task}")
-    # Don't await - let it run in background
+    logger.info("Starting background poller thread...")
+    import threading
+    def run_poller_thread():
+        # Create a new event loop for this thread
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(start_poller())
+        except Exception as e:
+            logger.error(f"Poller thread crashed: {e}", exc_info=True)
+        finally:
+            loop.close()
+            
+    thread = threading.Thread(target=run_poller_thread, daemon=True, name="PollerThread")
+    thread.start()
+    logger.info("Background poller thread started.")
 
 # CORS middleware
 app.add_middleware(

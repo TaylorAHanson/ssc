@@ -42,57 +42,61 @@ class OpaProvider(BaseProvider):
             logger.warning(f"Configured OPA path {expanded} is not a file.")
             return None
             
-        # 1. Try to find a bundled binary first (e.g. backend/bin/opa_linux_amd64)
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        bundled_linux = os.path.join(base_dir, "bin", "opa_linux_amd64")
+        import sys
+        is_linux = sys.platform.startswith("linux")
         
-        if os.path.isfile(bundled_linux):
-            # Check if it's already executable
-            if os.access(bundled_linux, os.X_OK):
-                return bundled_linux
-                
-            # If not executable, it might be in a read-only filesystem (Databricks Apps)
-            # Copy it to /tmp and make it executable there
-            dest_path = "/tmp/opa_linux_amd64"
-            try:
-                import stat
-                if not os.path.exists(dest_path):
-                    shutil.copy2(bundled_linux, dest_path)
-                else:
-                    if os.path.getsize(bundled_linux) != os.path.getsize(dest_path):
+        if is_linux:
+            # 1. Try to find a bundled binary first (e.g. backend/bin/opa_linux_amd64)
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            bundled_linux = os.path.join(base_dir, "bin", "opa_linux_amd64")
+            
+            if os.path.isfile(bundled_linux):
+                # Check if it's already executable
+                if os.access(bundled_linux, os.X_OK):
+                    return bundled_linux
+                    
+                # If not executable, it might be in a read-only filesystem (Databricks Apps)
+                # Copy it to /tmp and make it executable there
+                dest_path = "/tmp/opa_linux_amd64"
+                try:
+                    import stat
+                    if not os.path.exists(dest_path):
                         shutil.copy2(bundled_linux, dest_path)
-                        
-                st = os.stat(dest_path)
-                os.chmod(dest_path, st.st_mode | stat.S_IEXEC)
-                if os.access(dest_path, os.X_OK):
+                    else:
+                        if os.path.getsize(bundled_linux) != os.path.getsize(dest_path):
+                            shutil.copy2(bundled_linux, dest_path)
+                            
+                    st = os.stat(dest_path)
+                    os.chmod(dest_path, st.st_mode | stat.S_IEXEC)
+                    if os.access(dest_path, os.X_OK):
+                        return dest_path
+                    else:
+                        logger.error(f"Failed to verify executable permissions on {dest_path} after chmod.")
+                except Exception as e:
+                    logger.warning(f"Failed to copy and make {bundled_linux} executable in /tmp: {e}")
+            else:
+                # 1.5. Fallback: If not found, try downloading it to /tmp
+                dest_path = "/tmp/opa_linux_amd64"
+                if os.path.isfile(dest_path) and os.access(dest_path, os.X_OK):
                     return dest_path
-                else:
-                    logger.error(f"Failed to verify executable permissions on {dest_path} after chmod.")
-            except Exception as e:
-                logger.warning(f"Failed to copy and make {bundled_linux} executable in /tmp: {e}")
-        else:
-            # 1.5. Fallback: If not found, try downloading it to /tmp
-            dest_path = "/tmp/opa_linux_amd64"
-            if os.path.isfile(dest_path) and os.access(dest_path, os.X_OK):
-                return dest_path
-                
-            logger.info(f"Bundled OPA binary not found. Downloading dynamically to {dest_path}...")
-            try:
-                import stat
-                import urllib.request
-                opa_url = "https://openpolicyagent.org/downloads/v0.61.0/opa_linux_amd64_static"
-                urllib.request.urlretrieve(opa_url, dest_path)
-                
-                st = os.stat(dest_path)
-                os.chmod(dest_path, st.st_mode | stat.S_IEXEC)
-                
-                if os.access(dest_path, os.X_OK):
-                    logger.info(f"Successfully downloaded and prepared OPA at {dest_path}")
-                    return dest_path
-                else:
-                    logger.error(f"Failed to make downloaded OPA executable.")
-            except Exception as e:
-                logger.warning(f"Failed to dynamically download OPA: {e}")
+                    
+                logger.info(f"Bundled OPA binary not found. Downloading dynamically to {dest_path}...")
+                try:
+                    import stat
+                    import urllib.request
+                    opa_url = "https://openpolicyagent.org/downloads/v0.61.0/opa_linux_amd64_static"
+                    urllib.request.urlretrieve(opa_url, dest_path)
+                    
+                    st = os.stat(dest_path)
+                    os.chmod(dest_path, st.st_mode | stat.S_IEXEC)
+                    
+                    if os.access(dest_path, os.X_OK):
+                        logger.info(f"Successfully downloaded and prepared OPA at {dest_path}")
+                        return dest_path
+                    else:
+                        logger.error(f"Failed to make downloaded OPA executable.")
+                except Exception as e:
+                    logger.warning(f"Failed to dynamically download OPA: {e}")
             
         # 2. Try looking in the system PATH
         found = shutil.which("opa")

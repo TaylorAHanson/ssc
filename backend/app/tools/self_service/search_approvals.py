@@ -4,7 +4,7 @@ Tool to search for pending approvals.
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
-from app.db.session import get_lakebase_session
+from app.db.session import get_db
 from app.db import ApprovalModel, RequestModel
 from sqlalchemy import or_
 
@@ -23,7 +23,7 @@ async def search_approvals(approval_type: Optional[str] = None, status: str = "p
     """
     Execute the search for approvals.
     """
-    db = get_lakebase_session()
+    db = next(get_db())
     try:
         # Join with RequestModel to get titles
         sql_query = db.query(ApprovalModel, RequestModel).join(
