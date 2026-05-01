@@ -102,20 +102,23 @@ resources:
           group_name: "users"
 
 # Sync configuration
+# Only sync what the app needs at runtime:
+#   - backend/** (Python app + pre-built frontend in backend/static/)
+#   - configuration.yaml (app branding/config)
+# Frontend source (src/**, public/**, package.json, etc.) is NOT needed —
+# deploy.sh builds it locally and copies output to backend/static/.
 sync:
   include:
-    - package.json
-    - vite.config.ts
-    - tsconfig.json
-    - tailwind.config.js
-    - postcss.config.js
-    - eslint.config.js
-    - index.html
-    - src/**
-    - public/**
     - backend/**
     - configuration.yaml
   exclude:
+    - node_modules
+    - node_modules/**
+    - dist
+    - dist/**
+    - .git/**
+    - "*.local"
+    - .DS_Store
     - backend/bin/**
     - backend/__pycache__/**
     - backend/**/__pycache__/**
@@ -127,6 +130,7 @@ sync:
     - backend/**/.DS_Store
     - backend/*.log
     - backend/.git/**
+    - backend/tests/**
 
 # Variables
 variables:
