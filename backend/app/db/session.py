@@ -247,7 +247,7 @@ def get_engine():
                 try:
                     # By default in PG 15+, public schema doesn't allow CREATE
                     # Create our own schema and use it instead
-                    schema_name = "edh-ssc"
+                    schema_name = "atlas"
                     cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}";')
                     cursor.execute(f'SET search_path TO "{schema_name}";')
                 except Exception as e:

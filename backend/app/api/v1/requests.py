@@ -312,6 +312,50 @@ async def create_request(
     }
 
 
+def _authorize_approval_actor(approval: ApprovalModel, current_user: User) -> None:
+    """Enforce that the caller is the assigned approver (or a platform admin).
+
+    Manager-approval tasks are addressed to the requester's manager (email
+    captured by the agent and stored in approval.assigned_to_email). Data-owner
+    approval tasks are addressed to the asset owner returned by Unity Catalog
+    (stored in assigned_to_email or, when only a group/role is known,
+    assigned_to_role). Anyone else attempting to act on the approval is
+    rejected here so the state machine can't be advanced by an unrelated user.
+    Platform admins retain an override for break-glass scenarios.
+    """
+    if current_user.has_role("platform_admin"):
+        return
+
+    actor_email = (current_user.email or "").lower()
+    assignee_email = (approval.assigned_to_email or "").lower()
+    assignee_role = approval.assigned_to_role
+
+    if assignee_email and actor_email == assignee_email:
+        return
+    if assignee_role and current_user.has_role(assignee_role):
+        return
+
+    if not assignee_email and not assignee_role:
+        # Defensive: an approval with no assignee shouldn't be actionable by
+        # arbitrary authenticated users. Force a platform-admin override.
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"This {approval.approval_type} approval has no assignee on file; "
+                "only a platform admin can act on it."
+            ),
+        )
+
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"Only the assigned {approval.approval_type} approver "
+            f"({approval.assigned_to_email or approval.assigned_to_role}) "
+            "can act on this request."
+        ),
+    )
+
+
 @router.post("/{request_id}/approve", status_code=status.HTTP_200_OK)
 async def approve_request(
     request_id: str,
@@ -320,26 +364,39 @@ async def approve_request(
 ):
     """
     Approve a request using fact-based approach.
-    
+
     Records a fact (approval_received) - this is the source of truth.
     The state machine will reconcile state based on facts.
+
+    Authorization: only the assignee of the current pending approval (e.g. the
+    manager for manager_approval, the data owner for data_owner_approval) may
+    approve. Platform admins may override.
     """
-    # Find pending approval for this request
-    approval = db.query(ApprovalModel).filter(
-        ApprovalModel.request_id == request_id,
-        ApprovalModel.status == "pending"
-    ).first()
-    
+    # Find pending approval for this request. Order by created_at so that if
+    # multiple approval rows ever coexist, the oldest pending one (the active
+    # gate) is acted on first.
+    approval = (
+        db.query(ApprovalModel)
+        .filter(
+            ApprovalModel.request_id == request_id,
+            ApprovalModel.status == "pending",
+        )
+        .order_by(ApprovalModel.created_at.asc())
+        .first()
+    )
+
     if not approval:
         raise HTTPException(status_code=404, detail="No pending approval found for this request")
-    
+
+    _authorize_approval_actor(approval, current_user)
+
     approved_by = current_user.email
-    
+
     # Update approval status immediately
     approval.status = "approved"
     approval.approved_by = approved_by
     approval.approved_at = datetime.utcnow()
-    
+
     # Record fact (this is the source of truth)
     add_fact(
         db, request_id, "approval_received",
@@ -350,9 +407,9 @@ async def approve_request(
         },
         actor=approved_by
     )
-    
+
     db.commit()
-    
+
     return {"status": "approved", "message": "Approval recorded. State will be updated by poller."}
 
 
@@ -369,15 +426,22 @@ async def reject_request(
     Records a fact (request_rejected) - this is the source of truth.
     The state machine will reconcile state based on facts.
     """
-    # Find pending approval for this request
-    approval = db.query(ApprovalModel).filter(
-        ApprovalModel.request_id == request_id,
-        ApprovalModel.status == "pending"
-    ).first()
-    
+    # Find pending approval for this request (oldest pending wins, see /approve).
+    approval = (
+        db.query(ApprovalModel)
+        .filter(
+            ApprovalModel.request_id == request_id,
+            ApprovalModel.status == "pending",
+        )
+        .order_by(ApprovalModel.created_at.asc())
+        .first()
+    )
+
     if not approval:
         raise HTTPException(status_code=404, detail="No pending approval found for this request")
-    
+
+    _authorize_approval_actor(approval, current_user)
+
     rejected_by = current_user.email
     rejection_note = rejection_data.get("rejection_note")
     
