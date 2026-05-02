@@ -330,8 +330,16 @@ class DatabricksProvider(BaseProvider):
                 "manage": "ALL PRIVILEGES",
             },
             "schema": {
-                "read": "USE SCHEMA",
-                "write": "USE SCHEMA, CREATE TABLE, CREATE VIEW, CREATE FUNCTION",
+                # Aligns with the UC "Read group" (SELECT, EXECUTE, READ VOLUME)
+                # plus the USE SCHEMA prerequisite. Granted at schema level,
+                # SELECT/MODIFY/READ VOLUME/etc. cascade to all child objects.
+                "read": "USE SCHEMA, SELECT, EXECUTE, READ VOLUME",
+                # Read group + UC "Edit group" (MODIFY, REFRESH, WRITE VOLUME).
+                # NOTE: previously included CREATE VIEW which is not a valid
+                # schema-level privilege (CREATE MATERIALIZED VIEW is, but is
+                # only supported on newer metastores). If you need create
+                # rights on a schema, request "manage".
+                "write": "USE SCHEMA, SELECT, EXECUTE, READ VOLUME, MODIFY, REFRESH, WRITE VOLUME",
                 "manage": "ALL PRIVILEGES",
             },
             "table": {

@@ -233,25 +233,32 @@ def get_engine():
                 echo=False
             )
         else:
+            # search_path is set via libpq connection options (not a SQL `SET`
+            # statement) so it survives transaction rollbacks issued by the
+            # connection pool. Previously we set it inside an on_connect event
+            # listener, but that ran inside an implicit transaction, and
+            # SQLAlchemy's pool-return rollback would un-set it — leaving
+            # subsequent queries to default to `public` and fail with
+            # `relation "..." does not exist`.
             _engine = create_engine(
                 database_url,
                 pool_size=10,
                 max_overflow=20,
                 pool_pre_ping=True,  # checks connection is alive before using it
                 echo=False,
+                connect_args={"options": "-csearch_path=atlas,public"},
             )
-            
+
             @event.listens_for(_engine, "connect")
             def on_connect(dbapi_connection, connection_record):
+                """Ensure the atlas schema exists. search_path itself is set
+                via connect_args above (persistent across rollbacks)."""
                 cursor = dbapi_connection.cursor()
                 try:
-                    # By default in PG 15+, public schema doesn't allow CREATE
-                    # Create our own schema and use it instead
-                    schema_name = "atlas"
-                    cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}";')
-                    cursor.execute(f'SET search_path TO "{schema_name}";')
+                    cursor.execute('CREATE SCHEMA IF NOT EXISTS "atlas";')
+                    dbapi_connection.commit()
                 except Exception as e:
-                    logger.warning(f"Failed to setup schema or search_path: {e}")
+                    logger.warning(f"Failed to ensure atlas schema exists: {e}")
                 finally:
                     cursor.close()
                     
