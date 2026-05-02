@@ -210,17 +210,19 @@ class DatabricksProvider(BaseProvider):
         from databricks.sdk.service.catalog import SecurableType, PermissionsChange, Privilege
 
         try:
-            # Map asset_type to SecurableType
+            # Map asset_type to SecurableType. Views are exposed via the TABLE
+            # securable type in Unity Catalog (no separate SecurableType.VIEW).
             securable_type_map = {
                 "catalog": SecurableType.CATALOG,
                 "schema": SecurableType.SCHEMA,
                 "table": SecurableType.TABLE,
+                "view": SecurableType.TABLE,
                 "volume": SecurableType.VOLUME,
             }
 
             securable_type = securable_type_map.get(asset_type.lower())
             if not securable_type:
-                raise PermanentError(f"Invalid asset_type: {asset_type}. Must be one of: catalog, schema, table, volume")
+                raise PermanentError(f"Invalid asset_type: {asset_type}. Must be one of: catalog, schema, table, view, volume")
 
             # Map access_level to privileges
             # Unity Catalog privilege hierarchy:
@@ -280,7 +282,7 @@ class DatabricksProvider(BaseProvider):
             return [Privilege.USE_CATALOG]
         elif asset_type.lower() == "schema":
             return [Privilege.USE_SCHEMA]
-        elif asset_type.lower() in ["table", "volume"]:
+        elif asset_type.lower() in ["table", "view", "volume"]:
             return [Privilege.SELECT]
         return [Privilege.SELECT]
 
@@ -294,6 +296,9 @@ class DatabricksProvider(BaseProvider):
             return [Privilege.USE_SCHEMA, Privilege.CREATE_TABLE, Privilege.CREATE_VOLUME]
         elif asset_type.lower() == "table":
             return [Privilege.SELECT, Privilege.MODIFY]
+        elif asset_type.lower() == "view":
+            # Views are not directly writable in Unity Catalog; downgrade to SELECT.
+            return [Privilege.SELECT]
         elif asset_type.lower() == "volume":
             return [Privilege.READ_VOLUME, Privilege.WRITE_VOLUME]
         return [Privilege.SELECT, Privilege.MODIFY]
@@ -325,13 +330,27 @@ class DatabricksProvider(BaseProvider):
                 "manage": "ALL PRIVILEGES",
             },
             "schema": {
-                "read": "USE SCHEMA",
-                "write": "USE SCHEMA, CREATE TABLE, CREATE VIEW, CREATE FUNCTION",
+                # Aligns with the UC "Read group" (SELECT, EXECUTE, READ VOLUME)
+                # plus the USE SCHEMA prerequisite. Granted at schema level,
+                # SELECT/MODIFY/READ VOLUME/etc. cascade to all child objects.
+                "read": "USE SCHEMA, SELECT, EXECUTE, READ VOLUME",
+                # Read group + UC "Edit group" (MODIFY, REFRESH, WRITE VOLUME).
+                # NOTE: previously included CREATE VIEW which is not a valid
+                # schema-level privilege (CREATE MATERIALIZED VIEW is, but is
+                # only supported on newer metastores). If you need create
+                # rights on a schema, request "manage".
+                "write": "USE SCHEMA, SELECT, EXECUTE, READ VOLUME, MODIFY, REFRESH, WRITE VOLUME",
                 "manage": "ALL PRIVILEGES",
             },
             "table": {
                 "read": "SELECT",
                 "write": "SELECT, MODIFY",
+                "manage": "ALL PRIVILEGES",
+            },
+            "view": {
+                "read": "SELECT",
+                # Views are read-only; "write" maps to SELECT.
+                "write": "SELECT",
                 "manage": "ALL PRIVILEGES",
             },
             "volume": {
@@ -391,6 +410,20 @@ class DatabricksProvider(BaseProvider):
                 # Fallback if parts parsing fails
                 privileges = privilege_map["volume"].get(access_level, "READ VOLUME")
                 statements.append(f"GRANT {privileges} ON VOLUME `{asset_name}` TO `{principal}`")
+
+        elif asset_type == "view":
+            # Grant USE CATALOG, USE SCHEMA, then view permissions
+            if len(parts) >= 3:
+                catalog_name = parts[0]
+                schema_name = parts[1]
+                view_name = parts[2]
+                statements.append(f"GRANT USE CATALOG ON CATALOG `{catalog_name}` TO `{principal}`")
+                statements.append(f"GRANT USE SCHEMA ON SCHEMA `{catalog_name}`.`{schema_name}` TO `{principal}`")
+                privileges = privilege_map["view"].get(access_level, "SELECT")
+                statements.append(f"GRANT {privileges} ON VIEW `{catalog_name}`.`{schema_name}`.`{view_name}` TO `{principal}`")
+            else:
+                privileges = privilege_map["view"].get(access_level, "SELECT")
+                statements.append(f"GRANT {privileges} ON VIEW `{asset_name}` TO `{principal}`")
 
         return statements
 
@@ -452,15 +485,16 @@ class DatabricksProvider(BaseProvider):
                 else:
                     logger.warning(f"Invalid schema name format: {asset_name}. Expected catalog.schema")
                     return None
-            elif asset_type_lower == "table":
-                # Table: should be catalog.schema.table format
+            elif asset_type_lower in ("table", "view"):
+                # Table/view: should be catalog.schema.object format. Views are
+                # exposed via DESCRIBE TABLE EXTENDED in Unity Catalog.
                 if len(parts) >= 3:
                     catalog = parts[0]
                     schema = parts[1]
-                    table = parts[2]
-                    query = f"DESCRIBE TABLE EXTENDED {catalog}.{schema}.{table}"
+                    object_name = parts[2]
+                    query = f"DESCRIBE TABLE EXTENDED {catalog}.{schema}.{object_name}"
                 else:
-                    logger.warning(f"Invalid table name format: {asset_name}. Expected catalog.schema.table")
+                    logger.warning(f"Invalid {asset_type_lower} name format: {asset_name}. Expected catalog.schema.{asset_type_lower}")
                     return None
             elif asset_type_lower == "volume":
                 # Volume: should be catalog.schema.volume format

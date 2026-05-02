@@ -277,7 +277,7 @@ async def trigger_github_test():
         db = get_session_local()()
         try:
             timestamp = datetime.now().strftime("%Y%m%d-%H%M")
-            repo_name = f"edh-test-project-{timestamp}"
+            repo_name = f"atlas-test-project-{timestamp}"
             
             request_id = f"req-{uuid.uuid4()}"
             request = RequestModel(

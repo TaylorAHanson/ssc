@@ -46,7 +46,7 @@ The final layer exists to catch drift, uncover unauthorized changes, and continu
 
 ## Data Certification Workflow
 
-A key component of our governance framework is the proactive certification of data assets. Governance is uniform across the Enterprise Data Hub (EDH), meaning all eligible production tables must be pushed through certification. To minimize manual entry, we use an AI-assisted, proactive workflow.
+A key component of our governance framework is the proactive certification of data assets. Governance is uniform across ATLAS, meaning all eligible production tables must be pushed through certification. To minimize manual entry, we use an AI-assisted, proactive workflow.
 
 The Data Certification flow operates in four distinct phases:
 
