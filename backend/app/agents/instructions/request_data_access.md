@@ -29,7 +29,30 @@
 4.  **Justification**: Why do you need this access?
     *   *Validation*: Must be at least 10 characters.
 5.  **Manager Email**: Email of your manager who will approve this request.
-    *   *Validation*: Must be a valid email address.
+    *   *Validation*: Must be a valid email address (basic format check
+        only — `name@domain.tld`). Do NOT require Entra ID confirmation.
+    *   <!-- TODO(entra-id): Remove the Entra-ID fallback block below
+        once the Entra ID integration is reliable end-to-end. When
+        users can be looked up consistently, tighten this back to:
+        "Reject the email if `search_entra_id_users` returns no
+        results." Tracking: see Slack thread / ticket on Entra ID
+        provider stability (added 2026-05-05). -->
+    *   *Entra ID lookup is best-effort, not a gate*: You MAY call
+        `search_entra_id_users` to *enrich* the manager's display name,
+        but a missing / failing / empty Entra ID result MUST NOT block
+        the request.
+    *   *Fallback flow when Entra ID lookup returns nothing or errors*:
+        Tell the user once that you couldn't confirm the address in
+        Entra ID, then ASK: "I couldn't find this email in Entra ID
+        (the directory may be incomplete or the lookup may be down).
+        Do you want to proceed with `<email>` anyway?" — if the user
+        says yes / confirms, accept the email as-is and continue to
+        the confirmation summary. Do NOT keep re-prompting for a
+        different email or a different name.
+    *   *Never*: refuse to proceed solely because Entra ID returned no
+        results. The downstream workflow will route the approval email
+        to whatever address the user supplied; an unreachable mailbox
+        will surface as a separate failure later, not at this step.
 
 ## Validation Loop
 Before calling `execute_workflow`:
