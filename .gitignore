@@ -55,3 +55,6 @@ backend/static/
 
 # Local sync script
 sync-personal.sh
+
+# Binaries
+backend/bin/
