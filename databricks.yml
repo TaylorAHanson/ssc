@@ -257,7 +257,7 @@ targets:
       app_name: "edh-ssc-stage"
       environment: "stage"
       source_code_path: "."
-      data_quality_table: "edh-ssc_stage_catalog.edh-ssc.data_quality_results"
+      data_quality_table: "enterprise_stg..data_quality_results"
 
   # Production environment
   prod:

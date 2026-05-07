@@ -55,8 +55,8 @@ The Data Certification flow operates in four distinct phases:
    * **Missing Metadata Generation**: During this scan, the job utilizes `dbxmetagen` to automatically generate and apply any missing table and column descriptions in Unity Catalog.
 
 2. **Automated Discovery & Contract Drafting (Data Product Definition)**
-   * A discovery job ("Sync Contracts") scans all catalogs, schemas, and tables in Databricks for the `data_set` tag.
-   * Tables sharing the same `data_set` tag value are grouped together into a logical Data Product.
+   * A discovery job ("Sync Contracts") scans all catalogs, schemas, and tables in Databricks for the `dataset` tag.
+   * Tables sharing the same `dataset` tag value are grouped together into a logical Data Product.
    * An AI Agent auto-generates or updates a draft Open Data Contract Standard (ODCS) YAML file for this grouped Data Product, merging Unity Catalog metadata while carefully preserving any manual edits from prior versions.
    * A new `DATA_CERTIFICATION` state machine request is spawned with this draft contract.
 
@@ -71,7 +71,7 @@ The Data Certification flow operates in four distinct phases:
 #### Data Certification Flow
 ```mermaid
 flowchart TD
-    Z[Discovery Job] -->|Finds tables with 'data_set' tag| Y[AI Generates/Updates ODCS YAML]
+    Z[Discovery Job] -->|Finds tables with 'dataset' tag| Y[AI Generates/Updates ODCS YAML]
     Y --> C
     A[Enforcement Sentinel Triggered] --> C[Loop Over YAML Contracts]
     

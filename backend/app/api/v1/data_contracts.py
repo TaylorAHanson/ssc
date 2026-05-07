@@ -45,7 +45,7 @@ async def sync_contracts(
     from app.core.config import settings
     
     try:
-        # 1. Query Databricks for tables with the 'data_set' tag
+        # 1. Query Databricks for tables with the 'dataset' tag
         provider = DatabricksProvider(
             host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
             token=settings.DATABRICKS_TOKEN,
@@ -64,7 +64,7 @@ async def sync_contracts(
                 continue
                 
             # Query the local information_schema for each catalog
-            query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {catalog.name}.information_schema.table_tags WHERE tag_name = 'data_set'"
+            query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {catalog.name}.information_schema.table_tags WHERE tag_name = 'dataset'"
             logger.info(f"Querying information_schema for catalog {catalog.name}")
             
             try:
@@ -83,14 +83,14 @@ async def sync_contracts(
                             dataset_groups[dataset_name] = []
                         dataset_groups[dataset_name].append(full_name)
                 else:
-                    logger.debug(f"No tables found with 'data_set' tag in catalog {catalog.name}")
+                    logger.debug(f"No tables found with 'dataset' tag in catalog {catalog.name}")
             except Exception as e:
                 logger.warning(f"Could not query information_schema for catalog {catalog.name}: {e}")
                 
         logger.info(f"Discovery complete. Found {len(dataset_groups)} unique data sets across all catalogs.")
         
         if not dataset_groups:
-            return {"status": "success", "message": "No tables found with 'data_set' tag."}
+            return {"status": "success", "message": "No tables found with 'dataset' tag."}
 
         background_tasks.add_task(run_sync_contracts_background, dataset_groups, force)
         return {"status": "success", "message": f"Sync started in the background for {len(dataset_groups)} data sets. This may take a few minutes."}
