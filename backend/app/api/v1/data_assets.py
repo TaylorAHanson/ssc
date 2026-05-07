@@ -39,7 +39,8 @@ class DataAssetResponse(BaseModel):
 def list_data_assets(
     domain: Optional[str] = None,
     certified: Optional[bool] = None,
-    limit: int = 100,
+    certification_only: Optional[bool] = None,
+    limit: Optional[int] = None,
     offset: int = 0,
     db: Session = Depends(get_db)
 ):
@@ -54,7 +55,25 @@ def list_data_assets(
     if certified is not None:
         query = query.filter(DataAssetModel.certified == certified)
         
-    assets = query.offset(offset).limit(limit).all()
+    if certification_only:
+        from sqlalchemy import or_
+        from app.db.data_contract import DataContractModel
+        query = query.filter(
+            or_(
+                DataAssetModel.contract_url.isnot(None),
+                DataAssetModel.certified == True,
+                DataAssetModel.data_quality.isnot(None),
+                DataAssetModel.id.in_(db.query(DataContractModel.dataset_id))
+            )
+        )
+        
+    if offset > 0:
+        query = query.offset(offset)
+        
+    if limit is not None:
+        query = query.limit(limit)
+        
+    assets = query.all()
     
     # Map 'schema' column to 'schema_name' for the Pydantic model since 'schema' is a reserved field name in BaseModel in pydantic sometimes,
     # actually let's just construct the response properly.

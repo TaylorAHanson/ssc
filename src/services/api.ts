@@ -774,13 +774,16 @@ export interface DataAsset {
   last_synced_at: string;
 }
 
-export async function getDataAssets(params?: { domain?: string; certified?: boolean; limit?: number; offset?: number }): Promise<DataAsset[]> {
+export async function getDataAssets(params?: { domain?: string; certified?: boolean; certification_only?: boolean; limit?: number; offset?: number }): Promise<DataAsset[]> {
   const url = new URL(`${API_BASE_URL}/data-assets`, window.location.origin);
   if (params?.domain) {
     url.searchParams.append('domain', params.domain);
   }
   if (params?.certified !== undefined) {
     url.searchParams.append('certified', String(params.certified));
+  }
+  if (params?.certification_only !== undefined) {
+    url.searchParams.append('certification_only', String(params.certification_only));
   }
   if (params?.limit !== undefined) {
     url.searchParams.append('limit', String(params.limit));

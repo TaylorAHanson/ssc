@@ -88,7 +88,7 @@ export function DataCertification() {
       
       // Reload assets to reflect changes
       const [data, contracts] = await Promise.all([
-        api.getDataAssets(),
+        api.getDataAssets({ certification_only: true }),
         api.getDataContracts()
       ]);
       const map: Record<string, DataContract> = {};
@@ -131,7 +131,7 @@ export function DataCertification() {
       setIsEditorOpen(false);
       // Reload assets to reflect changes
       const [data, contracts] = await Promise.all([
-        api.getDataAssets(),
+        api.getDataAssets({ certification_only: true }),
         api.getDataContracts()
       ]);
       const map: Record<string, DataContract> = {};
@@ -155,7 +155,7 @@ export function DataCertification() {
       
       // Reload assets to reflect changes
       const [data, contracts] = await Promise.all([
-        api.getDataAssets(),
+        api.getDataAssets({ certification_only: true }),
         api.getDataContracts()
       ]);
       const map: Record<string, DataContract> = {};
@@ -177,7 +177,7 @@ export function DataCertification() {
     async function loadData() {
       try {
         const [data, contracts] = await Promise.all([
-          api.getDataAssets(),
+          api.getDataAssets({ certification_only: true }),
           api.getDataContracts()
         ]);
         if (mounted) {
