@@ -83,7 +83,7 @@ class DatasetResourceHandler(BaseResourceHandler):
                         if reliability_window:
                             try:
                                 if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
-                                    query = f"SELECT COUNT(1) FROM {settings.DATABRICKS_ADOC_HISTORY_TABLE} LATERAL VIEW explode(items) as item WHERE assetInfo.assetUid = '{full_name}' AND cast(processed_at as date) >= date_sub(current_date(), {int(reliability_window)}) AND item.resultPercent < item.threshold"
+                                    query = f"SELECT COUNT(1) FROM {settings.DATA_QUALITY_TABLE} LATERAL VIEW explode(items) as item WHERE assetInfo.assetUid = '{full_name}' AND cast(processed_at as date) >= date_sub(current_date(), {int(reliability_window)}) AND item.resultPercent < item.threshold"
                                     response = self.workspace_client.statement_execution.execute_statement(
                                         statement=query,
                                         warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,

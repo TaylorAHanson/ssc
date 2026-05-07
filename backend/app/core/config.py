@@ -153,7 +153,7 @@ class Settings(BaseSettings):
     DATABRICKS_TOKEN: str = ""  # SECRET: Set in .env
     DATABRICKS_WORKSPACE_URL: str = ""
     DATABRICKS_WAREHOUSE_ID: str = "" # SQL Warehouse ID for running queries
-    DATABRICKS_ADOC_HISTORY_TABLE: str = "taylor_hanson_build_catalog.main.adoc_dq_history" # Table with ADOC DQ history
+    DATA_QUALITY_TABLE: str = "" # Table with ADOC DQ history
     
     # Databricks MWS (Account-level) Settings for Workspace Provisioning
     # SECRET: Set in .env file

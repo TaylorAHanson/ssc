@@ -18,21 +18,21 @@ features:
   calendar: true # Turns on the calendar feature
 
 ui:
-  app_switcher:
-    - id: "command-center"
-      name: "Command Center"
-      description: "Dashboards & widgets"
-      icon: "MonitorDot"
-      href: null
-      accent_color: "#007BFF"
-      accent_bg: "#EBF4FF"
+  app_switcher:    
     - id: "self-service"
       name: "Self Service Center"
       description: "Data access & provisioning"
       icon: "Headphones"
-      href: "https://example.com/"
+      href: null
       accent_color: "#00875A"
       accent_bg: "#E3F9F0"
+    - id: "command-center"
+      name: "Command Center"
+      description: "Dashboards & widgets"
+      icon: "MonitorDot"
+      href: "https://example.com/"
+      accent_color: "#007BFF"
+      accent_bg: "#EBF4FF"
     - id: "third-app"
       name: "Third App"
       description: "Another internal app"

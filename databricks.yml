@@ -88,6 +88,8 @@ resources:
             value: "INFO"
           - name: EVENT_SYNC_INTERVAL_MINUTES
             value: "60"
+          - name: DATA_QUALITY_TABLE
+            value: "${var.data_quality_table}"
 
       user_api_scopes:
         - "sql"
@@ -180,6 +182,9 @@ variables:
   model_serving_endpoint:
     description: "Model Serving Endpoint for Agent LLM"
     default: "databricks-claude-sonnet-4-6"
+  data_quality_table:
+    description: "Table where data quality results are stored"
+    default: "atlas_local_catalog.atlas.data_quality_results"
 
 # Target environments
 targets:
@@ -200,6 +205,7 @@ targets:
       app_name: "atlas-local-${var.dev_user}"
       environment: "local"
       source_code_path: "."
+      data_quality_table: "atlas_local_catalog.atlas.data_quality_results"
 
   # Development environment
   dev:
@@ -217,6 +223,7 @@ targets:
       app_name: "atlas-dev"
       environment: "dev"
       source_code_path: "."
+      data_quality_table: "atlas_dev_catalog.atlas.data_quality_results"
 
   # Staging environment
   stage:
@@ -234,6 +241,7 @@ targets:
       app_name: "atlas-stage"
       environment: "stage"
       source_code_path: "."
+      data_quality_table: "atlas_stage_catalog.atlas.data_quality_results"
 
   # Production environment
   prod:
@@ -251,3 +259,4 @@ targets:
       app_name: "atlas-prod"
       environment: "prod"
       source_code_path: "."
+      data_quality_table: "atlas_prod_catalog.atlas.data_quality_results"
