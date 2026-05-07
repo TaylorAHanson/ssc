@@ -1,5 +1,5 @@
 bundle:
-  name: atlas
+  name: edh-ssc
   # Require minimum CLI version for Databricks Apps with app.config support
   databricks_cli_version: ">=0.283.0"
 
@@ -7,25 +7,27 @@ bundle:
 resources:
   
   database_instances:
-    atlas_db:
-      name: "atlas-${var.environment}-v1"
+    edh_ssc_db:
+      name: "edh-ssc-${var.environment}-v5"
       enable_pg_native_login: true
       capacity: "CU_1"
+      lifecycle:
+        prevent_destroy: true
       permissions:
         - level: CAN_USE
           group_name: "users"
 
   # Apps
   apps:
-    atlas:
+    edh-ssc:
       name: ${var.app_name}
-      description: "ATLAS - Self-service platform for ${var.environment}"
+      description: "edh-ssc - Self-service platform for ${var.environment}"
       source_code_path: "${var.source_code_path}"
       resources:
         - name: postgres
           database:
             database_name: databricks_postgres
-            instance_name: ${resources.database_instances.atlas_db.name}
+            instance_name: ${resources.database_instances.edh_ssc_db.name}
             permission: CAN_CONNECT_AND_CREATE
       config:
         command:
@@ -53,7 +55,7 @@ resources:
           - name: GIT_TOKEN_SECRET_KEY
             value: "${var.github_pat_secret_key}"
           - name: GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE
-            value: "atlas-hub"
+            value: "edh-ssc-hub"
           - name: GITHUB_APP_PRIVATE_KEY_SECRET_KEY
             value: "github-app-private-key"
           - name: DATABRICKS_WAREHOUSE_ID
@@ -83,13 +85,11 @@ resources:
           - name: API_V1_PREFIX
             value: "/api/v1"
           - name: PROJECT_NAME
-            value: "atlas"
+            value: "edh-ssc"
           - name: LOG_LEVEL
             value: "INFO"
           - name: EVENT_SYNC_INTERVAL_MINUTES
             value: "60"
-          - name: DATA_QUALITY_TABLE
-            value: "${var.data_quality_table}"
 
       user_api_scopes:
         - "sql"
@@ -104,35 +104,49 @@ resources:
           group_name: "users"
 
 # Sync configuration
-# Only sync what the app needs at runtime:
-#   - backend/** (Python app + pre-built frontend in backend/static/)
-#   - configuration.yaml (app branding/config)
-# Frontend source (src/**, public/**, package.json, etc.) is NOT needed —
-# deploy.sh builds it locally and copies output to backend/static/.
 sync:
   include:
+    - package.json
+    - vite.config.ts
+    - tsconfig.json
+    - tailwind.config.js
+    - postcss.config.js
+    - eslint.config.js
+    - index.html
+    - src/**
+    - public/**
+    # Include all backend code
     - backend/**
     - configuration.yaml
   exclude:
-    - node_modules
-    - node_modules/**
-    - dist
-    - dist/**
-    - .git/**
-    - "*.local"
-    - .DS_Store
-    - backend/bin/**
+    # Python cache and compiled files
     - backend/__pycache__/**
     - backend/**/__pycache__/**
     - backend/**/*.pyc
+    - backend/**/*.pyo
+    # Virtual environment
     - backend/venv/**
+    - backend/.venv/**
+    # Environment and config files
     - backend/.env
+    - backend/.env.*
+    # Database files
     - backend/*.db
+    # IDE and OS files
     - backend/.DS_Store
     - backend/**/.DS_Store
+    # Test and cache directories
+    - backend/.pytest_cache/**
+    - backend/.mypy_cache/**
+    # Build artifacts
+    - backend/*.egg-info/**
+    - backend/dist/**
+    - backend/build/**
+    # Logs
     - backend/*.log
+    # Git files
     - backend/.git/**
-    - backend/tests/**
+    - backend/.gitignore
 
 # Variables
 variables:
@@ -141,7 +155,7 @@ variables:
     default: "taylor"
   app_name:
     description: "Application name"
-    default: "atlas"
+    default: "edh-ssc"
   environment:
     description: "Environment name (local, dev, stage, prod)"
     default: "local"
@@ -156,13 +170,13 @@ variables:
     default: "volume"
   gitops_volume_path:
     description: "Unity Catalog Volume path for GitOps requests"
-    default: "/Volumes/atlas_dev_catalog/atlas/gitops_requests"
+    default: "/Volumes/edh-ssc_dev_catalog/edh-ssc/gitops_requests"
   git_username:
     description: "Username for GitOps commits"
-    default: "atlas Bot"
+    default: "edh-ssc Bot"
   git_email:
     description: "Email for GitOps commits"
-    default: "atlas-bot@databricks.com"
+    default: "edh-ssc-bot@databricks.com"
   infra_repo_url:
     description: "URL for the infrastructure repository"
     default: "https://github.com/databricks-field-eng/fe-agentic-self-service-terraform"
@@ -171,7 +185,7 @@ variables:
     default: "main"
   github_pat_secret_scope:
     description: "Secret scope for GitHub PAT"
-    default: "atlas-hub"
+    default: "edh-ssc-hub"
   github_pat_secret_key:
     description: "Secret key for GitHub PAT"
     default: "github-pat"
@@ -182,9 +196,6 @@ variables:
   model_serving_endpoint:
     description: "Model Serving Endpoint for Agent LLM"
     default: "databricks-claude-sonnet-4-6"
-  data_quality_table:
-    description: "Table where data quality results are stored"
-    default: "atlas_local_catalog.atlas.data_quality_results"
 
 # Target environments
 targets:
@@ -198,14 +209,13 @@ targets:
         Repo_name: "${bundle.name}"
         deployed_via: "local"
         Environment: "local"
-        Application: "ATLAS Self-Service"
+        Application: "edh-ssc Self-Service"
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     variables:
-      app_name: "atlas-local-${var.dev_user}"
+      app_name: "edh-ssc-local-${var.dev_user}"
       environment: "local"
       source_code_path: "."
-      data_quality_table: "atlas_local_catalog.atlas.data_quality_results"
 
   # Development environment
   dev:
@@ -216,14 +226,13 @@ targets:
         Repo_name: "${bundle.name}"
         deployed_via: "CICD"
         Environment: "dev"
-        Application: "ATLAS Self-Service"
+        Application: "edh-ssc Self-Service"
     workspace:
       root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
     variables:
-      app_name: "atlas-dev"
+      app_name: "edh-ssc-dev"
       environment: "dev"
       source_code_path: "."
-      data_quality_table: "atlas_dev_catalog.atlas.data_quality_results"
 
   # Staging environment
   stage:
@@ -234,14 +243,13 @@ targets:
         Repo_name: "${bundle.name}"
         deployed_via: "CICD"
         Environment: "stage"
-        Application: "ATLAS Self-Service"
+        Application: "edh-ssc Self-Service"
     workspace:
       root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
     variables:
-      app_name: "atlas-stage"
+      app_name: "edh-ssc-stage"
       environment: "stage"
       source_code_path: "."
-      data_quality_table: "atlas_stage_catalog.atlas.data_quality_results"
 
   # Production environment
   prod:
@@ -252,11 +260,10 @@ targets:
         Repo_name: "${bundle.name}"
         deployed_via: "CICD"
         Environment: "prod"
-        Application: "ATLAS Self-Service"
+        Application: "edh-ssc Self-Service"
     workspace:
       root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
     variables:
-      app_name: "atlas-prod"
+      app_name: "edh-ssc-prod"
       environment: "prod"
       source_code_path: "."
-      data_quality_table: "atlas_prod_catalog.atlas.data_quality_results"
