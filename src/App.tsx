@@ -31,10 +31,13 @@ function App() {
   useEffect(() => {
     fetchBannerMessage();
     fetchBranding();
+  }, [fetchBannerMessage, fetchBranding]);
+
+  useEffect(() => {
     if (hydrated) {
       fetchCurrentUser();
     }
-  }, [fetchBannerMessage, fetchBranding, fetchCurrentUser, hydrated]);
+  }, [fetchCurrentUser, hydrated]);
 
   if (!hasLoaded) {
     return null; // Don't render anything until branding is loaded to prevent flash
