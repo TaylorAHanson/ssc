@@ -24,9 +24,19 @@ class DataContractResponse(BaseModel):
     is_active: bool
     created_at: datetime
     created_by: Optional[str]
+    
+    # Asset fields
+    catalog: Optional[str] = None
+    schema_name: Optional[str] = None
+    table_name: Optional[str] = None
+    data_quality: Optional[dict] = None
+    certification_violations: Optional[List[str]] = None
+    certified: Optional[bool] = False
+    last_synced_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 class DataContractCreate(BaseModel):
     dataset_id: str
@@ -223,14 +233,79 @@ async def run_sync_contracts_background(dataset_groups: dict, force: bool):
 @router.get("/", response_model=List[DataContractResponse])
 def list_contracts(db: Session = Depends(get_db)):
     """List all active data contracts."""
-    return db.query(DataContractModel).filter(DataContractModel.is_active == True).all()
+    import json
+    contracts = db.query(DataContractModel).filter(DataContractModel.is_active == True).all()
+    results = []
+    for c in contracts:
+        asset = db.query(DataAssetModel).filter(DataAssetModel.id == c.dataset_id).first()
+        contract_dict = {
+            "id": c.id,
+            "dataset_id": c.dataset_id,
+            "yaml_content": c.yaml_content,
+            "version": c.version,
+            "is_active": c.is_active,
+            "created_at": c.created_at,
+            "created_by": c.created_by,
+        }
+        if asset:
+            violations = asset.certification_violations
+            if isinstance(violations, str):
+                try:
+                    violations = json.loads(violations)
+                except Exception:
+                    violations = None
+                    
+            contract_dict.update({
+                "catalog": asset.catalog,
+                "schema_name": asset.schema,
+                "table_name": asset.table_name,
+                "data_quality": asset.data_quality,
+                "certification_violations": violations,
+                "certified": asset.certified,
+                "last_synced_at": asset.last_synced_at
+            })
+        results.append(contract_dict)
+    return results
 
 @router.get("/{dataset_id}", response_model=List[DataContractResponse])
 def get_contract_history(dataset_id: str, db: Session = Depends(get_db)):
     """Get the version history for a specific dataset contract."""
-    return db.query(DataContractModel).filter(
+    import json
+    contracts = db.query(DataContractModel).filter(
         DataContractModel.dataset_id == dataset_id
     ).order_by(DataContractModel.version.desc()).all()
+    
+    asset = db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
+    results = []
+    for c in contracts:
+        contract_dict = {
+            "id": c.id,
+            "dataset_id": c.dataset_id,
+            "yaml_content": c.yaml_content,
+            "version": c.version,
+            "is_active": c.is_active,
+            "created_at": c.created_at,
+            "created_by": c.created_by,
+        }
+        if asset:
+            violations = asset.certification_violations
+            if isinstance(violations, str):
+                try:
+                    violations = json.loads(violations)
+                except Exception:
+                    violations = None
+                    
+            contract_dict.update({
+                "catalog": asset.catalog,
+                "schema_name": asset.schema,
+                "table_name": asset.table_name,
+                "data_quality": asset.data_quality,
+                "certification_violations": violations,
+                "certified": asset.certified,
+                "last_synced_at": asset.last_synced_at
+            })
+        results.append(contract_dict)
+    return results
 
 @router.post("", response_model=DataContractResponse)
 @router.post("/", response_model=DataContractResponse)

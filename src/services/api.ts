@@ -810,6 +810,14 @@ export interface DataContract {
   is_active: boolean;
   created_at: string;
   created_by: string | null;
+  // Asset fields
+  catalog?: string | null;
+  schema_name?: string | null;
+  table_name?: string | null;
+  data_quality?: any | null;
+  certification_violations?: string[] | null;
+  certified?: boolean;
+  last_synced_at?: string | null;
 }
 
 export async function getDataContracts(): Promise<DataContract[]> {

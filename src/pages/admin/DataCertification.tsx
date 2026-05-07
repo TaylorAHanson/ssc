@@ -1,18 +1,15 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, ChevronUp, ChevronDown, Filter, Trash2 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { api } from '../../services/api';
-import type { DataAsset } from '../../services/api';
 import type { DataContract } from '../../services/api';
 import { format, parseISO } from 'date-fns';
 import Editor from '@monaco-editor/react';
 import yaml from 'js-yaml';
 
 export function DataCertification() {
-  const [datasets, setDatasets] = useState<DataAsset[]>([]);
-  const [contractsMap, setContractsMap] = useState<Record<string, DataContract>>({});
+  const [datasets, setDatasets] = useState<DataContract[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState<'name' | 'reliability' | 'lastRun' | 'created'>('name');
@@ -23,7 +20,7 @@ export function DataCertification() {
 
   // Editor State
   const [isEditorOpen, setIsEditorOpen] = useState(false);
-  const [editingAsset, setEditingAsset] = useState<DataAsset | null>(null);
+  const [editingAsset, setEditingAsset] = useState<DataContract | null>(null);
   const [yamlContent, setYamlContent] = useState('');
   const [yamlError, setYamlError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -31,7 +28,7 @@ export function DataCertification() {
   const [showHistory, setShowHistory] = useState(false);
   
   // Violations Modal State
-  const [violationAsset, setViolationAsset] = useState<DataAsset | null>(null);
+  const [violationAsset, setViolationAsset] = useState<DataContract | null>(null);
 
   const fetchHistory = async (datasetId: string, contractUrl?: string | null) => {
     try {
@@ -65,17 +62,12 @@ export function DataCertification() {
     }
   };
 
-  const handleEdit = (dataset: DataAsset) => {
+  const handleEdit = (dataset: DataContract) => {
     setEditingAsset(dataset);
     setIsEditorOpen(true);
     setYamlError(null);
     setShowHistory(false);
-    if (dataset.contract_url) {
-      fetchHistory(dataset.id, dataset.contract_url);
-    } else {
-      setYamlContent('');
-      setYamlError('No existing contract found to edit. Please use the "Sync Data Contracts" button first.');
-    }
+    fetchHistory(dataset.dataset_id, `/governance/certification?dataset=${dataset.dataset_id}`);
   };
 
   const handleDeleteContract = async (datasetId: string) => {
@@ -87,14 +79,8 @@ export function DataCertification() {
       await api.deleteDataContract(datasetId);
       
       // Reload assets to reflect changes
-      const [data, contracts] = await Promise.all([
-        api.getDataAssets({ certification_only: true }),
-        api.getDataContracts()
-      ]);
-      const map: Record<string, DataContract> = {};
-      contracts.forEach(c => map[c.dataset_id] = c);
-      setContractsMap(map);
-      setDatasets(data.filter(d => map[d.id] || d.contract_url || d.certified || d.data_quality));
+      const contracts = await api.getDataContracts();
+      setDatasets(contracts);
     } catch (e: any) {
       console.error('Failed to delete contract', e);
       alert('Failed to delete contract: ' + e.message);
@@ -116,7 +102,7 @@ export function DataCertification() {
     if (yamlError) return;
     setIsSaving(true);
     try {
-      let datasetId = editingAsset?.id;
+      let datasetId = editingAsset?.dataset_id;
       if (!datasetId) {
         const parsed = yaml.load(yamlContent) as any;
         const servers = parsed.servers || [];
@@ -130,14 +116,8 @@ export function DataCertification() {
       await api.createDataContract(datasetId, yamlContent);
       setIsEditorOpen(false);
       // Reload assets to reflect changes
-      const [data, contracts] = await Promise.all([
-        api.getDataAssets({ certification_only: true }),
-        api.getDataContracts()
-      ]);
-      const map: Record<string, DataContract> = {};
-      contracts.forEach(c => map[c.dataset_id] = c);
-      setContractsMap(map);
-      setDatasets(data.filter(d => d.contract_url || d.certified || d.data_quality));
+      const contracts = await api.getDataContracts();
+      setDatasets(contracts);
     } catch (e: any) {
       setYamlError(e.message || 'Failed to save data contract');
     } finally {
@@ -154,14 +134,8 @@ export function DataCertification() {
       setTimeout(() => setSyncMessage(null), 5000);
       
       // Reload assets to reflect changes
-      const [data, contracts] = await Promise.all([
-        api.getDataAssets({ certification_only: true }),
-        api.getDataContracts()
-      ]);
-      const map: Record<string, DataContract> = {};
-      contracts.forEach(c => map[c.dataset_id] = c);
-      setContractsMap(map);
-      setDatasets(data.filter(d => map[d.id] || d.contract_url || d.certified || d.data_quality));
+      const contracts = await api.getDataContracts();
+      setDatasets(contracts);
       
     } catch (e: any) {
       console.error(e);
@@ -176,15 +150,9 @@ export function DataCertification() {
     let mounted = true;
     async function loadData() {
       try {
-        const [data, contracts] = await Promise.all([
-          api.getDataAssets({ certification_only: true }),
-          api.getDataContracts()
-        ]);
+        const contracts = await api.getDataContracts();
         if (mounted) {
-          const map: Record<string, DataContract> = {};
-          contracts.forEach(c => map[c.dataset_id] = c);
-          setContractsMap(map);
-          setDatasets(data.filter(d => map[d.id] || d.contract_url || d.certified || d.data_quality));
+          setDatasets(contracts);
         }
       } catch (e) {
         console.error('Failed to load data assets for certification', e);
@@ -212,39 +180,38 @@ export function DataCertification() {
     return sortDirection === 'asc' ? <ChevronUp className="w-3 h-3 text-primary" /> : <ChevronDown className="w-3 h-3 text-primary" />;
   };
 
-  const getStatus = (ds: DataAsset, contract: DataContract) => {
-    const dq = ds.data_quality || {} as any;
+  const getStatus = (contract: DataContract) => {
+    const dq = contract.data_quality || {} as any;
     const rel = dq.failed_rule_count !== undefined ? dq.failed_rule_count : (dq.reliability !== undefined ? dq.reliability : 'N/A');
-    const isInvalid = contract && contract.yaml_content.toLowerCase().includes('changeme');
+    const isInvalid = contract.yaml_content.toLowerCase().includes('changeme');
 
     if (isInvalid) return 'invalid';
     
-    const hasBeenScanned = ds.certification_violations !== null && ds.certification_violations !== undefined;
-    const hasViolations = hasBeenScanned && ds.certification_violations!.length > 0;
-    const isClean = hasBeenScanned && ds.certification_violations!.length === 0;
+    const hasBeenScanned = contract.certification_violations !== null && contract.certification_violations !== undefined;
+    const hasViolations = hasBeenScanned && contract.certification_violations!.length > 0;
+    const isClean = hasBeenScanned && contract.certification_violations!.length === 0;
 
-    if (ds.certified || (contract && isClean)) return 'certified';
+    if (contract.certified || isClean) return 'certified';
     if (hasViolations) return 'uncertified';
-    if (ds.contract_url) return 'pending';
     if (rel === 'N/A') return 'awaiting';
     return 'uncertified';
   };
 
   const processedDatasets = datasets
-    .filter(ds => {
-      const matchesSearch = ds.table_name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                            `${ds.catalog}.${ds.schema_name}`.toLowerCase().includes(searchTerm.toLowerCase());
+    .filter(contract => {
+      const tbName = contract.table_name || contract.dataset_id || '';
+      const matchesSearch = tbName.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            `${contract.catalog || ''}.${contract.schema_name || ''}`.toLowerCase().includes(searchTerm.toLowerCase());
       if (statusFilter === 'all') return matchesSearch;
       
-      const contract = contractsMap[ds.id];
-      return matchesSearch && getStatus(ds, contract) === statusFilter;
+      return matchesSearch && getStatus(contract) === statusFilter;
     })
     .sort((a, b) => {
       const dqA = a.data_quality || {} as any;
       const dqB = b.data_quality || {} as any;
       
-      let valA: any = a.table_name.toLowerCase();
-      let valB: any = b.table_name.toLowerCase();
+      let valA: any = (a.table_name || a.dataset_id || '').toLowerCase();
+      let valB: any = (b.table_name || b.dataset_id || '').toLowerCase();
       
       if (sortField === 'reliability') {
         valA = dqA.failed_rule_count !== undefined ? dqA.failed_rule_count : (dqA.reliability !== undefined && dqA.reliability !== 'N/A' ? Number(dqA.reliability) : -1);
@@ -368,24 +335,23 @@ export function DataCertification() {
                     <td colSpan={9} className="p-6 text-center text-gray-500">No datasets found.</td>
                   </tr>
                 ) : (
-                  processedDatasets.map(ds => {
-                    const dq = ds.data_quality || {} as any;
+                  processedDatasets.map(contract => {
+                    const dq = contract.data_quality || {} as any;
                     
                     const rel = dq.failed_rule_count !== undefined ? dq.failed_rule_count : (dq.reliability !== undefined ? dq.reliability : 'N/A');
                     const freshness = dq.freshness || 'N/A';
                     const drift = dq.drift || 'N/A';
-                    const lastRun = ds.last_synced_at ? format(parseISO(ds.last_synced_at), 'MMM d, HH:mm') : 'Unknown';
-                    const createdDate = ds.created_at ? format(parseISO(ds.created_at), 'MMM d, yyyy') : 'Unknown';
+                    const lastRun = contract.last_synced_at ? format(parseISO(contract.last_synced_at), 'MMM d, HH:mm') : 'Unknown';
+                    const createdDate = contract.created_at ? format(parseISO(contract.created_at), 'MMM d, yyyy') : 'Unknown';
 
-                    const contract = contractsMap[ds.id];
-                    const isInvalid = contract && contract.yaml_content.toLowerCase().includes('changeme');
+                    const isInvalid = contract.yaml_content.toLowerCase().includes('changeme');
 
                     return (
-                      <tr key={ds.id} className="hover:bg-gray-50 transition-colors">
+                      <tr key={contract.dataset_id} className="hover:bg-gray-50 transition-colors">
                         <td className="p-3 pl-4">
-                          <div className="font-medium text-gray-900">{ds.table_name}</div>
+                          <div className="font-medium text-gray-900">{contract.table_name || contract.dataset_id}</div>
                           <div className="text-xs text-gray-500 font-mono mt-0.5">
-                            {ds.catalog}{ds.schema_name ? `.${ds.schema_name}` : ''}
+                            {contract.catalog || ''}{contract.schema_name ? `.${contract.schema_name}` : ''}
                           </div>
                         </td>
                         <td className="p-3">
@@ -393,27 +359,20 @@ export function DataCertification() {
                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
                               <AlertCircle className="w-3 h-3 mr-1" /> Invalid
                             </span>
-                          ) : (ds.certified || (contract && ds.certification_violations && ds.certification_violations.length === 0)) ? (
+                          ) : (contract.certified || (contract.certification_violations && contract.certification_violations.length === 0)) ? (
                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
                               <CheckCircle2 className="w-3 h-3 mr-1" /> Certified
                             </span>
-                          ) : (ds.certification_violations && ds.certification_violations.length > 0) ? (
+                          ) : (contract.certification_violations && contract.certification_violations.length > 0) ? (
                             <div className="group relative inline-block">
                               <button
-                                onClick={() => setViolationAsset(ds)}
+                                onClick={() => setViolationAsset(contract)}
                                 className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800 cursor-pointer hover:bg-gray-200 transition-colors"
                               >
                                 Uncertified
                                 <AlertCircle className="w-3 h-3 ml-1 text-amber-500" />
                               </button>
                             </div>
-                          ) : ds.contract_url ? (
-                            <Link 
-                              to={ds.contract_url.startsWith('/requests') ? '/approvals' : `/governance/certification?dataset=${ds.id}`}
-                              className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 hover:bg-blue-200 transition-colors"
-                            >
-                              {ds.contract_url.startsWith('/requests') ? 'Pending Approval \u2192' : 'Pending'}
-                            </Link>
                           ) : rel === 'N/A' ? (
                             <span 
                               className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800"
@@ -449,23 +408,21 @@ export function DataCertification() {
                             <Button 
                               variant="outline" 
                               size="sm" 
-                              onClick={() => handleEdit(ds)}
+                              onClick={() => handleEdit(contract)}
                               className="text-xs h-7 px-2 border-blue-200 text-blue-600 hover:bg-blue-50"
                             >
                               <Edit className="w-3 h-3 mr-1" />
                               Edit Contract
                             </Button>
-                            {(contract || ds.contract_url) && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleDeleteContract(ds.id)}
-                                className="text-xs h-7 px-2 border-red-200 text-red-600 hover:bg-red-50"
-                                title="Delete Contract"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </Button>
-                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDeleteContract(contract.dataset_id)}
+                              className="text-xs h-7 px-2 border-red-200 text-red-600 hover:bg-red-50"
+                              title="Delete Contract"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </Button>
                           </div>
                         </td>
                       </tr>
@@ -593,7 +550,7 @@ export function DataCertification() {
                   <AlertCircle className="w-5 h-5 text-amber-500" />
                   Policy Violations
                 </h3>
-                <p className="text-xs text-gray-500 mt-1 font-mono">{violationAsset.catalog}.{violationAsset.schema_name}.{violationAsset.table_name}</p>
+                <p className="text-xs text-gray-500 mt-1 font-mono">{violationAsset.catalog || ''}.{violationAsset.schema_name || ''}.{violationAsset.table_name || violationAsset.dataset_id}</p>
               </div>
               <Button 
                 variant="ghost" 
