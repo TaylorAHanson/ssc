@@ -52,3 +52,6 @@ test.db
 
 # Static files
 backend/static/
+
+# Local sync script
+sync-personal.sh

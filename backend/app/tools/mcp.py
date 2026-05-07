@@ -39,7 +39,16 @@ class McpTool:
     @property
     def input_schema(self) -> Dict[str, Any]:
         """Returns the JSON schema for the input parameters."""
-        return self._args_schema.model_json_schema()
+        schema = self._args_schema.model_json_schema()
+        
+        # Patch schema for strict validation by some LLMs (e.g. Databricks FM APIs)
+        # Ensure array types have an 'items' definition.
+        if "properties" in schema:
+            for prop_name, prop_def in schema["properties"].items():
+                if prop_def.get("type") == "array" and "items" not in prop_def:
+                    prop_def["items"] = {"type": "string"}
+                    
+        return schema
         
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """Executes the wrapped function with the provided arguments."""

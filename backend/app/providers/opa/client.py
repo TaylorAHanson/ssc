@@ -72,7 +72,28 @@ class OpaProvider(BaseProvider):
                 logger.warning(f"Failed to copy and make {bundled_linux} executable in /tmp: {e}")
         else:
             # 1.5. Fallback: If not found, try downloading it to /tmp
-            dest_path = "/tmp/opa_linux_amd64"
+            import platform
+            import sys
+            
+            system = sys.platform.lower()
+            machine = platform.machine().lower()
+            
+            os_name = "linux"
+            if system.startswith("darwin"):
+                os_name = "darwin"
+            elif system.startswith("win"):
+                os_name = "windows"
+                
+            arch_name = "amd64"
+            if machine in ["arm64", "aarch64"]:
+                arch_name = "arm64"
+                
+            bin_name = f"opa_{os_name}_{arch_name}_static"
+            if os_name == "windows":
+                bin_name = f"opa_{os_name}_{arch_name}.exe"
+                
+            dest_path = f"/tmp/{bin_name}"
+            
             if os.path.isfile(dest_path) and os.access(dest_path, os.X_OK):
                 return dest_path
                 
@@ -80,7 +101,7 @@ class OpaProvider(BaseProvider):
             try:
                 import stat
                 import urllib.request
-                opa_url = "https://openpolicyagent.org/downloads/v0.61.0/opa_linux_amd64_static"
+                opa_url = f"https://openpolicyagent.org/downloads/v0.61.0/{bin_name}"
                 urllib.request.urlretrieve(opa_url, dest_path)
                 
                 st = os.stat(dest_path)

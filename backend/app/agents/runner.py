@@ -195,12 +195,9 @@ class AgentRunner:
     def _format_tools_for_llm(self, tools: List[Any]) -> Optional[List[Dict[str, Any]]]:
         if not tools: return None
         
-        def map_type(t: str) -> str:
-            mapping = {"float": "number", "int": "number", "str": "string", "bool": "boolean", "object": "object", "array": "array"}
-            return mapping.get(t.lower(), "string")
-
         formatted = []
         for tool in tools:
+            # tool.input_schema is already a valid JSON schema (patched in mcp.py)
             schema = tool.input_schema if isinstance(tool.input_schema, dict) else (
                 tool.input_schema.model_json_schema() if hasattr(tool.input_schema, "model_json_schema") 
                 else tool.input_schema.schema()
@@ -213,10 +210,7 @@ class AgentRunner:
                     "description": tool.description,
                     "parameters": {
                         "type": "object",
-                        "properties": {
-                            p: {"type": map_type(info.get("type", "string")), "description": info.get("description", "")}
-                            for p, info in schema.get("properties", {}).items()
-                        },
+                        "properties": schema.get("properties", {}),
                         "required": schema.get("required", [])
                     }
                 }

@@ -166,6 +166,7 @@ class Settings(BaseSettings):
     MODEL_SERVING_AGENT_LLM_ENDPOINT: str = ""
     MODEL_SERVING_CLASSIFIER_ENDPOINT: str = ""
     MODEL_SERVING_API_KEY: str = ""  # SECRET: Set in .env
+    MODEL_SERVING_TIMEOUT_SECONDS: float = 300.0
     
     # Poller Settings
     POLLER_INTERVAL_SECONDS: int = 5  # How often to poll for new requests
@@ -189,7 +190,13 @@ class Settings(BaseSettings):
     
     # Calendar Settings
     EVENT_CALENDAR_URL: str = ""
-    EVENT_SYNC_INTERVAL_MINUTES: int = 60
+    EVENT_SYNC_CRON: str = "0 * * * *"
+    
+    # Data Asset Settings
+    DATA_ASSET_SYNC_CRON: str = "0 * * * *"
+    
+    # Sentinel Settings
+    ENFORCEMENT_SENTINEL_CRON: str = "*/30 * * * *"  # Cron schedule to automatically run sentinel (empty = disabled)
     
     # Retry Settings
     DEFAULT_MAX_RETRIES: int = 3

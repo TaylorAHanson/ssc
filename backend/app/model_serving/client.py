@@ -122,7 +122,7 @@ class ModelServingClient:
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             },
-            timeout=60.0
+            timeout=120.0  # 2 minutes to accommodate long-running LLM generation
         )
     
     @retry_on_retryable(max_attempts=5, min_wait=2.0, max_wait=30.0)

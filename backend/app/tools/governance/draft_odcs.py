@@ -248,8 +248,18 @@ slaProperties:
 """
         
         messages = [{"role": "user", "content": prompt}]
-        response = await client.generate_response(messages=messages, temperature=0.2)
+        logger.info(f"Sending request to LLM for datasets: {dataset_ids}")
+        logger.debug(f"LLM Prompt length: {len(prompt)} chars")
+        
+        response = await client.generate_response(
+            messages=messages, 
+            temperature=0.2,
+            max_tokens=8000
+        )
         content = response.get("content", "")
+        
+        logger.info(f"Received response from LLM for datasets: {dataset_ids}")
+        logger.debug(f"LLM Response snippet: {content[:200]}...")
         
         content = content.replace("```yaml", "").replace("```yml", "").replace("```", "").strip()
         
