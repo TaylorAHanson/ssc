@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from datetime import datetime
 
-from app.db.session import get_lakebase_session
+from app.db.session import get_db
 from app.db.data_contract import DataContractModel
 from app.db.data_asset import DataAssetModel
 from pydantic import BaseModel
@@ -37,7 +37,7 @@ async def sync_contracts(
     background_tasks: BackgroundTasks,
     force: bool = False,
     current_user = Depends(get_current_user),
-    db: Session = Depends(get_lakebase_session)
+    db: Session = Depends(get_db)
 ):
     from app.tools.governance.draft_odcs import draft_odcs_contract
     from app.tools.execute_workflow import execute_workflow
@@ -221,12 +221,12 @@ async def run_sync_contracts_background(dataset_groups: dict, force: bool):
 
 @router.get("", response_model=List[DataContractResponse])
 @router.get("/", response_model=List[DataContractResponse])
-def list_contracts(db: Session = Depends(get_lakebase_session)):
+def list_contracts(db: Session = Depends(get_db)):
     """List all active data contracts."""
     return db.query(DataContractModel).filter(DataContractModel.is_active == True).all()
 
 @router.get("/{dataset_id}", response_model=List[DataContractResponse])
-def get_contract_history(dataset_id: str, db: Session = Depends(get_lakebase_session)):
+def get_contract_history(dataset_id: str, db: Session = Depends(get_db)):
     """Get the version history for a specific dataset contract."""
     return db.query(DataContractModel).filter(
         DataContractModel.dataset_id == dataset_id
@@ -234,7 +234,7 @@ def get_contract_history(dataset_id: str, db: Session = Depends(get_lakebase_ses
 
 @router.post("", response_model=DataContractResponse)
 @router.post("/", response_model=DataContractResponse)
-def create_contract(contract: DataContractCreate, db: Session = Depends(get_lakebase_session)):
+def create_contract(contract: DataContractCreate, db: Session = Depends(get_db)):
     """Create a new version of a data contract."""
     # Validate YAML
     try:
@@ -307,7 +307,7 @@ def create_contract(contract: DataContractCreate, db: Session = Depends(get_lake
 async def delete_contract(
     dataset_id: str, 
     current_user = Depends(get_current_user),
-    db: Session = Depends(get_lakebase_session)
+    db: Session = Depends(get_db)
 ):
     """Delete all versions of a data contract and unset the asset contract_url."""
     # Check permissions - usually only admins or owners should delete contracts

@@ -9,7 +9,7 @@
     *   *Validation*: Alphanumeric with hyphens only.
 3.  **Project Name**: What is the name of the project?
     *   *Validation*: Alphanumeric with hyphens only.
-4.  **Check Availability**: Once you have the domain and project name, **MANDATORY**: Call `check_github_repo` with the name `edh-{businessdomain}-{projectname}` to ensure it is available.
+4.  **Check Availability**: Once you have the domain and project name, **MANDATORY**: Call `check_github_repo` with the name `atlas-{businessdomain}-{projectname}` to ensure it is available.
     *   If it exists already, ask the user for a different project name.
 5.  **Visibility**: Public (Internal) or Private?
     *   *Options*: `internal`, `private`.
@@ -19,8 +19,8 @@
     *   If they choose a template, use its `name` in the `execute_workflow` call.
 
 ## Naming Convention
-You MUST construct the repository name as: `edh-{businessdomain}-{projectname}`.
-Before executing, inform the user: "The repository will be created with the name: **edh-{businessdomain}-{projectname}**".
+You MUST construct the repository name as: `atlas-{businessdomain}-{projectname}`.
+Before executing, inform the user: "The repository will be created with the name: **atlas-{businessdomain}-{projectname}**".
 
 ## Disambiguation
 If you asked multiple questions and the user responds with one or two words and it isn't clear which question they are responding to, ask for clarification.
@@ -41,7 +41,7 @@ Call `execute_workflow` with:
 {
   "workflow_type": "github_repo_creation",
   "parameters": {
-    "repo_name": "edh-{businessdomain}-{projectname}",
+    "repo_name": "atlas-{businessdomain}-{projectname}",
     "description": "...",
     "visibility": "...",
     "template": "..."

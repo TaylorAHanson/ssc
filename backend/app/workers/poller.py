@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 from typing import Optional
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
-from app.db.session import get_lakebase_session, get_engine, reset_database_connection
+from app.db.session import get_db, get_engine, reset_database_connection
 from app.db.base import Base
 from app.db import RequestModel, FailureModel
 from app.state_machines.persistence import load_state_machine, save_state_machine
@@ -58,22 +58,33 @@ async def start_poller():
     
     poll_count = 0
     consecutive_db_errors = 0
+    
+    # Use a semaphore to limit concurrent asset sync tasks if they run long
+    sync_semaphore = asyncio.Semaphore(1)
+    
     while True:
         poll_count += 1
         try:
             logger.debug(f"Poller cycle #{poll_count} - checking for requests...")
-            await process_open_requests()
             
-            # Check for scheduled reports (could be throttled if needed, but checking DB is cheap)
-            await process_scheduled_reports()
-            
-            # Sync calendar events
+            # Start sync tasks in background so they don't block request processing
             if _yaml_config.get("features", {}).get("calendar", False):
-                await sync_calendar_task()
-            
-            # Sync data assets
+                asyncio.create_task(sync_calendar_task())
+                
             if _yaml_config.get("features", {}).get("data_discovery", False):
-                await sync_data_assets_task()
+                async def safe_sync_data_assets():
+                    if sync_semaphore.locked():
+                        return # Already syncing
+                    async with sync_semaphore:
+                        try:
+                            await sync_data_assets_task()
+                        except Exception as e:
+                            logger.error(f"Error in background data asset sync: {e}", exc_info=True)
+                
+                asyncio.create_task(safe_sync_data_assets())
+
+            await process_open_requests()
+            await process_scheduled_reports()
 
             consecutive_db_errors = 0  # Reset on success
         except Exception as e:
@@ -104,7 +115,7 @@ async def start_poller():
 
 async def process_open_requests():
     """Find and process all open requests in parallel."""
-    db = get_lakebase_session()
+    db = next(get_db())
     try:
         # Find requests that need processing (not completed/rejected/failed)
         # and are not locked (or lock has expired)
@@ -166,7 +177,7 @@ async def process_open_requests():
 
 async def process_scheduled_reports():
     """Check for and spawn scheduled reports."""
-    db = get_lakebase_session()
+    db = next(get_db())
     try:
         now = datetime.utcnow()
         due_subs = db.query(ReportSubscription).filter(
@@ -262,7 +273,7 @@ async def _send_failure_notification(request: RequestModel, error_message: str):
 async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
     """Process a single request with locking and error handling."""
     async with semaphore:  # Limit concurrent processing
-        db = get_lakebase_session()
+        db = next(get_db())
         heartbeat_task = None
         try:
             # Load request from database
@@ -370,7 +381,7 @@ async def _heartbeat_lock_loop(request_id: str, timeout_minutes: int):
             await asyncio.sleep(heartbeat_interval)
             
             # Extend the lock
-            db = get_lakebase_session()
+            db = next(get_db())
             try:
                 success = heartbeat_lock(
                     db, request_id, _worker_id, timeout_minutes
@@ -638,6 +649,15 @@ async def _handle_retryable_error(
         "worker_id": worker_id
     }
     
+    # Check if max retries exceeded
+    if request.retry_count >= request.max_retries:
+        logger.warning(
+            f"Request {request.id} exceeded max retries ({request.max_retries}), "
+            "marking as failed"
+        )
+        request.status = RequestStatus.FAILED.value
+        # Don't change current_state - keep the last valid state so state machine can still be loaded
+    
     # Log failure to failures table
     failure = FailureModel(
         id=f"fail-{datetime.utcnow().timestamp()}",
@@ -652,9 +672,12 @@ async def _handle_retryable_error(
     db.add(failure)
     db.commit()
     
-    logger.warning(
-        f"Retryable error for request {request.id} (attempt {request.retry_count}/{request.max_retries}): {error}"
-    )
+    if request.status == RequestStatus.FAILED.value:
+        await _send_failure_notification(request, f"Exceeded max retries ({request.max_retries}) after error: {error}")
+    else:
+        logger.warning(
+            f"Retryable error for request {request.id} (attempt {request.retry_count}/{request.max_retries}): {error}"
+        )
 
 
 async def _handle_permanent_error(

@@ -4,7 +4,7 @@ Tool to search for requests.
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
-from app.db.session import get_lakebase_session
+from app.db.session import get_db
 from app.db.request import RequestModel
 from sqlalchemy import or_
 
@@ -22,7 +22,7 @@ async def search_requests(query: Optional[str] = None, status: Optional[str] = N
     """
     Execute the search.
     """
-    db = get_lakebase_session()
+    db = next(get_db())
     try:
         sql_query = db.query(RequestModel)
         

@@ -2,7 +2,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict
-from app.db.session import get_lakebase_session
+from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
 from datetime import datetime
 import json
@@ -39,7 +39,9 @@ class DataAssetResponse(BaseModel):
 def list_data_assets(
     domain: Optional[str] = None,
     certified: Optional[bool] = None,
-    db: Session = Depends(get_lakebase_session)
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db)
 ):
     """
     List cached data assets for discovery.
@@ -52,7 +54,7 @@ def list_data_assets(
     if certified is not None:
         query = query.filter(DataAssetModel.certified == certified)
         
-    assets = query.all()
+    assets = query.offset(offset).limit(limit).all()
     
     # Map 'schema' column to 'schema_name' for the Pydantic model since 'schema' is a reserved field name in BaseModel in pydantic sometimes,
     # actually let's just construct the response properly.

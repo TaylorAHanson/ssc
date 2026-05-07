@@ -19,16 +19,17 @@ logger = logging.getLogger(__name__)
 @workflow(request_types=[RequestType.CATALOG_SCHEMA_TABLE_ACCESS, RequestType.BATCH_DATA_ACCESS, RequestType.DATA_ACCESS_REQUEST], feature_flag="core")
 class DataAccessStateMachine(BaseRequestStateMachine):
     """
-    State machine for requesting access to Unity Catalog assets.
+    State machine for requesting access to Unity Catalog assets
+    (catalogs, schemas, tables, views, volumes).
 
     Flow:
-        pending -> data_owner_approval -> provisioning -> completed
+        pending -> manager_approval -> data_owner_approval -> provisioning -> completed
 
-    The data owner must approve the request before access is granted.
-    Access is provisioned using the Databricks Unity Catalog Grants API.
-
-    NOTE: Manager approval is commented out for now. To enable it, uncomment
-    the manager_approval state and related transitions below.
+    Both the requester's manager and the asset's data owner must approve
+    before access is granted. Manager email is collected from the requester
+    via the agent; data owner is auto-resolved by querying Unity Catalog.
+    Access is provisioned by executing SQL GRANT statements through a
+    serverless SQL warehouse.
     """
 
     # Override completion facts mapping for UI state tracking
@@ -196,6 +197,29 @@ class DataAccessStateMachine(BaseRequestStateMachine):
                         self.db.refresh(self.request)
                         logger.info(f"[{self.request.id}] Persisted data_owner_email to database")
 
+                        # Backfill the pending data_owner approval row with the
+                        # resolved assignee. The approval row is created by the
+                        # sync on_enter hook before this async owner lookup runs,
+                        # so assigned_to_email/role would otherwise stay null and
+                        # the /approve endpoint authorization would block the owner.
+                        from app.db import ApprovalModel
+                        approval_row = (
+                            self.db.query(ApprovalModel)
+                            .filter(
+                                ApprovalModel.request_id == self.request.id,
+                                ApprovalModel.approval_type == "data_owner",
+                                ApprovalModel.status == "pending",
+                            )
+                            .first()
+                        )
+                        if approval_row and not approval_row.assigned_to_email and not approval_row.assigned_to_role:
+                            if "@" in owner:
+                                approval_row.assigned_to_email = owner
+                            else:
+                                approval_row.assigned_to_role = owner
+                            self.db.commit()
+                            logger.info(f"[{self.request.id}] Backfilled data_owner approval assignee: {owner}")
+
                         # Send notification to data owner (with idempotency check)
                         if not has_fact(self.db, self.request.id, "data_owner_notified"):
                             await self._send_data_owner_notification(owner)
@@ -255,7 +279,14 @@ class DataAccessStateMachine(BaseRequestStateMachine):
 
         # Validate required parameters
         if not asset_type:
-            raise PermanentError("asset_type is required (catalog, schema, table, or volume)")
+            raise PermanentError("asset_type is required (schema, table, view, or volume)")
+        if asset_type.lower() == "catalog":
+            # Policy: catalog-level access is not allowed via this workflow.
+            # Requests must target a specific schema or object underneath.
+            raise PermanentError(
+                "Catalog-level access is not permitted. Please request access to a "
+                "specific schema, table, view, or volume."
+            )
         if not asset_name:
             raise PermanentError("asset_name is required")
         if not access_level:

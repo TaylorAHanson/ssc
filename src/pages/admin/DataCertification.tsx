@@ -94,7 +94,7 @@ export function DataCertification() {
       const map: Record<string, DataContract> = {};
       contracts.forEach(c => map[c.dataset_id] = c);
       setContractsMap(map);
-      setDatasets(data.filter(d => map[d.id] || d.contract_url));
+      setDatasets(data.filter(d => map[d.id] || d.contract_url || d.certified || d.data_quality));
     } catch (e: any) {
       console.error('Failed to delete contract', e);
       alert('Failed to delete contract: ' + e.message);
@@ -161,7 +161,7 @@ export function DataCertification() {
       const map: Record<string, DataContract> = {};
       contracts.forEach(c => map[c.dataset_id] = c);
       setContractsMap(map);
-      setDatasets(data.filter(d => map[d.id] || d.contract_url));
+      setDatasets(data.filter(d => map[d.id] || d.contract_url || d.certified || d.data_quality));
       
     } catch (e: any) {
       console.error(e);
@@ -184,7 +184,7 @@ export function DataCertification() {
           const map: Record<string, DataContract> = {};
           contracts.forEach(c => map[c.dataset_id] = c);
           setContractsMap(map);
-          setDatasets(data.filter(d => map[d.id] || d.contract_url));
+          setDatasets(data.filter(d => map[d.id] || d.contract_url || d.certified || d.data_quality));
         }
       } catch (e) {
         console.error('Failed to load data assets for certification', e);

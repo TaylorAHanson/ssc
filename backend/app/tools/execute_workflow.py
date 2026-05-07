@@ -1,7 +1,7 @@
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
-from app.db.session import get_lakebase_session
+from app.db.session import get_db
 from app.db.request import RequestModel
 from datetime import datetime
 import uuid
@@ -23,7 +23,7 @@ async def execute_workflow(workflow_type: str, parameters: Dict[str, Any], conve
     # Get user email from injected context
     user_email = kwargs.get("_user_email")
     
-    db = get_lakebase_session()
+    db = next(get_db())
     try:
         # Generate Request ID
         request_id = f"req-{str(uuid.uuid4())}"

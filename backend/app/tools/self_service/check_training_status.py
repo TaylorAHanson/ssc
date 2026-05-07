@@ -2,7 +2,7 @@ from typing import List, Any
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.providers.training.client import TrainingProvider
-from app.db.session import get_lakebase_session
+from app.db.session import get_db
 
 class CheckTrainingStatusArgs(BaseModel):
     user_email: str = Field(None, description="Email of the user (Required for 'status' query, ignored for others)")
@@ -16,7 +16,7 @@ class CheckTrainingStatusArgs(BaseModel):
 )
 
 def check_training_status(user_email: str = None, query_type: str = "status", days: int = 7) -> Any:
-    db = get_lakebase_session()
+    db = next(get_db())
     try:
         provider = TrainingProvider(db)
         
