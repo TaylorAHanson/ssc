@@ -68,7 +68,7 @@ violation_reasons contains msg if {
 }
 
 # 4. Tagging & Classification
-required_tags := {"owner_group", "approver_group", "domain", "slo_sla"}
+required_tags := {"data_set", "reliability_window"}
 violation_reasons contains msg if {
     input.resource.type == "data_product"
     some asset in input.resource.assets
