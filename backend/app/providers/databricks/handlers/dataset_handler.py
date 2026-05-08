@@ -82,8 +82,11 @@ class DatasetResourceHandler(BaseResourceHandler):
                         reliability_window = asset_info["tags"].get("reliability_window")
                         if reliability_window:
                             try:
+                                # Extract just the number from values like "7-days"
+                                digits = "".join([c for c in str(reliability_window) if c.isdigit()])
+                                window_days = int(digits) if digits else 7
                                 if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
-                                    query = f"SELECT COUNT(1) FROM {settings.DATA_QUALITY_TABLE} LATERAL VIEW explode(items) as item WHERE assetInfo.assetUid = '{full_name}' AND cast(processed_at as date) >= date_sub(current_date(), {int(reliability_window)}) AND item.resultPercent < item.threshold"
+                                    query = f"SELECT COUNT(1) FROM {settings.DATA_QUALITY_TABLE} LATERAL VIEW explode(items) as item WHERE assetInfo.assetUid = '{full_name}' AND cast(processed_at as date) >= date_sub(current_date(), {window_days}) AND item.resultPercent < item.threshold"
                                     response = self.workspace_client.statement_execution.execute_statement(
                                         statement=query,
                                         warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
