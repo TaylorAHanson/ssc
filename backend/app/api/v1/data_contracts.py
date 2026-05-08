@@ -119,6 +119,19 @@ async def run_sync_contracts_background(dataset_groups: dict, force: bool):
     db = get_lakebase_session()
     try:
         requests_created = 0
+        
+        # Clean up contracts for datasets that are no longer tagged
+        active_contracts = db.query(DataContractModel).filter(DataContractModel.is_active == True).all()
+        for contract in active_contracts:
+            if contract.dataset_id not in dataset_groups:
+                logger.info(f"Dataset {contract.dataset_id} is no longer tagged. Deleting contract.")
+                db.query(DataContractModel).filter(DataContractModel.dataset_id == contract.dataset_id).delete()
+                asset = db.query(DataAssetModel).filter(DataAssetModel.id == contract.dataset_id).first()
+                if asset:
+                    asset.contract_url = None
+                    asset.certified = False
+                    db.add(asset)
+        db.commit()
 
         for dataset_name, table_ids in dataset_groups.items():
             # Check if we have an existing contract

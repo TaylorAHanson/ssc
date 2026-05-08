@@ -127,8 +127,8 @@ async def sync_data_assets_task(force: bool = False):
                             
                     asset.last_synced_at = now
                     
-                # Optionally delete assets that no longer exist (if full sync)
-                # db.query(DataAssetModel).filter(DataAssetModel.id.notin_(synced_ids)).delete()
+                # Delete assets that no longer exist in Databricks
+                db.query(DataAssetModel).filter(DataAssetModel.id.notin_(synced_ids)).delete()
                 
                 db.commit()
                 logger.info(f"Successfully synced {len(rows)} data assets to Lakebase")

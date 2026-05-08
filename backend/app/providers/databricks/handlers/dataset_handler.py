@@ -89,10 +89,14 @@ class DatasetResourceHandler(BaseResourceHandler):
                                         warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
                                         wait_timeout="30s"
                                     )
-                                    if response.result and response.result.data_array and len(response.result.data_array) > 0 and response.result.data_array[0][0] is not None:
+                                    
+                                    if response.status.state.value in ("FAILED", "CANCELED", "CLOSED"):
+                                        error_msg = response.status.error.message if response.status.error else "Unknown SQL error"
+                                        logger.error(f"SQL execution failed when fetching rule count for {full_name}. Query: {query} | Error: {error_msg}")
+                                    elif response.result and response.result.data_array and len(response.result.data_array) > 0 and response.result.data_array[0][0] is not None:
                                         asset_info["failed_rule_count"] = int(response.result.data_array[0][0])
                             except Exception as e:
-                                logger.error(f"Failed to fetch failed rule count for {full_name} via SQL: {e}")
+                                logger.error(f"Failed to fetch failed rule count for {full_name} via SQL. Query: {query if 'query' in locals() else 'Unknown'} | Exception: {e}")
                         
                         # Fetch metadata from Unity Catalog
                         try:
