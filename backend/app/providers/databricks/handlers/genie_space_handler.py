@@ -13,7 +13,7 @@ class GenieSpaceResourceHandler(BaseResourceHandler):
             for space in spaces:
                 resources.append({
                     "id": getattr(space, 'space_id', getattr(space, 'id', 'unknown')),
-                    "name": space.name,
+                    "name": getattr(space, 'name', getattr(space, 'title', getattr(space, 'space_name', 'unknown'))),
                     "type": "genie_space",
                     "owner": getattr(space, 'creator', 'unknown'),
                     "tags": {t.key: t.value for t in getattr(space, 'tags', [])} if getattr(space, 'tags', None) else {}

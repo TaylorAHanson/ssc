@@ -272,6 +272,13 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
             "policies_evaluated": len(policy_files),
             "total_checks": len(discovered_resources) * len(policy_files)
         })
+        
+        try:
+            self.db.commit()
+        except Exception as e:
+            logger.error(f"Failed to commit discover results: {e}")
+            self.db.rollback()
+            
         self.finish_discovering()
 
     async def on_enter_enforcing_async(self):
