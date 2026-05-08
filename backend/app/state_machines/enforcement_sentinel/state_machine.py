@@ -192,6 +192,10 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                         total_failed = -1
                     dq["failed_rule_count"] = total_failed
                     asset.data_quality = dq
+                    
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(asset, "data_quality")
+                    
                     self.db.add(asset)
         
         try:
@@ -241,10 +245,12 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                 # Update local DataAsset cache with the latest violations if evaluating data certification
                 if policy_name == "data_certification" and resource.get("type") == "data_product":
                     from app.db.data_asset import DataAssetModel
+                    from sqlalchemy.orm.attributes import flag_modified
                     dataset_id = resource.get("dataset_id", resource.get("id"))
                     asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
                     if asset:
                         asset.certification_violations = result.get("violation_reasons", [])
+                        flag_modified(asset, "certification_violations")
                         self.db.add(asset)
                 
                 # We record it if it's an actual violation, OR if the action is a proactive enforcement step like CERTIFY or UNCERTIFY
