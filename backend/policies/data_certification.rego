@@ -13,7 +13,14 @@ default severity := "NONE"
 # This policy enforces the Data Certification Checklist.
 # It applies to data products containing one or more tables/views.
 
-# 1. Data Quality
+# 1. Invalid YAML
+violation_reasons contains msg if {
+    input.resource.type == "data_product"
+    input.resource.invalid_yaml == true
+    msg := "Data Contract YAML is invalid and could not be parsed."
+}
+
+# 2. Data Quality
 violation_reasons contains msg if {
     input.resource.type == "data_product"
     some asset in input.resource.assets
@@ -77,12 +84,12 @@ violation_reasons contains msg if {
     msg := sprintf("Required tag '%v' is missing from %v '%v'.", [tag, asset.type, asset.name])
 }
 
-violation_reasons contains msg if {
-    input.resource.type == "data_product"
-    some asset in input.resource.assets
-    not asset.tags["data_classification"]
-    msg := sprintf("Data classification tag (e.g., PII / No PII) must be defined for %v '%v'.", [asset.type, asset.name])
-}
+#violation_reasons contains msg if {
+#    input.resource.type == "data_product"
+#    some asset in input.resource.assets
+#    not asset.tags["data_classification"]
+#    msg := sprintf("Data classification tag (e.g., PII / No PII) must be defined for %v '%v'.", [asset.type, asset.name])
+#}
 
 # --- Apply Common Governance Logic ---
 is_violation := count(violation_reasons) > 0

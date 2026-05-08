@@ -12,7 +12,7 @@ class GenieSpaceResourceHandler(BaseResourceHandler):
             spaces = response.spaces if hasattr(response, 'spaces') and response.spaces is not None else []
             for space in spaces:
                 resources.append({
-                    "id": space.id,
+                    "id": getattr(space, 'space_id', getattr(space, 'id', 'unknown')),
                     "name": space.name,
                     "type": "genie_space",
                     "owner": getattr(space, 'creator', 'unknown'),

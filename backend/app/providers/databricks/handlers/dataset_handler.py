@@ -23,9 +23,12 @@ class DatasetResourceHandler(BaseResourceHandler):
                 try:
                     dataset_def = yaml.safe_load(contract.yaml_content)
                     full_name = contract.dataset_id
-                    contracted_datasets[full_name] = dataset_def
+                    contracted_datasets[full_name] = dataset_def or {}
+                    contracted_datasets[full_name]["_invalid_yaml"] = False
                 except Exception as e:
                     logger.error(f"Failed to parse Data Contract {contract.dataset_id}: {e}")
+                    full_name = contract.dataset_id
+                    contracted_datasets[full_name] = {"_invalid_yaml": True}
                     
             for dp_name, dataset_def in contracted_datasets.items():
                 try:
@@ -34,6 +37,7 @@ class DatasetResourceHandler(BaseResourceHandler):
                         "id": dp_name,
                         "dataset_id": dp_name,
                         "type": "data_product",
+                        "invalid_yaml": dataset_def.get("_invalid_yaml", False),
                         "assets": []
                     }
                     
