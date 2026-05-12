@@ -2,11 +2,12 @@
 API v1 routes.
 """
 from fastapi import APIRouter
-from app.api.v1 import requests, agent, approvals, content, delegations, branding, callbacks, roles, reports, github, training, allowlist, data_assets, data_contracts, odps
+from app.api.v1 import requests, agent, approvals, content, delegations, branding, callbacks, roles, reports, github, training, allowlist, data_assets, data_contracts, odps, system
 
 router = APIRouter()
 
 # Include sub-routers
+router.include_router(system.router, prefix="/system", tags=["system"])
 router.include_router(requests.router, prefix="/requests", tags=["requests"])
 router.include_router(agent.router, prefix="/agent", tags=["agent"])
 router.include_router(approvals.router, prefix="/approvals", tags=["approvals"])

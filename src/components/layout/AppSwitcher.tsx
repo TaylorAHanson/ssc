@@ -48,8 +48,8 @@ export const AppSwitcher: React.FC = () => {
                 className={clsx(
                     'p-2 rounded-full transition-all duration-150',
                     isOpen
-                        ? 'bg-gray-100 text-qualcomm-navy'
-                        : 'text-gray-500 hover:bg-gray-100 hover:text-qualcomm-navy',
+                        ? 'bg-gray-100 text-blue-900'
+                        : 'text-gray-500 hover:bg-gray-100 hover:text-blue-900',
                 )}
             >
                 <Icons.LayoutGrid className="w-5 h-5" />
@@ -84,7 +84,7 @@ export const AppSwitcher: React.FC = () => {
                                     className={clsx(
                                         'flex flex-col items-center gap-2.5 p-4 rounded-xl transition-all duration-150 group relative',
                                         isCurrent
-                                            ? 'bg-blue-50 cursor-default ring-1 ring-qualcomm-blue/20'
+                                            ? 'bg-blue-50 cursor-default ring-1 ring-blue-500/20'
                                             : 'hover:bg-gray-50 cursor-pointer',
                                     )}
                                 >
@@ -104,7 +104,7 @@ export const AppSwitcher: React.FC = () => {
                                         <p
                                             className={clsx(
                                                 'text-sm font-semibold leading-tight',
-                                                isCurrent ? 'text-qualcomm-navy' : 'text-gray-700',
+                                                isCurrent ? 'text-blue-900' : 'text-gray-700',
                                             )}
                                         >
                                             {app.name}
@@ -116,7 +116,7 @@ export const AppSwitcher: React.FC = () => {
 
                                     {/* "Current" badge */}
                                     {isCurrent && (
-                                        <span className="absolute top-2 right-2 text-[10px] font-semibold text-qualcomm-blue bg-white rounded-full px-1.5 py-0.5 border border-qualcomm-blue/20 leading-none">
+                                        <span className="absolute top-2 right-2 text-[10px] font-semibold text-blue-600 bg-white rounded-full px-1.5 py-0.5 border border-blue-500/20 leading-none">
                                             Current
                                         </span>
                                     )}
@@ -147,7 +147,7 @@ export const AppSwitcher: React.FC = () => {
                     {/* Footer */}
                     <div className="px-4 pb-3 pt-1 border-t border-gray-50">
                         <p className="text-[11px] text-gray-400 text-center">
-                            Qualcomm Internal Tools
+                            Internal Tools
                         </p>
                     </div>
                 </div>

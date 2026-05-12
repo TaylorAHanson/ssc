@@ -18,10 +18,8 @@ from app.middleware.auth import AuthMiddleware
 from app.middleware.profiler import PyinstrumentMiddleware
 
 # Configure logging
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from app.core.logging_formatter import setup_logging
+setup_logging(settings.LOG_LEVEL)
 
 logger = logging.getLogger(__name__)
 

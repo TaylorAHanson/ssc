@@ -817,6 +817,70 @@ class DatabricksProvider(BaseProvider):
             logger.error(error_msg)
             raise RetryableError(error_msg)
 
+    async def submit_python_job(
+        self, 
+        python_code: str, 
+        parameters: list[str],
+        run_name: str = "One-time Python Job"
+    ) -> str:
+        """
+        Submit a one-time Databricks job run using a temporary python script.
+        
+        Args:
+            python_code: The python code to execute
+            parameters: List of command line arguments to pass to the script
+            run_name: Name of the run
+            
+        Returns:
+            run_id of the submitted run
+        """
+        import uuid
+        try:
+            # Create a temporary path for the script
+            temp_path = f"/tmp/atlas_jobs/temp_job_{uuid.uuid4().hex}.py"
+            logger.info(f"Uploading temporary python script to {temp_path}")
+            
+            # Ensure parent directory exists
+            remote_dir = os.path.dirname(temp_path)
+            await asyncio.to_thread(self.client.workspace.mkdirs, remote_dir)
+            
+            # Encode content as base64 for the SDK
+            content_base64 = base64.b64encode(python_code.encode("utf-8")).decode("utf-8")
+            
+            # Upload the script
+            await asyncio.to_thread(
+                self.client.workspace.import_,
+                path=temp_path,
+                format=workspace.ImportFormat.AUTO,
+                language=workspace.Language.PYTHON,
+                content=content_base64,
+                overwrite=True
+            )
+            
+            logger.info(f"Submitting python job: {temp_path} with {len(parameters)} params")
+            
+            # Use the SDK to submit a one-time run
+            run = await asyncio.to_thread(
+                self.client.jobs.submit,
+                run_name=run_name,
+                tasks=[
+                    jobs.SubmitTask(
+                        task_key="main",
+                        spark_python_task=jobs.SparkPythonTask(
+                            python_file=f"Workspace{temp_path}",
+                            parameters=parameters
+                        )
+                    )
+                ]
+            )
+            
+            logger.info(f"Successfully submitted python job run: {run.run_id}")
+            return str(run.run_id)
+        except Exception as e:
+            error_msg = f"Failed to submit python job: {str(e)}"
+            logger.error(error_msg)
+            raise RetryableError(error_msg)
+
     async def get_run_status(self, run_id: str) -> Dict[str, Any]:
         """
         Get the status of a Databricks job run.

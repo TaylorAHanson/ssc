@@ -46,10 +46,12 @@ class RequestType(str, Enum):
 
 class Environment(str, Enum):
     """Environment enumeration."""
+    LOCAL = "local"
     DEV = "dev"
     TEST = "test"
     STAGE = "stage"
     PROD = "prod"
+    PRODUCTION = "production"
 
 
 class ApprovalType(str, Enum):

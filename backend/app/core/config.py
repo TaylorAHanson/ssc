@@ -241,10 +241,21 @@ class Settings(BaseSettings):
     
     # Notification Settings
     GOVERNANCE_EMAIL_GROUP: str = _notifications.get("governance_email_group", os.getenv("GOVERNANCE_EMAIL_GROUP", "data-governance@example.com"))
+    
+    # Email Provider Selection
+    NOTIFICATION_EMAIL_PROVIDER: str = "smtp" # "smtp", "ses", "mock"
+    
+    # SMTP Settings
     NOTIFICATION_EMAIL_SMTP_HOST: str = ""  # SMTP host for email notifications
     NOTIFICATION_EMAIL_SMTP_PORT: int = 587
     NOTIFICATION_EMAIL_SMTP_USER: str = ""  # SECRET: Set in .env
     NOTIFICATION_EMAIL_SMTP_PASSWORD: str = ""  # SECRET: Set in .env
+    
+    # SES Settings
+    NOTIFICATION_EMAIL_SES_REGION: str = "us-west-2"
+    NOTIFICATION_EMAIL_SES_CREDENTIAL: str = "" # Databricks service credential name
+    NOTIFICATION_EMAIL_SES_SOURCE: str = "" # Source email address
+    
     NOTIFICATION_SLACK_WEBHOOK_URL: str = ""  # SECRET: Set in .env
     NOTIFICATION_TEAMS_WEBHOOK_URL: str = ""  # SECRET: Set in .env
     

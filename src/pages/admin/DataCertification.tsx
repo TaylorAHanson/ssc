@@ -16,6 +16,7 @@ export function DataCertification() {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [statusFilter, setStatusFilter] = useState<'all' | 'certified' | 'uncertified' | 'pending' | 'invalid' | 'awaiting'>('all');
   const [isSyncingContracts, setIsSyncingContracts] = useState(false);
+  const [isCheckingPolicy, setIsCheckingPolicy] = useState(false);
   const [syncMessage, setSyncMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
   // Editor State
@@ -122,6 +123,26 @@ export function DataCertification() {
       setYamlError(e.message || 'Failed to save data contract');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleCheckPolicy = async (datasetId: string) => {
+    setIsCheckingPolicy(true);
+    setSyncMessage(null);
+    try {
+      const res = await api.checkPolicy(datasetId);
+      setSyncMessage({ type: 'success', text: `Policy Check Started: ${res.message || 'Success'}` });
+      setTimeout(() => setSyncMessage(null), 5000);
+      
+      // Reload assets to reflect changes
+      const contracts = await api.getDataContracts();
+      setDatasets(contracts);
+    } catch (e: any) {
+      console.error(e);
+      setSyncMessage({ type: 'error', text: e.message || "Error checking policy." });
+      setTimeout(() => setSyncMessage(null), 5000);
+    } finally {
+      setIsCheckingPolicy(false);
     }
   };
 
@@ -405,6 +426,17 @@ export function DataCertification() {
                         </td>
                         <td className="p-3 text-right">
                           <div className="flex items-center justify-end gap-2">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              onClick={() => handleCheckPolicy(contract.dataset_id)}
+                              disabled={isCheckingPolicy}
+                              className="text-xs h-7 px-2 border-purple-200 text-purple-600 hover:bg-purple-50"
+                              title="Run Policy Check"
+                            >
+                              <FileCheck className="w-3 h-3 mr-1" />
+                              Check Policy
+                            </Button>
                             <Button 
                               variant="outline" 
                               size="sm" 

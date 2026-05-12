@@ -41,11 +41,17 @@ export function EnforcementSentinel() {
     const [debouncedSearch, setDebouncedSearch] = useState('');
     const [isLoadingRuns, setIsLoadingRuns] = useState(false);
 
+    const [schedules, setSchedules] = useState<any>(null);
+
     // Debounce search query
     useEffect(() => {
         const timer = setTimeout(() => setDebouncedSearch(searchQuery), 300);
         return () => clearTimeout(timer);
     }, [searchQuery]);
+
+    useEffect(() => {
+        api.getSystemSchedules().then(setSchedules).catch(e => console.error("Failed to fetch schedules:", e));
+    }, []);
 
     // Reset page on search change
     useEffect(() => {
@@ -182,9 +188,16 @@ export function EnforcementSentinel() {
                 </CardHeader>
                 <CardContent>
                     <div className="bg-gray-50 border border-gray-200 rounded-md p-3 mb-6 flex flex-wrap items-center justify-between gap-4">
-                        <div className="flex items-center gap-2 text-sm text-gray-700 font-medium">
-                            <Search className="w-4 h-4" />
-                            <span>Manual Trigger</span>
+                        <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-2 text-sm text-gray-700 font-medium">
+                                <Search className="w-4 h-4" />
+                                <span>Manual Trigger</span>
+                            </div>
+                            {schedules?.enforcement_sentinel?.next_run && (
+                                <div className="text-xs text-gray-500">
+                                    Next scheduled run: {format(parseISO(schedules.enforcement_sentinel.next_run), 'MMM d, HH:mm')}
+                                </div>
+                            )}
                         </div>
 
                         <div className="flex items-center gap-3 flex-1 max-w-2xl justify-end">

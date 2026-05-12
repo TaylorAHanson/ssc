@@ -391,6 +391,43 @@ def create_contract(contract: DataContractCreate, db: Session = Depends(get_db))
     db.refresh(new_contract)
     return new_contract
 
+@router.post("/{dataset_id}/check-policy")
+async def check_policy(
+    dataset_id: str,
+    background_tasks: BackgroundTasks,
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Run a policy check for a specific dataset."""
+    from app.db.request import RequestModel
+    from app.models.request import RequestType
+    
+    try:
+        # Create an enforcement_sentinel request
+        # The poller will pick this up and run the state machine
+        request_id = f"req-{uuid.uuid4().hex[:8]}"
+        
+        new_request = RequestModel(
+            id=request_id,
+            type=RequestType.ENFORCEMENT_SENTINEL.value,
+            title=f"Manual Policy Check for {dataset_id}",
+            status="pending",
+            environment="production",
+            requester_email=current_user.email,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+            state_context={"dataset_id": dataset_id, "policies": ["data_certification"]}
+        )
+        
+        db.add(new_request)
+        db.commit()
+        
+        return {"status": "success", "message": f"Policy check started for {dataset_id}. Request ID: {request_id}"}
+    except Exception as e:
+        logger.error(f"Failed to check policy for {dataset_id}: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.delete("/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_contract(
     dataset_id: str, 

@@ -2,8 +2,13 @@
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import Request
 import logging
+import uuid
 
 from app.core.config import settings
+from app.core.logging_formatter import (
+    current_user_email, current_endpoint, current_request_id,
+    current_method, current_client_ip, current_user_agent, current_correlation_id
+)
 
 logger = logging.getLogger(__name__)
 
@@ -13,9 +18,38 @@ class AuthMiddleware(BaseHTTPMiddleware):
     and provide mock defaults for local development.
     """
     async def dispatch(self, request: Request, call_next):
+        # Generate a request ID
+        req_id = str(uuid.uuid4())
+        
+        # Set context variables for logging
+        endpoint_token = current_endpoint.set(request.url.path)
+        req_id_token = current_request_id.set(req_id)
+        method_token = current_method.set(request.method)
+        
+        # Extract correlation ID if present (useful for microservices/Databricks)
+        corr_id = request.headers.get("x-correlation-id") or request.headers.get("x-request-id", "N/A")
+        corr_id_token = current_correlation_id.set(corr_id)
+        
+        client_ip = request.client.host if request.client else None
+        # Databricks often load balances so we check X-Forwarded-For
+        x_forwarded_for = request.headers.get("X-Forwarded-For")
+        if x_forwarded_for:
+            client_ip = x_forwarded_for.split(",")[0].strip()
+        ip_token = current_client_ip.set(client_ip)
+        
+        agent_token = current_user_agent.set(request.headers.get("User-Agent", "Unknown"))
+        
         # Skip middleware for MCP SSE routes to avoid BaseHTTPMiddleware buffering issues
         if request.url.path.startswith("/mcp"):
-             return await call_next(request)
+             try:
+                 return await call_next(request)
+             finally:
+                 current_endpoint.reset(endpoint_token)
+                 current_request_id.reset(req_id_token)
+                 current_method.reset(method_token)
+                 current_client_ip.reset(ip_token)
+                 current_user_agent.reset(agent_token)
+                 current_correlation_id.reset(corr_id_token)
 
         # Extract headers (case-insensitive usually, but using request.headers.get is safe)
         # Databricks Apps headers:
@@ -26,6 +60,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         email = request.headers.get("X-Forwarded-Email", settings.MOCK_USER_EMAIL)
         username = request.headers.get("X-Forwarded-Preferred-Username", settings.MOCK_USER_NAME)
         user_id = request.headers.get("X-Forwarded-User", settings.MOCK_USER_ID)
+        
+        # Set user context for logging
+        user_email_token = current_user_email.set(email)
+
         
         
         # Extract OBO Token (Databricks Apps)
@@ -73,5 +111,40 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if email != settings.MOCK_USER_EMAIL:
              logger.debug(f"AuthMiddleware: User context set for {email}")
         
-        response = await call_next(request)
-        return response
+        import time
+        start_time = time.time()
+        
+        try:
+            response = await call_next(request)
+            
+            # Calculate execution time
+            process_time = time.time() - start_time
+            content_length = response.headers.get("content-length", "unknown")
+            
+            # Log the request details including status code and duration
+            logger.info(
+                f"HTTP_REQUEST: status_code={response.status_code} "
+                f"duration_ms={round(process_time * 1000, 2)} "
+                f"bytes={content_length}"
+            )
+            
+            return response
+        except Exception as e:
+            # Calculate execution time for failures
+            process_time = time.time() - start_time
+            
+            logger.error(
+                f"HTTP_REQUEST_FAILED: "
+                f"duration_ms={round(process_time * 1000, 2)} "
+                f"error='{str(e)}'",
+                exc_info=True
+            )
+            raise
+        finally:
+            current_endpoint.reset(endpoint_token)
+            current_request_id.reset(req_id_token)
+            current_user_email.reset(user_email_token)
+            current_method.reset(method_token)
+            current_client_ip.reset(ip_token)
+            current_user_agent.reset(agent_token)
+            current_correlation_id.reset(corr_id_token)

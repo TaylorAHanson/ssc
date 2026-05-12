@@ -1,6 +1,7 @@
 import logging
 import asyncio
 from datetime import datetime
+from croniter import croniter, CroniterBadCronError
 from app.providers.databricks.client import DatabricksProvider
 from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
@@ -8,26 +9,43 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Track last sync time
-_last_sync_time = None
+# Track next sync time
+_next_sync_time = None
 
 async def sync_data_assets_task(force: bool = False):
     """
     Task to sync data assets from Databricks Information Schema into local Lakebase cache.
     Designed to be called periodically from the poller.
     """
-    global _last_sync_time
-    
-    # Check if we should sync based on interval
-    interval_minutes = getattr(settings, 'DATA_ASSET_SYNC_INTERVAL_MINUTES', 60)
+    global _next_sync_time
     now = datetime.utcnow()
     
-    if not force and _last_sync_time is not None:
-        elapsed = (now - _last_sync_time).total_seconds() / 60
-        if elapsed < interval_minutes:
+    # Check if we should sync based on cron
+    cron_expr = getattr(settings, 'DATA_ASSET_SYNC_CRON', '0 * * * *')
+    if not force:
+        if not cron_expr:
+            return # Disabled
+            
+        if _next_sync_time is None:
+            try:
+                iter = croniter(cron_expr, now)
+                _next_sync_time = iter.get_next(datetime)
+            except CroniterBadCronError:
+                logger.error(f"Invalid DATA_ASSET_SYNC_CRON expression: {cron_expr}")
+                return
+                
+        if now < _next_sync_time:
             return # Too soon to sync again
             
     logger.info("Starting data assets sync...")
+    
+    # Calculate next time for the future
+    if cron_expr:
+        try:
+            iter = croniter(cron_expr, now)
+            _next_sync_time = iter.get_next(datetime)
+        except CroniterBadCronError:
+            pass
     
     try:
         host = settings.DATABRICKS_HOST
@@ -127,12 +145,11 @@ async def sync_data_assets_task(force: bool = False):
                             
                     asset.last_synced_at = now
                     
-                # Delete assets that no longer exist in Databricks
-                db.query(DataAssetModel).filter(DataAssetModel.id.notin_(synced_ids)).delete()
+                # Delete physical table assets that no longer exist in Databricks
+                db.query(DataAssetModel).filter(DataAssetModel.id.notin_(synced_ids), DataAssetModel.type != 'DATA_PRODUCT').delete()
                 
                 db.commit()
                 logger.info(f"Successfully synced {len(rows)} data assets to Lakebase")
-                _last_sync_time = now
             except Exception as e:
                 db.rollback()
                 logger.error(f"Database error during data asset sync: {e}", exc_info=True)

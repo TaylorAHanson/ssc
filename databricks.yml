@@ -88,8 +88,12 @@ resources:
             value: "edh-ssc"
           - name: LOG_LEVEL
             value: "INFO"
-          - name: EVENT_SYNC_INTERVAL_MINUTES
-            value: "60"
+          - name: EVENT_SYNC_CRON
+            value: "${var.event_sync_cron}"
+          - name: DATA_ASSET_SYNC_CRON
+            value: "${var.data_asset_sync_cron}"
+          - name: ENFORCEMENT_SENTINEL_CRON
+            value: "${var.enforcement_sentinel_cron}"
           - name: DATA_QUALITY_TABLE
             value: "${var.data_quality_table}"
 
@@ -201,6 +205,15 @@ variables:
   data_quality_table:
     description: "Table where data quality results are stored"
     default: "edh-ssc_local_catalog.edh-ssc.data_quality_results"
+  event_sync_cron:
+    description: "Cron schedule for syncing calendar events"
+    default: "0 * * * *"
+  data_asset_sync_cron:
+    description: "Cron schedule for syncing data assets"
+    default: "0 * * * *"
+  enforcement_sentinel_cron:
+    description: "Cron schedule for running enforcement sentinel"
+    default: "*/30 * * * *"
 
 # Target environments
 targets:
@@ -222,6 +235,9 @@ targets:
       environment: "local"
       source_code_path: "."
       data_quality_table: "edh-ssc_local_catalog.edh-ssc.data_quality_results"
+      event_sync_cron: "0 * * * *"
+      data_asset_sync_cron: "0 * * * *"
+      enforcement_sentinel_cron: "*/30 * * * *"
 
   # Development environment
   dev:
@@ -240,6 +256,9 @@ targets:
       environment: "dev"
       source_code_path: "."
       data_quality_table: "edh-ssc_dev_catalog.edh-ssc.data_quality_results"
+      event_sync_cron: "0 * * * *"
+      data_asset_sync_cron: "0 * * * *"
+      enforcement_sentinel_cron: "*/30 * * * *"
 
   # Staging environment
   stage:
@@ -258,6 +277,9 @@ targets:
       environment: "stage"
       source_code_path: "."
       data_quality_table: "enterprise_stg..data_quality_results"
+      event_sync_cron: "0 * * * *"
+      data_asset_sync_cron: "0 * * * *"
+      enforcement_sentinel_cron: "*/30 * * * *"
 
   # Production environment
   prod:
@@ -276,3 +298,6 @@ targets:
       environment: "prod"
       source_code_path: "."
       data_quality_table: "edh-ssc_prod_catalog.edh-ssc.data_quality_results"
+      event_sync_cron: "0 * * * *"
+      data_asset_sync_cron: "0 * * * *"
+      enforcement_sentinel_cron: "*/30 * * * *"

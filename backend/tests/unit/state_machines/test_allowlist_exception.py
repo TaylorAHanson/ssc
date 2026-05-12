@@ -50,7 +50,7 @@ async def test_allowlist_exception_lifecycle(db_session):
     harness.assert_fact(request.id, "platform_admin_approval_created")
     
     # Simulate platform admin actual approval from UI
-    add_fact(db_session, request.id, "approval_received", {"approval_type": "platform_admin", "approved_by": "admin@qualcomm.com"}, actor="admin")
+    add_fact(db_session, request.id, "approval_received", {"approval_type": "platform_admin", "approved_by": "admin@example.com"}, actor="admin")
     db_session.commit()
     
     # Tick to transition to updating_allowlist
@@ -66,7 +66,7 @@ async def test_allowlist_exception_lifecycle(db_session):
     # Verify DB record is approved
     db_session.refresh(db_entry)
     assert db_entry.status == "approved"
-    assert db_entry.approved_by == "admin@qualcomm.com"
+    assert db_entry.approved_by == "admin@example.com"
     
     # Tick to transition to completed
     harness.tick(request.id)

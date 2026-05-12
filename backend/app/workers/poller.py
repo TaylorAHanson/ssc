@@ -22,7 +22,7 @@ from app.state_machines.persistence import load_state_machine, save_state_machin
 from app.state_machines.lock import acquire_lock, release_lock, heartbeat_lock
 from app.models.request import RequestStatus, RequestType
 from app.db.report_subscription import ReportSubscription
-from croniter import croniter
+from croniter import croniter, CroniterBadCronError
 import uuid
 from app.core.config import settings, _yaml_config
 from app.core.exceptions import RetryableError, PermanentError
@@ -37,6 +37,68 @@ TERRAFORM_POLLING_STATES = {"terraform_planning", "awaiting_approval", "terrafor
 
 # Generate unique worker ID
 _worker_id = f"poll-worker-{socket.gethostname()}-{os.getpid()}"
+
+_next_sentinel_time = None
+
+async def process_enforcement_sentinel_cron():
+    """Check if it's time to run the enforcement sentinel and spawn it."""
+    global _next_sentinel_time
+    now = datetime.utcnow()
+    
+    cron_expr = getattr(settings, 'ENFORCEMENT_SENTINEL_CRON', '*/30 * * * *')
+    if not cron_expr:
+        return
+        
+    if _next_sentinel_time is None:
+        try:
+            iter = croniter(cron_expr, now)
+            _next_sentinel_time = iter.get_next(datetime)
+        except CroniterBadCronError:
+            logger.error(f"Invalid ENFORCEMENT_SENTINEL_CRON expression: {cron_expr}")
+            return
+            
+    if now >= _next_sentinel_time:
+        # Time to run
+        db = next(get_db())
+        try:
+            # Check if there is an active (pending/processing) sentinel run to avoid duplicates
+            from app.models.request import RequestModel, RequestType, RequestStatus
+            active_run = db.query(RequestModel).filter(
+                RequestModel.type == RequestType.ENFORCEMENT_SENTINEL.value,
+                RequestModel.status.in_([RequestStatus.PENDING.value, RequestStatus.PROCESSING.value])
+            ).first()
+            
+            if not active_run:
+                req_id = f"req-{uuid.uuid4()}"
+                new_request = RequestModel(
+                    id=req_id,
+                    type=RequestType.ENFORCEMENT_SENTINEL.value,
+                    title=f"Scheduled Sentinel Run",
+                    status=RequestStatus.PENDING.value,
+                    current_state="pending",
+                    state_context={},
+                    created_at=now,
+                    updated_at=now
+                )
+                db.add(new_request)
+                db.commit()
+                logger.info(f"Spawned scheduled Enforcement Sentinel request {req_id}")
+            else:
+                logger.info("Skipping scheduled Enforcement Sentinel run as one is already active.")
+                
+        except Exception as e:
+            logger.error(f"Failed to spawn scheduled Sentinel run: {e}", exc_info=True)
+            db.rollback()
+        finally:
+            db.close()
+            
+        # Calculate next time
+        try:
+            iter = croniter(cron_expr, now)
+            _next_sentinel_time = iter.get_next(datetime)
+        except CroniterBadCronError:
+            pass
+
 
 
 async def start_poller():
@@ -82,6 +144,9 @@ async def start_poller():
                             logger.error(f"Error in background data asset sync: {e}", exc_info=True)
                 
                 asyncio.create_task(safe_sync_data_assets())
+
+            if _yaml_config.get("features", {}).get("sentinel", False):
+                await process_enforcement_sentinel_cron()
 
             await process_open_requests()
             await process_scheduled_reports()
@@ -272,6 +337,12 @@ async def _send_failure_notification(request: RequestModel, error_message: str):
 
 async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
     """Process a single request with locking and error handling."""
+    from app.core.logging_formatter import current_request_id, current_endpoint
+    
+    # Set request_id context variable for logging all state machine execution steps
+    req_id_token = current_request_id.set(request_id)
+    endpoint_token = current_endpoint.set("PollerWorker")
+    
     async with semaphore:  # Limit concurrent processing
         db = next(get_db())
         heartbeat_task = None
@@ -363,6 +434,8 @@ async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
             )
         finally:
             db.close()
+            current_request_id.reset(req_id_token)
+            current_endpoint.reset(endpoint_token)
 
 
 async def _heartbeat_lock_loop(request_id: str, timeout_minutes: int):

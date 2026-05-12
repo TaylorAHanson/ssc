@@ -16,7 +16,7 @@ from databricks.sdk.core import DatabricksError
 
 logger = logging.getLogger(__name__)
 
-MOCK_USER_EMAIL = "admin@qualcomm.com"
+MOCK_USER_EMAIL = "admin@example.com"
 
 def _get_user_entitlements(user_email: str, obo_token: Optional[str] = None) -> List[str]:
     """Fetch SCIM entitlements (groups/roles) using Databricks SDK."""

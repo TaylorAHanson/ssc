@@ -44,6 +44,7 @@ We use **Mailpit** to capture emails sent by the application during development.
     This starts an SMTP server at `localhost:1025` and a UI at `http://localhost:8025`.
 3.  **Configure `.env`**:
     ```env
+    NOTIFICATION_EMAIL_PROVIDER=smtp
     NOTIFICATION_EMAIL_SMTP_HOST=localhost
     NOTIFICATION_EMAIL_SMTP_PORT=1025
     NOTIFICATION_EMAIL_SMTP_USER=

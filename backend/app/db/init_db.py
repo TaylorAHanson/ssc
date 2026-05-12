@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 # Default role mappings to seed
 DEFAULT_MAPPINGS = [
     {"external_role": "srikanth.anumula@databricks.com", "internal_role": "Platform Admin"},
-    {"external_role": "admin@qualcomm.com", "internal_role": "Platform Admin"},
+    {"external_role": "admin@example.com", "internal_role": "Platform Admin"},
     {"external_role": "platform_admin", "internal_role": "Platform Admin"},
     {"external_role": "governance_admin", "internal_role": "Governance Admin"},
     {"external_role": "finance_admin", "internal_role": "Finance Admin"},

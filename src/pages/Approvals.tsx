@@ -41,7 +41,7 @@ export function Approvals() {
   const [delegationsToMe, setDelegationsToMe] = useState<Delegation[]>([]);
 
   // Current mock user
-  const currentUserEmail = "admin@qualcomm.com";
+  const currentUserEmail = "admin@example.com";
 
   const fetchAllData = useCallback(async () => {
     await Promise.all([
@@ -74,7 +74,9 @@ export function Approvals() {
     return hasRole && a.status === 'pending';
   });
 
-  const completedApprovals = approvals.filter((a) => a.status !== 'pending');
+  const completedApprovals = approvals
+    .filter((a) => a.status !== 'pending')
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
   const handleAction = async (approval: Approval, action: 'approve' | 'reject' | 'delegate' | 'edit') => {
     setSelectedApproval(approval);
@@ -212,7 +214,7 @@ export function Approvals() {
               <div className="space-y-2">
                 <label className="text-sm font-semibold text-gray-700">Delegate To</label>
                 <Input
-                  placeholder="delegate@qualcomm.com"
+                  placeholder="delegate@example.com"
                   value={newDelegateEmail}
                   onChange={(e) => setNewDelegateEmail(e.target.value)}
                 />
@@ -653,7 +655,7 @@ export function Approvals() {
                   </label>
                   <Input
                     type="email"
-                    placeholder="user@qualcomm.com"
+                    placeholder="user@example.com"
                     value={delegateEmail}
                     onChange={(e) => setDelegateEmail(e.target.value)}
                     className="w-full"

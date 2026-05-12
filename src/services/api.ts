@@ -951,6 +951,40 @@ export async function deleteOdps(odpsId: string): Promise<void> {
   }
 }
 
+export async function checkPolicy(datasetId: string): Promise<{ status: string, message: string }> {
+  const response = await fetch(`${API_BASE_URL}/data-contracts/${datasetId}/check-policy`, {
+    method: 'POST',
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(errorText || `Failed to check policy: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export interface ScheduleInfo {
+  cron: string;
+  next_run: string | null;
+}
+
+export interface SystemSchedules {
+  enforcement_sentinel: ScheduleInfo;
+  data_asset_sync: ScheduleInfo;
+  event_sync: ScheduleInfo;
+}
+
+export async function getSystemSchedules(): Promise<SystemSchedules> {
+  const response = await fetch(`${API_BASE_URL}/system/schedules`, {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get schedules: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -981,9 +1015,11 @@ export const api = {
   createDataContract,
   syncDataContracts,
   deleteDataContract,
+  checkPolicy,
   getOdpsList,
   draftOdps,
   saveOdps,
   getOdpsHistory,
-  deleteOdps
+  deleteOdps,
+  getSystemSchedules
 };

@@ -159,23 +159,33 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
             self.finish_discovering()
             return
             
-        handler_classes = [
-            AppResourceHandler,
-            ClusterResourceHandler,
-            JobResourceHandler,
-            SqlWarehouseResourceHandler,
-            DashboardResourceHandler,
-            GenieSpaceResourceHandler,
-            ServicePrincipalResourceHandler,
-            NotebookResourceHandler,
-            VolumeResourceHandler,
-            DatasetResourceHandler
-        ]
+        # If a specific dataset_id was requested, only run the DatasetResourceHandler
+        dataset_id = self.request.state_context.get("dataset_id")
+        
+        if dataset_id:
+            handler_classes = [DatasetResourceHandler]
+        else:
+            handler_classes = [
+                AppResourceHandler,
+                ClusterResourceHandler,
+                JobResourceHandler,
+                SqlWarehouseResourceHandler,
+                DashboardResourceHandler,
+                GenieSpaceResourceHandler,
+                ServicePrincipalResourceHandler,
+                NotebookResourceHandler,
+                VolumeResourceHandler,
+                DatasetResourceHandler
+            ]
         
         discovered_resources = []
         for handler_class in handler_classes:
             handler = handler_class(workspace_client)
+            # If we're only looking for a specific dataset, we could pass it to the handler
+            # but for now we'll just filter the results
             resources = await handler.discover()
+            if dataset_id and handler_class == DatasetResourceHandler:
+                resources = [r for r in resources if r.get("dataset_id") == dataset_id or r.get("id") == dataset_id]
             discovered_resources.extend(resources)
 
         from app.db.data_asset import DataAssetModel
@@ -183,20 +193,33 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
             if resource.get("type") == "data_product" and "dataset_id" in resource:
                 dataset_id = resource.get("dataset_id")
                 asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
-                if asset:
-                    dq = dict(asset.data_quality or {})
-                    # Calculate aggregate failed rules for UI display
-                    total_failed = sum([a.get("failed_rule_count", 0) for a in resource.get("assets", []) if a.get("failed_rule_count", -1) >= 0])
-                    # If any asset failed to fetch (-1), mark as -1
-                    if any(a.get("failed_rule_count", 0) < 0 for a in resource.get("assets", [])):
-                        total_failed = -1
-                    dq["failed_rule_count"] = total_failed
-                    asset.data_quality = dq
-                    
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(asset, "data_quality")
-                    
+                if not asset:
+                    asset = DataAssetModel(
+                        id=dataset_id,
+                        catalog="Multiple datasets",
+                        schema="",
+                        table_name=dataset_id,
+                        type="DATA_PRODUCT",
+                        description=f"Data contract for {dataset_id}",
+                        domain="unknown",
+                        contract_url=f"/governance/certification?dataset={dataset_id}"
+                    )
                     self.db.add(asset)
+                    self.db.flush()
+                
+                dq = dict(asset.data_quality or {})
+                # Calculate aggregate failed rules for UI display
+                total_failed = sum([a.get("failed_rule_count", 0) for a in resource.get("assets", []) if a.get("failed_rule_count", -1) >= 0])
+                # If any asset failed to fetch (-1), mark as -1
+                if any(a.get("failed_rule_count", 0) < 0 for a in resource.get("assets", [])):
+                    total_failed = -1
+                dq["failed_rule_count"] = total_failed
+                asset.data_quality = dq
+                
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(asset, "data_quality")
+                
+                self.db.add(asset)
         
         try:
             self.db.commit()
@@ -248,14 +271,27 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                     from sqlalchemy.orm.attributes import flag_modified
                     dataset_id = resource.get("dataset_id", resource.get("id"))
                     asset = self.db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()
-                    if asset:
-                        asset.certification_violations = result.get("violation_reasons", [])
-                        flag_modified(asset, "certification_violations")
+                    if not asset:
+                        asset = DataAssetModel(
+                            id=dataset_id,
+                            catalog="Multiple datasets",
+                            schema="",
+                            table_name=dataset_id,
+                            type="DATA_PRODUCT",
+                            description=f"Data contract for {dataset_id}",
+                            domain="unknown",
+                            contract_url=f"/governance/certification?dataset={dataset_id}"
+                        )
                         self.db.add(asset)
+                        self.db.flush() # flush to get an ID if needed
+                    
+                    asset.certification_violations = result.get("violation_reasons", [])
+                    flag_modified(asset, "certification_violations")
+                    self.db.add(asset)
                 
                 # We record it if it's an actual violation, OR if the action is a proactive enforcement step like CERTIFY or UNCERTIFY
                 if is_violation or action in ["CERTIFY", "UNCERTIFY"]:
-                    violations.append({
+                    violation_record = {
                         "resource_id": resource.get("id"),
                         "resource_type": resource.get("type"),
                         "policy": policy_name,
@@ -264,7 +300,20 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                         "violation_reasons": result.get("violation_reasons", []),
                         "severity": result.get("severity", "HIGH"),
                         "input_context": input_data,
-                    })
+                    }
+                    violations.append(violation_record)
+                    
+                    if is_violation:
+                        logger.warning(
+                            f"POLICY_VIOLATION_DETECTED: "
+                            f"Policy={policy_name} | "
+                            f"Action={action} | "
+                            f"ResourceType={violation_record['resource_type']} | "
+                            f"ResourceID={violation_record['resource_id']} | "
+                            f"Reason={violation_record['reason']} | "
+                            f"Severity={violation_record['severity']} | "
+                            f"Violations={violation_record['violation_reasons']}"
+                        )
         
         # Save violations to state context and record fact
         # SQLAlchemy needs a fresh dict assignment or flag_modified to detect changes to JSON columns

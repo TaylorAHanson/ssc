@@ -20,63 +20,59 @@ class NotificationProvider(BaseProvider):
         self.email_config = self.get_config("email", {})
         self.slack_config = self.get_config("slack", {})
         self.teams_config = self.get_config("teams", {})
+        
+        self._email_provider = self._init_email_provider()
+
+    def _init_email_provider(self):
+        from app.core.config import settings
+        from app.providers.notifications.email import (
+            SMTPEmailProvider, 
+            SESEmailProvider, 
+            MockEmailProvider
+        )
+        
+        provider_type = getattr(settings, "NOTIFICATION_EMAIL_PROVIDER", "smtp").lower()
+        
+        if provider_type == "ses":
+            return SESEmailProvider(
+                region=getattr(settings, "NOTIFICATION_EMAIL_SES_REGION", "us-west-2")
+            )
+        elif provider_type == "smtp":
+            if settings.NOTIFICATION_EMAIL_SMTP_HOST:
+                return SMTPEmailProvider(
+                    host=settings.NOTIFICATION_EMAIL_SMTP_HOST,
+                    port=settings.NOTIFICATION_EMAIL_SMTP_PORT,
+                    user=settings.NOTIFICATION_EMAIL_SMTP_USER,
+                    password=settings.NOTIFICATION_EMAIL_SMTP_PASSWORD
+                )
+            else:
+                return MockEmailProvider()
+        else:
+            return MockEmailProvider()
     
     @retry_on_retryable(max_attempts=3)
     async def send_email(self, to: str, subject: str, body: str, metadata: Optional[Dict[str, Any]] = None, is_html: bool = False) -> bool:
         """Send email notification."""
         try:
-            import smtplib
-            from email.mime.text import MIMEText
-            from email.mime.multipart import MIMEMultipart
             from app.core.config import settings
-            
-            smtp_host = settings.NOTIFICATION_EMAIL_SMTP_HOST
-            smtp_port = settings.NOTIFICATION_EMAIL_SMTP_PORT
-            smtp_user = settings.NOTIFICATION_EMAIL_SMTP_USER
-            smtp_password = settings.NOTIFICATION_EMAIL_SMTP_PASSWORD
             
             # Always wrap in template, but hint if the body itself is already HTML
             html_body = self._get_html_body(body, metadata, is_html=is_html)
-
-            if not smtp_host:
-                import logging
-                logger = logging.getLogger(__name__)
-                mock_msg = (
-                    f"\n======== MOCK EMAIL NOTIFICATION ========\n"
-                    f"To: {to}\n"
-                    f"Subject: {subject}\n"
-                    f"Metadata: {metadata}\n"
-                    f"Body (Text length): {len(body)}\n"
-                    f"Body (HTML length): {len(html_body)}\n"
-                    f"is_html: {is_html}\n"
-                    f"=========================================\n"
-                )
-                logger.info(mock_msg)
-                print(mock_msg) # Direct print for visibility
-                return True
-
-            msg = MIMEMultipart("alternative")
-            msg['From'] = smtp_user or "noreply@databricks.com"
-            msg['To'] = to
-            msg['Subject'] = subject
             
-            # Attach plain text and HTML versions
-            part1 = MIMEText(body, 'plain')
-            part2 = MIMEText(html_body, 'html')
-            msg.attach(part1)
-            msg.attach(part2)
+            provider_type = getattr(settings, "NOTIFICATION_EMAIL_PROVIDER", "smtp").lower()
+            from_email = None
+            if provider_type == "ses":
+                from_email = getattr(settings, "NOTIFICATION_EMAIL_SES_SOURCE", None)
+            else:
+                from_email = settings.NOTIFICATION_EMAIL_SMTP_USER or None
             
-            # Using synchronous smtplib in async function
-            with smtplib.SMTP(smtp_host, smtp_port) as server:
-                if smtp_port == 587:
-                    server.starttls()
-                
-                if smtp_user and smtp_password:
-                    server.login(smtp_user, smtp_password)
-                
-                server.send_message(msg)
-                
-            return True
+            return await self._email_provider.send_email(
+                to=to,
+                subject=subject,
+                body=body,
+                html_body=html_body,
+                from_email=from_email
+            )
         except Exception as e:
             raise RetryableError(f"Email notification failed: {str(e)}")
 
