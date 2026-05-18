@@ -24,6 +24,8 @@ violation_reasons contains msg if {
 violation_reasons contains msg if {
     input.resource.type == "data_product"
     some asset in input.resource.assets
+    asset.table_exists != false
+    asset.type == "table"
     not asset.tags["reliability_window"]
     msg := sprintf("The 'reliability_window' tag is required for %v '%v'.", [asset.type, asset.name])
 }
@@ -31,6 +33,8 @@ violation_reasons contains msg if {
 violation_reasons contains msg if {
     input.resource.type == "data_product"
     some asset in input.resource.assets
+    asset.table_exists != false
+    asset.type == "table"
     asset.tags["reliability_window"]
     asset.failed_rule_count < 0
     msg := sprintf("Failed to fetch data quality rule history within the reliability window for %v '%v'.", [asset.type, asset.name])
@@ -39,6 +43,8 @@ violation_reasons contains msg if {
 violation_reasons contains msg if {
     input.resource.type == "data_product"
     some asset in input.resource.assets
+    asset.table_exists != false
+    asset.type == "table"
     asset.tags["reliability_window"]
     asset.failed_rule_count > 0
     msg := sprintf("Failed data quality rule count is %v within the reliability window for %v '%v'. Must be 0.", [asset.failed_rule_count, asset.type, asset.name])
@@ -48,6 +54,14 @@ violation_reasons contains msg if {
 violation_reasons contains msg if {
     input.resource.type == "data_product"
     some asset in input.resource.assets
+    asset.table_exists == false
+    msg := sprintf("Table or view '%v' does not exist or cannot be accessed.", [asset.name])
+}
+
+violation_reasons contains msg if {
+    input.resource.type == "data_product"
+    some asset in input.resource.assets
+    asset.table_exists != false
     not asset.catalog_description
     msg := sprintf("Catalog description is missing for %v '%v'.", [asset.type, asset.name])
 }
@@ -55,6 +69,7 @@ violation_reasons contains msg if {
 violation_reasons contains msg if {
     input.resource.type == "data_product"
     some asset in input.resource.assets
+    asset.table_exists != false
     not asset.schema_description
     msg := sprintf("Schema description is missing for %v '%v'.", [asset.type, asset.name])
 }
@@ -62,14 +77,17 @@ violation_reasons contains msg if {
 violation_reasons contains msg if {
     input.resource.type == "data_product"
     some asset in input.resource.assets
+    asset.table_exists != false
     asset.all_columns_have_descriptions == false
-    msg := sprintf("One or more columns are missing descriptions in %v '%v'.", [asset.type, asset.name])
+    missing_cols_str := concat(", ", asset.missing_column_descriptions)
+    msg := sprintf("The following columns are missing descriptions in %v '%v': %v.", [asset.type, asset.name, missing_cols_str])
 }
 
 # 3. Access Control exists
 violation_reasons contains msg if {
     input.resource.type == "data_product"
     some asset in input.resource.assets
+    asset.table_exists != false
     asset.rbac_defined == false
     msg := sprintf("RBAC (Role-Based Access Control) must be defined for %v '%v'.", [asset.type, asset.name])
 }
@@ -79,6 +97,8 @@ required_tags := {"dataset", "reliability_window", "data_owner", "approver_group
 violation_reasons contains msg if {
     input.resource.type == "data_product"
     some asset in input.resource.assets
+    asset.table_exists != false
+    asset.type == "table"
     tag := required_tags[_]
     not asset.tags[tag]
     msg := sprintf("Required tag '%v' is missing from %v '%v'.", [tag, asset.type, asset.name])

@@ -46,6 +46,7 @@ class DataContractCreate(BaseModel):
 async def sync_contracts(
     background_tasks: BackgroundTasks,
     force: bool = False,
+    dataset_id: Optional[str] = None,
     current_user = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -64,52 +65,103 @@ async def sync_contracts(
             config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID}
         )
         
-        # Fetch all catalogs the SP has access to
-        catalogs = provider.client.catalogs.list()
-        
         dataset_groups = {}
         
-        for catalog in catalogs:
-            if catalog.name in ("system", "samples"):
-                continue
-                
-            # Query the local information_schema for each catalog
-            query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {catalog.name}.information_schema.table_tags WHERE tag_name = 'dataset'"
-            logger.info(f"Querying information_schema for catalog {catalog.name}")
+        if dataset_id:
+            # Sync a specific dataset
+            parts = dataset_id.split(".")
+            if len(parts) == 3:
+                catalog_name, schema_name, table_name = parts
+                query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {catalog_name}.information_schema.table_tags WHERE tag_name = 'dataset' AND catalog_name = '{catalog_name}' AND schema_name = '{schema_name}' AND table_name = '{table_name}'"
+                try:
+                    response = provider.client.statement_execution.execute_statement(
+                        statement=query,
+                        warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
+                        wait_timeout="30s"
+                    )
+                    if response.result and response.result.data_array:
+                        for row in response.result.data_array:
+                            catalog_name, schema_name, table_name, dataset_name = row
+                            full_name = f"{catalog_name}.{schema_name}.{table_name}"
+                            if dataset_name not in dataset_groups:
+                                dataset_groups[dataset_name] = []
+                            dataset_groups[dataset_name].append(full_name)
+                    else:
+                        # If not found in table_tags, maybe it's the dataset_name itself
+                        pass
+                except Exception as e:
+                    logger.warning(f"Could not query information_schema for {dataset_id}: {e}")
             
-            try:
-                response = provider.client.statement_execution.execute_statement(
-                    statement=query,
-                    warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
-                    wait_timeout="30s"
-                )
+            # If we didn't find it by table name, maybe dataset_id is the tag value
+            if not dataset_groups:
+                catalogs = provider.client.catalogs.list()
+                for catalog in catalogs:
+                    if catalog.name in ("system", "samples"):
+                        continue
+                    query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {catalog.name}.information_schema.table_tags WHERE tag_name = 'dataset' AND tag_value = '{dataset_id}'"
+                    try:
+                        response = provider.client.statement_execution.execute_statement(
+                            statement=query,
+                            warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
+                            wait_timeout="30s"
+                        )
+                        if response.result and response.result.data_array:
+                            for row in response.result.data_array:
+                                catalog_name, schema_name, table_name, dataset_name = row
+                                full_name = f"{catalog_name}.{schema_name}.{table_name}"
+                                if dataset_name not in dataset_groups:
+                                    dataset_groups[dataset_name] = []
+                                dataset_groups[dataset_name].append(full_name)
+                    except Exception as e:
+                        logger.warning(f"Could not query information_schema for catalog {catalog.name}: {e}")
+        else:
+            # Fetch all catalogs the SP has access to
+            catalogs = provider.client.catalogs.list()
+            
+            for catalog in catalogs:
+                if catalog.name in ("system", "samples"):
+                    continue
+                    
+                # Query the local information_schema for each catalog
+                query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {catalog.name}.information_schema.table_tags WHERE tag_name = 'dataset'"
+                logger.info(f"Querying information_schema for catalog {catalog.name}")
                 
-                if response.result and response.result.data_array:
-                    logger.info(f"Found {len(response.result.data_array)} tagged tables in catalog {catalog.name}")
-                    for row in response.result.data_array:
-                        catalog_name, schema_name, table_name, dataset_name = row
-                        full_name = f"{catalog_name}.{schema_name}.{table_name}"
-                        if dataset_name not in dataset_groups:
-                            dataset_groups[dataset_name] = []
-                        dataset_groups[dataset_name].append(full_name)
-                else:
-                    logger.debug(f"No tables found with 'dataset' tag in catalog {catalog.name}")
-            except Exception as e:
-                logger.warning(f"Could not query information_schema for catalog {catalog.name}: {e}")
-                
-        logger.info(f"Discovery complete. Found {len(dataset_groups)} unique data sets across all catalogs.")
+                try:
+                    response = provider.client.statement_execution.execute_statement(
+                        statement=query,
+                        warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
+                        wait_timeout="30s"
+                    )
+                    
+                    if response.result and response.result.data_array:
+                        logger.info(f"Found {len(response.result.data_array)} tagged tables in catalog {catalog.name}")
+                        for row in response.result.data_array:
+                            catalog_name, schema_name, table_name, dataset_name = row
+                            full_name = f"{catalog_name}.{schema_name}.{table_name}"
+                            if dataset_name not in dataset_groups:
+                                dataset_groups[dataset_name] = []
+                            dataset_groups[dataset_name].append(full_name)
+                    else:
+                        logger.debug(f"No tables found with 'dataset' tag in catalog {catalog.name}")
+                except Exception as e:
+                    logger.warning(f"Could not query information_schema for catalog {catalog.name}: {e}")
+                    
+        logger.info(f"Discovery complete. Found {len(dataset_groups)} unique data sets.")
         
         if not dataset_groups:
+            if dataset_id:
+                # Still run background to clean up if it was deleted
+                background_tasks.add_task(run_sync_contracts_background, dataset_groups, force, dataset_id)
             return {"status": "success", "message": "No tables found with 'dataset' tag."}
 
-        background_tasks.add_task(run_sync_contracts_background, dataset_groups, force)
+        background_tasks.add_task(run_sync_contracts_background, dataset_groups, force, dataset_id)
         return {"status": "success", "message": f"Sync started in the background for {len(dataset_groups)} data sets. This may take a few minutes."}
         
     except Exception as e:
         logger.error(f"Failed to sync contracts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def run_sync_contracts_background(dataset_groups: dict, force: bool):
+async def run_sync_contracts_background(dataset_groups: dict, force: bool, specific_dataset_id: Optional[str] = None):
     from app.db.session import get_lakebase_session
     import hashlib
     import json
@@ -121,16 +173,26 @@ async def run_sync_contracts_background(dataset_groups: dict, force: bool):
         requests_created = 0
         
         # Clean up contracts for datasets that are no longer tagged
-        active_contracts = db.query(DataContractModel).filter(DataContractModel.is_active == True).all()
-        for contract in active_contracts:
-            if contract.dataset_id not in dataset_groups:
-                logger.info(f"Dataset {contract.dataset_id} is no longer tagged. Deleting contract.")
-                db.query(DataContractModel).filter(DataContractModel.dataset_id == contract.dataset_id).delete()
-                asset = db.query(DataAssetModel).filter(DataAssetModel.id == contract.dataset_id).first()
+        if specific_dataset_id:
+            if specific_dataset_id not in dataset_groups:
+                logger.info(f"Dataset {specific_dataset_id} is no longer tagged. Deleting contract.")
+                db.query(DataContractModel).filter(DataContractModel.dataset_id == specific_dataset_id).delete()
+                asset = db.query(DataAssetModel).filter(DataAssetModel.id == specific_dataset_id).first()
                 if asset:
                     asset.contract_url = None
                     asset.certified = False
                     db.add(asset)
+        else:
+            active_contracts = db.query(DataContractModel).filter(DataContractModel.is_active == True).all()
+            for contract in active_contracts:
+                if contract.dataset_id not in dataset_groups:
+                    logger.info(f"Dataset {contract.dataset_id} is no longer tagged. Deleting contract.")
+                    db.query(DataContractModel).filter(DataContractModel.dataset_id == contract.dataset_id).delete()
+                    asset = db.query(DataAssetModel).filter(DataAssetModel.id == contract.dataset_id).first()
+                    if asset:
+                        asset.contract_url = None
+                        asset.certified = False
+                        db.add(asset)
         db.commit()
 
         for dataset_name, table_ids in dataset_groups.items():

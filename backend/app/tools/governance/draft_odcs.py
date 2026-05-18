@@ -61,7 +61,7 @@ async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]
         except Exception: pass
         
         try:
-            uc_tags = provider.client.entity_tag_assignments.list(entity_type='tables', entity_name=dataset_id)
+            uc_tags = provider.client.entity_tag_assignments.list(entity_type='table', entity_name=dataset_id)
             for tag_assign in uc_tags:
                 if tag_assign.tag_key:
                     tags[tag_assign.tag_key] = tag_assign.tag_value
@@ -203,6 +203,8 @@ schema:
   - id: <dataset physical name>_obj
     name: <dataset physical name>
     physicalName: <dataset physical name>
+    catalog: <catalog name>
+    schema: <schema name>
     physicalType: table
     businessName: <generate friendly business name from dataset physical name>
     description: <table description or infer from name>

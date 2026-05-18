@@ -857,8 +857,9 @@ export async function createDataContract(datasetId: string, yamlContent: string)
   return response.json();
 }
 
-export async function syncDataContracts(): Promise<{ status: string, message: string }> {
-  const response = await fetch(`${API_BASE_URL}/data-contracts/sync`, {
+export async function syncDataContracts(datasetId?: string): Promise<{ status: string, message: string }> {
+  const url = datasetId ? `${API_BASE_URL}/data-contracts/sync?dataset_id=${encodeURIComponent(datasetId)}` : `${API_BASE_URL}/data-contracts/sync`;
+  const response = await fetch(url, {
     method: 'POST',
     headers: getHeaders()
   });

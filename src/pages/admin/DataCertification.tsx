@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
-import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, ChevronUp, ChevronDown, Filter, Trash2 } from 'lucide-react';
+import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, ChevronUp, ChevronDown, Filter, Trash2, RefreshCw } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { api } from '../../services/api';
 import type { DataContract } from '../../services/api';
@@ -146,11 +146,11 @@ export function DataCertification() {
     }
   };
 
-  const handleSyncContracts = async () => {
+  const handleSyncContracts = async (datasetId?: string) => {
     setIsSyncingContracts(true);
     setSyncMessage(null);
     try {
-      const res = await api.syncDataContracts();
+      const res = await api.syncDataContracts(datasetId);
       setSyncMessage({ type: 'success', text: `Sync Complete: ${res.message}` });
       setTimeout(() => setSyncMessage(null), 5000);
       
@@ -295,7 +295,7 @@ export function DataCertification() {
             </div>
             <div className="flex items-center gap-3">
               <Button
-                onClick={handleSyncContracts}
+                onClick={() => handleSyncContracts()}
                 disabled={isSyncingContracts}
                 className="flex items-center gap-2 bg-primary text-white disabled:opacity-50"
               >
@@ -425,35 +425,44 @@ export function DataCertification() {
                           </span>
                         </td>
                         <td className="p-3 text-right">
-                          <div className="flex items-center justify-end gap-2">
+                          <div className="flex items-center justify-end gap-1">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              onClick={() => handleSyncContracts(contract.dataset_id)}
+                              disabled={isSyncingContracts}
+                              className="text-xs h-7 w-7 p-0 border-green-200 text-green-600 hover:bg-green-50"
+                              title="Sync Contract"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                            </Button>
                             <Button 
                               variant="outline" 
                               size="sm" 
                               onClick={() => handleCheckPolicy(contract.dataset_id)}
                               disabled={isCheckingPolicy}
-                              className="text-xs h-7 px-2 border-purple-200 text-purple-600 hover:bg-purple-50"
+                              className="text-xs h-7 w-7 p-0 border-purple-200 text-purple-600 hover:bg-purple-50"
                               title="Run Policy Check"
                             >
-                              <FileCheck className="w-3 h-3 mr-1" />
-                              Check Policy
+                              <FileCheck className="w-3.5 h-3.5" />
                             </Button>
                             <Button 
                               variant="outline" 
                               size="sm" 
                               onClick={() => handleEdit(contract)}
-                              className="text-xs h-7 px-2 border-blue-200 text-blue-600 hover:bg-blue-50"
+                              className="text-xs h-7 w-7 p-0 border-blue-200 text-blue-600 hover:bg-blue-50"
+                              title="Edit Contract"
                             >
-                              <Edit className="w-3 h-3 mr-1" />
-                              Edit Contract
+                              <Edit className="w-3.5 h-3.5" />
                             </Button>
                             <Button
                               variant="outline"
                               size="sm"
                               onClick={() => handleDeleteContract(contract.dataset_id)}
-                              className="text-xs h-7 px-2 border-red-200 text-red-600 hover:bg-red-50"
+                              className="text-xs h-7 w-7 p-0 border-red-200 text-red-600 hover:bg-red-50"
                               title="Delete Contract"
                             >
-                              <Trash2 className="w-3 h-3" />
+                              <Trash2 className="w-3.5 h-3.5" />
                             </Button>
                           </div>
                         </td>

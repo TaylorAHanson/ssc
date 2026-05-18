@@ -53,7 +53,18 @@ class DatasetResourceHandler(BaseResourceHandler):
                         if not physical_table:
                             continue
                             
-                        if "." in physical_table and len(physical_table.split(".")) == 3:
+                        table_catalog = this_schema.get("catalog")
+                        table_schema = this_schema.get("schema")
+                        
+                        if table_catalog and table_schema:
+                            catalog = table_catalog
+                            schema = table_schema
+                            # If physical_table already has dots, don't prepend again
+                            if "." in physical_table:
+                                full_name = physical_table
+                            else:
+                                full_name = f"{catalog}.{schema}.{physical_table}"
+                        elif "." in physical_table and len(physical_table.split(".")) == 3:
                             full_name = physical_table
                             catalog, schema, table = full_name.split(".")
                         else:
@@ -71,12 +82,14 @@ class DatasetResourceHandler(BaseResourceHandler):
                             "catalog_description": None,
                             "schema_description": None,
                             "all_columns_have_descriptions": False,
-                            "rbac_defined": False
+                            "rbac_defined": False,
+                            "table_exists": True,
+                            "missing_column_descriptions": []
                         }
                         
                         # Get tags for this specific table
                         try:
-                            uc_tags = self.workspace_client.entity_tag_assignments.list(entity_type='tables', entity_name=full_name)
+                            uc_tags = self.workspace_client.entity_tag_assignments.list(entity_type='table', entity_name=full_name)
                             for tag_assign in uc_tags:
                                 if tag_assign.tag_key:
                                     asset_info["tags"][tag_assign.tag_key] = tag_assign.tag_value
@@ -125,9 +138,16 @@ class DatasetResourceHandler(BaseResourceHandler):
                                 asset_info["type"] = "view" if "VIEW" in t_type.upper() else "table"
                             
                             columns = table_info.columns or []
-                            asset_info["all_columns_have_descriptions"] = all(bool(col.comment) for col in columns) if columns else False
-                        except Exception:
+                            missing_cols = [col.name for col in columns if not col.comment]
+                            asset_info["all_columns_have_descriptions"] = len(missing_cols) == 0
+                            asset_info["missing_column_descriptions"] = missing_cols
+                        except Exception as e:
+                            logger.warning(f"Failed to fetch table info for {full_name} from Unity Catalog: {e}")
                             asset_info["all_columns_have_descriptions"] = False
+                            asset_info["table_exists"] = False
+                            # Fallback convention check
+                            if full_name.endswith("_v") or full_name.endswith("_view"):
+                                asset_info["type"] = "view"
                             
                         try:
                             grants = self.workspace_client.grants.get(securable_type="table", full_name=full_name)
@@ -186,7 +206,17 @@ class DatasetResourceHandler(BaseResourceHandler):
                 if not physical_table:
                     continue
                     
-                if "." in physical_table and len(physical_table.split(".")) == 3:
+                table_catalog = this_schema.get("catalog")
+                table_schema = this_schema.get("schema")
+                
+                if table_catalog and table_schema:
+                    catalog = table_catalog
+                    schema = table_schema
+                    if "." in physical_table:
+                        full_name = physical_table
+                    else:
+                        full_name = f"{catalog}.{schema}.{physical_table}"
+                elif "." in physical_table and len(physical_table.split(".")) == 3:
                     full_name = physical_table
                 else:
                     catalog = default_catalog
@@ -246,7 +276,17 @@ class DatasetResourceHandler(BaseResourceHandler):
                 if not physical_table:
                     continue
                     
-                if "." in physical_table and len(physical_table.split(".")) == 3:
+                table_catalog = this_schema.get("catalog")
+                table_schema = this_schema.get("schema")
+                
+                if table_catalog and table_schema:
+                    catalog = table_catalog
+                    schema = table_schema
+                    if "." in physical_table:
+                        full_name = physical_table
+                    else:
+                        full_name = f"{catalog}.{schema}.{physical_table}"
+                elif "." in physical_table and len(physical_table.split(".")) == 3:
                     full_name = physical_table
                 else:
                     catalog = default_catalog
