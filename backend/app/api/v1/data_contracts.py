@@ -311,26 +311,6 @@ async def run_sync_contracts_background(dataset_groups: dict, force: bool, speci
                 if hasattr(existing_contract, 'metadata_hash'):
                     existing_contract.metadata_hash = metadata_hash
                     db.commit()
-                    
-                if force_sync:
-                    logger.info(f"Force sync requested for {dataset_name}, triggering Enforcement Sentinel anyway to clear stale state.")
-                    try:
-                        from app.models.request import RequestType
-                        from app.state_machines.enforcement_sentinel.state_machine import EnforcementSentinelStateMachine
-                        
-                        sentinel = EnforcementSentinelStateMachine(
-                            db=db,
-                            request_type=RequestType.ENFORCEMENT_SENTINEL,
-                            state_context={
-                                "workspace": "ws-enterprise-prod",
-                                "environment": "prod",
-                                "dataset_id": dataset_name,
-                                "policies": ["data_certification"]
-                            }
-                        )
-                        await sentinel.run_async()
-                    except Exception as e:
-                        logger.error(f"Failed to trigger Enforcement Sentinel for {dataset_name}: {e}")
                 continue
             
             # Save directly to database
