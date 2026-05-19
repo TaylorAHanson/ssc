@@ -64,7 +64,7 @@ async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]
             continue
         
         try:
-            uc_tags = provider.client.entity_tag_assignments.list(entity_type='table', entity_name=dataset_id)
+            uc_tags = provider.client.entity_tag_assignments.list(entity_type='tables', entity_name=dataset_id)
             for tag_assign in uc_tags:
                 if tag_assign.tag_key:
                     tags[tag_assign.tag_key] = tag_assign.tag_value
@@ -172,6 +172,24 @@ async def draft_odcs_contract(
                             filtered_schema.append(table_def)
                         else:
                             logger.info(f"Pre-LLM Pruning: Removing invalid table {full_name} from existing YAML.")
+                            
+                    # Programmatically add missing tables to ensure the LLM doesn't skip them
+                    existing_table_names = {t.get("physicalName", "") for t in filtered_schema}
+                    for m in datasets_metadata:
+                        m_full = m["dataset_id"]
+                        m_short = m["table"]
+                        if m_full not in existing_table_names and m_short not in existing_table_names:
+                            logger.info(f"Pre-LLM Injection: Adding missing table {m_full} to existing YAML stub.")
+                            filtered_schema.append({
+                                "id": f"{m_short}_obj",
+                                "name": m_short,
+                                "physicalName": m_full,
+                                "catalog": m["catalog"],
+                                "schema": m["schema"],
+                                "physicalType": "table",
+                                "description": m.get("table_desc", "No description"),
+                                "properties": [] # LLM will fill this in
+                            })
                             
                     parsed_yaml["schema"] = filtered_schema
                     existing_odcs_yaml = yaml.dump(parsed_yaml, sort_keys=False)

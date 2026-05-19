@@ -89,12 +89,12 @@ class DatasetResourceHandler(BaseResourceHandler):
                         
                         # Get tags for this specific table
                         try:
-                            uc_tags = self.workspace_client.entity_tag_assignments.list(entity_type='table', entity_name=full_name)
+                            uc_tags = self.workspace_client.entity_tag_assignments.list(entity_type='tables', entity_name=full_name)
                             for tag_assign in uc_tags:
                                 if tag_assign.tag_key:
                                     asset_info["tags"][tag_assign.tag_key] = tag_assign.tag_value
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.error(f"Failed to fetch tags for {full_name}: {e}")
                             
                         reliability_window = asset_info["tags"].get("reliability_window")
                         if reliability_window:
