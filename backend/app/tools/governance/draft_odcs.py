@@ -184,6 +184,8 @@ You are an expert Data Architect. Generate a valid Open Data Contract Standard (
 Since an ODCS document can represent a Data Product containing multiple datasets, generate a single ODCS YAML where the 'schema' array contains one entry for each dataset.
 Output ONLY the raw YAML, with no markdown formatting or conversational filler.
 
+CRITICAL: ONLY generate `schema` entries for the specific datasets listed as top-level objects in the provided Metadata. DO NOT generate schema entries for any tables listed in the `upstream_tables` or `downstream_tables` arrays. Those are provided for lineage context only.
+
 {existing_contract_instructions}
 
 Metadata for included datasets (includes new or updated information):
@@ -287,6 +289,27 @@ slaProperties:
         content = content.replace("```yaml", "").replace("```yml", "").replace("```", "").strip()
         
         if "apiVersion:" in content and "kind: DataContract" in content:
+            # Post-LLM Pruning: Ensure the LLM didn't hallucinate or re-add tables from upstream/downstream lists
+            try:
+                final_yaml = yaml.safe_load(content)
+                if "schema" in final_yaml and isinstance(final_yaml["schema"], list):
+                    valid_names = {m["dataset_id"] for m in datasets_metadata}
+                    valid_short_names = {m["table"] for m in datasets_metadata}
+                    
+                    filtered_schema = []
+                    for table_def in final_yaml["schema"]:
+                        phys_name = table_def.get("physicalName", "")
+                        if phys_name in valid_names or phys_name in valid_short_names:
+                            filtered_schema.append(table_def)
+                        else:
+                            logger.info(f"Post-LLM Pruning: Removing invalid/hallucinated table {phys_name} from final YAML.")
+                            
+                    final_yaml["schema"] = filtered_schema
+                    # Dump with sort_keys=False to preserve order, and default_flow_style=False for block format
+                    content = yaml.dump(final_yaml, sort_keys=False, default_flow_style=False)
+            except Exception as e:
+                logger.warning(f"Failed to post-prune LLM YAML: {e}")
+                
             return content
             
         raise ValueError("LLM generated invalid ODCS format.")

@@ -1,0 +1,147 @@
+apiVersion: v3.1.0
+kind: DataContract
+
+domain: sales
+dataProduct: Customer Retention Analytics
+version: 1.0.0
+status: active
+id: a3f7c2e1-84b6-4d29-9e15-7f02b3c8d541
+
+authoritativeDefinitions:
+- type: canonical
+  url: https://github.com/bitol-io/open-data-contract-standard/blob/main/docs/examples/all/full-example.odcs.yaml
+  description: Canonical URL to the latest version of the contract.
+
+description:
+  purpose: Track customer retention metrics and predictive churn risk scores across the Sales Domain, enabling proactive identification of at-risk customers and supporting downstream sales analytics.
+  limitations: Data is intended for development and self-service testing environments using production-equivalent test data. Not for use in production reporting without promotion to a production catalog.
+  usage: Internal analytics for sales engineering and governance teams to monitor churn risk, retention status, and customer interaction history.
+
+servers:
+  - id: production
+    type: databricks
+    host: prod-workspace.cloud.databricks.com
+    catalog: taylor_hanson_build_catalog
+    schema: main
+
+schema:
+  - id: customer_retention_test_obj
+    name: customer_retention_test
+    physicalName: customer_retention_test
+    physicalType: table
+    businessName: Customer Retention Test
+    description: Table tracking customer retention metrics and predictive churn risk scores for the Sales Domain.
+    tags:
+      - data_classification:u-nnpi
+      - data_set:customer_retention
+      - domain:sales
+      - reliability_window:7
+      - slo_sla:1d
+    customProperties:
+      - property: abac_required
+        value: false
+      - property: classification
+        value: u-nnpi
+      - property: table_type
+        value: MANAGED
+      - property: approver_group
+        value: users
+      - property: owner_group
+        value: users
+      - property: upstream_tables
+        value: []
+      - property: downstream_tables
+        value:
+          - combined_customer_sales
+    properties:
+      - id: customer_id
+        name: customer_id
+        physicalName: customer_id
+        logicalType: string
+        description: Unique identifier for the customer
+      - id: churn_risk_score
+        name: churn_risk_score
+        physicalName: churn_risk_score
+        logicalType: double
+        description: Predictive score representing likelihood of churn (0.0 to 1.0)
+      - id: last_interaction_date
+        name: last_interaction_date
+        physicalName: last_interaction_date
+        logicalType: date
+        description: Date of the last logged interaction with the customer
+      - id: retention_status
+        name: retention_status
+        physicalName: retention_status
+        logicalType: string
+        description: "Current status: Active, At Risk, or Churned"
+
+  - id: customer_retention_test_2_obj
+    name: customer_retention_test_2
+    physicalName: customer_retention_test_2
+    physicalType: table
+    businessName: Customer Retention Test 2
+    description: Table tracking customer retention metrics and predictive churn risk scores for the Sales Domain.
+    tags:
+      - data_classification:u-nnpi
+      - data_set:customer_retention
+      - domain:sales
+      - reliability_window:7
+      - slo_sla:Tier 1
+    customProperties:
+      - property: abac_required
+        value: false
+      - property: classification
+        value: u-nnpi
+      - property: table_type
+        value: MANAGED
+      - property: approver_group
+        value: governance_team
+      - property: owner_group
+        value: sales_engineering
+      - property: upstream_tables
+        value: []
+      - property: downstream_tables
+        value: []
+    properties:
+      - id: customer_id
+        name: customer_id
+        physicalName: customer_id
+        logicalType: string
+        description: Unique identifier for the customer
+      - id: churn_risk_score
+        name: churn_risk_score
+        physicalName: churn_risk_score
+        logicalType: double
+        description: Predictive score representing likelihood of churn (0.0 to 1.0)
+      - id: last_interaction_date
+        name: last_interaction_date
+        physicalName: last_interaction_date
+        logicalType: date
+        description: Date of the last logged interaction with the customer
+      - id: retention_status
+        name: retention_status
+        physicalName: retention_status
+        logicalType: string
+        description: "Current status: Active, At Risk, or Churned"
+
+price:
+  priceAmount: 0.00
+  priceCurrency: USD
+  priceUnit: request
+
+team:
+  name: sales_engineering
+  members:
+    - username: sales_engineering
+      role: Owner
+
+roles:
+  - role: data_engineer
+    access: write
+  - role: data_analyst
+    access: read
+
+slaProperties:
+  - property: latency
+    value: 1
+    unit: d
