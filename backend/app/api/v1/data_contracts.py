@@ -246,7 +246,31 @@ async def run_sync_contracts_background(dataset_groups: dict, force: bool, speci
             # Calculate metadata hash
             metadata_hash = hashlib.md5(json.dumps(datasets_metadata, sort_keys=True).encode()).hexdigest()
             
-            if existing_contract and hasattr(existing_contract, 'metadata_hash') and existing_contract.metadata_hash == metadata_hash and not force:
+            # Check if tables in YAML match tables in metadata
+            yaml_tables_match = True
+            if existing_contract and existing_contract.yaml_content:
+                try:
+                    parsed_yaml = yaml.safe_load(existing_contract.yaml_content)
+                    if "schema" in parsed_yaml and isinstance(parsed_yaml["schema"], list):
+                        yaml_table_names = set()
+                        for table_def in parsed_yaml["schema"]:
+                            phys_name = table_def.get("physicalName", "")
+                            if phys_name:
+                                yaml_table_names.add(phys_name)
+                        
+                        meta_table_names = set(table_ids)
+                        meta_short_names = {d.split('.')[-1] for d in table_ids if '.' in d}
+                        
+                        # If there are tables in YAML that are not in metadata, they don't match
+                        for y_name in yaml_table_names:
+                            if y_name not in meta_table_names and y_name not in meta_short_names:
+                                yaml_tables_match = False
+                                break
+                except Exception as e:
+                    logger.warning(f"Failed to parse existing YAML to check tables: {e}")
+                    yaml_tables_match = False
+            
+            if existing_contract and hasattr(existing_contract, 'metadata_hash') and existing_contract.metadata_hash == metadata_hash and yaml_tables_match and not force:
                 logger.info(f"No metadata changes detected for {dataset_name}, skipping LLM call.")
                 continue
             
