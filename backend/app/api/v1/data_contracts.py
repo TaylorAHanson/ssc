@@ -258,14 +258,26 @@ async def run_sync_contracts_background(dataset_groups: dict, force: bool, speci
                             if phys_name:
                                 yaml_table_names.add(phys_name)
                         
-                        meta_table_names = set(table_ids)
-                        meta_short_names = {d.split('.')[-1] for d in table_ids if '.' in d}
+                        # Use datasets_metadata instead of table_ids because datasets_metadata 
+                        # only contains tables that actually exist and could be fetched
+                        meta_table_names = {m["dataset_id"] for m in datasets_metadata}
+                        meta_short_names = {m["table"] for m in datasets_metadata}
                         
-                        # If there are tables in YAML that are not in metadata, they don't match
+                        # Check if any table in YAML is missing from metadata
                         for y_name in yaml_table_names:
                             if y_name not in meta_table_names and y_name not in meta_short_names:
+                                logger.info(f"Table {y_name} in YAML is missing from metadata. Forcing LLM call.")
                                 yaml_tables_match = False
                                 break
+                                
+                        # Also check if any table in metadata is missing from YAML
+                        if yaml_tables_match:
+                            for m_name in meta_table_names:
+                                short_m_name = m_name.split('.')[-1]
+                                if m_name not in yaml_table_names and short_m_name not in yaml_table_names:
+                                    logger.info(f"Table {m_name} in metadata is missing from YAML. Forcing LLM call.")
+                                    yaml_tables_match = False
+                                    break
                 except Exception as e:
                     logger.warning(f"Failed to parse existing YAML to check tables: {e}")
                     yaml_tables_match = False

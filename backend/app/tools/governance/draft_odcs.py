@@ -59,7 +59,9 @@ async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]
                         "type": col.type_text,
                         "description": col.comment or "No description"
                     })
-        except Exception: pass
+        except Exception as e:
+            logger.warning(f"Skipping table {dataset_id} during metadata fetch because it could not be accessed: {e}")
+            continue
         
         try:
             uc_tags = provider.client.entity_tag_assignments.list(entity_type='table', entity_name=dataset_id)
@@ -153,8 +155,8 @@ async def draft_odcs_contract(
             try:
                 parsed_yaml = yaml.safe_load(existing_odcs_yaml)
                 if "schema" in parsed_yaml and isinstance(parsed_yaml["schema"], list):
-                    valid_names = set(dataset_ids)
-                    valid_short_names = {d.split('.')[-1] for d in dataset_ids if '.' in d}
+                    valid_names = {m["dataset_id"] for m in datasets_metadata}
+                    valid_short_names = {m["table"] for m in datasets_metadata}
                     
                     filtered_schema = []
                     for table_def in parsed_yaml["schema"]:
