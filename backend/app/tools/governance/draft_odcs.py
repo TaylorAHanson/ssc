@@ -156,13 +156,22 @@ async def draft_odcs_contract(
                 parsed_yaml = yaml.safe_load(existing_odcs_yaml)
                 if "schema" in parsed_yaml and isinstance(parsed_yaml["schema"], list):
                     valid_names = {m["dataset_id"] for m in datasets_metadata}
-                    valid_short_names = {m["table"] for m in datasets_metadata}
                     
                     filtered_schema = []
                     for table_def in parsed_yaml["schema"]:
                         phys_name = table_def.get("physicalName", "")
-                        if phys_name in valid_names or phys_name in valid_short_names:
+                        table_catalog = table_def.get("catalog", "")
+                        table_schema = table_def.get("schema", "")
+                        
+                        if table_catalog and table_schema and "." not in phys_name:
+                            full_name = f"{table_catalog}.{table_schema}.{phys_name}"
+                        else:
+                            full_name = phys_name
+                            
+                        if full_name in valid_names or phys_name in valid_names:
                             filtered_schema.append(table_def)
+                        else:
+                            logger.info(f"Pre-LLM Pruning: Removing invalid table {full_name} from existing YAML.")
                             
                     parsed_yaml["schema"] = filtered_schema
                     existing_odcs_yaml = yaml.dump(parsed_yaml, sort_keys=False)
@@ -184,7 +193,11 @@ You are an expert Data Architect. Generate a valid Open Data Contract Standard (
 Since an ODCS document can represent a Data Product containing multiple datasets, generate a single ODCS YAML where the 'schema' array contains one entry for each dataset.
 Output ONLY the raw YAML, with no markdown formatting or conversational filler.
 
-CRITICAL: ONLY generate `schema` entries for the specific datasets listed as top-level objects in the provided Metadata. DO NOT generate schema entries for any tables listed in the `upstream_tables` or `downstream_tables` arrays. Those are provided for lineage context only.
+CRITICAL INSTRUCTIONS:
+1. ONLY generate `schema` entries for the specific datasets listed as top-level objects in the provided Metadata. 
+2. DO NOT generate schema entries for any tables listed in the `upstream_tables` or `downstream_tables` arrays. Those are provided for lineage context only.
+3. You MUST ensure that EVERY dataset listed in the Metadata has a corresponding entry in the `schema` array. Do not skip any datasets.
+4. The following datasets MUST be present in the final YAML `schema` array: {', '.join([m["dataset_id"] for m in datasets_metadata])}
 
 {existing_contract_instructions}
 
@@ -294,15 +307,22 @@ slaProperties:
                 final_yaml = yaml.safe_load(content)
                 if "schema" in final_yaml and isinstance(final_yaml["schema"], list):
                     valid_names = {m["dataset_id"] for m in datasets_metadata}
-                    valid_short_names = {m["table"] for m in datasets_metadata}
                     
                     filtered_schema = []
                     for table_def in final_yaml["schema"]:
                         phys_name = table_def.get("physicalName", "")
-                        if phys_name in valid_names or phys_name in valid_short_names:
+                        table_catalog = table_def.get("catalog", "")
+                        table_schema = table_def.get("schema", "")
+                        
+                        if table_catalog and table_schema and "." not in phys_name:
+                            full_name = f"{table_catalog}.{table_schema}.{phys_name}"
+                        else:
+                            full_name = phys_name
+                            
+                        if full_name in valid_names or phys_name in valid_names:
                             filtered_schema.append(table_def)
                         else:
-                            logger.info(f"Post-LLM Pruning: Removing invalid/hallucinated table {phys_name} from final YAML.")
+                            logger.info(f"Post-LLM Pruning: Removing invalid/hallucinated table {full_name} from final YAML.")
                             
                     final_yaml["schema"] = filtered_schema
                     # Dump with sort_keys=False to preserve order, and default_flow_style=False for block format
