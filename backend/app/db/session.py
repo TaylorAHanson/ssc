@@ -29,6 +29,62 @@ def reset_database_connection():
     _connection_verified = False
 
 
+def get_lakebase_token() -> Optional[str]:
+    """Fetch a fresh Databricks OAuth token for Lakebase."""
+    pg_host = os.environ.get("PGHOST")
+    if pg_host:
+        try:
+            from databricks.sdk import WorkspaceClient
+            sdk = WorkspaceClient()
+            auth_headers = sdk.config.authenticate()
+            if auth_headers and "Authorization" in auth_headers:
+                return auth_headers["Authorization"].replace("Bearer ", "")
+            elif hasattr(sdk.config, "token") and sdk.config.token:
+                return sdk.config.token
+        except Exception as e:
+            logger.error(f"Failed to fetch Databricks OAuth token: {type(e).__name__}: {e}")
+            return None
+
+    host = settings.DATABASE_HOST or ""
+    is_databricks = (
+        os.environ.get("DATABRICKS_RUNTIME_VERSION") or 
+        os.environ.get("DATABRICKS_HOST") or
+        os.environ.get("DATABRICKS_INSTANCE_POOL_ID") or
+        os.path.exists("/databricks") or
+        "database.cloud.databricks.com" in host
+    )
+    
+    if is_databricks:
+        try:
+            from databricks.sdk import WorkspaceClient
+            sdk = WorkspaceClient()
+            
+            projects_res = sdk.api_client.do("GET", "/api/2.0/postgres/projects")
+            projects = projects_res.get("projects", [])
+            
+            target_project_name = settings.DATABASE_INSTANCE_NAME
+            matched_project = None
+            
+            if target_project_name:
+                matched_project = next((p for p in projects if p.get("name", "").endswith(target_project_name)), None)
+            elif projects:
+                matched_project = projects[0]
+                target_project_name = matched_project.get("name")
+            
+            if matched_project and target_project_name:
+                endpoint_path = f"projects/{target_project_name}/branches/production/endpoints/primary"
+                res = sdk.api_client.do(
+                    "POST", 
+                    "/api/2.0/postgres/credentials",
+                    body={"endpoint": endpoint_path}
+                )
+                return res.get("token")
+        except Exception as e:
+            logger.error(f"Failed to fetch Lakebase OAuth credentials: {type(e).__name__}: {e}")
+            
+    return None
+
+
 def get_database_url() -> str:
     """
     Get database URL, constructing it if needed.
@@ -66,21 +122,11 @@ def get_database_url() -> str:
     if host and user and name:
         if pg_host:
             logger.info("Using Databricks Apps auto-injected PG variables for Lakebase connection.")
-            try:
-                from databricks.sdk import WorkspaceClient
-                sdk = WorkspaceClient()
-                auth_headers = sdk.config.authenticate()
-                if auth_headers and "Authorization" in auth_headers:
-                    password = auth_headers["Authorization"].replace("Bearer ", "")
-                elif hasattr(sdk.config, "token") and sdk.config.token:
-                    password = sdk.config.token
-                
-                if password:
-                    logger.info("Successfully acquired Databricks OAuth token for Lakebase password.")
-                else:
-                    logger.error("Failed to acquire OAuth token from WorkspaceClient.")
-            except Exception as e:
-                logger.error(f"Failed to fetch Databricks OAuth token: {type(e).__name__}: {e}")
+            password = get_lakebase_token()
+            if password:
+                logger.info("Successfully acquired Databricks OAuth token for Lakebase password.")
+            else:
+                logger.error("Failed to acquire OAuth token from WorkspaceClient.")
         elif settings.DATABASE_PASSWORD:
             logger.info("Using injected DATABASE_PASSWORD from environment (Resource Binding).")
             password = settings.DATABASE_PASSWORD
@@ -125,10 +171,6 @@ def get_database_url() -> str:
                         logger.warning(f"DATABASE_INSTANCE_NAME not set in environment. Auto-discovered project: {target_project_name}")
                     
                     if matched_project and target_project_name:
-                        # Construct the path to the primary endpoint on the production branch
-                        endpoint_path = f"projects/{target_project_name}/branches/production/endpoints/primary"
-                        logger.info(f"Found matching Lakebase project. Requesting credentials for: {endpoint_path}")
-                        
                         # Fetch databases in this branch to use the database ID as dbname
                         try:
                             db_res = sdk.api_client.do("GET", f"/api/2.0/postgres/projects/{target_project_name}/branches/production/databases")
@@ -146,14 +188,7 @@ def get_database_url() -> str:
                             logger.warning(f"Failed to auto-discover database ID, falling back to name. Error: {db_e}")
                             db_id = None
                         
-                        # Request the token
-                        res = sdk.api_client.do(
-                            "POST", 
-                            "/api/2.0/postgres/credentials",
-                            body={"endpoint": endpoint_path}
-                        )
-                        
-                        password = res.get("token")
+                        password = get_lakebase_token()
                         if password:
                             logger.info("Successfully acquired short-lived OAuth token for Lakebase.")
                         else:
@@ -261,6 +296,20 @@ def get_engine():
                     logger.warning(f"Failed to ensure atlas schema exists: {e}")
                 finally:
                     cursor.close()
+                    
+            @event.listens_for(_engine, "do_connect")
+            def receive_do_connect(dialect, conn_rec, cargs, cparams):
+                """
+                Refresh the OAuth token dynamically when creating a new connection.
+                This prevents 'password authentication failed' errors when the initial
+                token expires after a few hours/days.
+                """
+                # Only fetch a fresh token if we are using Databricks OAuth
+                # (i.e. we didn't provide a hardcoded DATABASE_PASSWORD or DATABASE_URL)
+                if not settings.DATABASE_PASSWORD and not settings.DATABASE_URL:
+                    fresh_token = get_lakebase_token()
+                    if fresh_token:
+                        cparams["password"] = fresh_token
                     
     return _engine
 
