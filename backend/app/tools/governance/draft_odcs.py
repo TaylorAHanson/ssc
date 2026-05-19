@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional, List
 import json
 import logging
+import yaml
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.model_serving.agent_llm import AgentLLMClient
@@ -149,10 +150,28 @@ async def draft_odcs_contract(
         
         existing_contract_instructions = ""
         if existing_odcs_yaml:
+            try:
+                parsed_yaml = yaml.safe_load(existing_odcs_yaml)
+                if "schema" in parsed_yaml and isinstance(parsed_yaml["schema"], list):
+                    valid_names = set(dataset_ids)
+                    valid_short_names = {d.split('.')[-1] for d in dataset_ids if '.' in d}
+                    
+                    filtered_schema = []
+                    for table_def in parsed_yaml["schema"]:
+                        phys_name = table_def.get("physicalName", "")
+                        if phys_name in valid_names or phys_name in valid_short_names:
+                            filtered_schema.append(table_def)
+                            
+                    parsed_yaml["schema"] = filtered_schema
+                    existing_odcs_yaml = yaml.dump(parsed_yaml, sort_keys=False)
+            except Exception as e:
+                logger.warning(f"Failed to pre-prune existing YAML: {e}")
+
             existing_contract_instructions = f"""
 CRITICAL INSTRUCTION: You are UPDATING an existing Open Data Contract Standard (ODCS) document.
 You MUST preserve all existing manual customizations (descriptions, roles, thresholds, custom properties, slas) EXACTLY as they are in the existing YAML.
 Only ADD new tables or columns found in the Metadata that are missing from the existing YAML. Do NOT overwrite existing human-written descriptions or rules.
+CRITICAL: You MUST REMOVE any tables from the `schema` array that are NOT present in the provided Metadata. If a table is in the existing YAML but not in the Metadata, it has been deleted or untagged, so DELETE IT from the YAML.
 
 EXISTING ODCS YAML TO UPDATE:
 {existing_odcs_yaml}

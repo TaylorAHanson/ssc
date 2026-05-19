@@ -218,6 +218,7 @@ class DatasetResourceHandler(BaseResourceHandler):
                         full_name = f"{catalog}.{schema}.{physical_table}"
                 elif "." in physical_table and len(physical_table.split(".")) == 3:
                     full_name = physical_table
+                    catalog, schema, table = full_name.split(".")
                 else:
                     catalog = default_catalog
                     schema = default_schema
@@ -288,6 +289,7 @@ class DatasetResourceHandler(BaseResourceHandler):
                         full_name = f"{catalog}.{schema}.{physical_table}"
                 elif "." in physical_table and len(physical_table.split(".")) == 3:
                     full_name = physical_table
+                    catalog, schema, table = full_name.split(".")
                 else:
                     catalog = default_catalog
                     schema = default_schema

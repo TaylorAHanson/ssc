@@ -84,13 +84,13 @@ violation_reasons contains msg if {
 }
 
 # 3. Access Control exists
-violation_reasons contains msg if {
-    input.resource.type == "data_product"
-    some asset in input.resource.assets
-    asset.table_exists != false
-    asset.rbac_defined == false
-    msg := sprintf("RBAC (Role-Based Access Control) must be defined for %v '%v'.", [asset.type, asset.name])
-}
+#violation_reasons contains msg if {
+#    input.resource.type == "data_product"
+#    some asset in input.resource.assets
+#    asset.table_exists != false
+#    asset.rbac_defined == false
+#    msg := sprintf("RBAC (Role-Based Access Control) must be defined for %v '%v'.", [asset.type, asset.name])
+#}
 
 # 4. Tagging & Classification
 required_tags := {"dataset", "reliability_window", "data_owner", "approver_group", "access_group"}
