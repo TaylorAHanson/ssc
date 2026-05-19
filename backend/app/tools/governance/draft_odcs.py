@@ -311,50 +311,65 @@ slaProperties:
         logger.info(f"Sending request to LLM for datasets: {dataset_ids}")
         logger.debug(f"LLM Prompt length: {len(prompt)} chars")
         
-        response = await client.generate_response(
-            messages=messages, 
-            temperature=0.2,
-            max_tokens=8000
-        )
-        content = response.get("content", "")
-        
-        logger.info(f"Received response from LLM for datasets: {dataset_ids}")
-        logger.debug(f"LLM Response snippet: {content[:200]}...")
-        
-        content = content.replace("```yaml", "").replace("```yml", "").replace("```", "").strip()
-        
-        if "apiVersion:" in content and "kind: DataContract" in content:
-            # Post-LLM Pruning: Ensure the LLM didn't hallucinate or re-add tables from upstream/downstream lists
+        max_retries = 3
+        for attempt in range(max_retries):
             try:
-                final_yaml = yaml.safe_load(content)
-                if "schema" in final_yaml and isinstance(final_yaml["schema"], list):
-                    valid_names = {m["dataset_id"] for m in datasets_metadata}
-                    
-                    filtered_schema = []
-                    for table_def in final_yaml["schema"]:
-                        phys_name = table_def.get("physicalName", "")
-                        table_catalog = table_def.get("catalog", "")
-                        table_schema = table_def.get("schema", "")
-                        
-                        if table_catalog and table_schema and "." not in phys_name:
-                            full_name = f"{table_catalog}.{table_schema}.{phys_name}"
-                        else:
-                            full_name = phys_name
-                            
-                        if full_name in valid_names or phys_name in valid_names:
-                            filtered_schema.append(table_def)
-                        else:
-                            logger.info(f"Post-LLM Pruning: Removing invalid/hallucinated table {full_name} from final YAML.")
-                            
-                    final_yaml["schema"] = filtered_schema
-                    # Dump with sort_keys=False to preserve order, and default_flow_style=False for block format
-                    content = yaml.dump(final_yaml, sort_keys=False, default_flow_style=False)
-            except Exception as e:
-                logger.warning(f"Failed to post-prune LLM YAML: {e}")
+                response = await client.generate_response(
+                    messages=messages, 
+                    temperature=0.2,
+                    max_tokens=8000
+                )
+                content = response.get("content", "")
                 
-            return content
-            
-        raise ValueError("LLM generated invalid ODCS format.")
+                logger.info(f"Received response from LLM for datasets: {dataset_ids} (Attempt {attempt + 1})")
+                
+                content = content.replace("```yaml", "").replace("```yml", "").replace("```", "").strip()
+                
+                if "apiVersion:" in content and "kind: DataContract" in content:
+                    # Post-LLM Pruning: Ensure the LLM didn't hallucinate or re-add tables from upstream/downstream lists
+                    try:
+                        final_yaml = yaml.safe_load(content)
+                        if "schema" in final_yaml and isinstance(final_yaml["schema"], list):
+                            valid_names = {m["dataset_id"] for m in datasets_metadata}
+                            
+                            filtered_schema = []
+                            for table_def in final_yaml["schema"]:
+                                phys_name = table_def.get("physicalName", "")
+                                table_catalog = table_def.get("catalog", "")
+                                table_schema = table_def.get("schema", "")
+                                
+                                if table_catalog and table_schema and "." not in phys_name:
+                                    full_name = f"{table_catalog}.{table_schema}.{phys_name}"
+                                else:
+                                    full_name = phys_name
+                                    
+                                if full_name in valid_names or phys_name in valid_names:
+                                    filtered_schema.append(table_def)
+                                else:
+                                    logger.info(f"Post-LLM Pruning: Removing invalid/hallucinated table {full_name} from final YAML.")
+                                    
+                            final_yaml["schema"] = filtered_schema
+                            # Dump with sort_keys=False to preserve order, and default_flow_style=False for block format
+                            content = yaml.dump(final_yaml, sort_keys=False, default_flow_style=False)
+                        return content
+                    except yaml.YAMLError as ye:
+                        logger.error(f"LLM generated invalid YAML on attempt {attempt + 1}: {ye}")
+                        if attempt == max_retries - 1:
+                            raise ValueError(f"LLM generated invalid YAML after {max_retries} attempts: {ye}")
+                        # Add the error to the messages to prompt the LLM to fix it
+                        messages.append({"role": "assistant", "content": content})
+                        messages.append({"role": "user", "content": f"The YAML you generated is invalid and failed to parse with this error: {ye}\n\nPlease fix the syntax error and return ONLY the corrected YAML."})
+                        continue
+                    except Exception as e:
+                        logger.warning(f"Failed to post-prune LLM YAML: {e}")
+                        return content
+                    
+                if attempt == max_retries - 1:
+                    raise ValueError("LLM generated invalid ODCS format.")
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    raise e
+                logger.warning(f"LLM call failed on attempt {attempt + 1}: {e}")
             
     except Exception as e:
         logger.error(f"Failed to generate ODCS YAML in tool: {e}")
