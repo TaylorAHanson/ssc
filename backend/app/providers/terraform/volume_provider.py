@@ -16,7 +16,7 @@ import copy
 import json
 import logging
 import yaml
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 
 logger = logging.getLogger(__name__)
@@ -275,7 +275,7 @@ class VolumeGitOpsProvider(BaseProvider):
                     "name": self.username,
                     "email": self.email
                 },
-                "submitted_at": datetime.utcnow().isoformat(),
+                "submitted_at": datetime.now(timezone.utc).isoformat(),
                 "action": "plan"  # plan = create PR, apply = merge PR
             }
             
@@ -333,7 +333,7 @@ class VolumeGitOpsProvider(BaseProvider):
             
             # Update status to request merge
             status["apply_requested"] = True
-            status["apply_requested_at"] = datetime.utcnow().isoformat()
+            status["apply_requested_at"] = datetime.now(timezone.utc).isoformat()
             
             status_file = f"{self.volume_path}/status/{request_id}.json"
             self._write_file(status_file, json.dumps(status, indent=2))
@@ -530,7 +530,7 @@ class VolumeGitOpsProvider(BaseProvider):
                 "commit_message": commit_message,
                 "environment": self.environment,
                 "author": {"name": self.username, "email": self.email},
-                "submitted_at": datetime.utcnow().isoformat(),
+                "submitted_at": datetime.now(timezone.utc).isoformat(),
                 "action": "plan"
             }
             
@@ -643,7 +643,7 @@ class VolumeGitOpsProvider(BaseProvider):
                 "commit_message": commit_message or f"Revoke access from {principal} on {resource_name}",
                 "environment": self.environment,
                 "author": {"name": self.username, "email": self.email},
-                "submitted_at": datetime.utcnow().isoformat(),
+                "submitted_at": datetime.now(timezone.utc).isoformat(),
                 "action": "plan"
             }
             

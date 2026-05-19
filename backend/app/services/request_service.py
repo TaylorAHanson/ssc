@@ -7,7 +7,7 @@ from app.db.request import RequestModel
 from app.models.request import RequestType, RequestCreate, Request
 from app.state_machines.persistence import save_state_machine
 from app.state_machines.factory import get_state_machine
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 
@@ -41,8 +41,8 @@ class RequestService:
             requires_training=request_data.type == RequestType.WORKSPACE_PROVISION,
             environment=request_data.environment.value if request_data.environment else None,
             conversation=request_data.conversation,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc)
         )
         
         # Initialize state machine (this will set up parallel paths)

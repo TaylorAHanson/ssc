@@ -127,7 +127,7 @@ class CampaignStateMachine(BaseRequestStateMachine):
         """Override tick to check children completion."""
         changed = super().tick()
         
-        if self.current_state.id == "running":
+        if self.current_state_value == "running":
             # Check if all children are done
             if self.all_children_completed():
                 add_fact(self.db, self.request.id, "campaign_finished", {}, actor="system")

@@ -1,3 +1,23 @@
+# Target Workspaces Configuration
+# Define authoritative target workspaces for the agent to operate on.
+# To securely map Databricks Secrets to these workspaces without hardcoding them,
+# use Databricks Apps environment variable mapping in your app.yaml:
+#   env:
+#     - name: PROD_WS_CLIENT_ID
+#       valueFrom: databricks-secret:atlas_sp_credentials:prod_client_id
+#
+# target_workspaces:
+#   - name: "enterprise-prod"
+#     host: "https://adb-123456789.1.azuredatabricks.net"
+#     environment: "prod"
+#     client_id_env: "PROD_WS_CLIENT_ID"
+#     client_secret_env: "PROD_WS_CLIENT_SECRET"
+#   - name: "enterprise-dev"
+#     host: "https://adb-987654321.2.azuredatabricks.net"
+#     environment: "dev"
+#     client_id_env: "DEV_WS_CLIENT_ID"
+#     client_secret_env: "DEV_WS_CLIENT_SECRET"
+
 branding:
   name: "ATLAS Self-Service Center"
   logo_url: ""
@@ -47,6 +67,10 @@ tools:
   get_resource_efficiency_metrics: false
   get_schema_list: true
   get_table_list: true
+  get_volume_list: true
+  get_credential_list: true
+  check_workspace_path: true
+  get_target_workspaces: true
   list_github_templates: true
   list_workspaces: true
   search_events: true
@@ -76,10 +100,18 @@ workflows:
   RequestType.ENFORCEMENT_SENTINEL: false
   RequestType.GITHUB_REPO_CREATION: true
   RequestType.MARKETPLACE_CERTIFICATION: false
-  RequestType.PROJECT_ONBOARDING: false
+  RequestType.PROJECT_ONBOARDING: true
   RequestType.REPORT_EXECUTION: true
   RequestType.REST_API_ACCESS: false
   RequestType.SERVICE_PRINCIPAL: true
   RequestType.SIMPLE_EMAIL: false
   RequestType.WORKSPACE_ACCESS: true
   RequestType.WORKSPACE_PROVISION: true
+  RequestType.TAG_CREATION: true
+  RequestType.CREDENTIAL_CREATION: true
+  RequestType.VOLUME_CREATION: true
+  RequestType.WORKSPACE_FOLDER_CREATION: true
+  RequestType.GITHUB_REPO_ACCESS: true
+  RequestType.REUSABLE_ASSETS: true
+  RequestType.TRAINING_LINKS: true
+  RequestType.TRAINING_VERIFICATION: true

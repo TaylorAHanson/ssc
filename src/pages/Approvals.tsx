@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRequestStore } from '../stores/requestStore';
+import { useUserStore } from '../stores/userStore';
 import { RequestDetailsModal } from '../components/RequestDetailsModal';
 import { RequestStateList } from './Requests';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -40,8 +41,8 @@ export function Approvals() {
   const [endDate, setEndDate] = useState('');
   const [delegationsToMe, setDelegationsToMe] = useState<Delegation[]>([]);
 
-  // Current mock user
-  const currentUserEmail = "admin@example.com";
+  const { currentUser } = useUserStore();
+  const currentUserEmail = currentUser?.email || "admin@example.com";
 
   const fetchAllData = useCallback(async () => {
     await Promise.all([
@@ -59,20 +60,22 @@ export function Approvals() {
     fetchAllData();
   }, [fetchAllData]);
 
-  // User roles
-  const userRoles = ['platform_admin', 'data_owner', 'manager', 'governance_admin'];
+  // User roles from actual user object, mapped to the internal format
+  const userRoles = currentUser?.roles.map(r => r.toLowerCase().replace(' ', '_')) || [];
+  
   const roleLabels: Record<string, string> = {
     platform_admin: 'Platform Admin',
     data_owner: 'Data Owner',
     manager: 'Manager',
     governance_admin: 'Governance Admin',
+    security_admin: 'Security Admin',
+    finance_admin: 'Finance Admin'
   };
 
   // Filter approvals by user's roles
-  const pendingApprovals = approvals.filter((a) => {
-    const hasRole = userRoles.includes(a.approvalType);
-    return hasRole && a.status === 'pending';
-  });
+  // Note: The backend already filters the approvals list to only those the user is authorized to see.
+  // We just need to separate them into pending and completed.
+  const pendingApprovals = approvals.filter((a) => a.status === 'pending');
 
   const completedApprovals = approvals
     .filter((a) => a.status !== 'pending')
@@ -342,7 +345,7 @@ export function Approvals() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {userRoles.map((role) => (
+            {userRoles.length > 0 ? userRoles.map((role) => (
               <div key={role} className="border border-gray-200 rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-3">
                   {role === 'platform_admin' ? (
@@ -352,7 +355,7 @@ export function Approvals() {
                   ) : (
                     <UserPlus className="w-5 h-5 text-primary" />
                   )}
-                  <h3 className="font-semibold text-gray-900">{roleLabels[role]}</h3>
+                  <h3 className="font-semibold text-gray-900">{roleLabels[role] || role.replace('_', ' ')}</h3>
                 </div>
                 {role === 'data_owner' && (
                   <p className="text-sm text-gray-600 mb-2">Data Owner for: <strong>platform_catalog</strong></p>
@@ -366,7 +369,9 @@ export function Approvals() {
                   ))}
                 </ul>
               </div>
-            ))}
+            )) : (
+              <p className="text-sm text-gray-500 italic">No approval roles assigned.</p>
+            )}
           </div>
         </CardContent>
       </Card>

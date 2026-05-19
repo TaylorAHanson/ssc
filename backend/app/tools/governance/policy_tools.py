@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.core.exceptions import PermanentError
@@ -50,7 +50,7 @@ async def evaluate_policy(workspace: str, resource_type: str, resource_id: str) 
         input_data = {
             "workspace": {"name": workspace, "type": workspace_type},
             "resource": {"id": resource_id, "type": resource_type},
-            "request_time": datetime.utcnow().isoformat(),
+            "request_time": datetime.now(timezone.utc).isoformat(),
             "allowlist_records": allowlist_records
         }
         

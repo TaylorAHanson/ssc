@@ -1,6 +1,6 @@
 from app.db.request import RequestModel
 from app.models.request import RequestType
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import random
 from faker import Faker
@@ -23,8 +23,8 @@ class RequestFactory:
             title=kwargs.pop("title", default_title),
             status=kwargs.pop("status", "pending"),
             current_state=kwargs.pop("current_state", "pending"),
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
             state_context=params,
             **kwargs
         )

@@ -18,13 +18,25 @@ class SearchRequestsInput(BaseModel):
     description="Search for existing requests by title, ID, or status. Use this to check the status of a user's request or find specific requests.",
     args_schema=SearchRequestsInput
 )
-async def search_requests(query: Optional[str] = None, status: Optional[str] = None, limit: int = 5) -> Dict[str, Any]:
+async def search_requests(
+    query: Optional[str] = None, 
+    status: Optional[str] = None, 
+    limit: int = 5,
+    _user_email: Optional[str] = None,
+    _user_roles: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Execute the search.
     """
     db = next(get_db())
     try:
         sql_query = db.query(RequestModel)
+        
+        # Apply role-based filtering
+        if _user_email and _user_roles is not None:
+            roles_list = [r.strip().lower() for r in _user_roles.split(",")]
+            if "platform admin" not in roles_list:
+                sql_query = sql_query.filter(RequestModel.requester_email == _user_email)
         
         # Filter by text query
         if query:

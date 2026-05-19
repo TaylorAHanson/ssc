@@ -2,7 +2,7 @@ import logging
 from typing import List, Optional
 import uuid
 import yaml
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -24,8 +24,7 @@ class OdpsResponse(BaseModel):
     created_at: datetime
     created_by: Optional[str]
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 class OdpsDraftRequest(BaseModel):
     dataset_ids: List[str]
@@ -78,7 +77,7 @@ def save_odps(odps: OdpsCreate, db: Session = Depends(get_db), current_user = De
         yaml_content=odps.yaml_content,
         version=new_version,
         is_active=True,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
         created_by=current_user.email
     )
 

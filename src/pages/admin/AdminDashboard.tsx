@@ -1,5 +1,5 @@
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, Fragment } from 'react';
 import { useRequestStore } from '../../stores/requestStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -19,9 +19,29 @@ const EFFORT_ESTIMATES: Record<string, number> = {
     'workspace_provision': 4,
     'workspace_access': 0.5,
     'catalog_schema_table': 1,
+    'catalog_schema_table_access': 0.5,
     'service_principal': 2,
     'marketplace_certification': 8,
+    'data_certification': 8,
     'github_repo_creation': 0.5,
+    'github_repo_access': 0.5,
+    'project_onboarding': 8,
+    'rest_api_access': 1,
+    'batch_data_access': 1,
+    'data_access_request': 0.5,
+    'simple_email': 0.25,
+    'campaign': 2,
+    'report_execution': 0.5,
+    'enforcement_sentinel': 2,
+    'asset_deduplication': 4,
+    'allowlist_exception': 1,
+    'tag_creation': 0.5,
+    'credential_creation': 1,
+    'volume_creation': 1,
+    'workspace_folder_creation': 0.5,
+    'reusable_assets': 0.25,
+    'training_links': 0.25,
+    'training_verification': 0.5,
     'default': 1
 };
 
@@ -300,8 +320,8 @@ export function AdminDashboard() {
                         </thead>
                         <tbody className="divide-y divide-gray-100">
                             {filteredAndSortedRequests.map(req => (
-                                <>
-                                    <tr key={req.id} className="hover:bg-gray-50 group transition-colors">
+                                <Fragment key={req.id}>
+                                    <tr className="hover:bg-gray-50 group transition-colors">
                                         <td className="p-3">
                                             <button onClick={() => toggleRow(req.id)} className="p-1 hover:bg-gray-200 rounded">
                                                 {expandedRows.has(req.id) ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
@@ -360,7 +380,7 @@ export function AdminDashboard() {
                                             </td>
                                         </tr>
                                     )}
-                                </>
+                                </Fragment>
                             ))}
                         </tbody>
                     </table>

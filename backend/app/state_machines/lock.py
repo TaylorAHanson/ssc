@@ -1,7 +1,7 @@
 """
 State locking mechanism for concurrent state transitions.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.db.request import RequestModel
@@ -26,7 +26,7 @@ def acquire_lock(db: Session, request_id: str, worker_id: str, timeout_minutes: 
     
     # Check if already locked and not expired
     if request.locked_by and request.locked_until:
-        if request.locked_until > datetime.utcnow():
+        if request.locked_until > datetime.now(timezone.utc):
             return False  # Locked by another worker
         # Lock expired, we can take it
     
@@ -36,11 +36,11 @@ def acquire_lock(db: Session, request_id: str, worker_id: str, timeout_minutes: 
         RequestModel.id == request_id,
         or_(
             RequestModel.locked_by.is_(None),
-            RequestModel.locked_until < datetime.utcnow()
+            RequestModel.locked_until < datetime.now(timezone.utc)
         )
     ).update({
         RequestModel.locked_by: worker_id,
-        RequestModel.locked_until: datetime.utcnow() + timedelta(minutes=timeout_minutes)
+        RequestModel.locked_until: datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
     })
     
     db.commit()
@@ -85,12 +85,12 @@ def heartbeat_lock(db: Session, request_id: str, worker_id: str, timeout_minutes
         return False
     
     # Extend the lock timeout
-    from datetime import datetime, timedelta
+    from datetime import datetime, timezone, timedelta
     rows_updated = db.query(RequestModel).filter(
         RequestModel.id == request_id,
         RequestModel.locked_by == worker_id
     ).update({
-        RequestModel.locked_until: datetime.utcnow() + timedelta(minutes=timeout_minutes)
+        RequestModel.locked_until: datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
     })
     
     db.commit()

@@ -2,7 +2,7 @@
 Reports API endpoints.
 """
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -45,8 +45,7 @@ class ReportSubscriptionResponse(ReportSubscriptionCreate):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 class ExecutionSummary(BaseModel):
     id: str
@@ -70,7 +69,7 @@ def create_subscription(sub: ReportSubscriptionCreate, db: Session = Depends(get
     
     # Validate cron
     try:
-        iter = croniter(sub.schedule_cron, datetime.utcnow())
+        iter = croniter(sub.schedule_cron, datetime.now(timezone.utc))
         next_run = iter.get_next(datetime)
     except (CroniterBadCronError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid cron expression")
@@ -113,7 +112,7 @@ def update_subscription(id: str, update: ReportSubscriptionUpdate, db: Session =
     
     if update.schedule_cron is not None:
         try:
-            iter = croniter(update.schedule_cron, datetime.utcnow())
+            iter = croniter(update.schedule_cron, datetime.now(timezone.utc))
             next_run = iter.get_next(datetime)
             sub.schedule_cron = update.schedule_cron
             sub.next_run_at = next_run

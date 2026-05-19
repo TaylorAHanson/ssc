@@ -117,7 +117,7 @@ class WorkspaceAccessStateMachine(BaseRequestStateMachine):
     async def on_enter_provisioning_async(self):
         """Execute async tasks when entering provisioning state."""
         import logging
-        from datetime import datetime
+        from datetime import datetime, timezone
         from app.state_machines.facts import add_fact
         from app.providers.entra_id.client import EntraIdProvider
         from app.core.config import settings
@@ -159,7 +159,7 @@ class WorkspaceAccessStateMachine(BaseRequestStateMachine):
                     "workspace_name": workspace_name,
                     "user_email": user_email,
                     "entra_id_group": target_group_id,
-                    "granted_at": datetime.utcnow().isoformat()
+                    "granted_at": datetime.now(timezone.utc).isoformat()
                 }, actor="system")
                 self.db.commit()
                 

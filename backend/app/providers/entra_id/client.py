@@ -18,6 +18,7 @@ class EntraIdProvider(BaseProvider):
         self.client_secret = client_secret
         self.base_url = "https://graph.microsoft.com/v1.0"
         self._access_token = None
+        self._token_expires_at = 0
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=30.0
@@ -25,17 +26,41 @@ class EntraIdProvider(BaseProvider):
         
     async def _get_token(self) -> str:
         """Get or refresh the OAuth2 access token for Microsoft Graph."""
-        # In a real implementation, this would cache the token and handle expiration.
-        # For now, we simulate getting a token or just return a dummy.
-        if self._access_token:
+        import time
+        
+        # Check if we have a valid token (with 5 minute buffer)
+        if self._access_token and self._token_expires_at and time.time() < (self._token_expires_at - 300):
             return self._access_token
             
-        # Simulated token fetch
-        # token_url = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
-        # ... fetch token ...
-        self._access_token = "simulated_entra_id_token"
-        self.client.headers.update({"Authorization": f"Bearer {self._access_token}"})
-        return self._access_token
+        try:
+            token_url = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
+            
+            # Use a separate client for the token request to avoid base_url issues
+            async with httpx.AsyncClient(timeout=30.0) as token_client:
+                response = await token_client.post(
+                    token_url,
+                    data={
+                        "client_id": self.client_id,
+                        "client_secret": self.client_secret,
+                        "scope": "https://graph.microsoft.com/.default",
+                        "grant_type": "client_credentials"
+                    }
+                )
+                response.raise_for_status()
+                token_data = response.json()
+                
+                self._access_token = token_data["access_token"]
+                # Default to 3600 seconds (1 hour) if expires_in is not provided
+                expires_in = token_data.get("expires_in", 3600)
+                self._token_expires_at = time.time() + expires_in
+                
+                self.client.headers.update({"Authorization": f"Bearer {self._access_token}"})
+                return self._access_token
+                
+        except httpx.HTTPStatusError as e:
+            raise PermanentError(f"Failed to authenticate with Entra ID: {e.response.text}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error during Entra ID authentication: {str(e)}")
     
     @retry_on_retryable(max_attempts=3)
     async def create_user(self, email: str, attributes: Dict[str, Any]) -> Dict[str, Any]:
@@ -152,10 +177,13 @@ class EntraIdProvider(BaseProvider):
             response.raise_for_status()
             return True
         except httpx.HTTPStatusError as e:
+            if e.response.status_code == 400 and "already exist" in e.response.text.lower():
+                # User is already in the group
+                return True
             if e.response.status_code >= 500:
                 raise RetryableError(f"Entra ID server error: {str(e)}")
             else:
-                raise PermanentError(f"Failed to add user to group: {str(e)}")
+                raise PermanentError(f"Failed to add user to group: {str(e)} - {e.response.text}")
         except httpx.RequestError as e:
             raise RetryableError(f"Request error: {str(e)}")
 
@@ -192,46 +220,119 @@ class EntraIdProvider(BaseProvider):
     @retry_on_retryable(max_attempts=3)
     async def search_users(self, query: str) -> Dict[str, Any]:
         """
-        Search for users in the IDP.
-        Currently mocked for development.
+        Search for users in Entra ID using Microsoft Graph API.
         """
-        # Mock data
-        mock_users = [
-            {"id": "usr_101", "email": "alice@example.com", "name": "Alice Smith", "department": "Engineering"},
-            {"id": "usr_102", "email": "bob@example.com", "name": "Bob Jones", "department": "Data Science"},
-            {"id": "usr_103", "email": "charlie@example.com", "name": "Charlie Brown", "department": "Finance"}
-        ]
-        
-        # Simple mock filtering
-        results = [u for u in mock_users if query.lower() in u["email"].lower() or query.lower() in u["name"].lower()]
-        
-        return {
-            "query": query,
-            "results": results,
-            "count": len(results)
-        }
+        await self._get_token()
+        try:
+            # Use $search for better matching if query is provided
+            # Requires ConsistencyLevel: eventual header
+            headers = {"ConsistencyLevel": "eventual"}
+            
+            if query:
+                # Search by displayName or mail
+                search_query = f'"displayName:{query}" OR "mail:{query}" OR "userPrincipalName:{query}"'
+                response = await self.client.get(
+                    "/users",
+                    headers=headers,
+                    params={
+                        "$search": search_query,
+                        "$select": "id,displayName,mail,userPrincipalName,department,jobTitle",
+                        "$top": 20
+                    }
+                )
+            else:
+                response = await self.client.get(
+                    "/users",
+                    params={
+                        "$select": "id,displayName,mail,userPrincipalName,department,jobTitle",
+                        "$top": 20
+                    }
+                )
+                
+            response.raise_for_status()
+            data = response.json()
+            
+            # Format results
+            results = []
+            for user in data.get("value", []):
+                results.append({
+                    "id": user.get("id"),
+                    "email": user.get("mail") or user.get("userPrincipalName"),
+                    "name": user.get("displayName"),
+                    "department": user.get("department", "Unknown"),
+                    "jobTitle": user.get("jobTitle", "Unknown")
+                })
+                
+            return {
+                "query": query,
+                "results": results,
+                "count": len(results)
+            }
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"Entra ID server error: {str(e)}")
+            else:
+                raise PermanentError(f"Failed to search users: {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
 
     @retry_on_retryable(max_attempts=3)
     async def search_groups(self, query: str) -> Dict[str, Any]:
         """
-        Search for groups in the IDP.
-        Currently mocked for development.
+        Search for groups in Entra ID using Microsoft Graph API.
         """
-        # Mock data
-        mock_groups = [
-            {"id": "grp_123", "name": "data-engineering-prod", "description": "Data Engineering Production Access"},
-            {"id": "grp_124", "name": "data-science-dev", "description": "Data Science Development"},
-            {"id": "grp_125", "name": "finance-analysts", "description": "Finance Analytics Team"}
-        ]
-        
-        # Simple mock filtering
-        results = [g for g in mock_groups if query.lower() in g["name"].lower()]
-        
-        return {
-            "query": query,
-            "results": results,
-            "count": len(results)
-        }
+        await self._get_token()
+        try:
+            headers = {"ConsistencyLevel": "eventual"}
+            
+            if query:
+                search_query = f'"displayName:{query}" OR "description:{query}"'
+                response = await self.client.get(
+                    "/groups",
+                    headers=headers,
+                    params={
+                        "$search": search_query,
+                        "$select": "id,displayName,description,mailEnabled,securityEnabled",
+                        "$top": 20
+                    }
+                )
+            else:
+                response = await self.client.get(
+                    "/groups",
+                    params={
+                        "$select": "id,displayName,description,mailEnabled,securityEnabled",
+                        "$top": 20
+                    }
+                )
+                
+            response.raise_for_status()
+            data = response.json()
+            
+            # Format results
+            results = []
+            for group in data.get("value", []):
+                results.append({
+                    "id": group.get("id"),
+                    "name": group.get("displayName"),
+                    "description": group.get("description", ""),
+                    "isSecurityGroup": group.get("securityEnabled", False),
+                    "isMailEnabled": group.get("mailEnabled", False)
+                })
+                
+            return {
+                "query": query,
+                "results": results,
+                "count": len(results)
+            }
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"Entra ID server error: {str(e)}")
+            else:
+                raise PermanentError(f"Failed to search groups: {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
     
     async def __aenter__(self):
         return self

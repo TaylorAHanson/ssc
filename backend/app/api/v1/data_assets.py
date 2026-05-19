@@ -166,3 +166,95 @@ def get_databricks_tables(catalog: str, schema: str):
     except Exception as e:
         logger.error(f"Failed to fetch tables for {catalog}.{schema}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/databricks/dashboards")
+def get_databricks_dashboards():
+    """Fetch available Lakeview dashboards from Databricks."""
+    from app.providers.databricks import DatabricksProvider
+    from app.core.config import settings
+    from fastapi import HTTPException
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        provider = DatabricksProvider(
+            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
+            token=settings.DATABRICKS_TOKEN,
+            client_id=settings.DATABRICKS_CLIENT_ID,
+            client_secret=settings.DATABRICKS_CLIENT_SECRET
+        )
+        dashboards = provider.client.lakeview.list()
+        return [{"id": d.dashboard_id, "name": d.display_name, "type": "dashboard", "path": d.parent_path} for d in dashboards]
+    except Exception as e:
+        logger.error(f"Failed to fetch dashboards: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/databricks/jobs")
+def get_databricks_jobs():
+    """Fetch available jobs from Databricks."""
+    from app.providers.databricks import DatabricksProvider
+    from app.core.config import settings
+    from fastapi import HTTPException
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        provider = DatabricksProvider(
+            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
+            token=settings.DATABRICKS_TOKEN,
+            client_id=settings.DATABRICKS_CLIENT_ID,
+            client_secret=settings.DATABRICKS_CLIENT_SECRET
+        )
+        jobs = provider.client.jobs.list()
+        return [{"id": str(j.job_id), "name": j.settings.name, "type": "job", "creator": j.creator_user_name} for j in jobs]
+    except Exception as e:
+        logger.error(f"Failed to fetch jobs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/databricks/apps")
+def get_databricks_apps():
+    """Fetch available apps from Databricks."""
+    from app.providers.databricks import DatabricksProvider
+    from app.core.config import settings
+    from fastapi import HTTPException
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        provider = DatabricksProvider(
+            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
+            token=settings.DATABRICKS_TOKEN,
+            client_id=settings.DATABRICKS_CLIENT_ID,
+            client_secret=settings.DATABRICKS_CLIENT_SECRET
+        )
+        apps = provider.client.apps.list()
+        return [{"id": a.name, "name": a.name, "type": "app", "creator": a.creator} for a in apps]
+    except Exception as e:
+        logger.error(f"Failed to fetch apps: {e}")
+        # Return empty list if apps aren't supported in this workspace/SDK yet
+        return []
+
+@router.get("/databricks/genie_spaces")
+def get_databricks_genie_spaces():
+    """Fetch available Genie Spaces from Databricks."""
+    from app.providers.databricks import DatabricksProvider
+    from app.core.config import settings
+    from fastapi import HTTPException
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        provider = DatabricksProvider(
+            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
+            token=settings.DATABRICKS_TOKEN,
+            client_id=settings.DATABRICKS_CLIENT_ID,
+            client_secret=settings.DATABRICKS_CLIENT_SECRET
+        )
+        # Handle potential absence of genie attribute in older SDKs or if not configured
+        if hasattr(provider.client, 'genie'):
+            spaces = provider.client.genie.list()
+            return [{"id": s.id, "name": s.name, "type": "genie_space", "description": s.description} for s in spaces]
+        return []
+    except Exception as e:
+        logger.error(f"Failed to fetch genie spaces: {e}")
+        return []

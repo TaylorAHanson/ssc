@@ -9,16 +9,17 @@ logger = logging.getLogger(__name__)
 
 
 class CheckResourceAccessInput(BaseModel):
+    target_host: str = Field(..., description="The host URL of the target Databricks workspace.")
     resource_name: str = Field(..., description="Name of the resource (schema or catalog)")
     principal: Optional[str] = Field(None, description="Optional: specific user, group, or service principal to check")
 
 
 @tool(
     name="check_resource_access",
-    description="Check existing access grants on a Unity Catalog resource (schema or catalog). Use this BEFORE granting or revoking access to verify current state.",
+    description="Check existing access grants on a Unity Catalog resource (schema or catalog) in a specific workspace. Use this BEFORE granting or revoking access to verify current state.",
     args_schema=CheckResourceAccessInput
 )
-async def check_resource_access(resource_name: str, principal: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+async def check_resource_access(target_host: str, resource_name: str, principal: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     """
     Check what access grants exist on a resource.
     

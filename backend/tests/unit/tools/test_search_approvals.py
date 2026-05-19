@@ -14,7 +14,7 @@ class TestSearchApprovalsTool:
     async def test_search_by_type(self, tool, db_session):
         # We need to patch get_lakebase_session for each execution or via a bigger scope
         # With functional tool, it calls get_lakebase_session() inside the body.
-        with patch("app.tools.self_service.search_approvals.get_lakebase_session", return_value=db_session): 
+        with patch("app.tools.self_service.search_approvals.get_db", side_effect=lambda: iter([db_session])):
             # Setup
             req1 = RequestFactory.create(db_session, title="Req 1")
             req2 = RequestFactory.create(db_session, title="Req 2")
@@ -32,7 +32,7 @@ class TestSearchApprovalsTool:
 
     @pytest.mark.asyncio
     async def test_search_by_status(self, tool, db_session):
-        with patch("app.tools.self_service.search_approvals.get_lakebase_session", return_value=db_session):
+        with patch("app.tools.self_service.search_approvals.get_db", side_effect=lambda: iter([db_session])):
             # Setup
             req = RequestFactory.create(db_session)
             ApprovalFactory.create(db_session, request_id=req.id, status="pending")
@@ -47,7 +47,7 @@ class TestSearchApprovalsTool:
 
     @pytest.mark.asyncio
     async def test_search_by_request_id(self, tool, db_session):
-         with patch("app.tools.self_service.search_approvals.get_lakebase_session", return_value=db_session):
+         with patch("app.tools.self_service.search_approvals.get_db", side_effect=lambda: iter([db_session])):
             # Setup
             req1 = RequestFactory.create(db_session)
             req2 = RequestFactory.create(db_session)
@@ -64,6 +64,6 @@ class TestSearchApprovalsTool:
 
     @pytest.mark.asyncio
     async def test_no_results(self, tool, db_session):
-         with patch("app.tools.self_service.search_approvals.get_lakebase_session", return_value=db_session):
+         with patch("app.tools.self_service.search_approvals.get_db", side_effect=lambda: iter([db_session])):
             result = await tool.execute(approval_type="platform_admin")
             assert result["count"] == 0

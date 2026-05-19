@@ -55,6 +55,7 @@ export interface Request {
   lastError?: any;
   metadata?: Record<string, any>;
   conversation?: ChatMessage[];
+  approvals?: Approval[];
 }
 
 export interface ProgressInfo {
@@ -122,6 +123,10 @@ export interface Approval {
   requestedByEmail: string;
   assignedToEmail?: string;
   assignedToRole?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectedBy?: string;
+  rejectedAt?: string;
   status: 'pending' | 'approved' | 'rejected' | 'delegated' | 'superseded';
   createdAt: string;
   updatedAt: string;

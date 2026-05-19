@@ -42,15 +42,13 @@ def test_github_repo_provisioning_flow(db_session):
     # 3. Test on_enter_provisioning_async
     # We need to mock the GitHubProvider
     
+    from unittest.mock import patch, AsyncMock
     with patch("app.providers.github.client.GitHubProvider") as MockProvider, \
-         patch("app.core.config.settings") as mock_settings:
+         patch("app.core.config.settings.PLATFORM_ADMIN_EMAIL", "admin@example.com"):
         
         # Setup Mock
         mock_github = AsyncMock()
         MockProvider.return_value.__aenter__.return_value = mock_github
-        
-        mock_settings.GITHUB_TOKEN = "fake-token"
-        mock_settings.GITHUB_ORG = "fake-org"
         
         mock_github.create_repo.return_value = {
             "html_url": "https://github.com/fake-org/test-repo",
@@ -97,6 +95,7 @@ def test_github_repo_from_template(db_session):
     harness.tick(request.id)
     harness.assert_state(request.id, "provisioning")
     
+    from unittest.mock import patch, AsyncMock
     with patch("app.providers.github.client.GitHubProvider") as MockProvider:
         
         mock_github = AsyncMock()

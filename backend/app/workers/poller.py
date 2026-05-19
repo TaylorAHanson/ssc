@@ -10,7 +10,7 @@ import asyncio
 import logging
 import os
 import socket
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from typing import Optional
 from sqlalchemy import or_
@@ -43,7 +43,7 @@ _next_sentinel_time = None
 async def process_enforcement_sentinel_cron():
     """Check if it's time to run the enforcement sentinel and spawn it."""
     global _next_sentinel_time
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     
     cron_expr = getattr(settings, 'ENFORCEMENT_SENTINEL_CRON', '*/30 * * * *')
     if not cron_expr:
@@ -184,7 +184,7 @@ async def process_open_requests():
     try:
         # Find requests that need processing (not completed/rejected/failed)
         # and are not locked (or lock has expired)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Process pending requests AND failed requests that might be recoverable
         # Failed requests in non-terminal states (like terraform_applying) may have
         # success facts that can transition them to completed
@@ -244,7 +244,7 @@ async def process_scheduled_reports():
     """Check for and spawn scheduled reports."""
     db = next(get_db())
     try:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         due_subs = db.query(ReportSubscription).filter(
             ReportSubscription.is_active == True,
             ReportSubscription.next_run_at <= now
@@ -665,7 +665,7 @@ async def _process_request_state_machine(db, request: RequestModel):
     
     # Load the polymorphic state machine
     sm = load_state_machine(request, db)
-    initial_state = sm.current_state.id
+    initial_state = sm.current_state_value
     logger.debug(f"[{request.id}] Loaded state machine - Current state: {initial_state}")
     
     # Log relevant facts for debugging
@@ -685,7 +685,7 @@ async def _process_request_state_machine(db, request: RequestModel):
     # Let the state machine handle all logic
     logger.debug(f"[{request.id}] Calling state machine tick()...")
     changed = sm.tick()
-    new_state = sm.current_state.id
+    new_state = sm.current_state_value
     
     # Save state machine to sync status and state
     # We do this every time to ensure the database matches the state machine's internal view
@@ -694,7 +694,7 @@ async def _process_request_state_machine(db, request: RequestModel):
         logger.info(f"[{request.id}] Syncing state machine status: {request.status} -> {sm.get_mapped_status().value}")
         save_state_machine(db, request, sm)
         db.commit()
-        logger.info(f"[{request.id}] Saved state machine - Current state: {sm.current_state.id}, Status: {request.status}")
+        logger.info(f"[{request.id}] Saved state machine - Current state: {sm.current_state_value}, Status: {request.status}")
     else:
         logger.debug(f"[{request.id}] No state change or status sync needed (still in {initial_state})")
     
@@ -714,7 +714,7 @@ async def _handle_retryable_error(
 ):
     """Handle a retryable error by incrementing retry count and logging."""
     request.retry_count += 1
-    request.last_failure = datetime.utcnow()
+    request.last_failure = datetime.now(timezone.utc)
     request.last_error = {
         "error": str(error),
         "traceback": traceback.format_exc(),
@@ -733,14 +733,14 @@ async def _handle_retryable_error(
     
     # Log failure to failures table
     failure = FailureModel(
-        id=f"fail-{datetime.utcnow().timestamp()}",
+        id=f"fail-{datetime.now(timezone.utc).timestamp()}",
         request_id=request.id,
         task_id=worker_id,
         failure_type="retryable_error",
         error_message=str(error),
         error_details=request.last_error,
         retry_count=request.retry_count,
-        occurred_at=datetime.utcnow()
+        occurred_at=datetime.now(timezone.utc)
     )
     db.add(failure)
     db.commit()
@@ -773,14 +773,14 @@ async def _handle_permanent_error(
     
     # Log permanent failure
     failure = FailureModel(
-        id=f"fail-{datetime.utcnow().timestamp()}",
+        id=f"fail-{datetime.now(timezone.utc).timestamp()}",
         request_id=request.id,
         task_id=worker_id,
         failure_type="permanent_error",
         error_message=str(error),
         error_details=request.last_error,
         retry_count=request.retry_count,
-        occurred_at=datetime.utcnow(),
+        occurred_at=datetime.now(timezone.utc),
         resolved=False
     )
     db.add(failure)

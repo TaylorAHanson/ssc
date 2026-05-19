@@ -11,7 +11,7 @@ The Settings class uses pydantic-settings which automatically loads from:
 """
 from pydantic_settings import BaseSettings
 from pydantic import field_validator, Field
-from typing import List, Union, Any
+from typing import List, Union, Any, Optional
 import os
 import json
 import yaml
@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     
     # Environment
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "production")
+    
+    # Platform Admin
+    PLATFORM_ADMIN_EMAIL: str | None = os.getenv("PLATFORM_ADMIN_EMAIL", "admin@example.com")
     
     # API Settings
     API_V1_PREFIX: str = "/api/v1"
@@ -375,10 +378,11 @@ class Settings(BaseSettings):
             "policies_dir": (self.OPA_POLICIES_DIR or "policies").strip(),
         }
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-        extra = "ignore"
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": True,
+        "extra": "ignore"
+    }
 
 
 settings = Settings()

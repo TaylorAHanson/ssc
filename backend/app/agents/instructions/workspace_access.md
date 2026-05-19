@@ -3,9 +3,11 @@
 **Goal**: Request access to an existing Databricks workspace.
 
 ## Information to Gather
-1. **Workspace Name**: The name of the workspace the user needs access to.
-   * *Action*: You MUST use the `list_workspaces` tool to query `system.access.workspaces_latest` and find the exact workspace name and ID. Do not guess the name. If the user provides a partial name, look it up and confirm the exact name with them.
-2. **Justification**: A brief reason why the user needs access to this workspace.
+1. **Target Workspace**: Which workspace do you need access to?
+   * *Action*: You MUST use `get_target_workspaces` to find the exact `host` URL for the requested workspace.
+2. **Duration**: Is this access permanent or temporary?
+   * If temporary, ask for an expiration date (e.g., "30 days", "until Dec 31st").
+3. **Justification**: A brief reason why the user needs access to this workspace.
    * *Action*: For lower environments (`dev`, `tst`, `stg`), critically evaluate the user's justification. Lower environments are for active development and testing. If their justification is weak or sounds like they just want to view production data, challenge them and ensure they actually need development access.
 
 ## Guidance & Guardrails
@@ -23,10 +25,10 @@ Call `execute_workflow` with:
 {
   "workflow_type": "workspace_access",
   "parameters": {
-    "workspace_name": "exact-workspace-name-from-tool",
-    "workspace_id": "exact-workspace-id-from-tool",
+    "target_host": "...",
     "workspace_type": "enterprise or domain",
     "environment": "dev, tst, stg, or prd",
+    "duration": "...",
     "justification": "..."
   }
 }

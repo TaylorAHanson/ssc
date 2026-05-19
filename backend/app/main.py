@@ -23,6 +23,56 @@ setup_logging(settings.LOG_LEVEL)
 
 logger = logging.getLogger(__name__)
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start background tasks and initialize DB."""
+    logger.info("Application starting up...")
+    
+    # Initialize DB (Seed Roles)
+    try:
+        from app.db.init_db import init_db
+        from app.db.session import get_session_local, get_engine
+        from app.db.base import Base
+        import app.db  # Ensure all models are imported and registered with Base.metadata
+        
+        # Create Tables (ensure models are loaded via init_db import or explicit import)
+        # init_db imports models, so metadata should be populated
+        engine = get_engine()
+        Base.metadata.create_all(bind=engine)
+        
+        db = get_session_local()()
+        try:
+            init_db(db)
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        # We don't stop startup, but we log strictly
+        
+    if not os.environ.get("TESTING"):
+        logger.info("Starting background poller thread...")
+        import threading
+        def run_poller_thread():
+            # Create a new event loop for this thread
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(start_poller())
+            except Exception as e:
+                logger.error(f"Poller thread crashed: {e}", exc_info=True)
+            finally:
+                loop.close()
+                
+        thread = threading.Thread(target=run_poller_thread, daemon=True, name="PollerThread")
+        thread.start()
+    
+    yield
+    
+    logger.info("Application shutting down...")
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description=settings.DESCRIPTION,
@@ -30,6 +80,7 @@ app = FastAPI(
     # Disable automatic trailing slash redirects - they cause issues with reverse proxies
     # because FastAPI constructs redirect URLs using localhost instead of the actual host
     redirect_slashes=False,
+    lifespan=lifespan
 )
 
 # Static directory definition
@@ -66,50 +117,6 @@ async def spa_fallback_handler(request: Request, exc):
         status_code=status.HTTP_404_NOT_FOUND,
         content={"detail": "Frontend not found"}
     )
-
-@app.on_event("startup")
-async def startup_event():
-    """Start background tasks and initialize DB."""
-    logger.info("Application starting up...")
-    
-    # Initialize DB (Seed Roles)
-    try:
-        from app.db.init_db import init_db
-        from app.db.session import get_session_local, get_engine
-        from app.db.base import Base
-        import app.db  # Ensure all models are imported and registered with Base.metadata
-        
-        # Create Tables (ensure models are loaded via init_db import or explicit import)
-        # init_db imports models, so metadata should be populated
-        engine = get_engine()
-        Base.metadata.create_all(bind=engine)
-        
-        db = get_session_local()()
-        try:
-            init_db(db)
-        finally:
-            db.close()
-    except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
-        # We don't stop startup, but we log strictly
-        
-    logger.info("Starting background poller thread...")
-    import threading
-    def run_poller_thread():
-        # Create a new event loop for this thread
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(start_poller())
-        except Exception as e:
-            logger.error(f"Poller thread crashed: {e}", exc_info=True)
-        finally:
-            loop.close()
-            
-    thread = threading.Thread(target=run_poller_thread, daemon=True, name="PollerThread")
-    thread.start()
-    logger.info("Background poller thread started.")
 
 # CORS middleware
 app.add_middleware(

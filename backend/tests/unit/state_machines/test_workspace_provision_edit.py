@@ -11,7 +11,7 @@ These tests verify:
 Test data flows through the 'workspace_provision' type (which maps to
 WorkspaceProvisionStateMachine in the factory).
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 import pytest
 from tests.harness.context import StateMachineTestHarness
 from tests.factories.request_factory import RequestFactory
@@ -46,7 +46,7 @@ def _advance_to_awaiting_admin_approval(db_session, request):
     add_fact(db_session, request.id, "terraform_plan_received", {"plan_output": "Plan: 3 to add"}, actor="system")
 
     # Move the request to awaiting_admin_approval
-    db_request = db_session.query(RequestModel).get(request.id)
+    db_request = db_session.get(RequestModel, request.id)
     db_request.current_state = "awaiting_admin_approval"
     db_session.commit()
 
@@ -125,7 +125,7 @@ def test_has_parameters_edited_false_after_admin_approval_post_edit(db_session):
         state_context={"workspace_name": "ws-alpha"},
     )
 
-    t0 = datetime.utcnow()
+    t0 = datetime.now(timezone.utc)
     add_fact(db_session, request.id, "parameters_edited",
              {"edited_by": "admin@test.com"}, actor="admin@test.com")
     db_session.commit()
@@ -210,7 +210,7 @@ def test_edit_and_restart_transitions_through_parameters_updated(db_session):
     _advance_to_awaiting_admin_approval(db_session, request)
 
     # Simulate the edit-parameters API call: update context + add fact
-    db_request = db_session.query(RequestModel).get(request.id)
+    db_request = db_session.get(RequestModel, request.id)
     db_request.state_context = {"workspace_name": "ws-beta", "requested_by_email": "user@test.com"}
     add_fact(db_session, request.id, "parameters_edited",
              {"edited_by": "admin@test.com", "new_params": {"workspace_name": "ws-beta"}},
@@ -263,7 +263,7 @@ def test_multiple_edit_cycles_accumulate_facts(db_session):
     _advance_to_awaiting_admin_approval(db_session, request)
 
     # First edit
-    db_request = db_session.query(RequestModel).get(request.id)
+    db_request = db_session.get(RequestModel, request.id)
     db_request.state_context = {"workspace_name": "ws-beta", "requested_by_email": "user@test.com"}
     add_fact(db_session, request.id, "parameters_edited",
              {"edited_by": "admin@test.com", "new_params": {"workspace_name": "ws-beta"}},
@@ -281,7 +281,7 @@ def test_multiple_edit_cycles_accumulate_facts(db_session):
     harness.tick(request.id)  # → awaiting_admin_approval again
 
     # Second edit
-    db_request = db_session.query(RequestModel).get(request.id)
+    db_request = db_session.get(RequestModel, request.id)
     db_request.state_context = {"workspace_name": "ws-gamma", "requested_by_email": "user@test.com"}
     add_fact(db_session, request.id, "parameters_edited",
              {"edited_by": "admin@test.com", "new_params": {"workspace_name": "ws-gamma"}},
@@ -349,7 +349,7 @@ def test_full_edit_then_approve_cycle(db_session):
     harness = _advance_to_awaiting_admin_approval(db_session, request)
 
     # Admin edits instead of approving
-    db_request = db_session.query(RequestModel).get(request.id)
+    db_request = db_session.get(RequestModel, request.id)
     db_request.state_context = {"workspace_name": "ws-beta", "requested_by_email": "user@test.com"}
     db_request.locked_by = None  # Simulate lock release from API
     add_fact(db_session, request.id, "parameters_edited",
@@ -378,5 +378,5 @@ def test_full_edit_then_approve_cycle(db_session):
     harness.assert_state(request.id, "terraform_applying")
 
     # Verify the final state_context has the updated workspace name
-    final_request = db_session.query(RequestModel).get(request.id)
+    final_request = db_session.get(RequestModel, request.id)
     assert final_request.state_context.get("workspace_name") == "ws-beta"

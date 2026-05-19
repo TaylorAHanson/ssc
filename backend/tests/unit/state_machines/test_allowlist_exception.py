@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from tests.harness.context import StateMachineTestHarness
 from tests.factories.request_factory import RequestFactory
 from app.db.allowlist import AllowlistModel
@@ -20,7 +20,7 @@ async def test_allowlist_exception_lifecycle(db_session):
             "resource_type": "app",
             "resource_id": "fin-forecast-app",
             "justification": "Important",
-            "expires_at": (datetime.utcnow() + timedelta(days=365)).isoformat()
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=365)).isoformat()
         }
     )
     

@@ -9,7 +9,7 @@ from app.state_machines.facts import add_fact
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, Literal
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ async def terraform_callback(
         "summary": payload.summary,
         "outputs": payload.outputs,
         "error": payload.error,
-        "received_at": datetime.utcnow().isoformat()
+        "received_at": datetime.now(timezone.utc).isoformat()
     }
     
     add_fact(db, request_id, fact_name, fact_data, actor="system-cicd")

@@ -22,13 +22,13 @@ async def manual_tick_children(db: Session, parent_id: str):
         sm = get_state_machine(child, db)
         
         # 1. Pending -> Sending
-        if sm.current_state.id == "pending":
+        if sm.current_state_value == "pending":
             sm.tick()
             sm.save()
             db.commit()
             
         # 2. Sending -> Completed (Async Hook)
-        if sm.current_state.id == "sending":
+        if sm.current_state_value == "sending":
             # Manually run the async hook because we are not running the real poller
             await sm.on_enter_sending_async() 
             # The async hook should have called finish() and save()

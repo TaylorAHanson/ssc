@@ -7,7 +7,7 @@ from app.tools.mcp import tool
 from app.providers.databricks import DatabricksProvider
 from app.core.config import settings
 from app.core.exceptions import RetryableError
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 import calendar
 
 class GetForecastedSpendInput(BaseModel):
@@ -32,7 +32,7 @@ async def get_forecasted_spend(start_date: Optional[str] = None, end_date: Optio
         )
 
         # 1. Get current month progress
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         days_in_month = calendar.monthrange(now.year, now.month)[1]
         days_elapsed = now.day
         remaining_days = days_in_month - days_elapsed

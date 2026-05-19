@@ -9,11 +9,13 @@
     *   *Validation*: Alphanumeric with hyphens only.
 3.  **Project Name**: What is the name of the project?
     *   *Validation*: Alphanumeric with hyphens only.
-4.  **Check Availability**: Once you have the domain and project name, **MANDATORY**: Call `check_github_repo` with the name `atlas-{businessdomain}-{projectname}` to ensure it is available.
+4.  **Admin Group**: The Entra ID group that will be granted admin rights over this repository.
+    *   *Enterprise Policy*: Individual users CANNOT be repo admins. It must be an Entra ID group.
+5.  **Check Availability**: Once you have the domain and project name, **MANDATORY**: Call `check_github_repo` with the name `atlas-{businessdomain}-{projectname}` to ensure it is available.
     *   If it exists already, ask the user for a different project name.
-5.  **Visibility**: Public (Internal) or Private?
+6.  **Visibility**: Public (Internal) or Private?
     *   *Options*: `internal`, `private`.
-6.  **Template Discovery**: Call `list_github_templates` AFTER you get the description to find available reusable templates.
+7.  **Template Discovery**: Call `list_github_templates` AFTER you get the description to find available reusable templates.
     *   Use the **Project Description** to filter or recommend templates.
     *   Present the available templates to the user and ask if they would like to use one.
     *   If they choose a template, use its `name` in the `execute_workflow` call.
@@ -43,6 +45,7 @@ Call `execute_workflow` with:
   "parameters": {
     "repo_name": "atlas-{businessdomain}-{projectname}",
     "description": "...",
+    "admin_group": "...",
     "visibility": "...",
     "template": "..."
   }

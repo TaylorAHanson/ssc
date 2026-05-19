@@ -16,11 +16,12 @@ def mock_provider():
 
 @pytest.mark.asyncio
 async def test_get_forecasted_spend(tool, mock_provider):
-    # Mock date to be deterministically mid-month? 
-    # Hard to mock datetime.utcnow inside the tool without patching it.
-    # Let's patch datetime
+    # Mock date to be deterministically mid-month?
     with patch("app.tools.finops.get_forecast.datetime") as mock_datetime:
-        mock_datetime.utcnow.return_value = datetime(2023, 1, 15) # 15th of Jan, 31 days total
+        from datetime import timezone
+        mock_now = datetime(2023, 1, 15, tzinfo=timezone.utc)
+        mock_datetime.now.return_value = mock_now
+        mock_datetime.side_effect = lambda *args, **kw: datetime(*args, **kw)
         # remaining days = 16
         
         # 30 day cost mock (1000 total -> ~33.3/day)

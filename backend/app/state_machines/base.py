@@ -2,7 +2,7 @@
 Base state machine class for all request state machines.
 """
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timezone
 from statemachine import StateMachine, State
 from app.models.request import RequestStatus, RequestType, StateMachineState
 from app.db import ApprovalModel, RequestModel
@@ -96,7 +96,7 @@ class BaseRequestStateMachine(StateMachine):
         
         for state in self.states:
             # Hide rejection logs/status if not applicable
-            if state.id == "rejected" and self.current_state.id != "rejected":
+            if state.id == "rejected" and self.current_state_value != "rejected":
                 continue
             
             completed_at = self._get_state_completion_timestamp(state.id)
@@ -104,7 +104,7 @@ class BaseRequestStateMachine(StateMachine):
             states_view.append({
                 "id": state.id,
                 "name": self._get_state_display_name(state.id),
-                "isActive": state.id == self.current_state.id,
+                "isActive": state.id == self.current_state_value,
                 "isCompleted": self._is_state_completed(state.id),
                 "isInitial": state.initial,
                 "isFinal": state.final,
@@ -119,7 +119,7 @@ class BaseRequestStateMachine(StateMachine):
                 previous_completed_at = completed_at
         
         return StateMachineState(
-            currentState=self.current_state.id,
+            currentState=self.current_state_value,
             states=states_view,
             currentProgress=self._get_current_progress()
         )
@@ -130,7 +130,7 @@ class BaseRequestStateMachine(StateMachine):
 
     def tick(self) -> bool:
         """Reconciles internal state with external facts."""
-        initial_state = self.current_state.id
+        initial_state = self.current_state_value
         
         # 1. Try transitions first (prioritize moving forward based on facts)
         self._try_transitions()
@@ -139,9 +139,9 @@ class BaseRequestStateMachine(StateMachine):
         self._process_current_state()
         
         # 3. Handle state entry hooks
-        if self.current_state.id != initial_state:
-            logger.info(f"[{self.request.id}] Transition: {initial_state} -> {self.current_state.id}")
-            self._call_on_enter_hooks(initial_state, self.current_state.id)
+        if self.current_state_value != initial_state:
+            logger.info(f"[{self.request.id}] Transition: {initial_state} -> {self.current_state_value}")
+            self._call_on_enter_hooks(initial_state, self.current_state_value)
             return True
             
         return False
@@ -153,7 +153,7 @@ class BaseRequestStateMachine(StateMachine):
         Dynamically discovers all outgoing transitions from the current state and attempts
         to fire their events. This avoids hardcoding triggers in the base class.
         """
-        current_state_obj = self.current_state
+        current_state_obj = list(self.configuration)[0]
         
         if not hasattr(current_state_obj, 'transitions'):
             return
@@ -180,10 +180,10 @@ class BaseRequestStateMachine(StateMachine):
             if not func: continue
             
             try:
-                state_before = self.current_state.id
+                state_before = self.current_state_value
                 func()
-                if self.current_state.id != state_before:
-                    logger.info(f"[{self.request.id}] Triggered '{trigger}': {state_before} -> {self.current_state.id}")
+                if self.current_state_value != state_before:
+                    logger.info(f"[{self.request.id}] Triggered '{trigger}': {state_before} -> {self.current_state_value}")
                     break # Single transition per tick
             except Exception:
                 pass # Guard conditions not met
@@ -191,7 +191,7 @@ class BaseRequestStateMachine(StateMachine):
 
     def _process_current_state(self) -> bool:
         """Handles background logic required by the current state."""
-        state_id = self.current_state.id
+        state_id = self.current_state_value
         changed = False
 
         # Automatic submission for pending requests
@@ -243,7 +243,7 @@ class BaseRequestStateMachine(StateMachine):
                 logger.info(f"[{self.request.id}] Training verification passed for {user_email}")
                 add_fact(self.db, self.request.id, "training_completed", {
                     "completed_courses": completed_courses,
-                    "verified_at": datetime.utcnow().isoformat()
+                    "verified_at": datetime.now(timezone.utc).isoformat()
                 }, actor="system")
                 
                 # Check for auto-transition
@@ -263,14 +263,14 @@ class BaseRequestStateMachine(StateMachine):
 
     def save(self):
         """Persists state and status to DB."""
-        self.request.current_state = self.current_state.id
+        self.request.current_state = self.current_state_value
         
         # Update status based on state machine's mapped status
         # Only preserve "failed" status if we're in an actual terminal failure state
         new_status = self.get_mapped_status().value
         terminal_failure_states = {"failed", "rejected"}
         
-        if self.request.status == "failed" and self.current_state.id not in terminal_failure_states:
+        if self.request.status == "failed" and self.current_state_value not in terminal_failure_states:
             # State machine recovered from failure - update status
             self.request.status = new_status
         elif self.request.status != "failed":
@@ -278,10 +278,10 @@ class BaseRequestStateMachine(StateMachine):
             self.request.status = new_status
         # else: keep "failed" status for terminal failure states
         
-        self.request.updated_at = datetime.utcnow()
+        self.request.updated_at = datetime.now(timezone.utc)
 
     def get_mapped_status(self) -> RequestStatus:
-        return self.STATUS_MAPPING.get(self.current_state.id, RequestStatus.PENDING)
+        return self.STATUS_MAPPING.get(self.current_state_value, RequestStatus.PENDING)
 
     def create_approval_task(self, approval_type: str):
         """Standardized approval task creation with duplicate prevention."""
@@ -308,7 +308,7 @@ class BaseRequestStateMachine(StateMachine):
             assigned_to_role = ctx.get(assignee_role_key) if assignee_role_key else None
             
             new_approval = ApprovalModel(
-                id=f"app-{datetime.utcnow().timestamp()}",
+                id=f"app-{datetime.now(timezone.utc).timestamp()}",
                 request_id=self.request.id,
                 approval_type=approval_type,
                 requested_by=ctx.get("requested_by", "system"),
@@ -316,7 +316,7 @@ class BaseRequestStateMachine(StateMachine):
                 assigned_to_email=assigned_to_email,
                 assigned_to_role=assigned_to_role,
                 status="pending",
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             )
             self.db.add(new_approval)
             self.db.commit()
@@ -328,8 +328,8 @@ class BaseRequestStateMachine(StateMachine):
 
     def _is_state_completed(self, state_id: str) -> bool:
         """Returns True if the state is finished based on facts or position."""
-        if self.current_state.id == "completed": return state_id != "completed"
-        if self.current_state.id == "rejected": return state_id not in ["rejected", "completed"]
+        if self.current_state_value == "completed": return state_id != "completed"
+        if self.current_state_value == "rejected": return state_id not in ["rejected", "completed"]
         
         fact_type = self.STATE_COMPLETION_FACTS.get(state_id)
         if fact_type:
@@ -343,7 +343,7 @@ class BaseRequestStateMachine(StateMachine):
         # Position-based fallback
         all_states = [s.id for s in self.states]
         try:
-            return all_states.index(self.current_state.id) > all_states.index(state_id)
+            return all_states.index(self.current_state_value) > all_states.index(state_id)
         except ValueError:
             return False
 
@@ -364,8 +364,8 @@ class BaseRequestStateMachine(StateMachine):
         from app.db import EventModel
         
         # Only show facts for completed or active states
-        if not self._is_state_completed(state_id) and self.current_state.id != state_id:
-            if not (state_id == "provisioning" and self.current_state.id == "completed"):
+        if not self._is_state_completed(state_id) and self.current_state_value != state_id:
+            if not (state_id == "provisioning" and self.current_state_value == "completed"):
                 return []
         
         event_types = self.STATE_LOG_FACTS.get(state_id, [])
@@ -456,7 +456,7 @@ class BaseRequestStateMachine(StateMachine):
 
     async def execute_tasks(self):
         """Runs the async handler for the current state."""
-        handler_name = f"on_enter_{self.current_state.id}_async"
+        handler_name = f"on_enter_{self.current_state_value}_async"
         logger.debug(f"[{self.request.id}] execute_tasks() - Looking for handler: {handler_name}")
         handler = getattr(self, handler_name, None)
         logger.debug(f"[{self.request.id}] execute_tasks() - Handler found: {handler}, callable: {callable(handler) if handler else False}")
@@ -464,7 +464,7 @@ class BaseRequestStateMachine(StateMachine):
             logger.debug(f"[{self.request.id}] execute_tasks() - Calling async handler: {handler_name}")
             await handler()
         else:
-            logger.debug(f"[{self.request.id}] execute_tasks() - No async handler for state: {self.current_state.id}")
+            logger.debug(f"[{self.request.id}] execute_tasks() - No async handler for state: {self.current_state_value}")
 
     def _call_on_enter_hooks(self, previous_state: str, new_state: str):
         """Calls synchronous on_enter hooks, including auto-generated approval ones."""
@@ -520,8 +520,8 @@ class BaseRequestStateMachine(StateMachine):
             state_context=context,
             parent_id=self.request.id,
             root_id=self.request.root_id or self.request.id,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc)
         )
         self.db.add(child)
         self.db.commit()

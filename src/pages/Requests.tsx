@@ -275,8 +275,42 @@ export function RequestStateList({ request }: { request: Request }) {
 
               {/* Progress Bar for Provisioning */}
               {isActive && step.id === 'provisioning' && request.stateMachine.currentProgress && (
-                <div className="ml-14">
+                <div className="ml-14 mt-3">
                   <ProvisioningProgress progress={request.stateMachine.currentProgress} />
+                </div>
+              )}
+
+              {/* Multiple Data Owner Approvals */}
+              {step.id === 'data_owner_approval' && request.approvals && request.approvals.filter(a => a.approvalType === 'data_owner').length > 0 && (
+                <div className="ml-14 mt-3 space-y-2">
+                  <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-1">Required Approvals</p>
+                  <div className="grid gap-2">
+                    {request.approvals.filter(a => a.approvalType === 'data_owner').map((approval, aIdx) => (
+                      <div key={aIdx} className="flex items-center justify-between bg-white border border-gray-200 rounded p-2 text-sm">
+                        <div className="flex items-center gap-2">
+                          {approval.status === 'approved' ? (
+                            <CheckCircle2 className="w-4 h-4 text-success" />
+                          ) : approval.status === 'rejected' ? (
+                            <X className="w-4 h-4 text-alert" />
+                          ) : (
+                            <Circle className="w-4 h-4 text-gray-300" />
+                          )}
+                          <span className="font-medium text-gray-700">
+                            {approval.assignedToEmail || approval.assignedToRole || 'Unknown Owner'}
+                          </span>
+                        </div>
+                        <span className={`text-xs font-medium ${
+                          approval.status === 'approved' ? 'text-success' :
+                          approval.status === 'rejected' ? 'text-alert' :
+                          'text-gray-500'
+                        }`}>
+                          {approval.status === 'approved' ? `Approved by ${approval.approvedBy || approval.assignedToEmail || approval.assignedToRole}` :
+                           approval.status === 'rejected' ? `Rejected by ${approval.rejectedBy || approval.assignedToEmail || approval.assignedToRole}` :
+                           'Pending'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 

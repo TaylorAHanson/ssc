@@ -9,23 +9,29 @@ from app.core.config import settings
 from app.core.exceptions import RetryableError
 
 class DoesServicePrincipalExistInput(BaseModel):
+    target_host: str = Field(..., description="The host URL of the target Databricks workspace.")
     name: str = Field(..., description="The display name of the service principal to check.")
 
 @tool(
     name="does_service_principal_exist",
-    description="Checks if a service principal exists in the Databricks account/workspace by its display name. Useful for avoiding duplicate creation requests.",
+    description="Checks if a service principal exists in the specified Databricks account/workspace by its display name. Useful for avoiding duplicate creation requests.",
     args_schema=DoesServicePrincipalExistInput
 )
-async def does_service_principal_exist(name: str) -> Dict[str, Any]:
+async def does_service_principal_exist(target_host: str, name: str) -> Dict[str, Any]:
     """
     Check if a service principal exists.
     """
     try:
+        from app.core.workspaces import get_workspace_config
+        ws_config = get_workspace_config(target_host)
+        if not ws_config:
+            raise ValueError(f"Target host {target_host} not found in configuration.")
+            
         provider = DatabricksProvider(
-            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-            token=settings.DATABRICKS_TOKEN,
-            client_id=settings.DATABRICKS_CLIENT_ID,
-            client_secret=settings.DATABRICKS_CLIENT_SECRET,
+            host=ws_config.host,
+            token=ws_config.token,
+            client_id=ws_config.client_id,
+            client_secret=ws_config.client_secret,
             config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID}
         )
         

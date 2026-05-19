@@ -12,8 +12,9 @@ Before executing the workflow, ensure you have the following information from th
 
 | # | Parameter | Required | Default | Notes |
 |---|-----------|----------|---------|-------|
-| 1 | **Target Catalog** | ✅ Yes | — | The catalog to scan for potential duplicates. |
-| 2 | **Reference Catalog** | ✅ Yes | `enterprise_certified` | The "Golden" catalog to compare against. |
+| 1 | **Target Workspace** | ✅ Yes | — | The workspace where the scan should run. (MUST use `get_target_workspaces` to find the exact `host` URL) |
+| 2 | **Target Catalog** | ✅ Yes | — | The catalog to scan for potential duplicates. (MUST verify existence using `get_catalog_list` passing the `target_host`) |
+| 3 | **Reference Catalog** | ✅ Yes | `enterprise_certified` | The "Golden" catalog to compare against. (MUST verify existence using `get_catalog_list` passing the `target_host`) |
 | 3 | **Results Table** | ❌ Optional | `main.governance.uc_similarity_matches` | The fully qualified table (catalog.schema.table) to write results to. |
 | 4 | **Email Notification** | ❌ Optional | — | Email address to send the final deduplication report to. |
 | 5 | **Title** | ❌ Optional | "Deduplication Scan: {target}" | A descriptive title for the request. |
@@ -47,6 +48,7 @@ Once you have gathered the required catalogs, call the `execute_workflow` tool w
 {
   "workflow_type": "asset_deduplication",
   "parameters": {
+    "target_host": "user_provided_target_host",
     "target_catalog": "user_provided_target",
     "reference_catalog": "user_provided_reference",
     "results_table": "user_provided_catalog.schema.table",

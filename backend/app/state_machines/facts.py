@@ -5,7 +5,7 @@ Facts are immutable events that represent what has happened.
 State is calculated from facts, not stored directly.
 """
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from app.db import EventModel, RequestModel
 import uuid
@@ -45,9 +45,9 @@ def add_fact(
         event_data={
             **fact_data,
             "actor": actor,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         },
-        created_at=datetime.utcnow()
+        created_at=datetime.now(timezone.utc)
     )
     
     db.add(fact)

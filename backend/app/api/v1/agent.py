@@ -173,7 +173,8 @@ async def handle_conversation(
         # Build user identity for the runner
         user_identity = {
             "email": current_user.email,
-            "roles": ", ".join(current_user.roles)
+            "roles": ", ".join(current_user.roles),
+            "entitlements": ", ".join(current_user.entitlements)
         }
         
         # Initialize Runner

@@ -21,4 +21,5 @@ class User(BaseModel):
 
     def has_role(self, role_name: str) -> bool:
         """Check if user has a specific role. 'Platform Admin' has all roles."""
-        return "Platform Admin" in self.roles or role_name in self.roles
+        lower_roles = [r.lower() for r in self.roles]
+        return "platform admin" in lower_roles or role_name.lower() in lower_roles

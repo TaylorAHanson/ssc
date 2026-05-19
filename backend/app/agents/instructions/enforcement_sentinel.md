@@ -12,7 +12,7 @@ When triggered manually, gather the following from the user before executing:
 
 | # | Parameter | Required | Default | Notes |
 |---|-----------|----------|---------|-------|
-| 1 | **Workspace** | ✅ Yes | — | The workspace name or ID to scan. Use the `list_workspaces` tool to help the user identify the target. |
+| 1 | **Target Workspace** | ✅ Yes | — | The workspace name or ID to scan. You MUST use the `get_target_workspaces` tool to find the exact `host` URL for the target. |
 | 2 | **Enforcement Mode** | ✅ Yes | `audit_only` | `audit_only` = Discover + Notify. `active_enforcement` = Discover + Kill + Notify. |
 | 3 | **Policies** | ❌ Optional | All | Comma-separated list of policy IDs to run (e.g., `notebooks_in_prod`, `tag_compliance`). Omit to run all. |
 | 4 | **Notify** | ❌ Optional | Resource Owner | Email addresses or group names to receive the report. Falls back to dynamically discovered resource owner. |
@@ -28,7 +28,7 @@ Call `execute_workflow` with:
 {
   "workflow_type": "enforcement_sentinel",
   "parameters": {
-    "workspace": "ws-finance-prod",
+    "target_host": "...",
     "enforcement_mode": "audit_only",
     "policies": ["notebooks_in_prod", "tag_compliance"],
     "notify": ["platform-governance@company.com"]

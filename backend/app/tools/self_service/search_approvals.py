@@ -19,7 +19,15 @@ class SearchApprovalsInput(BaseModel):
     description="Search for pending approvals by type (manager, data_owner, platform_admin) or status. Use this to find requests that are awaiting action from specific roles.",
     args_schema=SearchApprovalsInput
 )
-async def search_approvals(approval_type: Optional[str] = None, status: str = "pending", request_id: Optional[str] = None, limit: int = 5) -> Dict[str, Any]:
+async def search_approvals(
+    approval_type: Optional[str] = None, 
+    status: str = "pending", 
+    request_id: Optional[str] = None, 
+    limit: int = 5,
+    _user_email: Optional[str] = None,
+    _user_roles: Optional[str] = None,
+    _user_entitlements: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Execute the search for approvals.
     """
@@ -29,6 +37,29 @@ async def search_approvals(approval_type: Optional[str] = None, status: str = "p
         sql_query = db.query(ApprovalModel, RequestModel).join(
             RequestModel, ApprovalModel.request_id == RequestModel.id
         )
+        
+        # Apply role-based filtering
+        if _user_email and _user_roles is not None:
+            roles_list = [r.strip().lower() for r in _user_roles.split(",")]
+            entitlements_list = [e.strip() for e in _user_entitlements.split(",")] if _user_entitlements else []
+            
+            allowed_types = []
+            if "platform admin" in roles_list:
+                allowed_types.extend(["platform_admin", "manager", "data_owner", "security", "security_admin", "finance_admin", "governance_admin"])
+            if "governance admin" in roles_list:
+                allowed_types.append("governance_admin")
+            if "security admin" in roles_list:
+                allowed_types.extend(["security", "security_admin"])
+            if "finance admin" in roles_list:
+                allowed_types.append("finance_admin")
+                
+            sql_query = sql_query.filter(
+                (ApprovalModel.assigned_to_email == _user_email) | 
+                (ApprovalModel.delegated_to_email == _user_email) |
+                (ApprovalModel.assigned_to_role.in_(entitlements_list)) |
+                (ApprovalModel.approval_type.in_(allowed_types))
+            )
+
         
         # Filter by status
         if status:

@@ -42,6 +42,14 @@ class RequestType(str, Enum):
     ENFORCEMENT_SENTINEL = "enforcement_sentinel"
     ASSET_DEDUPLICATION = "asset_deduplication"
     ALLOWLIST_EXCEPTION = "allowlist_exception"
+    TAG_CREATION = "tag_creation"
+    CREDENTIAL_CREATION = "credential_creation"
+    VOLUME_CREATION = "volume_creation"
+    WORKSPACE_FOLDER_CREATION = "workspace_folder_creation"
+    GITHUB_REPO_ACCESS = "github_repo_access"
+    REUSABLE_ASSETS = "reusable_assets"
+    TRAINING_LINKS = "training_links"
+    TRAINING_VERIFICATION = "training_verification"
 
 
 class Environment(str, Enum):
@@ -105,6 +113,10 @@ class Approval(BaseModel):
     requestedByEmail: str
     assignedToEmail: Optional[str] = None
     assignedToRole: Optional[str] = None
+    approvedBy: Optional[str] = None
+    approvedAt: Optional[datetime] = None
+    rejectedBy: Optional[str] = None
+    rejectedAt: Optional[datetime] = None
     status: str
     createdAt: datetime
     updatedAt: datetime
@@ -134,6 +146,7 @@ class Request(BaseModel):
     lastError: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
     conversation: Optional[List[Dict[str, Any]]] = None  # Chat history
+    approvals: Optional[List[Approval]] = None
 
 
 class RequestCreate(BaseModel):

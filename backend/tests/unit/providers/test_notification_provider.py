@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 from app.providers.notifications.client import NotificationProvider
 
 @pytest.fixture
@@ -59,7 +59,8 @@ async def test_send_email_ses_mode():
     with patch("app.core.config.settings.NOTIFICATION_EMAIL_PROVIDER", "ses"), \
          patch("app.core.config.settings.NOTIFICATION_EMAIL_SES_REGION", "us-east-1"), \
          patch("app.core.config.settings.NOTIFICATION_EMAIL_SES_SOURCE", "source@databricks.com"), \
-         patch("app.providers.databricks.client.DatabricksProvider.submit_python_job") as mock_submit:
+         patch("app.providers.databricks.client.DatabricksProvider.__init__", return_value=None), \
+         patch("app.providers.databricks.client.DatabricksProvider.submit_python_job", new_callable=AsyncMock) as mock_submit:
         
         mock_submit.return_value = "12345"
         provider = NotificationProvider()

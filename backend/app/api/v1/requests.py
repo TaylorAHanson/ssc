@@ -12,7 +12,7 @@ from app.db.session import get_db
 from app.db import ApprovalModel, RequestModel
 from app.state_machines.persistence import load_state_machine
 from app.state_machines.facts import add_fact
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import logging
 
@@ -23,6 +23,82 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _format_request(req: RequestModel, db: Session) -> Optional[Request]:
+    """Format a RequestModel into a Request Pydantic model."""
+    try:
+        r_type = RequestType(req.type)
+    except ValueError:
+        logger.error(f"Skipping request {req.id} with invalid type: {req.type}")
+        return None
+
+    try:
+        if r_type == RequestType.DATA_CERTIFICATION:
+            sm_state = StateMachineState(
+                currentState=req.current_state or "completed",
+                states=[],
+                currentProgress=None
+            )
+        else:
+            sm = load_state_machine(req, db)
+            sm_state = sm.to_state_machine_state()
+    except Exception as e:
+        logger.error(f"ERROR loading SM for {req.id}: {e}", exc_info=True)
+        sm_state = StateMachineState(
+            currentState=req.current_state or "unknown",
+            states=[],
+            currentProgress=None
+        )
+
+    try:
+        request_status = RequestStatus(req.status)
+    except ValueError:
+        request_status = RequestStatus.PENDING
+        
+    approvals = []
+    if hasattr(req, "approvals") and req.approvals:
+        from app.models.request import Approval
+        for app in req.approvals:
+            approvals.append(Approval(
+                id=app.id,
+                requestId=app.request_id,
+                requestTitle=req.title,
+                requestType=r_type,
+                approvalType=app.approval_type,
+                requestedBy=app.requested_by or "",
+                requestedByEmail=app.requested_by_email or "",
+                assignedToEmail=app.assigned_to_email,
+                assignedToRole=app.assigned_to_role,
+                approvedBy=app.approved_by,
+                approvedAt=app.approved_at,
+                rejectedBy=app.rejected_by,
+                rejectedAt=app.rejected_at,
+                status=app.status,
+                createdAt=app.created_at,
+                updatedAt=app.updated_at,
+                rejectionNote=app.rejection_note,
+                delegatedTo=app.delegated_to,
+                delegatedToEmail=app.delegated_to_email,
+                supersededNote=app.superseded_note
+            ))
+
+    return Request(
+        id=req.id,
+        type=r_type,
+        title=req.title,
+        status=request_status,
+        createdAt=req.created_at,
+        updatedAt=req.updated_at,
+        stateMachine=sm_state,
+        requiresTraining=req.requires_training,
+        trainingCompleted=req.training_completed,
+        environment=req.environment,
+        requester_email=req.requester_email,
+        lastError=req.last_error,
+        metadata=req.state_context or {},
+        conversation=req.conversation,
+        approvals=approvals
+    )
 
 @router.get("", response_model=List[Request])
 async def get_requests(
@@ -43,57 +119,9 @@ async def get_requests(
     response_list = []
     
     for req in requests:
-        # Dynamically calculate state machine view
-        try:
-            # Handle invalid types by skipping - prevents whole page crash
-            try:
-                r_type = RequestType(req.type)
-            except ValueError:
-                logger.error(f"Skipping request {req.id} with invalid type: {req.type}")
-                continue
-
-            if r_type == RequestType.DATA_CERTIFICATION:
-                sm_state = StateMachineState(
-                    currentState=req.current_state or "completed",
-                    states=[],
-                    currentProgress=None
-                )
-            else:
-                sm = load_state_machine(req, db)
-                sm_state = sm.to_state_machine_state()
-        except Exception as e:
-            # Fallback for corrupted/legacy data
-            logger.error(f"ERROR loading SM for {req.id}: {e}", exc_info=True)
-            sm_state = StateMachineState(
-                currentState=req.current_state or "unknown",
-                states=[],
-                currentProgress=None
-            )
-
-        # Handle invalid status values gracefully
-        try:
-            request_status = RequestStatus(req.status)
-        except ValueError:
-            # If status is not in enum (e.g., "failed" from old code), default to pending
-            # This handles legacy data or unexpected status values
-            request_status = RequestStatus.PENDING
-        
-        response_list.append(Request(
-            id=req.id,
-            type=r_type,
-            title=req.title,
-            status=request_status,
-            createdAt=req.created_at,
-            updatedAt=req.updated_at,
-            stateMachine=sm_state,
-            requiresTraining=req.requires_training,
-            trainingCompleted=req.training_completed,
-            environment=req.environment,
-            requester_email=req.requester_email,
-            lastError=req.last_error,
-            metadata=req.state_context or {},
-            conversation=req.conversation
-        ))
+        formatted = _format_request(req, db)
+        if formatted:
+            response_list.append(formatted)
     return response_list
 
 
@@ -147,49 +175,9 @@ async def get_paginated_requests(
     response_list = []
     
     for req in requests:
-        try:
-            try:
-                r_type = RequestType(req.type)
-            except ValueError:
-                continue
-
-            if r_type == RequestType.DATA_CERTIFICATION:
-                sm_state = StateMachineState(
-                    currentState=req.current_state or "completed",
-                    states=[],
-                    currentProgress=None
-                )
-            else:
-                sm = load_state_machine(req, db)
-                sm_state = sm.to_state_machine_state()
-        except Exception as e:
-            sm_state = StateMachineState(
-                currentState=req.current_state or "unknown",
-                states=[],
-                currentProgress=None
-            )
-
-        try:
-            request_status = RequestStatus(req.status)
-        except ValueError:
-            request_status = RequestStatus.PENDING
-        
-        response_list.append(Request(
-            id=req.id,
-            type=r_type,
-            title=req.title,
-            status=request_status,
-            createdAt=req.created_at,
-            updatedAt=req.updated_at,
-            stateMachine=sm_state,
-            requiresTraining=req.requires_training,
-            trainingCompleted=req.training_completed,
-            environment=req.environment,
-            requester_email=req.requester_email,
-            lastError=req.last_error,
-            metadata=req.state_context or {},
-            conversation=req.conversation
-        ))
+        formatted = _format_request(req, db)
+        if formatted:
+            response_list.append(formatted)
         
     return PaginatedRequestsResponse(items=response_list, total=total)
 
@@ -219,52 +207,11 @@ async def get_request(
         logger.warning(f"Unauthorized access attempt to {request_id} by {current_user.email}")
         raise HTTPException(status_code=403, detail="Not authorized to view this request")
         
-    # Dynamically calculate state machine view
-    try:
-        try:
-            r_type = RequestType(request_model.type)
-        except ValueError:
-            r_type = None
-
-        if r_type == RequestType.DATA_CERTIFICATION:
-            sm_state = StateMachineState(
-                currentState=request_model.current_state or "completed",
-                states=[],
-                currentProgress=None
-            )
-        else:
-            sm = load_state_machine(request_model, db)
-            sm_state = sm.to_state_machine_state()
-    except Exception as e:
-        logger.error(f"ERROR loading SM for {request_id}: {e}", exc_info=True)
-        sm_state = StateMachineState(
-            currentState=request_model.current_state or "unknown",
-            states=[],
-            currentProgress=None
-        )
-    
-    # Handle invalid status values gracefully
-    try:
-        request_status = RequestStatus(request_model.status)
-    except ValueError:
-        # If status is not in enum (e.g., "failed" from old code), default to pending
-        request_status = RequestStatus.PENDING
-    
-    return Request(
-            id=request_model.id,
-            type=request_model.type,
-            title=request_model.title,
-            status=request_status,
-            createdAt=request_model.created_at,
-            updatedAt=request_model.updated_at,
-            stateMachine=sm_state,
-            requiresTraining=request_model.requires_training,
-            trainingCompleted=request_model.training_completed,
-            environment=request_model.environment,
-            lastError=request_model.last_error,
-            metadata=request_model.state_context or {},
-            conversation=request_model.conversation
-        )
+    formatted = _format_request(request_model, db)
+    if not formatted:
+        raise HTTPException(status_code=500, detail="Failed to format request")
+        
+    return formatted
 
 
 @router.get("/{request_id}/status")
@@ -372,30 +319,39 @@ async def approve_request(
     manager for manager_approval, the data owner for data_owner_approval) may
     approve. Platform admins may override.
     """
-    # Find pending approval for this request. Order by created_at so that if
-    # multiple approval rows ever coexist, the oldest pending one (the active
-    # gate) is acted on first.
-    approval = (
+    # Find all pending approvals for this request
+    pending_approvals = (
         db.query(ApprovalModel)
         .filter(
             ApprovalModel.request_id == request_id,
             ApprovalModel.status == "pending",
         )
         .order_by(ApprovalModel.created_at.asc())
-        .first()
+        .all()
     )
 
-    if not approval:
+    if not pending_approvals:
         raise HTTPException(status_code=404, detail="No pending approval found for this request")
 
-    _authorize_approval_actor(approval, current_user)
+    # Find the first pending approval the user is authorized to act on
+    approval = None
+    for pending in pending_approvals:
+        try:
+            _authorize_approval_actor(pending, current_user)
+            approval = pending
+            break
+        except HTTPException:
+            continue
+
+    if not approval:
+        raise HTTPException(status_code=403, detail="You are not authorized to approve this request")
 
     approved_by = current_user.email
 
     # Update approval status immediately
     approval.status = "approved"
     approval.approved_by = approved_by
-    approval.approved_at = datetime.utcnow()
+    approval.approved_at = datetime.now(timezone.utc)
 
     # Record fact (this is the source of truth)
     add_fact(
@@ -403,7 +359,7 @@ async def approve_request(
         {
             "approval_type": approval.approval_type,
             "approved_by": approved_by,
-            "approved_at": datetime.utcnow().isoformat()
+            "approved_at": datetime.now(timezone.utc).isoformat()
         },
         actor=approved_by
     )
@@ -426,21 +382,32 @@ async def reject_request(
     Records a fact (request_rejected) - this is the source of truth.
     The state machine will reconcile state based on facts.
     """
-    # Find pending approval for this request (oldest pending wins, see /approve).
-    approval = (
+    # Find all pending approvals for this request
+    pending_approvals = (
         db.query(ApprovalModel)
         .filter(
             ApprovalModel.request_id == request_id,
             ApprovalModel.status == "pending",
         )
         .order_by(ApprovalModel.created_at.asc())
-        .first()
+        .all()
     )
 
-    if not approval:
+    if not pending_approvals:
         raise HTTPException(status_code=404, detail="No pending approval found for this request")
 
-    _authorize_approval_actor(approval, current_user)
+    # Find the first pending approval the user is authorized to act on
+    approval = None
+    for pending in pending_approvals:
+        try:
+            _authorize_approval_actor(pending, current_user)
+            approval = pending
+            break
+        except HTTPException:
+            continue
+
+    if not approval:
+        raise HTTPException(status_code=403, detail="You are not authorized to reject this request")
 
     rejected_by = current_user.email
     rejection_note = rejection_data.get("rejection_note")
@@ -449,7 +416,7 @@ async def reject_request(
     approval.status = "rejected"
     approval.rejected_by = rejected_by
     approval.rejection_note = rejection_note
-    approval.rejected_at = datetime.utcnow()
+    approval.rejected_at = datetime.now(timezone.utc)
     
     # Record fact (this is the source of truth)
     add_fact(
@@ -615,7 +582,7 @@ async def edit_parameters(
     # Release the lock so the poller processes the state transition immediately
     request_model.locked_by = None
     request_model.locked_until = None
-    request_model.updated_at = datetime.utcnow()
+    request_model.updated_at = datetime.now(timezone.utc)
 
     db.commit()
 

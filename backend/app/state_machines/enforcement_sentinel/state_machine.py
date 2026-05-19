@@ -27,7 +27,7 @@ This provider handles alerting resource owners and the governance team.
 import glob
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from statemachine import State
 
@@ -246,7 +246,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
             input_data = {
                 "workspace": {"name": workspace_name, "type": workspace_type, "environment": environment},
                 "resource": resource,
-                "request_time": datetime.utcnow().isoformat(),
+                "request_time": datetime.now(timezone.utc).isoformat(),
                 "allowlist_records": allowlist_records
             }
             

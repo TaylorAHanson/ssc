@@ -124,7 +124,7 @@ def seed_db():
         from app.db.session import get_session_local
         from app.db import RequestModel
         from app.models.request import RequestType, RequestStatus
-        from datetime import datetime, timedelta
+        from datetime import datetime, timezone, timedelta
         import uuid
         
         db = get_session_local()()
@@ -137,24 +137,24 @@ def seed_db():
                         title="Sample Project Onboarding",
                         type="project_onboarding",
                         status="pending",
-                        created_at=datetime.utcnow(),
-                        updated_at=datetime.utcnow()
+                        created_at=datetime.now(timezone.utc),
+                        updated_at=datetime.now(timezone.utc)
                     ),
                     RequestModel(
                         id=str(uuid.uuid4()),
                         title="Access to Finance Data",
                         type="data_access_request",
                         status="manager_approval",
-                        created_at=datetime.utcnow() - timedelta(days=1),
-                        updated_at=datetime.utcnow()
+                        created_at=datetime.now(timezone.utc) - timedelta(days=1),
+                        updated_at=datetime.now(timezone.utc)
                     ),
                     RequestModel(
                         id=str(uuid.uuid4()),
                         title="New Service Principal",
                         type="service_principal",
                         status="completed",
-                        created_at=datetime.utcnow() - timedelta(days=5),
-                        updated_at=datetime.utcnow() - timedelta(days=4)
+                        created_at=datetime.now(timezone.utc) - timedelta(days=5),
+                        updated_at=datetime.now(timezone.utc) - timedelta(days=4)
                     )
                 ]
                 
@@ -179,7 +179,7 @@ async def setup_github_templates():
         from app.core.config import settings
         from app.providers.github.client import GitHubProvider
         import httpx
-        from datetime import datetime
+        from datetime import datetime, timezone
         import base64
 
         token = settings.GITHUB_TOKEN or settings.get_git_token()
@@ -271,7 +271,7 @@ async def trigger_github_test():
         from app.db.session import get_session_local
         from app.db.request import RequestModel
         from app.models.request import RequestType, RequestStatus
-        from datetime import datetime
+        from datetime import datetime, timezone
         import uuid
         
         db = get_session_local()()
@@ -294,8 +294,8 @@ async def trigger_github_test():
                     "requested_by": "System Test",
                     "requested_by_email": "admin@example.com"
                 },
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc)
             )
             db.add(request)
             db.commit()

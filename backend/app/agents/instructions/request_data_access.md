@@ -14,52 +14,32 @@
 > Which schema or object would you like access to?"
 
 ## Information to Gather
-1.  **Asset Type**: What kind of asset do you need access to?
+1.  **Target Workspace**: Which workspace contains the asset(s)?
+    *   *Action*: You MUST use `get_target_workspaces` to find the exact `host` URL for the requested workspace.
+2.  **Asset(s)**: What kind of asset(s) do you need access to? You can request access to multiple assets at once.
     *   *Allowed*: `schema`, `table`, `view`, `volume`.
     *   *Not allowed*: `catalog` — re-prompt the user; do not accept this value.
-2.  **Asset Name**: The full name of the asset.
+3.  **Asset Name(s)**: The full name of the asset(s).
     *   *Format*:
         *   `schema` → `catalog.schema` (must contain exactly one `.`)
         *   `table` / `view` / `volume` → `catalog.schema.object` (must contain exactly two `.`)
     *   *Validation*: A bare catalog name (no `.`) is invalid — re-prompt for a
         schema or object underneath the catalog.
+    *   *Existence Check (REQUIRED)*: Before calling `execute_workflow`, you MUST verify the asset(s) actually exist using `get_schema_list`, `get_table_list`, or `get_volume_list` (passing the `target_host`) depending on the asset type.
 3.  **Access Level**: What level of access do you need?
     *   *Options*: `read`, `write`, `manage`.
     *   *Note*: `write` on a view falls back to `read` (SELECT) since views are not directly writable.
-4.  **Justification**: Why do you need this access?
-    *   *Validation*: Must be at least 10 characters.
-5.  **Manager Email**: Email of your manager who will approve this request.
-    *   *Validation*: Must be a valid email address (basic format check
-        only — `name@domain.tld`). Do NOT require Entra ID confirmation.
-    *   <!-- TODO(entra-id): Remove the Entra-ID fallback block below
-        once the Entra ID integration is reliable end-to-end. When
-        users can be looked up consistently, tighten this back to:
-        "Reject the email if `search_entra_id_users` returns no
-        results." Tracking: see Slack thread / ticket on Entra ID
-        provider stability (added 2026-05-05). -->
-    *   *Entra ID lookup is best-effort, not a gate*: You MAY call
-        `search_entra_id_users` to *enrich* the manager's display name,
-        but a missing / failing / empty Entra ID result MUST NOT block
-        the request.
-    *   *Fallback flow when Entra ID lookup returns nothing or errors*:
-        Tell the user once that you couldn't confirm the address in
-        Entra ID, then ASK: "I couldn't find this email in Entra ID
-        (the directory may be incomplete or the lookup may be down).
-        Do you want to proceed with `<email>` anyway?" — if the user
-        says yes / confirms, accept the email as-is and continue to
-        the confirmation summary. Do NOT keep re-prompting for a
-        different email or a different name.
-    *   *Never*: refuse to proceed solely because Entra ID returned no
-        results. The downstream workflow will route the approval email
-        to whatever address the user supplied; an unreachable mailbox
-        will surface as a separate failure later, not at this step.
+4.  **Duration**: Is this access permanent or temporary?
+    *   If temporary, ask for an expiration date (e.g., "30 days", "until Dec 31st").
+5.  **Justification**: Why do you need this access?
+    *   *Validation*: Must be at least 10 characters and reference a specific business need.
 
 ## Validation Loop
 Before calling `execute_workflow`:
-*   If `asset_type` is `catalog` OR `asset_name` has no `.` → refuse, explain
+*   If any `asset_type` is `catalog` OR any `asset_name` has no `.` → refuse, explain
     that catalog-level access is not allowed, and ask the user to scope their
     request to a schema/table/view/volume. Repeat until valid.
-*   Only once all five fields are valid AND scoped below catalog level, present
+*   Only once all fields are valid AND scoped below catalog level, present
     the confirmation summary and proceed.
 
 ## Execution
@@ -68,11 +48,17 @@ Call `execute_workflow` with:
 {
   "workflow_type": "data_access_request",
   "parameters": {
-    "asset_type": "...",
-    "asset_name": "...",
+    "target_host": "...",
+    "assets": [
+      {
+        "asset_type": "...",
+        "asset_name": "..."
+      }
+    ],
     "access_level": "...",
-    "justification": "...",
-    "manager_email": "..."
+    "duration": "...",
+    "justification": "..."
   }
 }
 ```
+*(Note: For backwards compatibility, a single `asset_type` and `asset_name` at the top level is also supported, but `assets` array is preferred when requesting multiple items).*

@@ -23,7 +23,9 @@ class TestGetCatalogListTool:
     @pytest.fixture
     def mock_provider(self):
         with patch("app.tools.self_service.get_catalog_list.DatabricksProvider") as MockProvider:
-            yield MockProvider.return_value
+            with patch("app.core.workspaces.get_workspace_config") as mock_ws_config:
+                mock_ws_config.return_value = MagicMock(host="https://test.azuredatabricks.net", token="test", client_id=None, client_secret=None)
+                yield MockProvider.return_value
 
     @pytest.mark.asyncio
     async def test_properties(self, tool):
@@ -31,6 +33,7 @@ class TestGetCatalogListTool:
         assert "catalog" in tool.description.lower()
         schema = tool.input_schema
         assert "name_pattern" in schema.get("properties", {})
+        assert "target_host" in schema.get("properties", {})
 
     @pytest.mark.asyncio
     async def test_execute_success(self, tool, mock_provider):
@@ -43,7 +46,7 @@ class TestGetCatalogListTool:
         mock_provider.client.catalogs.list.return_value = mock_catalogs
 
         # Execute
-        result = await tool.execute()
+        result = await tool.execute(target_host="https://test.azuredatabricks.net")
 
         # Verify
         assert result["count"] == 2
@@ -63,7 +66,7 @@ class TestGetCatalogListTool:
     async def test_execute_empty(self, tool, mock_provider):
         mock_provider.client.catalogs.list.return_value = []
         
-        result = await tool.execute()
+        result = await tool.execute(target_host="https://test.azuredatabricks.net")
         
         assert result["count"] == 0
         assert result["catalogs"] == []
@@ -73,6 +76,6 @@ class TestGetCatalogListTool:
         mock_provider.client.catalogs.list.side_effect = Exception("SDK Error")
         
         with pytest.raises(RetryableError) as excinfo:
-            await tool.execute()
+            await tool.execute(target_host="https://test.azuredatabricks.net")
             
         assert "Failed to fetch catalog list" in str(excinfo.value)

@@ -14,12 +14,12 @@ class FindOwnerInput(BaseModel):
 
 @tool(
     name="find_owner",
-    description="Finds the owner of a specified Databricks object (catalog, schema, table, job, dashboard, notebook, genie_space).",
+    description="Finds the owner and relevant tags (e.g., approver_group, access_group) of a specified Databricks object (catalog, schema, table, job, dashboard, notebook, genie_space).",
     args_schema=FindOwnerInput
 )
 async def find_owner(object_type: str, object_name: str) -> Dict[str, Any]:
     """
-    Finds the owner of a Databricks object.
+    Finds the owner and relevant tags of a Databricks object.
 
     IMPLEMENTATION APPROACH:
     This tool uses the DatabricksProvider.find_object_owner() method which leverages

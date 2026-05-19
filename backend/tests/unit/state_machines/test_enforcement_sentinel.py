@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from tests.harness.context import StateMachineTestHarness
 from tests.factories.request_factory import RequestFactory
 from app.db.allowlist import AllowlistModel
@@ -16,7 +16,7 @@ async def test_enforcement_sentinel_discovery(db_session):
         workspace="ws-enterprise-prod",
         justification="Approved",
         status="approved",
-        expires_at=datetime.utcnow() + timedelta(days=1)
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1)
     )
     pending_entry = AllowlistModel(
         id=str(uuid.uuid4()),

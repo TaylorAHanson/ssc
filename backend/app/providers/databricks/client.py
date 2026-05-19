@@ -455,6 +455,61 @@ class DatabricksProvider(BaseProvider):
             logger.warning(f"Failed to get user email for ID {user_id}: {str(e)}")
             return None
 
+    async def get_asset_tags(self, asset_type: str, asset_name: str, tag_names: List[str]) -> Dict[str, str]:
+        """
+        Get specific tags for a Unity Catalog asset.
+
+        Args:
+            asset_type: Type of asset (catalog, schema, table, volume)
+            asset_name: Full name of the asset (e.g., "catalog.schema.table")
+            tag_names: List of tag names to fetch
+
+        Returns:
+            Dictionary mapping tag names to their values. Missing tags are omitted.
+        """
+        try:
+            asset_type_lower = asset_type.lower()
+            parts = asset_name.split(".")
+            
+            if asset_type_lower not in ("table", "view"):
+                logger.warning(f"Fetching tags is currently only supported for tables and views. Got: {asset_type_lower}")
+                return {}
+                
+            if len(parts) < 3:
+                logger.warning(f"Invalid {asset_type_lower} name format: {asset_name}. Expected catalog.schema.{asset_type_lower}")
+                return {}
+                
+            catalog, schema, table = parts[0], parts[1], parts[2]
+            
+            # Format tag names for SQL IN clause
+            tags_list_str = ", ".join([f"'{t}'" for t in tag_names])
+            
+            query = f"""
+            SELECT tag_name, tag_value 
+            FROM system.information_schema.table_tags 
+            WHERE catalog_name = '{catalog}' 
+              AND schema_name = '{schema}' 
+              AND table_name = '{table}'
+              AND tag_name IN ({tags_list_str})
+            """
+            
+            logger.info(f"Fetching tags for {asset_name}: {tag_names}")
+            result = await self.execute_sql(query)
+            
+            tags = {}
+            for row in result.get("rows", []):
+                if isinstance(row, dict):
+                    tag_name = row.get("tag_name")
+                    tag_value = row.get("tag_value")
+                    if tag_name and tag_value is not None:
+                        tags[tag_name] = str(tag_value)
+                        
+            return tags
+            
+        except Exception as e:
+            logger.error(f"Failed to get tags for {asset_type} '{asset_name}': {str(e)}")
+            return {}
+
     async def get_asset_owner(self, asset_type: str, asset_name: str) -> Optional[str]:
         """
         Get the owner of a Unity Catalog asset.
@@ -620,15 +675,28 @@ class DatabricksProvider(BaseProvider):
             }
 
     async def _find_table_owner(self, full_name: str) -> Dict[str, Any]:
-        """Find owner of a table."""
+        """Find owner and relevant tags of a table."""
         try:
             table = await asyncio.to_thread(self.client.tables.get, full_name)
-            return {
+            result = {
                 "found": True,
                 "owner": table.owner or "Unknown",
                 "object_type": "table",
                 "object_name": full_name
             }
+            
+            # Fetch tags if possible
+            try:
+                tags = await self.get_asset_tags("table", full_name, ["approver_group", "access_group"])
+                if tags:
+                    if "approver_group" in tags:
+                        result["approver_group"] = tags["approver_group"]
+                    if "access_group" in tags:
+                        result["access_group"] = tags["access_group"]
+            except Exception as tag_err:
+                logger.warning(f"Could not fetch tags for table {full_name}: {tag_err}")
+                
+            return result
         except Exception as e:
             return {
                 "found": False,

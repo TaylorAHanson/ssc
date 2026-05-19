@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.db.session import get_db
 from app.db.request import RequestModel
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 from app.state_machines.facts import add_fact
 
@@ -44,8 +44,8 @@ async def execute_workflow(workflow_type: str, parameters: Dict[str, Any], conve
             state_context=state_context_with_email,
             conversation=conversation_history,  # Save chat history
             requester_email=user_email,  # Set requester for permission filtering
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc)
         )
         
         db.add(request)

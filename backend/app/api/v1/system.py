@@ -2,7 +2,7 @@
 System API routes for configuration and schedules.
 """
 from fastapi import APIRouter
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel
 from typing import Optional
 
@@ -22,7 +22,7 @@ def get_next_run(cron_expr: str) -> Optional[str]:
         return None
     try:
         from croniter import croniter
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         iter = croniter(cron_expr, now)
         return iter.get_next(datetime).isoformat() + "Z"
     except Exception:

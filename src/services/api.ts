@@ -986,6 +986,46 @@ export async function getSystemSchedules(): Promise<SystemSchedules> {
   return response.json();
 }
 
+export async function getDatabricksDashboards(): Promise<any[]> {
+  const response = await fetch(`${API_BASE_URL}/data-assets/databricks/dashboards`, {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to get dashboards: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function getDatabricksJobs(): Promise<any[]> {
+  const response = await fetch(`${API_BASE_URL}/data-assets/databricks/jobs`, {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to get jobs: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function getDatabricksApps(): Promise<any[]> {
+  const response = await fetch(`${API_BASE_URL}/data-assets/databricks/apps`, {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to get apps: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function getDatabricksGenieSpaces(): Promise<any[]> {
+  const response = await fetch(`${API_BASE_URL}/data-assets/databricks/genie_spaces`, {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to get genie spaces: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -1022,5 +1062,9 @@ export const api = {
   saveOdps,
   getOdpsHistory,
   deleteOdps,
-  getSystemSchedules
+  getSystemSchedules,
+  getDatabricksDashboards,
+  getDatabricksJobs,
+  getDatabricksApps,
+  getDatabricksGenieSpaces
 };

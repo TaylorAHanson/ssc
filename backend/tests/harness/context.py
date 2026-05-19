@@ -2,7 +2,7 @@ from app.db.request import RequestModel
 from app.models.request import RequestType
 from app.state_machines.factory import get_state_machine
 from app.state_machines.facts import get_latest_fact
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 class StateMachineTestHarness:
@@ -18,8 +18,8 @@ class StateMachineTestHarness:
             status="pending",
             current_state="pending",
             title=kwargs.get("title", "Test Request"),
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
             state_context=params or {},
             **kwargs
         )
@@ -29,7 +29,7 @@ class StateMachineTestHarness:
 
     def tick(self, request_id):
         """Ticks the state machine for the given request."""
-        request = self.db.query(RequestModel).get(request_id)
+        request = self.db.get(RequestModel, request_id)
         sm = get_state_machine(request, self.db)
         changed = sm.tick()
         if changed:
@@ -38,7 +38,7 @@ class StateMachineTestHarness:
         return changed
 
     def assert_state(self, request_id, expected_state):
-        request = self.db.query(RequestModel).get(request_id)
+        request = self.db.get(RequestModel, request_id)
         assert request.current_state == expected_state, f"Expected state {expected_state}, but got {request.current_state}"
 
     def assert_fact(self, request_id, fact_type):

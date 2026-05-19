@@ -5,7 +5,7 @@ import yaml
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.db.session import get_db
 from app.db.data_contract import DataContractModel
@@ -34,9 +34,10 @@ class DataContractResponse(BaseModel):
     certified: Optional[bool] = False
     last_synced_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = {
+        "from_attributes": True,
+        "populate_by_name": True
+    }
 
 class DataContractCreate(BaseModel):
     dataset_id: str
@@ -325,7 +326,7 @@ async def run_sync_contracts_background(dataset_groups: dict, force: bool, speci
                 yaml_content=odcs_yaml,
                 version=new_version,
                 is_active=True,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
                 metadata_hash=metadata_hash
             )
             db.add(new_contract)
@@ -446,7 +447,7 @@ def create_contract(contract: DataContractCreate, db: Session = Depends(get_db))
         yaml_content=contract.yaml_content,
         version=new_version,
         is_active=True,
-        created_at=datetime.utcnow()
+        created_at=datetime.now(timezone.utc)
         # created_by could be pulled from auth context if needed
     )
 
@@ -512,8 +513,8 @@ async def check_policy(
             status="pending",
             environment="production",
             requester_email=current_user.email,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
             state_context={"dataset_id": dataset_id, "policies": ["data_certification"]}
         )
         

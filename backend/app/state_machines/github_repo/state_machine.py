@@ -40,12 +40,12 @@ class GithubRepoCreationStateMachine(BaseRequestStateMachine):
 
         from app.providers.github.client import GitHubProvider
         from app.core.config import settings
-        from datetime import datetime
+        from datetime import datetime, timezone
         import traceback
         
         # Mark provisioning as started if not already marked
         if not has_fact(self.db, self.request.id, "provisioning_started"):
-            add_fact(self.db, self.request.id, "provisioning_started", {"started_at": datetime.utcnow().isoformat()}, actor="system")
+            add_fact(self.db, self.request.id, "provisioning_started", {"started_at": datetime.now(timezone.utc).isoformat()}, actor="system")
             self.db.commit()
         
         logger.info(f"[{self.request.id}] Provisioning GitHub repository...")
@@ -86,7 +86,7 @@ class GithubRepoCreationStateMachine(BaseRequestStateMachine):
                     }, actor="system")
                     
                     add_fact(self.db, self.request.id, "provisioning_completed", {
-                        "completed_at": datetime.utcnow().isoformat()
+                        "completed_at": datetime.now(timezone.utc).isoformat()
                     }, actor="system")
                     
                     logger.info(f"[{self.request.id}] Repository created successfully: {result.get('html_url')}")
@@ -96,6 +96,6 @@ class GithubRepoCreationStateMachine(BaseRequestStateMachine):
             logger.error(traceback.format_exc())
             add_fact(self.db, self.request.id, "provisioning_failed", {
                 "error": str(e),
-                "failed_at": datetime.utcnow().isoformat()
+                "failed_at": datetime.now(timezone.utc).isoformat()
             }, actor="system")
             raise e

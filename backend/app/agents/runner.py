@@ -150,6 +150,8 @@ class AgentRunner:
                         # Inject user identity for tools that need it (e.g., execute_workflow)
                         if self.user_identity:
                             fn_args["_user_email"] = self.user_identity.get("email")
+                            fn_args["_user_roles"] = self.user_identity.get("roles")
+                            fn_args["_user_entitlements"] = self.user_identity.get("entitlements")
                             
                         result = await matching_tool.execute(**fn_args)
                         tool_outputs.append({

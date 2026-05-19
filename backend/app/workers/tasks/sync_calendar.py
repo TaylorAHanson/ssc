@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from croniter import croniter, CroniterBadCronError
 from app.providers.calendar.client import CalendarProvider
 from app.agents.content_registry import save_content
@@ -17,7 +17,7 @@ async def sync_calendar_task(force: bool = False):
     Designed to be called periodically from the poller.
     """
     global _next_sync_time
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     
     # Check if we should sync based on cron
     cron_expr = getattr(settings, 'EVENT_SYNC_CRON', '0 * * * *')

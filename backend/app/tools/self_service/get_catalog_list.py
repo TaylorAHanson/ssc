@@ -10,23 +10,29 @@ from app.core.exceptions import RetryableError
 import fnmatch
 
 class GetCatalogListInput(BaseModel):
+    target_host: str = Field(..., description="The host URL of the target Databricks workspace.")
     name_pattern: Optional[str] = Field(None, description="Optional. Exact name or glob pattern (e.g. '*dev*') to filter catalogs.")
 
 @tool(
     name="get_catalog_list",
-    description="Lists all available catalogs in the Databricks Unity Catalog, including their descriptions and comments. You can optionally filter by a specific name or pattern to check if a catalog exists. NEXT STEP: Use 'get_schema_list' to explore a specific catalog.",
+    description="Lists all available catalogs in the Databricks Unity Catalog for a specific workspace. You can optionally filter by a specific name or pattern to check if a catalog exists. NEXT STEP: Use 'get_schema_list' to explore a specific catalog.",
     args_schema=GetCatalogListInput
 )
-async def get_catalog_list(name_pattern: Optional[str] = None) -> Dict[str, Any]:
+async def get_catalog_list(target_host: str, name_pattern: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetch the list of catalogs along with their descriptions.
     """
     try:
+        from app.core.workspaces import get_workspace_config
+        ws_config = get_workspace_config(target_host)
+        if not ws_config:
+            raise ValueError(f"Target host {target_host} not found in configuration.")
+            
         provider = DatabricksProvider(
-            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-            token=settings.DATABRICKS_TOKEN,
-            client_id=settings.DATABRICKS_CLIENT_ID,
-            client_secret=settings.DATABRICKS_CLIENT_SECRET,
+            host=ws_config.host,
+            token=ws_config.token,
+            client_id=ws_config.client_id,
+            client_secret=ws_config.client_secret,
             config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID}
         )
         

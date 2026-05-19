@@ -17,7 +17,7 @@ When filing the request, gather the following:
 
 | # | Parameter | Required | Notes |
 |---|-----------|----------|-------|
-| 1 | **Workspace** | ✅ Yes | The workspace name or ID where the resource lives (e.g. `ws-enterprise-prod`). |
+| 1 | **Target Workspace** | ✅ Yes | The workspace where the resource lives. You MUST use `get_target_workspaces` to find the exact `host` URL. |
 | 2 | **Resource Type** | ✅ Yes | Enum: `app`, `notebook`, `job`, `cluster`, `dashboard`, `genie_space`. |
 | 3 | **Resource ID** | ✅ Yes | The normalized name or ID of the resource (e.g., `fin-forecast-app`). Remind them this must match the actual name EXACTLY. |
 | 4 | **Justification** | ✅ Yes | A detailed business justification for why they need this exception. |
@@ -32,7 +32,7 @@ Once all parameters are gathered, call `execute_workflow` with:
 {
   "workflow_type": "allowlist_exception",
   "parameters": {
-    "workspace": "ws-enterprise-prod",
+    "target_host": "...",
     "resource_type": "app",
     "resource_id": "fin-forecast-app",
     "justification": "Required for finance reporting.",

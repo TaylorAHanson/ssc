@@ -11,7 +11,7 @@ class TestSearchRequestsTool:
 
     @pytest.mark.asyncio
     async def test_search_by_title(self, tool, db_session):
-        with patch("app.tools.self_service.search_requests.get_lakebase_session", return_value=db_session):
+        with patch("app.tools.self_service.search_requests.get_db", side_effect=lambda: iter([db_session])):
             # Seed data
             RequestFactory.create(db_session, title="Finance Access Request", status="pending")
             RequestFactory.create(db_session, title="HR Data Access", status="completed")
@@ -26,7 +26,7 @@ class TestSearchRequestsTool:
 
     @pytest.mark.asyncio
     async def test_search_by_id(self, tool, db_session):
-        with patch("app.tools.self_service.search_requests.get_lakebase_session", return_value=db_session):
+        with patch("app.tools.self_service.search_requests.get_db", side_effect=lambda: iter([db_session])):
             # Seed data
             RequestFactory.create(db_session, id="req-123-abc", title="Target")
             RequestFactory.create(db_session, id="req-456-def", title="Other")
@@ -40,7 +40,7 @@ class TestSearchRequestsTool:
 
     @pytest.mark.asyncio
     async def test_filter_by_status(self, tool, db_session):
-         with patch("app.tools.self_service.search_requests.get_lakebase_session", return_value=db_session):
+         with patch("app.tools.self_service.search_requests.get_db", side_effect=lambda: iter([db_session])):
             # Seed data
             RequestFactory.create(db_session, title="A", status="pending")
             RequestFactory.create(db_session, title="B", status="completed")
@@ -56,7 +56,7 @@ class TestSearchRequestsTool:
 
     @pytest.mark.asyncio
     async def test_limit(self, tool, db_session):
-         with patch("app.tools.self_service.search_requests.get_lakebase_session", return_value=db_session):
+         with patch("app.tools.self_service.search_requests.get_db", side_effect=lambda: iter([db_session])):
             # Seed data
             for i in range(10):
                 RequestFactory.create(db_session, title=f"Bulk {i}")
@@ -71,7 +71,7 @@ class TestSearchRequestsTool:
 
     @pytest.mark.asyncio
     async def test_no_results(self, tool, db_session):
-         with patch("app.tools.self_service.search_requests.get_lakebase_session", return_value=db_session):
+         with patch("app.tools.self_service.search_requests.get_db", side_effect=lambda: iter([db_session])):
             result = await tool.execute(query="Nonexistent")
             assert result["count"] == 0
             assert result["requests"] == []

@@ -34,7 +34,9 @@ class TestGetSchemaListTool:
     @pytest.fixture
     def mock_provider(self):
         with patch("app.tools.self_service.get_schema_list.DatabricksProvider") as MockProvider:
-            yield MockProvider.return_value
+            with patch("app.core.workspaces.get_workspace_config") as mock_ws_config:
+                mock_ws_config.return_value = MagicMock(host="https://test.azuredatabricks.net", token="test", client_id=None, client_secret=None)
+                yield MockProvider.return_value
 
     @pytest.mark.asyncio
     async def test_execute_success(self, tool, mock_provider):
@@ -43,7 +45,7 @@ class TestGetSchemaListTool:
             MockSchema("schema2")
         ]
         
-        result = await tool.execute(catalog_name="main")
+        result = await tool.execute(target_host="https://test.azuredatabricks.net", catalog_name="main")
         
         assert result["count"] == 2
         assert result["schemas"][0]["name"] == "schema1"
@@ -57,7 +59,9 @@ class TestGetTableListTool:
     @pytest.fixture
     def mock_provider(self):
         with patch("app.tools.self_service.get_table_list.DatabricksProvider") as MockProvider:
-            yield MockProvider.return_value
+            with patch("app.core.workspaces.get_workspace_config") as mock_ws_config:
+                mock_ws_config.return_value = MagicMock(host="https://test.azuredatabricks.net", token="test", client_id=None, client_secret=None)
+                yield MockProvider.return_value
 
     @pytest.mark.asyncio
     async def test_execute_success(self, tool, mock_provider):
@@ -66,7 +70,7 @@ class TestGetTableListTool:
             MockTable("view1", "c2", "VIEW")
         ]
         
-        result = await tool.execute(catalog_name="main", schema_name="default")
+        result = await tool.execute(target_host="https://test.azuredatabricks.net", catalog_name="main", schema_name="default")
         
         assert result["count"] == 2
         assert result["tables"][0]["name"] == "table1"

@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from statemachine import State
 from app.state_machines.base import BaseRequestStateMachine
 from app.state_machines.facts import add_fact, get_latest_fact, has_fact
@@ -155,7 +155,7 @@ class AssetDeduplicationStateMachine(BaseRequestStateMachine):
                 add_fact(self.db, self.request.id, "run_id_created", {
                     "run_id": run_id,
                     "remote_path": remote_notebook_path,
-                    "submitted_at": datetime.utcnow().isoformat()
+                    "submitted_at": datetime.now(timezone.utc).isoformat()
                 }, actor="system")
                 
                 logger.info(f"[{self.request.id}] Job submitted successfully: RunID={run_id}")
@@ -179,14 +179,14 @@ class AssetDeduplicationStateMachine(BaseRequestStateMachine):
                         add_fact(self.db, self.request.id, "job_completed", {
                             "run_id": run_id,
                             "status": "success",
-                            "completed_at": datetime.utcnow().isoformat()
+                            "completed_at": datetime.now(timezone.utc).isoformat()
                         }, actor="system")
                     else:
                         logger.error(f"[{self.request.id}] Job {run_id} failed: {status['state_message']}")
                         add_fact(self.db, self.request.id, "job_failed", {
                             "run_id": run_id,
                             "error": status["state_message"],
-                            "failed_at": datetime.utcnow().isoformat()
+                            "failed_at": datetime.now(timezone.utc).isoformat()
                         }, actor="system")
                         self.mark_failed()
             except PermanentError as e:
@@ -194,7 +194,7 @@ class AssetDeduplicationStateMachine(BaseRequestStateMachine):
                 add_fact(self.db, self.request.id, "job_failed", {
                     "run_id": run_id,
                     "error": str(e),
-                    "failed_at": datetime.utcnow().isoformat()
+                    "failed_at": datetime.now(timezone.utc).isoformat()
                 }, actor="system")
                 self.mark_failed()
             except RetryableError as e:
@@ -212,17 +212,17 @@ class AssetDeduplicationStateMachine(BaseRequestStateMachine):
         changed = super()._process_current_state()
         
         # Check for job completion to advance
-        if self.current_state.id == "job_submitted" and self.has_job_completed:
+        if self.current_state_value == "job_submitted" and self.has_job_completed:
             if hasattr(self, "finish_job"):
                 self.finish_job()
                 changed = True
 
-        if self.current_state.id == "job_complete" and self.has_results_fetched:
+        if self.current_state_value == "job_complete" and self.has_results_fetched:
             # Auto-advance to notifying after fetching results
              self.notify()
              changed = True
 
-        if self.current_state.id == "notifying":
+        if self.current_state_value == "notifying":
              # Auto-advance to completed after notification attempt
              self.complete_request()
              changed = True
@@ -361,7 +361,7 @@ class AssetDeduplicationStateMachine(BaseRequestStateMachine):
             
             add_fact(self.db, self.request.id, "notification_sent", {
                 "recipient": recipient,
-                "sent_at": datetime.utcnow().isoformat()
+                "sent_at": datetime.now(timezone.utc).isoformat()
             }, actor="system")
             
         except Exception as e:

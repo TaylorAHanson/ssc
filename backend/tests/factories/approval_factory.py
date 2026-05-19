@@ -1,5 +1,5 @@
 from app.db import ApprovalModel
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import random
 
@@ -15,8 +15,8 @@ class ApprovalFactory:
             requested_by=kwargs.pop("requested_by", "user@example.com"),
             requested_by_email=kwargs.pop("requested_by_email", "user@example.com"),
             status=kwargs.pop("status", "pending"),
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
             **kwargs
         )
         session.add(approval)
