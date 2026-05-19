@@ -152,8 +152,10 @@ async def draft_odcs_contract(
         
         existing_contract_instructions = ""
         if existing_odcs_yaml:
+            is_valid_yaml = False
             try:
                 parsed_yaml = yaml.safe_load(existing_odcs_yaml)
+                is_valid_yaml = True
                 if "schema" in parsed_yaml and isinstance(parsed_yaml["schema"], list):
                     valid_names = {m["dataset_id"] for m in datasets_metadata}
                     
@@ -194,9 +196,11 @@ async def draft_odcs_contract(
                     parsed_yaml["schema"] = filtered_schema
                     existing_odcs_yaml = yaml.dump(parsed_yaml, sort_keys=False)
             except Exception as e:
-                logger.warning(f"Failed to pre-prune existing YAML: {e}")
+                logger.warning(f"Failed to parse or pre-prune existing YAML. Discarding it to force a clean regeneration: {e}")
+                existing_odcs_yaml = None
 
-            existing_contract_instructions = f"""
+            if is_valid_yaml and existing_odcs_yaml:
+                existing_contract_instructions = f"""
 CRITICAL INSTRUCTION: You are UPDATING an existing Open Data Contract Standard (ODCS) document.
 You MUST preserve all existing manual customizations (descriptions, roles, thresholds, custom properties, slas) EXACTLY as they are in the existing YAML.
 Only ADD new tables or columns found in the Metadata that are missing from the existing YAML. Do NOT overwrite existing human-written descriptions or rules.
