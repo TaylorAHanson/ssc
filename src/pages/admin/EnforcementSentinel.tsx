@@ -588,7 +588,7 @@ export function EnforcementSentinel() {
                                                                     <th className="p-3 text-left">Severity</th>
                                                                     <th className="p-3 text-left">Action</th>
                                                                     <th className="p-3 text-left w-1/3">Reason</th>
-                                                                    {selectedRun?.metadata?.enforcement_mode === 'audit_only' && (
+                                                                    {ctx.enforcement_mode === 'audit_only' && (
                                                                         <th className="p-3 text-right">Controls</th>
                                                                     )}
                                                                 </tr>
@@ -615,7 +615,7 @@ export function EnforcementSentinel() {
                                                                         </td>
                                                                         <td className="p-3 font-mono text-xs font-bold text-gray-700">{v.action}</td>
                                                                         <td className="p-3 text-xs text-gray-600 break-words leading-relaxed">{formatReason(v)}</td>
-                                                                        {selectedRun?.metadata?.enforcement_mode === 'audit_only' && (
+                                                                        {ctx.enforcement_mode === 'audit_only' && (
                                                                             <td className="p-3 text-right">
                                                                                 {(() => {
                                                                                     const execKey = `${selectedRun.id}-${v.resource_id}-${v.policy}-${v.action}`;
