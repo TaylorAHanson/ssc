@@ -1,7 +1,7 @@
 """
 Databricks provider client.
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 import os
 from app.providers.base import BaseProvider
 from app.core.exceptions import RetryableError, PermanentError
