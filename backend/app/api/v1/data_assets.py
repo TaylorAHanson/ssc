@@ -234,6 +234,121 @@ def get_databricks_apps():
         # Return empty list if apps aren't supported in this workspace/SDK yet
         return []
 
+def _classify_uc_error(message: str) -> str:
+    """Translate raw UC SDK errors into user-facing strings.
+
+    The Discover modal shows this in an inline banner so users understand
+    *why* metadata is missing (most often: SP lacks USE CATALOG / SELECT
+    grants on the target object).
+    """
+    m = (message or "").lower()
+    if "does not exist" in m:
+        return "not_found"
+    if "permission" in m or "not authorized" in m or "access denied" in m or "forbidden" in m:
+        return "permission_denied"
+    return "error"
+
+
+@router.get("/databricks/table")
+def get_databricks_table_details(table_name: str):
+    """Return full Unity Catalog metadata for a single table.
+
+    Always returns HTTP 200 with a payload so frontend can inspect the
+    ``error`` field for not-found / permission errors. (Returning 4xx here
+    would be intercepted by the app's SPA-fallback 404 handler, masking
+    the real reason.)
+    """
+    from app.providers.databricks import DatabricksProvider
+    from app.core.config import settings
+    from fastapi import HTTPException
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    if not table_name or table_name.count(".") != 2:
+        raise HTTPException(
+            status_code=400,
+            detail="table_name must be a fully qualified name (catalog.schema.table)",
+        )
+
+    base_response = {
+        "table_name": table_name,
+        "comment": None,
+        "table_type": None,
+        "data_source_format": None,
+        "owner": None,
+        "created_at": None,
+        "updated_at": None,
+        "columns": [],
+        "tags": {},
+        "error": None,
+        "error_kind": None,
+    }
+
+    try:
+        provider = DatabricksProvider(
+            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
+            token=settings.DATABRICKS_TOKEN,
+            client_id=settings.DATABRICKS_CLIENT_ID,
+            client_secret=settings.DATABRICKS_CLIENT_SECRET,
+        )
+
+        try:
+            info = provider.client.tables.get(full_name=table_name)
+        except Exception as e:
+            msg = str(e)
+            logger.warning(f"Failed to fetch table info for {table_name}: {msg}")
+            kind = _classify_uc_error(msg)
+            return {
+                **base_response,
+                "error": msg,
+                "error_kind": kind,
+            }
+
+        columns = []
+        for col in (getattr(info, "columns", None) or []):
+            columns.append({
+                "name": getattr(col, "name", None),
+                "type": getattr(col, "type_text", None) or getattr(col, "type_name", None),
+                "comment": getattr(col, "comment", None),
+                "nullable": getattr(col, "nullable", None),
+                "position": getattr(col, "position", None),
+            })
+
+        table_type = None
+        if getattr(info, "table_type", None) is not None:
+            tt = info.table_type
+            table_type = str(tt.value) if hasattr(tt, "value") else str(tt)
+
+        tags = {}
+        try:
+            uc_tags = provider.client.entity_tag_assignments.list(
+                entity_type="tables", entity_name=table_name
+            )
+            for t in uc_tags:
+                if getattr(t, "tag_key", None):
+                    tags[t.tag_key] = getattr(t, "tag_value", None)
+        except Exception:
+            pass
+
+        return {
+            **base_response,
+            "comment": getattr(info, "comment", None),
+            "table_type": table_type,
+            "data_source_format": getattr(info, "data_source_format", None) and str(info.data_source_format),
+            "owner": getattr(info, "owner", None),
+            "created_at": getattr(info, "created_at", None),
+            "updated_at": getattr(info, "updated_at", None),
+            "columns": columns,
+            "tags": tags,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error fetching table {table_name}: {e}")
+        return {**base_response, "error": str(e), "error_kind": _classify_uc_error(str(e))}
+
+
 @router.get("/databricks/lineage")
 def get_databricks_table_lineage(table_name: str):
     """Return immediate (1-hop) upstream/downstream tables for a UC table.
@@ -291,13 +406,23 @@ def get_databricks_table_lineage(table_name: str):
             "table_name": table_name,
             "upstreams": _extract(resp.get("upstreams")),
             "downstreams": _extract(resp.get("downstreams")),
+            "error": None,
+            "error_kind": None,
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.warning(f"Failed to fetch lineage for {table_name}: {e}")
-        # Return an empty result so the graph just shows the center node.
-        return {"table_name": table_name, "upstreams": [], "downstreams": []}
+        msg = str(e)
+        logger.warning(f"Failed to fetch lineage for {table_name}: {msg}")
+        # Return 200 with the error fields so the frontend can render a clear
+        # message (the SPA fallback 404 handler would otherwise mask details).
+        return {
+            "table_name": table_name,
+            "upstreams": [],
+            "downstreams": [],
+            "error": msg,
+            "error_kind": _classify_uc_error(msg),
+        }
 
 
 @router.get("/databricks/genie_spaces")

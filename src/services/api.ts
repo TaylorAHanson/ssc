@@ -1035,10 +1035,14 @@ export interface LineageNeighbor {
   table_type?: string | null;
 }
 
+export type DatabricksMetadataErrorKind = 'not_found' | 'permission_denied' | 'error' | null;
+
 export interface TableLineageResponse {
   table_name: string;
   upstreams: LineageNeighbor[];
   downstreams: LineageNeighbor[];
+  error?: string | null;
+  error_kind?: DatabricksMetadataErrorKind;
 }
 
 /**
@@ -1053,6 +1057,44 @@ export async function getTableLineage(tableName: string): Promise<TableLineageRe
   );
   if (!response.ok) {
     throw new Error(`Failed to get table lineage: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export interface TableColumn {
+  name: string;
+  type?: string | null;
+  comment?: string | null;
+  nullable?: boolean | null;
+  position?: number | null;
+}
+
+export interface TableDetailsResponse {
+  table_name: string;
+  comment?: string | null;
+  table_type?: string | null;
+  data_source_format?: string | null;
+  owner?: string | null;
+  created_at?: number | string | null;
+  updated_at?: number | string | null;
+  columns: TableColumn[];
+  tags: Record<string, string | null>;
+  error?: string | null;
+  error_kind?: DatabricksMetadataErrorKind;
+}
+
+/**
+ * Fetch full Unity Catalog metadata (columns, comment, owner, tags) for a
+ * UC table. Used by the Discover page Schema tab for tables without a
+ * data contract.
+ */
+export async function getTableDetails(tableName: string): Promise<TableDetailsResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/data-assets/databricks/table?table_name=${encodeURIComponent(tableName)}`,
+    { headers: getHeaders() }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to get table details: ${response.statusText}`);
   }
   return response.json();
 }
@@ -1098,5 +1140,6 @@ export const api = {
   getDatabricksJobs,
   getDatabricksApps,
   getDatabricksGenieSpaces,
-  getTableLineage
+  getTableLineage,
+  getTableDetails
 };

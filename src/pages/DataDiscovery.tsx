@@ -9,7 +9,7 @@ import {
   Key, ExternalLink, Network, Activity
 } from 'lucide-react';
 import { api } from '../services/api';
-import type { DataAsset } from '../services/api';
+import type { DataAsset, TableDetailsResponse } from '../services/api';
 import { useBrandingStore } from '../stores/brandingStore';
 import {
   assetWorkspaceUrl,
@@ -50,6 +50,12 @@ export function DataDiscovery() {
   const [contractError, setContractError] = useState<string | null>(null);
   const [isLoadingContract, setIsLoadingContract] = useState(false);
 
+  // UC table metadata (columns/description) for non-contract tables — loaded
+  // lazily when a managed/external/view asset is opened in the modal.
+  const [selectedTableDetails, setSelectedTableDetails] = useState<TableDetailsResponse | null>(null);
+  const [tableDetailsError, setTableDetailsError] = useState<string | null>(null);
+  const [isLoadingTableDetails, setIsLoadingTableDetails] = useState(false);
+
   useEffect(() => {
     let mounted = true;
     async function loadContract() {
@@ -84,6 +90,57 @@ export function DataDiscovery() {
       }
     }
     loadContract();
+    return () => { mounted = false; };
+  }, [selectedDataset]);
+
+  // Load Unity Catalog metadata when a plain UC table (managed/external/view)
+  // is selected, so the Schema tab can show columns + descriptions.
+  useEffect(() => {
+    let mounted = true;
+    async function loadTable() {
+      if (!selectedDataset) {
+        setSelectedTableDetails(null);
+        setTableDetailsError(null);
+        return;
+      }
+      const t = String(selectedDataset.type || '').toLowerCase();
+      const isTable = t === 'managed' || t === 'external' || t === 'view';
+      if (!isTable) {
+        setSelectedTableDetails(null);
+        setTableDetailsError(null);
+        return;
+      }
+      const fqn = selectedDataset.id
+        || `${selectedDataset.catalog}.${(selectedDataset as any).schema_name}.${selectedDataset.table_name}`;
+      if (!fqn || fqn.split('.').length !== 3) {
+        setSelectedTableDetails(null);
+        setTableDetailsError('Cannot resolve table name.');
+        return;
+      }
+      setIsLoadingTableDetails(true);
+      setTableDetailsError(null);
+      try {
+        const details = await api.getTableDetails(fqn);
+        if (!mounted) return;
+        setSelectedTableDetails(details);
+        // Backend always returns 200; surface in-payload errors here.
+        if (details.error_kind === 'not_found') {
+          setTableDetailsError(`This table isn't visible in the connected workspace. The Discover catalog may be out of date or the table may have moved.`);
+        } else if (details.error_kind === 'permission_denied') {
+          setTableDetailsError(`This app's service principal doesn't have access to ${fqn}. Ask a workspace admin to grant USE CATALOG / USE SCHEMA / SELECT on this object so the Discover page can show its columns.`);
+        } else if (details.error) {
+          setTableDetailsError(details.error);
+        }
+      } catch (e) {
+        if (mounted) {
+          setSelectedTableDetails(null);
+          setTableDetailsError(e instanceof Error ? e.message : 'Failed to load table details.');
+        }
+      } finally {
+        if (mounted) setIsLoadingTableDetails(false);
+      }
+    }
+    loadTable();
     return () => { mounted = false; };
   }, [selectedDataset]);
 
@@ -586,6 +643,9 @@ export function DataDiscovery() {
           contract={selectedContract}
           isLoadingContract={isLoadingContract}
           contractError={contractError}
+          tableDetails={selectedTableDetails}
+          isLoadingTableDetails={isLoadingTableDetails}
+          tableDetailsError={tableDetailsError}
           workspaceUrl={databricksWorkspaceUrl}
           onClose={() => setSelectedDataset(null)}
           canRequestAccess={canRequestAccess(selectedDataset.type)}
@@ -604,6 +664,9 @@ interface DetailsModalProps {
   contract: any | null;
   isLoadingContract: boolean;
   contractError: string | null;
+  tableDetails: TableDetailsResponse | null;
+  isLoadingTableDetails: boolean;
+  tableDetailsError: string | null;
   workspaceUrl: string;
   onClose: () => void;
   canRequestAccess: boolean;
@@ -615,6 +678,9 @@ function DetailsModal({
   contract,
   isLoadingContract,
   contractError,
+  tableDetails,
+  isLoadingTableDetails,
+  tableDetailsError,
   workspaceUrl,
   onClose,
   canRequestAccess,
@@ -701,7 +767,13 @@ function DetailsModal({
     return [];
   }, [isDataset, isTableLike, primaryServer, schema, asset.catalog, asset.schema_name, asset.table_name]);
   const hasLineage = lineageSeeds.length > 0;
-  const hasSchema = isDataset && schema.length > 0;
+  // Schema tab: from contract YAML (datasets) OR live UC columns (plain tables).
+  // For UC tables we render the tab as soon as we know the asset is a table —
+  // the actual content shows a loader/error/empty state if needed.
+  const tableColumns = tableDetails?.columns ?? [];
+  const hasSchema = (isDataset && schema.length > 0)
+    || (isTableLike && (tableColumns.length > 0 || isLoadingTableDetails || !!tableDetailsError));
+  const schemaTabCount = isDataset ? schema.length : tableColumns.length;
   const hasQuality = (slaProperties.length > 0 || asset.sla)
     || (asset.data_quality && Object.keys(asset.data_quality).length > 0);
   const hasTeam = isDataset && (team.length > 0 || support.length > 0 || authoritativeDefinitions.length > 0);
@@ -710,7 +782,12 @@ function DetailsModal({
   const tabs: { id: TabId; label: string; icon: ReactNode; count?: number }[] = [
     { id: 'overview', label: 'Overview', icon: <BookOpen className="w-4 h-4" /> },
     ...(hasSchema
-      ? [{ id: 'schema' as TabId, label: 'Schema', icon: <TableIcon className="w-4 h-4" />, count: schema.length }]
+      ? [{
+          id: 'schema' as TabId,
+          label: isDataset ? 'Schema' : 'Columns',
+          icon: <TableIcon className="w-4 h-4" />,
+          ...(schemaTabCount > 0 ? { count: schemaTabCount } : {}),
+        }]
       : []),
     ...(hasLineage
       ? [{ id: 'lineage' as TabId, label: 'Lineage', icon: <Network className="w-4 h-4" /> }]
@@ -958,28 +1035,115 @@ function DetailsModal({
 
           {/* ============== Schema tab ============== */}
           {activeTab === 'schema' && hasSchema && (
-            <section>
-              <SectionHeading
-                icon={<TableIcon className="w-4 h-4" />}
-                title="Tables & Columns"
-                count={schema.length}
-              />
-              <p className="text-xs text-gray-500 mb-3">
-                Click a table to see its columns, access groups, and tags. View the data flow visually in the Lineage tab.
-              </p>
-              <div className="space-y-2">
-                {schema.map((tbl: any, i: number) => (
-                  <SchemaTableEntry
-                    key={tbl.id || i}
-                    tbl={tbl}
-                    expandedByDefault={schema.length === 1}
-                    workspaceUrl={workspaceUrl}
-                    catalog={primaryServer?.catalog}
-                    schema={primaryServer?.schema}
+            <>
+              {/* Dataset (contract YAML) view */}
+              {isDataset && schema.length > 0 && (
+                <section>
+                  <SectionHeading
+                    icon={<TableIcon className="w-4 h-4" />}
+                    title="Tables & Columns"
+                    count={schema.length}
                   />
-                ))}
-              </div>
-            </section>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Click a table to see its columns, access groups, and tags. View the data flow visually in the Lineage tab.
+                  </p>
+                  <div className="space-y-2">
+                    {schema.map((tbl: any, i: number) => (
+                      <SchemaTableEntry
+                        key={tbl.id || i}
+                        tbl={tbl}
+                        expandedByDefault={schema.length === 1}
+                        workspaceUrl={workspaceUrl}
+                        catalog={primaryServer?.catalog}
+                        schema={primaryServer?.schema}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {/* UC table (live columns) view */}
+              {!isDataset && isTableLike && (
+                <section>
+                  <SectionHeading
+                    icon={<Columns3 className="w-4 h-4" />}
+                    title="Columns"
+                    {...(tableColumns.length > 0 ? { count: tableColumns.length } : {})}
+                  />
+                  {isLoadingTableDetails && (
+                    <div className="flex items-center gap-2 text-sm text-gray-500 bg-gray-50 border border-gray-100 rounded-lg p-4">
+                      <Loader2 className="w-4 h-4 animate-spin" /> Loading table schema…
+                    </div>
+                  )}
+                  {!isLoadingTableDetails && tableDetailsError && (
+                    <div className="flex items-start gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-lg p-3">
+                      <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-amber-600" />
+                      <span>{tableDetailsError}</span>
+                    </div>
+                  )}
+                  {!isLoadingTableDetails && !tableDetailsError && tableColumns.length === 0 && (
+                    <div className="bg-gray-50 border border-gray-200 border-dashed rounded-lg p-4 text-center">
+                      <p className="text-sm text-gray-500">No columns reported for this table.</p>
+                    </div>
+                  )}
+                  {tableColumns.length > 0 && (
+                    <div className="rounded-md border border-gray-200 overflow-hidden">
+                      <div className="bg-gray-50 px-3 py-2 border-b border-gray-200 text-[11px] font-semibold uppercase tracking-wide text-gray-500 flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <Columns3 className="w-3 h-3" /> {tableColumns.length} column{tableColumns.length === 1 ? '' : 's'}
+                        </span>
+                        {tableDetails?.owner && (
+                          <span className="normal-case font-normal text-gray-500">
+                            Owner: <span className="font-medium text-gray-700">{tableDetails.owner}</span>
+                          </span>
+                        )}
+                      </div>
+                      <table className="w-full text-xs">
+                        <thead className="bg-white text-gray-500 border-b border-gray-100">
+                          <tr>
+                            <th className="text-left font-medium px-3 py-1.5">Name</th>
+                            <th className="text-left font-medium px-3 py-1.5">Type</th>
+                            <th className="text-left font-medium px-3 py-1.5">Description</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {[...tableColumns]
+                            .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+                            .map((c, i) => (
+                              <tr key={`${c.name}-${i}`} className="hover:bg-gray-50/60">
+                                <td className="px-3 py-1.5 align-top font-mono text-gray-900 break-all">
+                                  {c.name}
+                                </td>
+                                <td className="px-3 py-1.5 align-top text-gray-600 font-mono whitespace-nowrap">
+                                  {c.type || '—'}
+                                  {c.nullable === false && (
+                                    <span className="ml-1 text-rose-500" title="Required (NOT NULL)">*</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-1.5 align-top text-gray-600 leading-snug">
+                                  {c.comment || <span className="text-gray-400 italic">—</span>}
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {tableDetails?.tags && Object.keys(tableDetails.tags).length > 0 && (
+                    <div className="mt-4">
+                      <SectionHeading icon={<Tag className="w-4 h-4" />} title="UC Tags" count={Object.keys(tableDetails.tags).length} />
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(tableDetails.tags).map(([k, v]) => (
+                          <span key={k} className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-100 font-mono">
+                            {k}{v ? `=${v}` : ''}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </section>
+              )}
+            </>
           )}
 
           {/* ============== Lineage tab ============== */}

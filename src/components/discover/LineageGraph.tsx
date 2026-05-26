@@ -347,6 +347,15 @@ export function LineageGraph({ seedTables, workspaceUrl, height = '100%' }: Line
             setError(null);
             try {
                 const resp = await api.getTableLineage(fqn);
+                if (resp.error_kind === 'permission_denied') {
+                    setError(
+                        `This app's service principal doesn't have access to ${fqn} in Unity Catalog, ` +
+                        `so its lineage can't be loaded. Ask a workspace admin to grant the SP USE CATALOG / ` +
+                        `USE SCHEMA / SELECT on this table.`,
+                    );
+                } else if (resp.error) {
+                    setError(resp.error);
+                }
                 setInternal((prev) => {
                     const next = new Map(prev);
                     const center = next.get(fqn);
@@ -423,20 +432,38 @@ export function LineageGraph({ seedTables, workspaceUrl, height = '100%' }: Line
     );
 
     const isEmpty = nodes.length === 0;
+    // "Lonely" = we have the seed(s) but no neighbors found — happens when
+    // a table has no recorded UC lineage. We still want to show the seed,
+    // but with a clear callout so users don't think the page is broken.
+    const allSeedsTriedBoth = Array.from(internal.values()).every(
+        (n) => n.role !== 'primary' || (n.upstreamLoaded && n.downstreamLoaded),
+    );
+    const hasAnyNeighbor = Array.from(internal.values()).some(
+        (n) => n.role === 'neighbor',
+    );
+    const isLonely = !isEmpty && allSeedsTriedBoth && !hasAnyNeighbor && !loadingFqn && !error;
 
     return (
-        <div className="w-full" style={{ height }}>
+        <div className="w-full flex flex-col" style={{ height }}>
             {error && (
                 <div className="mb-2 text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-md px-3 py-2">
                     {error}
                 </div>
             )}
+            {isLonely && (
+                <div className="mb-2 text-xs text-gray-700 bg-blue-50 border border-blue-100 rounded-md px-3 py-2">
+                    No upstream or downstream lineage was found in Unity Catalog for this
+                    {seeds.length === 1 ? ' table' : ' dataset'}. Lineage is captured automatically
+                    when jobs/queries read or write the table — newly created or unused tables may
+                    show empty here.
+                </div>
+            )}
             {isEmpty ? (
-                <div className="h-full flex items-center justify-center text-sm text-gray-500 bg-gray-50 border border-dashed border-gray-200 rounded-lg">
+                <div className="flex-1 flex items-center justify-center text-sm text-gray-500 bg-gray-50 border border-dashed border-gray-200 rounded-lg">
                     No lineage information available.
                 </div>
             ) : (
-                <div className="w-full h-full bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
+                <div className="w-full flex-1 min-h-0 bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
                     <ReactFlow
                         nodes={nodes}
                         edges={edges}
