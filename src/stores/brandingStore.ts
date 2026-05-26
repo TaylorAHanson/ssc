@@ -11,6 +11,7 @@ interface BrandingState {
     brandColorAlert: string;
     brandColorWarning: string;
     brandColorSuccess: string;
+    databricksWorkspaceUrl: string;
     features: Record<string, boolean>;
     tools: Record<string, boolean>;
     workflows: Record<string, boolean>;
@@ -31,6 +32,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     brandColorAlert: '#98102A',
     brandColorWarning: '#FFAB00',
     brandColorSuccess: '#00A972',
+    databricksWorkspaceUrl: '',
     features: {},
     tools: {},
     workflows: {},
@@ -52,6 +54,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 brandColorAlert: branding.brand_color_alert,
                 brandColorWarning: branding.brand_color_warning,
                 brandColorSuccess: branding.brand_color_success,
+                databricksWorkspaceUrl: branding.databricks_workspace_url || '',
                 features: branding.features || {},
                 tools: branding.tools || {},
                 workflows: branding.workflows || {},

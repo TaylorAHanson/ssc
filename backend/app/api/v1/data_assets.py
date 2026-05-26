@@ -234,6 +234,72 @@ def get_databricks_apps():
         # Return empty list if apps aren't supported in this workspace/SDK yet
         return []
 
+@router.get("/databricks/lineage")
+def get_databricks_table_lineage(table_name: str):
+    """Return immediate (1-hop) upstream/downstream tables for a UC table.
+
+    `table_name` must be a fully qualified name like ``catalog.schema.table``.
+    Used by the Discover page Lineage tab to render a click-to-expand graph
+    similar to Databricks Catalog Explorer's lineage view.
+    """
+    from app.providers.databricks import DatabricksProvider
+    from app.core.config import settings
+    from fastapi import HTTPException
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    if not table_name or table_name.count(".") != 2:
+        raise HTTPException(
+            status_code=400,
+            detail="table_name must be a fully qualified name (catalog.schema.table)",
+        )
+
+    try:
+        provider = DatabricksProvider(
+            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
+            token=settings.DATABRICKS_TOKEN,
+            client_id=settings.DATABRICKS_CLIENT_ID,
+            client_secret=settings.DATABRICKS_CLIENT_SECRET,
+        )
+        resp = provider.client.api_client.do(
+            "GET",
+            f"/api/2.0/lineage-tracking/table-lineage?table_name={table_name}&include_entity_lineage=true",
+        ) or {}
+
+        def _extract(entries):
+            results = []
+            seen = set()
+            for entry in entries or []:
+                info = entry.get("tableInfo") or {}
+                fqn = info.get("name")
+                if not fqn or fqn in seen:
+                    continue
+                seen.add(fqn)
+                results.append(
+                    {
+                        "name": fqn,
+                        "catalog_name": info.get("catalog_name"),
+                        "schema_name": info.get("schema_name"),
+                        "table_name": info.get("table_name"),
+                        "table_type": info.get("table_type"),
+                    }
+                )
+            return results
+
+        return {
+            "table_name": table_name,
+            "upstreams": _extract(resp.get("upstreams")),
+            "downstreams": _extract(resp.get("downstreams")),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Failed to fetch lineage for {table_name}: {e}")
+        # Return an empty result so the graph just shows the center node.
+        return {"table_name": table_name, "upstreams": [], "downstreams": []}
+
+
 @router.get("/databricks/genie_spaces")
 def get_databricks_genie_spaces():
     """Fetch available Genie Spaces from Databricks."""

@@ -22,17 +22,5 @@
     "type": "Webinar",
     "attendees": 0,
     "joinLink": null
-  },
-  {
-    "id": "7a6huku5uubilho5s02hraa413@google.com",
-    "title": "Office Hours",
-    "description": "",
-    "date": "2026-02-25T17:30:00-07:00",
-    "time": "05:30 PM",
-    "duration": "50 minutes",
-    "location": "TBD",
-    "type": "Office Hours",
-    "attendees": 0,
-    "joinLink": null
   }
 ]

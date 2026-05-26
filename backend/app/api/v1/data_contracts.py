@@ -515,7 +515,11 @@ async def check_policy(
             requester_email=current_user.email,
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
-            state_context={"dataset_id": dataset_id, "policies": ["data_certification"]}
+            state_context={
+                "dataset_id": dataset_id,
+                "policies": ["data_certification"],
+                "enforcement_mode": "audit_only",
+            },
         )
         
         db.add(new_request)

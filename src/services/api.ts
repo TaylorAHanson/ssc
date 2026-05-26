@@ -483,6 +483,7 @@ export async function getBranding(): Promise<{
   brand_color_alert: string;
   brand_color_warning: string;
   brand_color_success: string;
+  databricks_workspace_url?: string;
   features?: Record<string, boolean>;
   tools?: Record<string, boolean>;
   workflows?: Record<string, boolean>;
@@ -1026,6 +1027,36 @@ export async function getDatabricksGenieSpaces(): Promise<any[]> {
   return response.json();
 }
 
+export interface LineageNeighbor {
+  name: string;
+  catalog_name?: string | null;
+  schema_name?: string | null;
+  table_name?: string | null;
+  table_type?: string | null;
+}
+
+export interface TableLineageResponse {
+  table_name: string;
+  upstreams: LineageNeighbor[];
+  downstreams: LineageNeighbor[];
+}
+
+/**
+ * Fetch immediate (1-hop) upstream/downstream tables for a UC table FQN.
+ * Backed by Databricks' lineage-tracking API; returns empty arrays when the
+ * table has no recorded lineage or when the call fails.
+ */
+export async function getTableLineage(tableName: string): Promise<TableLineageResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/data-assets/databricks/lineage?table_name=${encodeURIComponent(tableName)}`,
+    { headers: getHeaders() }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to get table lineage: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -1066,5 +1097,6 @@ export const api = {
   getDatabricksDashboards,
   getDatabricksJobs,
   getDatabricksApps,
-  getDatabricksGenieSpaces
+  getDatabricksGenieSpaces,
+  getTableLineage
 };
