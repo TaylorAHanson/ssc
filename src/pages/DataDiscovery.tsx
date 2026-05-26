@@ -894,7 +894,7 @@ function DetailsModal({
         </div>
 
         {/* Scrollable Content */}
-        <div className={`overflow-y-auto flex-1 ${activeTab === 'lineage' ? 'p-4 sm:p-6 flex flex-col' : 'p-4 sm:p-6 space-y-6'}`}>
+        <div className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-6">
 
           {/* Contract loading / error states (visible regardless of tab so users get feedback) */}
           {isDataset && isLoadingContract && (
@@ -1148,18 +1148,18 @@ function DetailsModal({
 
           {/* ============== Lineage tab ============== */}
           {activeTab === 'lineage' && hasLineage && (
-            <section className="flex flex-col flex-1 min-h-0">
-              <div className="flex items-start justify-between gap-3 mb-3">
-                <div>
-                  <SectionHeading icon={<Network className="w-4 h-4" />} title="Lineage" />
-                  <p className="text-xs text-gray-500 -mt-1">
-                    Click <span className="font-medium">Sources</span> on any table to see what feeds it, or
-                    {' '}<span className="font-medium">Consumers</span> to see what depends on it. The
-                    {' '}<ExternalLink className="inline w-3 h-3 align-text-bottom" /> icon opens that table in Catalog Explorer.
-                  </p>
-                </div>
+            <section>
+              <div className="mb-3">
+                <SectionHeading icon={<Network className="w-4 h-4" />} title="Lineage" />
+                <p className="text-xs text-gray-500 -mt-1">
+                  Click <span className="font-medium">Sources</span> on any table to see what feeds it, or
+                  {' '}<span className="font-medium">Consumers</span> to see what depends on it. The
+                  {' '}<ExternalLink className="inline w-3 h-3 align-text-bottom" /> icon opens that table in Catalog Explorer.
+                </p>
               </div>
-              <div className="flex-1 min-h-[480px]">
+              {/* Fixed height keeps React Flow's container dimensions definite,
+                  which is required for it to render the canvas correctly. */}
+              <div className="h-[520px]">
                 <LineageGraph seedTables={lineageSeeds} workspaceUrl={workspaceUrl} height="100%" />
               </div>
             </section>
