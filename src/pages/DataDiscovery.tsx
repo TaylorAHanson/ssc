@@ -6,7 +6,7 @@ import {
   LayoutDashboard, PlaySquare, ChevronRight, Tag, FileText, Loader2,
   BookOpen, Calendar, GitBranch, AlertCircle, ChevronDown, ChevronUp,
   Link as LinkIcon, ArrowDownToLine, ArrowUpFromLine, Lock, Columns3,
-  Key, ExternalLink, Network, Activity
+  Key, ExternalLink, Network, Activity, Sparkles, ArrowRight
 } from 'lucide-react';
 import { api } from '../services/api';
 import type { DataAsset, TableDetailsResponse } from '../services/api';
@@ -33,10 +33,27 @@ const getDomainIcon = (domain: string) => {
 
 import yaml from 'js-yaml';
 
+type DiscoverInputMode = 'search' | 'agent';
+const INPUT_MODE_STORAGE_KEY = 'discover_input_mode';
+
 export function DataDiscovery() {
   const navigate = useNavigate();
   const databricksWorkspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
   const [searchTerm, setSearchTerm] = useState('');
+  // Toggle between filtering the asset list (default) and forwarding the
+  // input to the home page agent. We keep one input bound to `searchTerm`
+  // regardless of mode; in agent mode we just don't feed it to the filter.
+  const [inputMode, setInputMode] = useState<DiscoverInputMode>(() => {
+    const saved = typeof window !== 'undefined' ? window.localStorage.getItem(INPUT_MODE_STORAGE_KEY) : null;
+    return saved === 'agent' ? 'agent' : 'search';
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem(INPUT_MODE_STORAGE_KEY, inputMode); } catch { /* ignore quota errors */ }
+  }, [inputMode]);
+  // When in agent mode the input represents a question, not a filter, so the
+  // asset list should NOT live-filter. We still keep `searchTerm` as the
+  // input value so toggling modes preserves what the user typed.
+  const effectiveSearchTerm = inputMode === 'search' ? searchTerm : '';
   const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
   const [selectedType, setSelectedType] = useState<string>('all');
   const [showCertifiedOnly, setShowCertifiedOnly] = useState(false);
@@ -252,10 +269,11 @@ export function DataDiscovery() {
   };
 
   const filteredDatasets = datasets.filter(ds => {
-    const matchesSearch = 
-      ds.table_name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      (ds.description && ds.description.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (ds.owner && ds.owner.toLowerCase().includes(searchTerm.toLowerCase()));
+    const term = effectiveSearchTerm.toLowerCase();
+    const matchesSearch =
+      ds.table_name.toLowerCase().includes(term) ||
+      (ds.description && ds.description.toLowerCase().includes(term)) ||
+      (ds.owner && ds.owner.toLowerCase().includes(term));
     
     const matchesDomain = selectedDomains.length === 0 || (ds.domain && selectedDomains.includes(ds.domain));
     
@@ -331,26 +349,106 @@ export function DataDiscovery() {
   const featuredAssets = datasets.filter(ds => ds.certified).slice(0, 4);
 
   // Determine if we should show the landing view or the search results view
-  const showResults = searchTerm !== '' || selectedDomains.length > 0 || selectedType !== 'all' || showCertifiedOnly;
+  const showResults = effectiveSearchTerm !== '' || selectedDomains.length > 0 || selectedType !== 'all' || showCertifiedOnly;
 
   return (
-    <div className="space-y-8 w-full max-w-7xl mx-auto pb-12">
-      {/* Header */}
+    <div className="space-y-6 pb-20">
+      {/* Page header — matches the shared Approvals / Requests pattern
+          (h1 + descriptive subtitle on the left). */}
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Discover</h1>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">Discover</h1>
+        <p className="text-gray-600">
+          Browse the data catalog, search assets, and explore lineage.
+        </p>
       </div>
 
-      {/* Big Search Bar */}
-      <div className="relative group">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 group-focus-within:text-primary transition-colors" />
+      {/* Single input with an embedded mode chip on the right.
+          The chip is purely a mode toggle — clicks never submit. In agent
+          mode with text in the box, a separate Send button appears just
+          to the left of the chip, and Enter also submits. */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (inputMode !== 'agent') return;
+          const q = searchTerm.trim();
+          if (!q) return; // don't navigate on empty submit
+          navigate('/', { state: { autoQuery: q } });
+        }}
+        className="relative group"
+      >
+        {inputMode === 'search' ? (
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 group-focus-within:text-primary transition-colors" />
+        ) : (
+          <Sparkles className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-primary" />
+        )}
         <input
           type="text"
-          placeholder="Search across assets..."
-          className="w-full pl-12 pr-4 py-4 bg-white border border-gray-200 rounded-xl text-base shadow-sm focus:ring-2 focus:ring-primary focus:border-primary transition-all outline-none"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder={
+            inputMode === 'search'
+              ? 'Search across assets...'
+              : 'Ask the agent — e.g. "How do I request access to a dataset?"'
+          }
+          aria-label={inputMode === 'search' ? 'Search assets' : 'Ask the agent'}
+          className={`w-full pl-12 pr-[19rem] py-4 bg-white border rounded-xl text-base shadow-sm focus:ring-2 focus:ring-primary focus:border-primary transition-all outline-none ${
+            inputMode === 'agent' ? 'border-primary/30' : 'border-gray-200'
+          }`}
         />
-      </div>
+
+        {/* Right-side controls: optional Send button, then the mode chip. */}
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center gap-2">
+          {/* Explicit submit affordance — only meaningful in agent mode
+              with content. Keeping submit separate from the mode chip
+              avoids the "click chip = navigate to home" surprise. */}
+          {inputMode === 'agent' && searchTerm.trim() && (
+            <button
+              type="submit"
+              title="Send to agent (Enter)"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-primary text-white text-xs font-medium shadow-sm hover:bg-primary/90 transition-colors"
+            >
+              Send
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {/* Pure mode toggle — clicks only switch modes, never submit. */}
+          <div
+            className="inline-flex p-0.5 rounded-full bg-gray-100 border border-gray-200 text-xs font-medium"
+            role="tablist"
+            aria-label="Discover input mode"
+          >
+            <button
+              type="button"
+              onClick={() => setInputMode('search')}
+              aria-pressed={inputMode === 'search'}
+              title="Filter the asset list as you type"
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full transition-colors ${
+                inputMode === 'search'
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <Search className="w-3.5 h-3.5" />
+              Instant Search
+            </button>
+            <button
+              type="button"
+              onClick={() => setInputMode('agent')}
+              aria-pressed={inputMode === 'agent'}
+              title="Forward your question to the agent"
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full transition-colors ${
+                inputMode === 'agent'
+                  ? 'bg-white text-primary shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Ask Agent
+            </button>
+          </div>
+        </div>
+      </form>
 
       {/* Filter Pills */}
       <div className="flex flex-wrap gap-2 items-center">

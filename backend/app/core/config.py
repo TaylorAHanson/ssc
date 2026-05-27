@@ -183,6 +183,14 @@ class Settings(BaseSettings):
     AGENT_ENABLED: bool = True
     AGENT_MAX_ITERATIONS: int = 10
     AGENT_TIMEOUT_SECONDS: int = 60
+    # Per-tool output cap (chars). Prevents a single chatty tool (e.g. system
+    # tables, audit logs, table lists) from blowing the model's context window.
+    # ~25k chars ≈ ~6-8k tokens, generous enough for most "get_*" responses.
+    AGENT_MAX_TOOL_OUTPUT_CHARS: int = 25000
+    # Soft cap for total prompt size across all messages. When exceeded, the
+    # runner replaces the oldest tool messages with placeholders before the
+    # next LLM call. ~600k chars ≈ ~150k tokens, well under typical 1M limits.
+    AGENT_MAX_PROMPT_CHARS: int = 600000
 
     # Open Policy Agent (governance / Rego)
     # Empty OPA_URL → local CLI. Install `opa` (brew install opa) or set OPA_BINARY_PATH.

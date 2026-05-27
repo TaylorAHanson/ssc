@@ -254,7 +254,7 @@ export function Home() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const { brandName, brandLogoUrl, features } = useBrandingStore();
+  const { features } = useBrandingStore();
 
   const availableModes = (Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).filter(mode => {
     // 1. Check persona permissions
@@ -649,21 +649,6 @@ export function Home() {
       <div className="flex flex-col h-[calc(100vh-200px)] relative">
         {/* Background gradient */}
         <div className="absolute inset-0 bg-linear-to-br from-primary/5 via-transparent to-primary/10 pointer-events-none" />
-
-        <div className="text-center mb-6 relative z-10">
-          <div className="flex items-center justify-center gap-3 mb-3">
-            {brandLogoUrl ? (
-              <img src={brandLogoUrl} alt="Logo" className="max-h-12 max-w-[150px] w-auto h-auto object-contain rounded-md" />
-            ) : (
-              <div className="p-2 bg-primary rounded-xl shadow-md">
-                <Sparkles className="w-5 h-5 text-white" />
-              </div>
-            )}
-            <h1 className="text-3xl font-bold text-primary">
-              {conversationState.context?.title || brandName}
-            </h1>
-          </div>
-        </div>
 
         <div className="relative flex-1 flex flex-col">
           {/* Glow effect */}
@@ -1110,21 +1095,6 @@ export function Home() {
   return (
     <div className="flex items-center justify-center min-h-[calc(100vh-200px)] relative">
       <div className="w-full max-w-3xl">
-        <div className="text-center mb-8">
-          <div className="flex items-center justify-center gap-3 mb-6">
-            {brandLogoUrl ? (
-              <img src={brandLogoUrl} alt="Logo" className="max-h-16 max-w-[200px] w-auto h-auto object-contain rounded-2xl" />
-            ) : (
-              <div className="p-3 bg-linear-to-br from-primary to-primary/80 rounded-2xl shadow-lg">
-                <Sparkles className="w-8 h-8 text-white" />
-              </div>
-            )}
-            <h1 className="text-5xl font-bold text-primary">
-              {brandName}
-            </h1>
-          </div>
-        </div>
-
         <div className="relative">
           {/* Glow effect */}
           <div className="absolute -inset-1 bg-linear-to-r from-primary/20 to-primary/10 rounded-3xl blur-xl opacity-30" />
@@ -1132,11 +1102,17 @@ export function Home() {
           <div className="relative bg-white/90 backdrop-blur-sm rounded-3xl shadow-xl border border-gray-200/50 overflow-hidden">
             <div className="p-8 md:p-10">
               <form onSubmit={handleInitialSubmit} className="space-y-4">
+                {/* Prompt sits directly above the input as a centered
+                    label rather than greyed-out placeholder text inside
+                    the box — keeps the call-to-action prominent even
+                    while the user is typing. */}
+                <h2 className="text-2xl md:text-3xl font-semibold text-gray-800 text-center tracking-tight">
+                  What do you need to do today?
+                </h2>
                 <div className="relative group">
                   <div className="absolute inset-0 bg-linear-to-r from-primary/10 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
                   <Textarea
                     ref={inputRef}
-                    placeholder="What do you need to do today?"
                     value={query}
                     onChange={(e) => {
                       setQuery(e.target.value);

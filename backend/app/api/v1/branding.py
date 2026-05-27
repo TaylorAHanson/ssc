@@ -36,6 +36,7 @@ async def get_branding():
         "brand_color_warning": settings.BRAND_COLOR_WARNING,
         "brand_color_success": settings.BRAND_COLOR_SUCCESS,
         "databricks_workspace_url": workspace_url,
+        "command_center_url": _yaml_config.get("branding", {}).get("command_center_url", ""),
         "features": _yaml_config.get("features", {}),
         "tools": _yaml_config.get("tools", {}),
         "workflows": _yaml_config.get("workflows", {}),

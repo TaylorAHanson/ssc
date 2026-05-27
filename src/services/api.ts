@@ -484,6 +484,7 @@ export async function getBranding(): Promise<{
   brand_color_warning: string;
   brand_color_success: string;
   databricks_workspace_url?: string;
+  command_center_url?: string;
   features?: Record<string, boolean>;
   tools?: Record<string, boolean>;
   workflows?: Record<string, boolean>;

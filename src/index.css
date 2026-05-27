@@ -10,6 +10,23 @@
   --brand-alert: #98102A;
   --brand-warning: #FFAB00;
   --brand-success: #00A972;
+
+  /* Shared design tokens (mirror of src/theme.ts).
+     Semantic names so the same palette can be reused across products. */
+  --theme-nav-bg: #001E3C;
+  --theme-nav-border: #1F2937;
+  --theme-nav-text: #FFFFFF;
+  --theme-nav-text-muted: #9CA3AF;
+  --theme-nav-hover-bg: #1F2937;
+  --theme-nav-active-bg: #007BFF;
+  --theme-nav-active-text: #FFFFFF;
+
+  --theme-heading: #001E3C;
+  --theme-accent: #007BFF;
+  --theme-accent-soft: #EBF4FF;
+
+  --theme-surface: #F8F9FA;
+  --theme-surface-muted: #F3F4F6;
 }
 
 * {
@@ -24,7 +41,7 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #F3F4F6;
+  background-color: var(--theme-surface);
   color: #1f2937;
 }
 
@@ -39,7 +56,7 @@ body {
   background: transparent !important;
 }
 
-/* Custom scrollbar */
+/* Custom scrollbar (light surfaces) */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
 }
@@ -55,6 +72,37 @@ body {
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #9ca3af;
+}
+
+/* Dark scrollbar — used inside the navy sidebar so the scroll thumb
+   reads as part of the dark surface instead of a bright system-default
+   gray bar. Also a thin track (6px) so it can't visibly steal layout
+   width from the collapsed icon-only rail. */
+.dark-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.dark-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.dark-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dark-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 9999px;
+}
+
+.dark-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
+}
+
+.dark-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* Smooth animations */

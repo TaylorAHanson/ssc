@@ -12,6 +12,81 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Placeholder we substitute when pruning an old tool output to stay within
+# the context window. Kept short and recognizable so the LLM understands
+# the data was dropped (and avoid double-pruning the same message).
+_PRUNED_TOOL_PLACEHOLDER = (
+    "[truncated: earlier tool result removed to stay within context window. "
+    "Re-run the tool with more specific filters if you need this data again.]"
+)
+
+
+def _truncate_tool_output(content: str, max_chars: int) -> str:
+    """Cap a single serialized tool output to ``max_chars`` characters.
+
+    We only ever drop from the tail; the prefix is JSON so it's usually
+    parseable up to the cut point. The suffix tells the agent the output
+    was truncated and how to recover.
+    """
+    if max_chars <= 0 or len(content) <= max_chars:
+        return content
+    head = content[:max_chars]
+    return (
+        head
+        + f"\n\n...[truncated: tool returned {len(content)} characters, kept first {max_chars}. "
+        + "Re-run the tool with more specific filters/pagination to see the rest.]"
+    )
+
+
+def _estimate_messages_chars(messages: List[Dict[str, Any]]) -> int:
+    """Approximate prompt size by summing string lengths of all message content.
+
+    Includes ``tool_calls`` payloads (assistant turns) since those round-trip
+    as JSON in the request body and also count toward the model's prompt.
+    """
+    total = 0
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, str):
+            total += len(c)
+        tc = m.get("tool_calls")
+        if isinstance(tc, list):
+            try:
+                total += len(json.dumps(tc, default=str))
+            except Exception:
+                pass
+    return total
+
+
+def _prune_oldest_tool_outputs(messages: List[Dict[str, Any]], max_chars: int) -> int:
+    """Replace oldest ``tool`` message contents with a placeholder until the
+    total estimated prompt size is at or below ``max_chars``.
+
+    We mutate ``content`` in place rather than removing the message so that
+    the ``tool_call_id`` linkage with the assistant turn that requested it
+    remains valid (most providers reject orphan tool_calls).
+
+    Returns the number of tool messages whose content was pruned.
+    """
+    if max_chars <= 0:
+        return 0
+    pruned = 0
+    for m in messages:
+        if _estimate_messages_chars(messages) <= max_chars:
+            break
+        if m.get("role") != "tool":
+            continue
+        content = m.get("content")
+        if not isinstance(content, str):
+            continue
+        if content == _PRUNED_TOOL_PLACEHOLDER:
+            continue
+        if len(content) <= len(_PRUNED_TOOL_PLACEHOLDER):
+            continue
+        m["content"] = _PRUNED_TOOL_PLACEHOLDER
+        pruned += 1
+    return pruned
+
 class AgentRunner:
     """
     Executes an agent conversation loop (ReAct pattern).
@@ -83,7 +158,23 @@ class AgentRunner:
         while iteration < self.max_iterations:
             iteration += 1
             logger.info(f"Agent iteration {iteration}/{self.max_iterations}")
-            
+
+            # Defense-in-depth: even with per-tool truncation, a long
+            # multi-iteration conversation can accumulate enough tool output
+            # to exceed the model's context window. Prune oldest tool
+            # results first (newest are most relevant to the current step).
+            max_prompt_chars = getattr(settings, "AGENT_MAX_PROMPT_CHARS", 600000)
+            pre_prune_size = _estimate_messages_chars(messages)
+            if pre_prune_size > max_prompt_chars:
+                pruned = _prune_oldest_tool_outputs(messages, max_prompt_chars)
+                if pruned:
+                    post = _estimate_messages_chars(messages)
+                    logger.warning(
+                        f"Agent prompt size {pre_prune_size} chars exceeded budget "
+                        f"({max_prompt_chars}); pruned {pruned} older tool output(s); "
+                        f"new size {post} chars."
+                    )
+
             response = await self.llm_client.generate_response(
                 messages=messages,
                 tools=formatted_tools,
@@ -154,10 +245,19 @@ class AgentRunner:
                             fn_args["_user_entitlements"] = self.user_identity.get("entitlements")
                             
                         result = await matching_tool.execute(**fn_args)
+                        serialized = json.dumps(result, default=str)
+                        max_tool_chars = getattr(settings, "AGENT_MAX_TOOL_OUTPUT_CHARS", 25000)
+                        truncated = _truncate_tool_output(serialized, max_tool_chars)
+                        if len(truncated) < len(serialized):
+                            logger.warning(
+                                f"Tool '{fn_name}' returned {len(serialized)} chars; "
+                                f"truncated to {len(truncated)} for prompt budget. "
+                                f"Consider tightening the tool's filters/pagination."
+                            )
                         tool_outputs.append({
                             "tool_call_id": tc.get("id", fn_name),
                             "name": fn_name,
-                            "content": json.dumps(result, default=str)
+                            "content": truncated,
                         })
                         executed_any = True
                     except Exception as e:

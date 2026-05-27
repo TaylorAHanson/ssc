@@ -11,6 +11,8 @@ import { Events } from './pages/Events';
 import { ReusableAssets } from './pages/ReusableAssets';
 import { CommunityLinks } from './pages/CommunityLinks';
 import { AdminReports } from './pages/AdminReports';
+import { CommandCenter } from './pages/CommandCenter';
+import { Welcome } from './pages/Welcome';
 import { useBrandingStore } from './stores/brandingStore';
 import { useRequestStore } from './stores/requestStore';
 import { useUserStore } from './stores/userStore';
@@ -21,6 +23,19 @@ import { Allowlist } from './pages/admin/Allowlist';
 import { EnforcementSentinel } from './pages/admin/EnforcementSentinel';
 import { DataCertification } from './pages/admin/DataCertification';
 import { ODPS } from './pages/admin/ODPS';
+
+// Root-route dispatcher: when the user has set a default landing page on
+// the Welcome screen, `/` jumps them straight there. Otherwise we render
+// Welcome inline. `/welcome` always shows the Welcome screen regardless
+// of the preference (used by the sidebar logo) so the page is reachable
+// even after the user has picked a default.
+function LandingDispatcher() {
+  const defaultHomePage = useUserStore((state) => state.defaultHomePage);
+  if (defaultHomePage) {
+    return <Navigate to={defaultHomePage} replace />;
+  }
+  return <Welcome />;
+}
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -47,7 +62,12 @@ function App() {
     <BrowserRouter>
       <Layout>
         <Routes>
-          <Route path="/" element={<Home />} />
+          <Route path="/" element={<LandingDispatcher />} />
+          <Route path="/welcome" element={<Welcome />} />
+          <Route path="/request" element={<Home />} />
+          {/* Legacy redirects: prior versions exposed these routes. */}
+          <Route path="/home" element={<Navigate to="/request" replace />} />
+          <Route path="/apps" element={<Navigate to="/request" replace />} />
           <Route path="/discovery" element={<DataDiscovery />} />
           <Route path="/requests" element={<Requests />} />
           <Route path="/requests/:requestId" element={<Requests />} />
@@ -105,6 +125,7 @@ function App() {
               }
             />
           )}
+          <Route path="/command-center" element={<CommandCenter />} />
           <Route path="/community/training" element={<Training />} />
           <Route path="/community/events" element={<Events />} />
           <Route path="/community/assets" element={<ReusableAssets />} />

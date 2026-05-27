@@ -481,10 +481,18 @@ export function Requests() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-        <h1 className="text-3xl font-bold text-gray-900">My Requests</h1>
-        <div className="flex bg-gray-100 p-1 rounded-full border border-gray-200 shadow-inner">
+    <div className="space-y-6 pb-20">
+      {/* Page header — matches the Approvals page pattern (h1 + subtitle
+          on the left, primary controls on the right). Stacks on narrow
+          screens so the filter pills don't get squeezed. */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">My Requests</h1>
+          <p className="text-gray-600">
+            Track the status of every request you've submitted.
+          </p>
+        </div>
+        <div className="flex bg-gray-100 p-1 rounded-full border border-gray-200 shadow-inner shrink-0 self-start sm:self-auto">
           <button
             onClick={() => setFilterStatus('pending')}
             className={`px-6 py-2 rounded-full text-sm font-bold transition-all duration-200 ${filterStatus === 'pending'

@@ -66,6 +66,32 @@ export function genieSpaceUrl(workspaceUrl: string, spaceId: string): string | n
 }
 
 /**
+ * Genie home URL.
+ *
+ * "Genie" is the user-facing name for what the workspace serves at the
+ * `/one` route (formerly Databricks One). When the user is signed into the
+ * workspace, the page resolves the correct org context automatically, so the
+ * `?o=<id>` query param is optional and only worth passing when we already
+ * happen to know it.
+ */
+export function genieHomeUrl(
+    workspaceUrl: string,
+    orgId?: string | number | null,
+): string | null {
+    const base = normalizeWorkspaceUrl(workspaceUrl);
+    if (!base) return null;
+    const url = `${base}/one`;
+    return orgId ? `${url}?o=${encodeURIComponent(String(orgId))}` : url;
+}
+
+/** Workspace home URL (top of the lakehouse). */
+export function workspaceHomeUrl(workspaceUrl: string): string | null {
+    const base = normalizeWorkspaceUrl(workspaceUrl);
+    if (!base) return null;
+    return base;
+}
+
+/**
  * Best-effort URL builder for an asset rendered in the Discover page.
  * Returns `null` when no sensible Databricks deep link is available
  * (e.g. dataset without a contract — caller should fall back to the

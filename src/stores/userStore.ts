@@ -24,6 +24,10 @@ interface UserState {
     setRoleOverride: (role: string | null) => Promise<void>;
     hydrated: boolean;
     setHydrated: (val: boolean) => void;
+
+    // Landing page preference (persisted). Empty string means "no preference".
+    defaultHomePage: string;
+    setDefaultHomePage: (val: string) => void;
 }
 
 const derivePersona = (user: User | null): UserPersona => {
@@ -49,6 +53,10 @@ export const useUserStore = create<UserState>()(
             // Dev Mode
             isDevMode: false,
             activeRoleOverride: null,
+
+            // Landing page preference
+            defaultHomePage: '',
+            setDefaultHomePage: (val: string) => set({ defaultHomePage: val }),
 
             toggleDevMode: async () => {
                 const nextIsDevMode = !get().isDevMode;
@@ -157,8 +165,13 @@ export const useUserStore = create<UserState>()(
             partialize: (state) => ({
                 isDevMode: state.isDevMode,
                 activeRoleOverride: state.activeRoleOverride,
+                defaultHomePage: state.defaultHomePage,
             }),
             onRehydrateStorage: () => (state) => {
+                // Migrate legacy `/home` preference to the new `/request` path.
+                if (state?.defaultHomePage === '/home') {
+                    state.setDefaultHomePage('/request');
+                }
                 state?.setHydrated(true);
             },
         }
