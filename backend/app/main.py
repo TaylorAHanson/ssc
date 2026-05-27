@@ -50,7 +50,34 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         # We don't stop startup, but we log strictly
-        
+
+    # Start the embedded OPA server unless the user has wired up a remote
+    # OPA explicitly via OPA_URL. Spawning OPA in-process turns the per-call
+    # ~25ms subprocess startup into ~1ms localhost HTTP — critical for runs
+    # over thousands of resources.
+    if settings.OPA_EMBEDDED_ENABLED and not (settings.OPA_URL or "").strip():
+        try:
+            from app.providers.opa.client import OpaProvider
+            from app.providers.opa.server_manager import start_embedded_opa
+
+            resolver = OpaProvider({
+                "use_local_binary": True,
+                "opa_binary": (settings.OPA_BINARY_PATH or "").strip() or None,
+                "policies_dir": (settings.OPA_POLICIES_DIR or "policies").strip(),
+            })
+            opa_exe = resolver._resolve_opa_executable()
+            if opa_exe:
+                policies_dir = (settings.OPA_POLICIES_DIR or "policies").strip()
+                if not os.path.isabs(policies_dir):
+                    policies_dir = os.path.join(os.getcwd(), policies_dir)
+                start_embedded_opa(policies_dir=policies_dir, opa_binary=opa_exe)
+            else:
+                logger.warning(
+                    "OPA binary could not be resolved; running policies in per-call CLI mode."
+                )
+        except Exception as e:
+            logger.warning(f"Embedded OPA server failed to start: {e}", exc_info=True)
+
     if not os.environ.get("TESTING"):
         logger.info("Starting background poller thread...")
         import threading
@@ -72,6 +99,17 @@ async def lifespan(app: FastAPI):
     yield
     
     logger.info("Application shutting down...")
+    try:
+        from app.providers.opa.server_manager import stop_embedded_opa
+        stop_embedded_opa()
+    except Exception as e:
+        logger.warning(f"Error stopping embedded OPA server: {e}")
+    # Close the shared async HTTP client used by OpaProvider, if it was opened.
+    try:
+        from app.providers.opa.client import close_shared_async_client
+        await close_shared_async_client()
+    except Exception:
+        pass
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

@@ -193,10 +193,14 @@ class Settings(BaseSettings):
     AGENT_MAX_PROMPT_CHARS: int = 600000
 
     # Open Policy Agent (governance / Rego)
-    # Empty OPA_URL → local CLI. Install `opa` (brew install opa) or set OPA_BINARY_PATH.
-    # Set OPA_URL (e.g. http://localhost:8181) when policies are loaded on a remote OPA server.
+    # Empty OPA_URL → app starts an embedded `opa run --server` child process
+    # (see `app.providers.opa.server_manager`) and routes evaluations there.
+    # Set OPA_URL (e.g. http://opa:8181) to disable the embedded server and
+    # talk to an externally managed OPA. Set OPA_EMBEDDED_ENABLED=false to
+    # opt out of the embedded server entirely and force per-call CLI mode.
     OPA_URL: str = ""
     OPA_BINARY_PATH: str = ""
+    OPA_EMBEDDED_ENABLED: bool = True
     OPA_POLICIES_DIR: str = "policies"
     
     # Calendar Settings
@@ -377,10 +381,27 @@ class Settings(BaseSettings):
         return ""
     
     def opa_provider_config(self) -> dict:
-        """Build kwargs for OpaProvider from application settings."""
-        url = (self.OPA_URL or "").strip()
+        """Build kwargs for OpaProvider from application settings.
+
+        Resolution order for the OPA endpoint:
+          1. Explicit ``OPA_URL`` setting (user-managed external server)
+          2. Embedded OPA server URL if it's running (started in main.lifespan)
+          3. Fall back to local CLI per-call evaluation
+        """
+        explicit_url = (self.OPA_URL or "").strip()
+        embedded_url = None
+        if not explicit_url:
+            # Imported lazily to avoid pulling httpx into config import paths
+            # in unit tests that don't need the embedded server.
+            try:
+                from app.providers.opa.server_manager import get_opa_url
+                embedded_url = get_opa_url()
+            except Exception:
+                embedded_url = None
+
+        url = explicit_url or embedded_url or None
         return {
-            "opa_url": url if url else None,
+            "opa_url": url,
             "opa_binary": (self.OPA_BINARY_PATH or "").strip() or None,
             "use_local_binary": not bool(url),
             "policies_dir": (self.OPA_POLICIES_DIR or "policies").strip(),

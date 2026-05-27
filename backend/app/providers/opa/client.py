@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -11,6 +12,37 @@ from app.core.exceptions import PermanentError, RetryableError
 from app.providers.base import BaseProvider
 
 logger = logging.getLogger(__name__)
+
+
+# Module-level shared async HTTP client. Reused across OpaProvider instances
+# so that TCP connections to the embedded/remote OPA stay pooled — important
+# because we may make thousands of evaluation calls back-to-back during a
+# sentinel discover phase. Creating a new client per call adds ~1-3 ms of
+# connection setup overhead per call, which adds up quickly at scale.
+_shared_async_client: Optional[httpx.AsyncClient] = None
+_shared_async_client_lock = asyncio.Lock()
+
+
+async def _get_shared_async_client() -> httpx.AsyncClient:
+    global _shared_async_client
+    if _shared_async_client is not None and not _shared_async_client.is_closed:
+        return _shared_async_client
+    async with _shared_async_client_lock:
+        if _shared_async_client is None or _shared_async_client.is_closed:
+            limits = httpx.Limits(max_connections=32, max_keepalive_connections=16)
+            _shared_async_client = httpx.AsyncClient(timeout=30.0, limits=limits)
+        return _shared_async_client
+
+
+async def close_shared_async_client() -> None:
+    """Close the shared async client. Called from FastAPI lifespan shutdown."""
+    global _shared_async_client
+    if _shared_async_client is not None and not _shared_async_client.is_closed:
+        try:
+            await _shared_async_client.aclose()
+        except Exception:
+            pass
+    _shared_async_client = None
 
 OPA_SETUP_HINT = (
     "Open Policy Agent (opa) is not available. Install it (e.g. `brew install opa`) so `opa` is on PATH, "
@@ -206,11 +238,11 @@ class OpaProvider(BaseProvider):
 
     async def _evaluate_remote(self, query: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
         endpoint = f"{self.opa_url}/v1/data/{query.replace('data.', '').replace('.', '/')}"
+        client = await _get_shared_async_client()
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(endpoint, json={"input": input_data})
-                response.raise_for_status()
-                return response.json().get("result", {})
+            response = await client.post(endpoint, json={"input": input_data})
+            response.raise_for_status()
+            return response.json().get("result", {})
         except httpx.RequestError as e:
             raise RetryableError(f"Failed to communicate with OPA server: {str(e)}")
         except httpx.HTTPStatusError as e:
