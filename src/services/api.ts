@@ -490,7 +490,6 @@ export async function getBranding(): Promise<{
   workflows?: Record<string, boolean>;
   ui?: { 
     tabs?: Record<string, boolean>;
-    app_switcher?: any[];
   };
 }> {
   const response = await fetch(`${API_BASE_URL}/branding`, {

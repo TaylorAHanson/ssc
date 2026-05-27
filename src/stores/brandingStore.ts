@@ -17,7 +17,6 @@ interface BrandingState {
     tools: Record<string, boolean>;
     workflows: Record<string, boolean>;
     uiTabs: Record<string, boolean>;
-    uiAppSwitcher: any[];
     isLoading: boolean;
     hasLoaded: boolean;
     error: string | null;
@@ -39,7 +38,6 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     tools: {},
     workflows: {},
     uiTabs: {},
-    uiAppSwitcher: [],
     isLoading: false,
     hasLoaded: false,
     error: null,
@@ -62,7 +60,6 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 tools: branding.tools || {},
                 workflows: branding.workflows || {},
                 uiTabs: branding.ui?.tabs || {},
-                uiAppSwitcher: branding.ui?.app_switcher || [],
                 isLoading: false,
                 hasLoaded: true,
             });

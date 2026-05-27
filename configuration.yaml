@@ -44,57 +44,6 @@ features:
   calendar: true # Turns on the calendar feature
 
 ui:
-  app_switcher:    
-    - id: "self-service"
-      name: "Discover & Access"
-      sub_label: "Self Service"
-      short_description: "Request access and provision data resources."
-      description: "Search the enterprise data catalog, request access to data, and provision Databricks resources for your project."
-      icon: "Layout"
-      path: "/"
-      cta_label: "Launch"
-      accent_color: "#2563eb"
-      accent_bg: "#eff6ff"
-      # Optional shortcuts shown on the AppLauncher card in place of the
-      # standard "Launch" CTA. Each link supports `label`, `path`, and an
-      # optional lucide `icon` name.
-      quick_links:
-        - label: "Discover data"
-          path: "/discovery"
-          icon: "Search"
-        - label: "Request something"
-          path: "/request"
-          icon: "Plus"
-    - id: "command-center"
-      name: "Customize Widgets and Views"
-      sub_label: "Command Center"
-      short_description: "Build custom widgets and views."
-      description: "Build custom widgets and combine apps, dashboards, tools, agents, and more into a single view."
-      icon: "FileText"
-      path: "/admin/dashboard"
-      cta_label: "Launch"
-      accent_color: "#4f46e5"
-      accent_bg: "#eef2ff"
-    - id: "databricks-one"
-      name: "Analyze & Chat with Data"
-      sub_label: "Databricks Genie"
-      short_description: "Perform deep research and chat with your data."
-      description: "Perform deep research and chat with your data."
-      icon: "Database"
-      href: "https://adb-123456789.1.azuredatabricks.net"
-      cta_label: "Open"
-      accent_color: "#ea580c"
-      accent_bg: "#fff7ed"
-    - id: "databricks-lakehouse"
-      name: "Build Dashboards, Pipelines, etc."
-      sub_label: "Lakehouse"
-      short_description: "Build pipelines, dashboards, and more."
-      description: "Unify your data, analytics, and AI on a single platform with an open lakehouse architecture for better performance and governance."
-      icon: "Hammer"
-      href: "https://adb-123456789.1.azuredatabricks.net"
-      cta_label: "Open"
-      accent_color: "#dc2626"
-      accent_bg: "#fef2f2"
   tabs:
     home: true
     data_discovery: true
