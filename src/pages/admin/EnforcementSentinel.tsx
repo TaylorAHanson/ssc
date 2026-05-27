@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { ShieldAlert, AlertTriangle, Search, Unlock, Lock, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ShieldAlert, AlertTriangle, Search, Unlock, Lock, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight, ClipboardList, XCircle } from 'lucide-react';
 import { api } from '../../services/api';
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { format, parseISO } from 'date-fns';
@@ -26,6 +26,11 @@ export function EnforcementSentinel() {
     const [isEnforcementUnlocked, setIsEnforcementUnlocked] = useState(false);
     const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<string>('all');
+    // Top-level toggle: "Violations" shows only failed checks (legacy view).
+    // "Checklist" shows every (resource, policy) evaluation — PASS and
+    // VIOLATION — so reviewers can audit what was actually verified.
+    const [reportView, setReportView] = useState<'violations' | 'checklist'>('violations');
+    const [checklistFilter, setChecklistFilter] = useState<'all' | 'pass' | 'violation'>('all');
     const [workspace, setWorkspace] = useState('ws-enterprise-prod');
     const [environment, setEnvironment] = useState<'dev' | 'stage' | 'prod'>('prod');
     const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -415,7 +420,7 @@ export function EnforcementSentinel() {
                                     {((selectedRun as any).stateContext || selectedRun.metadata || (selectedRun as any).state_context || {}).workspace || 'ws-enterprise-prod'}
                                 </p>
                             </div>
-                            <Button variant="ghost" size="sm" onClick={() => { setSelectedRunId(null); setActiveTab('all'); }} className="rounded-full hover:bg-gray-100">
+                            <Button variant="ghost" size="sm" onClick={() => { setSelectedRunId(null); setActiveTab('all'); setReportView('violations'); setChecklistFilter('all'); }} className="rounded-full hover:bg-gray-100">
                                 <X className="w-5 h-5 text-gray-500" />
                             </Button>
                         </div>
@@ -423,12 +428,14 @@ export function EnforcementSentinel() {
                         {(() => {
                             const ctx = (selectedRun as any).stateContext || selectedRun.metadata || (selectedRun as any).state_context || {};
                             const violations: any[] = ctx.violations || [];
+                            const checks: any[] = ctx.checks || [];
                             const discoverFact = selectedRun.stateMachine?.states?.flatMap((s: any) => s.facts || []).find((f: any) => f.type === 'discover_completed');
                             
                             const assetsScanned = discoverFact?.data?.total_resources_scanned ?? '—';
                             const policiesEvaluated = discoverFact?.data?.policies_evaluated ?? '—';
-                            const totalChecks = discoverFact?.data?.total_checks ?? '—';
+                            const totalChecks = discoverFact?.data?.total_checks ?? checks.length ?? '—';
                             const vCount = discoverFact?.data?.violation_count ?? violations.length;
+                            const passCount = discoverFact?.data?.pass_count ?? (checks.length ? checks.length - violations.length : null);
 
                             // Group violations by policy
                             const violationsByPolicy = violations.reduce((acc: any, v: any) => {
@@ -500,12 +507,32 @@ export function EnforcementSentinel() {
                                                             <div className="text-2xl font-bold text-gray-900">{totalChecks}</div>
                                                         </CardContent>
                                                     </Card>
-                                                    <Card className={`shadow-sm border-gray-200 ${vCount > 0 ? 'bg-red-50/50 border-red-100' : 'bg-green-50/50 border-green-100'}`}>
-                                                        <CardContent className="p-4 flex flex-col gap-1">
-                                                            <div className="flex items-center text-sm font-medium text-gray-500 mb-1">
-                                                                <AlertTriangle className={`w-4 h-4 mr-2 ${vCount > 0 ? 'text-red-500' : 'text-green-500'}`} /> Total Violations
+                                                    {/* Combined pass/violation card. Falls back to violations-only
+                                                        for older runs that didn't record a per-check pass count. */}
+                                                    <Card className={`shadow-sm ${vCount > 0 ? 'bg-red-50/30 border-red-100' : 'bg-green-50/30 border-green-100'}`}>
+                                                        <CardContent className="p-4 flex flex-col gap-2">
+                                                            <div className="flex items-center text-sm font-medium text-gray-500">
+                                                                <ListChecks className="w-4 h-4 mr-2" /> Result Summary
                                                             </div>
-                                                            <div className={`text-2xl font-bold ${vCount > 0 ? 'text-red-600' : 'text-green-600'}`}>{vCount}</div>
+                                                            <div className="flex items-center gap-4">
+                                                                {passCount !== null && passCount !== undefined && (
+                                                                    <>
+                                                                        <div className="flex flex-col">
+                                                                            <div className="text-[10px] uppercase tracking-wider font-semibold text-green-700 flex items-center gap-1">
+                                                                                <CheckCircle2 className="w-3 h-3" /> Pass
+                                                                            </div>
+                                                                            <div className="text-2xl font-bold text-green-600 leading-tight">{passCount}</div>
+                                                                        </div>
+                                                                        <div className="h-8 w-px bg-gray-200" />
+                                                                    </>
+                                                                )}
+                                                                <div className="flex flex-col">
+                                                                    <div className={`text-[10px] uppercase tracking-wider font-semibold flex items-center gap-1 ${vCount > 0 ? 'text-red-700' : 'text-gray-500'}`}>
+                                                                        <AlertTriangle className="w-3 h-3" /> Violation
+                                                                    </div>
+                                                                    <div className={`text-2xl font-bold leading-tight ${vCount > 0 ? 'text-red-600' : 'text-green-600'}`}>{vCount}</div>
+                                                                </div>
+                                                            </div>
                                                         </CardContent>
                                                     </Card>
                                                 </div>
@@ -540,33 +567,84 @@ export function EnforcementSentinel() {
 
                                             {/* Detailed Report Section */}
                                             <div className="bg-white border border-gray-200 rounded-lg shadow-sm flex flex-col overflow-hidden min-h-[400px]">
-                                                {/* Tabs */}
-                                                <div className="flex overflow-x-auto border-b border-gray-100 bg-gray-50/80 p-2 gap-2 hide-scrollbar">
-                                                    <button
-                                                        onClick={() => setActiveTab('all')}
-                                                        className={`px-3 py-1.5 text-sm font-medium rounded-md whitespace-nowrap transition-colors ${
-                                                            activeTab === 'all' 
-                                                            ? 'bg-white text-gray-900 shadow-sm ring-1 ring-gray-200' 
-                                                            : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'
-                                                        }`}
-                                                    >
-                                                        All Violations ({violations.length})
-                                                    </button>
-                                                    {policyGroups.map(policy => (
+                                                {/* Combined toolbar: view toggle on the left, contextual
+                                                    tabs/filters on the right. Single row to keep the
+                                                    table visible without extra vertical chrome. */}
+                                                <div className="flex items-center gap-3 border-b border-gray-100 bg-gray-50/80 px-2 py-2">
+                                                    <div className="inline-flex rounded-md border border-gray-200 bg-white p-0.5 flex-shrink-0">
                                                         <button
-                                                            key={policy}
-                                                            onClick={() => setActiveTab(policy)}
-                                                            className={`px-3 py-1.5 text-sm font-medium rounded-md whitespace-nowrap transition-colors ${
-                                                                activeTab === policy 
-                                                                ? 'bg-white text-gray-900 shadow-sm ring-1 ring-gray-200' 
-                                                                : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'
+                                                            onClick={() => setReportView('violations')}
+                                                            className={`flex items-center gap-1.5 px-2.5 py-1 text-sm font-medium rounded transition-colors ${
+                                                                reportView === 'violations'
+                                                                    ? 'bg-gray-100 text-gray-900 shadow-sm ring-1 ring-gray-200'
+                                                                    : 'text-gray-500 hover:text-gray-900'
                                                             }`}
                                                         >
-                                                            {policy.replace(/_/g, ' ')} ({violationsByPolicy[policy].length})
+                                                            <AlertTriangle className="w-4 h-4" /> Violations
                                                         </button>
-                                                    ))}
+                                                        <button
+                                                            onClick={() => setReportView('checklist')}
+                                                            className={`flex items-center gap-1.5 px-2.5 py-1 text-sm font-medium rounded transition-colors ${
+                                                                reportView === 'checklist'
+                                                                    ? 'bg-gray-100 text-gray-900 shadow-sm ring-1 ring-gray-200'
+                                                                    : 'text-gray-500 hover:text-gray-900'
+                                                            } ${checks.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                                            disabled={checks.length === 0}
+                                                            title={checks.length === 0 ? 'No checklist data available for this run' : ''}
+                                                        >
+                                                            <ClipboardList className="w-4 h-4" /> Checklist
+                                                        </button>
+                                                    </div>
+                                                    <div className="h-6 w-px bg-gray-200 flex-shrink-0" />
+                                                    {reportView === 'violations' ? (
+                                                        <div className="flex overflow-x-auto gap-2 hide-scrollbar flex-1 min-w-0">
+                                                            <button
+                                                                onClick={() => setActiveTab('all')}
+                                                                className={`px-3 py-1 text-sm font-medium rounded-md whitespace-nowrap transition-colors flex-shrink-0 ${
+                                                                    activeTab === 'all'
+                                                                    ? 'bg-white text-gray-900 shadow-sm ring-1 ring-gray-200'
+                                                                    : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'
+                                                                }`}
+                                                            >
+                                                                All ({violations.length})
+                                                            </button>
+                                                            {policyGroups.map(policy => (
+                                                                <button
+                                                                    key={policy}
+                                                                    onClick={() => setActiveTab(policy)}
+                                                                    className={`px-3 py-1 text-sm font-medium rounded-md whitespace-nowrap transition-colors flex-shrink-0 ${
+                                                                        activeTab === policy
+                                                                        ? 'bg-white text-gray-900 shadow-sm ring-1 ring-gray-200'
+                                                                        : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'
+                                                                    }`}
+                                                                >
+                                                                    {policy.replace(/_/g, ' ')} ({violationsByPolicy[policy].length})
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    ) : (
+                                                        <div className="flex gap-2 flex-1 min-w-0">
+                                                            {[
+                                                                { id: 'all', label: `All (${checks.length})` },
+                                                                { id: 'pass', label: `Passed (${checks.filter((c: any) => c.result === 'PASS').length})` },
+                                                                { id: 'violation', label: `Violations (${checks.filter((c: any) => c.result === 'VIOLATION').length})` },
+                                                            ].map(opt => (
+                                                                <button
+                                                                    key={opt.id}
+                                                                    onClick={() => setChecklistFilter(opt.id as any)}
+                                                                    className={`px-3 py-1 text-sm font-medium rounded-md whitespace-nowrap transition-colors flex-shrink-0 ${
+                                                                        checklistFilter === opt.id
+                                                                            ? 'bg-white text-gray-900 shadow-sm ring-1 ring-gray-200'
+                                                                            : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'
+                                                                    }`}
+                                                                >
+                                                                    {opt.label}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    )}
                                                 </div>
-
+                                                {reportView === 'violations' && (<>
                                                 {/* Tab Content */}
                                                 <div className="p-0 overflow-y-auto flex-1 max-h-[50vh]">
                                                     {activeViolations.length === 0 ? (
@@ -649,6 +727,137 @@ export function EnforcementSentinel() {
                                                         </table>
                                                     )}
                                                 </div>
+                                                </>)}
+                                                {reportView === 'checklist' && (
+                                                    <div className="p-0 overflow-y-auto flex-1 max-h-[60vh]">
+                                                        {(() => {
+                                                            if (checks.length === 0) {
+                                                                return (
+                                                                    <div className="flex flex-col items-center justify-center h-full p-12 text-center">
+                                                                        <ClipboardList className="w-12 h-12 text-gray-400 mb-4" />
+                                                                        <h3 className="text-lg font-medium text-gray-900">No checklist data available</h3>
+                                                                        <p className="text-gray-500 text-sm mt-1 max-w-sm">
+                                                                            This run did not record per-check evaluations. Re-run the Sentinel to capture a full audit checklist.
+                                                                        </p>
+                                                                    </div>
+                                                                );
+                                                            }
+
+                                                            const filtered = checks.filter((c: any) => {
+                                                                if (checklistFilter === 'pass') return c.result === 'PASS';
+                                                                if (checklistFilter === 'violation') return c.result === 'VIOLATION';
+                                                                return true;
+                                                            });
+
+                                                            // Violations first (by severity desc), then passes (by resource).
+                                                            const severityRank: Record<string, number> = { 'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1, 'NONE': 0 };
+                                                            const sorted = [...filtered].sort((a, b) => {
+                                                                if (a.result !== b.result) return a.result === 'VIOLATION' ? -1 : 1;
+                                                                if (a.result === 'VIOLATION') {
+                                                                    const sa = severityRank[a.severity] || 0;
+                                                                    const sb = severityRank[b.severity] || 0;
+                                                                    if (sa !== sb) return sb - sa;
+                                                                }
+                                                                const ra = (a.resource_id || '').toString();
+                                                                const rb = (b.resource_id || '').toString();
+                                                                if (ra !== rb) return ra.localeCompare(rb);
+                                                                return (a.policy || '').localeCompare(b.policy || '');
+                                                            });
+
+                                                            if (sorted.length === 0) {
+                                                                return (
+                                                                    <div className="flex flex-col items-center justify-center h-full p-12 text-center">
+                                                                        <CheckCircle2 className="w-12 h-12 text-green-400 mb-4" />
+                                                                        <h3 className="text-lg font-medium text-gray-900">Nothing matches this filter</h3>
+                                                                        <p className="text-gray-500 text-sm mt-1 max-w-sm">
+                                                                            Try switching the filter above to see other checks.
+                                                                        </p>
+                                                                    </div>
+                                                                );
+                                                            }
+
+                                                            return (
+                                                                <table className="w-full text-sm">
+                                                                    <thead className="bg-white sticky top-0 z-10 text-gray-500 font-medium border-b border-gray-200">
+                                                                        <tr>
+                                                                            <th className="p-3 px-4 text-left w-28">Result</th>
+                                                                            <th className="p-3 text-left">Resource</th>
+                                                                            <th className="p-3 text-left">Policy</th>
+                                                                            <th className="p-3 text-left w-24">Severity</th>
+                                                                            <th className="p-3 text-left w-2/5">Notes</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody className="divide-y divide-gray-100">
+                                                                        {sorted.map((c: any, idx: number) => {
+                                                                            const tags = c.resource?.tags;
+                                                                            const tagList = Array.isArray(tags)
+                                                                                ? tags
+                                                                                : (tags && typeof tags === 'object'
+                                                                                    ? Object.entries(tags).map(([k, v]) => `${k}: ${v}`)
+                                                                                    : []);
+                                                                            return (
+                                                                                <tr key={idx} className="hover:bg-gray-50/60 align-top">
+                                                                                    <td className="p-3 px-4">
+                                                                                        {c.result === 'PASS' ? (
+                                                                                            <span className="inline-flex items-center gap-1 text-[10px] uppercase font-bold px-2 py-1 rounded-full bg-green-50 text-green-700 border border-green-200">
+                                                                                                <CheckCircle2 className="w-3 h-3" /> Pass
+                                                                                            </span>
+                                                                                        ) : (
+                                                                                            <span className="inline-flex items-center gap-1 text-[10px] uppercase font-bold px-2 py-1 rounded-full bg-red-50 text-red-700 border border-red-200">
+                                                                                                <XCircle className="w-3 h-3" /> Violation
+                                                                                            </span>
+                                                                                        )}
+                                                                                    </td>
+                                                                                    <td className="p-3">
+                                                                                        <div className="flex flex-col gap-1">
+                                                                                            <span className="text-[10px] text-gray-700 font-semibold uppercase tracking-wider">{c.resource_type}</span>
+                                                                                            <span className="font-medium text-gray-900">{c.resource?.name || c.resource_id}</span>
+                                                                                            <span className="font-mono text-[10px] text-gray-500 break-all">{c.resource_id}</span>
+                                                                                            {tagList.length > 0 && (
+                                                                                                <div className="flex flex-wrap gap-1 mt-1">
+                                                                                                    {tagList.slice(0, 4).map((t: string, i: number) => (
+                                                                                                        <span key={i} className="inline-block text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200">{t}</span>
+                                                                                                    ))}
+                                                                                                    {tagList.length > 4 && (
+                                                                                                        <span className="inline-block text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 border border-gray-200">+{tagList.length - 4}</span>
+                                                                                                    )}
+                                                                                                </div>
+                                                                                            )}
+                                                                                        </div>
+                                                                                    </td>
+                                                                                    <td className="p-3 text-gray-700">{(c.policy || '').replace(/_/g, ' ')}</td>
+                                                                                    <td className="p-3">
+                                                                                        {c.result === 'VIOLATION' ? (
+                                                                                            <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded-full ${
+                                                                                                c.severity === 'CRITICAL' ? 'bg-red-100 text-red-800 border border-red-200' :
+                                                                                                c.severity === 'HIGH' ? 'bg-orange-100 text-orange-800 border border-orange-200' :
+                                                                                                c.severity === 'MEDIUM' ? 'bg-yellow-100 text-yellow-800 border border-yellow-200' :
+                                                                                                'bg-gray-100 text-gray-800 border border-gray-200'
+                                                                                            }`}>
+                                                                                                {c.severity}
+                                                                                            </span>
+                                                                                        ) : (
+                                                                                            <span className="text-gray-300 text-xs">—</span>
+                                                                                        )}
+                                                                                    </td>
+                                                                                    <td className="p-3 text-xs text-gray-600 leading-relaxed break-words">
+                                                                                        {c.result === 'VIOLATION' ? (
+                                                                                            formatReason(c)
+                                                                                        ) : c.resource?.description ? (
+                                                                                            <span className="italic text-gray-500">{c.resource.description}</span>
+                                                                                        ) : (
+                                                                                            <span className="text-gray-400">Verified — no description on resource</span>
+                                                                                        )}
+                                                                                    </td>
+                                                                                </tr>
+                                                                            );
+                                                                        })}
+                                                                    </tbody>
+                                                                </table>
+                                                            );
+                                                        })()}
+                                                    </div>
+                                                )}
                                             </div>
                                         </>
                                     )}

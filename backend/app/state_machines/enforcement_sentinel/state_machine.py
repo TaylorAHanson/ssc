@@ -230,7 +230,12 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
         # 3. Evaluate with OPA
         opa_provider = OpaProvider(settings.opa_provider_config())
         violations = []
-        
+        # Per-(resource, policy) checklist. Captures every evaluation —
+        # PASS or VIOLATION — alongside a slim snapshot of the resource
+        # being checked (description, tags, etc.) so governance reviewers
+        # can audit what was verified, not only what failed.
+        checks = []
+
         # In a real implementation, we would iterate over all policies in the policies directory.
         # For now, we will simulate loading multiple policies or use the specific one requested.
         
@@ -264,7 +269,64 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                 
                 is_violation = result.get("is_violation")
                 action = result.get("action", "KILL")
-                
+
+                # Always emit a check-evaluated log so we have a per-(resource, policy)
+                # trace whether the check passed or failed — not just failures. This
+                # makes it possible to confirm "the check ran and passed" vs. "the
+                # check was skipped/missed" (asked for in the TDQ/BDQ working session).
+                # Violations still get an additional WARNING log below so high-severity
+                # findings remain easy to grep / alert on.
+                logger.info(
+                    f"POLICY_CHECK_EVALUATED: "
+                    f"Policy={policy_name} | "
+                    f"Result={'VIOLATION' if is_violation else 'PASS'} | "
+                    f"Action={action} | "
+                    f"ResourceType={resource.get('type')} | "
+                    f"ResourceID={resource.get('id')} | "
+                    f"Severity={result.get('severity', 'N/A')}"
+                )
+
+                # Build a slim resource snapshot. We deliberately copy only the
+                # fields a governance reviewer would want to see ("what was
+                # actually verified") and skip nested arrays / large payloads
+                # to keep state_context size bounded for runs with many
+                # resources × policies.
+                resource_snapshot = {
+                    "name": (
+                        resource.get("name")
+                        or resource.get("title")
+                        or resource.get("table_name")
+                        or resource.get("id")
+                    ),
+                    "description": resource.get("description"),
+                    "tags": resource.get("tags"),
+                    "owner": resource.get("owner"),
+                    "catalog": resource.get("catalog"),
+                    "schema": resource.get("schema"),
+                    "policies": resource.get("policies"),
+                }
+                # Drop None values so the UI doesn't have to filter empty keys.
+                resource_snapshot = {
+                    k: v for k, v in resource_snapshot.items() if v not in (None, "", [])
+                }
+
+                check_record = {
+                    "resource_id": resource.get("id"),
+                    "resource_type": resource.get("type"),
+                    "resource": resource_snapshot,
+                    "policy": policy_name,
+                    "result": "VIOLATION" if is_violation else "PASS",
+                    "action": action,
+                    "reason": result.get(
+                        "reason",
+                        "" if not is_violation else "Unknown violation",
+                    ),
+                    "violation_reasons": result.get("violation_reasons", []),
+                    "severity": result.get("severity", "N/A"),
+                    "evaluated_at": datetime.now(timezone.utc).isoformat(),
+                }
+                checks.append(check_record)
+
                 # Update local DataAsset cache with the latest violations if evaluating data certification
                 if policy_name == "data_certification" and resource.get("type") == "data_product":
                     from app.db.data_asset import DataAssetModel
@@ -315,17 +377,25 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                             f"Violations={violation_record['violation_reasons']}"
                         )
         
-        # Save violations to state context and record fact
-        # SQLAlchemy needs a fresh dict assignment or flag_modified to detect changes to JSON columns
+        # Save violations + full checklist to state context and record fact.
+        # SQLAlchemy needs a fresh dict assignment or flag_modified to detect
+        # changes to JSON columns.
+        pass_count = sum(1 for c in checks if c["result"] == "PASS")
+        violation_count = sum(1 for c in checks if c["result"] == "VIOLATION")
+
         ctx = dict(self.request.state_context or {})
         ctx["violations"] = violations
+        ctx["checks"] = checks
         self.request.state_context = ctx
-        
+
         add_fact(self.db, self.request.id, "discover_completed", {
-            "violation_count": len(violations),
+            "violation_count": violation_count,
+            "pass_count": pass_count,
             "total_resources_scanned": len(discovered_resources),
             "policies_evaluated": len(policy_files),
-            "total_checks": len(discovered_resources) * len(policy_files)
+            # Actual count of (resource, policy) evaluations performed,
+            # rather than the resources × policies estimate.
+            "total_checks": len(checks),
         })
         
         try:
