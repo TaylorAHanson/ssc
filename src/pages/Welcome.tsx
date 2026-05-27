@@ -140,7 +140,7 @@ function buildGroups(opts: {
     },
     {
       id: 'build-deploy',
-      title: 'Build & Deploy',
+      title: 'Build & Customize',
       description:
         'Jump into the building blocks of the lakehouse and the companion operations tooling.',
       icon: <Wrench className="w-5 h-5" />,

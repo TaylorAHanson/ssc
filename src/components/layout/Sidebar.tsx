@@ -40,7 +40,7 @@ import type { UserPersona } from '../../types';
 const GROUP_ORDER = [
   'Discover & Analyze',
   'Access & Provision',
-  'Build & Deploy',
+  'Build & Customize',
   'Learn & Share',
   'Governance',
   'Admin',
@@ -285,7 +285,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         title: 'Command Center',
         icon: <LayoutDashboard className="w-5 h-5" />,
         path: '/command-center',
-        group: 'Build & Deploy',
+        group: 'Build & Customize',
       });
     }
     const lakehouseUrl = workspaceHomeUrl(databricksWorkspaceUrl);
@@ -295,7 +295,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         title: 'Lakehouse',
         icon: <Database className="w-5 h-5" />,
         href: lakehouseUrl,
-        group: 'Build & Deploy',
+        group: 'Build & Customize',
       });
     }
     return items;

@@ -31,7 +31,7 @@ branding:
   warning_color: "#FFC107"
   success_color: "#388E3C"
   # External URL for the companion Command Center app. When set, a
-  # "Command Center" link appears in the "Build & Deploy" sidebar group.
+  # "Command Center" link appears in the "Build & Customize" sidebar group.
   command_center_url: "https://fevm-taylor-hanson-build.cloud.databricks.com/apps/command-center"
 
 features:
