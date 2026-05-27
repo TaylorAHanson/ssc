@@ -43,9 +43,8 @@ async def evaluate_policy(workspace: str, resource_type: str, resource_id: str) 
         finally:
             db.close()
 
-        # 2. Evaluate with OPA
-        import glob
-        import os
+        # 2. Evaluate with OPA — one batched call returns every policy result
+        # (see OpaProvider.evaluate_namespace for why we don't loop per policy).
         opa_provider = OpaProvider(settings.opa_provider_config())
         input_data = {
             "workspace": {"name": workspace, "type": workspace_type},
@@ -53,20 +52,10 @@ async def evaluate_policy(workspace: str, resource_type: str, resource_id: str) 
             "request_time": datetime.now(timezone.utc).isoformat(),
             "allowlist_records": allowlist_records
         }
-        
-        policy_files = glob.glob(os.path.join("policies", "*.rego"))
+
+        namespace_results = await opa_provider.evaluate_namespace(input_data)
         violations = []
-        
-        for policy_path in policy_files:
-            policy_name = os.path.basename(policy_path).replace(".rego", "")
-            query = f"data.databricks.governance.{policy_name}"
-            
-            result = await opa_provider.evaluate(
-                policy_path=policy_path,
-                query=query,
-                input_data=input_data
-            )
-            
+        for policy_name, result in namespace_results.items():
             if result.get("is_violation"):
                 violations.append({
                     "action": result.get("action", "KILL"),

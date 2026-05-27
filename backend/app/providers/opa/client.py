@@ -142,7 +142,7 @@ class OpaProvider(BaseProvider):
 
     async def evaluate(self, policy_path: str, query: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Evaluate a Rego policy.
+        Evaluate a single Rego policy.
         
         :param policy_path: Path to the .rego file or package name.
         :param query: The data path to query (e.g., "data.databricks.governance.asset_allowlist").
@@ -155,6 +155,54 @@ class OpaProvider(BaseProvider):
             return await self._evaluate_local(policy_path, query, input_data)
         else:
             raise PermanentError("OPA provider not configured for remote or local execution")
+
+    async def evaluate_namespace(
+        self,
+        input_data: Dict[str, Any],
+        base_query: str = "data.databricks.governance",
+        exclude: Optional[set] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Evaluate every policy under `base_query` in a single OPA call.
+
+        Each call to OPA (whether local CLI or remote HTTP) carries non-trivial
+        per-invocation overhead: spawning the binary, loading every .rego file,
+        starting the evaluator. Doing one call per policy per resource is the
+        biggest cost in a full sentinel run (an OPA CLI startup is ~20 ms each,
+        so N resources × M policies quickly adds tens of seconds of pure
+        overhead). This method does the moral equivalent of `data.databricks.
+        governance` and splits the resulting dict per package so the caller
+        can loop over policies in-process — at one OPA call per resource
+        instead of M.
+
+        :param input_data: The shared input passed to OPA for this resource.
+        :param base_query: Rego data path containing the policy packages.
+        :param exclude:    Top-level package names to skip in the returned
+                           dict (defaults to {"common"} — the shared helpers).
+        :return: Dict of policy_name -> evaluation result (same shape as
+                 `evaluate()` would have returned for each one individually).
+        """
+        if exclude is None:
+            exclude = {"common"}
+
+        if self.opa_url:
+            namespace = await self._evaluate_remote(base_query, input_data)
+        elif self.use_local_binary:
+            namespace = await self._evaluate_local(
+                policy_file="", query=base_query, input_data=input_data
+            )
+        else:
+            raise PermanentError(
+                "OPA provider not configured for remote or local execution"
+            )
+
+        if not isinstance(namespace, dict):
+            return {}
+        return {
+            name: result
+            for name, result in namespace.items()
+            if name not in exclude and isinstance(result, dict)
+        }
 
     async def _evaluate_remote(self, query: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
         endpoint = f"{self.opa_url}/v1/data/{query.replace('data.', '').replace('.', '/')}"

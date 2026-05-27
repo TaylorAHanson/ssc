@@ -10,22 +10,57 @@ default is_violation := false
 default reason := "Resource complied with policies."
 default severity := "NONE"
 
-violation_reasons contains msg if {
-    input.resource.type == "personal_access_token"
-    input.workspace.type == "enterprise"
-    input.workspace.environment == "prod"
-    not input.resource.is_break_glass
-    msg := "Personal access tokens (PATs) are disabled in enterprise prod except for break-glass use."
+# === Rule catalog ===
+rule_metadata := {
+	"no_pat_prod": "Personal access tokens disabled in enterprise prod (break-glass excepted)",
+	"no_direct_user_grants_prod": "No direct grants to individual users in production",
 }
 
-violation_reasons contains msg if {
-    input.resource.type == "grant"
-    input.resource.principal_type == "user"
-    input.workspace.environment == "prod"
-    msg := "All data access is granted to groups, not individual users. Direct object grants to individuals are disallowed in production catalogs."
+# === Applicability ===
+applies contains "no_pat_prod" if {
+	input.resource.type == "personal_access_token"
+	input.workspace.type == "enterprise"
+	input.workspace.environment == "prod"
 }
 
-# --- Apply Common Governance Logic ---
+applies contains "no_direct_user_grants_prod" if {
+	input.resource.type == "grant"
+	input.workspace.environment == "prod"
+}
+
+# === Violations ===
+violations["no_pat_prod"] contains msg if {
+	applies["no_pat_prod"]
+	not input.resource.is_break_glass
+	msg := "Personal access tokens (PATs) are disabled in enterprise prod except for break-glass use."
+}
+
+violations["no_direct_user_grants_prod"] contains msg if {
+	applies["no_direct_user_grants_prod"]
+	input.resource.principal_type == "user"
+	msg := "All data access is granted to groups, not individual users. Direct object grants to individuals are disallowed in production catalogs."
+}
+
+# === Structured per-rule results ===
+rule_results contains result if {
+	some rule_id
+	applies[rule_id]
+	rule_violations := object.get(violations, rule_id, set())
+	result := {
+		"id": rule_id,
+		"description": rule_metadata[rule_id],
+		"passed": count(rule_violations) == 0,
+		"messages": sort([m | some m in rule_violations]),
+	}
+}
+
+# === Backwards-compat ===
+violation_reasons contains msg if {
+	some r in rule_results
+	msg := r.messages[_]
+}
+
+# === Common governance logic ===
 is_violation := common.is_violation(violation_reasons)
 has_approved_exception := common.has_approved_exception(input.allowlist_records, input.resource.id, is_violation, input.request_time)
 has_pending_exception := common.has_pending_exception(input.allowlist_records, input.resource.id, is_violation, has_approved_exception)

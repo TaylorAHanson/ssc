@@ -841,12 +841,45 @@ export function EnforcementSentinel() {
                                                                                         )}
                                                                                     </td>
                                                                                     <td className="p-3 text-xs text-gray-600 leading-relaxed break-words">
-                                                                                        {c.result === 'VIOLATION' ? (
+                                                                                        {Array.isArray(c.rule_results) && c.rule_results.length > 0 ? (
+                                                                                            <ul className="space-y-1.5">
+                                                                                                {c.rule_results.map((rr: any) => (
+                                                                                                    <li key={rr.id} className="flex items-start gap-2">
+                                                                                                        {rr.passed ? (
+                                                                                                            <CheckCircle2 className="w-3.5 h-3.5 text-green-500 mt-0.5 flex-shrink-0" />
+                                                                                                        ) : (
+                                                                                                            <XCircle className="w-3.5 h-3.5 text-red-500 mt-0.5 flex-shrink-0" />
+                                                                                                        )}
+                                                                                                        <div className="flex-1 min-w-0">
+                                                                                                            <span className={rr.passed ? 'text-gray-700' : 'text-red-700 font-medium'}>
+                                                                                                                {rr.description}
+                                                                                                            </span>
+                                                                                                            {(() => {
+                                                                                                                // Rego emits `messages`; fall back to `violations`
+                                                                                                                // for any legacy in-flight runs.
+                                                                                                                const msgs: string[] = (rr.messages || rr.violations || []) as string[];
+                                                                                                                if (rr.passed || msgs.length === 0) return null;
+                                                                                                                return (
+                                                                                                                    <ul className="mt-1 ml-1 space-y-0.5 text-[11px] text-gray-500">
+                                                                                                                        {msgs.slice(0, 3).map((v, vi) => (
+                                                                                                                            <li key={vi}>• {v}</li>
+                                                                                                                        ))}
+                                                                                                                        {msgs.length > 3 && (
+                                                                                                                            <li className="italic">+{msgs.length - 3} more</li>
+                                                                                                                        )}
+                                                                                                                    </ul>
+                                                                                                                );
+                                                                                                            })()}
+                                                                                                        </div>
+                                                                                                    </li>
+                                                                                                ))}
+                                                                                            </ul>
+                                                                                        ) : c.result === 'VIOLATION' ? (
                                                                                             formatReason(c)
                                                                                         ) : c.resource?.description ? (
                                                                                             <span className="italic text-gray-500">{c.resource.description}</span>
                                                                                         ) : (
-                                                                                            <span className="text-gray-400">Verified — no description on resource</span>
+                                                                                            <span className="text-gray-300">—</span>
                                                                                         )}
                                                                                     </td>
                                                                                 </tr>

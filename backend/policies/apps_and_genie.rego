@@ -10,27 +10,67 @@ default is_violation := false
 default reason := "Resource complied with policies."
 default severity := "NONE"
 
-violation_reasons contains msg if {
-    input.resource.type == "app"
-    input.workspace.type == "enterprise"
-    input.workspace.environment == "prod"
-    msg := "Apps and Genie spaces must not be hosted in enterprise prod unless they are on a centrally managed allowlist with documented risk review."
+# === Rule catalog ===
+rule_metadata := {
+	"no_apps_enterprise_prod": "Apps not hosted in enterprise prod without allowlist",
+	"no_genie_enterprise_prod": "Genie spaces not hosted in enterprise prod without allowlist",
+	"app_not_idle": "App has been accessed in the last 30 days",
 }
 
-violation_reasons contains msg if {
-    input.resource.type == "genie_space"
-    input.workspace.type == "enterprise"
-    input.workspace.environment == "prod"
-    msg := "Apps and Genie spaces must not be hosted in enterprise prod unless they are on a centrally managed allowlist with documented risk review."
+# === Applicability ===
+applies contains "no_apps_enterprise_prod" if {
+	input.resource.type == "app"
+	input.workspace.type == "enterprise"
+	input.workspace.environment == "prod"
 }
 
-violation_reasons contains msg if {
-    input.resource.type == "app"
-    input.resource.idle_days > 30
-    msg := "Apps must be stopped if no one has accessed the app in over 30 days."
+applies contains "no_genie_enterprise_prod" if {
+	input.resource.type == "genie_space"
+	input.workspace.type == "enterprise"
+	input.workspace.environment == "prod"
 }
 
-# --- Apply Common Governance Logic ---
+applies contains "app_not_idle" if {
+	input.resource.type == "app"
+}
+
+# === Violations ===
+violations["no_apps_enterprise_prod"] contains msg if {
+	applies["no_apps_enterprise_prod"]
+	msg := "Apps and Genie spaces must not be hosted in enterprise prod unless they are on a centrally managed allowlist with documented risk review."
+}
+
+violations["no_genie_enterprise_prod"] contains msg if {
+	applies["no_genie_enterprise_prod"]
+	msg := "Apps and Genie spaces must not be hosted in enterprise prod unless they are on a centrally managed allowlist with documented risk review."
+}
+
+violations["app_not_idle"] contains msg if {
+	applies["app_not_idle"]
+	input.resource.idle_days > 30
+	msg := "Apps must be stopped if no one has accessed the app in over 30 days."
+}
+
+# === Structured per-rule results ===
+rule_results contains result if {
+	some rule_id
+	applies[rule_id]
+	rule_violations := object.get(violations, rule_id, set())
+	result := {
+		"id": rule_id,
+		"description": rule_metadata[rule_id],
+		"passed": count(rule_violations) == 0,
+		"messages": sort([m | some m in rule_violations]),
+	}
+}
+
+# === Backwards-compat ===
+violation_reasons contains msg if {
+	some r in rule_results
+	msg := r.messages[_]
+}
+
+# === Common governance logic ===
 is_violation := common.is_violation(violation_reasons)
 has_approved_exception := common.has_approved_exception(input.allowlist_records, input.resource.id, is_violation, input.request_time)
 has_pending_exception := common.has_pending_exception(input.allowlist_records, input.resource.id, is_violation, has_approved_exception)

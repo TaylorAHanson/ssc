@@ -241,12 +241,20 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
         
         # Dynamically load all rego policies from the policies directory
         policy_files = glob.glob(os.path.join("policies", "*.rego"))
-        
+        all_policy_names = {
+            os.path.basename(p).replace(".rego", "") for p in policy_files
+        }
+
         # If the user requested specific policies, filter them
         requested_policies = self.request.state_context.get("policies", [])
         if requested_policies:
             policy_files = [p for p in policy_files if any(req in p for req in requested_policies)]
-            
+            allowed_policy_names = {
+                os.path.basename(p).replace(".rego", "") for p in policy_files
+            }
+        else:
+            allowed_policy_names = all_policy_names
+
         for resource in discovered_resources:
             input_data = {
                 "workspace": {"name": workspace_name, "type": workspace_type, "environment": environment},
@@ -254,19 +262,25 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                 "request_time": datetime.now(timezone.utc).isoformat(),
                 "allowlist_records": allowlist_records
             }
-            
-            for policy_path in policy_files:
-                # Extract policy name to construct the query path
-                # e.g. policies/asset_allowlist.rego -> asset_allowlist
-                policy_name = os.path.basename(policy_path).replace(".rego", "")
-                query = f"data.databricks.governance.{policy_name}"
-                
-                result = await opa_provider.evaluate(
-                    policy_path=policy_path,
-                    query=query,
-                    input_data=input_data
-                )
-                
+
+            # Single OPA call per resource that returns every policy result.
+            # Spawning the OPA binary once and reading all .rego files once is
+            # ~10× faster than evaluating each policy individually (see the
+            # `evaluate_namespace` docstring for the underlying reasoning).
+            namespace_results = await opa_provider.evaluate_namespace(input_data)
+
+            for policy_name, result in namespace_results.items():
+                if policy_name not in allowed_policy_names:
+                    continue
+
+                # Skip policies that had no applicable rules for this resource
+                # (e.g. compute_and_jobs vs a data_product). Recording these
+                # as vacuous PASS checks bloats state_context and produces
+                # misleading "Verified — no rules mapped" rows in the UI.
+                rule_results_raw = result.get("rule_results", []) or []
+                if not rule_results_raw and not result.get("is_violation"):
+                    continue
+
                 is_violation = result.get("is_violation")
                 action = result.get("action", "KILL")
 
@@ -310,6 +324,16 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                     k: v for k, v in resource_snapshot.items() if v not in (None, "", [])
                 }
 
+                # `rule_results` is emitted directly by each rego policy
+                # (see policies/*.rego). Each entry is a per-rule pass/fail
+                # record with messages, scoped to the rules that were
+                # actually applicable to this (resource, workspace) tuple.
+                # Sort for stable UI rendering (failed rules first, then alpha).
+                rule_results_sorted = sorted(
+                    rule_results_raw,
+                    key=lambda r: (bool(r.get("passed")), r.get("id", "")),
+                )
+
                 check_record = {
                     "resource_id": resource.get("id"),
                     "resource_type": resource.get("type"),
@@ -322,6 +346,7 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                         "" if not is_violation else "Unknown violation",
                     ),
                     "violation_reasons": result.get("violation_reasons", []),
+                    "rule_results": rule_results_sorted,
                     "severity": result.get("severity", "N/A"),
                     "evaluated_at": datetime.now(timezone.utc).isoformat(),
                 }
