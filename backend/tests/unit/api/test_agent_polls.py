@@ -135,18 +135,160 @@ async def test_poll_genie_handles_mcp_exception():
 
 def test_parse_genie_response_text_only_payload_treated_as_running():
     """A response that's just unparseable text => keep polling."""
-    parsed = _parse_genie_response({"content": "still working", "structured": None, "is_error": False})
+    body = GeniePollRequest(conversation_id="c", message_id="m")
+    parsed = _parse_genie_response(
+        {"content": "still working", "structured": None, "is_error": False}, body
+    )
     assert parsed.status == "running"
 
 
 def test_parse_genie_response_text_json_completed():
     """Some Genie responses ship JSON in the text part instead of structured."""
+    body = GeniePollRequest(conversation_id="conv-123", message_id="m")
     parsed = _parse_genie_response(
         {
             "content": '{"status": "COMPLETED", "answer": "ok"}',
             "structured": None,
             "is_error": False,
-        }
+        },
+        body,
     )
     assert parsed.status == "complete"
     assert parsed.result["answer"] == "ok"
+    # conversation_id is echoed back from the request so the UI can
+    # build a deep link even when the upstream payload omits it.
+    assert parsed.result["conversation_id"] == "conv-123"
+
+
+def test_parse_genie_response_includes_deep_link_when_payload_provides_one(monkeypatch):
+    """Only surface a deep link when Genie itself supplied one — we
+    used to synthesize URLs from ``DATABRICKS_HOST`` but the patterns
+    we guessed (``/one#g/...``, ``/genie/rooms/{space}#conversation/{id}``)
+    landed on the workspace home page instead of the conversation,
+    which was worse UX than no link.
+    """
+    from app.api.v1 import agent_polls
+
+    monkeypatch.setattr(
+        agent_polls.settings,
+        "DATABRICKS_HOST",
+        "https://example.cloud.databricks.com",
+        raising=False,
+    )
+
+    # Genie supplies a per-conversation URL on the payload itself.
+    # Auth must be OBO — under SP we hide the link to avoid
+    # "Conversation not found" landings.
+    body = GeniePollRequest(
+        space_id="space-abc", conversation_id="conv-1", message_id="m"
+    )
+    parsed = _parse_genie_response(
+        {
+            "structured": {
+                "status": "COMPLETED",
+                "conversation_url": (
+                    "https://example.cloud.databricks.com/genie/rooms/space-abc/c/conv-1"
+                ),
+            },
+            "is_error": False,
+            "auth_source": "obo",
+        },
+        body,
+    )
+    assert parsed.status == "complete"
+    assert parsed.result["_deep_link"] == (
+        "https://example.cloud.databricks.com/genie/rooms/space-abc/c/conv-1"
+    )
+    assert parsed.result["_space_id"] == "space-abc"
+    assert parsed.result["_auth_source"] == "obo"
+
+
+def test_parse_genie_response_hides_deep_link_under_sp_fallback():
+    """Local-dev SP fallback owns the conversation, so Databricks One
+    won't show it in the human user's chat history. Surfacing a link
+    that lands on "Conversation not found" is worse than no link.
+    """
+    body = GeniePollRequest(conversation_id="conv-7", message_id="m")
+    parsed = _parse_genie_response(
+        {
+            "structured": {
+                "status": "COMPLETED",
+                "conversation_url": (
+                    "https://example.cloud.databricks.com/one/chat/threads/conv-7"
+                ),
+            },
+            "is_error": False,
+            "auth_source": "sp",
+        },
+        body,
+    )
+    assert "_deep_link" not in parsed.result
+    # Still echo the auth mode so the UI can render an explanatory
+    # hint instead of leaving the user wondering where the button
+    # went.
+    assert parsed.result["_auth_source"] == "sp"
+
+
+def test_parse_genie_response_omits_deep_link_when_no_url_in_payload(monkeypatch):
+    """No URL in the payload ⇒ no button. Better than a dead link to
+    the workspace root.
+    """
+    from app.api.v1 import agent_polls
+
+    monkeypatch.setattr(
+        agent_polls.settings,
+        "DATABRICKS_HOST",
+        "https://example.cloud.databricks.com",
+        raising=False,
+    )
+
+    body = GeniePollRequest(conversation_id="conv-2", message_id="m")
+    parsed = _parse_genie_response(
+        {"structured": {"status": "COMPLETED"}, "is_error": False}, body
+    )
+    assert "_deep_link" not in parsed.result
+
+
+def test_parse_genie_response_rejects_workspace_home_url():
+    """A bare ``/one`` URL is treated as non-actionable — it just opens
+    the workspace home, which is what the user complained about.
+    """
+    body = GeniePollRequest(conversation_id="conv-x", message_id="m")
+    parsed = _parse_genie_response(
+        {
+            "structured": {
+                "status": "COMPLETED",
+                "url": "https://example.cloud.databricks.com/one",
+            },
+            "is_error": False,
+        },
+        body,
+    )
+    assert "_deep_link" not in parsed.result
+
+
+def test_parse_genie_response_finds_url_inside_attachments():
+    """Some Genie payload shapes nest the share URL on an attachment."""
+    body = GeniePollRequest(conversation_id="conv-y", message_id="m")
+    parsed = _parse_genie_response(
+        {
+            "structured": {
+                "status": "COMPLETED",
+                "attachments": [
+                    {
+                        "text": {"content": "ok"},
+                        "share_link": (
+                            "https://example.cloud.databricks.com/"
+                            "genie/rooms/abc/c/xyz"
+                        ),
+                    }
+                ],
+            },
+            "is_error": False,
+            "auth_source": "obo",
+        },
+        body,
+    )
+    assert parsed.result["_deep_link"] == (
+        "https://example.cloud.databricks.com/genie/rooms/abc/c/xyz"
+    )

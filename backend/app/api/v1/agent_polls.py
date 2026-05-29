@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.models.user import User
 from app.providers.databricks_mcp import GenieAuthUnavailableError, call_genie_tool
 
@@ -121,11 +122,79 @@ async def poll_genie(
             error=response.get("content") or "Genie reported an error.",
         )
 
-    parsed = _parse_genie_response(response)
+    parsed = _parse_genie_response(response, body)
     return parsed
 
 
-def _parse_genie_response(response: Dict[str, Any]) -> GeniePollResponse:
+_URL_FIELD_NAMES = (
+    "conversation_url",
+    "share_url",
+    "share_link",
+    "deep_link",
+    "deeplink",
+    "permalink",
+    "link",
+    "url",
+)
+
+
+def _find_genie_deep_link_in_payload(payload: Dict[str, Any]) -> Optional[str]:
+    """Scan a Genie response payload for a Databricks-supplied URL.
+
+    The MCP managed-Genie docs promise "a deep link back to the
+    conversation in the Databricks UI" but don't pin down the field
+    name, and the shape evolves between releases. We walk the top
+    level (and one level into ``attachments``) checking a handful of
+    likely names and return the first ``http(s)://...databricks...``
+    URL we encounter. Anything else (including a
+    ``"databricks.com/one"``-style root URL) is rejected — landing on
+    the home page would be worse UX than not showing the button at
+    all.
+    """
+
+    def _looks_like_conversation_url(value: object) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        v = value.strip()
+        if not (v.startswith("http://") or v.startswith("https://")):
+            return None
+        # Must look like a Databricks workspace URL...
+        if "databricks." not in v:
+            return None
+        # ...and must point to a per-conversation resource. We treat
+        # bare ``/one`` (the general Genie home) and root URLs as
+        # non-actionable.
+        path_only = v.split("?", 1)[0].split("#", 1)[0]
+        last_segment = path_only.rsplit("/", 1)[-1]
+        if last_segment in {"one", "", "genie"}:
+            return None
+        return v
+
+    candidates: list[Any] = []
+    candidates.extend(payload.get(k) for k in _URL_FIELD_NAMES)
+
+    attachments = payload.get("attachments")
+    if isinstance(attachments, list):
+        for att in attachments:
+            if isinstance(att, dict):
+                candidates.extend(att.get(k) for k in _URL_FIELD_NAMES)
+                # Some shapes nest URLs inside ``query`` or ``share``.
+                for nest_key in ("query", "share", "metadata"):
+                    nested = att.get(nest_key)
+                    if isinstance(nested, dict):
+                        candidates.extend(nested.get(k) for k in _URL_FIELD_NAMES)
+
+    for c in candidates:
+        url = _looks_like_conversation_url(c)
+        if url:
+            return url
+    return None
+
+
+def _parse_genie_response(
+    response: Dict[str, Any],
+    body: GeniePollRequest,
+) -> GeniePollResponse:
     """Translate a Genie MCP response into our poll wire shape.
 
     Genie's poll responses are not 100% standardized across versions;
@@ -133,6 +202,11 @@ def _parse_genie_response(response: Dict[str, Any]) -> GeniePollResponse:
     a JSON-decoded text body, and treat anything we don't recognize
     as still running so the UI keeps polling rather than failing
     fast on a transient parse mismatch.
+
+    On completion we also enrich the payload with a per-conversation
+    Databricks deep link so the UI can render an "Open in Databricks
+    Genie" CTA without having to reconstruct the URL from
+    ``DATABRICKS_HOST`` itself.
     """
     structured = response.get("structured")
     payload: Optional[Dict[str, Any]] = None
@@ -153,9 +227,67 @@ def _parse_genie_response(response: Dict[str, Any]) -> GeniePollResponse:
         raw_status = str(payload.get("status") or payload.get("state") or "").upper()
 
     if raw_status in ("COMPLETED", "SUCCESS", "DONE"):
+        # Best-effort enrichment. Keys are namespaced with a single
+        # underscore prefix so they don't clash with Genie's own
+        # response fields if the upstream schema gains the same name.
+        result: Dict[str, Any] = dict(payload) if payload else {"text": response.get("content")}
+        conversation_id = (
+            result.get("conversation_id")
+            or result.get("conversationId")
+            or body.conversation_id
+        )
+        if conversation_id and "conversation_id" not in result:
+            result["conversation_id"] = conversation_id
+        # Surface a deep link only when Genie itself supplied one AND
+        # the call ran under the user's own identity. When we fall
+        # back to the service principal in local dev, the conversation
+        # is owned by the SP — clicking the link would land the user
+        # on Databricks One's "Conversation not found" page because
+        # their personal Genie chat history doesn't include SP-owned
+        # threads. The link works fine in deployed environments where
+        # OBO is mandatory.
+        deep_link: Optional[str] = None
+        auth_source = response.get("auth_source")
+        if isinstance(result, dict) and auth_source == "obo":
+            deep_link = _find_genie_deep_link_in_payload(result)
+        if deep_link:
+            result["_deep_link"] = deep_link
+        # Always echo the auth mode so the UI can render a small
+        # local-dev hint instead of leaving the panel feeling broken.
+        if auth_source:
+            result.setdefault("_auth_source", auth_source)
+        # Echo the space scope back so the UI can label cards
+        # appropriately (and disambiguate when one chat session has
+        # mixed general + space-scoped Genie calls).
+        if body.space_id:
+            result.setdefault("_space_id", body.space_id)
+        # Visibility: log the top-level keys (and a sample of attachment
+        # keys) so we can see what Genie actually returned without
+        # spamming the log with full payloads. Use DEBUG for the full
+        # dump.
+        try:
+            top_keys = sorted(k for k in result.keys() if isinstance(k, str))
+            attachment_summary: Optional[str] = None
+            atts = result.get("attachments")
+            if isinstance(atts, list) and atts:
+                first = atts[0] if isinstance(atts[0], dict) else None
+                if first is not None:
+                    attachment_summary = (
+                        f"{len(atts)} attachment(s); first keys="
+                        f"{sorted(k for k in first.keys() if isinstance(k, str))}"
+                    )
+            logger.info(
+                "Genie poll complete: top_keys=%s attachments=%s deep_link_found=%s",
+                top_keys,
+                attachment_summary or "none",
+                bool(deep_link),
+            )
+            logger.debug("Genie poll full payload: %s", json.dumps(result, default=str))
+        except Exception:  # noqa: BLE001 — logging must never break the response
+            pass
         return GeniePollResponse(
             status="complete",
-            result=payload or {"text": response.get("content")},
+            result=result,
             attempt_after_ms=None,
         )
     if raw_status in ("FAILED", "ERROR", "CANCELLED", "CANCELED"):

@@ -33,6 +33,7 @@ import {
 } from '../../lib/agentStream';
 import { usePendingPoll } from '../../hooks/usePendingPoll';
 import { ToolCallPill, type ToolCallStatus } from './ToolCallPill';
+import { GenieDetailsPanel } from './GenieDetailsPanel';
 
 // Each chat surface holds its own UI-side message log. Tool
 // invocations and pending polls live as first-class entries here so
@@ -72,6 +73,13 @@ type DisplayMessage =
          * message with 'tool_calls'``.
          */
         toolArguments?: Record<string, unknown>;
+        /**
+         * Raw structured payload from a completed Genie poll. Surfaces
+         * the SQL, result rows, chart spec, and per-conversation deep
+         * link via `<GenieDetailsPanel>`. Set on the tool pill's
+         * resolution; absent until `pollResolution === 'complete'`.
+         */
+        genieResult?: Record<string, unknown>;
         /** When set, this tool call was a pending-poll handoff. */
         poll?: PendingPollEvent;
         pollResolution?: 'complete' | 'failed' | 'cancelled' | 'timeout';
@@ -257,6 +265,13 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                             status: 'success',
                             completedAt: Date.now(),
                             pollResolution: 'complete',
+                            // Persist the structured payload so the
+                            // GenieDetailsPanel can render SQL, rows,
+                            // chart, and the deep link below the pill.
+                            genieResult:
+                                final.result && typeof final.result === 'object'
+                                    ? (final.result as Record<string, unknown>)
+                                    : undefined,
                         };
                     }
                     return {
@@ -967,8 +982,15 @@ function MessageRow({
                           // elapsed instead of the new turn's clock.
                           formatElapsed(Date.now() - msg.startedAt)
                         : undefined;
+        // Only Genie tool calls carry a structured payload worth
+        // surfacing in a panel today. Other tools (catalog lookups,
+        // etc.) are short-lived and their detail string suffices.
+        const isGenie =
+            msg.toolName === 'ask_your_data' ||
+            msg.toolName?.startsWith('genie') ||
+            !!msg.genieResult;
         return (
-            <div className="flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-300 min-w-0">
+            <div className="flex flex-col items-start gap-0 min-w-0 animate-in fade-in slide-in-from-bottom-2 duration-300">
                 <ToolCallPill
                     label={msg.label}
                     status={msg.status}
@@ -976,6 +998,14 @@ function MessageRow({
                     errorMessage={msg.errorMessage}
                     elapsedLabel={elapsed}
                 />
+                {isGenie && msg.pollResolution === 'complete' && (
+                    // Wider than the message bubble (80%) — SQL and
+                    // result tables read much better with full chat-
+                    // column width.
+                    <div className="w-full">
+                        <GenieDetailsPanel result={msg.genieResult} />
+                    </div>
+                )}
             </div>
         );
     }
