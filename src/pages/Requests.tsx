@@ -6,6 +6,7 @@ import { Button } from '../components/ui/button';
 import { formatInTimeZone } from 'date-fns-tz';
 import { Eye, X, Trash2, CheckCircle2, Circle, Loader2, AlertCircle, Clock } from 'lucide-react';
 import type { Request } from '../types';
+import { renderMarkdownSafe } from '../lib/markdown';
 
 import { formatDistanceToNow, differenceInHours } from 'date-fns';
 
@@ -685,8 +686,8 @@ export function Requests() {
                           >
                             {isAgent ? (
                               <div
-                                className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
-                                dangerouslySetInnerHTML={{ __html: message.content }}
+                                className="text-sm leading-relaxed prose prose-sm agent-prose max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
+                                dangerouslySetInnerHTML={{ __html: renderMarkdownSafe(message.content) }}
                               />
                             ) : (
                               <p className="text-sm leading-relaxed">{message.content}</p>

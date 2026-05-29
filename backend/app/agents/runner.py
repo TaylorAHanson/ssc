@@ -429,6 +429,7 @@ class AgentRunner:
                                 name=fn_name,
                                 ok=False,
                                 summary=tool_error_msg[:200],
+                                result=result,
                             )
                         else:
                             yield ToolResultEvent(
@@ -436,6 +437,7 @@ class AgentRunner:
                                 name=fn_name,
                                 ok=True,
                                 summary=matching_tool.friendly_completion_label,
+                                result=result,
                             )
                         executed_any = True
                     except Exception as e:

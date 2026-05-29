@@ -34,6 +34,7 @@ import {
 import { usePendingPoll } from '../../hooks/usePendingPoll';
 import { ToolCallPill, type ToolCallStatus } from './ToolCallPill';
 import { GenieDetailsPanel } from './GenieDetailsPanel';
+import { ToolRawOutputPanel } from './ToolRawOutputPanel';
 import { renderMarkdownSafe } from '../../lib/markdown';
 
 // Each chat surface holds its own UI-side message log. Tool
@@ -74,6 +75,15 @@ type DisplayMessage =
          * message with 'tool_calls'``.
          */
         toolArguments?: Record<string, unknown>;
+        /**
+         * Raw, JSON-serializable payload the tool returned. Captured
+         * from the ``tool_result`` SSE event for synchronous tools so
+         * the UI can render a "Raw output" expander under every pill.
+         * For pending-poll handoffs (Genie) the analogous structured
+         * data lives on ``genieResult`` and is rendered via
+         * ``GenieDetailsPanel``.
+         */
+        toolResult?: unknown;
         /**
          * Raw structured payload from a completed Genie poll. Surfaces
          * the SQL, result rows, chart spec, and per-conversation deep
@@ -226,6 +236,25 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages, statusLabel]);
+
+    // Per-second tick to drive the elapsed-time label inside running
+    // tool pills. The label is computed at render time as
+    // ``Date.now() - msg.startedAt``, so without a periodic re-render
+    // the counter would freeze at "0s" until some other state change
+    // (a tool_result, a new pill, the next message) happened to
+    // re-render the row. We mount the timer only while at least one
+    // pill is actively ``running``; pending-poll pills already have
+    // their own per-second tick from ``usePendingPoll``.
+    const [, setNowTick] = useState(0);
+    const hasRunningPill = useMemo(
+        () => messages.some((m) => m.kind === 'tool' && m.status === 'running'),
+        [messages],
+    );
+    useEffect(() => {
+        if (!hasRunningPill) return;
+        const id = window.setInterval(() => setNowTick((n) => n + 1), 1000);
+        return () => window.clearInterval(id);
+    }, [hasRunningPill]);
 
     // Close the mode dropdown when the user clicks anywhere outside
     // it. Mirrors the same pattern Home.tsx uses so the affordance
@@ -420,6 +449,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         setIsStreaming(true);
         setStatusLabel('Thinking...');
         setShowThinking(false);
+        // New turn, new gate — stale "minimum tool-pill duration"
+        // bookkeeping from a prior stream shouldn't delay the first
+        // event of this one.
+        eventGateRef.current = 0;
         // Stale form-route CTAs from a prior turn shouldn't survive a
         // new question — the agent may pick a different form, or no
         // form at all. The continuation path skips this clear so the
@@ -495,6 +528,16 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         }
     };
 
+    // Earliest wall-clock time at which the next agent event may
+    // visually apply. Used to enforce ordering between tool pills
+    // and the agent message that follows them: when a synchronous
+    // tool resolves in under MIN_RUNNING_MS we delay its visible
+    // settle, and we likewise delay the agent's `message` event so
+    // it never renders before the pill it depends on. Without this
+    // the user reported "everything pops in at once" — the message
+    // would show while the pill was still spinning on fast tools.
+    const eventGateRef = useRef<number>(0);
+
     const handleStreamEvent = (event: AgentEvent) => {
         switch (event.type) {
             case 'status': {
@@ -525,18 +568,64 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 break;
             }
             case 'tool_result': {
-                setMessages((prev) =>
-                    prev.map((m) => {
-                        if (m.kind !== 'tool' || m.toolCallId !== event.id) return m;
-                        return {
-                            ...m,
-                            status: event.ok ? 'success' : 'error',
-                            completedAt: Date.now(),
-                            errorMessage: event.error ?? undefined,
-                            label: event.summary || m.label,
-                        };
-                    }),
-                );
+                // Hold the "running" pill on screen for a short
+                // minimum so synchronous tools (e.g. execute_workflow,
+                // metadata listings) don't flash from "Running …" to
+                // "Done" in the same render frame as the agent's
+                // follow-up message — the user reported "everything
+                // pops in at once" before this. With the floor in
+                // place even fast tools render at least one
+                // perceivable "running" frame, mirroring how Genie's
+                // pending-poll pill behaves.
+                const MIN_RUNNING_MS = 600;
+                const settle = () =>
+                    setMessages((prev) =>
+                        prev.map((m) => {
+                            if (m.kind !== 'tool' || m.toolCallId !== event.id) return m;
+                            return {
+                                ...m,
+                                status: event.ok ? 'success' : 'error',
+                                completedAt: Date.now(),
+                                errorMessage: event.error ?? undefined,
+                                label: event.summary || m.label,
+                                toolResult: event.result,
+                            };
+                        }),
+                    );
+                // Use a functional setter purely to read the current
+                // pill state without relying on a possibly stale
+                // ``messages`` closure inside this async SSE handler.
+                setMessages((prev) => {
+                    const pill = prev.find(
+                        (m) => m.kind === 'tool' && m.toolCallId === event.id,
+                    ) as Extract<DisplayMessage, { kind: 'tool' }> | undefined;
+                    const elapsed = pill?.startedAt
+                        ? Date.now() - pill.startedAt
+                        : MIN_RUNNING_MS;
+                    const delay = Math.max(0, MIN_RUNNING_MS - elapsed);
+                    eventGateRef.current = Math.max(
+                        eventGateRef.current,
+                        Date.now() + delay,
+                    );
+                    if (delay === 0) {
+                        // Settle synchronously inside this same updater
+                        // so the gate's effect on subsequent events is
+                        // immediate.
+                        return prev.map((m) => {
+                            if (m.kind !== 'tool' || m.toolCallId !== event.id) return m;
+                            return {
+                                ...m,
+                                status: event.ok ? 'success' : 'error',
+                                completedAt: Date.now(),
+                                errorMessage: event.error ?? undefined,
+                                label: event.summary || m.label,
+                                toolResult: event.result,
+                            };
+                        });
+                    }
+                    setTimeout(settle, delay);
+                    return prev;
+                });
                 break;
             }
             case 'pending_poll': {
@@ -573,16 +662,45 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             }
             case 'message': {
                 if (!event.content) break;
-                setMessages((prev) => [
-                    ...prev,
-                    {
-                        kind: 'agent',
-                        id: `${Date.now()}-m`,
-                        content: event.content,
-                        timestamp: new Date().toISOString(),
-                    },
-                ]);
-                setStatusLabel(null);
+                const apply = () =>
+                    setMessages((prev) => {
+                        // Defensive dedup: if the runner re-emits an
+                        // identical message back-to-back (we've seen this
+                        // happen in the wild on certain model serving
+                        // endpoints when the LLM produces the same text
+                        // across two iterations), don't push another
+                        // bubble. Compare against the most recent agent
+                        // message only — non-trivial repetition across
+                        // unrelated turns is fine and represents a real
+                        // user observation.
+                        const lastAgent = [...prev]
+                            .reverse()
+                            .find((m): m is Extract<DisplayMessage, { kind: 'agent' }> => m.kind === 'agent');
+                        if (lastAgent && lastAgent.content.trim() === event.content.trim()) {
+                            return prev;
+                        }
+                        return [
+                            ...prev,
+                            {
+                                kind: 'agent',
+                                id: `${Date.now()}-m`,
+                                content: event.content,
+                                timestamp: new Date().toISOString(),
+                            },
+                        ];
+                    });
+                // Honor the tool-pill gate so messages never render
+                // before their preceding tool resolves visually.
+                const wait = Math.max(0, eventGateRef.current - Date.now());
+                if (wait === 0) {
+                    apply();
+                    setStatusLabel(null);
+                } else {
+                    setTimeout(() => {
+                        apply();
+                        setStatusLabel(null);
+                    }, wait);
+                }
                 break;
             }
             case 'route': {
@@ -1000,12 +1118,16 @@ function MessageRow({
         // `renderMarkdownSafe` so the `prose` class can style
         // headings, tables, code blocks, etc. consistently. Legacy
         // persisted HTML content passes through marked unchanged.
+        // The `agent-prose` class layers on chat-appropriate spacing
+        // and heading sizes (the typography plugin's defaults are
+        // calibrated for a blog post and look obnoxiously large
+        // inside a chat bubble).
         const html = renderMarkdownSafe(msg.content);
         return (
             <div className="flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-300">
                 <div className="max-w-[80%] rounded-2xl px-4 py-3 shadow-sm bg-gray-50 text-gray-900 border border-gray-200/50">
                     <div
-                        className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700"
+                        className="text-sm leading-relaxed prose prose-sm agent-prose max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700"
                         dangerouslySetInnerHTML={{ __html: html }}
                     />
                 </div>
@@ -1027,7 +1149,16 @@ function MessageRow({
                           // before settling) — show its own frozen-ish
                           // elapsed instead of the new turn's clock.
                           formatElapsed(Date.now() - msg.startedAt)
-                        : undefined;
+                        : (msg.status === 'success' || msg.status === 'error') &&
+                            msg.startedAt && msg.completedAt
+                            ? // Settled pill — keep the total runtime
+                              // visible so the user can see "this tool
+                              // took 8s" at a glance even after it's
+                              // resolved. Without this the counter
+                              // disappeared the moment the pill turned
+                              // green.
+                              formatElapsed(msg.completedAt - msg.startedAt)
+                            : undefined;
         // Only Genie tool calls carry a structured payload worth
         // surfacing in a panel today. Other tools (catalog lookups,
         // etc.) are short-lived and their detail string suffices.
@@ -1035,6 +1166,17 @@ function MessageRow({
             msg.toolName === 'ask_your_data' ||
             msg.toolName?.startsWith('genie') ||
             !!msg.genieResult;
+        // Synchronous tools: surface the raw result in a collapsible
+        // expander so SAs can verify exactly what data the agent saw.
+        // Skip for Genie — its dedicated panel renders SQL, results,
+        // and a chart and the raw payload would be redundant. Skip
+        // when there's nothing to show (errors that didn't return a
+        // body, in-flight pills, etc.).
+        const showRawOutput =
+            !isGenie &&
+            (msg.status === 'success' || msg.status === 'error') &&
+            msg.toolResult !== undefined &&
+            msg.toolResult !== null;
         return (
             <div className="flex flex-col items-start gap-0 min-w-0 animate-in fade-in slide-in-from-bottom-2 duration-300">
                 <ToolCallPill
@@ -1051,6 +1193,13 @@ function MessageRow({
                     <div className="w-full">
                         <GenieDetailsPanel result={msg.genieResult} />
                     </div>
+                )}
+                {showRawOutput && (
+                    <ToolRawOutputPanel
+                        toolName={msg.toolName}
+                        toolArguments={msg.toolArguments}
+                        result={msg.toolResult}
+                    />
                 )}
             </div>
         );

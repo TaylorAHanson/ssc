@@ -48,6 +48,12 @@ export interface ToolResultEvent {
     ok: boolean;
     summary?: string;
     error?: string;
+    /**
+     * Raw, JSON-serializable payload the tool returned. Surfaced
+     * verbatim in a collapsible "Raw output" panel under the pill so
+     * an SA can inspect exactly what the agent saw.
+     */
+    result?: unknown;
 }
 
 export interface PendingPollEvent {

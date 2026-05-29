@@ -140,6 +140,87 @@ body {
   animation: slide-in-from-bottom 0.3s ease-out;
 }
 
+/* Chat-bubble prose overrides. The default Tailwind typography
+ * plugin sizes headings for a blog post (h1 ≈ 36 px) which is
+ * obnoxious inside a chat message. We dial the heading scale down
+ * to something proportional to a 14 px body and tighten the vertical
+ * rhythm so multi-section messages feel like a chat reply, not a
+ * mini-essay. The selector targets only the agent bubble so other
+ * uses of `prose` (long-form copy elsewhere) keep their natural
+ * sizing.
+ *
+ * Specificity note: the typography plugin emits rules like
+ * `.prose :where(h1):not(...)` which have specificity 1 (just the
+ * `.prose` class — :where() always contributes 0). Our overrides
+ * deliberately use `.agent-prose h1` (specificity 1,1) so they win
+ * over the plugin defaults regardless of source order. Earlier we
+ * also wrapped the targets in :where() and the plugin's rules were
+ * tying or beating us, leaving the plugin's blog-sized headings
+ * showing through.
+ */
+.agent-prose h1 {
+  font-size: 1.05rem;
+  line-height: 1.4;
+  font-weight: 600;
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.agent-prose h2 {
+  font-size: 1rem;
+  line-height: 1.4;
+  font-weight: 600;
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.agent-prose h3 {
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  font-weight: 600;
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.agent-prose h4,
+.agent-prose h5,
+.agent-prose h6 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.agent-prose p {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+.agent-prose p:first-child {
+  margin-top: 0;
+}
+.agent-prose p:last-child {
+  margin-bottom: 0;
+}
+.agent-prose ul,
+.agent-prose ol {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+.agent-prose table {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.8125rem;
+}
+.agent-prose pre {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.8125rem;
+}
+.agent-prose code {
+  font-size: 0.875em;
+}
+.agent-prose blockquote {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-style: normal;
+}
+
 /* Ensure HTML lists in agent messages display properly */
 .prose ul,
 .prose-sm ul {

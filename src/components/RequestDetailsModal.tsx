@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { useState } from 'react';
 import type { Request } from '../types';
+import { renderMarkdownSafe } from '../lib/markdown';
 
 interface RequestDetailsModalProps {
     request: Request;
@@ -82,8 +83,8 @@ export function RequestDetailsModal({ request, onClose, RequestStateList }: Requ
                                             >
                                                 {isAgent ? (
                                                     <div
-                                                        className="text-sm leading-relaxed prose prose-sm max-w-none text-current"
-                                                        dangerouslySetInnerHTML={{ __html: message.content }}
+                                                        className="text-sm leading-relaxed prose prose-sm agent-prose max-w-none text-current"
+                                                        dangerouslySetInnerHTML={{ __html: renderMarkdownSafe(message.content) }}
                                                     />
                                                 ) : (
                                                     <p className="text-sm leading-relaxed">{message.content}</p>

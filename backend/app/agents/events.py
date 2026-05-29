@@ -52,6 +52,15 @@ class ToolResultEvent(BaseModel):
 
     Skipped for tools that yield a ``pending_poll`` envelope - the poll
     lifecycle (handled by the UI) replaces the immediate result.
+
+    ``result`` carries the raw, JSON-serializable payload the tool
+    returned. The UI surfaces it in a collapsible "Raw output" panel
+    underneath the pill so SAs / advanced users can see exactly what
+    the agent saw — useful when debugging "why did the agent
+    interpret that result this way?". Capped to
+    ``AGENT_MAX_TOOL_OUTPUT_CHARS`` upstream (same cap that controls
+    the LLM-facing copy) so we don't ship megabyte payloads through
+    SSE.
     """
 
     type: Literal["tool_result"] = "tool_result"
@@ -60,6 +69,7 @@ class ToolResultEvent(BaseModel):
     ok: bool
     summary: Optional[str] = None
     error: Optional[str] = None
+    result: Optional[Any] = None
 
 
 class PendingPollEvent(BaseModel):
