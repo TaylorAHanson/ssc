@@ -37,6 +37,12 @@ async def get_branding():
         "brand_color_success": settings.BRAND_COLOR_SUCCESS,
         "databricks_workspace_url": workspace_url,
         "command_center_url": _yaml_config.get("branding", {}).get("command_center_url", ""),
+        # External "open in Databricks" link surfaced inside the
+        # Ask Your Data page. Falls back to /one (Genie home) when not
+        # explicitly configured.
+        "genie_full_experience_url": _yaml_config.get("links", {}).get(
+            "genie_full_experience_url", ""
+        ),
         "features": _yaml_config.get("features", {}),
         "tools": _yaml_config.get("tools", {}),
         "workflows": _yaml_config.get("workflows", {}),

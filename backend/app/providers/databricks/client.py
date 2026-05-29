@@ -3,16 +3,18 @@ Databricks provider client.
 """
 from typing import Dict, Any, List, Optional
 import os
+import uuid
 from app.providers.base import BaseProvider
 from app.core.exceptions import RetryableError, PermanentError
 from app.core.retry import retry_on_retryable
+from app.providers.databricks.compute import ComputeSpec
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
 import logging
 import asyncio
 import time
 import base64
-from databricks.sdk.service import jobs, workspace
+from databricks.sdk.service import jobs, workspace, compute as compute_svc
 
 logger = logging.getLogger(__name__)
 
@@ -842,112 +844,234 @@ class DatabricksProvider(BaseProvider):
             logger.error(f"Failed to import notebook: {str(e)}")
             raise RetryableError(f"Failed to import notebook: {str(e)}")
 
-    async def submit_notebook_job(
-        self, 
-        notebook_path: str, 
-        parameters: Dict[str, str],
-        run_name: str = "One-time Job Run"
+    # ------------------------------------------------------------------
+    # Unified Job Submission
+    # ------------------------------------------------------------------
+    #
+    # `submit_job` is the single primitive every workflow should use to run
+    # arbitrary code on a Databricks cluster. It accepts either an inline
+    # `jobs.SubmitTask` (advanced) or a pair of high-level builders
+    # (`notebook_task=` / `spark_python_task=`) and stamps the chosen
+    # compute target onto it.
+    #
+    # The two historical helpers (`submit_notebook_job`, `submit_python_job`)
+    # are now thin shims that delegate to `submit_job` so the codebase has
+    # exactly one place that talks to `client.jobs.submit`.
+    # ------------------------------------------------------------------
+
+    async def submit_job(
+        self,
+        *,
+        notebook_task: Optional[Dict[str, Any]] = None,
+        spark_python_task: Optional[Dict[str, Any]] = None,
+        submit_task: Optional[jobs.SubmitTask] = None,
+        run_name: str = "One-time Job Run",
+        compute: Optional[ComputeSpec] = None,
+        timeout_seconds: Optional[int] = None,
+        task_key: str = "main",
     ) -> str:
-        """
-        Submit a one-time Databricks job run using a notebook.
-        
+        """Submit a one-shot Databricks job and return its run_id.
+
+        Exactly one of ``notebook_task``, ``spark_python_task`` or
+        ``submit_task`` must be provided. ``compute`` selects the runtime
+        target; ``None`` means serverless.
+
+        ``notebook_task`` shape: ``{"notebook_path": str, "base_parameters": dict}``
+        ``spark_python_task`` shape: ``{"python_file": str, "parameters": list[str]}``
+
         Args:
-            notebook_path: Path to the notebook in Databricks workspace
-            parameters: Dictionary of parameters to pass to the notebook
-            run_name: Name of the run
-            
+            notebook_task: Builder for a notebook task. See shape above.
+            spark_python_task: Builder for an inline Python script task.
+            submit_task: Pre-built ``jobs.SubmitTask`` for advanced callers
+                that need full control (e.g. multi-task chains). When provided
+                the ``compute`` argument is ignored — bake the cluster into
+                the task yourself.
+            run_name: Display name for the run in the Databricks UI.
+            compute: Where to run. ``None`` = serverless.
+            timeout_seconds: Optional job-level timeout (forwarded to SDK).
+            task_key: Task key for the single-task case. Ignored when
+                ``submit_task`` is provided.
+
         Returns:
-            run_id of the submitted run
+            run_id as a string.
         """
-        try:
-            logger.info(f"Submitting notebook job: {notebook_path} with params {parameters}")
-            
-            # Use the SDK to submit a one-time run
-            run = await asyncio.to_thread(
-                self.client.jobs.submit,
-                run_name=run_name,
-                tasks=[
-                    jobs.SubmitTask(
-                        task_key="main",
-                        notebook_task=jobs.NotebookTask(
-                            notebook_path=notebook_path,
-                            base_parameters=parameters
-                        )
-                        # No hardcoded new_cluster here - Databricks will use serverless compute
-                    )
-                ]
+        provided = [bool(notebook_task), bool(spark_python_task), bool(submit_task)]
+        if sum(provided) != 1:
+            raise ValueError(
+                "submit_job requires exactly one of notebook_task, "
+                "spark_python_task, or submit_task."
             )
-            
-            logger.info(f"Successfully submitted job run: {run.run_id}")
+
+        if submit_task is None:
+            task_kwargs: Dict[str, Any] = {"task_key": task_key}
+
+            if notebook_task is not None:
+                task_kwargs["notebook_task"] = jobs.NotebookTask(
+                    notebook_path=notebook_task["notebook_path"],
+                    base_parameters=notebook_task.get("base_parameters") or {},
+                )
+            else:
+                task_kwargs["spark_python_task"] = jobs.SparkPythonTask(
+                    python_file=spark_python_task["python_file"],
+                    parameters=spark_python_task.get("parameters") or [],
+                )
+
+            task_kwargs.update(self._build_compute_fields(compute))
+            submit_task = jobs.SubmitTask(**task_kwargs)
+
+        submit_kwargs: Dict[str, Any] = {
+            "run_name": run_name,
+            "tasks": [submit_task],
+        }
+        if timeout_seconds is not None:
+            submit_kwargs["timeout_seconds"] = timeout_seconds
+
+        try:
+            logger.info(
+                f"Submitting job '{run_name}' "
+                f"(compute={'serverless' if compute is None or compute.is_serverless else 'classic'})"
+            )
+            run = await asyncio.to_thread(self.client.jobs.submit, **submit_kwargs)
+            logger.info(f"Submitted job run: {run.run_id}")
             return str(run.run_id)
         except Exception as e:
-            error_msg = f"Failed to submit notebook job: {str(e)}"
+            error_msg = f"Failed to submit job '{run_name}': {str(e)}"
             logger.error(error_msg)
             raise RetryableError(error_msg)
 
-    async def submit_python_job(
-        self, 
-        python_code: str, 
-        parameters: list[str],
-        run_name: str = "One-time Python Job"
+    def _build_compute_fields(self, compute: Optional[ComputeSpec]) -> Dict[str, Any]:
+        """Translate a ``ComputeSpec`` into ``jobs.SubmitTask`` kwargs.
+
+        Converts the plain-dict cluster spec on ``ComputeSpec`` into the SDK's
+        typed wrappers (``compute.ClusterSpec`` and ``compute.Library``) at the
+        last possible moment to keep ``compute.py`` SDK-free and unit-testable.
+        """
+        if compute is None or compute.is_serverless:
+            return {}
+
+        fields = compute.to_submit_task_fields()
+        out: Dict[str, Any] = {}
+
+        if "existing_cluster_id" in fields:
+            out["existing_cluster_id"] = fields["existing_cluster_id"]
+
+        if "new_cluster" in fields:
+            out["new_cluster"] = compute_svc.ClusterSpec.from_dict(fields["new_cluster"])
+
+        if "libraries" in fields:
+            out["libraries"] = [compute_svc.Library.from_dict(lib) for lib in fields["libraries"]]
+
+        return out
+
+    async def upload_python_script(
+        self,
+        python_code: str,
+        remote_path: Optional[str] = None,
     ) -> str:
+        """Upload an inline Python script to the workspace and return its path.
+
+        ``remote_path`` defaults to a unique scratch location under
+        ``/tmp/atlas_jobs/``. Returns the path *with* the ``Workspace`` prefix
+        required by ``SparkPythonTask.python_file``.
         """
-        Submit a one-time Databricks job run using a temporary python script.
-        
-        Args:
-            python_code: The python code to execute
-            parameters: List of command line arguments to pass to the script
-            run_name: Name of the run
-            
-        Returns:
-            run_id of the submitted run
-        """
-        import uuid
-        try:
-            # Create a temporary path for the script
-            temp_path = f"/tmp/atlas_jobs/temp_job_{uuid.uuid4().hex}.py"
-            logger.info(f"Uploading temporary python script to {temp_path}")
-            
-            # Ensure parent directory exists
-            remote_dir = os.path.dirname(temp_path)
+        target_path = remote_path or f"/tmp/atlas_jobs/job_{uuid.uuid4().hex}.py"
+        remote_dir = os.path.dirname(target_path)
+        if remote_dir and remote_dir != "/":
             await asyncio.to_thread(self.client.workspace.mkdirs, remote_dir)
-            
-            # Encode content as base64 for the SDK
-            content_base64 = base64.b64encode(python_code.encode("utf-8")).decode("utf-8")
-            
-            # Upload the script
-            await asyncio.to_thread(
-                self.client.workspace.import_,
-                path=temp_path,
-                format=workspace.ImportFormat.AUTO,
-                language=workspace.Language.PYTHON,
-                content=content_base64,
-                overwrite=True
-            )
-            
-            logger.info(f"Submitting python job: {temp_path} with {len(parameters)} params")
-            
-            # Use the SDK to submit a one-time run
-            run = await asyncio.to_thread(
-                self.client.jobs.submit,
-                run_name=run_name,
-                tasks=[
-                    jobs.SubmitTask(
-                        task_key="main",
-                        spark_python_task=jobs.SparkPythonTask(
-                            python_file=f"Workspace{temp_path}",
-                            parameters=parameters
-                        )
-                    )
-                ]
-            )
-            
-            logger.info(f"Successfully submitted python job run: {run.run_id}")
-            return str(run.run_id)
+
+        content_b64 = base64.b64encode(python_code.encode("utf-8")).decode("utf-8")
+        await asyncio.to_thread(
+            self.client.workspace.import_,
+            path=target_path,
+            format=workspace.ImportFormat.AUTO,
+            language=workspace.Language.PYTHON,
+            content=content_b64,
+            overwrite=True,
+        )
+        logger.debug(f"Uploaded inline Python script to {target_path}")
+        return f"Workspace{target_path}"
+
+    async def submit_notebook_job(
+        self,
+        notebook_path: str,
+        parameters: Dict[str, str],
+        run_name: str = "One-time Job Run",
+        compute: Optional[ComputeSpec] = None,
+    ) -> str:
+        """Submit a one-time notebook job (back-compat shim over ``submit_job``).
+
+        New code should call ``submit_job`` directly. This shim preserves the
+        original signature for existing callers (and for the dedup integration
+        test that mocks this method by name).
+        """
+        return await self.submit_job(
+            notebook_task={
+                "notebook_path": notebook_path,
+                "base_parameters": parameters,
+            },
+            run_name=run_name,
+            compute=compute,
+        )
+
+    async def submit_python_job(
+        self,
+        python_code: str,
+        parameters: List[str],
+        run_name: str = "One-time Python Job",
+        compute: Optional[ComputeSpec] = None,
+    ) -> str:
+        """Submit an inline Python script (back-compat shim over ``submit_job``).
+
+        Uploads ``python_code`` to a scratch workspace path, then calls
+        ``submit_job`` with a ``spark_python_task``.
+        """
+        python_file = await self.upload_python_script(python_code)
+        return await self.submit_job(
+            spark_python_task={
+                "python_file": python_file,
+                "parameters": parameters,
+            },
+            run_name=run_name,
+            compute=compute,
+        )
+
+    async def get_run_output(
+        self,
+        run_id: str,
+        task_key: str = "main",
+    ) -> Dict[str, Any]:
+        """Fetch terminal output (notebook return value, logs, task values).
+
+        Returns ``{}`` if the run has no output yet. Raises ``PermanentError``
+        if the run does not exist.
+        """
+        try:
+            run_id_int = int(run_id)
+            run = await asyncio.to_thread(self.client.jobs.get_run, run_id_int)
+            task = next((t for t in (run.tasks or []) if t.task_key == task_key), None)
+            if task is None or task.run_id is None:
+                return {}
+
+            output = await asyncio.to_thread(self.client.jobs.get_run_output, task.run_id)
+            result: Dict[str, Any] = {}
+            if getattr(output, "notebook_output", None) is not None:
+                result["notebook_result"] = output.notebook_output.result
+                result["truncated"] = output.notebook_output.truncated
+            if getattr(output, "logs", None) is not None:
+                result["logs"] = output.logs
+            if getattr(output, "logs_truncated", None) is not None:
+                result["logs_truncated"] = output.logs_truncated
+            if getattr(output, "error", None) is not None:
+                result["error"] = output.error
+            if getattr(output, "error_trace", None) is not None:
+                result["error_trace"] = output.error_trace
+            return result
         except Exception as e:
-            error_msg = f"Failed to submit python job: {str(e)}"
-            logger.error(error_msg)
-            raise RetryableError(error_msg)
+            error_msg = str(e)
+            if "does not exist" in error_msg:
+                raise PermanentError(f"Run {run_id} does not exist.")
+            logger.error(f"Failed to get run output for {run_id}: {error_msg}")
+            raise RetryableError(f"Failed to get run output: {error_msg}")
 
     async def get_run_status(self, run_id: str) -> Dict[str, Any]:
         """

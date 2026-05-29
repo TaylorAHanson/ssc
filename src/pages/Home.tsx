@@ -1,1235 +1,350 @@
-import { useState, useEffect, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+/**
+ * Self Service / Home page.
+ *
+ * Same streaming chat surface as the Ask Your Data page (`<ChatView>`),
+ * just with the Self Service / Governance / FinOps modes plumbed in
+ * and a richer welcome that surfaces the discovery cards. The
+ * mode-specific suggestion grid and the `autoQuery` deep-link
+ * behavior live here; everything else (streaming, tool pills,
+ * pending-poll lifecycle, form-route CTA, mode picker) is owned by
+ * `ChatView`.
+ *
+ * The previous structured Q&A flow (`follow_up_questions` + radio /
+ * multi-select widgets) was removed — the backend has not produced
+ * those questions in a long time, the UI was dead code, and the
+ * streaming endpoint emits a `route` event that the chat surface
+ * already renders as a "Continue to form" CTA.
+ */
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
-  Sparkles, ArrowRight, Send, ExternalLink, ChevronDown, Shield, BarChart3,
-  Database, Box, TrendingUp, Activity, FileText, Info
+    Activity,
+    BarChart3,
+    Box,
+    Database,
+    FileText,
+    Info,
+    Shield,
+    Sparkles,
+    TrendingUp,
 } from 'lucide-react';
 
-import { Textarea } from '../components/ui/textarea';
-import { Button } from '../components/ui/button';
-import type { ChatMessage, ConversationState } from '../types';
-import { callAgent } from '../services/api';
+import { ChatView, type ChatModeOption, type ChatRouteInfo, type ChatViewHandle } from '../components/chat/ChatView';
 import { useUserStore } from '../stores/userStore';
+import { useBrandingStore } from '../stores/brandingStore';
 import type { UserPersona } from '../types';
 
 type AgentMode = 'Self Service Agent' | 'Governance' | 'FinOps';
 
-const AGENT_SUGGESTIONS: Record<AgentMode, { label: string; query: string }[]> = {
-  'Self Service Agent': [
-    { label: 'Get workspace access', query: "I need to get access to a workspace for my team" },
-    { label: 'Request data access', query: "I need access to some data tables for my project" },
-    { label: 'Create a new workspace', query: "I'd like to create a new workspace for our analytics team" },
-    { label: 'Provision service principal', query: "I need a service principal for my CI/CD pipeline" },
-    { label: 'Create a new catalog', query: "I want to create a new catalog in Unity Catalog" },
-    { label: 'Request GitHub repo', query: "I need a new GitHub repository for my Databricks project" },
-    { label: 'Learn a new skill', query: "I want to learn new skills and improve my capabilities" },
-    { label: 'Browse reusable assets', query: "I want to see what design patterns and templates are available" }
-  ],
-  'Governance': [
-    { label: 'Overprovisioned users', query: "Which users are overprovisioned?" },
-    { label: 'Recent changes', query: "What changed in the last 24 hours?" },
-    { label: 'Workspace admins', query: "Who has workspace admin?" },
-    { label: 'Account admins', query: "List all users with Account Admin role" },
-    { label: 'Audit permissions', query: "Audit recent permission changes in the last 7 days" }
-  ],
-  'FinOps': [
-    { label: 'Expensive workspaces', query: "Which workspaces are the most expensive?" },
-    { label: 'Tagging compliance', query: "Which users are out of compliance with the tagging policy?" },
-    { label: 'Cost trends', query: "Show monthly cost trend by department" },
-    { label: 'Idle clusters', query: "Identify idle clusters that can be terminated" }
-  ]
-};
-
-interface DiscoveryItem {
-  title: string;
-  description: string;
-  query: string;
-}
-
-interface DiscoveryColumn {
-  title: string;
-  icon: React.ReactNode;
-  colorClass: string;
-  hoverBorderClass: string;
-  hoverTextClass: string;
-  items: DiscoveryItem[];
-}
-
-const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
-  'Self Service Agent': [
-    {
-      title: 'Data Access',
-      icon: <Database className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
-        { title: 'Request Data Access', description: 'Access via Catalog, Schema, or Table', query: "I need to request access to a dataset" },
-        { title: 'REST API Access', description: 'Programmatic data access', query: "I need REST API access to data" },
-        { title: 'My Groups', description: 'What groups am I in?', query: "What groups am I in?" },
-        { title: 'My Current Access', description: 'What access do I have now?', query: "What access do I have now?" },
-      ]
-    },
-    {
-      title: 'Enterprise Data',
-      icon: <Database className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
-        { title: 'Discover Enterprise Data', description: 'Search and explore data assets', query: "I want to discover enterprise data" },
-        { title: 'Marketplace Certification', description: 'Certify assets for broader consumption', query: "I need to certify a dataset for the marketplace" },
-        { title: 'Learn About Data Quality', description: 'Find out how data quality is managed and how you can use it', query: "I want to learn about data quality" },
-      ]
-    },
-    {
-      title: 'Platform Services',
-      icon: <Box className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
-        { title: 'Workspace Access', description: 'Join an existing workspace', query: "I need access to a Databricks workspace" },
-        { title: 'Provision Workspace', description: 'Create a new Databricks environment', query: "I need to provision a new Databricks workspace" },
-        { title: 'Create Catalog or Schema', description: 'Create new data containers', query: "I need to create a new catalog or schema" },
-        { title: 'Service Principal', description: 'For external apps, automation, and CI/CD pipelines', query: "I need a service principal for CI/CD" },
-        { title: 'GitHub Repository', description: 'Create a new code repository', query: "I need to create a new GitHub repository" }
-      ]
-    }
-  ],
-  'Governance': [
-    {
-      title: 'Compliance Audit',
-      icon: <Shield className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
-        { title: 'Overprovisioned Admins', description: 'Find users with excessive access', query: "Which users are overprovisioned?" },
-        { title: 'Orphaned Assets', description: 'Resources with deleted owners', query: "Identify assets owned by deleted users or service principals" },
-        { title: 'Missing Owners', description: 'Catalogs without assignment', query: "Find catalogs and schemas that do not have an owner" }
-      ]
-    },
-    {
-      title: 'Activity Monitoring',
-      icon: <Activity className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
-        { title: 'Failed Logins', description: 'Count failed attempts last 24h', query: "Count failed logins in the last 24 hours" },
-        { title: 'Unique Users', description: 'Daily active user count', query: "How many unique users accessed the platform today?" },
-        { title: 'Admin Changes', description: 'Recent privilege grants', query: "Show recent administrative changes to groups or permissions" }
-      ]
-    },
-    {
-      title: 'Audit & Tracking',
-      icon: <FileText className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
-        { title: 'Access Report', description: 'See who can access your data', query: "Show me an access report for my production data" },
-        { title: 'Usage Audit', description: 'Review recent administrative actions', query: "Audit administrative actions in my workspace" }
-      ]
-    }
-  ],
-  'FinOps': [
-    {
-      title: 'Cost Analysis',
-      icon: <BarChart3 className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
-        { title: 'Top Spending', description: 'Highest cost workspaces', query: "Which workspaces are the most expensive?" },
-        { title: 'Forecast Spend', description: 'Predict future monthly cost', query: "What is my predicted spend for next month?" },
-        { title: 'Department Billing', description: 'Breakdown by cost center', query: "Show me the cost breakdown by department" }
-      ]
-    },
-    {
-      title: 'Resource Efficiency',
-      icon: <TrendingUp className="w-5 h-5" />,
-      colorClass: 'text-primary',
-      hoverBorderClass: 'hover:border-primary/50',
-      hoverTextClass: 'group-hover:text-primary',
-      items: [
-        { title: 'Idle Clusters', description: 'Terminate unused compute', query: "Identify idle clusters I can safely terminate" },
-        { title: 'Tagging Compliance', description: 'Resources missing mandatory tags', query: "Which users are out of compliance with the tagging policy?" }
-      ]
-    }
-  ]
-};
+const STORAGE_KEY = 'atlas_agent_mode';
 
 const MODE_ICONS: Record<AgentMode, React.ReactNode> = {
-  'Self Service Agent': <Sparkles className="w-3.5 h-3.5" />,
-  'Governance': <Shield className="w-3.5 h-3.5" />,
-  'FinOps': <BarChart3 className="w-3.5 h-3.5" />
+    'Self Service Agent': <Sparkles className="w-3.5 h-3.5" />,
+    Governance: <Shield className="w-3.5 h-3.5" />,
+    FinOps: <BarChart3 className="w-3.5 h-3.5" />,
 };
 
 const MODE_PERMISSIONS: Record<AgentMode, UserPersona[]> = {
-  'Self Service Agent': ['Platform Admin', 'User', 'Governance Admin', 'Finance Admin', 'Security Admin'],
-  'Governance': ['Platform Admin', 'Governance Admin', 'Security Admin'],
-  'FinOps': ['Platform Admin', 'Finance Admin']
+    'Self Service Agent': [
+        'Platform Admin',
+        'User',
+        'Governance Admin',
+        'Finance Admin',
+        'Security Admin',
+    ],
+    Governance: ['Platform Admin', 'Governance Admin', 'Security Admin'],
+    FinOps: ['Platform Admin', 'Finance Admin'],
 };
 
-// Determine which form route to use based on conversation (fallback only for error cases)
-const determineFormRoute = (query: string, _answers: Record<string, string | string[]>, context?: { type: 'paas' | 'daas'; title: string }): { path: string; title: string } => {
-  const lowerQuery = query.toLowerCase();
+interface DiscoveryItem {
+    title: string;
+    description: string;
+    query: string;
+}
 
-  if (lowerQuery.includes('workspace access') || (lowerQuery.includes('workspace') && lowerQuery.includes('access'))) {
-    return { path: '/paas/workspace-access', title: 'Get Workspace Access' };
-  } else if (lowerQuery.includes('catalog') || lowerQuery.includes('schema') || lowerQuery.includes('table')) {
-    if (lowerQuery.includes('create') || lowerQuery.includes('new')) {
-      return { path: '/paas/request-catalog', title: 'Create Catalog/Schema/Table' };
-    } else {
-      return { path: '/paas/request-access', title: 'Request Data Access' };
-    }
-  } else if (lowerQuery.includes('data access')) {
-    return { path: '/paas/request-access', title: 'Request Data Access' };
-  } else if (lowerQuery.includes('workspace') && (lowerQuery.includes('provision') || lowerQuery.includes('new'))) {
-    return { path: '/paas/provision-workspace', title: 'Provision New Workspace' };
-  } else if (lowerQuery.includes('service principal')) {
-    return { path: '/paas/service-principal', title: 'Provision Service Principal' };
-  } else if (lowerQuery.includes('marketplace') || lowerQuery.includes('certification')) {
-    return { path: '/paas/marketplace', title: 'Marketplace Certification' };
-  } else if (lowerQuery.includes('github') || lowerQuery.includes('repo') || lowerQuery.includes('repository') || lowerQuery.includes('git')) {
-    return { path: '/paas/github-repo-creation', title: 'GitHub Repository Creation' };
-  } else if (lowerQuery.includes('rest api') || (lowerQuery.includes('api') && !lowerQuery.includes('batch'))) {
-    return { path: '/daas/rest-api', title: 'Request REST API Access' };
-  } else if (lowerQuery.includes('batch') || lowerQuery.includes('delta sharing')) {
-    return { path: '/daas/batch-data', title: 'Request Batch Data Access' };
-  } else if (context?.type === 'paas') {
-    // Default PAAS routes based on context
-    if (context.title.includes('Workspace Access')) {
-      return { path: '/paas/workspace-access', title: 'Get Workspace Access' };
-    } else if (context.title.includes('Catalog')) {
-      return { path: '/paas/request-catalog', title: 'Create Catalog/Schema/Table' };
-    } else if (context.title.includes('Data Access')) {
-      return { path: '/paas/request-access', title: 'Request Data Access' };
-    } else if (context.title.includes('Provision') && context.title.includes('Workspace')) {
-      return { path: '/paas/provision-workspace', title: 'Provision New Workspace' };
-    } else if (context.title.includes('Service Principal')) {
-      return { path: '/paas/service-principal', title: 'Provision Service Principal' };
-    } else if (context.title.includes('Marketplace')) {
-      return { path: '/paas/marketplace', title: 'Marketplace Certification' };
-    } else if (context.title.includes('GitHub')) {
-      return { path: '/paas/github-repo-creation', title: 'GitHub Repository Creation' };
-    }
-  } else if (context?.type === 'daas') {
-    if (context.title.includes('REST API')) {
-      return { path: '/daas/rest-api', title: 'Request REST API Access' };
-    } else if (context.title.includes('Batch')) {
-      return { path: '/daas/batch-data', title: 'Request Batch Data Access' };
-    }
-  }
+interface DiscoveryColumn {
+    title: string;
+    icon: React.ReactNode;
+    colorClass: string;
+    hoverBorderClass: string;
+    hoverTextClass: string;
+    items: DiscoveryItem[];
+}
 
-  // Default fallback
-  return { path: '/paas/request-access', title: 'Request Data Access' };
+const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
+    'Self Service Agent': [
+        {
+            title: 'Data Access',
+            icon: <Database className="w-5 h-5" />,
+            colorClass: 'text-primary',
+            hoverBorderClass: 'hover:border-primary/50',
+            hoverTextClass: 'group-hover:text-primary',
+            items: [
+                { title: 'Request Data Access', description: 'Access via Catalog, Schema, or Table', query: 'I need to request access to a dataset' },
+                { title: 'REST API Access', description: 'Programmatic data access', query: 'I need REST API access to data' },
+                { title: 'My Groups', description: 'What groups am I in?', query: 'What groups am I in?' },
+                { title: 'My Current Access', description: 'What access do I have now?', query: 'What access do I have now?' },
+            ],
+        },
+        {
+            title: 'Enterprise Data',
+            icon: <Database className="w-5 h-5" />,
+            colorClass: 'text-primary',
+            hoverBorderClass: 'hover:border-primary/50',
+            hoverTextClass: 'group-hover:text-primary',
+            items: [
+                { title: 'Discover Enterprise Data', description: 'Search and explore data assets', query: 'I want to discover enterprise data' },
+                { title: 'Marketplace Certification', description: 'Certify assets for broader consumption', query: 'I need to certify a dataset for the marketplace' },
+                { title: 'Learn About Data Quality', description: 'Find out how data quality is managed and how you can use it', query: 'I want to learn about data quality' },
+            ],
+        },
+        {
+            title: 'Platform Services',
+            icon: <Box className="w-5 h-5" />,
+            colorClass: 'text-primary',
+            hoverBorderClass: 'hover:border-primary/50',
+            hoverTextClass: 'group-hover:text-primary',
+            items: [
+                { title: 'Workspace Access', description: 'Join an existing workspace', query: 'I need access to a Databricks workspace' },
+                { title: 'Provision Workspace', description: 'Create a new Databricks environment', query: 'I need to provision a new Databricks workspace' },
+                { title: 'Create Catalog or Schema', description: 'Create new data containers', query: 'I need to create a new catalog or schema' },
+                { title: 'Service Principal', description: 'For external apps, automation, and CI/CD pipelines', query: 'I need a service principal for CI/CD' },
+                { title: 'GitHub Repository', description: 'Create a new code repository', query: 'I need to create a new GitHub repository' },
+            ],
+        },
+    ],
+    Governance: [
+        {
+            title: 'Compliance Audit',
+            icon: <Shield className="w-5 h-5" />,
+            colorClass: 'text-primary',
+            hoverBorderClass: 'hover:border-primary/50',
+            hoverTextClass: 'group-hover:text-primary',
+            items: [
+                { title: 'Overprovisioned Admins', description: 'Find users with excessive access', query: 'Which users are overprovisioned?' },
+                { title: 'Orphaned Assets', description: 'Resources with deleted owners', query: 'Identify assets owned by deleted users or service principals' },
+                { title: 'Missing Owners', description: 'Catalogs without assignment', query: 'Find catalogs and schemas that do not have an owner' },
+            ],
+        },
+        {
+            title: 'Activity Monitoring',
+            icon: <Activity className="w-5 h-5" />,
+            colorClass: 'text-primary',
+            hoverBorderClass: 'hover:border-primary/50',
+            hoverTextClass: 'group-hover:text-primary',
+            items: [
+                { title: 'Failed Logins', description: 'Count failed attempts last 24h', query: 'Count failed logins in the last 24 hours' },
+                { title: 'Unique Users', description: 'Daily active user count', query: 'How many unique users accessed the platform today?' },
+                { title: 'Admin Changes', description: 'Recent privilege grants', query: 'Show recent administrative changes to groups or permissions' },
+            ],
+        },
+        {
+            title: 'Audit & Tracking',
+            icon: <FileText className="w-5 h-5" />,
+            colorClass: 'text-primary',
+            hoverBorderClass: 'hover:border-primary/50',
+            hoverTextClass: 'group-hover:text-primary',
+            items: [
+                { title: 'Access Report', description: 'See who can access your data', query: 'Show me an access report for my production data' },
+                { title: 'Usage Audit', description: 'Review recent administrative actions', query: 'Audit administrative actions in my workspace' },
+            ],
+        },
+    ],
+    FinOps: [
+        {
+            title: 'Cost Analysis',
+            icon: <BarChart3 className="w-5 h-5" />,
+            colorClass: 'text-primary',
+            hoverBorderClass: 'hover:border-primary/50',
+            hoverTextClass: 'group-hover:text-primary',
+            items: [
+                { title: 'Top Spending', description: 'Highest cost workspaces', query: 'Which workspaces are the most expensive?' },
+                { title: 'Forecast Spend', description: 'Predict future monthly cost', query: 'What is my predicted spend for next month?' },
+                { title: 'Department Billing', description: 'Breakdown by cost center', query: 'Show me the cost breakdown by department' },
+            ],
+        },
+        {
+            title: 'Resource Efficiency',
+            icon: <TrendingUp className="w-5 h-5" />,
+            colorClass: 'text-primary',
+            hoverBorderClass: 'hover:border-primary/50',
+            hoverTextClass: 'group-hover:text-primary',
+            items: [
+                { title: 'Idle Clusters', description: 'Terminate unused compute', query: 'Identify idle clusters I can safely terminate' },
+                { title: 'Tagging Compliance', description: 'Resources missing mandatory tags', query: 'Which users are out of compliance with the tagging policy?' },
+            ],
+        },
+    ],
 };
 
-const ThinkingBubble = () => (
-  <div className="flex items-center gap-1 px-1 py-1">
-    <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-    <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-    <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>
-  </div>
-);
-
-import { useBrandingStore } from '../stores/brandingStore';
+function getButtonLabel(path: string): string {
+    if (!path) return 'Continue to form';
+    if (path.startsWith('/paas/') || path.startsWith('/daas/')) {
+        return 'Go to pre-filled form';
+    }
+    if (path.includes('/community/links') || path === '/community-links') {
+        return 'Go to community links';
+    }
+    if (path.includes('/community/assets') || path === '/reusable-assets') {
+        return 'View reusable assets';
+    }
+    if (path.includes('/community/training') || path === '/training') {
+        return 'Go to training';
+    }
+    if (path.includes('/community/events') || path === '/events') {
+        return 'View events';
+    }
+    const parts = path.split('/').filter(Boolean);
+    if (parts.length === 0) return 'Continue';
+    const last = parts[parts.length - 1];
+    return `Go to ${last.replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())}`;
+}
 
 export function Home() {
-  const [query, setQuery] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [conversationState, setConversationState] = useState<ConversationState | null>(null);
-  const [agentMode, setAgentMode] = useState<AgentMode>(() => {
-    // Initialize from localStorage directly to avoid race conditions
-    const savedMode = localStorage.getItem('atlas_agent_mode');
-    return (savedMode as AgentMode) || 'Self Service Agent';
-  });
+    const currentPersona = useUserStore((state) => state.currentPersona);
+    const isInitialized = useUserStore((state) => state.isInitialized);
+    const { features } = useBrandingStore();
 
-  const [showModeDropdown, setShowModeDropdown] = useState(false);
-  const currentPersona = useUserStore((state) => state.currentPersona);
-  const navigate = useNavigate();
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const { features } = useBrandingStore();
+    const [agentMode, setAgentMode] = useState<AgentMode>(() => {
+        const saved =
+            typeof window !== 'undefined'
+                ? (window.localStorage.getItem(STORAGE_KEY) as AgentMode | null)
+                : null;
+        return saved ?? 'Self Service Agent';
+    });
 
-  const availableModes = (Object.keys(AGENT_SUGGESTIONS) as AgentMode[]).filter(mode => {
-    // 1. Check persona permissions
-    if (!MODE_PERMISSIONS[mode].includes(currentPersona)) return false;
-    
-    // 2. Check feature flags
-    if (mode === 'Self Service Agent' && features?.self_service === false) return false;
-    if (mode === 'Governance' && features?.governance === false) return false;
-    if (mode === 'FinOps' && features?.finops === false) return false;
-    
-    return true;
-  });
-  const isInitialized = useUserStore((state) => state.isInitialized);
+    const navigate = useNavigate();
+    const location = useLocation();
+    const chatRef = useRef<ChatViewHandle | null>(null);
 
-  const adjustHeight = (el: HTMLTextAreaElement) => {
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
-  };
-
-  const handleReset = () => {
-    setConversationState(null);
-    setQuery('');
-    // Ensure we KEEP the current mode
-    // setAgentMode('Self Service Agent');
-    setIsProcessing(false);
-    localStorage.removeItem('atlas_conversation_state');
-    // localStorage.removeItem('atlas_agent_mode');
-
-    setTimeout(() => {
-      const initialTextarea = document.querySelector('textarea');
-      if (initialTextarea instanceof HTMLTextAreaElement) {
-        initialTextarea.focus();
-      }
-    }, 100);
-  };
-
-  // Load state from localStorage on mount (Conversation Only)
-  useEffect(() => {
-    const savedState = localStorage.getItem('atlas_conversation_state');
-    if (savedState) {
-      try {
-        const parsedState = JSON.parse(savedState);
-        if (parsedState.messages) {
-          parsedState.messages = parsedState.messages.map((m: Omit<ChatMessage, 'timestamp'> & { timestamp: string }) => ({
-            ...m,
-            timestamp: new Date(m.timestamp)
-          }));
+    // Persist mode selection so the user lands in the same context
+    // when they revisit the page.
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try {
+            window.localStorage.setItem(STORAGE_KEY, agentMode);
+        } catch {
+            /* storage quota / disabled — non-fatal */
         }
-        setConversationState(parsedState);
-      } catch (e) {
-        console.error('Failed to parse saved conversation state', e);
-      }
-    }
-  }, []); // Only run once on mount
+    }, [agentMode]);
 
-  // Persist state to localStorage
-  useEffect(() => {
-    if (conversationState) {
-      localStorage.setItem('atlas_conversation_state', JSON.stringify(conversationState));
-    }
-    localStorage.setItem('atlas_agent_mode', agentMode);
-  }, [conversationState, agentMode]);
+    // Reset mode if the active persona / feature flags forbid the
+    // current selection. Same guard that lived in the prior Home
+    // implementation.
+    useEffect(() => {
+        if (!isInitialized || !currentPersona) return;
+        const allowedByPersona = MODE_PERMISSIONS[agentMode]?.includes(currentPersona);
+        const allowedByFeature =
+            (agentMode === 'Self Service Agent' && features?.self_service !== false) ||
+            (agentMode === 'Governance' && features?.governance !== false) ||
+            (agentMode === 'FinOps' && features?.finops !== false);
+        if (!allowedByPersona || !allowedByFeature) {
+            setAgentMode('Self Service Agent');
+        }
+    }, [currentPersona, agentMode, isInitialized, features]);
 
-  // Reset agent mode only if current persona explicitly FORBIDS it or feature is disabled
-  useEffect(() => {
-    if (isInitialized && currentPersona && MODE_PERMISSIONS[agentMode]) {
-      const isAllowedByPersona = MODE_PERMISSIONS[agentMode].includes(currentPersona);
-      const isAllowedByFeature = 
-        (agentMode === 'Self Service Agent' && features?.self_service !== false) ||
-        (agentMode === 'Governance' && features?.governance !== false) ||
-        (agentMode === 'FinOps' && features?.finops !== false);
+    const availableModes: ChatModeOption[] = useMemo(() => {
+        return (Object.keys(MODE_PERMISSIONS) as AgentMode[])
+            .filter((mode) => {
+                if (!MODE_PERMISSIONS[mode].includes(currentPersona)) return false;
+                if (mode === 'Self Service Agent' && features?.self_service === false) return false;
+                if (mode === 'Governance' && features?.governance === false) return false;
+                if (mode === 'FinOps' && features?.finops === false) return false;
+                return true;
+            })
+            .map((mode) => ({ id: mode, label: mode, icon: MODE_ICONS[mode] }));
+    }, [currentPersona, features]);
 
-      if (!isAllowedByPersona || !isAllowedByFeature) {
-        console.warn(`Resetting mode from ${agentMode} because it is not allowed (persona: ${isAllowedByPersona}, feature: ${isAllowedByFeature}).`);
-        setAgentMode('Self Service Agent');
-      }
-    }
-  }, [currentPersona, agentMode, isInitialized, features]);
+    // External deep-links can navigate to /request with
+    // `state.autoQuery` to kick off a turn immediately. Forward that
+    // into ChatView via the imperative handle, then clear the state
+    // so a refresh doesn't replay the same query.
+    useEffect(() => {
+        const auto = location.state?.autoQuery as string | undefined;
+        if (!auto) return;
+        navigate(location.pathname, { replace: true, state: {} });
+        // Tiny defer so the imperative ref is wired before submission.
+        const id = window.setTimeout(() => {
+            chatRef.current?.submitQuery(auto);
+        }, 0);
+        return () => window.clearTimeout(id);
+    }, [location.state, location.pathname, navigate]);
 
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setShowModeDropdown(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // Scroll to bottom when messages change
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [conversationState?.messages, conversationState?.currentQuestionIndex]);
-
-  // Focus input when conversation starts
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (conversationState && !conversationState.showConfirmation) {
-      setTimeout(() => inputRef.current?.focus(), 100);
-    }
-  }, [conversationState?.currentQuestionIndex, conversationState?.showConfirmation]);
-
-
-  const location = useLocation();
-
-  const submitQuery = async (queryText: string) => {
-    if (!queryText.trim() || isProcessing) return;
-    setIsProcessing(true);
-
-    // Create initial user message
-    const userMessage: ChatMessage = {
-      id: Date.now().toString(),
-      type: 'user',
-      content: queryText,
-      timestamp: new Date(),
+    const handleRoute = (route: ChatRouteInfo) => {
+        // Persist any prefill data the agent computed so the form page
+        // can pick it up out of localStorage on mount.
+        if (route.prefill && Object.keys(route.prefill).length > 0) {
+            try {
+                window.localStorage.setItem(
+                    `form_prefill_${route.path}`,
+                    JSON.stringify(route.prefill),
+                );
+            } catch {
+                /* swallow */
+            }
+        }
+        navigate(route.path);
     };
 
-    // Create thinking message
-    const thinkingMessage: ChatMessage = {
-      id: "thinking",
-      type: 'agent',
-      content: '__THINKING__',
-      timestamp: new Date(),
-    };
+    const welcomeNode = (
+        <div className="flex flex-col gap-6 max-w-5xl w-full mx-auto">
+            <h2 className="text-2xl md:text-3xl font-semibold text-gray-800 text-center tracking-tight">
+                What do you need to do today?
+            </h2>
 
-    // Optimistically set state with thinking bubble
-    setConversationState({
-      initialQuery: queryText,
-      messages: [userMessage, thinkingMessage],
-      currentQuestionIndex: 0,
-      followUpQuestions: [],
-      answers: {},
-      agentActions: [],
-      showConfirmation: false,
-      context: undefined,
-    });
-
-    try {
-      // Call the real agent endpoint
-      const agentResponse = await callAgent({
-        query: queryText,
-        conversation_history: [], // First message, no history
-        context: {
-          mode: agentMode
-        },
-      });
-
-      // Use only agent-provided questions (no fallback)
-      const followUpQuestions = agentResponse.follow_up_questions || [];
-
-      // Create agent message from response
-      let agentMessageContent = agentResponse.message;
-      if (!agentMessageContent || !agentMessageContent.trim()) {
-        agentMessageContent = "I'm processing your request.";
-      }
-
-      const agentMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        type: 'agent',
-        content: agentMessageContent,
-        timestamp: new Date(),
-      };
-
-      // Create messages array (replace thinking with real response)
-      const messages: ChatMessage[] = [userMessage, agentMessage];
-
-      // Add first question if agent provided one
-      if (followUpQuestions.length > 0) {
-        messages.push({
-          id: (Date.now() + 2).toString(),
-          type: 'agent',
-          content: followUpQuestions[0].question,
-          timestamp: new Date(),
-        });
-      }
-
-      // Determine if we should show confirmation
-      const showConfirmation = !agentResponse.requires_more_info && (agentResponse.form_route !== null || agentResponse.form_prefill_data !== undefined);
-
-      setConversationState(prev => prev ? {
-        ...prev,
-        messages,
-        followUpQuestions,
-        showConfirmation,
-        formRoute: agentResponse.form_route || undefined,
-        formPrefillData: agentResponse.form_prefill_data,
-        context: prev.context // Preserve context if set (unlikely for initial)
-      } : null);
-    } catch (error) {
-      console.error('Error calling agent:', error);
-      const errorMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        type: 'agent',
-        content: error instanceof Error
-          ? `I'm having trouble connecting to the agent service. ${error.message}. Please try again.`
-          : "I'm having trouble connecting to the agent service. Please try again.",
-        timestamp: new Date(),
-      };
-
-      setConversationState(prev => prev ? {
-        ...prev,
-        messages: [userMessage, errorMessage],
-        showConfirmation: false
-      } : null);
-    }
-
-    setIsProcessing(false);
-  };
-
-  const handleInitialSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim() || isProcessing) return;
-    const initialQuery = query.trim();
-    setQuery(''); // Clear input immediately
-    await submitQuery(initialQuery);
-  };
-
-  useEffect(() => {
-    if (location.state?.autoQuery && !isProcessing) {
-      const autoQ = location.state.autoQuery;
-      // Clear the state so it doesn't re-trigger on refresh
-      navigate(location.pathname, { replace: true, state: {} });
-      submitQuery(autoQ);
-    }
-  }, [location.state?.autoQuery, navigate, isProcessing]);
-
-  const handleAnswerSubmit = async (questionId: string, answer: string | string[]) => {
-    if (!conversationState || isProcessing) return;
-
-    setIsProcessing(true);
-
-    const updatedAnswers = {
-      ...conversationState.answers,
-      [questionId]: answer,
-    };
-
-    const answerMessage: ChatMessage = {
-      id: Date.now().toString(),
-      type: 'user',
-      content: Array.isArray(answer) ? answer.join(', ') : answer,
-      timestamp: new Date(),
-    };
-
-    // Create thinking message
-    const thinkingMessage: ChatMessage = {
-      id: "thinking",
-      type: 'agent',
-      content: '__THINKING__',
-      timestamp: new Date(),
-    };
-
-    // Optimistically update
-    setConversationState({
-      ...conversationState,
-      messages: [...conversationState.messages, answerMessage, thinkingMessage],
-      answers: updatedAnswers,
-    });
-
-    try {
-      // Call the agent with the answer to get next question or form route
-      const agentResponse = await callAgent({
-        query: `Answer to "${conversationState.followUpQuestions[conversationState.currentQuestionIndex]?.question}": ${Array.isArray(answer) ? answer.join(', ') : answer}`,
-        conversation_history: conversationState.messages.map(m => ({
-          id: m.id,
-          type: m.type,
-          content: m.content,
-          timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : (typeof m.timestamp === 'string' ? m.timestamp : new Date().toISOString()),
-        })),
-        context: {
-          ...conversationState.context,
-          mode: agentMode
-        },
-      });
-
-      // Use only agent-provided questions (no fallback)
-      const followUpQuestions = agentResponse.follow_up_questions || [];
-      const nextIndex = agentResponse.follow_up_questions ? 0 : conversationState.currentQuestionIndex + 1;
-      const hasMoreQuestions = agentResponse.requires_more_info && followUpQuestions.length > 0;
-
-      // Create agent message from response
-      let agentMessageContent = agentResponse.message;
-      if (!agentMessageContent || !agentMessageContent.trim()) {
-        agentMessageContent = "Thank you for that information.";
-      }
-
-      const agentMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        type: 'agent',
-        content: agentMessageContent,
-        timestamp: new Date(),
-      };
-
-      const messages: ChatMessage[] = [...conversationState.messages, answerMessage, agentMessage];
-
-      // Add next question if agent provided one
-      if (hasMoreQuestions && followUpQuestions.length > 0) {
-        const nextQuestion = followUpQuestions[0];
-        messages.push({
-          id: (Date.now() + 2).toString(),
-          type: 'agent',
-          content: nextQuestion.question,
-          timestamp: new Date(),
-        });
-      }
-
-      // Determine if we should show confirmation (form route ready)
-      const showConfirmation = conversationState?.showConfirmation || (!agentResponse.requires_more_info && (agentResponse.form_route !== null || agentResponse.form_prefill_data !== undefined));
-
-      setConversationState(prev => prev ? {
-        ...prev,
-        messages,
-        currentQuestionIndex: agentResponse.follow_up_questions ? 0 : nextIndex, // Reset if new questions
-        followUpQuestions,
-        answers: updatedAnswers, // Keep updated answers
-        showConfirmation,
-        formRoute: agentResponse.form_route || prev.formRoute,
-        formPrefillData: agentResponse.form_prefill_data || prev.formPrefillData,
-      } : null);
-    } catch (error) {
-      console.error('Error calling agent:', error);
-      const errorMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        type: 'agent',
-        content: error instanceof Error
-          ? `I'm having trouble processing your answer. ${error.message}. Please try again.`
-          : "I'm having trouble processing your answer. Please try again.",
-        timestamp: new Date(),
-      };
-
-      setConversationState(prev => prev ? {
-        ...prev,
-        messages: [...conversationState.messages, answerMessage, errorMessage],
-        answers: updatedAnswers,
-      } : null);
-    }
-
-    setIsProcessing(false);
-  };
-
-  const getButtonLabel = (path: string | undefined): string => {
-    if (!path) return 'Continue to form';
-
-    // Determine button label based on route
-    if (path.startsWith('/paas/') || path.startsWith('/daas/')) {
-      return 'Go to pre-filled form';
-    } else if (path.includes('/community/links') || path === '/community-links') {
-      return 'Go to community links';
-    } else if (path.includes('/community/assets') || path === '/reusable-assets') {
-      return 'View reusable assets';
-    } else if (path.includes('/community/training') || path === '/training') {
-      return 'Go to training';
-    } else if (path.includes('/community/events') || path === '/events') {
-      return 'View events';
-    } else {
-      // Fallback: try to extract meaningful label from path
-      const pathParts = path.split('/').filter(Boolean);
-      if (pathParts.length > 0) {
-        const lastPart = pathParts[pathParts.length - 1];
-        return `Go to ${lastPart.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}`;
-      }
-      return 'Continue';
-    }
-  };
-
-  const handleGoToForm = () => {
-    if (!conversationState?.formRoute?.path) {
-      console.error('No form route path available');
-      return;
-    }
-
-    const routePath = conversationState.formRoute.path;
-
-    // Store prefilled data in localStorage before navigating
-    // Use form_prefill_data from agent if available, otherwise use answers
-    const prefillData = conversationState.formPrefillData || conversationState.answers;
-    if (prefillData && Object.keys(prefillData).length > 0) {
-      localStorage.setItem(`form_prefill_${routePath}`, JSON.stringify(prefillData));
-    }
-
-    // Navigate in the same window
-    navigate(routePath);
-  };
-
-
-  // If we have a conversation in progress, show chat interface
-  if (conversationState) {
-    const currentQuestion = conversationState.followUpQuestions[conversationState.currentQuestionIndex];
-    const allQuestionsAnswered = conversationState.currentQuestionIndex >= conversationState.followUpQuestions.length;
-
-    return (
-      <div className="flex flex-col h-[calc(100vh-200px)] relative">
-        {/* Background gradient */}
-        <div className="absolute inset-0 bg-linear-to-br from-primary/5 via-transparent to-primary/10 pointer-events-none" />
-
-        <div className="relative flex-1 flex flex-col">
-          {/* Glow effect */}
-          <div className="absolute -inset-1 bg-linear-to-r from-primary/20 to-primary/10 rounded-3xl blur-xl opacity-30" />
-
-          <div className="relative flex-1 flex flex-col bg-white/80 backdrop-blur-sm rounded-3xl shadow-2xl border border-gray-200/50 overflow-hidden">
-            <div className="flex-1 flex flex-col p-6 overflow-hidden">
-              {/* Messages */}
-              <div className="flex-1 overflow-y-auto space-y-4 mb-4 pr-2 custom-scrollbar">
-                {conversationState.messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2 duration-300`}
-                  >
-                    <div
-                      className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${message.type === 'user'
-                        ? 'bg-primary text-white'
-                        : 'bg-gray-50 text-gray-900 border border-gray-200/50'
-                        }`}
-                    >
-                      {message.content === '__THINKING__' ? (
-                        <ThinkingBubble />
-                      ) : message.type === 'agent' ? (
-                        <div
-                          className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
-                          dangerouslySetInnerHTML={{ __html: message.content }}
-                        />
-                      ) : (
-                        <p className="text-sm leading-relaxed">{message.content}</p>
-                      )}
-                    </div>
-                  </div>
-                ))}
-
-                {/* Form Link */}
-                {conversationState.showConfirmation && conversationState.formRoute && (
-                  <div className="space-y-4 mt-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                    <div className="bg-linear-to-br from-blue-50 to-primary/5 border border-blue-200/50 rounded-2xl p-5 shadow-sm">
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <Button
-                            onClick={handleGoToForm}
-                            className="flex items-center gap-2 rounded-xl shadow-md hover:shadow-lg transition-all duration-200"
-                          >
-                            <ExternalLink className="w-4 h-4" />
-                            {getButtonLabel(conversationState.formRoute?.path)}
-                          </Button>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
+                {DISCOVERY_CONTENT[agentMode].map((column, idx) => (
+                    <div key={`${agentMode}-${idx}`} className="space-y-4">
+                        <div className={`flex items-center gap-2 font-semibold ${column.colorClass}`}>
+                            {column.icon}
+                            <h3>{column.title}</h3>
                         </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div ref={messagesEndRef} />
-              </div>
-
-              {/* Input Area */}
-              {/* Show input for specific question types */}
-              {!allQuestionsAnswered && currentQuestion && (
-                <div className="border-t border-gray-200/50 pt-5 mt-4">
-                  <div className="space-y-3">
-                    {currentQuestion.type === 'text' && (
-                      <form
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          const input = e.currentTarget.querySelector('input') as HTMLInputElement;
-                          if (input.value.trim()) {
-                            handleAnswerSubmit(currentQuestion.id, input.value.trim());
-                            input.value = '';
-                          }
-                        }}
-                      >
-                        <div className="flex gap-2 items-center">
-                          <Textarea
-                            placeholder="Type your answer..."
-                            required={currentQuestion.required}
-                            className="flex-1 rounded-xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 min-h-[48px] max-h-[200px] resize-none overflow-hidden py-3"
-                            disabled={isProcessing}
-                            rows={1}
-                            onInput={(e) => adjustHeight(e.currentTarget)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' && !e.shiftKey) {
-                                e.preventDefault();
-                                const form = e.currentTarget.closest('form');
-                                if (form && !isProcessing) {
-                                  form.requestSubmit();
-                                }
-                              }
-                            }}
-                          />
-                          <Button
-                            type="submit"
-                            disabled={isProcessing}
-                            className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 h-10"
-                          >
-                            <Send className="w-4 h-4 text-white" />
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={handleReset}
-                            className="rounded-xl border-primary/30 text-primary hover:bg-primary/5 hover:text-primary/80 transition-all duration-200 h-10 px-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
-                          >
-                            New Chat
-                          </Button>
-                        </div>
-
-                        <div className="mt-2 flex items-center gap-2 px-1 relative" ref={dropdownRef}>
-                          <button
-                            type="button"
-                            onClick={() => setShowModeDropdown(!showModeDropdown)}
-                            className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors duration-200 py-1"
-                          >
-                            <span className="flex items-center gap-1.5">
-                              {MODE_ICONS[agentMode]}
-                              {agentMode}
-                            </span>
-                            <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showModeDropdown ? 'rotate-180' : ''}`} />
-                          </button>
-
-                          {showModeDropdown && (
-                            <div className="absolute bottom-full left-0 mb-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                              {availableModes
-                                .map((mode) => (
-                                  <button
-                                    key={mode}
+                        <div className="grid gap-2">
+                            {column.items.map((item) => (
+                                <button
+                                    key={item.title}
                                     type="button"
-                                    onClick={() => {
-                                      setAgentMode(mode);
-                                      setShowModeDropdown(false);
-                                    }}
-                                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${agentMode === mode
-                                      ? 'bg-primary/5 text-primary font-semibold'
-                                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                                      }`}
-                                  >
-                                    <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
-                                      {MODE_ICONS[mode]}
-                                    </span>
-                                    {mode}
-                                  </button>
-                                ))}
-                            </div>
-                          )}
-                        </div>
-                      </form>
-                    )}
-
-                    {currentQuestion.type === 'radio' && (
-                      <div className="space-y-2">
-                        {currentQuestion.options?.map((option) => (
-                          <button
-                            key={option}
-                            onClick={() => handleAnswerSubmit(currentQuestion.id, option)}
-                            className="w-full text-left px-4 py-3 bg-gray-50 hover:bg-linear-to-r hover:from-primary/10 hover:to-primary/5 rounded-xl border border-gray-200/50 hover:border-primary/30 transition-all duration-200 hover:shadow-sm text-sm"
-                          >
-                            {option}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    {currentQuestion.type === 'multi-select' && (
-                      <div className="space-y-2">
-                        {currentQuestion.options?.map((option) => {
-                          const isSelected = Array.isArray(conversationState.answers[currentQuestion.id]) &&
-                            conversationState.answers[currentQuestion.id].includes(option);
-                          return (
-                            <button
-                              key={option}
-                              onClick={() => {
-                                const current = Array.isArray(conversationState.answers[currentQuestion.id])
-                                  ? conversationState.answers[currentQuestion.id] as string[]
-                                  : [];
-                                const updated = isSelected
-                                  ? current.filter(o => o !== option)
-                                  : [...current, option];
-                                handleAnswerSubmit(currentQuestion.id, updated);
-                              }}
-                              className={`w-full text-left px-4 py-3 rounded-xl border transition-all duration-200 text-sm ${isSelected
-                                ? 'bg-linear-to-r from-primary to-primary/90 text-white border-primary shadow-md'
-                                : 'bg-gray-50 hover:bg-linear-to-r hover:from-primary/10 hover:to-primary/5 border-gray-200/50 hover:border-primary/30 hover:shadow-sm'
-                                }`}
-                            >
-                              {option}
-                            </button>
-                          );
-                        })}
-                        {Array.isArray(conversationState.answers[currentQuestion.id]) &&
-                          conversationState.answers[currentQuestion.id].length > 0 && (
-                            <Button
-                              onClick={() => {
-                                const answer = conversationState.answers[currentQuestion.id];
-                                if (Array.isArray(answer) && answer.length > 0) {
-                                  // Move to next question
-                                  const nextIndex = conversationState.currentQuestionIndex + 1;
-                                  if (nextIndex < conversationState.followUpQuestions.length) {
-                                    const nextQuestion = conversationState.followUpQuestions[nextIndex];
-                                    const agentMessage: ChatMessage = {
-                                      id: Date.now().toString(),
-                                      type: 'agent',
-                                      content: nextQuestion.question,
-                                      timestamp: new Date(),
-                                    };
-                                    setConversationState({
-                                      ...conversationState,
-                                      messages: [...conversationState.messages, agentMessage],
-                                      currentQuestionIndex: nextIndex,
-                                    });
-                                  } else {
-                                    // All questions answered, determine form route
-                                    const formRoute = determineFormRoute(
-                                      conversationState.initialQuery,
-                                      conversationState.answers,
-                                      conversationState.context
-                                    );
-
-                                    // Store prefilled data in localStorage for the form page
-                                    localStorage.setItem(`form_prefill_${formRoute.path}`, JSON.stringify(conversationState.answers));
-
-                                    const agentMessage: ChatMessage = {
-                                      id: Date.now().toString(),
-                                      type: 'agent',
-                                      content: `I have prefilled the correct form based on your input. Click the link below to review and submit.`,
-                                      timestamp: new Date(),
-                                    };
-                                    setConversationState({
-                                      ...conversationState,
-                                      messages: [...conversationState.messages, agentMessage],
-                                      currentQuestionIndex: nextIndex,
-                                      agentActions: [],
-                                      showConfirmation: true,
-                                      formRoute,
-                                    });
-                                  }
-                                }
-                              }}
-                              className="w-full mt-3 rounded-xl shadow-md hover:shadow-lg transition-all duration-200"
-                            >
-                              Continue
-                            </Button>
-                          )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* General text input - always available when conversation is active and no specific question */}
-              {(!currentQuestion || allQuestionsAnswered) && (
-                <div className="border-t border-gray-200/50 pt-5 mt-4">
-                  <form
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      const textarea = e.currentTarget.querySelector('textarea') as HTMLTextAreaElement;
-                      const userMessage = textarea.value.trim();
-                      if (userMessage && !isProcessing) {
-                        setIsProcessing(true);
-                        textarea.value = ''; // Clear input immediately
-
-                        const userMsg: ChatMessage = {
-                          id: Date.now().toString(),
-                          type: 'user',
-                          content: userMessage,
-                          timestamp: new Date(),
-                        };
-
-                        const thinkingMsg: ChatMessage = {
-                          id: "thinking",
-                          type: 'agent',
-                          content: '__THINKING__',
-                          timestamp: new Date(),
-                        };
-
-                        // Optimistic update
-                        setConversationState({
-                          ...conversationState,
-                          messages: [...conversationState.messages, userMsg, thinkingMsg],
-                        });
-
-                        try {
-                          // Call agent with the free-form message
-                          const agentResponse = await callAgent({
-                            query: userMessage,
-                            conversation_history: conversationState.messages.map(m => ({
-                              id: m.id,
-                              type: m.type,
-                              content: m.content,
-                              timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : (typeof m.timestamp === 'string' ? m.timestamp : new Date().toISOString()),
-                            })),
-                            context: {
-                              ...conversationState.context,
-                              agent_mode: agentMode
-                            },
-                          });
-
-                          const agentMsg: ChatMessage = {
-                            id: (Date.now() + 1).toString(),
-                            type: 'agent',
-                            content: agentResponse.message || "Failure to generate response",
-                            timestamp: new Date(),
-                          };
-
-                          const followUpQuestions = agentResponse.follow_up_questions || [];
-                          const messages: ChatMessage[] = [...conversationState.messages, userMsg, agentMsg];
-
-                          // Add first question if agent provided one
-                          if (followUpQuestions.length > 0) {
-                            messages.push({
-                              id: (Date.now() + 2).toString(),
-                              type: 'agent',
-                              content: followUpQuestions[0].question,
-                              timestamp: new Date(),
-                            });
-                          }
-
-                          // Determine if we should show confirmation
-                          const showConfirmation = conversationState.showConfirmation || (!agentResponse.requires_more_info && (agentResponse.form_route !== null || agentResponse.form_prefill_data !== undefined));
-
-                          setConversationState(prev => prev ? {
-                            ...prev,
-                            messages,
-                            currentQuestionIndex: followUpQuestions.length > 0 ? 0 : prev.currentQuestionIndex,
-                            followUpQuestions,
-                            showConfirmation,
-                            formRoute: agentResponse.form_route || prev.formRoute,
-                            formPrefillData: agentResponse.form_prefill_data || prev.formPrefillData,
-                          } : null);
-
-                          // Store prefilled data if available
-                          if (agentResponse.form_route) {
-                            const prefillData = agentResponse.form_prefill_data || conversationState.answers;
-                            if (prefillData && Object.keys(prefillData).length > 0) {
-                              localStorage.setItem(`form_prefill_${agentResponse.form_route.path}`, JSON.stringify(prefillData));
-                            }
-                          }
-                        } catch (error) {
-                          console.error('Error calling agent:', error);
-                          const errorMsg: ChatMessage = {
-                            id: (Date.now() + 1).toString(),
-                            type: 'agent',
-                            content: error instanceof Error
-                              ? `I'm having trouble processing your message. ${error.message}. Please try again.`
-                              : "I'm having trouble processing your message. Please try again.",
-                            timestamp: new Date(),
-                          };
-                          setConversationState(prev => prev ? {
-                            ...prev,
-                            messages: [...conversationState.messages, userMsg, errorMsg],
-                          } : null);
-                        } finally {
-                          setIsProcessing(false);
-                        }
-                      }
-                    }}
-                  >
-                    <div className="flex gap-2 items-center">
-                      <Textarea
-                        ref={inputRef}
-                        placeholder="Type your message..."
-                        className="flex-1 rounded-xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 min-h-[48px] max-h-[200px] resize-none overflow-hidden py-3"
-                        disabled={false} // Allow typing during processing
-                        onInput={(e) => adjustHeight(e.currentTarget)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault();
-                            const form = e.currentTarget.closest('form');
-                            if (form && !isProcessing && e.currentTarget.value.trim()) {
-                              form.requestSubmit();
-                            }
-                          }
-                        }}
-                      />
-                      <Button
-                        type="submit"
-                        disabled={isProcessing}
-                        className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 self-end h-10 disabled:opacity-50"
-                      >
-                        {isProcessing ? (
-                          <div className="w-4 h-4 rounded-full border-2 border-primary/20 border-t-primary animate-spin" />
-                        ) : (
-                          <Send className="w-4 h-4 text-white" />
-                        )}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={handleReset}
-                        className="rounded-xl border-primary/30 text-primary hover:bg-primary/5 hover:text-primary/80 transition-all duration-200 self-end h-10 px-4 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
-                      >
-                        New Chat
-                      </Button>
-                    </div>
-
-                    <div className="mt-2 flex items-center gap-2 px-1 relative" ref={dropdownRef}>
-                      <button
-                        type="button"
-                        onClick={() => setShowModeDropdown(!showModeDropdown)}
-                        className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors duration-200 py-1"
-                      >
-                        <span className="flex items-center gap-1.5">
-                          {MODE_ICONS[agentMode]}
-                          {agentMode}
-                        </span>
-                        <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showModeDropdown ? 'rotate-180' : ''}`} />
-                      </button>
-
-                      {showModeDropdown && (
-                        <div className="absolute bottom-full left-0 mb-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                          {availableModes
-                            .map((mode) => (
-                              <button
-                                key={mode}
-                                type="button"
-                                onClick={() => {
-                                  setAgentMode(mode);
-                                  setShowModeDropdown(false);
-                                }}
-                                className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${agentMode === mode
-                                  ? 'bg-primary/5 text-primary font-semibold'
-                                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                                  }`}
-                              >
-                                <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
-                                  {MODE_ICONS[mode]}
-                                </span>
-                                {mode}
-                              </button>
+                                    onClick={() => chatRef.current?.submitQuery(item.query)}
+                                    className={`relative p-2.5 rounded-xl border border-gray-200 hover:shadow-md hover:bg-white/80 transition-all duration-200 text-left group ${column.hoverBorderClass}`}
+                                >
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div
+                                            className={`text-[13px] font-medium text-gray-900 transition-colors ${column.hoverTextClass}`}
+                                        >
+                                            {item.title}
+                                        </div>
+                                        <div className="relative group/info">
+                                            <Info className="w-4 h-4 text-gray-400 hover:text-gray-600 transition-colors" />
+                                            <div className="absolute bottom-full right-0 mb-2 w-48 p-2 bg-gray-900 text-white text-xs rounded-lg shadow-xl opacity-0 translate-y-2 invisible group-hover/info:opacity-100 group-hover/info:translate-y-0 group-hover/info:visible transition-all duration-200 z-50 pointer-events-none">
+                                                {item.description}
+                                                <div className="absolute top-full right-1.5 -mt-1 border-4 border-transparent border-t-gray-900" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </button>
                             ))}
                         </div>
-                      )}
                     </div>
-                  </form>
-                </div>
-              )}
+                ))}
             </div>
-          </div>
         </div>
-      </div>
     );
-  }
 
-  // Initial state - show input form
-  return (
-    <div className="flex items-center justify-center min-h-[calc(100vh-200px)] relative">
-      <div className="w-full max-w-3xl">
-        <div className="relative">
-          {/* Glow effect */}
-          <div className="absolute -inset-1 bg-linear-to-r from-primary/20 to-primary/10 rounded-3xl blur-xl opacity-30" />
-
-          <div className="relative bg-white/90 backdrop-blur-sm rounded-3xl shadow-xl border border-gray-200/50 overflow-hidden">
-            <div className="p-8 md:p-10">
-              <form onSubmit={handleInitialSubmit} className="space-y-4">
-                {/* Prompt sits directly above the input as a centered
-                    label rather than greyed-out placeholder text inside
-                    the box — keeps the call-to-action prominent even
-                    while the user is typing. */}
-                <h2 className="text-2xl md:text-3xl font-semibold text-gray-800 text-center tracking-tight">
-                  What do you need to do today?
-                </h2>
-                <div className="relative group">
-                  <div className="absolute inset-0 bg-linear-to-r from-primary/10 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                  <Textarea
-                    ref={inputRef}
-                    value={query}
-                    onChange={(e) => {
-                      setQuery(e.target.value);
-                      adjustHeight(e.target);
-                    }}
-                    className="text-base py-3 pr-14 rounded-2xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 bg-white/90 backdrop-blur-sm min-h-[52px] max-h-[200px] resize-none overflow-hidden custom-scrollbar"
-                    disabled={false}
-                    rows={1}
-                    onInput={(e) => adjustHeight(e.currentTarget)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        if (!isProcessing && query.trim()) {
-                          handleInitialSubmit(e);
-                        }
-                      }
-                    }}
-                  />
-                  <Button
-                    type="submit"
-                    disabled={isProcessing || !query.trim()}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                    size="sm"
-                  >
-                    {isProcessing ? (
-                      <span className="animate-pulse px-3">Processing...</span>
-                    ) : (
-                      <ArrowRight className="w-4 h-4 text-white" />
-                    )}
-                  </Button>
-                </div>
-
-                <div className="flex items-center justify-between px-1 relative">
-                  <div ref={dropdownRef}>
-                    <button
-                      type="button"
-                      onClick={() => setShowModeDropdown(!showModeDropdown)}
-                      className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors duration-200 py-1"
-                    >
-                      <span className="flex items-center gap-1.5">
-                        {MODE_ICONS[agentMode]}
-                        {agentMode}
-                      </span>
-                      <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showModeDropdown ? 'rotate-180' : ''}`} />
-                    </button>
-
-                    {showModeDropdown && (
-                      <div className="absolute top-full left-0 mt-1 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                        {availableModes
-                          .map((mode) => (
-                            <button
-                              key={mode}
-                              type="button"
-                              onClick={() => {
-                                setAgentMode(mode);
-                                setShowModeDropdown(false);
-                              }}
-                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-200 ${agentMode === mode
-                                ? 'bg-primary/5 text-primary font-semibold'
-                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                                }`}
-                            >
-                              <span className={`${agentMode === mode ? 'text-primary' : 'text-gray-400'}`}>
-                                {MODE_ICONS[mode]}
-                              </span>
-                              {mode}
-                            </button>
-                          ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </form>
-
-              {/* Quick suggestions */}
-              <div className="mt-6 pt-6 border-t border-gray-200/50">
-                {/* Service Discovery Categories */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
-                  {DISCOVERY_CONTENT[agentMode].map((column, idx) => (
-                    <div key={idx} className="space-y-4">
-                      <div className={`flex items-center gap-2 font-semibold ${column.colorClass}`}>
-                        {column.icon}
-                        <h3>{column.title}</h3>
-                      </div>
-                      <div className="grid gap-2">
-                        {column.items.map((item, itemIdx) => (
-                          <button
-                            key={itemIdx}
-                            onClick={() => {
-                              setQuery(item.query);
-                              inputRef.current?.focus();
-                            }}
-                            className={`relative p-2.5 rounded-xl border border-gray-200 hover:shadow-md hover:bg-white/80 transition-all duration-200 text-left group ${column.hoverBorderClass}`}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <div className={`text-[13px] font-medium text-gray-900 transition-colors ${column.hoverTextClass}`}>{item.title}</div>
-                              <div className="relative group/info">
-                                <Info className="w-4 h-4 text-gray-400 hover:text-gray-600 transition-colors" />
-                                {/* Tooltip */}
-                                <div className="absolute bottom-full right-0 mb-2 w-48 p-2 bg-gray-900 text-white text-xs rounded-lg shadow-xl opacity-0 translate-y-2 invisible group-hover/info:opacity-100 group-hover/info:translate-y-0 group-hover/info:visible transition-all duration-200 z-50 pointer-events-none">
-                                  {item.description}
-                                  {/* Arrow */}
-                                  <div className="absolute top-full right-1.5 -mt-1 border-4 border-transparent border-t-gray-900" />
-                                </div>
-                              </div>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+    return (
+        <div className="px-6 py-4 h-[calc(100vh-3rem)] flex flex-col">
+            <div className="flex-1 min-h-0">
+                <ChatView
+                    ref={chatRef}
+                    mode={agentMode}
+                    welcomeNode={welcomeNode}
+                    placeholder="Type your message..."
+                    storageKey={`chatview_messages_self_service_${agentMode}`}
+                    availableModes={availableModes}
+                    onModeChange={(id) => setAgentMode(id as AgentMode)}
+                    onRoute={handleRoute}
+                    formCtaLabelFor={getButtonLabel}
+                />
             </div>
-          </div>
         </div>
-      </div>
-    </div >
-  );
+    );
 }

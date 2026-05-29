@@ -13,6 +13,7 @@ interface BrandingState {
     brandColorSuccess: string;
     databricksWorkspaceUrl: string;
     commandCenterUrl: string;
+    genieFullExperienceUrl: string;
     features: Record<string, boolean>;
     tools: Record<string, boolean>;
     workflows: Record<string, boolean>;
@@ -34,6 +35,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     brandColorSuccess: '#00A972',
     databricksWorkspaceUrl: '',
     commandCenterUrl: '',
+    genieFullExperienceUrl: '',
     features: {},
     tools: {},
     workflows: {},
@@ -56,6 +58,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 brandColorSuccess: branding.brand_color_success,
                 databricksWorkspaceUrl: branding.databricks_workspace_url || '',
                 commandCenterUrl: branding.command_center_url || '',
+                genieFullExperienceUrl: (branding as { genie_full_experience_url?: string }).genie_full_experience_url || '',
                 features: branding.features || {},
                 tools: branding.tools || {},
                 workflows: branding.workflows || {},

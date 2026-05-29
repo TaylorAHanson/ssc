@@ -87,7 +87,7 @@ function buildGroups(opts: {
         },
         {
           id: 'databricks_genie',
-          title: 'Databricks Genie',
+          title: 'Analyze and Explore',
           description:
             'Ask natural-language questions of your Databricks data.',
           icon: <Sparkles className={ICON_CLASS} />,
@@ -268,7 +268,7 @@ export function Welcome() {
       {/* ─── Hero ─────────────────────────────────────────────── */}
       <section>
         <h1 className="text-3xl sm:text-4xl font-bold text-heading">
-          Welcome to {brandName}
+          Welcome to the {brandName}
         </h1>
       </section>
 
@@ -277,7 +277,7 @@ export function Welcome() {
         className="rounded-2xl border border-accent-soft bg-linear-to-r from-accent-soft/60 to-white p-5 sm:p-6 shadow-sm"
         aria-labelledby="landing-pref-heading"
       >
-        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+        <div className="flex items-start gap-4">
           <div className="w-12 h-12 rounded-xl bg-accent text-white flex items-center justify-center shrink-0 shadow-sm">
             <MapPin className="w-6 h-6" />
           </div>
@@ -292,22 +292,27 @@ export function Welcome() {
               Pick your home base and we'll take you there the moment you load
               the app.
             </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <label
+                htmlFor="default-landing-page"
+                className="text-sm font-medium text-gray-700"
+              >
+                Take me to
+              </label>
+              <select
+                id="default-landing-page"
+                value={defaultHomePage}
+                onChange={(e) => setDefaultHomePage(e.target.value)}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-800 shadow-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+              >
+                {landingChoices.map((choice) => (
+                  <option key={choice.value || 'none'} value={choice.value}>
+                    {choice.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-          <label className="sr-only" htmlFor="default-landing-page">
-            Default landing page
-          </label>
-          <select
-            id="default-landing-page"
-            value={defaultHomePage}
-            onChange={(e) => setDefaultHomePage(e.target.value)}
-            className="w-full sm:w-auto sm:min-w-[260px] rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm font-medium text-gray-800 shadow-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
-          >
-            {landingChoices.map((choice) => (
-              <option key={choice.value || 'none'} value={choice.value}>
-                {choice.label}
-              </option>
-            ))}
-          </select>
         </div>
       </section>
 

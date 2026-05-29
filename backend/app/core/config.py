@@ -163,6 +163,18 @@ class Settings(BaseSettings):
     DATABRICKS_ACCOUNT_ID: str = ""  # SECRET: Set in .env - Account ID for MWS workspace provisioning
     DATABRICKS_CLIENT_ID: str = ""  # SECRET: Set in .env - Service principal client ID for MWS
     DATABRICKS_CLIENT_SECRET: str = ""  # SECRET: Set in .env - Service principal client secret for MWS
+
+    # Databricks Job Runner (classic compute) — used by BaseDatabricksJobStateMachine
+    # for workloads that need control-plane network connectivity (email, LDAP, etc.).
+    # The defaults below describe a small single-node job cluster. Override the node
+    # type and spark version for your cloud/region. To skip cold-starts entirely,
+    # set DATABRICKS_JOB_CLUSTER_ID (always-on) or DATABRICKS_JOB_INSTANCE_POOL_ID
+    # (warm pool). Precedence: cluster_id > instance_pool_id > new job cluster.
+    DATABRICKS_JOB_SPARK_VERSION: str = "15.4.x-scala2.12"
+    DATABRICKS_JOB_NODE_TYPE_ID: str = "i3.xlarge"
+    DATABRICKS_JOB_NUM_WORKERS: int = 0  # 0 = single-node
+    DATABRICKS_JOB_CLUSTER_ID: str = ""  # Optional: pin to an always-on cluster
+    DATABRICKS_JOB_INSTANCE_POOL_ID: str = ""  # Optional: pull from instance pool
     
     # Model Serving (Databricks)
     # SECRET: Set in .env file

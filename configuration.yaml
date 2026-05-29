@@ -34,6 +34,15 @@ branding:
   # "Command Center" link appears in the "Build & Customize" sidebar group.
   command_center_url: "https://fevm-taylor-hanson-build.cloud.databricks.com/apps/command-center"
 
+links:
+  # External "Open in Databricks" deep link surfaced inside the
+  # Ask Your Data page so power users can pop into the native Genie
+  # UI for deeper exploration. When empty, the in-page button is
+  # hidden. Defaults to the workspace's /one entry point if you
+  # leave it blank and the workspace URL is configured (the frontend
+  # falls back to that automatically).
+  genie_full_experience_url: ""
+
 features:
   core: true
   governance: true
@@ -42,11 +51,16 @@ features:
   workflows: true
   data_discovery: true # Turns on the data discovery feature
   calendar: true # Turns on the calendar feature
+  # Enables the new "Ask Your Data" tab and the matching ask_your_data tool.
+  # Backed by Databricks Genie (Managed MCP). Disable this in environments
+  # where Genie isn't available or OBO auth isn't configured.
+  ask_your_data: true
 
 ui:
   tabs:
     home: true
     data_discovery: true
+    ask_your_data: true
     my_requests: true
     pending_approvals: true
     training: true
@@ -96,6 +110,19 @@ tools:
   check_asset_quality: true
   find_owner: true
   check_training_status: true
+  # Databricks Genie (the general-purpose data chat in Databricks One)
+  # via Managed MCP. Slow tool (30-120s per question); safeguarded by
+  # the `ask_your_data` feature flag and an OBO-only auth path. By
+  # default the tool calls the general Genie endpoint
+  # (`/api/2.0/mcp/genie`), which searches across the caller's
+  # accessible Unity Catalog data and any Genie Spaces they have.
+  # Setting `default_genie_space_id` is OPTIONAL: if non-empty, all
+  # Ask Your Data traffic is pinned to that single curated Genie Space
+  # (`/api/2.0/mcp/genie/{space_id}`) instead of the general server.
+  # Leave it empty for the typical "ask everything" experience.
+  ask_your_data:
+    enabled: true
+    default_genie_space_id: ""
 
 workflows:
   RequestType.ALLOWLIST_EXCEPTION: true

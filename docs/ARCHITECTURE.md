@@ -969,6 +969,118 @@ async def on_enter_terraform_applying_async(self):
     - Next poll: `tick()` sees fact → Transitions to `completed`
     - **No duplicate creation** - hook's idempotency guard prevents it
 
+#### Databricks Job Runner Pattern
+
+Many workflows need to run arbitrary code on a Databricks cluster — heavy
+batch analytics (asset deduplication), control-plane integrations that need
+PrivateLink network reachability (email/SES delivery, LDAP lookups), or any
+job that has to run *outside* the FastAPI container.
+
+The upload → submit → poll → handle-result → notify lifecycle is identical
+across all of them, so it lives in a single reusable base class:
+
+**`backend/app/state_machines/databricks_job_base.py` — `BaseDatabricksJobStateMachine`**
+
+States: `pending → job_submitted → job_complete → notifying → completed/failed`.
+The base handles idempotent job submission (writes `run_id_created` once),
+per-tick polling, error classification, and auto-advancement between states.
+
+Subclasses only declare *what* runs:
+
+```python
+@workflow(request_types=RequestType.ASSET_DEDUPLICATION)
+class AssetDeduplicationStateMachine(BaseDatabricksJobStateMachine):
+    NOTEBOOK_PATH = "asset_deduplication_job.py"   # relative to this file
+    USE_CLASSIC_COMPUTE = False                    # True for email/LDAP/etc.
+
+    def build_job_parameters(self) -> dict:
+        ctx = self.request.state_context or {}
+        return {"target_catalog": ctx["target_catalog"], "run_id": self.request.id}
+
+    def build_run_name(self) -> str:
+        return f"Asset Deduplication: {self.request.id}"
+
+    async def on_job_completed_async(self):
+        # Custom: query the Delta table the notebook wrote
+        ...
+
+    async def send_notification_async(self):
+        # Custom: rich HTML report
+        ...
+```
+
+For inline Python scripts (no notebook file), override `build_python_code()`
+instead of setting `NOTEBOOK_PATH`. Parameters become positional CLI args.
+
+**Compute targets** are described by `app.providers.databricks.compute.ComputeSpec`:
+
+| Mode | When to use | Cold-start |
+|------|-------------|------------|
+| Serverless (default) | Batch analytics, no PrivateLink needs | ~10s |
+| Classic, new job cluster | Control-plane providers today | 1–3 min |
+| Classic, instance pool | Future: warm pool for sub-minute control-plane | ~10–30s |
+| Classic, existing cluster ID | Future: always-on cluster, lowest latency | None |
+
+The default classic compute spec is configured via `DATABRICKS_JOB_*` settings
+in `app/core/config.py` (spark version, node type, num workers, optional
+`DATABRICKS_JOB_CLUSTER_ID` / `DATABRICKS_JOB_INSTANCE_POOL_ID` for the
+future swap to warmer compute).
+
+**Provider primitive**: `DatabricksProvider.submit_job(...)` is the single
+entry point used by the base class and by direct callers (e.g. `SESEmailProvider`
+via the back-compat `submit_python_job` shim). It accepts notebook tasks,
+inline Python tasks, or pre-built `jobs.SubmitTask` objects, plus an optional
+`ComputeSpec`. Use `get_run_output(run_id)` to fetch notebook return values,
+task values, or stdout once the run terminates.
+
+##### Single-step variant (`DatabricksJobStepMixin`)
+
+`BaseDatabricksJobStateMachine` assumes the *whole* workflow is one job. Many
+workflows are mostly app-side and only need a *single step* to dispatch to a
+Databricks cluster — sending an email mid-flow, looking a user up in LDAP,
+calling a control-plane-only API between approvals.
+
+For that, mix `DatabricksJobStepMixin` directly into your own state machine:
+
+```python
+class ProvisionWorkspaceStateMachine(BaseRequestStateMachine, DatabricksJobStepMixin):
+    provisioning = State("provisioning")
+    notifying_owner = State("notifying_owner")
+    completed = State("completed", final=True)
+
+    send = provisioning.to(notifying_owner, cond="has_workspace_created")
+    finish = notifying_owner.to(completed, cond="step_email_completed")
+
+    async def on_enter_notifying_owner_async(self):
+        await self.run_databricks_job_step(
+            step_id="email",                       # namespaces the facts
+            notebook_path="send_email_job.py",     # relative to this file
+            parameters={"to": ..., "subject": ...},
+            compute=default_classic_compute(...),  # control-plane network
+        )
+
+    @property
+    def step_email_completed(self) -> bool:
+        return self.step_completed("email")
+```
+
+The mixin handles submission idempotency, polling, and writes facts scoped to
+the step:
+
+* `step:<id>:submitted` — first visit, after the job is in flight
+* `step:<id>:completed` — terminal success (includes captured task output)
+* `step:<id>:failed`    — terminal failure (submit error or run error)
+
+Step failure does **not** auto-call `mark_failed()` — the caller decides
+whether a failed step should kill the workflow or trigger a fallback. Use
+`step_failed("email")` in a transition guard to route accordingly.
+
+`BaseDatabricksJobStateMachine` is itself just a thin wrapper around the
+mixin: it calls `run_databricks_job_step(step_id="main", ...)` once and
+gates its state transitions on the resulting facts. So everything that runs
+a Databricks job in this codebase — single-step or whole-workflow — funnels
+through the same submit/poll/idempotency code path.
+
 ### API Layer (`app/api/`)
 
 **Purpose**: Provide REST endpoints for the frontend UI.
@@ -1092,6 +1204,97 @@ State machine includes failure states:
 - **Circuit Breaker Pattern**: Temporarily disable failing providers to prevent cascade failures
 - **Health Checks**: Monitor provider health and automatically failover
 - **Proactive Agentic Monitoring**: run without a user to provide proactive monitoring of system health and issues
+
+## Agent SSE Event Protocol
+
+The agent supports two endpoints for conversation turns:
+
+- `POST /api/v1/agent/conversation` — single JSON response (legacy / background callers)
+- `POST /api/v1/agent/conversation/stream` — `text/event-stream` of incremental events
+
+The streaming endpoint lets the chat UI render live "Calling X..." pills, status lines, optional reasoning, and the final assistant message as they happen instead of staring at a thinking indicator.
+
+### Event types (see `backend/app/agents/events.py`)
+
+| Event | When emitted | Payload |
+|---|---|---|
+| `status` | Once per LLM iteration ("Thinking..." / "Working on it...") | `{label, elapsed_ms?}` |
+| `tool_call` | Just before a tool executes | `{id, name, friendly_label, args_summary?}` |
+| `tool_result` | After a tool returns (skipped for `pending_poll`) | `{id, name, ok, summary?, error?}` |
+| `pending_poll` | Tool returned an async handle the UI must drain | `{kind, ids, friendly_label, tool_call_id, tool_name}` |
+| `reasoning` | LLM endpoint surfaced a non-empty reasoning block | `{text}` |
+| `message` | Final assistant text for the turn | `{content}` |
+| `done` | Stream terminator | `{messages?}` |
+| `error` | Recoverable / fatal failure | `{message, fatal}` |
+
+### `run_stream` contract
+
+`AgentRunner.run_stream(query, history, context, obo_token)` is an async generator that yields the events above. The legacy `AgentRunner.run()` is a thin shim that drains the generator into a `{content, tool_calls, messages, pending_poll}` dict so background callers (and the non-streaming endpoint) keep working unchanged.
+
+### Coarse vs. token streaming
+
+We emit **one event per LLM iteration / tool boundary**, not per token. `ModelServingClient` stays non-streaming; if we need token-level deltas later we can add a `message_delta` event without breaking the wire format.
+
+### Friendly labels
+
+Each tool's user-facing copy (e.g. "Asking Genie...") lives on the tool itself via the `friendly_label` / `friendly_completion_label` arguments to `@tool`. The runner reads those when emitting `tool_call` / `tool_result` events; tools without a label fall back to a humanized version of the snake_case tool name.
+
+### Frontend consumer
+
+`src/lib/agentStream.ts` wraps `fetch` + `ReadableStream` to parse the SSE frames into typed JS events. `src/components/chat/ChatView.tsx` is the canonical consumer — it owns the messages state, draws tool-call pills, drives pending-poll loops, and renders the optional "Show reasoning" disclosure when reasoning events arrive.
+
+## Async MCP Integrations (Pending-Poll Pattern)
+
+Some external services answer asynchronously: a request kicks off the work, and the caller polls for completion. Databricks Genie (via Managed MCP) is the first such integration; future async backends (Vector Search, UC Functions, custom MCP servers) plug into the same wiring without changes to the runner or chat UI.
+
+### Wire shape
+
+A tool that needs async hand-off returns `{"pending_poll": {kind, ...ids}}` from its `execute()`. The runner detects this envelope, emits a `PendingPollEvent`, halts the iteration loop, and ends the SSE stream with a `done` event.
+
+```python
+return {
+    "pending_poll": {
+        "kind": "genie",                # routes the UI to the right poll endpoint
+        "friendly_label": "Asking Genie...",
+        "space_id": "...",
+        "conversation_id": "...",
+        "message_id": "...",
+        "question": "...",              # echoed back so the UI can show context
+    }
+}
+```
+
+### Lifecycle
+
+1. **User asks a question.** `ChatView` opens `POST /agent/conversation/stream`.
+2. **Runner calls `ask_your_data`.** The tool fires `genie_ask` over MCP, returns the pending-poll envelope.
+3. **Runner emits `pending_poll` and ends the stream.** `ChatView` records the tool pill in a "pending" state with an elapsed counter.
+4. **`usePendingPoll` polls the matching endpoint** (`POST /agent/poll/genie`) every 3 s, capped at 180 s. The endpoint forwards `genie_poll_response` over MCP using the same OBO token.
+5. **On `complete`**, `ChatView` re-invokes the runner with the resolved answer attached as a synthetic `tool` message in `conversation_history`. The LLM summarizes; the chat continues normally.
+6. **On `failed` / `timeout` / user cancel**, the pill switches to error state and the chat surface offers a "New chat" affordance.
+
+### MCP client
+
+`backend/app/providers/databricks_mcp/client.py` wraps the standard `mcp.client.streamable_http.streamablehttp_client` with:
+
+- A URL builder that points to `https://<workspace>/api/2.0/mcp/genie` (general Databricks Genie — searches across the caller's accessible UC data + any Genie Spaces) by default. When `space_id` is supplied it switches to the space-scoped server at `/api/2.0/mcp/genie/<space_id>`. Both endpoints are documented under [Available managed servers](https://docs.databricks.com/aws/en/generative-ai/mcp/managed-mcp#available-managed-servers).
+- An OBO-only auth path (`Authorization: Bearer <user_token>` headers). Service-principal auth is intentionally rejected — answers must reflect the caller's UC permissions.
+- A `call_genie_tool(...)` convenience for the common open-session-call-one-tool flow.
+
+### Adding a new async MCP server
+
+1. Add the tool that returns the pending-poll envelope; pick a unique `kind` value.
+2. Add a poll endpoint at `POST /api/v1/agent/poll/<kind>` that drains it.
+3. Extend `usePendingPoll` to dispatch on the new `kind`.
+4. Update prompts in the relevant agent modes so the LLM knows when to reach for the new tool.
+
+### Safeguards against accidental Genie calls
+
+1. The tool description explicitly enumerates what NOT to use it for.
+2. Each mode's system prompt repeats the warning ("only use it if no faster tool answers the question").
+3. The schema requires `question: str` with a min length and a description that says "the literal natural-language question to ask Genie".
+4. The Ask Your Data mode is a *narrow* mode — only the `ask_your_data` tool is registered, so the LLM can't divert into provisioning workflows.
+5. The frontend renders a distinct "Asking Genie..." pill with an elapsed counter so the user knows the call is in flight; mid-flight cancel is supported (it stops the UI poll loop; the Genie query continues server-side until it self-completes).
 
 ## Implementation Requirements
 

@@ -1,14 +1,44 @@
 """
 Reusable Agent Runner for executing agent loops with tools.
+
+Two entry points:
+
+* :py:meth:`AgentRunner.run_stream` is an async generator that yields
+  :mod:`app.agents.events` events as the ReAct loop progresses. The HTTP
+  layer wraps these in SSE frames so the browser can render live
+  progress (status line, tool-call pills, optional reasoning, final
+  message).
+* :py:meth:`AgentRunner.run` is a thin shim that drains the streaming
+  generator into the legacy dict shape (``{content, tool_calls,
+  messages}``). Background callers and the existing non-streaming
+  endpoint keep working unchanged.
+
+When a tool returns a value matching the *pending-poll envelope*
+(``{"pending_poll": {...}}``), the runner emits a :class:`PendingPollEvent`
+and stops the iteration loop early. The UI is responsible for draining
+the poll, then re-invoking the runner with a synthetic ``tool`` message
+carrying the resolved result so the LLM can summarize the answer.
 """
 import json
 import logging
 import re
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Union
-from app.model_serving.agent_llm import AgentLLMClient
+from typing import Any, AsyncIterator, Dict, List, Optional
+
+from app.agents.events import (
+    AgentEvent,
+    DoneEvent,
+    ErrorEvent,
+    MessageEvent,
+    PendingPollEvent,
+    ReasoningEvent,
+    StatusEvent,
+    ToolCallEvent,
+    ToolResultEvent,
+)
 from app.agents.prompts import get_agent_prompt
 from app.core.config import settings
+from app.model_serving.agent_llm import AgentLLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -87,26 +117,65 @@ def _prune_oldest_tool_outputs(messages: List[Dict[str, Any]], max_chars: int) -
         pruned += 1
     return pruned
 
+
+def _summarize_args(fn_args: Dict[str, Any], max_chars: int = 120) -> Optional[str]:
+    """Best-effort short string of tool arguments for display under a pill.
+
+    We prefer obvious "natural language" keys (``query``, ``question``,
+    ``prompt``) since those make the most useful tool-call labels. Falls
+    back to a truncated JSON dump when no friendly key is present.
+    """
+    if not fn_args:
+        return None
+    for key in ("question", "query", "prompt", "filter_string"):
+        v = fn_args.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()[:max_chars]
+    try:
+        rendered = json.dumps(fn_args, default=str)
+    except Exception:
+        return None
+    if len(rendered) > max_chars:
+        return rendered[: max_chars - 1] + "\u2026"
+    return rendered
+
+
+def _extract_pending_poll(result: Any) -> Optional[Dict[str, Any]]:
+    """If a tool result is a pending-poll envelope, return its payload.
+
+    The envelope shape is ``{"pending_poll": {kind, ids, ...}}``. Anything
+    else (or an envelope missing ``kind``) is treated as a normal result.
+    """
+    if not isinstance(result, dict):
+        return None
+    pp = result.get("pending_poll")
+    if not isinstance(pp, dict):
+        return None
+    if not pp.get("kind"):
+        return None
+    return pp
+
+
 class AgentRunner:
     """
     Executes an agent conversation loop (ReAct pattern).
     Works outside of FastAPI request context for background tasks.
     """
-    
+
     def __init__(
-        self, 
+        self,
         system_prompt: Optional[str] = None,
         tools: Optional[List[Any]] = None,
         user_identity: Optional[Dict[str, str]] = None,
         max_iterations: int = 5,
-        mode: str = "self_service"
+        mode: str = "self_service",
     ):
         self.llm_client = AgentLLMClient()
         self.tools = tools or []
         self.max_iterations = max_iterations
         self.user_identity = user_identity or {}
         self.mode = mode
-        
+
         # Build standard system prompt if not provided
         if system_prompt is None:
             self.system_prompt = get_agent_prompt(tools_override=self.tools, mode=self.mode)
@@ -118,135 +187,216 @@ class AgentRunner:
         else:
             self.system_prompt = system_prompt
 
-    async def run(
-        self, 
-        query: str, 
+    def _find_tool(self, name: str):
+        return next((t for t in self.tools if t.name == name), None)
+
+    async def run_stream(
+        self,
+        query: str,
         history: Optional[List[Dict[str, str]]] = None,
         context: Optional[Dict[str, Any]] = None,
-        obo_token: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Executes the agent loop for a single query.
-        Returns the final standardized response.
+        obo_token: Optional[str] = None,
+    ) -> AsyncIterator[AgentEvent]:
+        """Execute the agent loop, yielding SSE events as work progresses.
+
+        The caller is expected to forward each event to the client (the
+        FastAPI streaming endpoint serializes them as ``text/event-stream``
+        frames). The final event is always a :class:`DoneEvent` (or an
+        :class:`ErrorEvent` with ``fatal=True``) so the UI knows when to
+        close the reader.
         """
         # Inject context into system prompt
         current_system_prompt = self.system_prompt
         if context:
-            ctx_str = "\n\nCURRENT CONTEXT:\n" + "\n".join([f"{k}: {v}" for k, v in context.items()])
+            ctx_str = "\n\nCURRENT CONTEXT:\n" + "\n".join(
+                [f"{k}: {v}" for k, v in context.items()]
+            )
             current_system_prompt += ctx_str
-        
-        messages = [{"role": "system", "content": current_system_prompt}]
-        
+
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": current_system_prompt}
+        ]
         if history:
             messages.extend(history)
-            
+
         # Add current query with timestamp and type
-        messages.append({
-            "role": "user", 
-            "content": query,
-            "timestamp": datetime.now().isoformat(),
-            "type": "user"
-        })
-        
-        # Format tools for LLM
+        messages.append(
+            {
+                "role": "user",
+                "content": query,
+                "timestamp": datetime.now().isoformat(),
+                "type": "user",
+            }
+        )
+
         formatted_tools = self._format_tools_for_llm(self.tools)
-        
+
         iteration = 0
         final_content = ""
-        final_tool_calls = []
-        
-        while iteration < self.max_iterations:
-            iteration += 1
-            logger.info(f"Agent iteration {iteration}/{self.max_iterations}")
+        agent_message = ""
+        last_tool_calls: List[Dict[str, Any]] = []
 
-            # Defense-in-depth: even with per-tool truncation, a long
-            # multi-iteration conversation can accumulate enough tool output
-            # to exceed the model's context window. Prune oldest tool
-            # results first (newest are most relevant to the current step).
-            max_prompt_chars = getattr(settings, "AGENT_MAX_PROMPT_CHARS", 600000)
-            pre_prune_size = _estimate_messages_chars(messages)
-            if pre_prune_size > max_prompt_chars:
-                pruned = _prune_oldest_tool_outputs(messages, max_prompt_chars)
-                if pruned:
-                    post = _estimate_messages_chars(messages)
-                    logger.warning(
-                        f"Agent prompt size {pre_prune_size} chars exceeded budget "
-                        f"({max_prompt_chars}); pruned {pruned} older tool output(s); "
-                        f"new size {post} chars."
+        try:
+            while iteration < self.max_iterations:
+                iteration += 1
+                logger.info(f"Agent iteration {iteration}/{self.max_iterations}")
+
+                # Defense-in-depth context window pruning. See _prune_oldest_tool_outputs.
+                max_prompt_chars = getattr(settings, "AGENT_MAX_PROMPT_CHARS", 600000)
+                pre_prune_size = _estimate_messages_chars(messages)
+                if pre_prune_size > max_prompt_chars:
+                    pruned = _prune_oldest_tool_outputs(messages, max_prompt_chars)
+                    if pruned:
+                        post = _estimate_messages_chars(messages)
+                        logger.warning(
+                            f"Agent prompt size {pre_prune_size} chars exceeded budget "
+                            f"({max_prompt_chars}); pruned {pruned} older tool output(s); "
+                            f"new size {post} chars."
+                        )
+
+                # Surface a status line per iteration so the UI's
+                # progress indicator updates as the agent reasons.
+                yield StatusEvent(
+                    label="Thinking..." if iteration == 1 else "Working on it..."
+                )
+
+                response = await self.llm_client.generate_response(
+                    messages=messages,
+                    tools=formatted_tools,
+                    temperature=0.0,  # 0.0 for deterministic reporting
+                )
+
+                agent_message = response.get("content") or ""
+                tool_calls = response.get("tool_calls", []) or []
+                last_tool_calls = tool_calls
+
+                if agent_message:
+                    agent_message = self._clean_message(agent_message)
+
+                # Some endpoints surface a separate reasoning block. If we
+                # got non-empty reasoning text, hand it to the UI for the
+                # collapsible "Thinking" disclosure.
+                reasoning_text = self._extract_reasoning(response)
+                if reasoning_text:
+                    yield ReasoningEvent(text=reasoning_text)
+
+                # Terminal: model decided no more tool calls. Emit the
+                # final message and exit.
+                if not tool_calls:
+                    final_content = agent_message
+                    break
+
+                # Record the assistant's tool-calling turn so subsequent
+                # iterations have the linkage between assistant + tool
+                # messages required by most LLM tool schemas.
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "tool_calls": tool_calls,
+                        "timestamp": datetime.now().isoformat(),
+                        "type": "agent",
+                    }
+                )
+
+                tool_outputs: List[Dict[str, Any]] = []
+                executed_any = False
+                pending_poll_event: Optional[PendingPollEvent] = None
+
+                for tc in tool_calls:
+                    fn_name = tc.get("function", {}).get("name", "")
+                    fn_args = tc.get("function", {}).get("arguments", {})
+                    if isinstance(fn_args, str):
+                        try:
+                            fn_args = json.loads(fn_args)
+                        except Exception:
+                            fn_args = {}
+
+                    matching_tool = self._find_tool(fn_name)
+                    tool_call_id = tc.get("id", fn_name)
+                    if not matching_tool:
+                        # Unknown tool name from the LLM. Surface as a
+                        # tool_result error so the user sees what went
+                        # wrong and the loop can self-correct.
+                        err_msg = f"Tool '{fn_name}' is not registered for this mode."
+                        logger.warning(err_msg)
+                        yield ToolResultEvent(
+                            id=tool_call_id, name=fn_name, ok=False, error=err_msg
+                        )
+                        tool_outputs.append(
+                            {
+                                "tool_call_id": tool_call_id,
+                                "name": fn_name,
+                                "content": err_msg,
+                            }
+                        )
+                        executed_any = True
+                        continue
+
+                    # Announce the call so the UI can show a running pill.
+                    yield ToolCallEvent(
+                        id=tool_call_id,
+                        name=fn_name,
+                        friendly_label=matching_tool.friendly_label,
+                        args_summary=_summarize_args(fn_args),
                     )
 
-            response = await self.llm_client.generate_response(
-                messages=messages,
-                tools=formatted_tools,
-                temperature=0.0 # Use 0.0 for more deterministic reporting
-            )
-            
-            agent_message = response.get("content") or ""
-            tool_calls = response.get("tool_calls", [])
-            
-            # Standardize message cleaning
-            if agent_message:
-                agent_message = self._clean_message(agent_message)
-            
-            # If no tool calls, we're done
-            if not tool_calls:
-                final_content = agent_message
-                break
-                
-            # Add assistant message to history with timestamp
-            messages.append({
-                "role": "assistant",
-                "tool_calls": tool_calls,
-                "timestamp": datetime.now().isoformat(),
-                "type": "agent"
-            })
-            
-            # Execute tools
-            tool_outputs = []
-            executed_any = False
-            
-            for tc in tool_calls:
-                fn_name = tc.get("function", {}).get("name", "")
-                fn_args = tc.get("function", {}).get("arguments", {})
-                
-                if isinstance(fn_args, str):
-                    try:
-                        fn_args = json.loads(fn_args)
-                    except:
-                        fn_args = {}
-                
-                # Note: No special case termination tools exist. The agent loop breaks naturally when it stops returning tool_calls.
-                
-                matching_tool = next((t for t in self.tools if t.name == fn_name), None)
-                if matching_tool:
                     try:
                         logger.info(f"Executing tool: {fn_name}")
-                        
-                        # Inject conversation history/context for execute_workflow if available
+
+                        # Inject conversation history/context for execute_workflow
                         if fn_name == "execute_workflow":
-                            # Pass all messages EXCEPT the system prompt and tool outputs to prevent DB bloat
                             history_for_tool = []
                             for m in messages:
                                 if m.get("role") not in ("system", "tool"):
-                                    # Copy message and strip heavy tool_calls payload
                                     m_copy = {k: v for k, v in m.items() if k != "tool_calls"}
                                     history_for_tool.append(m_copy)
                             fn_args["conversation_history"] = history_for_tool
-                            
-                        # Inject OBO token if provided
+
                         if obo_token:
-                            logger.info(f"AgentRunner: Injecting OBO token into tool {fn_name}")
+                            logger.info(
+                                f"AgentRunner: Injecting OBO token into tool {fn_name}"
+                            )
                             fn_args["_obo_token"] = obo_token
-                        
-                        # Inject user identity for tools that need it (e.g., execute_workflow)
+
                         if self.user_identity:
                             fn_args["_user_email"] = self.user_identity.get("email")
                             fn_args["_user_roles"] = self.user_identity.get("roles")
-                            fn_args["_user_entitlements"] = self.user_identity.get("entitlements")
-                            
+                            fn_args["_user_entitlements"] = self.user_identity.get(
+                                "entitlements"
+                            )
+
                         result = await matching_tool.execute(**fn_args)
+
+                        # Async hand-off: the tool returned a poll envelope
+                        # rather than a final result. We surface it to the
+                        # UI, stop processing further tool calls in this
+                        # iteration, and break out of the ReAct loop. The
+                        # UI re-invokes us once the poll resolves.
+                        pending_poll = _extract_pending_poll(result)
+                        if pending_poll is not None:
+                            pending_poll_event = PendingPollEvent(
+                                kind=str(pending_poll.get("kind")),
+                                ids={
+                                    k: v
+                                    for k, v in pending_poll.items()
+                                    if k not in ("kind", "friendly_label")
+                                },
+                                friendly_label=str(
+                                    pending_poll.get(
+                                        "friendly_label", matching_tool.friendly_label
+                                    )
+                                ),
+                                tool_call_id=tool_call_id,
+                                tool_name=fn_name,
+                            )
+                            # Stop processing remaining tool calls so the
+                            # UI sees a single poll for the turn.
+                            break
+
                         serialized = json.dumps(result, default=str)
-                        max_tool_chars = getattr(settings, "AGENT_MAX_TOOL_OUTPUT_CHARS", 25000)
+                        max_tool_chars = getattr(
+                            settings, "AGENT_MAX_TOOL_OUTPUT_CHARS", 25000
+                        )
                         truncated = _truncate_tool_output(serialized, max_tool_chars)
                         if len(truncated) < len(serialized):
                             logger.warning(
@@ -254,72 +404,220 @@ class AgentRunner:
                                 f"truncated to {len(truncated)} for prompt budget. "
                                 f"Consider tightening the tool's filters/pagination."
                             )
-                        tool_outputs.append({
-                            "tool_call_id": tc.get("id", fn_name),
-                            "name": fn_name,
-                            "content": truncated,
-                        })
+                        tool_outputs.append(
+                            {
+                                "tool_call_id": tool_call_id,
+                                "name": fn_name,
+                                "content": truncated,
+                            }
+                        )
+                        # Many tools surface validation / auth issues as a
+                        # ``{"error": "..."}`` payload rather than raising.
+                        # Treat that as a failed pill so the UI doesn't show
+                        # the friendly "X completed" label on what was
+                        # actually a failure (and the user doesn't think
+                        # something succeeded that didn't).
+                        tool_error_msg: Optional[str] = None
+                        if isinstance(result, dict):
+                            err_val = result.get("error")
+                            if isinstance(err_val, str) and err_val.strip():
+                                tool_error_msg = err_val
+                        if tool_error_msg:
+                            yield ToolResultEvent(
+                                id=tool_call_id,
+                                name=fn_name,
+                                ok=False,
+                                summary=tool_error_msg[:200],
+                            )
+                        else:
+                            yield ToolResultEvent(
+                                id=tool_call_id,
+                                name=fn_name,
+                                ok=True,
+                                summary=matching_tool.friendly_completion_label,
+                            )
                         executed_any = True
                     except Exception as e:
-                        logger.error(f"Tool error {fn_name}: {e}")
-                        tool_outputs.append({
-                            "tool_call_id": tc.get("id", fn_name),
-                            "name": fn_name,
-                            "content": f"Error: {str(e)}"
-                        })
+                        logger.error(f"Tool error {fn_name}: {e}", exc_info=True)
+                        err_text = f"Error: {e}"
+                        tool_outputs.append(
+                            {
+                                "tool_call_id": tool_call_id,
+                                "name": fn_name,
+                                "content": err_text,
+                            }
+                        )
+                        yield ToolResultEvent(
+                            id=tool_call_id,
+                            name=fn_name,
+                            ok=False,
+                            error=str(e),
+                        )
                         executed_any = True
-            
-            if iteration >= self.max_iterations: 
-                logger.warning(f"Hit max iterations ({self.max_iterations}) for query")
-                fallback_msg = "\n\n<em>Note: I've reached my maximum processing limit for this request. If I haven't fully answered your question, please try rephrasing or breaking it down.</em>"
-                final_content = (agent_message + fallback_msg).strip()
-                break
-            
-            if not executed_any:
-                final_content = agent_message
-                break
-                
-            # Add tool outputs to history
-            for output in tool_outputs:
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": output["tool_call_id"],
-                    "name": output["name"],
-                    "content": output["content"]
-                })
-        
+
+                # Pending poll handed off control to the UI. Emit the
+                # event and exit. Note: no tool message gets appended to
+                # ``messages`` for this call - the continuation turn
+                # adds it once the poll resolves.
+                if pending_poll_event is not None:
+                    yield pending_poll_event
+                    final_content = agent_message
+                    yield DoneEvent(messages=messages)
+                    return
+
+                if iteration >= self.max_iterations:
+                    logger.warning(
+                        f"Hit max iterations ({self.max_iterations}) for query"
+                    )
+                    fallback_msg = (
+                        "\n\n<em>Note: I've reached my maximum processing limit "
+                        "for this request. If I haven't fully answered your "
+                        "question, please try rephrasing or breaking it down.</em>"
+                    )
+                    final_content = (agent_message + fallback_msg).strip()
+                    break
+
+                if not executed_any:
+                    final_content = agent_message
+                    break
+
+                # Append tool outputs so the next iteration can use them.
+                for output in tool_outputs:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": output["tool_call_id"],
+                            "name": output["name"],
+                            "content": output["content"],
+                        }
+                    )
+
+            # Normal exit: emit the final message + done.
+            final_text = final_content or agent_message
+            if final_text:
+                yield MessageEvent(content=final_text)
+            yield DoneEvent(messages=messages)
+        except Exception as e:
+            logger.error(f"AgentRunner.run_stream failed: {e}", exc_info=True)
+            yield ErrorEvent(message=str(e), fatal=True)
+
+    async def run(
+        self,
+        query: str,
+        history: Optional[List[Dict[str, str]]] = None,
+        context: Optional[Dict[str, Any]] = None,
+        obo_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Executes the agent loop for a single query.
+
+        Backward-compatible shim over :py:meth:`run_stream`. Drains all
+        events into the legacy ``{content, tool_calls, messages}`` shape
+        used by the non-streaming endpoint and any background callers.
+
+        Pending-poll events have no analogue in this dict shape, so we
+        surface them via a ``pending_poll`` key for callers that opt
+        into the streaming mental model.
+        """
+        final_content = ""
+        tool_calls: List[Dict[str, Any]] = []
+        messages: List[Dict[str, Any]] = []
+        pending_poll: Optional[Dict[str, Any]] = None
+        last_tool_call_event: Optional[ToolCallEvent] = None
+
+        async for ev in self.run_stream(
+            query=query, history=history, context=context, obo_token=obo_token
+        ):
+            if isinstance(ev, MessageEvent):
+                final_content = ev.content
+            elif isinstance(ev, ToolCallEvent):
+                last_tool_call_event = ev
+                tool_calls.append(
+                    {
+                        "id": ev.id,
+                        "type": "function",
+                        "function": {"name": ev.name, "arguments": {}},
+                    }
+                )
+            elif isinstance(ev, PendingPollEvent):
+                pending_poll = ev.model_dump(mode="json")
+            elif isinstance(ev, DoneEvent):
+                if ev.messages is not None:
+                    messages = ev.messages
+            elif isinstance(ev, ErrorEvent) and ev.fatal:
+                final_content = (
+                    final_content
+                    or "I encountered an error processing your request. Please try again."
+                )
+
         return {
-            "content": final_content or agent_message,
-            "tool_calls": tool_calls if not final_tool_calls else final_tool_calls,
-            "messages": messages # Return full history for persistence if needed
+            "content": final_content,
+            "tool_calls": tool_calls,
+            "messages": messages,
+            "pending_poll": pending_poll,
         }
 
     def _format_tools_for_llm(self, tools: List[Any]) -> Optional[List[Dict[str, Any]]]:
-        if not tools: return None
-        
+        if not tools:
+            return None
+
         formatted = []
         for tool in tools:
-            # tool.input_schema is already a valid JSON schema (patched in mcp.py)
-            schema = tool.input_schema if isinstance(tool.input_schema, dict) else (
-                tool.input_schema.model_json_schema() if hasattr(tool.input_schema, "model_json_schema") 
-                else tool.input_schema.schema()
+            schema = (
+                tool.input_schema
+                if isinstance(tool.input_schema, dict)
+                else (
+                    tool.input_schema.model_json_schema()
+                    if hasattr(tool.input_schema, "model_json_schema")
+                    else tool.input_schema.schema()
+                )
             )
-            
-            formatted.append({
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": schema.get("properties", {}),
-                        "required": schema.get("required", [])
-                    }
+            formatted.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": {
+                            "type": "object",
+                            "properties": schema.get("properties", {}),
+                            "required": schema.get("required", []),
+                        },
+                    },
                 }
-            })
+            )
         return formatted
 
     def _clean_message(self, message: str) -> str:
         # Remove reasoning signatures
-        message = re.sub(r'\{[^{}]*"signature"[^{}]*\}', '', message, flags=re.IGNORECASE | re.DOTALL)
+        message = re.sub(
+            r'\{[^{}]*"signature"[^{}]*\}', "", message, flags=re.IGNORECASE | re.DOTALL
+        )
         return message.strip()
+
+    def _extract_reasoning(self, response: Dict[str, Any]) -> Optional[str]:
+        """Pull a reasoning/thinking block out of an LLM response, if any.
+
+        Different endpoints surface this differently:
+        - Anthropic-style: ``thinking`` field at top level or in message.
+        - OpenAI-style "reasoning": ``reasoning_content`` or ``reasoning``.
+        - Embedded in content as a ``[reasoning]...[/reasoning]`` block.
+
+        We sniff for the common shapes and return ``None`` when none
+        match - the UI then simply doesn't render the disclosure.
+        """
+        if not isinstance(response, dict):
+            return None
+        for key in ("reasoning", "thinking", "reasoning_content"):
+            v = response.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+            if isinstance(v, list):
+                # List of content parts (Anthropic-style ``thinking``).
+                texts = [
+                    p.get("text", "") if isinstance(p, dict) else str(p) for p in v
+                ]
+                joined = "\n".join(t for t in texts if t).strip()
+                if joined:
+                    return joined
+        return None

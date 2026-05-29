@@ -30,7 +30,15 @@ def load_workflows():
     # Walk through all modules in the state_machines directory
     for _, module_name, is_pkg in pkgutil.walk_packages([str(package_dir)], prefix="app.state_machines."):
         # Skip base modules
-        if module_name in ("app.state_machines.base", "app.state_machines.factory", "app.state_machines.decorators", "app.state_machines.lock", "app.state_machines.facts"):
+        if module_name in (
+            "app.state_machines.base",
+            "app.state_machines.databricks_job_base",
+            "app.state_machines.databricks_job_step",
+            "app.state_machines.factory",
+            "app.state_machines.decorators",
+            "app.state_machines.lock",
+            "app.state_machines.facts",
+        ):
             continue
             
         try:

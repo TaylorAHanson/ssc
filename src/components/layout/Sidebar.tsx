@@ -206,6 +206,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const brandLogoUrl = useBrandingStore((s) => s.brandLogoUrl);
   const databricksWorkspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
   const commandCenterUrl = useBrandingStore((s) => s.commandCenterUrl);
+  const features = useBrandingStore((s) => s.features);
 
   // User menu (account dropdown) is click-to-toggle for accessibility.
   // Close on outside click and on Escape.
@@ -266,15 +267,32 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   // They drop out silently if the workspace URL is not configured.
   const externalNavItems = React.useMemo<NavItem[]>(() => {
     const items: NavItem[] = [];
-    const genieUrl = genieHomeUrl(databricksWorkspaceUrl);
-    if (genieUrl) {
+    // "Analyze and Explore" used to deep-link out to Databricks Genie,
+    // but we now have an in-app chat view that wraps the same Genie
+    // space via the Managed MCP server. Route to /ask-your-data when
+    // the feature is enabled (default true), and fall back to the
+    // external link otherwise so legacy environments keep working.
+    const askYourDataEnabled =
+      uiTabs?.ask_your_data !== false && features?.ask_your_data !== false;
+    if (askYourDataEnabled) {
       items.push({
-        id: 'databricks_genie',
-        title: 'Databricks Genie',
+        id: 'ask_your_data',
+        title: 'Analyze and Explore',
         icon: <Sparkles className="w-5 h-5" />,
-        href: genieUrl,
+        path: '/ask-your-data',
         group: 'Discover & Analyze',
       });
+    } else {
+      const genieUrl = genieHomeUrl(databricksWorkspaceUrl);
+      if (genieUrl) {
+        items.push({
+          id: 'databricks_genie',
+          title: 'Analyze and Explore',
+          icon: <Sparkles className="w-5 h-5" />,
+          href: genieUrl,
+          group: 'Discover & Analyze',
+        });
+      }
     }
     if (commandCenterUrl) {
       // Internal route — Command Center is rendered inside an iframe at
@@ -299,7 +317,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       });
     }
     return items;
-  }, [databricksWorkspaceUrl, commandCenterUrl]);
+  }, [databricksWorkspaceUrl, commandCenterUrl, uiTabs?.ask_your_data, features?.ask_your_data]);
 
   const allNavItems = React.useMemo(
     () => [...navItems, ...externalNavItems],

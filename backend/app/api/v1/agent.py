@@ -2,8 +2,17 @@
 Agent API endpoints for conversation handling.
 """
 from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, AsyncIterator
+from app.agents.events import (
+    DoneEvent,
+    ErrorEvent,
+    MessageEvent,
+    RouteEvent,
+    StatusEvent,
+    serialize_sse,
+)
 from app.agents.prompts import get_agent_prompt, AGENT_TOOLS
 from app.agents.runner import AgentRunner
 from app.core.config import settings
@@ -67,9 +76,15 @@ def _clean_message_remove_json(message: str) -> str:
 
 class ChatMessage(BaseModel):
     id: str
-    type: str  # 'user' | 'agent'
+    type: str  # 'user' | 'agent' | 'tool'
     content: str
     timestamp: str
+    # Optional metadata used when the UI replays a tool result back to
+    # the runner (after a pending-poll completes). The runner injects
+    # these into the synthetic ``tool`` message so the LLM can see the
+    # original assistant tool-call linkage.
+    tool_call_id: Optional[str] = None
+    name: Optional[str] = None
 
 class ConversationRequest(BaseModel):
     query: str
@@ -119,6 +134,120 @@ async def get_agent_prompt_endpoint(current_user: User = Depends(get_current_use
         }
     }
 
+def _build_runner_and_history(
+    request: ConversationRequest,
+    current_user: User,
+) -> tuple[AgentRunner, List[Dict[str, Any]], str]:
+    """Shared setup for both the streaming and non-streaming endpoints.
+
+    Returns ``(runner, history, agent_mode)``. Raises ``HTTPException``
+    if the agent feature is disabled.
+    """
+    if not settings.AGENT_ENABLED:
+        raise HTTPException(status_code=503, detail="Agent is currently disabled")
+
+    logger.info(f"Incoming agent request context: {request.context}")
+    logger.info(f"Current User: {current_user.email}")
+    logger.info(f"Current User Roles: {current_user.roles}")
+
+    # Resolve agent mode from frontend context (normalize a few spellings)
+    agent_mode = "self_service"
+    if request.context:
+        raw_mode = request.context.get("mode") or request.context.get("agent_mode", "self_service")
+        mode_map = {
+            "self service agent": "self_service",
+            "self_service": "self_service",
+            "governance": "governance",
+            "finops": "finops",
+            "ask your data": "ask_your_data",
+            "ask_your_data": "ask_your_data",
+        }
+        agent_mode = mode_map.get(str(raw_mode).lower(), "self_service")
+    logger.info(f"Resolved agent mode: {agent_mode}")
+
+    # Filter tools by user permissions and mode. The "ask_your_data" mode
+    # is a curated allow-list: read-only data-discovery tools (catalog /
+    # schema / table / volume listing, owner lookup, target-workspace
+    # listing) plus the slow Genie escape hatch. Provisioning workflows,
+    # audit tooling, and entitlement search are intentionally excluded so
+    # the LLM doesn't try to route the user out of this tab.
+    ASK_YOUR_DATA_TOOLS = {
+        "get_catalog_list",
+        "get_schema_list",
+        "get_table_list",
+        "get_volume_list",
+        "get_target_workspaces",
+        "find_owner",
+        "ask_your_data",
+    }
+    visible_tools = []
+    for tool in AGENT_TOOLS:
+        if agent_mode == "ask_your_data" and tool.name not in ASK_YOUR_DATA_TOOLS:
+            continue
+
+        allowed = True
+        if hasattr(tool, "required_role") and tool.required_role:
+            if not current_user.has_role(tool.required_role):
+                allowed = False
+
+        if allowed:
+            visible_tools.append(tool)
+
+    user_identity = {
+        "email": current_user.email,
+        "roles": ", ".join(current_user.roles),
+        "entitlements": ", ".join(current_user.entitlements),
+    }
+
+    runner = AgentRunner(
+        tools=visible_tools,
+        user_identity=user_identity,
+        max_iterations=settings.AGENT_MAX_ITERATIONS,
+        mode=agent_mode,
+    )
+
+    history: List[Dict[str, Any]] = []
+    if request.conversation_history:
+        for msg in request.conversation_history:
+            if msg.type == "tool":
+                # Synthetic tool-result replay (e.g. after a Genie poll
+                # completes). Preserve linkage to the originating
+                # assistant tool_call so the LLM accepts the message.
+                history.append(
+                    {
+                        "role": "tool",
+                        "content": msg.content,
+                        "tool_call_id": msg.tool_call_id or msg.id,
+                        "name": msg.name or "tool",
+                    }
+                )
+            else:
+                role = "user" if msg.type == "user" else "assistant"
+                history.append(
+                    {
+                        "role": role,
+                        "content": msg.content,
+                        "timestamp": msg.timestamp,
+                        "type": msg.type,
+                    }
+                )
+
+    return runner, history, agent_mode
+
+
+def _extract_obo_token(req: Request) -> Optional[str]:
+    """Pull the forwarded user OBO token off the request, if present."""
+    if hasattr(req, "state") and hasattr(req.state, "token"):
+        token = req.state.token
+        if token:
+            logger.info(
+                f"Agent Endpoint: Found OBO token in request state (len={len(token)})"
+            )
+            return token
+        logger.info("Agent Endpoint: No OBO token in request state")
+    return None
+
+
 @router.post("/conversation", response_model=AgentResponse)
 async def handle_conversation(
     request: ConversationRequest, 
@@ -126,87 +255,10 @@ async def handle_conversation(
     current_user: User = Depends(get_current_user)
 ):
     """Handle a conversation turn with the agent."""
-    if not settings.AGENT_ENABLED:
-        raise HTTPException(status_code=503, detail="Agent is currently disabled")
-    
     try:
-        # User Refresh removed to preserve Dev Persona overrides
-        # The dependency injection provides the correct user state
-        
-        logger.info(f"Incoming agent request context: {request.context}")
-        
-        # DEBUG: Log user roles to debug visibility issues
-        logger.info(f"Current User: {current_user.email}")
-        logger.info(f"Current User Roles: {current_user.roles}")
+        runner, history, _agent_mode = _build_runner_and_history(request, current_user)
+        obo_token = _extract_obo_token(req)
 
-        # Extract mode from context first to filter tools
-        agent_mode = "self_service"
-        if request.context:
-            raw_mode = request.context.get("mode") or request.context.get("agent_mode", "self_service")
-            # Normalize mode strings from frontend (e.g., 'Self Service Agent' -> 'self_service')
-            mode_map = {
-                "self service agent": "self_service",
-                "self_service": "self_service",
-                "governance": "governance",
-                "finops": "finops"
-            }
-            agent_mode = mode_map.get(str(raw_mode).lower(), "self_service")
-        
-        logger.info(f"Resolved agent mode: {agent_mode} (from raw: {request.context.get('mode') or request.context.get('agent_mode') if request.context else 'None'})")
-
-        # Filter tools by user permissions AND mode
-        visible_tools = []
-        for tool in AGENT_TOOLS:
-            # Mode-based filtering (Removed restriction on execute_workflow to allow Governance/FinOps workflows)
-            # if tool.name == "execute_workflow" and agent_mode != "self_service":
-            #     continue
-
-            # Role-based filtering
-            allowed = True
-            if hasattr(tool, "required_role") and tool.required_role:
-                if not current_user.has_role(tool.required_role):
-                    allowed = False
-            
-            if allowed:
-                visible_tools.append(tool)
-
-        # Build user identity for the runner
-        user_identity = {
-            "email": current_user.email,
-            "roles": ", ".join(current_user.roles),
-            "entitlements": ", ".join(current_user.entitlements)
-        }
-        
-        # Initialize Runner
-        runner = AgentRunner(
-            tools=visible_tools,
-            user_identity=user_identity,
-            max_iterations=settings.AGENT_MAX_ITERATIONS,
-            mode=agent_mode
-        )
-        
-        # Format history for runner - preserve all metadata including timestamps
-        history = []
-        if request.conversation_history:
-            for msg in request.conversation_history:
-                # Standard roles for LLM
-                role = "user" if msg.type == "user" else "assistant"
-                history.append({
-                    "role": role, 
-                    "content": msg.content,
-                    "timestamp": msg.timestamp,
-                    "type": msg.type
-                })
-        
-        # Get OBO token if available
-        obo_token = None
-        if hasattr(req, "state") and hasattr(req.state, "token"):
-            obo_token = req.state.token
-            if obo_token:
-                logger.info(f"Agent Endpoint: Found OBO token in request state (len={len(obo_token)})")
-            else:
-                logger.info("Agent Endpoint: No OBO token in request state")
-            
         # Run agent
         result = await runner.run(
             query=request.query,
@@ -248,10 +300,103 @@ async def handle_conversation(
             form_prefill_data=form_prefill_data
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in agent conversation: {str(e)}", exc_info=True)
         # Don't expose usage internal errors to the client
         raise HTTPException(status_code=500, detail="An internal error occurred while processing your request.")
+
+
+@router.post("/conversation/stream")
+async def stream_conversation(
+    request: ConversationRequest,
+    req: Request,
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Stream a conversation turn as Server-Sent Events.
+
+    The response media type is ``text/event-stream``; the body is a
+    sequence of frames defined by :mod:`app.agents.events`. The browser
+    consumes this via fetch + ``ReadableStream`` (see
+    ``src/lib/agentStream.ts``) rather than the built-in ``EventSource``,
+    since we need POST + custom auth headers.
+
+    Errors during setup raise plain HTTP responses; errors *during*
+    streaming are surfaced as ``error`` events so the UI can render
+    them in-line without dropping the response.
+    """
+    try:
+        runner, history, _agent_mode = _build_runner_and_history(request, current_user)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error preparing agent stream: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="An internal error occurred while preparing the agent stream.",
+        )
+
+    obo_token = _extract_obo_token(req)
+
+    async def event_source() -> AsyncIterator[bytes]:
+        try:
+            async for event in runner.run_stream(
+                query=request.query,
+                history=history,
+                context=request.context,
+                obo_token=obo_token,
+            ):
+                # The Self Service agent occasionally embeds a JSON
+                # ``route_to_form`` instruction inside its final
+                # ``MessageEvent``. We do the same post-processing the
+                # non-streaming endpoint does (extract + clean) and
+                # emit a structured ``RouteEvent`` so the UI can render
+                # the "Continue to form" CTA without parsing markdown.
+                if isinstance(event, MessageEvent) and event.content:
+                    instructions = _extract_json_instructions(event.content)
+                    if instructions:
+                        cleaned = _clean_message_remove_json(event.content)
+                        if not cleaned.strip():
+                            cleaned = (
+                                "Perfect! I have all the information I need. "
+                                "Ready to proceed to the form."
+                            )
+                        form_path = instructions.get("form_path", "")
+                        prefill = instructions.get("values_to_insert") or None
+                        if form_path:
+                            path_parts = form_path.strip("/").split("/")
+                            title = " ".join(
+                                part.replace("-", " ").title()
+                                for part in path_parts
+                            )
+                            yield serialize_sse(
+                                RouteEvent(
+                                    path=form_path,
+                                    title=title,
+                                    prefill=prefill if isinstance(prefill, dict) else None,
+                                )
+                            ).encode("utf-8")
+                        # Replace the original message with the cleaned
+                        # one so the user never sees the raw JSON block.
+                        event = MessageEvent(content=cleaned)
+                yield serialize_sse(event).encode("utf-8")
+        except Exception as e:
+            logger.error(f"Agent stream failed mid-flight: {e}", exc_info=True)
+            yield serialize_sse(
+                ErrorEvent(message="Agent stream failed.", fatal=True)
+            ).encode("utf-8")
+            yield serialize_sse(DoneEvent()).encode("utf-8")
+
+    headers = {
+        # Disable buffering on intermediaries (nginx etc.) so events
+        # arrive promptly rather than being held until the response
+        # body is complete.
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }
+    return StreamingResponse(event_source(), media_type="text/event-stream", headers=headers)
 
 @router.get("/health")
 async def agent_health():

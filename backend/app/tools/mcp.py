@@ -12,13 +12,25 @@ class McpTool:
     This allows us to transition to decorators while maintaining compatibility.
     """
     
-    def __init__(self, func: Callable, args_schema: Type[BaseModel], name: Optional[str] = None, description: Optional[str] = None, required_role: Optional[str] = None, feature_flag: Optional[str] = None):
+    def __init__(
+        self,
+        func: Callable,
+        args_schema: Type[BaseModel],
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        required_role: Optional[str] = None,
+        feature_flag: Optional[str] = None,
+        friendly_label: Optional[str] = None,
+        friendly_completion_label: Optional[str] = None,
+    ):
         self._func = func
         self._args_schema = args_schema
         self._name = name or func.__name__
         self._description = description or func.__doc__ or ""
         self._required_role = required_role
         self._feature_flag = feature_flag
+        self._friendly_label = friendly_label
+        self._friendly_completion_label = friendly_completion_label
         
     @property
     def name(self) -> str:
@@ -35,6 +47,28 @@ class McpTool:
     @property
     def feature_flag(self) -> Optional[str]:
         return self._feature_flag
+
+    @property
+    def friendly_label(self) -> str:
+        """User-facing copy shown while the tool is running.
+
+        Falls back to a humanized version of the snake_case tool name
+        (e.g. ``search_user_entitlements`` -> ``Searching user entitlements...``)
+        when no explicit label was provided at registration time.
+        """
+        if self._friendly_label:
+            return self._friendly_label
+        humanized = self._name.replace("_", " ").strip().capitalize()
+        return f"Running {humanized}..."
+
+    @property
+    def friendly_completion_label(self) -> Optional[str]:
+        """Optional copy shown after the tool succeeds.
+
+        ``None`` => the UI swaps the running pill to a generic done state
+        without changing the label.
+        """
+        return self._friendly_completion_label
         
     @property
     def input_schema(self) -> Dict[str, Any]:
@@ -70,7 +104,15 @@ class McpTool:
         else:
             return self._func(**bound_args)
 
-def tool(name: Optional[str] = None, description: Optional[str] = None, args_schema: Optional[Type[BaseModel]] = None, required_role: Optional[str] = None, feature_flag: Optional[str] = None):
+def tool(
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    args_schema: Optional[Type[BaseModel]] = None,
+    required_role: Optional[str] = None,
+    feature_flag: Optional[str] = None,
+    friendly_label: Optional[str] = None,
+    friendly_completion_label: Optional[str] = None,
+):
     """
     Decorator to register a function as a tool.
     
@@ -111,6 +153,15 @@ def tool(name: Optional[str] = None, description: Optional[str] = None, args_sch
             tool_name = name or func.__name__
             actual_schema = create_model(f"{tool_name}Input", **fields)
             
-        return McpTool(func, actual_schema, name, description, required_role, feature_flag)
+        return McpTool(
+            func,
+            actual_schema,
+            name,
+            description,
+            required_role,
+            feature_flag,
+            friendly_label,
+            friendly_completion_label,
+        )
         
     return decorator

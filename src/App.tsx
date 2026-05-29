@@ -13,6 +13,7 @@ import { CommunityLinks } from './pages/CommunityLinks';
 import { AdminReports } from './pages/AdminReports';
 import { CommandCenter } from './pages/CommandCenter';
 import { Welcome } from './pages/Welcome';
+import { AskYourData } from './pages/AskYourData';
 import { useBrandingStore } from './stores/brandingStore';
 import { useRequestStore } from './stores/requestStore';
 import { useUserStore } from './stores/userStore';
@@ -126,6 +127,7 @@ function App() {
             />
           )}
           <Route path="/command-center" element={<CommandCenter />} />
+          <Route path="/ask-your-data" element={<AskYourData />} />
           <Route path="/community/training" element={<Training />} />
           <Route path="/community/events" element={<Events />} />
           <Route path="/community/assets" element={<ReusableAssets />} />
