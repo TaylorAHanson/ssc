@@ -90,7 +90,12 @@ export function parseGenieResult(
     const narrativeBits: string[] = [];
 
     // Top-level "answer"-style fields some versions ship.
-    for (const k of ['description', 'answer', 'text']) {
+    // ``final_answer`` is what the managed-MCP Genie server (general
+    // ``/api/2.0/mcp/genie`` endpoint) ships — markdown including
+    // headings, bullets, and inline tables. We surface it as the
+    // primary narrative since attachments are usually empty on this
+    // surface.
+    for (const k of ['final_answer', 'description', 'answer', 'text']) {
         const v = (raw as Record<string, unknown>)[k];
         if (typeof v === 'string' && v.trim()) {
             narrativeBits.push(v.trim());

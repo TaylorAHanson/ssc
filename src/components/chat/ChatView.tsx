@@ -34,6 +34,7 @@ import {
 import { usePendingPoll } from '../../hooks/usePendingPoll';
 import { ToolCallPill, type ToolCallStatus } from './ToolCallPill';
 import { GenieDetailsPanel } from './GenieDetailsPanel';
+import { renderMarkdownSafe } from '../../lib/markdown';
 
 // Each chat surface holds its own UI-side message log. Tool
 // invocations and pending polls live as first-class entries here so
@@ -618,6 +619,45 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     };
 
     const resumeAfterPoll = async (result: Record<string, unknown> | null) => {
+        if (!pendingPoll) return;
+
+        // Short-circuit when Genie produced a self-contained answer.
+        // The managed-MCP Genie endpoint ships its full answer
+        // (markdown with headings, bullets, inline tables) on the
+        // ``final_answer`` field. The LLM "summarization" turn we
+        // would otherwise run on top of it adds latency, costs
+        // tokens, and frequently rephrases Genie's polished output
+        // into something less precise. Surfacing the markdown
+        // directly in the agent bubble gives the user verbatim
+        // fidelity and keeps the UX snappy. Future turns still see
+        // this in conversation history (we push it as a normal
+        // ``agent`` message), so the LLM has full context if the
+        // user asks a follow-up.
+        const finalAnswer =
+            result && typeof result === 'object' && typeof result.final_answer === 'string'
+                ? (result.final_answer as string).trim()
+                : '';
+        if (finalAnswer) {
+            // Store the raw markdown — the agent message renderer
+            // will run it through `renderMarkdownSafe` at view time.
+            // Keeping the storage format consistent with LLM-authored
+            // messages means the conversation log is always markdown
+            // and we never have to detect "is this already HTML?".
+            setMessages((prev) => [
+                ...prev,
+                {
+                    kind: 'agent',
+                    id: `${Date.now()}-m-genie`,
+                    content: finalAnswer,
+                    timestamp: new Date().toISOString(),
+                },
+            ]);
+            setStatusLabel(null);
+            setIsStreaming(false);
+            setPendingPoll(null);
+            return;
+        }
+
         // Build the synthetic ``assistant.tool_calls`` + ``tool``
         // message pair carrying the resolved Genie answer back to the
         // LLM. We send BOTH messages because the streaming endpoint's
@@ -627,7 +667,6 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         // is reconstructed from the ``tool_call`` event we captured
         // at the start of the original turn — its ``arguments`` are
         // pulled from the matching tool display message.
-        if (!pendingPoll) return;
 
         // The tool display message carrying the original arguments.
         // React may not have flushed the success-status update yet by
@@ -955,12 +994,19 @@ function MessageRow({
         );
     }
     if (msg.kind === 'agent') {
+        // Agent messages are stored as markdown (Genie's `final_answer`
+        // ships as markdown; the LLM is now prompted to produce
+        // markdown too). We render to HTML at view time via
+        // `renderMarkdownSafe` so the `prose` class can style
+        // headings, tables, code blocks, etc. consistently. Legacy
+        // persisted HTML content passes through marked unchanged.
+        const html = renderMarkdownSafe(msg.content);
         return (
             <div className="flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-300">
                 <div className="max-w-[80%] rounded-2xl px-4 py-3 shadow-sm bg-gray-50 text-gray-900 border border-gray-200/50">
                     <div
                         className="text-sm leading-relaxed prose prose-sm max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700"
-                        dangerouslySetInnerHTML={{ __html: msg.content }}
+                        dangerouslySetInnerHTML={{ __html: html }}
                     />
                 </div>
             </div>

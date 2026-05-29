@@ -471,9 +471,9 @@ class AgentRunner:
                         f"Hit max iterations ({self.max_iterations}) for query"
                     )
                     fallback_msg = (
-                        "\n\n<em>Note: I've reached my maximum processing limit "
+                        "\n\n*Note: I've reached my maximum processing limit "
                         "for this request. If I haven't fully answered your "
-                        "question, please try rephrasing or breaking it down.</em>"
+                        "question, please try rephrasing or breaking it down.*"
                     )
                     final_content = (agent_message + fallback_msg).strip()
                     break

@@ -20,6 +20,7 @@ import { Check, ChevronDown, ChevronRight, Copy, ExternalLink } from 'lucide-rea
 
 import { VegaLiteChart } from './VegaLiteChart';
 import { parseGenieResult, type ParsedGenieResult } from './parseGenieResult';
+import { renderMarkdownSafe } from '../../lib/markdown';
 
 export interface GenieDetailsPanelProps {
     /** Raw payload from the Genie poll endpoint's ``result`` field. */
@@ -31,9 +32,18 @@ export function GenieDetailsPanel({ result }: GenieDetailsPanelProps) {
     // collapse state below doesn't blink when React rerenders.
     const parsed: ParsedGenieResult = useMemo(() => parseGenieResult(result), [result]);
 
+    // ``final_answer`` is rendered directly as the agent bubble (see
+    // ChatView.resumeAfterPoll). Don't duplicate it inside the panel —
+    // showing the same markdown twice was confusing. Other narrative
+    // sources (e.g. ``attachments[].text`` on space-scoped responses)
+    // still render here when ``final_answer`` is absent.
+    const hasFinalAnswer =
+        !!result && typeof (result as Record<string, unknown>).final_answer === 'string';
+    const showNarrative = !!parsed.narrative && !hasFinalAnswer;
+
     // What we have to show drives both the open default and the
     // header chip summary.
-    const hasStructured = !!(parsed.sql || parsed.preview || parsed.chartSpec || parsed.narrative);
+    const hasStructured = !!(parsed.sql || parsed.preview || parsed.chartSpec || showNarrative);
     const hasRawPayload = !!result && Object.keys(result).length > 0;
     const hasAnything = hasStructured || hasRawPayload || parsed.deepLink;
     if (!hasAnything) return null;
@@ -115,14 +125,17 @@ export function GenieDetailsPanel({ result }: GenieDetailsPanelProps) {
 
             {open && (
                 <div className="border-t border-gray-100 px-3 py-3 space-y-3 bg-gray-50">
-                    {parsed.narrative && (
+                    {showNarrative && (
                         <section>
                             <h5 className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1">
                                 Genie's answer
                             </h5>
-                            <p className="text-sm text-gray-800 whitespace-pre-wrap">
-                                {parsed.narrative}
-                            </p>
+                            <div
+                                className="text-sm text-gray-800 prose prose-sm max-w-none"
+                                dangerouslySetInnerHTML={{
+                                    __html: renderMarkdownSafe(parsed.narrative),
+                                }}
+                            />
                         </section>
                     )}
 
