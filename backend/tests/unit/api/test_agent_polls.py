@@ -249,22 +249,32 @@ def test_parse_genie_response_omits_deep_link_when_no_url_in_payload(monkeypatch
     assert "_deep_link" not in parsed.result
 
 
-def test_parse_genie_response_rejects_workspace_home_url():
-    """A bare ``/one`` URL is treated as non-actionable — it just opens
-    the workspace home, which is what the user complained about.
+def test_parse_genie_response_trusts_genie_supplied_urls(monkeypatch):
+    """Whatever Genie hands us in a URL field is treated as
+    authoritative. We previously had a guard that rejected URLs
+    "looking like" the workspace home (``/one``, root) because earlier
+    versions of this code synthesized those URLs ourselves and they
+    didn't resolve — but the guard then rejected legitimate
+    per-conversation links in customer environments. Genie is the
+    authority on what URL to render, so we just pass it through if
+    it's a Databricks-hosted http(s) URL.
     """
     body = GeniePollRequest(conversation_id="conv-x", message_id="m")
     parsed = _parse_genie_response(
         {
             "structured": {
                 "status": "COMPLETED",
-                "url": "https://example.cloud.databricks.com/one",
+                "deep_link": "https://example.cloud.databricks.com/one",
             },
             "is_error": False,
+            "auth_source": "obo",
         },
         body,
     )
-    assert "_deep_link" not in parsed.result
+    assert (
+        parsed.result["_deep_link"]
+        == "https://example.cloud.databricks.com/one"
+    )
 
 
 def test_parse_genie_response_finds_url_inside_attachments():

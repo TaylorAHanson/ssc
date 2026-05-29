@@ -146,27 +146,28 @@ def _find_genie_deep_link_in_payload(payload: Dict[str, Any]) -> Optional[str]:
     name, and the shape evolves between releases. We walk the top
     level (and one level into ``attachments``) checking a handful of
     likely names and return the first ``http(s)://...databricks...``
-    URL we encounter. Anything else (including a
-    ``"databricks.com/one"``-style root URL) is rejected — landing on
-    the home page would be worse UX than not showing the button at
-    all.
+    URL we encounter.
+
+    Whatever Genie hands us is treated as authoritative — earlier
+    versions of this code tried to filter out URLs that "looked like"
+    workspace home pages, but that rejected legitimate per-conversation
+    URLs in customer environments and produced a "no link" UX even
+    when Genie was supplying a real one. The rule now is simple: if
+    the field exists, points at a Databricks workspace, and isn't a
+    placeholder, render it.
     """
 
-    def _looks_like_conversation_url(value: object) -> Optional[str]:
+    def _looks_like_databricks_url(value: object) -> Optional[str]:
         if not isinstance(value, str):
             return None
         v = value.strip()
+        if not v:
+            return None
         if not (v.startswith("http://") or v.startswith("https://")):
             return None
-        # Must look like a Databricks workspace URL...
+        # Only accept Databricks-hosted URLs to avoid e.g. an upstream
+        # bug putting a tracking URL in the same field.
         if "databricks." not in v:
-            return None
-        # ...and must point to a per-conversation resource. We treat
-        # bare ``/one`` (the general Genie home) and root URLs as
-        # non-actionable.
-        path_only = v.split("?", 1)[0].split("#", 1)[0]
-        last_segment = path_only.rsplit("/", 1)[-1]
-        if last_segment in {"one", "", "genie"}:
             return None
         return v
 
@@ -185,7 +186,7 @@ def _find_genie_deep_link_in_payload(payload: Dict[str, Any]) -> Optional[str]:
                         candidates.extend(nested.get(k) for k in _URL_FIELD_NAMES)
 
     for c in candidates:
-        url = _looks_like_conversation_url(c)
+        url = _looks_like_databricks_url(c)
         if url:
             return url
     return None
@@ -261,10 +262,10 @@ def _parse_genie_response(
         # mixed general + space-scoped Genie calls).
         if body.space_id:
             result.setdefault("_space_id", body.space_id)
-        # Visibility: log the top-level keys (and a sample of attachment
-        # keys) so we can see what Genie actually returned without
-        # spamming the log with full payloads. Use DEBUG for the full
-        # dump.
+        # Visibility: log the top-level keys, the actual deep_link
+        # value (truncated), and a sample of attachment keys so we can
+        # see what Genie returned without spamming the log with full
+        # payloads. Use DEBUG for the full dump.
         try:
             top_keys = sorted(k for k in result.keys() if isinstance(k, str))
             attachment_summary: Optional[str] = None
@@ -276,10 +277,22 @@ def _parse_genie_response(
                         f"{len(atts)} attachment(s); first keys="
                         f"{sorted(k for k in first.keys() if isinstance(k, str))}"
                     )
+            # Snapshot whatever value(s) Genie put in URL-shaped fields
+            # so we can debug "deep_link_found=false but a key is
+            # there" cases. Truncate to 200 chars to be safe.
+            url_field_snapshot: dict[str, str] = {}
+            for k in _URL_FIELD_NAMES:
+                v = result.get(k)
+                if v is not None:
+                    s = repr(v)
+                    url_field_snapshot[k] = s[:200] + ("…" if len(s) > 200 else "")
             logger.info(
-                "Genie poll complete: top_keys=%s attachments=%s deep_link_found=%s",
+                "Genie poll complete: auth=%s top_keys=%s attachments=%s "
+                "url_fields=%s deep_link_found=%s",
+                auth_source or "unknown",
                 top_keys,
                 attachment_summary or "none",
+                url_field_snapshot or "none",
                 bool(deep_link),
             )
             logger.debug("Genie poll full payload: %s", json.dumps(result, default=str))
