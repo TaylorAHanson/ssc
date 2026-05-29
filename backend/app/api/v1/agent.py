@@ -85,6 +85,15 @@ class ChatMessage(BaseModel):
     # original assistant tool-call linkage.
     tool_call_id: Optional[str] = None
     name: Optional[str] = None
+    # Optional ``tool_calls`` block carried on a ``type='agent'`` (i.e.
+    # assistant) message so the chat completion request preserves the
+    # ``user → assistant(tool_calls) → tool → ...`` linkage required by
+    # the model serving endpoint. The UI synthesizes this entry in
+    # ``ChatView.buildHistory`` immediately before each replayed tool
+    # result. Without it, the endpoint rejects the request with
+    # ``messages with role 'tool' must be a response to a preceding
+    # message with 'tool_calls'``.
+    tool_calls: Optional[List[Dict[str, Any]]] = None
 
 class ConversationRequest(BaseModel):
     query: str
@@ -223,14 +232,20 @@ def _build_runner_and_history(
                 )
             else:
                 role = "user" if msg.type == "user" else "assistant"
-                history.append(
-                    {
-                        "role": role,
-                        "content": msg.content,
-                        "timestamp": msg.timestamp,
-                        "type": msg.type,
-                    }
-                )
+                entry: Dict[str, Any] = {
+                    "role": role,
+                    "content": msg.content,
+                    "timestamp": msg.timestamp,
+                    "type": msg.type,
+                }
+                # When the UI replays an assistant tool-call announcement,
+                # carry the ``tool_calls`` block through verbatim so the
+                # subsequent ``role='tool'`` message has its required
+                # linkage (model serving endpoints reject orphan tool
+                # messages with ``HTTP 400 BAD_REQUEST``).
+                if msg.type == "agent" and msg.tool_calls:
+                    entry["tool_calls"] = msg.tool_calls
+                history.append(entry)
 
     return runner, history, agent_mode
 

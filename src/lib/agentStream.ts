@@ -30,6 +30,15 @@ export interface ToolCallEvent {
     name: string;
     friendly_label: string;
     args_summary?: string;
+    /**
+     * Raw arguments the LLM produced for the call. The UI keeps a copy
+     * so it can synthesize the matching `assistant.tool_calls` block
+     * when replaying a tool result on a continuation turn — without
+     * that block, the model serving endpoint rejects the request with
+     * "messages with role 'tool' must be a response to a preceding
+     * message with 'tool_calls'".
+     */
+    arguments?: Record<string, unknown>;
 }
 
 export interface ToolResultEvent {
@@ -97,6 +106,16 @@ export type AgentEvent =
 
 // ─── Wire types for the streaming endpoint ───────────────────────────
 
+export interface AgentChatToolCall {
+    id: string;
+    type: 'function';
+    function: {
+        name: string;
+        /** JSON-encoded arguments — chat completion APIs expect a string here. */
+        arguments: string;
+    };
+}
+
 export interface AgentChatMessage {
     id: string;
     /** 'user' | 'agent' | 'tool' — 'tool' is used to replay a resolved
@@ -109,6 +128,14 @@ export interface AgentChatMessage {
     tool_call_id?: string;
     /** For 'tool' messages only — the original tool name. */
     name?: string;
+    /**
+     * For 'agent' (assistant) messages only. Set when the assistant
+     * turn was a tool-call announcement. The UI synthesizes one of
+     * these immediately before each replayed tool message so the
+     * model serving endpoint sees the required
+     * ``user → assistant(tool_calls) → tool`` linkage.
+     */
+    tool_calls?: AgentChatToolCall[];
 }
 
 export interface StreamConversationRequest {

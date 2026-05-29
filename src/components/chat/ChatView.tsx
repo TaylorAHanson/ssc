@@ -63,6 +63,15 @@ type DisplayMessage =
         startedAt: number;
         completedAt?: number;
         errorMessage?: string;
+        /**
+         * Raw arguments the LLM produced for the call. Persisted so we
+         * can synthesize the matching ``assistant.tool_calls`` block
+         * when replaying this tool result on a continuation turn —
+         * without it the model serving endpoint rejects the request
+         * with ``role 'tool' must be a response to a preceding
+         * message with 'tool_calls'``.
+         */
+        toolArguments?: Record<string, unknown>;
         /** When set, this tool call was a pending-poll handoff. */
         poll?: PendingPollEvent;
         pollResolution?: 'complete' | 'failed' | 'cancelled' | 'timeout';
@@ -301,7 +310,33 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     // format the streaming endpoint expects. Tool pills become
     // synthetic `tool` messages once their poll has resolved so the
     // LLM can see the answer.
+    //
+    // Chat completion APIs require every ``role: 'tool'`` message to
+    // be preceded by an ``assistant`` message whose ``tool_calls``
+    // contains a matching id. Our display state never stores that
+    // assistant turn (the agent runner does internally, but it isn't
+    // round-tripped). So we synthesize one here, immediately before
+    // each completed tool, using the arguments we captured from the
+    // ``tool_call`` SSE event. Without this the upstream serving
+    // endpoint returns ``HTTP 400 BAD_REQUEST`` with "messages with
+    // role 'tool' must be a response to a preceding message with
+    // 'tool_calls'".
+    //
+    // ``extras`` are appended verbatim *after* the messages-derived
+    // prefix and may carry their own assistant + tool pair (the
+    // resume-after-poll path does this so the just-resolved Genie
+    // answer is included even if React hasn't flushed the success
+    // update yet). We dedupe against extras' ``tool_call_id``s so a
+    // raced flush doesn't produce duplicates.
     const buildHistory = (extras: AgentChatMessage[] = []): AgentChatMessage[] => {
+        const skipToolCallIds = new Set<string>();
+        for (const e of extras) {
+            if (e.type === 'tool' && e.tool_call_id) skipToolCallIds.add(e.tool_call_id);
+            if (e.type === 'agent' && e.tool_calls) {
+                for (const tc of e.tool_calls) skipToolCallIds.add(tc.id);
+            }
+        }
+
         const out: AgentChatMessage[] = [];
         for (const m of messages) {
             if (m.kind === 'user') {
@@ -314,14 +349,32 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     timestamp: m.timestamp,
                 });
             } else if (m.kind === 'tool' && m.poll && m.pollResolution === 'complete') {
-                // Replay completed Genie answers as a synthetic tool
-                // message so subsequent turns can reference the
-                // results without re-asking Genie.
+                if (skipToolCallIds.has(m.toolCallId)) continue;
+                const completedAt = new Date(m.completedAt ?? Date.now()).toISOString();
+                // Synthetic assistant turn carrying the original
+                // ``tool_calls`` block so the linkage is intact.
+                out.push({
+                    id: `${m.id}-tc`,
+                    type: 'agent',
+                    content: '',
+                    timestamp: completedAt,
+                    tool_calls: [
+                        {
+                            id: m.toolCallId,
+                            type: 'function',
+                            function: {
+                                name: m.toolName,
+                                arguments: JSON.stringify(m.toolArguments ?? {}),
+                            },
+                        },
+                    ],
+                });
+                // Replay the resolved Genie answer as a tool message.
                 out.push({
                     id: m.id,
                     type: 'tool',
                     content: m.detail ?? `Genie answered "${m.label}"`,
-                    timestamp: new Date(m.completedAt ?? Date.now()).toISOString(),
+                    timestamp: completedAt,
                     tool_call_id: m.toolCallId,
                     name: m.toolName,
                 });
@@ -332,7 +385,17 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
 
     const submitTurn = async (
         userText: string,
-        opts: { isContinuation?: boolean; toolMessage?: AgentChatMessage } = {},
+        opts: {
+            isContinuation?: boolean;
+            /**
+             * Extra wire messages appended to the history *after* the
+             * messages-derived prefix. Used by the post-poll
+             * continuation to send the synthetic
+             * ``assistant.tool_calls`` + ``tool`` pair carrying the
+             * resolved Genie answer.
+             */
+            toolMessages?: AgentChatMessage[];
+        } = {},
     ) => {
         const controller = new AbortController();
         abortRef.current?.abort();
@@ -365,7 +428,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             ]);
         }
 
-        const history = buildHistory(opts.toolMessage ? [opts.toolMessage] : []);
+        const history = buildHistory(opts.toolMessages ?? []);
 
         try {
             for await (const event of streamAgentConversation(
@@ -440,6 +503,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                         detail: event.args_summary,
                         status: 'running',
                         startedAt: Date.now(),
+                        toolArguments: event.arguments,
                     },
                 ]);
                 break;
@@ -539,18 +603,58 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     };
 
     const resumeAfterPoll = async (result: Record<string, unknown> | null) => {
-        // Build a synthetic tool message carrying the resolved Genie
-        // answer back to the LLM so it can summarize.
+        // Build the synthetic ``assistant.tool_calls`` + ``tool``
+        // message pair carrying the resolved Genie answer back to the
+        // LLM. We send BOTH messages because the streaming endpoint's
+        // upstream model serving API rejects orphan tool messages
+        // ("messages with role 'tool' must be a response to a
+        // preceding message with 'tool_calls'"). The assistant turn
+        // is reconstructed from the ``tool_call`` event we captured
+        // at the start of the original turn — its ``arguments`` are
+        // pulled from the matching tool display message.
         if (!pendingPoll) return;
+
+        // The tool display message carrying the original arguments.
+        // React may not have flushed the success-status update yet by
+        // the time we run, but the arguments were stored back when
+        // the ``tool_call`` SSE event arrived, so they're already on
+        // the message regardless of its current status.
+        const matchingTool = messages.find(
+            (m): m is Extract<DisplayMessage, { kind: 'tool' }> =>
+                m.kind === 'tool' && m.toolCallId === pendingPoll.tool_call_id,
+        );
+        const toolArgs = matchingTool?.toolArguments ?? {};
+
+        const completedAt = new Date().toISOString();
+        const baseId = `${Date.now()}`;
+        const assistantToolCall: AgentChatMessage = {
+            id: `${baseId}-tc`,
+            type: 'agent',
+            content: '',
+            timestamp: completedAt,
+            tool_calls: [
+                {
+                    id: pendingPoll.tool_call_id,
+                    type: 'function',
+                    function: {
+                        name: pendingPoll.tool_name,
+                        arguments: JSON.stringify(toolArgs),
+                    },
+                },
+            ],
+        };
         const toolMessage: AgentChatMessage = {
-            id: `${Date.now()}-tool`,
+            id: `${baseId}-tool`,
             type: 'tool',
             content: stringifyResult(result),
-            timestamp: new Date().toISOString(),
+            timestamp: completedAt,
             tool_call_id: pendingPoll.tool_call_id,
             name: pendingPoll.tool_name,
         };
-        await submitTurn('', { isContinuation: true, toolMessage });
+        await submitTurn('', {
+            isContinuation: true,
+            toolMessages: [assistantToolCall, toolMessage],
+        });
     };
 
     const handleSubmit = async (e: React.FormEvent) => {

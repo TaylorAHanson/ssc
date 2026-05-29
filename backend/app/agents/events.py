@@ -32,6 +32,11 @@ class ToolCallEvent(BaseModel):
     ``friendly_label`` is the user-facing copy ("Asking Genie...");
     ``args_summary`` is an optional short description of inputs that the
     UI may render under the pill (e.g. "What is our top revenue product?").
+    ``arguments`` is the raw JSON-serializable payload the LLM produced
+    for the call. The UI keeps a copy so it can reconstruct the
+    assistant's ``tool_calls`` block on a continuation turn (chat
+    completion APIs reject a ``tool`` message that isn't preceded by a
+    matching assistant ``tool_calls``).
     """
 
     type: Literal["tool_call"] = "tool_call"
@@ -39,6 +44,7 @@ class ToolCallEvent(BaseModel):
     name: str
     friendly_label: str
     args_summary: Optional[str] = None
+    arguments: Optional[Dict[str, Any]] = None
 
 
 class ToolResultEvent(BaseModel):

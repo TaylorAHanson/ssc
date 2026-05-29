@@ -338,6 +338,7 @@ class AgentRunner:
                         name=fn_name,
                         friendly_label=matching_tool.friendly_label,
                         args_summary=_summarize_args(fn_args),
+                        arguments=fn_args,
                     )
 
                     try:
