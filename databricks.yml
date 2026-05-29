@@ -102,6 +102,9 @@ resources:
         - "sql.statement-execution"
         - "sql.warehouses"
         - "files.files"
+        - "genie"
+        - "mcp.functions"
+        - "ai-gateway"
 
       permissions:
         - level: CAN_MANAGE

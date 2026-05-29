@@ -14,6 +14,7 @@ envelope necessary - the chat doesn't block waiting for Genie.
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
@@ -87,31 +88,103 @@ def build_genie_mcp_url(space_id: Optional[str] = None, host: Optional[str] = No
     return f"{base}/api/2.0/mcp/genie"
 
 
+# Environments where we allow the SP fallback. Used as a *secondary*
+# signal — the primary signal is the presence of Databricks-Apps
+# runtime env vars (see ``_running_in_databricks_apps``). Anything
+# deployed inside Databricks Apps is treated as "real" regardless of
+# what ``ENVIRONMENT`` says.
+_LOCAL_ENVIRONMENTS = frozenset({"development", "dev", "local", "test", "testing"})
+
+
+def _running_in_databricks_apps() -> bool:
+    """Detect whether the process is running inside the Databricks Apps runtime.
+
+    Databricks Apps injects a small set of platform-specific env vars
+    into every app process. ``DATABRICKS_APP_PORT`` is the cleanest
+    signal — it's only ever set by the platform — so we use it as the
+    canonical "are we in Databricks Apps?" check. ``DATABRICKS_APP_NAME``
+    is checked as a defensive secondary in case the platform ever
+    renames the port variable.
+
+    This is intentionally separate from ``ENVIRONMENT``: the ``dev``,
+    ``stage`` and ``prod`` bundle targets all deploy into Databricks
+    Apps and must all refuse the SP fallback. Only true local
+    ``./dev.sh`` runs (no platform env vars) are allowed to fall back.
+    """
+    return bool(os.environ.get("DATABRICKS_APP_PORT") or os.environ.get("DATABRICKS_APP_NAME"))
+
+
+def _is_local_environment() -> bool:
+    """True when the resolver is allowed to use the SP fallback.
+
+    Two conditions must both hold:
+
+    1. We're not running inside the Databricks Apps runtime (no
+       ``DATABRICKS_APP_PORT`` etc.). Any deployed bundle target —
+       ``dev``, ``stage``, ``prod`` — is on the platform and is
+       therefore *not* local, even though ``ENVIRONMENT`` may be
+       ``"dev"``.
+    2. The configured ``ENVIRONMENT`` value is one of the explicitly
+       local-flavored names. The default (``production``) is excluded,
+       so a deployed app that forgot to set the variable is still
+       safe.
+    """
+    if _running_in_databricks_apps():
+        return False
+    env = (settings.ENVIRONMENT or "").strip().lower()
+    return env in _LOCAL_ENVIRONMENTS
+
+
 def resolve_genie_bearer_token(obo_token: Optional[str]) -> Tuple[Optional[str], str]:
     """Pick the bearer token to use for Databricks Genie MCP.
 
     Returns a tuple ``(token, source)`` where ``source`` is one of:
 
-    * ``"obo"`` - the user's forwarded access token. Always preferred.
-      Genie answers will be scoped to the user's Unity Catalog
-      permissions, which is the right behavior in production
-      (Databricks Apps inject ``X-Forwarded-Access-Token`` on every
-      request).
+    * ``"obo"`` - the user's forwarded access token. Always preferred,
+      and the **only** acceptable source when running inside Databricks
+      Apps. Genie answers are scoped to the user's Unity Catalog
+      permissions, which is the right behavior because the platform
+      injects ``X-Forwarded-Access-Token`` on every request.
     * ``"sp"`` - service-principal OAuth token fetched via the
-      Databricks SDK ``Config(...).authenticate()`` flow. This is a
-      pragmatic fallback for local dev (and any non-Databricks-Apps
-      hosting) where no user OBO header is available. Genie answers
-      will be scoped to the SP's UC permissions, which in dev is fine
-      because the developer is effectively the user.
-    * ``"none"`` - neither path worked. Token is ``None``; callers
-      should surface a clear "no auth" error to the user.
+      Databricks SDK ``Config(...).authenticate()`` flow. **Only**
+      used in true local runs (``./dev.sh`` outside Databricks Apps,
+      with ``ENVIRONMENT`` set to a local-flavored name) where the
+      OBO header isn't available. Genie answers are scoped to the
+      SP's UC permissions, which in local dev is acceptable because
+      the developer is effectively the user.
+    * ``"none"`` - no usable token. Token is ``None``; callers should
+      surface a clear "no auth" error to the user.
     """
     if obo_token:
         return obo_token, "obo"
 
-    # SP fallback. Mirrors the OAuth path used by `app.model_serving.client`
-    # so we don't introduce a new auth shape. Only triggers when there's no
-    # OBO; in Databricks Apps the OBO header is always present.
+    # Anywhere on the Databricks Apps runtime we *intentionally* refuse
+    # to fall back to the SP. Databricks Apps always injects the user
+    # OBO token *if and only if* the bundle's ``user_api_scopes``
+    # cover the Genie endpoint and the user has granted those scopes.
+    # If we silently used the SP instead, the caller would see a
+    # confusing 403 from /api/2.0/mcp/genie (because the SP almost
+    # never has Genie access) — when the real fix is to add the right
+    # OAuth scope to ``databricks.yml``.
+    if not _is_local_environment():
+        if _running_in_databricks_apps():
+            logger.warning(
+                "Genie MCP: no OBO token forwarded while running inside "
+                "Databricks Apps; refusing the SP fallback. The bundle's "
+                "``user_api_scopes`` likely needs to include the Genie / "
+                "dashboards scope, or the user hasn't re-authorized the "
+                "app since that scope was added."
+            )
+        else:
+            logger.warning(
+                "Genie MCP: no OBO token forwarded and ENVIRONMENT=%r is "
+                "not a local/dev environment; refusing the SP fallback.",
+                settings.ENVIRONMENT,
+            )
+        return None, "none"
+
+    # Local-only SP fallback. Mirrors the OAuth path used by
+    # ``app.model_serving.client`` so we don't introduce a new auth shape.
     client_id = settings.DATABRICKS_CLIENT_ID
     client_secret = settings.DATABRICKS_CLIENT_SECRET
     host = settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL
@@ -130,8 +203,10 @@ def resolve_genie_bearer_token(obo_token: Optional[str]) -> Tuple[Optional[str],
         auth_val = headers.get("Authorization") if isinstance(headers, dict) else None
         if isinstance(auth_val, str) and auth_val.startswith("Bearer "):
             logger.info(
-                "Genie MCP: no OBO token available; falling back to SP OAuth "
-                "token (this should only happen outside Databricks Apps)."
+                "Genie MCP: no OBO token available; using SP OAuth fallback "
+                "(ENVIRONMENT=%r, not running in Databricks Apps). This "
+                "path is local-dev-only.",
+                settings.ENVIRONMENT,
             )
             return auth_val[len("Bearer "):], "sp"
     except Exception as e:
@@ -210,11 +285,32 @@ async def call_genie_tool(
     """
     bearer_token, source = resolve_genie_bearer_token(obo_token)
     if not bearer_token:
+        if _running_in_databricks_apps():
+            raise GenieAuthUnavailableError(
+                "No OBO token was forwarded for the Databricks Genie call. "
+                "The Databricks Apps platform should inject "
+                "X-Forwarded-Access-Token automatically — if it's missing, "
+                "the bundle's user_api_scopes likely doesn't include the "
+                "Genie / dashboards scope, or the user hasn't re-authorized "
+                "the app since that scope was added. (SP fallback is "
+                "intentionally disabled inside Databricks Apps so Genie "
+                "always runs under the user's identity.)"
+            )
+        if _is_local_environment():
+            raise GenieAuthUnavailableError(
+                "No authentication available for Databricks Genie. In local dev, "
+                "set DATABRICKS_CLIENT_ID / DATABRICKS_CLIENT_SECRET (the SP must "
+                "have access to Genie in this workspace) or paste a user token "
+                "into MOCK_USER_TOKEN."
+            )
         raise GenieAuthUnavailableError(
-            "No authentication available for Databricks Genie. In production "
-            "(Databricks Apps) this is automatic; in local dev set the "
-            "DATABRICKS_CLIENT_ID / DATABRICKS_CLIENT_SECRET pair (the SP must "
-            "have access to Genie) or paste a user token into MOCK_USER_TOKEN."
+            "No OBO token was forwarded for the Databricks Genie call, and "
+            f"ENVIRONMENT={settings.ENVIRONMENT!r} is not a local/dev "
+            "environment, so the SP fallback is disabled. Either set "
+            "ENVIRONMENT to a local-flavored value (development / dev / "
+            "local / test / testing) for off-platform dev, or run the app "
+            "inside Databricks Apps so the X-Forwarded-Access-Token header "
+            "is forwarded."
         )
 
     url = build_genie_mcp_url(space_id, host=host)
