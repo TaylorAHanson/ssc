@@ -9,8 +9,9 @@ on:
       - develop
 
 env:
-  APP_NAME: atlas-dev
-  WORKSPACE_PATH: /Workspace/Shared/apps/atlas-dev
+  APP_NAME: edh-ssc
+  TARGET: dev
+  WORKSPACE_PATH: /Workspace/Shared/apps/edh-ssc-dev
 
 jobs:
   build-and-deploy:
@@ -22,30 +23,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4.3.1
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4.4.0
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Build frontend
-        env:
-          # Use relative URL for production (same host serves frontend + API)
-          VITE_API_BASE_URL: /api/v1
-        run: npm run build
-
-      - name: Copy frontend to backend
-        run: |
-          rm -rf backend/static
-          mkdir -p backend/static
-          cp -r dist/* backend/static/
-
-      # Environment configuration is now defined in databricks.yml
-      # including Lakebase database settings, agent config, branding, etc.
 
       - name: Install Databricks CLI
         run: |
@@ -71,24 +48,12 @@ jobs:
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
-          databricks bundle deploy -t dev --var "app_name=${{ env.APP_NAME }}"
+          databricks bundle deploy -t ${{ env.TARGET }}
 
-      - name: Deploy App Container
+      - name: Run App
         env:
           DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
-          databricks apps deploy ${{ env.APP_NAME }}
-
-      - name: Get App URL
-        env:
-          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
-          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
-          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
-        run: |
-          APP_URL=$(databricks apps get ${{ env.APP_NAME }} --output json | jq -r '.url')
-          echo "## Deployment Successful! 🚀" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Environment:** Development" >> $GITHUB_STEP_SUMMARY
-          echo "**App URL:** $APP_URL" >> $GITHUB_STEP_SUMMARY
+          databricks bundle run ${{ env.APP_NAME }} -t ${{ env.TARGET }}
