@@ -111,17 +111,22 @@ class DatasetResourceHandler(BaseResourceHandler):
                                     # rule-item (ruleItemId) inside the reliability window so a rule
                                     # that fails on every daily run is counted once, reflecting its
                                     # current state. failed_rule_count is then derived from this set.
+                                    # The ADOC *_history tables live under a configurable
+                                    # catalog.schema so the same code works against the real
+                                    # customer environment (enterprise_stg.data_quality) and
+                                    # local/dev workspaces where they live elsewhere.
+                                    adoc_schema = settings.DATA_QUALITY_ADOC_SCHEMA or "enterprise_stg.data_quality"
                                     query = f"""
 WITH combined AS (
     SELECT assetInfo.assetUid AS assetUid, assetInfo.assetName AS assetName,
            execution.ruleName AS ruleName, execution.ruleType AS ruleType,
            processed_at, items
-    FROM enterprise_stg.data_quality.adoc_dq_history
-    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM enterprise_stg.data_quality.adoc_freshness_history
-    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM enterprise_stg.data_quality.adoc_data_drift_history
-    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM enterprise_stg.data_quality.adoc_profile_anomaly_history
-    --UNION ALL SELECT assetInfo.leftBackingAssetUid, ... FROM enterprise_stg.data_quality.adoc_reconciliation_history
-    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM enterprise_stg.data_quality.adoc_schema_drift_history
+    FROM {adoc_schema}.adoc_dq_history
+    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM {adoc_schema}.adoc_freshness_history
+    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM {adoc_schema}.adoc_data_drift_history
+    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM {adoc_schema}.adoc_profile_anomaly_history
+    --UNION ALL SELECT assetInfo.leftBackingAssetUid, ... FROM {adoc_schema}.adoc_reconciliation_history
+    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM {adoc_schema}.adoc_schema_drift_history
 ),
 exploded AS (
     SELECT assetUid, assetName, ruleName, ruleType, processed_at,

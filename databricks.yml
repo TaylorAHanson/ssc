@@ -96,6 +96,8 @@ resources:
             value: "${var.enforcement_sentinel_cron}"
           - name: DATA_QUALITY_TABLE
             value: "${var.data_quality_table}"
+          - name: DATA_QUALITY_ADOC_SCHEMA
+            value: "${var.data_quality_adoc_schema}"
           # Email notifications via AWS SES (sent in-app via boto3).
           # IAM credentials are read at runtime from the Databricks secret
           # scope below — never injected as plaintext env values.
@@ -228,6 +230,9 @@ variables:
   data_quality_table:
     description: "Table where data quality results are stored"
     default: "edh-ssc_local_catalog.edh-ssc.data_quality_results"
+  data_quality_adoc_schema:
+    description: "catalog.schema holding the ADOC *_history tables (adoc_dq_history, adoc_freshness_history, etc.)"
+    default: "enterprise_stg.data_quality"
   event_sync_cron:
     description: "Cron schedule for syncing calendar events"
     default: "0 * * * *"

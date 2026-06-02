@@ -202,11 +202,6 @@ export function EnforcementSentinel() {
                                 <Search className="w-4 h-4" />
                                 <span>Run a governance audit</span>
                             </div>
-                            <p className="text-xs text-gray-500 max-w-xl leading-relaxed">
-                                Scans every resource in the workspace and evaluates it against all Open Policy
-                                Agent (OPA) policies. Audit mode is <span className="font-medium text-gray-700">read-only</span> —
-                                it reports which checks pass and fail but never changes, terminates, or uncertifies anything.
-                            </p>
                             {schedules?.enforcement_sentinel?.next_run && (
                                 <div className="text-xs text-gray-400 mt-0.5">
                                     Next scheduled run: {format(parseISO(schedules.enforcement_sentinel.next_run), 'MMM d, HH:mm')}
@@ -217,7 +212,7 @@ export function EnforcementSentinel() {
                         <Button
                             onClick={() => handleRunSentinel('audit_only')}
                             disabled={isRunning}
-                            className="h-9 whitespace-nowrap self-start sm:self-auto"
+                            className="h-9 whitespace-nowrap self-start sm:self-auto text-white"
                         >
                             <Search className="w-4 h-4 mr-1.5" />
                             {isRunning ? 'Starting...' : 'Run Audit'}
@@ -240,6 +235,18 @@ export function EnforcementSentinel() {
 
                         {advancedOpen && (
                             <div className="mt-3 border border-gray-200 rounded-md divide-y divide-gray-100 animate-in fade-in slide-in-from-top-1">
+                                {/* Audit mode explainer */}
+                                <div className="p-4 flex flex-col gap-1.5">
+                                    <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                                        Audit mode
+                                    </div>
+                                    <p className="text-[11px] text-gray-500 max-w-2xl leading-relaxed">
+                                        Scans every resource in the workspace and evaluates it against all Open Policy
+                                        Agent (OPA) policies. Audit mode is <span className="font-medium text-gray-700">read-only</span> —
+                                        it reports which checks pass and fail but never changes, terminates, or uncertifies anything.
+                                    </p>
+                                </div>
+
                                 {/* Scan scope */}
                                 <div className="p-4 flex flex-col gap-3">
                                     <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">

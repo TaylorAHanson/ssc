@@ -411,51 +411,64 @@ export function DataCertification() {
                             >
                               {rel}
                             </button>
+                          ) : (typeof rel === 'number' && rel === 0) ? (
+                            <span className="font-semibold text-green-600">0</span>
+                          ) : (typeof rel === 'number' && rel > 0) ? (
+                            <span className="font-semibold text-red-600">{rel}</span>
                           ) : (
-                            <span className={`font-semibold ${typeof rel === 'number' ? (rel === 0 ? 'text-green-600' : 'text-red-600') : 'text-gray-400 cursor-help'}`} title={typeof rel === 'number' ? '' : 'Run Enforcement Sentinel to fetch count'}>
-                              {rel}
+                            <span
+                              className="text-gray-400 cursor-help"
+                              title={rel === -1 || rel === '-1'
+                                ? "Couldn't fetch data quality history. Check that the table has a 'reliability_window' tag, then re-run the Enforcement Sentinel."
+                                : 'Run the Enforcement Sentinel to evaluate data quality.'}
+                            >
+                              &mdash;
                             </span>
                           )}
                         </td>
                         <td className="p-3 text-right">
-                          <div className="flex items-center justify-end gap-1">
+                          <div className="flex items-center justify-end gap-1.5">
                             <Button 
                               variant="outline" 
                               size="sm" 
                               onClick={() => handleSyncContracts(contract.dataset_id)}
                               disabled={isSyncingContracts}
-                              className="text-xs h-7 w-7 p-0 border-green-200 text-green-600 hover:bg-green-50"
+                              className="text-xs h-7 px-2 gap-1 border-green-200 text-green-600 hover:bg-green-50"
                               title="Sync Contract"
                             >
                               <RefreshCw className="w-3.5 h-3.5" />
+                              Sync
                             </Button>
                             <Button 
                               variant="outline" 
                               size="sm" 
                               onClick={() => handleCheckPolicy(contract.dataset_id)}
                               disabled={isCheckingPolicy}
-                              className="text-xs h-7 w-7 p-0 border-purple-200 text-purple-600 hover:bg-purple-50"
+                              className="text-xs h-7 px-2 gap-1 border-purple-200 text-purple-600 hover:bg-purple-50"
                               title="Run Policy Check"
                             >
                               <FileCheck className="w-3.5 h-3.5" />
+                              Check
                             </Button>
                             <Button 
                               variant="outline" 
                               size="sm" 
                               onClick={() => handleEdit(contract)}
-                              className="text-xs h-7 w-7 p-0 border-blue-200 text-blue-600 hover:bg-blue-50"
+                              className="text-xs h-7 px-2 gap-1 border-blue-200 text-blue-600 hover:bg-blue-50"
                               title="Edit Contract"
                             >
                               <Edit className="w-3.5 h-3.5" />
+                              Edit
                             </Button>
                             <Button
                               variant="outline"
                               size="sm"
                               onClick={() => handleDeleteContract(contract.dataset_id)}
-                              className="text-xs h-7 w-7 p-0 border-red-200 text-red-600 hover:bg-red-50"
+                              className="text-xs h-7 px-2 gap-1 border-red-200 text-red-600 hover:bg-red-50"
                               title="Delete Contract"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
+                              Delete
                             </Button>
                           </div>
                         </td>

@@ -157,6 +157,11 @@ class Settings(BaseSettings):
     DATABRICKS_WORKSPACE_URL: str = ""
     DATABRICKS_WAREHOUSE_ID: str = "" # SQL Warehouse ID for running queries
     DATA_QUALITY_TABLE: str = "" # Table with ADOC DQ history
+    # catalog.schema that holds the ADOC `*_history` tables (adoc_dq_history,
+    # adoc_freshness_history, adoc_data_drift_history, adoc_profile_anomaly_history,
+    # adoc_schema_drift_history). Defaults to the real customer environment; override
+    # via env (e.g. a personal build catalog) for local/dev where these live elsewhere.
+    DATA_QUALITY_ADOC_SCHEMA: str = "enterprise_stg.data_quality"
     
     # Databricks MWS (Account-level) Settings for Workspace Provisioning
     # SECRET: Set in .env file
