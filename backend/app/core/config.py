@@ -265,6 +265,22 @@ class Settings(BaseSettings):
     # SECRET: Set in .env file
     IDP_BASE_URL: str = ""  # Base URL for IDP API
     IDP_API_KEY: str = ""  # SECRET: Set in .env
+
+    # LMWS / FWS-API Group Management
+    # Group/user management runs as a Databricks job (classic compute) against
+    # the vendored LMWS notebook. The notebook reads the service-account
+    # credentials from this Databricks secret scope (keys: username/password)
+    # cluster-side; the app never reads these creds itself. See
+    # app/providers/lmws/.
+    LMWS_SECRET_SCOPE: str = "lmws"  # Databricks secret scope (keys: username, password)
+    LMWS_JOB_TIMEOUT_SECONDS: int = 1800  # Job-level timeout for an LMWS action run
+    LMWS_DEFAULT_JUSTIFICATION: str = "Automated via Databricks job"
+    LMWS_DEFAULT_CLONE_SOURCE: str = "qcc.dsf.eccn.reference"  # Default clone source for createSPGroup
+    # Inline (agent-tool) read path polling: how long a stateless tool will
+    # wait for a job-backed read (list_retrieve / member_retrieve) before
+    # giving up. State-machine writes poll across ticks instead.
+    LMWS_INLINE_POLL_INTERVAL_SECONDS: int = 5
+    LMWS_INLINE_MAX_WAIT_SECONDS: int = 300
     
     # Notification Settings
     GOVERNANCE_EMAIL_GROUP: str = _notifications.get("governance_email_group", os.getenv("GOVERNANCE_EMAIL_GROUP", "data-governance@example.com"))
@@ -279,9 +295,20 @@ class Settings(BaseSettings):
     NOTIFICATION_EMAIL_SMTP_PASSWORD: str = ""  # SECRET: Set in .env
     
     # SES Settings
+    # Email is sent in-process via boto3. Authentication uses IAM credentials
+    # (access key id + secret access key) stored in a Databricks secret scope —
+    # NOT dbutils service credentials, which are unavailable from a serverless
+    # Databricks App. See get_ses_aws_credentials() below.
     NOTIFICATION_EMAIL_SES_REGION: str = "us-west-2"
-    NOTIFICATION_EMAIL_SES_CREDENTIAL: str = "" # Databricks service credential name
-    NOTIFICATION_EMAIL_SES_SOURCE: str = "" # Source email address
+    NOTIFICATION_EMAIL_SES_SOURCE: str = "" # Source email address (must be SES-verified)
+    # Databricks secret scope + keys holding the AWS IAM credentials.
+    NOTIFICATION_EMAIL_SES_SECRET_SCOPE: str = ""  # Databricks secret scope
+    NOTIFICATION_EMAIL_SES_ACCESS_KEY_ID_SECRET_KEY: str = ""  # key for AWS access key id
+    NOTIFICATION_EMAIL_SES_SECRET_ACCESS_KEY_SECRET_KEY: str = ""  # key for AWS secret access key
+    NOTIFICATION_EMAIL_SES_SESSION_TOKEN_SECRET_KEY: str = ""  # optional key for AWS session token (temp creds)
+    # Legacy: Databricks service credential name (dbutils-based). No longer used
+    # by the in-app boto3 path; kept for backward compatibility / reference.
+    NOTIFICATION_EMAIL_SES_CREDENTIAL: str = ""
     
     NOTIFICATION_SLACK_WEBHOOK_URL: str = ""  # SECRET: Set in .env
     NOTIFICATION_TEAMS_WEBHOOK_URL: str = ""  # SECRET: Set in .env
@@ -300,6 +327,70 @@ class Settings(BaseSettings):
     # Cache for runtime-fetched secrets
     _github_app_private_key_cached: str = ""
     _git_token_cached: str = ""
+    _ses_aws_credentials_cached: Optional[dict] = None
+
+    def get_ses_aws_credentials(self) -> Optional[dict]:
+        """
+        Fetch AWS IAM credentials for SES from a Databricks secret scope.
+
+        Returns a dict suitable for boto3.client(...) / boto3.Session(...):
+            {
+                "aws_access_key_id": "...",
+                "aws_secret_access_key": "...",
+                "aws_session_token": "...",   # only if a session-token key is configured
+            }
+        or None if the scope/keys aren't configured or the secrets can't be read.
+
+        Replaces the dbutils service-credential provider shown in notebooks,
+        which is unavailable from a serverless Databricks App.
+        """
+        if self._ses_aws_credentials_cached:
+            return self._ses_aws_credentials_cached
+
+        scope = self.NOTIFICATION_EMAIL_SES_SECRET_SCOPE
+        access_key_id_key = self.NOTIFICATION_EMAIL_SES_ACCESS_KEY_ID_SECRET_KEY
+        secret_access_key_key = self.NOTIFICATION_EMAIL_SES_SECRET_ACCESS_KEY_SECRET_KEY
+
+        if not (scope and access_key_id_key and secret_access_key_key):
+            return None
+
+        import logging
+        logger = logging.getLogger(__name__)
+        try:
+            from databricks.sdk import WorkspaceClient
+            import base64
+
+            def _read(key: str) -> str:
+                secret = WorkspaceClient().secrets.get_secret(scope=scope, key=key)
+                if not secret or not secret.value:
+                    return ""
+                # Databricks SDK returns secret values base64-encoded.
+                return base64.b64decode(secret.value).decode("utf-8").strip()
+
+            creds = {
+                "aws_access_key_id": _read(access_key_id_key),
+                "aws_secret_access_key": _read(secret_access_key_key),
+            }
+
+            session_token_key = self.NOTIFICATION_EMAIL_SES_SESSION_TOKEN_SECRET_KEY
+            if session_token_key:
+                token = _read(session_token_key)
+                if token:
+                    creds["aws_session_token"] = token
+
+            if not (creds["aws_access_key_id"] and creds["aws_secret_access_key"]):
+                logger.warning(
+                    f"SES IAM credentials in secrets/{scope} are incomplete; "
+                    "falling back to ambient AWS credentials."
+                )
+                return None
+
+            self._ses_aws_credentials_cached = creds
+            logger.info(f"Fetched SES IAM credentials from secrets/{scope}")
+            return self._ses_aws_credentials_cached
+        except Exception as e:
+            logger.warning(f"Failed to fetch SES IAM credentials from secrets: {e}")
+            return None
     
     def get_git_token(self) -> str:
         """

@@ -55,30 +55,40 @@ async def test_send_email_smtp_mode():
 
 @pytest.mark.asyncio
 async def test_send_email_ses_mode():
-    """Test that email uses SES when configured."""
+    """SES mode sends in-app via boto3 using IAM creds from a Databricks secret."""
+    fake_creds = {
+        "aws_access_key_id": "AKIATEST",
+        "aws_secret_access_key": "secret",
+    }
+    mock_boto3 = MagicMock()
+    mock_ses_client = mock_boto3.Session.return_value.client.return_value
+    mock_ses_client.send_raw_email.return_value = {"MessageId": "msg-123"}
+
     with patch("app.core.config.settings.NOTIFICATION_EMAIL_PROVIDER", "ses"), \
          patch("app.core.config.settings.NOTIFICATION_EMAIL_SES_REGION", "us-east-1"), \
          patch("app.core.config.settings.NOTIFICATION_EMAIL_SES_SOURCE", "source@databricks.com"), \
-         patch("app.providers.databricks.client.DatabricksProvider.__init__", return_value=None), \
-         patch("app.providers.databricks.client.DatabricksProvider.submit_python_job", new_callable=AsyncMock) as mock_submit:
-        
-        mock_submit.return_value = "12345"
+         patch("app.core.config.Settings.get_ses_aws_credentials", return_value=fake_creds), \
+         patch.dict("sys.modules", {"boto3": mock_boto3}):
+
         provider = NotificationProvider()
-        
+
         result = await provider.send_email(
-            to="user@example.com", 
-            subject="SES Email", 
+            to="user@example.com",
+            subject="SES Email",
             body="SES Body"
         )
-        
+
         assert result is True
-        mock_submit.assert_called_once()
-        
-        # Verify message content
-        args, kwargs = mock_submit.call_args
-        assert kwargs['parameters'][0] == "user@example.com"
-        assert kwargs['parameters'][1] == "SES Email"
-        assert kwargs['parameters'][4] == "source@databricks.com"
+
+        # Session created with region + IAM creds from the secret.
+        mock_boto3.Session.assert_called_once_with(region_name="us-east-1", **fake_creds)
+        mock_boto3.Session.return_value.client.assert_called_once_with("ses")
+
+        # Verify the raw email was sent with the configured source and recipient.
+        _, kwargs = mock_ses_client.send_raw_email.call_args
+        assert kwargs["Source"] == "source@databricks.com"
+        assert kwargs["Destinations"] == ["user@example.com"]
+        assert "SES Email" in kwargs["RawMessage"]["Data"]
 
 def test_html_body_generation(provider):
     """Test HTML body generation with metadata."""

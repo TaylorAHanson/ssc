@@ -16,7 +16,7 @@ This workflow allows users to request the creation of a new volume (managed or e
 5. **External Location**: (Required ONLY if type is EXTERNAL) The path to the external storage.
 6. **Data Classification**: The sensitivity level of the data that will be stored here.
     *   *Options*: `green`, `yellow`, `red`, `black`.
-7. **Owner**: Which Entra ID group should own this volume?
+7. **Owner**: Which LMWS group/list should own this volume?
     *   *Enterprise Policy*: Individual users CANNOT own shared data assets. It must be a group (e.g., `data-eng-team`).
 8. **Comment**: (Optional) A description of the volume.
 

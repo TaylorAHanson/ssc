@@ -70,85 +70,55 @@ class SMTPEmailProvider(BaseEmailProvider):
 
 
 class SESEmailProvider(BaseEmailProvider):
-    """Email provider using AWS SES via a Databricks Job."""
-    
+    """Email provider using AWS SES, sent in-process via boto3.
+
+    Authentication uses static IAM credentials (access key id + secret access
+    key, optionally a session token) read from a Databricks secret scope. This
+    deliberately avoids ``dbutils.credentials.getServiceCredentialsProvider``,
+    which is not available from a serverless Databricks App. If no IAM
+    credentials are configured, boto3 falls back to the ambient credential
+    chain (env vars, instance profile, etc.).
+    """
+
     def __init__(self, region: str):
         self.region = region
 
-    async def send_email(self, to: str, subject: str, body: str, html_body: str, from_email: Optional[str] = None) -> bool:
-        from app.providers.databricks.client import DatabricksProvider
+    def _send_sync(self, to: str, subject: str, body: str, html_body: str, from_email: str) -> str:
+        """Synchronous boto3 SES send. Runs in a thread via send_email()."""
+        import boto3
         from app.core.config import settings
-        import json
-        
-        # Initialize Databricks provider
-        db_provider = DatabricksProvider(
-            host=settings.DATABRICKS_HOST,
-            token=settings.DATABRICKS_TOKEN,
-            client_id=settings.DATABRICKS_CLIENT_ID,
-            client_secret=settings.DATABRICKS_CLIENT_SECRET
+
+        msg = MIMEMultipart("alternative")
+        msg["From"] = from_email
+        msg["To"] = to
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain"))
+        msg.attach(MIMEText(html_body, "html"))
+
+        # IAM credentials from a Databricks secret. Returns None to let boto3
+        # use its default credential resolution chain.
+        creds = settings.get_ses_aws_credentials() or {}
+
+        session = boto3.Session(region_name=self.region, **creds)
+        client = session.client("ses")
+
+        response = client.send_raw_email(
+            Source=from_email,
+            Destinations=[to],
+            RawMessage={"Data": msg.as_string()},
         )
-        
-        # Python script to be executed on the cluster
-        python_code = f'''
-import sys
-import boto3
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+        return response.get("MessageId", "")
 
-def main():
-    if len(sys.argv) < 7:
-        print("Missing arguments")
-        sys.exit(1)
-        
-    to_email = sys.argv[1]
-    subject = sys.argv[2]
-    body = sys.argv[3]
-    html_body = sys.argv[4]
-    from_email = sys.argv[5]
-    region = sys.argv[6]
-    
-    msg = MIMEMultipart("alternative")
-    msg['From'] = from_email
-    msg['To'] = to_email
-    msg['Subject'] = subject
-    
-    part1 = MIMEText(body, 'plain')
-    part2 = MIMEText(html_body, 'html')
-    msg.attach(part1)
-    msg.attach(part2)
-    
-    # Boto3 will automatically use instance profile or environment variables
-    session = boto3.Session(region_name=region)
-    client = session.client("ses")
-    
-    response = client.send_raw_email(
-        Source=msg['From'],
-        Destinations=[to_email],
-        RawMessage={{'Data': msg.as_string()}}
-    )
-    print(f"Email sent successfully. MessageId: {{response.get('MessageId')}}")
+    async def send_email(self, to: str, subject: str, body: str, html_body: str, from_email: Optional[str] = None) -> bool:
+        import asyncio
 
-if __name__ == "__main__":
-    main()
-'''
-        
-        parameters = [
-            to,
-            subject,
-            body,
-            html_body,
-            from_email or "noreply@databricks.com",
-            self.region
-        ]
-        
+        sender = from_email or "noreply@databricks.com"
         try:
-            run_id = await db_provider.submit_python_job(
-                python_code=python_code,
-                parameters=parameters,
-                run_name=f"Send Email to {to}"
+            message_id = await asyncio.to_thread(
+                self._send_sync, to, subject, body, html_body, sender
             )
-            logger.info(f"SES email job submitted. RunId: {run_id}")
+            logger.info(f"SES email sent to {to}. MessageId: {message_id}")
             return True
         except Exception as e:
-            logger.error(f"Failed to submit SES email job: {e}")
+            logger.error(f"Failed to send SES email to {to}: {e}")
             return False

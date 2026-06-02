@@ -9,8 +9,8 @@
     *   *Validation*: Alphanumeric with hyphens only.
 3.  **Project Name**: What is the name of the project?
     *   *Validation*: Alphanumeric with hyphens only.
-4.  **Admin Group**: The Entra ID group that will be granted admin rights over this repository.
-    *   *Enterprise Policy*: Individual users CANNOT be repo admins. It must be an Entra ID group.
+4.  **Admin Group**: The LMWS group/list that will be granted admin rights over this repository.
+    *   *Enterprise Policy*: Individual users CANNOT be repo admins. It must be an LMWS group/list.
 5.  **Check Availability**: Once you have the domain and project name, **MANDATORY**: Call `check_github_repo` with the name `atlas-{businessdomain}-{projectname}` to ensure it is available.
     *   If it exists already, ask the user for a different project name.
 6.  **Visibility**: Public (Internal) or Private?

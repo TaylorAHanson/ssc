@@ -97,8 +97,8 @@ tools:
   list_workspaces: true
   search_events: true
   search_requests: true
-  search_entra_id_groups: true
-  search_entra_id_users: true
+  lmws_list_retrieve: true
+  lmws_member_retrieve: true
   check_resource_access: true
   search_approvals: true
   search_user_entitlements: true

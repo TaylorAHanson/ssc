@@ -18,7 +18,7 @@
     *   *Existence Check (REQUIRED)*: Before calling `execute_workflow`, you MUST use `get_catalog_list` or `get_schema_list` (passing the `target_host` and optional pattern filter) to verify the catalog or schema doesn't already exist.
 5.  **Data Classification**: The sensitivity level of the data that will be stored here.
     *   *Options*: `green`, `yellow`, `red`, `black`.
-5.  **Owner**: Which Entra ID group should own this asset?
+5.  **Owner**: Which LMWS group/list should own this asset?
     *   *Enterprise Policy*: Individual users CANNOT own shared data assets. It must be a group (e.g., `data-eng-team`).
 6.  **Discovery**: If a user mentions a parent catalog that does not exist, use the `get_catalog_list` tool to find similar or existing catalogs.
 7.  **Comment**: A brief description of the asset's purpose.

@@ -3,12 +3,14 @@ Data Access state machine.
 Handles requests for access to Unity Catalog assets (catalogs, schemas, tables, volumes).
 Uses Databricks SDK to grant permissions via Unity Catalog Grants API.
 """
+import re
 from statemachine import State
 from app.models.request import RequestType
 from app.state_machines.decorators import workflow
 from app.state_machines.base import BaseRequestStateMachine
+from app.state_machines.databricks_job_step import DatabricksJobStepMixin
 from app.models.request import RequestStatus
-from app.state_machines.facts import has_fact, add_fact
+from app.state_machines.facts import has_fact, add_fact, get_latest_fact
 from app.core.config import settings
 from app.core.exceptions import PermanentError, RetryableError
 import logging
@@ -17,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 @workflow(request_types=[RequestType.CATALOG_SCHEMA_TABLE_ACCESS, RequestType.BATCH_DATA_ACCESS, RequestType.DATA_ACCESS_REQUEST], feature_flag="core")
-class DataAccessStateMachine(BaseRequestStateMachine):
+class DataAccessStateMachine(DatabricksJobStepMixin, BaseRequestStateMachine):
     """
     State machine for requesting access to Unity Catalog assets
     (catalogs, schemas, tables, views, volumes).
@@ -279,18 +281,29 @@ class DataAccessStateMachine(BaseRequestStateMachine):
     # Provisioning Logic
     # --------------------------------------------------------------------------
 
-    async def _grant_access(self):
-        """Grant access to the Unity Catalog asset(s) using Databricks SDK."""
-        # Idempotency check
-        if has_fact(self.db, self.request.id, "access_grant_started"):
-            logger.info(f"[{self.request.id}] Access grant already started, skipping")
-            return
+    @staticmethod
+    def _lmws_step_id(list_name: str) -> str:
+        """Stable, fact-safe step id for an LMWS membership add to a given list."""
+        slug = re.sub(r"[^a-zA-Z0-9]+", "_", list_name).strip("_").lower()
+        return f"lmws_add_{slug}"
 
-        # Extract parameters from request context
+    async def _grant_access(self):
+        """Grant access to the requested Unity Catalog asset(s).
+
+        Re-entrant: ``on_enter_provisioning_async`` re-invokes this every poller
+        tick while in ``provisioning``. Two phases, each idempotent:
+
+        1. **Plan + direct grants** (runs once, gated by ``access_grant_started``):
+           assets tagged with an ``access_group`` are routed to LMWS group
+           membership; untagged assets get a direct UC SQL grant immediately.
+        2. **LMWS membership** (driven across ticks): for each distinct
+           ``access_group`` list, dispatch an LMWS ``list_members_add`` job step
+           via ``DatabricksJobStepMixin`` and gate completion on the step facts.
+        """
         ctx = self.request.state_context or {}
         access_level = ctx.get("access_level")  # read, write, manage
         principal = ctx.get("requested_by_email")  # User email to grant access to
-        
+
         # Support both single asset and multiple assets
         assets = ctx.get("assets", [])
         if not assets and ctx.get("asset_name"):
@@ -303,22 +316,91 @@ class DataAccessStateMachine(BaseRequestStateMachine):
         if not principal:
             raise PermanentError("requested_by_email is required to grant access")
 
-        # Record that we've started the grant process
-        add_fact(self.db, self.request.id, "access_grant_started", {
-            "assets": assets,
-            "access_level": access_level,
-            "principal": principal
-        }, actor="system")
+        # --- Phase 1: build the plan + perform direct grants (once) ---
+        if not has_fact(self.db, self.request.id, "access_grant_started"):
+            await self._plan_and_direct_grant(assets, access_level, principal)
 
+        started = get_latest_fact(self.db, self.request.id, "access_grant_started")
+        plan = started.event_data if started else {}
+        group_lists = plan.get("group_lists", [])
+        direct_results = plan.get("direct_results", [])
+
+        # No LMWS membership needed → direct grants are the whole job.
+        if not group_lists:
+            if not has_fact(self.db, self.request.id, "access_granted"):
+                add_fact(self.db, self.request.id, "access_granted", {
+                    "access_level": access_level,
+                    "principal": principal,
+                    "results": direct_results,
+                }, actor="system")
+                logger.info(f"[{self.request.id}] Access granted via direct UC grants only")
+            return
+
+        # --- Phase 2: drive LMWS membership job steps (idempotent across ticks) ---
+        from app.providers.lmws import LmwsProvider, LmwsAction
+
+        provider = LmwsProvider()
+        justification = ctx.get("justification") or None
+        pending: list[str] = []
+        failed: list[dict] = []
+
+        for list_name in group_lists:
+            step_id = self._lmws_step_id(list_name)
+            logger.info(
+                f"[{self.request.id}] LMWS add {principal} -> '{list_name}' (step {step_id})"
+            )
+            await self.run_databricks_job_step(
+                **provider.build_step_kwargs(
+                    LmwsAction.LIST_MEMBERS_ADD,
+                    step_id=step_id,
+                    list_name=list_name,
+                    members=[principal],
+                    justification=justification,
+                    run_name=f"LMWS add {principal} -> {list_name}: {self.request.id}",
+                )
+            )
+            if self.step_failed(step_id):
+                failed.append({"list_name": list_name, "error": self.get_step_error(step_id)})
+            elif not self.step_completed(step_id):
+                pending.append(list_name)
+
+        if failed:
+            logger.error(f"[{self.request.id}] LMWS membership failed: {failed}")
+            add_fact(self.db, self.request.id, "access_grant_failed", {
+                "failed": failed,
+                "permanent": True,
+            }, actor="system")
+            self.mark_failed()
+            return
+
+        if pending:
+            logger.info(f"[{self.request.id}] Waiting on LMWS membership jobs: {pending}")
+            return  # still running; next tick will poll
+
+        add_fact(self.db, self.request.id, "access_granted", {
+            "access_level": access_level,
+            "principal": principal,
+            "granted_groups": group_lists,
+            "results": direct_results,
+        }, actor="system")
+        logger.info(f"[{self.request.id}] Successfully granted access to all requested assets")
+
+    async def _plan_and_direct_grant(self, assets: list, access_level: str, principal: str):
+        """Resolve each asset to LMWS-group vs direct-grant, executing direct grants now.
+
+        Writes a single ``access_grant_started`` fact capturing the plan:
+        ``group_lists`` (LMWS lists to add the principal to) and
+        ``direct_results`` (UC grants already applied).
+        """
         provider = self._get_provider()
-        results = []
+        group_lists: set[str] = set()
+        direct_results: list[dict] = []
 
         try:
             for asset in assets:
                 asset_type = asset.get("asset_type")
                 asset_name = asset.get("asset_name")
-                
-                # Validate required parameters for this asset
+
                 if not asset_type:
                     raise PermanentError("asset_type is required (schema, table, view, or volume)")
                 if asset_type.lower() == "catalog":
@@ -329,87 +411,49 @@ class DataAccessStateMachine(BaseRequestStateMachine):
                 if not asset_name:
                     raise PermanentError("asset_name is required")
 
-                logger.info(f"[{self.request.id}] Granting {access_level} access to {asset_type} '{asset_name}' for {principal}")
-
-                # Fetch the access_group tag
+                # Fetch the access_group tag → route to LMWS list membership.
                 tags = await provider.get_asset_tags(asset_type, asset_name, ["access_group"])
                 access_group = tags.get("access_group")
-                
+
                 if access_group:
-                    logger.info(f"[{self.request.id}] Found access_group tag: {access_group}. Adding {principal} to Entra ID group.")
-                    
-                    from app.providers.entra_id.client import EntraIdProvider
-                    from app.core.config import settings
-                    
-                    entra_provider = EntraIdProvider(
-                        tenant_id=getattr(settings, "ENTRA_ID_TENANT_ID", "mock-tenant-id"),
-                        client_id=getattr(settings, "ENTRA_ID_CLIENT_ID", "mock-client-id"),
-                        client_secret=getattr(settings, "ENTRA_ID_CLIENT_SECRET", "mock-client-secret")
+                    logger.info(
+                        f"[{self.request.id}] Asset '{asset_name}' maps to LMWS list '{access_group}'"
                     )
-                    
-                    async with entra_provider:
-                        # Find the user ID
-                        user_search = await entra_provider.search_users(principal)
-                        if not user_search.get("results"):
-                            raise PermanentError(f"User {principal} not found in Entra ID")
-                        user_id = user_search["results"][0]["id"]
-                        
-                        # Find the group ID
-                        group_search = await entra_provider.search_groups(access_group)
-                        if not group_search.get("results"):
-                            raise PermanentError(f"Group {access_group} not found in Entra ID")
-                        
-                        # Find exact match just in case search returns multiple
-                        group_id = None
-                        for g in group_search["results"]:
-                            if g["name"].lower() == access_group.lower():
-                                group_id = g["id"]
-                                break
-                        
-                        if not group_id:
-                            group_id = group_search["results"][0]["id"]
-                            
-                        # Add user to group
-                        await entra_provider.add_to_group(user_id=user_id, group_id=group_id)
-                        
-                    result = {"success": True, "granted_group": access_group, "asset_name": asset_name}
+                    group_lists.add(access_group)
                 else:
-                    logger.warning(f"[{self.request.id}] No access_group tag found for {asset_name}. Falling back to direct grant.")
-                    # Fallback to direct grant if tag is missing
+                    logger.warning(
+                        f"[{self.request.id}] No access_group tag for {asset_name}; direct UC grant."
+                    )
                     result = await provider.grant_access(
                         asset_type=asset_type,
                         asset_name=asset_name,
                         principal=principal,
-                        access_level=access_level
+                        access_level=access_level,
                     )
-                    
-                results.append({"asset_name": asset_name, "result": result})
+                    direct_results.append({"asset_name": asset_name, "result": result})
 
-            # Record success for all assets
-            add_fact(self.db, self.request.id, "access_granted", {
+            add_fact(self.db, self.request.id, "access_grant_started", {
                 "assets": assets,
                 "access_level": access_level,
                 "principal": principal,
-                "results": results
+                "group_lists": sorted(group_lists),
+                "direct_results": direct_results,
             }, actor="system")
-
-            logger.info(f"[{self.request.id}] Successfully granted access to all requested assets")
 
         except PermanentError as e:
-            logger.error(f"[{self.request.id}] Permanent error granting access: {e}")
+            logger.error(f"[{self.request.id}] Permanent error planning access grant: {e}")
             add_fact(self.db, self.request.id, "access_grant_failed", {
                 "error": str(e),
-                "permanent": True
+                "permanent": True,
             }, actor="system")
             raise
-
         except Exception as e:
-            logger.error(f"[{self.request.id}] Error granting access: {e}")
+            logger.error(f"[{self.request.id}] Error planning access grant: {e}")
             add_fact(self.db, self.request.id, "access_grant_failed", {
                 "error": str(e),
-                "permanent": False
+                "permanent": False,
             }, actor="system")
-            raise RetryableError(f"Failed to grant access: {e}")
+            raise RetryableError(f"Failed to plan access grant: {e}")
 
     # --------------------------------------------------------------------------
     # Fact Properties (Used in transitions)

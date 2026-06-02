@@ -19,8 +19,8 @@ You must gather the following information from the user before executing the wor
     *   *Validation*: Must be a 6-digit number.
 3.  **Data Sensitivity**: The highest classification of data that will be processed in this project.
     *   *Options*: `green`, `yellow`, `red`, `black`.
-4.  **Admin Group**: The Entra ID group that will be granted admin rights over the workspace and repository.
-    *   *Enterprise Policy*: Individual users CANNOT be admins of shared resources. It must be an Entra ID group.
+4.  **Admin Group**: The LMWS group/list that will be granted admin rights over the workspace and repository.
+    *   *Enterprise Policy*: Individual users CANNOT be admins of shared resources. It must be an LMWS group/list.
 5.  **Repository Name**: Name for the GitHub repository.
     *   *Default*: Suggest `{project_name}-repo` if not provided.
 6.  **Team Members**: A list of email addresses of team members who need access to the workspace.

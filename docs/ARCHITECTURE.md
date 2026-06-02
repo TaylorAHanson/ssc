@@ -439,9 +439,21 @@ class ConnectionError(RetryableError):
 - `rotate_credentials(name: str, config: dict) -> dict` - Rotate credentials
 - `grant_access(principal: str, resource: str, permissions: list) -> bool` - Grant access via SDK
 
-**IDP Provider** (`providers/idp/`):
-- `create_group(name: str, attributes: dict) -> dict` - Create group in IDP
-- `add_to_group(user_id: str, group_id: str) -> bool` - Add user to group
+**LMWS Provider** (`providers/lmws/`) — group & user management (replaces the former Entra ID provider):
+- `list_retrieve(list_name) -> dict` - Owner/supervisors/members of a list
+- `member_retrieve(member) -> dict` - All list memberships for a user
+- `add_members(list_name, members) -> dict` / `remove_members(...)` / `update_members(...)`
+- `build_step_kwargs(action, step_id=..., **params) -> dict` - kwargs for `DatabricksJobStepMixin.run_databricks_job_step` (preferred path for state-machine writes)
+- `run_action(action, **params) -> dict` - inline submit+poll (agent read tools)
+
+Unlike Entra ID (direct Graph HTTP from the app), **every LMWS operation runs as
+a Databricks job** (classic compute) against the vendored notebook
+`providers/lmws/lmws_group_management_job.py`, which reads the service-account
+credentials from the `LMWS_SECRET_SCOPE` Databricks secret scope (keys
+`username`/`password`) cluster-side. State machines (`data_access`,
+`workspace_access`) dispatch membership changes via the non-blocking
+`DatabricksJobStepMixin`; the agent read tools (`lmws_list_retrieve`,
+`lmws_member_retrieve`) use the inline submit+poll path.
 
 **GitHub Provider** (`providers/github/`):
 - `create_repo(name: str, config: dict) -> dict` - Create repository
@@ -455,6 +467,19 @@ class ConnectionError(RetryableError):
 **Notification Provider** (`providers/notifications/`):
 - `send_email(to: str, subject: str, body: str) -> bool` - Send email
 - `send_teams(webhook: str, message: dict) -> bool` - Send Teams message
+
+Email supports three backends selected by `NOTIFICATION_EMAIL_PROVIDER`
+(`smtp`, `ses`, `mock`). The `ses` backend (`SESEmailProvider`) sends mail
+**in-process via boto3** and authenticates with static AWS IAM credentials
+(access key id / secret access key, optionally an STS session token) read at
+runtime from a Databricks secret scope (`NOTIFICATION_EMAIL_SES_SECRET_SCOPE`
++ `*_SECRET_KEY` settings, resolved via `settings.get_ses_aws_credentials()`).
+This deliberately avoids `dbutils.credentials.getServiceCredentialsProvider`,
+which is unavailable from a serverless Databricks App. If no IAM credentials
+are configured, boto3 falls back to its ambient credential chain. If SES isn't
+reachable from the App's serverless network, route delivery through a
+`DatabricksJobStepMixin` step on classic compute instead (see the Databricks
+Job Runner Pattern below).
 
 ### Agent Tools Layer (`app/tools/`)
 
@@ -1027,8 +1052,7 @@ in `app/core/config.py` (spark version, node type, num workers, optional
 future swap to warmer compute).
 
 **Provider primitive**: `DatabricksProvider.submit_job(...)` is the single
-entry point used by the base class and by direct callers (e.g. `SESEmailProvider`
-via the back-compat `submit_python_job` shim). It accepts notebook tasks,
+entry point used by the base class and by direct callers. It accepts notebook tasks,
 inline Python tasks, or pre-built `jobs.SubmitTask` objects, plus an optional
 `ComputeSpec`. Use `get_run_output(run_id)` to fetch notebook return values,
 task values, or stdout once the run terminates.

@@ -8,7 +8,7 @@
 2.  **Service Name**: The name for the service principal.
     *   *Naming Convention*: `sp-{team}-{application}-{env}`.
     *   *Existence Check (REQUIRED)*: Before calling `execute_workflow`, you MUST use `does_service_principal_exist` (passing the `target_host`) to verify the service principal doesn't already exist.
-3.  **Team**: The Entra ID group that will own and manage this service principal.
+3.  **Team**: The LMWS group/list that will own and manage this service principal.
 3.  **Environment**: The environment where this SP will be used.
     *   *Options*: `dev`, `test`, `prod`.
 4.  **Cost Center**: The financial billing code responsible for any compute costs incurred by this SP.

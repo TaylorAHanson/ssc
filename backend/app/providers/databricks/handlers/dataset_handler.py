@@ -103,7 +103,26 @@ class DatasetResourceHandler(BaseResourceHandler):
                                 digits = "".join([c for c in str(reliability_window) if c.isdigit()])
                                 window_days = int(digits) if digits else 7
                                 if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
-                                    query = f"SELECT COUNT(1) FROM {settings.DATA_QUALITY_TABLE} LATERAL VIEW explode(items) as item WHERE assetInfo.assetUid LIKE '%{full_name}%' AND cast(processed_at as date) >= date_sub(current_date(), {window_days}) AND item.resultPercent < item.threshold"
+                                    query = f"""
+WITH combined AS (
+    SELECT assetInfo.assetUid, processed_at, items FROM enterprise_stg.data_quality.adoc_dq_history
+    UNION ALL SELECT assetInfo.assetUid, processed_at, items FROM enterprise_stg.data_quality.adoc_freshness_history
+    UNION ALL SELECT assetInfo.assetUid, processed_at, items FROM enterprise_stg.data_quality.adoc_data_drift_history
+    UNION ALL SELECT assetInfo.assetUid, processed_at, items FROM enterprise_stg.data_quality.adoc_profile_anomaly_history
+    --UNION ALL SELECT assetInfo.leftBackingAssetUid, processed_at, items FROM enterprise_stg.data_quality.adoc_reconciliation_history
+    UNION ALL SELECT assetInfo.assetUid, processed_at, items FROM enterprise_stg.data_quality.adoc_schema_drift_history
+)
+SELECT count(1)
+FROM combined
+LATERAL VIEW explode(items) exploded AS item
+WHERE assetUid LIKE '%{full_name}%'
+AND cast(processed_at AS date) >= date_sub(current_date(), {window_days})
+AND item.resultPercent < item.threshold
+"""
+                                    logger.info(
+                                        f"Fetching failed rule count for asset '{full_name}' "
+                                        f"(reliability_window={window_days} days). Query: {query}"
+                                    )
                                     response = self.workspace_client.statement_execution.execute_statement(
                                         statement=query,
                                         warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,

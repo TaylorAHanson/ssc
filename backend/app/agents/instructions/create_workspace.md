@@ -9,7 +9,7 @@
 3.  **Cost Center**: The financial billing code or cost center responsible for the compute costs in this workspace.
 4.  **Data Sensitivity**: The highest classification of data that will be processed here.
     *   *Options*: `green`, `yellow`, `red`, `black`.
-5.  **Workspace Admin Group**: The Entra ID group that will be granted admin rights. (Individual users cannot be workspace admins).
+5.  **Workspace Admin Group**: The LMWS group/list that will be granted admin rights. (Individual users cannot be workspace admins).
 6.  **Justification**: A detailed reason for needing a *new* workspace.
     *   *Analysis Logic*: A new workspace is only valid for **new business domain onboarding**. If the user is part of an existing domain that already has a workspace, push them to request access to that existing workspace instead. If the justification is weak or doesn't align with domain onboarding, challenge it.
 7.  **Workspace Name**: This is hardcoded to a specific format. Do NOT ask the user for the name.

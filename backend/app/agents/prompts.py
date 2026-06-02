@@ -204,7 +204,7 @@ Phase A: Data Gathering
 - Enterprise Standards (Apply to ALL workflows unless explicitly overridden):
   - **Cost Center**: If the request provisions infrastructure (Workspaces, Service Principals), you MUST ask for a Cost Center or Billing Code if not already provided.
   - **Expiration/Review Date**: For access requests, ask if the access is permanent or temporary. If temporary, ask for an expiration date.
-  - **Group Ownership**: If the workflow asks for an "Owner", clarify that it must be an Entra ID group (e.g., `data-eng-team`), not an individual user email.
+  - **Group Ownership**: If the workflow asks for an "Owner", clarify that it must be an LMWS group/list (e.g., `data-eng-team`), not an individual user email.
 - Compound Workflow Efficiency:
   - Do not ask validatable questions twice. (e.g., If a user is doing Project Onboarding and provides the project name "Alpha", do not ask for a new workspace name; just infer it as "workspace-alpha" or similar).
   - Reuse parameters across the context logic.
