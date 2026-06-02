@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { ShieldAlert, AlertTriangle, Search, Unlock, Lock, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight, ClipboardList, XCircle } from 'lucide-react';
+import { ShieldAlert, AlertTriangle, Search, Unlock, Lock, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, ClipboardList, XCircle, SlidersHorizontal } from 'lucide-react';
 import { api } from '../../services/api';
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { format, parseISO } from 'date-fns';
@@ -24,6 +24,9 @@ const formatReason = (v: any) => {
 export function EnforcementSentinel() {
     const [isRunning, setIsRunning] = useState(false);
     const [isEnforcementUnlocked, setIsEnforcementUnlocked] = useState(false);
+    // Keep the primary surface to a single "Run Audit" action. Scan scope and
+    // the destructive active-enforcement controls live behind this disclosure.
+    const [advancedOpen, setAdvancedOpen] = useState(false);
     const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<string>('all');
     // Top-level toggle: "Violations" shows only failed checks (legacy view).
@@ -192,99 +195,147 @@ export function EnforcementSentinel() {
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <div className="bg-gray-50 border border-gray-200 rounded-md p-3 mb-6 flex flex-wrap items-center justify-between gap-4">
+                    {/* Primary action: a single, clearly-explained "Run Audit". */}
+                    <div className="bg-gray-50 border border-gray-200 rounded-md p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                         <div className="flex flex-col gap-1">
-                            <div className="flex items-center gap-2 text-sm text-gray-700 font-medium">
+                            <div className="flex items-center gap-2 text-sm text-gray-800 font-medium">
                                 <Search className="w-4 h-4" />
-                                <span>Manual Trigger</span>
+                                <span>Run a governance audit</span>
                             </div>
+                            <p className="text-xs text-gray-500 max-w-xl leading-relaxed">
+                                Scans every resource in the workspace and evaluates it against all Open Policy
+                                Agent (OPA) policies. Audit mode is <span className="font-medium text-gray-700">read-only</span> —
+                                it reports which checks pass and fail but never changes, terminates, or uncertifies anything.
+                            </p>
                             {schedules?.enforcement_sentinel?.next_run && (
-                                <div className="text-xs text-gray-500">
+                                <div className="text-xs text-gray-400 mt-0.5">
                                     Next scheduled run: {format(parseISO(schedules.enforcement_sentinel.next_run), 'MMM d, HH:mm')}
                                 </div>
                             )}
                         </div>
 
-                        <div className="flex items-center gap-3 flex-1 max-w-2xl justify-end">
-                            <div className="flex items-center gap-4 flex-1">
-                                <div className="flex items-center gap-2 flex-1 max-w-xs">
-                                    <label htmlFor="workspace" className="text-xs font-medium text-gray-500 whitespace-nowrap">
-                                        Workspace:
-                                    </label>
-                                    <input
-                                        type="text"
-                                        id="workspace"
-                                        value={workspace}
-                                        onChange={(e) => setWorkspace(e.target.value)}
-                                        className="flex h-8 w-full rounded-md border border-input bg-white px-2 py-1 text-xs ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                                        placeholder="ws-enterprise-prod"
-                                    />
-                                </div>
-                                <div className="flex items-center gap-2 flex-1 max-w-[150px]">
-                                    <label htmlFor="environment" className="text-xs font-medium text-gray-500 whitespace-nowrap">
-                                        Env:
-                                    </label>
-                                    <select
-                                        id="environment"
-                                        value={environment}
-                                        onChange={(e) => setEnvironment(e.target.value as any)}
-                                        className="flex h-8 w-full rounded-md border border-input bg-white px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                    >
-                                        <option value="dev">dev</option>
-                                        <option value="stage">stage</option>
-                                        <option value="prod">prod</option>
-                                    </select>
-                                </div>
-                            </div>
+                        <Button
+                            onClick={() => handleRunSentinel('audit_only')}
+                            disabled={isRunning}
+                            className="h-9 whitespace-nowrap self-start sm:self-auto"
+                        >
+                            <Search className="w-4 h-4 mr-1.5" />
+                            {isRunning ? 'Starting...' : 'Run Audit'}
+                        </Button>
+                    </div>
 
-                            <Button 
-                                onClick={() => handleRunSentinel('audit_only')} 
-                                variant="outline" 
-                                disabled={isRunning}
-                                size="sm"
-                                className="h-8 bg-white"
-                            >
-                                <Search className="w-3 h-3 mr-1" />
-                                {isRunning ? 'Starting...' : 'Run Audit'}
-                            </Button>
+                    {/* Everything else (scan scope + destructive enforcement) lives
+                        behind an Advanced disclosure so the default surface stays simple. */}
+                    <div className="mt-4">
+                        <button
+                            type="button"
+                            onClick={() => setAdvancedOpen(o => !o)}
+                            className="flex items-center gap-1.5 text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
+                            aria-expanded={advancedOpen}
+                        >
+                            <ChevronDown className={`w-4 h-4 transition-transform ${advancedOpen ? '' : '-rotate-90'}`} />
+                            <SlidersHorizontal className="w-4 h-4" />
+                            Advanced options
+                        </button>
 
-                            <div className={`flex items-center transition-colors duration-300 rounded-md border ${isEnforcementUnlocked ? 'bg-red-50 border-red-200 shadow-sm' : 'bg-white border-gray-200'}`}>
-                                {!isEnforcementUnlocked ? (
-                                        <Button 
-                                            onClick={() => setIsEnforcementUnlocked(true)} 
-                                            variant="outline"
-                                            disabled={isRunning}
-                                        size="sm"
-                                        className="h-8 border-0 bg-transparent hover:bg-gray-100 text-xs"
-                                    >
-                                        <Unlock className="w-3 h-3 mr-1 text-gray-500" />
-                                        Unlock Enforcement
-                                    </Button>
-                                ) : (
-                                    <div className="flex items-center animate-in fade-in slide-in-from-left-2">
-                                        <Button 
-                                            onClick={() => handleRunSentinel('active_enforcement')} 
-                                            variant="default"
-                                            disabled={isRunning}
-                                            size="sm"
-                                            className="h-8 rounded-r-none text-xs"
-                                        >
-                                            <AlertTriangle className="w-3 h-3 mr-1" />
-                                            {isRunning ? 'Starting...' : 'Execute'}
-                                        </Button>
-                                        <Button 
-                                            onClick={() => setIsEnforcementUnlocked(false)} 
-                                            variant="ghost"
-                                            disabled={isRunning}
-                                            size="sm"
-                                            className="text-gray-500 hover:text-gray-700 h-8 rounded-l-none text-xs px-2"
-                                        >
-                                            <Lock className="w-3 h-3" />
-                                        </Button>
+                        {advancedOpen && (
+                            <div className="mt-3 border border-gray-200 rounded-md divide-y divide-gray-100 animate-in fade-in slide-in-from-top-1">
+                                {/* Scan scope */}
+                                <div className="p-4 flex flex-col gap-3">
+                                    <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                                        Scan scope
                                     </div>
-                                )}
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div className="flex flex-col gap-1">
+                                            <label htmlFor="workspace" className="text-xs font-medium text-gray-700">
+                                                Workspace
+                                            </label>
+                                            <input
+                                                type="text"
+                                                id="workspace"
+                                                value={workspace}
+                                                onChange={(e) => setWorkspace(e.target.value)}
+                                                className="flex h-8 w-full rounded-md border border-input bg-white px-2 py-1 text-xs ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                                                placeholder="ws-enterprise-prod"
+                                            />
+                                            <p className="text-[11px] text-gray-500 leading-relaxed">
+                                                Scopes the <span className="font-medium text-gray-700">apps &amp; platform governance</span> policies
+                                                (clusters, jobs, warehouses, dashboards, etc.). It does <span className="font-medium text-gray-700">not</span> affect
+                                                data certification, which always evaluates the contracted datasets regardless of this selection.
+                                            </p>
+                                        </div>
+                                        <div className="flex flex-col gap-1">
+                                            <label htmlFor="environment" className="text-xs font-medium text-gray-700">
+                                                Environment
+                                            </label>
+                                            <select
+                                                id="environment"
+                                                value={environment}
+                                                onChange={(e) => setEnvironment(e.target.value as any)}
+                                                className="flex h-8 w-full rounded-md border border-input bg-white px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                            >
+                                                <option value="dev">dev</option>
+                                                <option value="stage">stage</option>
+                                                <option value="prod">prod</option>
+                                            </select>
+                                            <p className="text-[11px] text-gray-500 leading-relaxed">
+                                                Environment context the platform-governance policies are evaluated under. Some rules are stricter in prod.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Active enforcement (destructive) */}
+                                <div className="p-4 flex flex-col gap-3">
+                                    <div className="text-xs font-semibold uppercase tracking-wider text-red-600 flex items-center gap-1.5">
+                                        <AlertTriangle className="w-3.5 h-3.5" />
+                                        Active enforcement
+                                    </div>
+                                    <p className="text-[11px] text-gray-500 max-w-2xl leading-relaxed">
+                                        Runs the same scan but <span className="font-medium text-gray-700">executes remediation</span> on
+                                        violating resources (warn, uncertify, terminate, etc.) according to each policy's severity.
+                                        This is destructive — it can stop jobs, revoke access, and uncertify datasets, so it stays
+                                        locked until you explicitly unlock it.
+                                    </p>
+                                    <div className={`inline-flex items-center self-start transition-colors duration-300 rounded-md border ${isEnforcementUnlocked ? 'bg-red-50 border-red-200 shadow-sm' : 'bg-white border-gray-200'}`}>
+                                        {!isEnforcementUnlocked ? (
+                                            <Button
+                                                onClick={() => setIsEnforcementUnlocked(true)}
+                                                variant="outline"
+                                                disabled={isRunning}
+                                                size="sm"
+                                                className="h-8 border-0 bg-transparent hover:bg-gray-100 text-xs"
+                                            >
+                                                <Unlock className="w-3 h-3 mr-1 text-gray-500" />
+                                                Unlock Enforcement
+                                            </Button>
+                                        ) : (
+                                            <div className="flex items-center animate-in fade-in slide-in-from-left-2">
+                                                <Button
+                                                    onClick={() => handleRunSentinel('active_enforcement')}
+                                                    variant="default"
+                                                    disabled={isRunning}
+                                                    size="sm"
+                                                    className="h-8 rounded-r-none text-xs"
+                                                >
+                                                    <AlertTriangle className="w-3 h-3 mr-1" />
+                                                    {isRunning ? 'Starting...' : 'Execute Enforcement'}
+                                                </Button>
+                                                <Button
+                                                    onClick={() => setIsEnforcementUnlocked(false)}
+                                                    variant="ghost"
+                                                    disabled={isRunning}
+                                                    size="sm"
+                                                    className="text-gray-500 hover:text-gray-700 h-8 rounded-l-none text-xs px-2"
+                                                >
+                                                    <Lock className="w-3 h-3" />
+                                                </Button>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
                             </div>
-                        </div>
+                        )}
                     </div>
                 </CardContent>
             </Card>
@@ -430,12 +481,44 @@ export function EnforcementSentinel() {
                             const violations: any[] = ctx.violations || [];
                             const checks: any[] = ctx.checks || [];
                             const discoverFact = selectedRun.stateMachine?.states?.flatMap((s: any) => s.facts || []).find((f: any) => f.type === 'discover_completed');
-                            
+
+                            // Flatten every (resource, policy) check into its individual policy
+                            // rules so summary counts, tab counts, and the checklist are all
+                            // per-rule (each check in a policy is represented) rather than one
+                            // pass/fail per dataset. Policies without per-rule results fall back
+                            // to a single synthetic rule row for that evaluation.
+                            const ruleRows: any[] = checks.flatMap((c: any) => {
+                                const rrs = Array.isArray(c.rule_results) ? c.rule_results : [];
+                                if (rrs.length > 0) {
+                                    return rrs.map((rr: any) => ({
+                                        ...rr,
+                                        result: rr.passed ? 'PASS' : 'VIOLATION',
+                                        resource_id: c.resource_id,
+                                        resource_type: c.resource_type,
+                                        resource: c.resource,
+                                        policy: c.policy,
+                                        severity: rr.passed ? 'NONE' : c.severity,
+                                    }));
+                                }
+                                return [{
+                                    id: c.policy,
+                                    description: (c.policy || '').replace(/_/g, ' '),
+                                    passed: c.result === 'PASS',
+                                    messages: c.violation_reasons || [],
+                                    result: c.result,
+                                    resource_id: c.resource_id,
+                                    resource_type: c.resource_type,
+                                    resource: c.resource,
+                                    policy: c.policy,
+                                    severity: c.severity,
+                                }];
+                            });
+
                             const assetsScanned = discoverFact?.data?.total_resources_scanned ?? '—';
                             const policiesEvaluated = discoverFact?.data?.policies_evaluated ?? '—';
-                            const totalChecks = discoverFact?.data?.total_checks ?? checks.length ?? '—';
-                            const vCount = discoverFact?.data?.violation_count ?? violations.length;
-                            const passCount = discoverFact?.data?.pass_count ?? (checks.length ? checks.length - violations.length : null);
+                            const totalChecks = discoverFact?.data?.total_checks ?? ruleRows.length ?? '—';
+                            const vCount = discoverFact?.data?.violation_count ?? ruleRows.filter((r: any) => !r.passed).length;
+                            const passCount = discoverFact?.data?.pass_count ?? ruleRows.filter((r: any) => r.passed).length;
 
                             // Group violations by policy
                             const violationsByPolicy = violations.reduce((acc: any, v: any) => {
@@ -625,9 +708,9 @@ export function EnforcementSentinel() {
                                                     ) : (
                                                         <div className="flex gap-2 flex-1 min-w-0">
                                                             {[
-                                                                { id: 'all', label: `All (${checks.length})` },
-                                                                { id: 'pass', label: `Passed (${checks.filter((c: any) => c.result === 'PASS').length})` },
-                                                                { id: 'violation', label: `Violations (${checks.filter((c: any) => c.result === 'VIOLATION').length})` },
+                                                                { id: 'all', label: `All (${ruleRows.length})` },
+                                                                { id: 'pass', label: `Passed (${ruleRows.filter((r: any) => r.passed).length})` },
+                                                                { id: 'violation', label: `Violations (${ruleRows.filter((r: any) => !r.passed).length})` },
                                                             ].map(opt => (
                                                                 <button
                                                                     key={opt.id}
@@ -731,29 +814,29 @@ export function EnforcementSentinel() {
                                                 {reportView === 'checklist' && (
                                                     <div className="p-0 overflow-y-auto flex-1 max-h-[60vh]">
                                                         {(() => {
-                                                            if (checks.length === 0) {
+                                                            if (ruleRows.length === 0) {
                                                                 return (
                                                                     <div className="flex flex-col items-center justify-center h-full p-12 text-center">
                                                                         <ClipboardList className="w-12 h-12 text-gray-400 mb-4" />
                                                                         <h3 className="text-lg font-medium text-gray-900">No checklist data available</h3>
                                                                         <p className="text-gray-500 text-sm mt-1 max-w-sm">
-                                                                            This run did not record per-check evaluations. Re-run the Sentinel to capture a full audit checklist.
+                                                                            This run did not record per-rule evaluations. Re-run the Sentinel to capture a full audit checklist.
                                                                         </p>
                                                                     </div>
                                                                 );
                                                             }
 
-                                                            const filtered = checks.filter((c: any) => {
-                                                                if (checklistFilter === 'pass') return c.result === 'PASS';
-                                                                if (checklistFilter === 'violation') return c.result === 'VIOLATION';
+                                                            const filtered = ruleRows.filter((r: any) => {
+                                                                if (checklistFilter === 'pass') return r.passed;
+                                                                if (checklistFilter === 'violation') return !r.passed;
                                                                 return true;
                                                             });
 
                                                             // Violations first (by severity desc), then passes (by resource).
                                                             const severityRank: Record<string, number> = { 'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1, 'NONE': 0 };
                                                             const sorted = [...filtered].sort((a, b) => {
-                                                                if (a.result !== b.result) return a.result === 'VIOLATION' ? -1 : 1;
-                                                                if (a.result === 'VIOLATION') {
+                                                                if (a.passed !== b.passed) return a.passed ? 1 : -1;
+                                                                if (!a.passed) {
                                                                     const sa = severityRank[a.severity] || 0;
                                                                     const sb = severityRank[b.severity] || 0;
                                                                     if (sa !== sb) return sb - sa;
@@ -783,22 +866,24 @@ export function EnforcementSentinel() {
                                                                             <th className="p-3 px-4 text-left w-28">Result</th>
                                                                             <th className="p-3 text-left">Resource</th>
                                                                             <th className="p-3 text-left">Policy</th>
+                                                                            <th className="p-3 text-left">Check</th>
                                                                             <th className="p-3 text-left w-24">Severity</th>
-                                                                            <th className="p-3 text-left w-2/5">Notes</th>
+                                                                            <th className="p-3 text-left w-1/3">Notes</th>
                                                                         </tr>
                                                                     </thead>
                                                                     <tbody className="divide-y divide-gray-100">
-                                                                        {sorted.map((c: any, idx: number) => {
-                                                                            const tags = c.resource?.tags;
+                                                                        {sorted.map((r: any, idx: number) => {
+                                                                            const tags = r.resource?.tags;
                                                                             const tagList = Array.isArray(tags)
                                                                                 ? tags
                                                                                 : (tags && typeof tags === 'object'
                                                                                     ? Object.entries(tags).map(([k, v]) => `${k}: ${v}`)
                                                                                     : []);
+                                                                            const msgs: string[] = (r.messages || r.violations || []) as string[];
                                                                             return (
                                                                                 <tr key={idx} className="hover:bg-gray-50/60 align-top">
                                                                                     <td className="p-3 px-4">
-                                                                                        {c.result === 'PASS' ? (
+                                                                                        {r.passed ? (
                                                                                             <span className="inline-flex items-center gap-1 text-[10px] uppercase font-bold px-2 py-1 rounded-full bg-green-50 text-green-700 border border-green-200">
                                                                                                 <CheckCircle2 className="w-3 h-3" /> Pass
                                                                                             </span>
@@ -810,9 +895,9 @@ export function EnforcementSentinel() {
                                                                                     </td>
                                                                                     <td className="p-3">
                                                                                         <div className="flex flex-col gap-1">
-                                                                                            <span className="text-[10px] text-gray-700 font-semibold uppercase tracking-wider">{c.resource_type}</span>
-                                                                                            <span className="font-medium text-gray-900">{c.resource?.name || c.resource_id}</span>
-                                                                                            <span className="font-mono text-[10px] text-gray-500 break-all">{c.resource_id}</span>
+                                                                                            <span className="text-[10px] text-gray-700 font-semibold uppercase tracking-wider">{r.resource_type}</span>
+                                                                                            <span className="font-medium text-gray-900">{r.resource?.name || r.resource_id}</span>
+                                                                                            <span className="font-mono text-[10px] text-gray-500 break-all">{r.resource_id}</span>
                                                                                             {tagList.length > 0 && (
                                                                                                 <div className="flex flex-wrap gap-1 mt-1">
                                                                                                     {tagList.slice(0, 4).map((t: string, i: number) => (
@@ -825,59 +910,32 @@ export function EnforcementSentinel() {
                                                                                             )}
                                                                                         </div>
                                                                                     </td>
-                                                                                    <td className="p-3 text-gray-700">{(c.policy || '').replace(/_/g, ' ')}</td>
+                                                                                    <td className="p-3 text-gray-700">{(r.policy || '').replace(/_/g, ' ')}</td>
+                                                                                    <td className="p-3 text-gray-700">{r.description || r.id}</td>
                                                                                     <td className="p-3">
-                                                                                        {c.result === 'VIOLATION' ? (
+                                                                                        {!r.passed ? (
                                                                                             <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded-full ${
-                                                                                                c.severity === 'CRITICAL' ? 'bg-red-100 text-red-800 border border-red-200' :
-                                                                                                c.severity === 'HIGH' ? 'bg-orange-100 text-orange-800 border border-orange-200' :
-                                                                                                c.severity === 'MEDIUM' ? 'bg-yellow-100 text-yellow-800 border border-yellow-200' :
+                                                                                                r.severity === 'CRITICAL' ? 'bg-red-100 text-red-800 border border-red-200' :
+                                                                                                r.severity === 'HIGH' ? 'bg-orange-100 text-orange-800 border border-orange-200' :
+                                                                                                r.severity === 'MEDIUM' ? 'bg-yellow-100 text-yellow-800 border border-yellow-200' :
                                                                                                 'bg-gray-100 text-gray-800 border border-gray-200'
                                                                                             }`}>
-                                                                                                {c.severity}
+                                                                                                {r.severity}
                                                                                             </span>
                                                                                         ) : (
                                                                                             <span className="text-gray-300 text-xs">—</span>
                                                                                         )}
                                                                                     </td>
                                                                                     <td className="p-3 text-xs text-gray-600 leading-relaxed break-words">
-                                                                                        {Array.isArray(c.rule_results) && c.rule_results.length > 0 ? (
-                                                                                            <ul className="space-y-1.5">
-                                                                                                {c.rule_results.map((rr: any) => (
-                                                                                                    <li key={rr.id} className="flex items-start gap-2">
-                                                                                                        {rr.passed ? (
-                                                                                                            <CheckCircle2 className="w-3.5 h-3.5 text-green-500 mt-0.5 flex-shrink-0" />
-                                                                                                        ) : (
-                                                                                                            <XCircle className="w-3.5 h-3.5 text-red-500 mt-0.5 flex-shrink-0" />
-                                                                                                        )}
-                                                                                                        <div className="flex-1 min-w-0">
-                                                                                                            <span className={rr.passed ? 'text-gray-700' : 'text-red-700 font-medium'}>
-                                                                                                                {rr.description}
-                                                                                                            </span>
-                                                                                                            {(() => {
-                                                                                                                // Rego emits `messages`; fall back to `violations`
-                                                                                                                // for any legacy in-flight runs.
-                                                                                                                const msgs: string[] = (rr.messages || rr.violations || []) as string[];
-                                                                                                                if (rr.passed || msgs.length === 0) return null;
-                                                                                                                return (
-                                                                                                                    <ul className="mt-1 ml-1 space-y-0.5 text-[11px] text-gray-500">
-                                                                                                                        {msgs.slice(0, 3).map((v, vi) => (
-                                                                                                                            <li key={vi}>• {v}</li>
-                                                                                                                        ))}
-                                                                                                                        {msgs.length > 3 && (
-                                                                                                                            <li className="italic">+{msgs.length - 3} more</li>
-                                                                                                                        )}
-                                                                                                                    </ul>
-                                                                                                                );
-                                                                                                            })()}
-                                                                                                        </div>
-                                                                                                    </li>
+                                                                                        {!r.passed && msgs.length > 0 ? (
+                                                                                            <ul className="space-y-0.5">
+                                                                                                {msgs.slice(0, 3).map((v, vi) => (
+                                                                                                    <li key={vi}>• {v}</li>
                                                                                                 ))}
+                                                                                                {msgs.length > 3 && (
+                                                                                                    <li className="italic text-gray-400">+{msgs.length - 3} more</li>
+                                                                                                )}
                                                                                             </ul>
-                                                                                        ) : c.result === 'VIOLATION' ? (
-                                                                                            formatReason(c)
-                                                                                        ) : c.resource?.description ? (
-                                                                                            <span className="italic text-gray-500">{c.resource.description}</span>
                                                                                         ) : (
                                                                                             <span className="text-gray-300">—</span>
                                                                                         )}

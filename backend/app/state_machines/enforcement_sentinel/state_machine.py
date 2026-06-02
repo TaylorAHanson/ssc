@@ -214,6 +214,13 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
                 if any(a.get("failed_rule_count", 0) < 0 for a in resource.get("assets", [])):
                     total_failed = -1
                 dq["failed_rule_count"] = total_failed
+                # Per-rule failure details (rule name, dimension, score vs threshold,
+                # column/table impacted) aggregated across the product's tables, so the
+                # certification UI can show actionable specifics instead of just a count.
+                aggregated_failed_rules = []
+                for a in resource.get("assets", []):
+                    aggregated_failed_rules.extend(a.get("failed_rules", []) or [])
+                dq["failed_rules"] = aggregated_failed_rules
                 asset.data_quality = dq
                 
                 from sqlalchemy.orm.attributes import flag_modified
@@ -405,8 +412,20 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
         # Save violations + full checklist to state context and record fact.
         # SQLAlchemy needs a fresh dict assignment or flag_modified to detect
         # changes to JSON columns.
-        pass_count = sum(1 for c in checks if c["result"] == "PASS")
-        violation_count = sum(1 for c in checks if c["result"] == "VIOLATION")
+        # Count per individual policy rule (each entry in a policy's
+        # `rule_results`), not per (resource, policy) evaluation. This makes
+        # the run summary reflect every rule that was checked instead of
+        # collapsing to a single pass/fail per dataset. Policies that don't
+        # emit per-rule results yet fall back to one unit per evaluation.
+        def _rule_outcomes(check):
+            rule_results = check.get("rule_results") or []
+            if rule_results:
+                return [bool(rr.get("passed")) for rr in rule_results]
+            return [check["result"] == "PASS"]
+
+        rule_outcomes = [passed for c in checks for passed in _rule_outcomes(c)]
+        pass_count = sum(1 for passed in rule_outcomes if passed)
+        violation_count = sum(1 for passed in rule_outcomes if not passed)
 
         ctx = dict(self.request.state_context or {})
         ctx["violations"] = violations
@@ -418,9 +437,11 @@ class EnforcementSentinelStateMachine(BaseRequestStateMachine):
             "pass_count": pass_count,
             "total_resources_scanned": len(discovered_resources),
             "policies_evaluated": len(policy_files),
-            # Actual count of (resource, policy) evaluations performed,
-            # rather than the resources × policies estimate.
-            "total_checks": len(checks),
+            # Per-rule total: every individual policy rule evaluated across all
+            # (resource, policy) pairs, so each check in a policy is represented.
+            "total_checks": len(rule_outcomes),
+            # Retain the count of (resource, policy) evaluations for reference.
+            "total_evaluations": len(checks),
         })
         
         try:

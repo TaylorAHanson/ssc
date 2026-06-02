@@ -14,7 +14,7 @@ export function DataCertification() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState<'name' | 'reliability' | 'lastRun' | 'created'>('name');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'certified' | 'uncertified' | 'pending' | 'invalid' | 'awaiting'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'certified' | 'uncertified' | 'awaiting'>('all');
   const [isSyncingContracts, setIsSyncingContracts] = useState(false);
   const [isCheckingPolicy, setIsCheckingPolicy] = useState(false);
   const [syncMessage, setSyncMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
@@ -204,17 +204,21 @@ export function DataCertification() {
   const getStatus = (contract: DataContract) => {
     const dq = contract.data_quality || {} as any;
     const rel = dq.failed_rule_count !== undefined ? dq.failed_rule_count : (dq.reliability !== undefined ? dq.reliability : 'N/A');
+
+    // Certified is driven solely by the Unity Catalog certification status.
+    // A clean policy scan (zero violations) does NOT imply certified — that
+    // was the bug where uncertified datasets showed under the "Certified" filter.
+    if (contract.certified) return 'certified';
+
+    // Legacy "Invalid" status removed: a placeholder/invalid contract simply
+    // can't be certified, so it falls under uncertified.
     const isInvalid = contract.yaml_content.toLowerCase().includes('changeme');
+    if (isInvalid) return 'uncertified';
 
-    if (isInvalid) return 'invalid';
-    
+    // Never scanned and no data-quality signal yet → awaiting the first run.
     const hasBeenScanned = contract.certification_violations !== null && contract.certification_violations !== undefined;
-    const hasViolations = hasBeenScanned && contract.certification_violations!.length > 0;
-    const isClean = hasBeenScanned && contract.certification_violations!.length === 0;
+    if (!hasBeenScanned && rel === 'N/A') return 'awaiting';
 
-    if (contract.certified || isClean) return 'certified';
-    if (hasViolations) return 'uncertified';
-    if (rel === 'N/A') return 'awaiting';
     return 'uncertified';
   };
 
@@ -285,9 +289,7 @@ export function DataCertification() {
                   >
                     <option value="all">All Statuses</option>
                     <option value="certified">Certified</option>
-                    <option value="pending">Pending Approval</option>
                     <option value="uncertified">Uncertified</option>
-                    <option value="invalid">Invalid (Changeme)</option>
                     <option value="awaiting">Awaiting Scan</option>
                   </select>
                 </div>
@@ -341,31 +343,28 @@ export function DataCertification() {
                   >
                     <div className="flex items-center justify-between">Failed Rules {getSortIcon('reliability')}</div>
                   </th>
-                  <th className="p-3">Freshness</th>
-                  <th className="p-3">Drift</th>
                   <th className="p-3 text-right">Contract</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={9} className="p-6 text-center text-gray-500">Loading datasets...</td>
+                    <td colSpan={6} className="p-6 text-center text-gray-500">Loading datasets...</td>
                   </tr>
                 ) : processedDatasets.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="p-6 text-center text-gray-500">No datasets found.</td>
+                    <td colSpan={6} className="p-6 text-center text-gray-500">No datasets found.</td>
                   </tr>
                 ) : (
                   processedDatasets.map(contract => {
                     const dq = contract.data_quality || {} as any;
                     
                     const rel = dq.failed_rule_count !== undefined ? dq.failed_rule_count : (dq.reliability !== undefined ? dq.reliability : 'N/A');
-                    const freshness = dq.freshness || 'N/A';
-                    const drift = dq.drift || 'N/A';
                     const lastRun = contract.last_synced_at ? format(parseISO(contract.last_synced_at), 'MMM d, HH:mm') : 'Unknown';
                     const createdDate = contract.created_at ? format(parseISO(contract.created_at), 'MMM d, yyyy') : 'Unknown';
-
-                    const isInvalid = contract.yaml_content.toLowerCase().includes('changeme');
+                    const status = getStatus(contract);
+                    const failedRules = Array.isArray(dq.failed_rules) ? dq.failed_rules : [];
+                    const hasViolations = !!((contract.certification_violations && contract.certification_violations.length > 0) || failedRules.length > 0);
 
                     return (
                       <tr key={contract.dataset_id} className="hover:bg-gray-50 transition-colors">
@@ -376,31 +375,25 @@ export function DataCertification() {
                           </div>
                         </td>
                         <td className="p-3">
-                          {isInvalid ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
-                              <AlertCircle className="w-3 h-3 mr-1" /> Invalid
-                            </span>
-                          ) : (contract.certified || (contract.certification_violations && contract.certification_violations.length === 0)) ? (
+                          {status === 'certified' ? (
                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
                               <CheckCircle2 className="w-3 h-3 mr-1" /> Certified
                             </span>
-                          ) : (contract.certification_violations && contract.certification_violations.length > 0) ? (
-                            <div className="group relative inline-block">
-                              <button
-                                onClick={() => setViolationAsset(contract)}
-                                className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800 cursor-pointer hover:bg-gray-200 transition-colors"
-                              >
-                                Uncertified
-                                <AlertCircle className="w-3 h-3 ml-1 text-amber-500" />
-                              </button>
-                            </div>
-                          ) : rel === 'N/A' ? (
+                          ) : status === 'awaiting' ? (
                             <span 
                               className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800"
                               title="Run Enforcement Sentinel to fetch policy violations and scores"
                             >
                               <Info className="w-3 h-3 mr-1" /> Awaiting Scan
                             </span>
+                          ) : hasViolations ? (
+                            <button
+                              onClick={() => setViolationAsset(contract)}
+                              className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800 cursor-pointer hover:bg-gray-200 transition-colors"
+                            >
+                              Uncertified
+                              <AlertCircle className="w-3 h-3 ml-1 text-amber-500" />
+                            </button>
                           ) : (
                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
                               Uncertified
@@ -410,19 +403,19 @@ export function DataCertification() {
                         <td className="p-3 text-gray-600 whitespace-nowrap">{createdDate}</td>
                         <td className="p-3 text-gray-600 whitespace-nowrap">{lastRun}</td>
                         <td className="p-3">
-                          <span className={`font-semibold ${typeof rel === 'number' ? (rel === 0 ? 'text-green-600' : 'text-red-600') : 'text-gray-400 cursor-help'}`} title={typeof rel === 'number' ? '' : 'Run Enforcement Sentinel to fetch count'}>
-                            {rel}
-                          </span>
-                        </td>
-                        <td className="p-3 text-gray-600">
-                          <span className={`${freshness === 'N/A' ? 'text-gray-400 cursor-help' : ''}`} title={freshness === 'N/A' ? 'Run Enforcement Sentinel to fetch' : ''}>
-                            {freshness}
-                          </span>
-                        </td>
-                        <td className="p-3 text-gray-600">
-                          <span className={`${drift === 'N/A' ? 'text-gray-400 cursor-help' : ''}`} title={drift === 'N/A' ? 'Run Enforcement Sentinel to fetch' : ''}>
-                            {drift}
-                          </span>
+                          {failedRules.length > 0 ? (
+                            <button
+                              onClick={() => setViolationAsset(contract)}
+                              className="font-semibold text-red-600 hover:underline cursor-pointer"
+                              title="View failing data quality rules"
+                            >
+                              {rel}
+                            </button>
+                          ) : (
+                            <span className={`font-semibold ${typeof rel === 'number' ? (rel === 0 ? 'text-green-600' : 'text-red-600') : 'text-gray-400 cursor-help'}`} title={typeof rel === 'number' ? '' : 'Run Enforcement Sentinel to fetch count'}>
+                              {rel}
+                            </span>
+                          )}
                         </td>
                         <td className="p-3 text-right">
                           <div className="flex items-center justify-end gap-1">
@@ -589,7 +582,7 @@ export function DataCertification() {
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
                   <AlertCircle className="w-5 h-5 text-amber-500" />
-                  Policy Violations
+                  Certification Issues
                 </h3>
                 <p className="text-xs text-gray-500 mt-1 font-mono">{violationAsset.catalog || ''}.{violationAsset.schema_name || ''}.{violationAsset.table_name || violationAsset.dataset_id}</p>
               </div>
@@ -603,21 +596,67 @@ export function DataCertification() {
               </Button>
             </div>
             <div className="p-6 bg-gray-50 flex-1 overflow-y-auto max-h-[60vh]">
-              <p className="text-sm text-gray-600 mb-4">
-                This dataset fails the following Open Policy Agent (OPA) checks required for certification:
-              </p>
-              <ul className="space-y-3">
-                {violationAsset.certification_violations?.map((v, i) => (
-                  <li key={i} className="flex items-start gap-3 bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
-                    <span className="flex-shrink-0 w-6 h-6 rounded-full bg-red-100 text-red-700 flex items-center justify-center text-xs font-bold mt-0.5">
-                      {i + 1}
-                    </span>
-                    <span className="text-sm text-gray-800 leading-snug pt-0.5">
-                      {v.replace(/^\d+\.\s*/, '')}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              {(() => {
+                const failedRules = Array.isArray(violationAsset.data_quality?.failed_rules) ? violationAsset.data_quality.failed_rules : [];
+                if (failedRules.length === 0) return null;
+                return (
+                  <div className="mb-6">
+                    <p className="text-sm text-gray-600 mb-3">
+                      Failing data quality rules within the reliability window:
+                    </p>
+                    <div className="overflow-hidden rounded-lg border border-gray-200">
+                      <table className="w-full text-sm bg-white">
+                        <thead className="bg-gray-50 text-gray-500 text-xs border-b border-gray-200">
+                          <tr>
+                            <th className="text-left font-medium p-2 pl-3">Rule</th>
+                            <th className="text-left font-medium p-2">Column</th>
+                            <th className="text-right font-medium p-2">Score</th>
+                            <th className="text-right font-medium p-2">Threshold</th>
+                            <th className="text-right font-medium p-2 pr-3">Rows Failed</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {failedRules.map((fr: any, i: number) => (
+                            <tr key={i} className="align-top">
+                              <td className="p-2 pl-3">
+                                <div className="font-medium text-gray-900">{fr.rule || 'Unnamed rule'}</div>
+                                <div className="text-[11px] text-gray-500">
+                                  {[fr.dimension, fr.rule_type].filter(Boolean).join(' · ')}
+                                </div>
+                                {fr.table && <div className="text-[10px] text-gray-400 font-mono break-all">{fr.table}</div>}
+                              </td>
+                              <td className="p-2 text-gray-700">{fr.column || '—'}</td>
+                              <td className="p-2 text-right font-semibold text-red-600">{fr.score != null ? `${Number(fr.score).toFixed(2)}%` : '—'}</td>
+                              <td className="p-2 text-right text-gray-600">{fr.threshold != null ? `${Number(fr.threshold).toFixed(2)}%` : '—'}</td>
+                              <td className="p-2 pr-3 text-right text-gray-600">{fr.rows_failed != null ? Number(fr.rows_failed).toLocaleString() : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {violationAsset.certification_violations && violationAsset.certification_violations.length > 0 && (
+                <>
+                  <p className="text-sm text-gray-600 mb-4">
+                    This dataset fails the following Open Policy Agent (OPA) checks required for certification:
+                  </p>
+                  <ul className="space-y-3">
+                    {violationAsset.certification_violations?.map((v, i) => (
+                      <li key={i} className="flex items-start gap-3 bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
+                        <span className="flex-shrink-0 w-6 h-6 rounded-full bg-red-100 text-red-700 flex items-center justify-center text-xs font-bold mt-0.5">
+                          {i + 1}
+                        </span>
+                        <span className="text-sm text-gray-800 leading-snug pt-0.5">
+                          {v.replace(/^\d+\.\s*/, '')}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
               <div className="mt-6 p-4 bg-blue-50 text-blue-800 rounded-lg border border-blue-100 text-sm">
                 <p><strong>Next Steps:</strong> Once the data engineering team resolves these issues in Databricks (e.g., by adding missing tags, defining RBAC, or improving data quality scores), the next Enforcement Sentinel run will automatically detect the changes and generate a Data Certification request.</p>
               </div>

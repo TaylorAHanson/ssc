@@ -79,6 +79,7 @@ class DatasetResourceHandler(BaseResourceHandler):
                             "type": "table",
                             "tags": {},
                             "failed_rule_count": -1,
+                            "failed_rules": [],
                             "catalog_description": None,
                             "schema_description": None,
                             "all_columns_have_descriptions": False,
@@ -103,39 +104,80 @@ class DatasetResourceHandler(BaseResourceHandler):
                                 digits = "".join([c for c in str(reliability_window) if c.isdigit()])
                                 window_days = int(digits) if digits else 7
                                 if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
+                                    # Pull per-rule failure DETAILS (not just a count) so the
+                                    # certification UI can surface actionable specifics: the rule
+                                    # name/dimension, the score vs. threshold, and the column /
+                                    # table impacted. We dedupe to the most recent occurrence per
+                                    # rule-item (ruleItemId) inside the reliability window so a rule
+                                    # that fails on every daily run is counted once, reflecting its
+                                    # current state. failed_rule_count is then derived from this set.
                                     query = f"""
 WITH combined AS (
-    SELECT assetInfo.assetUid, processed_at, items FROM enterprise_stg.data_quality.adoc_dq_history
-    UNION ALL SELECT assetInfo.assetUid, processed_at, items FROM enterprise_stg.data_quality.adoc_freshness_history
-    UNION ALL SELECT assetInfo.assetUid, processed_at, items FROM enterprise_stg.data_quality.adoc_data_drift_history
-    UNION ALL SELECT assetInfo.assetUid, processed_at, items FROM enterprise_stg.data_quality.adoc_profile_anomaly_history
-    --UNION ALL SELECT assetInfo.leftBackingAssetUid, processed_at, items FROM enterprise_stg.data_quality.adoc_reconciliation_history
-    UNION ALL SELECT assetInfo.assetUid, processed_at, items FROM enterprise_stg.data_quality.adoc_schema_drift_history
+    SELECT assetInfo.assetUid AS assetUid, assetInfo.assetName AS assetName,
+           execution.ruleName AS ruleName, execution.ruleType AS ruleType,
+           processed_at, items
+    FROM enterprise_stg.data_quality.adoc_dq_history
+    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM enterprise_stg.data_quality.adoc_freshness_history
+    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM enterprise_stg.data_quality.adoc_data_drift_history
+    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM enterprise_stg.data_quality.adoc_profile_anomaly_history
+    --UNION ALL SELECT assetInfo.leftBackingAssetUid, ... FROM enterprise_stg.data_quality.adoc_reconciliation_history
+    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM enterprise_stg.data_quality.adoc_schema_drift_history
+),
+exploded AS (
+    SELECT assetUid, assetName, ruleName, ruleType, processed_at,
+           item.ruleItemId AS ruleItemId,
+           item.columnName AS columnName,
+           item.dimension AS dimension,
+           item.resultPercent AS resultPercent,
+           item.threshold AS threshold,
+           item.rowsFailed AS rowsFailed
+    FROM combined
+    LATERAL VIEW explode(items) exploded AS item
+    WHERE assetUid LIKE '%{full_name}%'
+      AND cast(processed_at AS date) >= date_sub(current_date(), {window_days})
+      AND item.resultPercent < item.threshold
 )
-SELECT count(1)
-FROM combined
-LATERAL VIEW explode(items) exploded AS item
-WHERE assetUid LIKE '%{full_name}%'
-AND cast(processed_at AS date) >= date_sub(current_date(), {window_days})
-AND item.resultPercent < item.threshold
+SELECT ruleName, ruleType, assetName, columnName, dimension, resultPercent, threshold, rowsFailed
+FROM exploded
+QUALIFY ROW_NUMBER() OVER (PARTITION BY ruleItemId ORDER BY processed_at DESC) = 1
+ORDER BY resultPercent ASC
 """
                                     logger.info(
-                                        f"Fetching failed rule count for asset '{full_name}' "
-                                        f"(reliability_window={window_days} days). Query: {query}"
+                                        f"Fetching failed data quality rules for asset '{full_name}' "
+                                        f"(reliability_window={window_days} days)."
                                     )
                                     response = self.workspace_client.statement_execution.execute_statement(
                                         statement=query,
                                         warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
                                         wait_timeout="30s"
                                     )
-                                    
+
                                     if response.status.state.value in ("FAILED", "CANCELED", "CLOSED"):
                                         error_msg = response.status.error.message if response.status.error else "Unknown SQL error"
-                                        logger.error(f"SQL execution failed when fetching rule count for {full_name}. Query: {query} | Error: {error_msg}")
-                                    elif response.result and response.result.data_array and len(response.result.data_array) > 0 and response.result.data_array[0][0] is not None:
-                                        asset_info["failed_rule_count"] = int(response.result.data_array[0][0])
+                                        logger.error(f"SQL execution failed when fetching failed rules for {full_name}. Query: {query} | Error: {error_msg}")
+                                    else:
+                                        rows = response.result.data_array if (response.result and response.result.data_array) else []
+                                        failed_rules = []
+                                        for r in rows:
+                                            # Pad short rows so unpacking is safe; column order
+                                            # matches the SELECT list above. The statement API
+                                            # returns all values as strings.
+                                            r = list(r) + [None] * (8 - len(r))
+                                            rule_name, rule_type, asset_name, column_name, dimension, result_percent, threshold, rows_failed = r[:8]
+                                            failed_rules.append({
+                                                "rule": rule_name or "Unnamed rule",
+                                                "rule_type": rule_type,
+                                                "table": asset_name or full_name,
+                                                "column": column_name,
+                                                "dimension": dimension,
+                                                "score": float(result_percent) if result_percent not in (None, "") else None,
+                                                "threshold": float(threshold) if threshold not in (None, "") else None,
+                                                "rows_failed": int(rows_failed) if rows_failed not in (None, "") else None,
+                                            })
+                                        asset_info["failed_rules"] = failed_rules
+                                        asset_info["failed_rule_count"] = len(failed_rules)
                             except Exception as e:
-                                logger.error(f"Failed to fetch failed rule count for {full_name} via SQL. Query: {query if 'query' in locals() else 'Unknown'} | Exception: {e}")
+                                logger.error(f"Failed to fetch failed rules for {full_name} via SQL. Query: {query if 'query' in locals() else 'Unknown'} | Exception: {e}")
                         
                         # Fetch metadata from Unity Catalog
                         try:
