@@ -116,34 +116,39 @@ class DatasetResourceHandler(BaseResourceHandler):
                                     # customer environment (enterprise_stg.data_quality) and
                                     # local/dev workspaces where they live elsewhere.
                                     adoc_schema = settings.DATA_QUALITY_ADOC_SCHEMA or "enterprise_stg.data_quality"
+                                    # NOTE: each ADOC *_history table has a slightly different
+                                    # `items` struct schema (e.g. nested columnMapping/thresholdLevel
+                                    # types differ), so UNION-ing the raw `items` array fails with
+                                    # INCOMPATIBLE_COLUMN_TYPE. We instead explode + project only the
+                                    # scalar fields we need inside each arm, so the unioned columns
+                                    # are all compatible scalar types.
+                                    item_projection = (
+                                        "assetInfo.assetUid AS assetUid, assetInfo.assetName AS assetName, "
+                                        "execution.ruleName AS ruleName, execution.ruleType AS ruleType, processed_at, "
+                                        "item.ruleItemId AS ruleItemId, item.columnName AS columnName, "
+                                        "item.dimension AS dimension, item.resultPercent AS resultPercent, "
+                                        "item.threshold AS threshold, item.rowsFailed AS rowsFailed"
+                                    )
+                                    adoc_tables = [
+                                        "adoc_dq_history",
+                                        "adoc_freshness_history",
+                                        "adoc_data_drift_history",
+                                        "adoc_profile_anomaly_history",
+                                        "adoc_schema_drift_history",
+                                    ]
+                                    arms = "\n    UNION ALL\n    ".join(
+                                        f"SELECT {item_projection} FROM {adoc_schema}.{t} LATERAL VIEW explode(items) exploded AS item"
+                                        for t in adoc_tables
+                                    )
                                     query = f"""
-WITH combined AS (
-    SELECT assetInfo.assetUid AS assetUid, assetInfo.assetName AS assetName,
-           execution.ruleName AS ruleName, execution.ruleType AS ruleType,
-           processed_at, items
-    FROM {adoc_schema}.adoc_dq_history
-    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM {adoc_schema}.adoc_freshness_history
-    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM {adoc_schema}.adoc_data_drift_history
-    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM {adoc_schema}.adoc_profile_anomaly_history
-    --UNION ALL SELECT assetInfo.leftBackingAssetUid, ... FROM {adoc_schema}.adoc_reconciliation_history
-    UNION ALL SELECT assetInfo.assetUid, assetInfo.assetName, execution.ruleName, execution.ruleType, processed_at, items FROM {adoc_schema}.adoc_schema_drift_history
-),
-exploded AS (
-    SELECT assetUid, assetName, ruleName, ruleType, processed_at,
-           item.ruleItemId AS ruleItemId,
-           item.columnName AS columnName,
-           item.dimension AS dimension,
-           item.resultPercent AS resultPercent,
-           item.threshold AS threshold,
-           item.rowsFailed AS rowsFailed
-    FROM combined
-    LATERAL VIEW explode(items) exploded AS item
-    WHERE assetUid LIKE '%{full_name}%'
-      AND cast(processed_at AS date) >= date_sub(current_date(), {window_days})
-      AND item.resultPercent < item.threshold
+WITH exploded AS (
+    {arms}
 )
 SELECT ruleName, ruleType, assetName, columnName, dimension, resultPercent, threshold, rowsFailed
 FROM exploded
+WHERE assetUid LIKE '%{full_name}%'
+  AND cast(processed_at AS date) >= date_sub(current_date(), {window_days})
+  AND resultPercent < threshold
 QUALIFY ROW_NUMBER() OVER (PARTITION BY ruleItemId ORDER BY processed_at DESC) = 1
 ORDER BY resultPercent ASC
 """
