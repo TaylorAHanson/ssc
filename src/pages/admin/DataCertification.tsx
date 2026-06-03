@@ -8,6 +8,11 @@ import { format, parseISO } from 'date-fns';
 import Editor from '@monaco-editor/react';
 import yaml from 'js-yaml';
 
+// The backend serializes naive UTC datetimes (no timezone suffix). Treat any
+// such string as UTC so date-fns renders it in the viewer's local timezone.
+const parseUtc = (value: string): Date =>
+  parseISO(/Z|[+-]\d{2}:?\d{2}$/.test(value) ? value : `${value}Z`);
+
 export function DataCertification() {
   const [datasets, setDatasets] = useState<DataContract[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -242,11 +247,11 @@ export function DataCertification() {
         valA = dqA.failed_rule_count !== undefined ? dqA.failed_rule_count : (dqA.reliability !== undefined && dqA.reliability !== 'N/A' ? Number(dqA.reliability) : -1);
         valB = dqB.failed_rule_count !== undefined ? dqB.failed_rule_count : (dqB.reliability !== undefined && dqB.reliability !== 'N/A' ? Number(dqB.reliability) : -1);
       } else if (sortField === 'lastRun') {
-        valA = a.last_synced_at ? new Date(a.last_synced_at).getTime() : 0;
-        valB = b.last_synced_at ? new Date(b.last_synced_at).getTime() : 0;
+        valA = a.last_synced_at ? parseUtc(a.last_synced_at).getTime() : 0;
+        valB = b.last_synced_at ? parseUtc(b.last_synced_at).getTime() : 0;
       } else if (sortField === 'created') {
-        valA = a.created_at ? new Date(a.created_at).getTime() : 0;
-        valB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        valA = a.created_at ? parseUtc(a.created_at).getTime() : 0;
+        valB = b.created_at ? parseUtc(b.created_at).getTime() : 0;
       }
       
       if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
@@ -360,8 +365,8 @@ export function DataCertification() {
                     const dq = contract.data_quality || {} as any;
                     
                     const rel = dq.failed_rule_count !== undefined ? dq.failed_rule_count : (dq.reliability !== undefined ? dq.reliability : 'N/A');
-                    const lastRun = contract.last_synced_at ? format(parseISO(contract.last_synced_at), 'MMM d, HH:mm') : 'Unknown';
-                    const createdDate = contract.created_at ? format(parseISO(contract.created_at), 'MMM d, yyyy') : 'Unknown';
+                    const lastRun = contract.last_synced_at ? format(parseUtc(contract.last_synced_at), 'MMM d, HH:mm') : 'Unknown';
+                    const createdDate = contract.created_at ? format(parseUtc(contract.created_at), 'MMM d, yyyy') : 'Unknown';
                     const status = getStatus(contract);
                     const failedRules = Array.isArray(dq.failed_rules) ? dq.failed_rules : [];
                     const hasViolations = !!((contract.certification_violations && contract.certification_violations.length > 0) || failedRules.length > 0);
@@ -537,7 +542,7 @@ export function DataCertification() {
                         className={`w-full text-left p-3 rounded-lg border text-sm transition-colors ${yamlContent === version.yaml_content ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-white border-gray-100 hover:bg-gray-50'}`}
                       >
                         <div className="font-semibold text-gray-900 mb-1">v{version.version}.0</div>
-                        <div className="text-xs text-gray-500">{format(parseISO(version.created_at), 'MMM d, yyyy HH:mm')}</div>
+                        <div className="text-xs text-gray-500">{format(parseUtc(version.created_at), 'MMM d, yyyy HH:mm')}</div>
                         {version.is_active && <span className="inline-block mt-2 px-2 py-0.5 bg-green-100 text-green-800 text-[10px] rounded-full font-bold">ACTIVE</span>}
                       </button>
                     ))}

@@ -17,19 +17,10 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import {
-    Activity,
-    BarChart3,
-    Box,
-    Database,
-    FileText,
-    Info,
-    Shield,
-    Sparkles,
-    TrendingUp,
-} from 'lucide-react';
+import { BarChart3, Shield, Sparkles } from 'lucide-react';
 
 import { ChatView, type ChatModeOption, type ChatRouteInfo, type ChatViewHandle } from '../components/chat/ChatView';
+import { AgentWelcome } from '../components/chat/AgentWelcome';
 import { useUserStore } from '../stores/userStore';
 import { useBrandingStore } from '../stores/brandingStore';
 import type { UserPersona } from '../types';
@@ -44,6 +35,14 @@ const MODE_ICONS: Record<AgentMode, React.ReactNode> = {
     FinOps: <BarChart3 className="w-3.5 h-3.5" />,
 };
 
+// Larger glyphs for the welcome header circle (the MODE_ICONS above are
+// sized for the inline mode picker).
+const MODE_WELCOME_ICONS: Record<AgentMode, React.ReactNode> = {
+    'Self Service Agent': <Sparkles className="w-7 h-7 text-primary" />,
+    Governance: <Shield className="w-7 h-7 text-primary" />,
+    FinOps: <BarChart3 className="w-7 h-7 text-primary" />,
+};
+
 const MODE_PERMISSIONS: Record<AgentMode, UserPersona[]> = {
     'Self Service Agent': [
         'Platform Admin',
@@ -56,125 +55,34 @@ const MODE_PERMISSIONS: Record<AgentMode, UserPersona[]> = {
     FinOps: ['Platform Admin', 'Finance Admin'],
 };
 
-interface DiscoveryItem {
+interface ModeWelcome {
     title: string;
     description: string;
-    query: string;
+    example: string;
 }
 
-interface DiscoveryColumn {
-    title: string;
-    icon: React.ReactNode;
-    colorClass: string;
-    hoverBorderClass: string;
-    hoverTextClass: string;
-    items: DiscoveryItem[];
-}
-
-const DISCOVERY_CONTENT: Record<AgentMode, DiscoveryColumn[]> = {
-    'Self Service Agent': [
-        {
-            title: 'Data Access',
-            icon: <Database className="w-5 h-5" />,
-            colorClass: 'text-primary',
-            hoverBorderClass: 'hover:border-primary/50',
-            hoverTextClass: 'group-hover:text-primary',
-            items: [
-                { title: 'Request Data Access', description: 'Access via Catalog, Schema, or Table', query: 'I need to request access to a dataset' },
-                { title: 'REST API Access', description: 'Programmatic data access', query: 'I need REST API access to data' },
-                { title: 'My Groups', description: 'What groups am I in?', query: 'What groups am I in?' },
-                { title: 'My Current Access', description: 'What access do I have now?', query: 'What access do I have now?' },
-            ],
-        },
-        {
-            title: 'Enterprise Data',
-            icon: <Database className="w-5 h-5" />,
-            colorClass: 'text-primary',
-            hoverBorderClass: 'hover:border-primary/50',
-            hoverTextClass: 'group-hover:text-primary',
-            items: [
-                { title: 'Discover Enterprise Data', description: 'Search and explore data assets', query: 'I want to discover enterprise data' },
-                { title: 'Marketplace Certification', description: 'Certify assets for broader consumption', query: 'I need to certify a dataset for the marketplace' },
-                { title: 'Learn About Data Quality', description: 'Find out how data quality is managed and how you can use it', query: 'I want to learn about data quality' },
-            ],
-        },
-        {
-            title: 'Platform Services',
-            icon: <Box className="w-5 h-5" />,
-            colorClass: 'text-primary',
-            hoverBorderClass: 'hover:border-primary/50',
-            hoverTextClass: 'group-hover:text-primary',
-            items: [
-                { title: 'Workspace Access', description: 'Join an existing workspace', query: 'I need access to a Databricks workspace' },
-                { title: 'Provision Workspace', description: 'Create a new Databricks environment', query: 'I need to provision a new Databricks workspace' },
-                { title: 'Create Catalog or Schema', description: 'Create new data containers', query: 'I need to create a new catalog or schema' },
-                { title: 'Service Principal', description: 'For external apps, automation, and CI/CD pipelines', query: 'I need a service principal for CI/CD' },
-                { title: 'GitHub Repository', description: 'Create a new code repository', query: 'I need to create a new GitHub repository' },
-            ],
-        },
-    ],
-    Governance: [
-        {
-            title: 'Compliance Audit',
-            icon: <Shield className="w-5 h-5" />,
-            colorClass: 'text-primary',
-            hoverBorderClass: 'hover:border-primary/50',
-            hoverTextClass: 'group-hover:text-primary',
-            items: [
-                { title: 'Overprovisioned Admins', description: 'Find users with excessive access', query: 'Which users are overprovisioned?' },
-                { title: 'Orphaned Assets', description: 'Resources with deleted owners', query: 'Identify assets owned by deleted users or service principals' },
-                { title: 'Missing Owners', description: 'Catalogs without assignment', query: 'Find catalogs and schemas that do not have an owner' },
-            ],
-        },
-        {
-            title: 'Activity Monitoring',
-            icon: <Activity className="w-5 h-5" />,
-            colorClass: 'text-primary',
-            hoverBorderClass: 'hover:border-primary/50',
-            hoverTextClass: 'group-hover:text-primary',
-            items: [
-                { title: 'Failed Logins', description: 'Count failed attempts last 24h', query: 'Count failed logins in the last 24 hours' },
-                { title: 'Unique Users', description: 'Daily active user count', query: 'How many unique users accessed the platform today?' },
-                { title: 'Admin Changes', description: 'Recent privilege grants', query: 'Show recent administrative changes to groups or permissions' },
-            ],
-        },
-        {
-            title: 'Audit & Tracking',
-            icon: <FileText className="w-5 h-5" />,
-            colorClass: 'text-primary',
-            hoverBorderClass: 'hover:border-primary/50',
-            hoverTextClass: 'group-hover:text-primary',
-            items: [
-                { title: 'Access Report', description: 'See who can access your data', query: 'Show me an access report for my production data' },
-                { title: 'Usage Audit', description: 'Review recent administrative actions', query: 'Audit administrative actions in my workspace' },
-            ],
-        },
-    ],
-    FinOps: [
-        {
-            title: 'Cost Analysis',
-            icon: <BarChart3 className="w-5 h-5" />,
-            colorClass: 'text-primary',
-            hoverBorderClass: 'hover:border-primary/50',
-            hoverTextClass: 'group-hover:text-primary',
-            items: [
-                { title: 'Top Spending', description: 'Highest cost workspaces', query: 'Which workspaces are the most expensive?' },
-                { title: 'Forecast Spend', description: 'Predict future monthly cost', query: 'What is my predicted spend for next month?' },
-                { title: 'Department Billing', description: 'Breakdown by cost center', query: 'Show me the cost breakdown by department' },
-            ],
-        },
-        {
-            title: 'Resource Efficiency',
-            icon: <TrendingUp className="w-5 h-5" />,
-            colorClass: 'text-primary',
-            hoverBorderClass: 'hover:border-primary/50',
-            hoverTextClass: 'group-hover:text-primary',
-            items: [
-                { title: 'Idle Clusters', description: 'Terminate unused compute', query: 'Identify idle clusters I can safely terminate' },
-                { title: 'Tagging Compliance', description: 'Resources missing mandatory tags', query: 'Which users are out of compliance with the tagging policy?' },
-            ],
-        },
-    ],
+// One emphasized, non-clickable example per mode. Keep these open-ended
+// so they hint at the kind of question the agent handles without making
+// it feel like a fixed menu of options.
+const MODE_WELCOME: Record<AgentMode, ModeWelcome> = {
+    'Self Service Agent': {
+        title: 'Self Service Agent',
+        description:
+            'Request access, provision resources, and get things done across data and platform — just describe what you need in plain language.',
+        example: 'I need read access to the prod.sales.orders table',
+    },
+    Governance: {
+        title: 'Governance Agent',
+        description:
+            'Audit access, monitor activity, and investigate compliance across the platform — ask in plain language.',
+        example: 'Which users have admin access they don’t need?',
+    },
+    FinOps: {
+        title: 'FinOps Agent',
+        description:
+            'Understand spend, forecast costs, and find savings across your workspaces — ask in plain language.',
+        example: 'What were my most expensive workspaces last month?',
+    },
 };
 
 function getButtonLabel(path: string): string {
@@ -286,48 +194,14 @@ export function Home() {
         navigate(route.path);
     };
 
+    const welcome = MODE_WELCOME[agentMode];
     const welcomeNode = (
-        <div className="flex flex-col gap-6 max-w-5xl w-full mx-auto">
-            <h2 className="text-2xl md:text-3xl font-semibold text-gray-800 text-center tracking-tight">
-                What do you need to do today?
-            </h2>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
-                {DISCOVERY_CONTENT[agentMode].map((column, idx) => (
-                    <div key={`${agentMode}-${idx}`} className="space-y-4">
-                        <div className={`flex items-center gap-2 font-semibold ${column.colorClass}`}>
-                            {column.icon}
-                            <h3>{column.title}</h3>
-                        </div>
-                        <div className="grid gap-2">
-                            {column.items.map((item) => (
-                                <button
-                                    key={item.title}
-                                    type="button"
-                                    onClick={() => chatRef.current?.submitQuery(item.query)}
-                                    className={`relative p-2.5 rounded-xl border border-gray-200 hover:shadow-md hover:bg-white/80 transition-all duration-200 text-left group ${column.hoverBorderClass}`}
-                                >
-                                    <div className="flex items-center justify-between gap-2">
-                                        <div
-                                            className={`text-[13px] font-medium text-gray-900 transition-colors ${column.hoverTextClass}`}
-                                        >
-                                            {item.title}
-                                        </div>
-                                        <div className="relative group/info">
-                                            <Info className="w-4 h-4 text-gray-400 hover:text-gray-600 transition-colors" />
-                                            <div className="absolute bottom-full right-0 mb-2 w-48 p-2 bg-gray-900 text-white text-xs rounded-lg shadow-xl opacity-0 translate-y-2 invisible group-hover/info:opacity-100 group-hover/info:translate-y-0 group-hover/info:visible transition-all duration-200 z-50 pointer-events-none">
-                                                {item.description}
-                                                <div className="absolute top-full right-1.5 -mt-1 border-4 border-transparent border-t-gray-900" />
-                                            </div>
-                                        </div>
-                                    </div>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                ))}
-            </div>
-        </div>
+        <AgentWelcome
+            title={welcome.title}
+            description={welcome.description}
+            example={welcome.example}
+            icon={MODE_WELCOME_ICONS[agentMode]}
+        />
     );
 
     return (

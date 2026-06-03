@@ -144,7 +144,7 @@ def seed_db():
                         id=str(uuid.uuid4()),
                         title="Access to Finance Data",
                         type="data_access_request",
-                        status="manager_approval",
+                        status="data_owner_approval",
                         created_at=datetime.now(timezone.utc) - timedelta(days=1),
                         updated_at=datetime.now(timezone.utc)
                     ),

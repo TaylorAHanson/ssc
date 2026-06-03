@@ -63,6 +63,11 @@ class BaseRequestStateMachine(StateMachine):
     # Custom approval configuration: {state_id: {"approval_type": str, "name": str}}
     APPROVAL_NODES = {}
 
+    # Map persisted-but-removed state ids to their current equivalent. Used to
+    # recover requests that were persisted in a state that a later flow refactor
+    # deleted (e.g. data access dropped "manager_approval"). Override in subclasses.
+    LEGACY_STATE_MAP: Dict[str, str] = {}
+
     def get_editable_states(self) -> list:
         """States from which a platform_admin can trigger Edit & Restart.
 
@@ -78,7 +83,54 @@ class BaseRequestStateMachine(StateMachine):
     def __init__(self, request: RequestModel, db: Session, **kwargs):
         self.request = request
         self.db = db
-        super().__init__(start_value=request.current_state, **kwargs)
+        start_value = self._resolve_start_value(request.current_state)
+        super().__init__(start_value=start_value, **kwargs)
+
+    def _resolve_start_value(self, current_state: Optional[str]) -> Optional[str]:
+        """Validate the persisted state against this SM's known states.
+
+        A flow refactor can delete a state that older requests were persisted in
+        (e.g. data access dropped ``manager_approval``). Loading such a request
+        would otherwise raise ``InvalidStateValue`` and make it permanently
+        unviewable/unprocessable. We instead remap via ``LEGACY_STATE_MAP`` when
+        possible, else fall back to the initial state, and persist the
+        correction so fact-based reconciliation can move it forward.
+        """
+        if not current_state:
+            return current_state
+
+        valid_ids = set(getattr(type(self), "states_map", {}).keys())
+        if not valid_ids or current_state in valid_ids:
+            return current_state
+
+        remapped = self.LEGACY_STATE_MAP.get(current_state)
+        if remapped and remapped in valid_ids:
+            logger.warning(
+                f"[{self.request.id}] Persisted state '{current_state}' is no longer "
+                f"defined for {type(self).__name__}; remapping to '{remapped}'."
+            )
+            corrected = remapped
+        else:
+            initial_id = next(
+                (sid for sid, s in type(self).states_map.items() if getattr(s, "initial", False)),
+                None,
+            )
+            logger.warning(
+                f"[{self.request.id}] Persisted state '{current_state}' is invalid for "
+                f"{type(self).__name__} and has no legacy mapping; resetting to "
+                f"initial state '{initial_id}'."
+            )
+            corrected = initial_id
+
+        if corrected and corrected != current_state:
+            try:
+                self.request.current_state = corrected
+                self.db.add(self.request)
+                self.db.commit()
+            except Exception as e:  # noqa: BLE001 - best-effort self-heal
+                logger.error(f"[{self.request.id}] Failed to persist state correction: {e}")
+                self.db.rollback()
+        return corrected
 
     def to_state_machine_state(self) -> StateMachineState:
         """Generates the UI view of the state machine."""

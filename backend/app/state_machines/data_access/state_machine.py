@@ -25,14 +25,16 @@ class DataAccessStateMachine(DatabricksJobStepMixin, BaseRequestStateMachine):
     (catalogs, schemas, tables, views, volumes).
 
     Flow:
-        pending -> manager_approval -> data_owner_approval -> provisioning -> completed
+        pending -> data_owner_approval -> provisioning -> completed
 
-    Both the requester's manager and the asset's data owner must approve
-    before access is granted. Manager email is collected from the requester
-    via the agent; data owner is auto-resolved by querying Unity Catalog.
-    Access is provisioned by executing SQL GRANT statements through a
-    serverless SQL warehouse.
+    The asset's data owner must approve before access is granted. The data
+    owner is auto-resolved by querying Unity Catalog. Access is provisioned by
+    executing SQL GRANT statements through a serverless SQL warehouse.
     """
+
+    # Older requests were persisted in "manager_approval" before that step was
+    # removed from the flow; treat them as data_owner_approval on load.
+    LEGACY_STATE_MAP = {"manager_approval": "data_owner_approval"}
 
     # Override completion facts mapping for UI state tracking
     STATE_COMPLETION_FACTS = {

@@ -11,19 +11,13 @@
  * native Genie experience for power users who want richer
  * exploration than the embedded chat surface offers.
  */
-import { ExternalLink, Sparkles } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
 import { useMemo } from 'react';
 
 import { ChatView } from '../components/chat/ChatView';
+import { AgentWelcome } from '../components/chat/AgentWelcome';
 import { useBrandingStore } from '../stores/brandingStore';
 import { genieHomeUrl } from '../lib/databricksLinks';
-
-const SAMPLE_PROMPTS = [
-    'What catalogs and schemas can I see?',
-    'Who owns the table prod.sales.orders?',
-    'How many active customers did we have last quarter?',
-    "Compare this year's revenue by region against last year",
-];
 
 export function AskYourData() {
     const databricksWorkspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
@@ -38,19 +32,11 @@ export function AskYourData() {
     }, [databricksWorkspaceUrl, genieFullExperienceUrl]);
 
     const welcomeNode = (
-        <div className="flex flex-col items-center justify-center py-10 gap-4 text-center">
-            <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center">
-                <Sparkles className="w-7 h-7 text-primary" />
-            </div>
-            <div>
-                <h2 className="text-xl font-semibold text-gray-900">Ask Your Data</h2>
-                <p className="text-sm text-gray-500 max-w-md mt-1">
-                    Type a natural-language question about enterprise data. Answers are
-                    grounded in the data you have access to and typically take 30 to
-                    120 seconds.
-                </p>
-            </div>
-        </div>
+        <AgentWelcome
+            title="Ask Your Data"
+            description="Ask a natural-language question about enterprise data. Answers are grounded in the data you have access to and typically take 30 to 120 seconds."
+            example="How many active customers did we have last quarter?"
+        />
     );
 
     return (
@@ -85,7 +71,6 @@ export function AskYourData() {
                     welcomeNode={welcomeNode}
                     placeholder="Ask a question about your data..."
                     storageKey="chatview_messages_ask_your_data"
-                    samplePrompts={SAMPLE_PROMPTS}
                 />
             </div>
         </div>
