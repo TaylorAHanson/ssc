@@ -7,6 +7,24 @@ from sqlalchemy import or_
 from app.db.request import RequestModel
 
 
+def _utcnow() -> datetime:
+    """Naive UTC 'now'.
+
+    The ``locked_until`` column is timezone-naive (stores UTC), so we compare
+    and write naive UTC throughout to stay consistent across SQLite (dev) and
+    Postgres (prod) and avoid "can't compare offset-naive and offset-aware
+    datetimes" errors.
+    """
+    return datetime.utcnow()
+
+
+def _to_naive_utc(dt):
+    """Coerce a possibly tz-aware datetime (e.g. a legacy row) to naive UTC."""
+    if dt is not None and dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def acquire_lock(db: Session, request_id: str, worker_id: str, timeout_minutes: int = 5) -> bool:
     """
     Acquire lock on request state using PostgreSQL. Returns True if lock acquired.
@@ -26,7 +44,7 @@ def acquire_lock(db: Session, request_id: str, worker_id: str, timeout_minutes: 
     
     # Check if already locked and not expired
     if request.locked_by and request.locked_until:
-        if request.locked_until > datetime.now(timezone.utc):
+        if _to_naive_utc(request.locked_until) > _utcnow():
             return False  # Locked by another worker
         # Lock expired, we can take it
     
@@ -36,11 +54,11 @@ def acquire_lock(db: Session, request_id: str, worker_id: str, timeout_minutes: 
         RequestModel.id == request_id,
         or_(
             RequestModel.locked_by.is_(None),
-            RequestModel.locked_until < datetime.now(timezone.utc)
+            RequestModel.locked_until < _utcnow()
         )
     ).update({
         RequestModel.locked_by: worker_id,
-        RequestModel.locked_until: datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
+        RequestModel.locked_until: _utcnow() + timedelta(minutes=timeout_minutes)
     })
     
     db.commit()
@@ -85,12 +103,11 @@ def heartbeat_lock(db: Session, request_id: str, worker_id: str, timeout_minutes
         return False
     
     # Extend the lock timeout
-    from datetime import datetime, timezone, timedelta
     rows_updated = db.query(RequestModel).filter(
         RequestModel.id == request_id,
         RequestModel.locked_by == worker_id
     ).update({
-        RequestModel.locked_until: datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
+        RequestModel.locked_until: _utcnow() + timedelta(minutes=timeout_minutes)
     })
     
     db.commit()

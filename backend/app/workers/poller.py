@@ -201,10 +201,12 @@ async def process_open_requests():
                 # Failed requests NOT in terminal states (may be recoverable)
                 (RequestModel.status == "failed") & (RequestModel.current_state.notin_(terminal_states))
             ),
-            # Only process requests that are not locked or have expired locks
+            # Only process requests that are not locked or have expired locks.
+            # locked_until is a timezone-naive UTC column, so compare against
+            # naive UTC to avoid offset-naive vs offset-aware comparison errors.
             or_(
                 RequestModel.locked_by.is_(None),
-                RequestModel.locked_until < now
+                RequestModel.locked_until < datetime.utcnow()
             ),
             # Only if we haven't exhausted retry attempts
             RequestModel.retry_count < RequestModel.max_retries
