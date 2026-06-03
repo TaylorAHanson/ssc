@@ -117,8 +117,12 @@ export interface ChatRouteInfo {
 }
 
 export interface ChatViewProps {
-    /** Mode forwarded to the runner (drives system prompt + tool filter). */
-    mode: string;
+    /**
+     * Mode forwarded to the runner as request context. The backend now runs
+     * a single unified agent and ignores this, but it is still sent for
+     * compatibility/logging. Defaults to "unified".
+     */
+    mode?: string;
     /** Optional welcome content shown when no messages yet. */
     welcomeNode?: React.ReactNode;
     /** Optional placeholder for the empty input. */
@@ -172,7 +176,7 @@ const ELLIPSIS_LIMIT_MS = 60_000; // bump elapsed display past this
 
 export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView(
     {
-        mode,
+        mode = 'unified',
         welcomeNode,
         placeholder = 'Ask a question...',
         headerActions,

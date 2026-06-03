@@ -101,12 +101,23 @@ interface NavItem {
   href?: string;
 }
 
+// Derive a short label from the configured brand name (e.g. "Enterprise
+// Data Hub" -> "EDH") so the agent entry reflects branding without
+// hardcoding the app name. Single-word brands fall back to the word itself.
+function brandAcronym(name: string): string {
+  const words = (name || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '';
+  if (words.length === 1) return words[0];
+  return words.map((w) => w[0]!.toUpperCase()).join('');
+}
+
 const navItems: NavItem[] = [
-  // Discover
+  // Discover & Analyze — the unified chat agent leads this section. Its title
+  // is overridden at render time with a brand-derived label (see allNavItems).
+  { id: 'home', title: 'Agent', icon: <WandSparkles className="w-5 h-5" />, path: '/request', group: 'Discover & Analyze' },
   { id: 'data_discovery', title: 'View & Search Catalog', icon: <Search className="w-5 h-5" />, path: '/discovery', group: 'Discover & Analyze' },
 
   // Self Service
-  { id: 'home', title: 'Request', icon: <WandSparkles className="w-5 h-5" />, path: '/request', group: 'Access & Provision' },
   { id: 'my_requests', title: 'My Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Access & Provision' },
   { id: 'pending_approvals', title: 'Pending Approvals', icon: <CheckCircle2 className="w-5 h-5" />, path: '/approvals', group: 'Access & Provision' },
   { id: 'reports', title: 'Reports', icon: <BarChart className="w-5 h-5" />, path: '/reports', group: 'Access & Provision' },
@@ -267,22 +278,13 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   // They drop out silently if the workspace URL is not configured.
   const externalNavItems = React.useMemo<NavItem[]>(() => {
     const items: NavItem[] = [];
-    // "Analyze and Explore" used to deep-link out to Databricks Genie,
-    // but we now have an in-app chat view that wraps the same Genie
-    // space via the Managed MCP server. Route to /ask-your-data when
-    // the feature is enabled (default true), and fall back to the
-    // external link otherwise so legacy environments keep working.
+    // "Analyze and Explore" / Ask Your Data is now folded into the unified
+    // chat (the Request entry), so we no longer add a dedicated in-app item.
+    // When the in-app feature is disabled, fall back to an external Databricks
+    // Genie deep-link so legacy environments keep a data-exploration entry.
     const askYourDataEnabled =
       uiTabs?.ask_your_data !== false && features?.ask_your_data !== false;
-    if (askYourDataEnabled) {
-      items.push({
-        id: 'ask_your_data',
-        title: 'Analyze and Explore',
-        icon: <Sparkles className="w-5 h-5" />,
-        path: '/ask-your-data',
-        group: 'Discover & Analyze',
-      });
-    } else {
+    if (!askYourDataEnabled) {
       const genieUrl = genieHomeUrl(databricksWorkspaceUrl);
       if (genieUrl) {
         items.push({
@@ -320,8 +322,15 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   }, [databricksWorkspaceUrl, commandCenterUrl, uiTabs?.ask_your_data, features?.ask_your_data]);
 
   const allNavItems = React.useMemo(
-    () => [...navItems, ...externalNavItems],
-    [externalNavItems]
+    () => {
+      const acronym = brandAcronym(brandName);
+      const agentLabel = acronym ? `${acronym} Agent` : 'Agent';
+      const items = navItems.map((item) =>
+        item.id === 'home' ? { ...item, title: agentLabel } : item
+      );
+      return [...items, ...externalNavItems];
+    },
+    [externalNavItems, brandName]
   );
 
   // Filter items based on current persona
@@ -373,7 +382,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 that still clearly answers "click here to go home" while
                 reading cleanly inside the 40px chip. */}
             <Link
-              to="/welcome"
+              to="/"
               aria-label={`${brandName} home`}
               title={brandName}
               className="w-10 h-10 flex items-center justify-center rounded-lg bg-white/10 text-white hover:bg-nav-hover transition-colors"
@@ -398,7 +407,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           // drop the brand name onto its own line below.
           <div className="flex items-start gap-2">
             <Link
-              to="/welcome"
+              to="/"
               aria-label={brandName}
               className="flex flex-col gap-1.5 min-w-0 flex-1 rounded-md p-1 -m-1 hover:bg-nav-hover transition-colors"
             >

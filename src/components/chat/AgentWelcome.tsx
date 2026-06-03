@@ -13,18 +13,28 @@
 import { Sparkles } from 'lucide-react';
 import type { ReactNode } from 'react';
 
+export interface AgentWelcomeExample {
+    /** Short category label, e.g. "Data" or "Requests". */
+    label: string;
+    /** The example question (no surrounding quotes — added here). */
+    text: string;
+}
+
 export interface AgentWelcomeProps {
     /** Short title, e.g. the agent / page name. */
     title: string;
     /** One-line description of what the agent does. */
     description: string;
-    /** A single example question (no surrounding quotes — added here). */
-    example: string;
+    /**
+     * One or more example questions, rendered as non-clickable emphasized
+     * lines. Each hints at a capability bucket via its `label`.
+     */
+    examples: AgentWelcomeExample[];
     /** Optional icon; defaults to the Sparkles glyph. */
     icon?: ReactNode;
 }
 
-export function AgentWelcome({ title, description, example, icon }: AgentWelcomeProps) {
+export function AgentWelcome({ title, description, examples, icon }: AgentWelcomeProps) {
     return (
         <div className="flex flex-col items-center justify-center py-10 gap-4 text-center">
             <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center">
@@ -34,10 +44,19 @@ export function AgentWelcome({ title, description, example, icon }: AgentWelcome
                 <h2 className="text-xl font-semibold text-gray-900">{title}</h2>
                 <p className="text-sm text-gray-500 mt-1">{description}</p>
             </div>
-            <p className="text-sm text-gray-600 max-w-md">
-                For example, try asking{' '}
-                <span className="font-medium italic text-gray-900">“{example}”</span>
-            </p>
+            {examples.length > 0 && (
+                <div className="flex flex-col gap-1.5 max-w-md">
+                    <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                        For example, try asking
+                    </p>
+                    {examples.map((ex) => (
+                        <p key={ex.label} className="text-sm text-gray-600">
+                            <span className="font-semibold text-gray-700">{ex.label}:</span>{' '}
+                            <span className="italic text-gray-900">“{ex.text}”</span>
+                        </p>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

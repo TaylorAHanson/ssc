@@ -13,7 +13,6 @@ import { CommunityLinks } from './pages/CommunityLinks';
 import { AdminReports } from './pages/AdminReports';
 import { CommandCenter } from './pages/CommandCenter';
 import { Welcome } from './pages/Welcome';
-import { AskYourData } from './pages/AskYourData';
 import { useBrandingStore } from './stores/brandingStore';
 import { useRequestStore } from './stores/requestStore';
 import { useUserStore } from './stores/userStore';
@@ -24,19 +23,6 @@ import { Allowlist } from './pages/admin/Allowlist';
 import { EnforcementSentinel } from './pages/admin/EnforcementSentinel';
 import { DataCertification } from './pages/admin/DataCertification';
 import { ODPS } from './pages/admin/ODPS';
-
-// Root-route dispatcher: when the user has set a default landing page on
-// the Welcome screen, `/` jumps them straight there. Otherwise we render
-// Welcome inline. `/welcome` always shows the Welcome screen regardless
-// of the preference (used by the sidebar logo) so the page is reachable
-// even after the user has picked a default.
-function LandingDispatcher() {
-  const defaultHomePage = useUserStore((state) => state.defaultHomePage);
-  if (defaultHomePage) {
-    return <Navigate to={defaultHomePage} replace />;
-  }
-  return <Welcome />;
-}
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -63,7 +49,8 @@ function App() {
     <BrowserRouter>
       <Layout>
         <Routes>
-          <Route path="/" element={<LandingDispatcher />} />
+          {/* Landing is always the unified chat. */}
+          <Route path="/" element={<Home />} />
           <Route path="/welcome" element={<Welcome />} />
           <Route path="/request" element={<Home />} />
           {/* Legacy redirects: prior versions exposed these routes. */}
@@ -127,7 +114,8 @@ function App() {
             />
           )}
           <Route path="/command-center" element={<CommandCenter />} />
-          <Route path="/ask-your-data" element={<AskYourData />} />
+          {/* Ask Your Data folded into the unified chat. */}
+          <Route path="/ask-your-data" element={<Navigate to="/" replace />} />
           <Route path="/community/training" element={<Training />} />
           <Route path="/community/events" element={<Events />} />
           <Route path="/community/assets" element={<ReusableAssets />} />

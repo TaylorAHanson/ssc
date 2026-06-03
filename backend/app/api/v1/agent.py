@@ -159,41 +159,14 @@ def _build_runner_and_history(
     logger.info(f"Current User: {current_user.email}")
     logger.info(f"Current User Roles: {current_user.roles}")
 
-    # Resolve agent mode from frontend context (normalize a few spellings)
-    agent_mode = "self_service"
-    if request.context:
-        raw_mode = request.context.get("mode") or request.context.get("agent_mode", "self_service")
-        mode_map = {
-            "self service agent": "self_service",
-            "self_service": "self_service",
-            "governance": "governance",
-            "finops": "finops",
-            "ask your data": "ask_your_data",
-            "ask_your_data": "ask_your_data",
-        }
-        agent_mode = mode_map.get(str(raw_mode).lower(), "self_service")
-    logger.info(f"Resolved agent mode: {agent_mode}")
+    # Single unified agent (no modes). Tools are gated purely by the user's
+    # role via ``required_role``; whatever the user is permitted to use, the
+    # one agent can use. ``agent_mode`` is retained only for the return
+    # signature / logging compatibility.
+    agent_mode = "unified"
 
-    # Filter tools by user permissions and mode. The "ask_your_data" mode
-    # is a curated allow-list: read-only data-discovery tools (catalog /
-    # schema / table / volume listing, owner lookup, target-workspace
-    # listing) plus the slow Genie escape hatch. Provisioning workflows,
-    # audit tooling, and entitlement search are intentionally excluded so
-    # the LLM doesn't try to route the user out of this tab.
-    ASK_YOUR_DATA_TOOLS = {
-        "get_catalog_list",
-        "get_schema_list",
-        "get_table_list",
-        "get_volume_list",
-        "get_target_workspaces",
-        "find_owner",
-        "ask_your_data",
-    }
     visible_tools = []
     for tool in AGENT_TOOLS:
-        if agent_mode == "ask_your_data" and tool.name not in ASK_YOUR_DATA_TOOLS:
-            continue
-
         allowed = True
         if hasattr(tool, "required_role") and tool.required_role:
             if not current_user.has_role(tool.required_role):
