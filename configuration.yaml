@@ -112,6 +112,9 @@ tools:
   get_credential_list: true
   check_workspace_path: true
   get_target_workspaces: true
+  # Connectivity diagnostic: SDK "ping" of target workspaces to prove
+  # cross-VPC / hub-spoke reachability (reuses existing credentials).
+  ping_workspaces: true
   list_github_templates: true
   list_workspaces: true
   search_events: true
