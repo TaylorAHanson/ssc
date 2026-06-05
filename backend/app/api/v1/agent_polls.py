@@ -328,17 +328,13 @@ def _summarize_genie_payload(
         fa_len = len(fa) if isinstance(fa, str) else 0
         steps = payload.get("progress_steps")
         steps_len = len(steps) if isinstance(steps, list) else 0
-        last_step = ""
-        if isinstance(steps, list) and steps:
-            last_step = _clean_step_text(_extract_step_text(steps[-1]))[:80]
-        narration = payload.get("narration_instruction")
-        narration_len = len(narration) if isinstance(narration, str) else 0
         items = payload.get("query_items")
         items_len = len(items) if isinstance(items, list) else 0
+        # Counts only (no step text) — enough to see streaming progress without
+        # echoing potentially sensitive data content into the logs.
         stream_shape = (
             f"final_answer_len={fa_len} progress_steps={steps_len} "
-            f"query_items={items_len} narration_len={narration_len} "
-            f"last_step={last_step!r}"
+            f"query_items={items_len}"
         )
     if isinstance(payload, dict):
         raw_status = str(payload.get("status") or payload.get("state") or "")
