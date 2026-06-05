@@ -83,6 +83,12 @@ async def sync_contracts(
                     if response.result and response.result.data_array:
                         for row in response.result.data_array:
                             catalog_name, schema_name, table_name, dataset_name = row
+                            if not dataset_name or not str(dataset_name).strip():
+                                logger.warning(
+                                    f"Skipping table {catalog_name}.{schema_name}.{table_name}: "
+                                    f"'dataset' tag has an empty value"
+                                )
+                                continue
                             full_name = f"{catalog_name}.{schema_name}.{table_name}"
                             if dataset_name not in dataset_groups:
                                 dataset_groups[dataset_name] = []
@@ -109,6 +115,12 @@ async def sync_contracts(
                         if response.result and response.result.data_array:
                             for row in response.result.data_array:
                                 catalog_name, schema_name, table_name, dataset_name = row
+                                if not dataset_name or not str(dataset_name).strip():
+                                    logger.warning(
+                                        f"Skipping table {catalog_name}.{schema_name}.{table_name}: "
+                                        f"'dataset' tag has an empty value"
+                                    )
+                                    continue
                                 full_name = f"{catalog_name}.{schema_name}.{table_name}"
                                 if dataset_name not in dataset_groups:
                                     dataset_groups[dataset_name] = []
@@ -138,6 +150,12 @@ async def sync_contracts(
                         logger.info(f"Found {len(response.result.data_array)} tagged tables in catalog {catalog.name}")
                         for row in response.result.data_array:
                             catalog_name, schema_name, table_name, dataset_name = row
+                            if not dataset_name or not str(dataset_name).strip():
+                                logger.warning(
+                                    f"Skipping table {catalog_name}.{schema_name}.{table_name}: "
+                                    f"'dataset' tag has an empty value"
+                                )
+                                continue
                             full_name = f"{catalog_name}.{schema_name}.{table_name}"
                             if dataset_name not in dataset_groups:
                                 dataset_groups[dataset_name] = []
