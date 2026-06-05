@@ -4,11 +4,86 @@ import { useRequestStore } from '../stores/requestStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { formatInTimeZone } from 'date-fns-tz';
-import { Eye, X, Trash2, CheckCircle2, Circle, Loader2, AlertCircle, Clock } from 'lucide-react';
+import { Eye, X, Trash2, CheckCircle2, Circle, Loader2, AlertCircle, Clock, WandSparkles, ArrowRight } from 'lucide-react';
 import type { Request } from '../types';
 import { renderMarkdownSafe } from '../lib/markdown';
+import { useBrandingStore } from '../stores/brandingStore';
 
 import { formatDistanceToNow, differenceInHours } from 'date-fns';
+
+// Derive a short label for the unified chat agent from the configured brand
+// name (e.g. "Enterprise Data Hub" -> "EDH Agent"), matching the sidebar.
+function brandAcronym(name: string): string {
+  const words = (name || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '';
+  if (words.length === 1) return words[0];
+  return words.map((w) => w[0]!.toUpperCase()).join('');
+}
+
+const NEW_REQUEST_BANNER_DISMISSED_KEY = 'requests.newRequestBanner.dismissed';
+
+/**
+ * Prominent call-to-action steering users to the unified chat agent to start a
+ * new request. New requests are conversational (there's no standalone form), so
+ * this banner is the primary entry point from the My Requests page. Dismissible:
+ * the choice is persisted to localStorage so it doesn't reappear every visit.
+ */
+function NewRequestBanner() {
+  const navigate = useNavigate();
+  const brandName = useBrandingStore((s) => s.brandName);
+  const agentLabel = `${brandAcronym(brandName) || 'EDH'} Agent`;
+
+  const [dismissed, setDismissed] = useState(
+    () => localStorage.getItem(NEW_REQUEST_BANNER_DISMISSED_KEY) === '1'
+  );
+
+  if (dismissed) return null;
+
+  const handleDismiss = () => {
+    localStorage.setItem(NEW_REQUEST_BANNER_DISMISSED_KEY, '1');
+    setDismissed(true);
+  };
+
+  return (
+    <div className="relative overflow-hidden rounded-xl bg-nav-bg text-nav-text shadow-md">
+      {/* Decorative oversized icon — purely visual, hidden from a11y tree */}
+      <WandSparkles
+        aria-hidden="true"
+        className="pointer-events-none absolute -right-5 -bottom-7 w-32 h-32 text-white/5"
+      />
+      <button
+        type="button"
+        onClick={handleDismiss}
+        aria-label="Dismiss"
+        className="absolute right-2 top-2 rounded-md p-1 text-nav-text-muted transition-colors hover:bg-white/10 hover:text-white"
+      >
+        <X className="h-4 w-4" />
+      </button>
+      <div className="relative flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3 pr-6">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/10">
+            <WandSparkles className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold">Need to request something?</h2>
+            <p className="text-xs text-white/80">
+              New requests start as a conversation — tell the {agentLabel} what you need (data
+              access, a workspace, a tag change) and it will submit it for you.
+            </p>
+          </div>
+        </div>
+        <Button
+          onClick={() => navigate('/')}
+          size="sm"
+          className="shrink-0 self-start bg-white font-semibold text-nav-bg hover:bg-white/90 sm:self-auto"
+        >
+          New request
+          <ArrowRight className="ml-2 h-4 w-4" />
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 const parseUtcDate = (dateString: string) => {
   if (!dateString) return new Date();
@@ -470,12 +545,15 @@ export function Requests() {
     }
 
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-center">
-          <p className="text-lg text-gray-600 mb-4">No requests yet</p>
-          <p className="text-sm text-gray-500">
-            Start by using the Agentic Helper on the home page to create a request.
-          </p>
+      <div className="space-y-6 pb-20">
+        <NewRequestBanner />
+        <div className="flex items-center justify-center min-h-[300px]">
+          <div className="text-center">
+            <p className="text-lg text-gray-600 mb-1">No requests yet</p>
+            <p className="text-sm text-gray-500">
+              Once you submit a request through the agent, it will show up here.
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -483,6 +561,8 @@ export function Requests() {
 
   return (
     <div className="space-y-6 pb-20">
+      <NewRequestBanner />
+
       {/* Page header — matches the Approvals page pattern (h1 + subtitle
           on the left, primary controls on the right). Stacks on narrow
           screens so the filter pills don't get squeezed. */}

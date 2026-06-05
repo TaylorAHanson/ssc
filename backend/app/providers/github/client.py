@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional, List
 from app.providers.base import BaseProvider
 from app.core.exceptions import RetryableError, PermanentError
 from app.core.retry import retry_on_retryable
+import base64
 import httpx
 import subprocess
 import asyncio
@@ -203,6 +204,148 @@ class GitHubProvider(BaseProvider):
         except httpx.RequestError as e:
             raise RetryableError(f"Request error: {str(e)}")
     
+    async def _resolve_repo_path(self, repo: str) -> str:
+        """Resolve a repo reference to a full ``owner/repo`` path.
+
+        Accepts either a bare repo name (resolved against ``self.org`` or the
+        authenticated user) or an already-qualified ``owner/repo`` string.
+        """
+        if "/" in repo:
+            return repo
+        if self.org:
+            return f"{self.org}/{repo}"
+        user_resp = await self.client.get("/user")
+        user_resp.raise_for_status()
+        return f"{user_resp.json()['login']}/{repo}"
+
+    @retry_on_retryable(max_attempts=3)
+    async def create_branch(self, repo: str, branch: str, from_branch: str) -> Dict[str, Any]:
+        """Create a new branch in ``repo`` pointing at the head of ``from_branch``."""
+        try:
+            repo_path = await self._resolve_repo_path(repo)
+
+            ref_resp = await self.client.get(f"/repos/{repo_path}/git/ref/heads/{from_branch}")
+            ref_resp.raise_for_status()
+            from_sha = ref_resp.json()["object"]["sha"]
+
+            response = await self.client.post(
+                f"/repos/{repo_path}/git/refs",
+                json={"ref": f"refs/heads/{branch}", "sha": from_sha},
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 422:
+                # The branch may already exist from a prior (partially failed)
+                # attempt. Treat creation as idempotent and return it if present.
+                existing = await self.client.get(
+                    f"/repos/{repo_path}/git/ref/heads/{branch}"
+                )
+                if existing.status_code == 200:
+                    return existing.json()
+                raise PermanentError(f"Invalid branch: {branch}")
+            elif e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            else:
+                raise PermanentError(f"Failed to create branch: {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
+    @retry_on_retryable(max_attempts=3)
+    async def create_or_update_file(
+        self,
+        repo: str,
+        path: str,
+        content: str,
+        branch: str,
+        message: str,
+    ) -> Dict[str, Any]:
+        """Create or update a file at ``path`` on ``branch`` via the Contents API."""
+        try:
+            repo_path = await self._resolve_repo_path(repo)
+            encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+
+            payload: Dict[str, Any] = {
+                "message": message,
+                "content": encoded,
+                "branch": branch,
+            }
+
+            # If the file already exists on this branch we must pass its blob sha.
+            existing = await self.client.get(
+                f"/repos/{repo_path}/contents/{path}", params={"ref": branch}
+            )
+            if existing.status_code == 200:
+                payload["sha"] = existing.json().get("sha")
+
+            response = await self.client.put(
+                f"/repos/{repo_path}/contents/{path}", json=payload
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            else:
+                error_detail = e.response.json().get("message", str(e))
+                raise PermanentError(f"Failed to write file '{path}': {error_detail}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
+    @retry_on_retryable(max_attempts=3)
+    async def create_pull_request(
+        self,
+        repo: str,
+        title: str,
+        head: str,
+        base: str,
+        body: str = "",
+    ) -> Dict[str, Any]:
+        """Open a pull request from ``head`` into ``base``."""
+        try:
+            repo_path = await self._resolve_repo_path(repo)
+            response = await self.client.post(
+                f"/repos/{repo_path}/pulls",
+                json={"title": title, "head": head, "base": base, "body": body},
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 422:
+                # A PR for this branch may already exist from a prior attempt;
+                # return it so the flow is idempotent on retry.
+                owner = repo_path.split("/")[0]
+                existing = await self.client.get(
+                    f"/repos/{repo_path}/pulls",
+                    params={"head": f"{owner}:{head}", "state": "all"},
+                )
+                if existing.status_code == 200 and existing.json():
+                    return existing.json()[0]
+                error_detail = e.response.json().get("message", str(e))
+                raise PermanentError(f"Failed to create pull request: {error_detail}")
+            elif e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            else:
+                error_detail = e.response.json().get("message", str(e))
+                raise PermanentError(f"Failed to create pull request: {error_detail}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
+    async def get_pull_request(self, repo: str, number: int) -> Dict[str, Any]:
+        """Fetch a pull request's current state (``state``, ``merged``, etc.)."""
+        try:
+            repo_path = await self._resolve_repo_path(repo)
+            response = await self.client.get(f"/repos/{repo_path}/pulls/{number}")
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            else:
+                raise PermanentError(f"Failed to get pull request #{number}: {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
     async def health_check(self) -> bool:
         """Check if GitHub is accessible."""
         try:

@@ -23,6 +23,7 @@ import {
   ExternalLink,
   ShieldCheck,
   ShieldAlert,
+  Tags,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -158,6 +159,14 @@ const navItems: NavItem[] = [
     title: 'Sentinel',
     icon: <ShieldAlert className="w-5 h-5" />,
     path: '/governance/sentinel',
+    group: 'Governance',
+    allowedPersonas: ['Platform Admin', 'Governance Admin']
+  },
+  {
+    id: 'tag_management',
+    title: 'Tag Management',
+    icon: <Tags className="w-5 h-5" />,
+    path: '/governance/tags',
     group: 'Governance',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },

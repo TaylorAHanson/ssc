@@ -23,6 +23,7 @@ import { Allowlist } from './pages/admin/Allowlist';
 import { EnforcementSentinel } from './pages/admin/EnforcementSentinel';
 import { DataCertification } from './pages/admin/DataCertification';
 import { ODPS } from './pages/admin/ODPS';
+import { TagManagement } from './pages/admin/TagManagement';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -109,6 +110,16 @@ function App() {
               element={
                 <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
                   <ODPS />
+                </ProtectedRoute>
+              }
+            />
+          )}
+          {uiTabs?.tag_management !== false && (
+            <Route
+              path="/governance/tags"
+              element={
+                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                  <TagManagement />
                 </ProtectedRoute>
               }
             />

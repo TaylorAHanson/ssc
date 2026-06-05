@@ -51,6 +51,7 @@ ui:
     odps: false
     allowlist: false
     sentinel: false
+    tag_management: false
 
 tools:
   check_allowlist_status: false
@@ -107,6 +108,7 @@ workflows:
   RequestType.WORKSPACE_ACCESS: true
   RequestType.WORKSPACE_PROVISION: true
   RequestType.TAG_CREATION: true
+  RequestType.TAG_CHANGE: false
   RequestType.CREDENTIAL_CREATION: true
   RequestType.VOLUME_CREATION: true
   RequestType.WORKSPACE_FOLDER_CREATION: true

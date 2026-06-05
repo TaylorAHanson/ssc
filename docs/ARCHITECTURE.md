@@ -460,6 +460,10 @@ credentials from the `LMWS_SECRET_SCOPE` Databricks secret scope (keys
 - `create_from_template(template: str, name: str, config: dict) -> dict` - Create from template
 - `run_shell_command(command: str, cwd: str = None) -> dict` - Execute gh CLI commands
 - `set_permissions(repo: str, user: str, permission: str) -> bool` - Set repository permissions
+- `create_branch(repo, branch, from_branch) -> dict` - Branch an existing repo (used by Tag Management GitOps)
+- `create_or_update_file(repo, path, content, branch, message) -> dict` - Write a file via the Contents API
+- `create_pull_request(repo, title, head, base, body) -> dict` - Open a PR
+- `get_pull_request(repo, number) -> dict` - Fetch PR state/merge status
 
 **Databricks Provider** (`providers/databricks/`):
 - `execute_sql(query: str, warehouse: str = None) -> dict` - Execute SQL query via SDK
@@ -1212,6 +1216,107 @@ State machine includes failure states:
   - Manually retry
   - Mark as resolved
   - Cancel request
+
+## Governance Tag Management (GitOps)
+
+The **Tag Management** governance tab lets Platform/Governance admins view and
+edit Unity Catalog tags on governed datasets. Critically, **the app never runs
+`ALTER TABLE ... SET TAGS` directly** — git is the source of truth. Editing tags
+produces a pull request; a GitHub Action in the tags repo applies the generated
+SQL across environments once a governance admin merges it. This keeps every DDL
+change reviewable and version-controlled, and prevents drift from ad-hoc manual
+edits.
+
+### Flow
+
+```mermaid
+flowchart LR
+  Admin["Admin (Tag Management tab)"] --> UI["TagManagement.tsx"]
+  UI -->|"GET current tags"| API["/api/v1/tags"]
+  API -->|"entity_tag_assignments.list"| UC["Unity Catalog"]
+  UI -->|"POST desired tags"| API
+  API -->|"diff vs current + create request"| DB[("Lakebase")]
+  Poller["Poller"] --> SM["TagChangeStateMachine"]
+  SM -->|"gen ALTER SQL + branch + PR (REST)"| GH["GitHub tags repo"]
+  SM -->|"poll PR status"| GH
+  GH -->|"on merge: GitHub Action runs SQL"| UC
+  SM --> Req["Requests UI (Queued -> PR Open -> Applied)"]
+```
+
+### Components
+
+- **API** (`backend/app/api/v1/tags.py`):
+  - `GET /tags/datasets` — datasets available for tagging (active data contracts).
+  - `GET /tags/datasets/{id}/tables` — member tables + current editable tags
+    (reads `entity_tag_assignments`; `system.*` tags are excluded since they are
+    owned by the Enforcement Sentinel).
+  - `POST /tags/changes` — diffs the desired tags against live UC tags, generates
+    `ALTER ... SET/UNSET TAGS` SQL, and creates a `TAG_CHANGE` request.
+  - `GET /tags/changes` — tracked changes with PR link + status.
+- **State machine** (`backend/app/state_machines/tag_change/state_machine.py`,
+  `RequestType.TAG_CHANGE`): `pending -> pr_open -> completed`, with `rejected`
+  (PR closed unmerged) and `failed`. On entering `pr_open` it creates the branch,
+  commits the `.sql` file, and opens the PR (idempotent via the `pr_created`
+  fact); every subsequent tick polls the PR and records `pr_merged` /
+  `pr_closed_unmerged`.
+- **Provider** (`backend/app/providers/github/client.py`): `create_branch`,
+  `create_or_update_file` (Contents API), `create_pull_request`,
+  `get_pull_request`.
+- **Config** (`backend/app/core/config.py`): `GOVERNANCE_TAGS_REPO`
+  (`owner/repo`), `GOVERNANCE_TAGS_BASE_BRANCH` (default `main`),
+  `GOVERNANCE_TAGS_PATH` (default `tags/migrations`).
+
+### Generated SQL
+
+One `.sql` file per request at `<GOVERNANCE_TAGS_PATH>/<timestamp>-<request_id>.sql`:
+
+```sql
+-- Tag change request req-ab12cd34
+-- Dataset: sales.orders
+-- Requested by: admin@example.com
+
+ALTER TABLE prod.sales.orders SET TAGS ('access_group' = 'sales-readers');
+ALTER TABLE prod.sales.orders UNSET TAGS ('deprecated_tag');
+```
+
+### Example GitHub Action (lives in the tags repo, not the app)
+
+The app's responsibility ends at opening the PR. The tags repo owns the workflow
+that applies merged SQL per environment (the env -> catalog mapping is owned by
+the action, not the app):
+
+```yaml
+# .github/workflows/apply-tags.yml (in the GOVERNANCE_TAGS_REPO)
+name: Apply UC Tag Changes
+on:
+  push:
+    branches: [main]
+    paths: ["tags/migrations/**.sql"]
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env: [dev, stage, prod]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Install Databricks CLI
+        run: pip install databricks-sql-connector
+      - name: Apply newly merged SQL files
+        env:
+          DATABRICKS_HOST: ${{ secrets[format('DBX_HOST_{0}', matrix.env)] }}
+          DATABRICKS_TOKEN: ${{ secrets[format('DBX_TOKEN_{0}', matrix.env)] }}
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets[format('DBX_WH_{0}', matrix.env)] }}
+        run: |
+          # Run only the .sql files added in the merge commit, optionally
+          # rewriting catalog names for the target environment.
+          for f in $(git diff --name-only HEAD~1 HEAD -- 'tags/migrations/*.sql'); do
+            echo "Applying $f to ${{ matrix.env }}"
+            python scripts/run_sql.py "$f" --env "${{ matrix.env }}"
+          done
+```
 
 ## Future Considerations
 

@@ -322,6 +322,13 @@ class Settings(BaseSettings):
     # SECRET: Set in .env file
     GITHUB_TOKEN: str = ""  # SECRET: Set in .env
     GITHUB_ORG: str = ""  # GitHub organization name
+
+    # Governance Tag Management (GitOps for UC tag changes)
+    # The app opens PRs against this repo; a GitHub Action in the repo runs the
+    # generated ALTER...SET/UNSET TAGS SQL per environment on merge.
+    GOVERNANCE_TAGS_REPO: str = ""  # "owner/repo" or bare repo name (resolved against GITHUB_ORG)
+    GOVERNANCE_TAGS_BASE_BRANCH: str = "main"  # base branch PRs target
+    GOVERNANCE_TAGS_PATH: str = "tags/migrations"  # path prefix for generated .sql files
     
     # Mock User Settings (for local dev when auth headers are missing)
     MOCK_USER_EMAIL: str = "dev@example.com"

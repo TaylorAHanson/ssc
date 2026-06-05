@@ -1100,6 +1100,88 @@ export async function getTableDetails(tableName: string): Promise<TableDetailsRe
   return response.json();
 }
 
+// ---------------------------------------------------------------------------
+// Governance: Tag Management
+// ---------------------------------------------------------------------------
+
+export interface TagDataset {
+  dataset_id: string;
+  catalog?: string | null;
+  schema_name?: string | null;
+}
+
+export interface TableTags {
+  table: string;
+  tags: Record<string, string | null>;
+}
+
+export interface DatasetTablesResponse {
+  dataset_id: string;
+  tables: TableTags[];
+  suggested_keys: string[];
+  error?: string | null;
+}
+
+export interface TagChange {
+  id: string;
+  title: string;
+  dataset_id?: string | null;
+  status: string;
+  pr_url?: string | null;
+  pr_number?: number | null;
+  table_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getTagDatasets(): Promise<TagDataset[]> {
+  const response = await fetch(`${API_BASE_URL}/tags/datasets`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get tag datasets: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getDatasetTags(datasetId: string): Promise<DatasetTablesResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/tags/datasets/${encodeURIComponent(datasetId)}/tables`,
+    { headers: getHeaders() }
+  );
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get dataset tags: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function createTagChange(payload: {
+  dataset_id: string;
+  dataset_name?: string;
+  tables: { table: string; desired_tags: Record<string, string> }[];
+  pr_title?: string;
+}): Promise<TagChange> {
+  const response = await fetch(`${API_BASE_URL}/tags/changes`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to submit tag change: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function listTagChanges(): Promise<TagChange[]> {
+  const response = await fetch(`${API_BASE_URL}/tags/changes`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to list tag changes: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -1142,5 +1224,9 @@ export const api = {
   getDatabricksApps,
   getDatabricksGenieSpaces,
   getTableLineage,
-  getTableDetails
+  getTableDetails,
+  getTagDatasets,
+  getDatasetTags,
+  createTagChange,
+  listTagChanges
 };

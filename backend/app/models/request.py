@@ -43,6 +43,7 @@ class RequestType(str, Enum):
     ASSET_DEDUPLICATION = "asset_deduplication"
     ALLOWLIST_EXCEPTION = "allowlist_exception"
     TAG_CREATION = "tag_creation"
+    TAG_CHANGE = "tag_change"
     CREDENTIAL_CREATION = "credential_creation"
     VOLUME_CREATION = "volume_creation"
     WORKSPACE_FOLDER_CREATION = "workspace_folder_creation"
