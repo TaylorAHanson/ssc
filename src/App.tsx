@@ -24,6 +24,7 @@ import { EnforcementSentinel } from './pages/admin/EnforcementSentinel';
 import { DataCertification } from './pages/admin/DataCertification';
 import { ODPS } from './pages/admin/ODPS';
 import { TagManagement } from './pages/admin/TagManagement';
+import { ContextCatalog } from './pages/admin/ContextCatalog';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -120,6 +121,16 @@ function App() {
               element={
                 <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
                   <TagManagement />
+                </ProtectedRoute>
+              }
+            />
+          )}
+          {uiTabs?.context_catalog !== false && (
+            <Route
+              path="/governance/context-catalog"
+              element={
+                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                  <ContextCatalog />
                 </ProtectedRoute>
               }
             />

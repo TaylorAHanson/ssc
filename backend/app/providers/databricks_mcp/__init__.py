@@ -1,6 +1,7 @@
 """Databricks Managed MCP integrations (Genie, etc.)."""
 from app.providers.databricks_mcp.client import (
     GenieAuthUnavailableError,
+    ProgressCallback,
     build_genie_mcp_url,
     call_genie_tool,
     open_mcp_session,
@@ -9,6 +10,7 @@ from app.providers.databricks_mcp.client import (
 
 __all__ = [
     "GenieAuthUnavailableError",
+    "ProgressCallback",
     "build_genie_mcp_url",
     "call_genie_tool",
     "open_mcp_session",

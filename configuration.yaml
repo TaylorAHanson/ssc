@@ -55,6 +55,14 @@ features:
   # Backed by Databricks Genie (Managed MCP). Disable this in environments
   # where Genie isn't available or OBO auth isn't configured.
   ask_your_data: true
+  # Context Catalog: curated knowledge base (context domains + documents) that
+  # the agent retrieves from. Gates the admin UI, the API, and the retrieval
+  # tools below.
+  context_catalog: true
+  # Onboarding suggestions: on login, the home page asks the agent for a few
+  # personalized, clickable starting prompts (role + recent-activity hints).
+  # One cached LLM call per session with a deterministic role-based fallback.
+  onboarding_suggestions: true
 
 ui:
   tabs:
@@ -75,6 +83,7 @@ ui:
     allowlist: true
     sentinel: true
     tag_management: true
+    context_catalog: true
 
 tools:
   check_allowlist_status: true
@@ -111,6 +120,10 @@ tools:
   check_asset_quality: true
   find_owner: true
   check_training_status: true
+  # Context Catalog retrieval tools (gated by the context_catalog feature flag)
+  list_context_domains: true
+  search_context_catalog: true
+  get_context_document: true
   # Databricks Genie (the general-purpose data chat in Databricks One)
   # via Managed MCP. Slow tool (30-120s per question); safeguarded by
   # the `ask_your_data` feature flag and an OBO-only auth path. By

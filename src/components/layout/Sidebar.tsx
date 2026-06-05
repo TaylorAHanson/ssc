@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   ShieldAlert,
   Tags,
+  Library,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -167,6 +168,14 @@ const navItems: NavItem[] = [
     title: 'Tag Management',
     icon: <Tags className="w-5 h-5" />,
     path: '/governance/tags',
+    group: 'Governance',
+    allowedPersonas: ['Platform Admin', 'Governance Admin']
+  },
+  {
+    id: 'context_catalog',
+    title: 'Context Catalog',
+    icon: <Library className="w-5 h-5" />,
+    path: '/governance/context-catalog',
     group: 'Governance',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },

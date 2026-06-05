@@ -26,15 +26,16 @@ export interface AgentWelcomeProps {
     /** One-line description of what the agent does. */
     description: string;
     /**
-     * One or more example questions, rendered as non-clickable emphasized
-     * lines. Each hints at a capability bucket via its `label`.
+     * Optional example questions, rendered as non-clickable emphasized
+     * lines. Each hints at a capability bucket via its `label`. Omit when a
+     * surface shows its own (e.g. personalized) starting prompts instead.
      */
-    examples: AgentWelcomeExample[];
+    examples?: AgentWelcomeExample[];
     /** Optional icon; defaults to the Sparkles glyph. */
     icon?: ReactNode;
 }
 
-export function AgentWelcome({ title, description, examples, icon }: AgentWelcomeProps) {
+export function AgentWelcome({ title, description, examples = [], icon }: AgentWelcomeProps) {
     return (
         <div className="flex flex-col items-center justify-center py-10 gap-4 text-center">
             <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center">

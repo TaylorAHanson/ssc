@@ -1318,6 +1318,86 @@ jobs:
           done
 ```
 
+## Context Catalog (Curated Agent Knowledge)
+
+The **Context Catalog** is a curated knowledge base that improves agent answer
+quality. Admins organize knowledge into **context domains** (an arbitrarily-deep
+tree) and author **documents** inside them — either markdown written in-app or
+uploaded files (`docx`, `pptx`, `pdf`, `md`, `txt`) whose text is extracted on
+ingest. Published documents are chunked and become retrievable by the agent via
+lightweight keyword search.
+
+This is deliberately **not** a vector database. The catalog is expected to stay
+small enough that case-insensitive keyword scoring over a chunk table is
+sufficient, and that approach is portable across local SQLite and Lakebase
+Postgres with no extra infrastructure. The schema leaves room to add embeddings
+later without a breaking change.
+
+### Flow
+
+```mermaid
+flowchart LR
+  Admin["Admin (Context Catalog tab)"] --> UI["ContextCatalog.tsx"]
+  UI -->|"CRUD domains/docs + upload"| API["/api/v1/context/*"]
+  API --> SVC["ContextCatalogService"]
+  SVC -->|"parse docx/pptx/pdf"| PARSER["providers/context_catalog/parser"]
+  SVC -->|"chunk on write"| DB[("context_domains / context_documents / context_chunks")]
+  SVC -. "store original (optional)" .-> VOL["UC Volume (Files API)"]
+  User["User"] --> Agent["AgentRunner"]
+  Agent -->|"search_context_catalog / list_context_domains / get_context_document"| SVC
+  SVC -->|"keyword-ranked passages"| Agent
+```
+
+### Components
+
+- **DB models** (`backend/app/db/context_catalog.py`):
+  - `ContextDomainModel` — tree node (`parent_id`), `domain_type`
+    (`community`/`system`), owners, reviewers, categories.
+  - `ContextDocumentModel` — `doc_type`, `body_markdown` (native or extracted),
+    `status` (`draft`/`published`), optional `storage_path` of the original.
+  - `ContextChunkModel` — retrievable slice of a published document; `domain_id`
+    is denormalized for filter-by-domain without a join. Chunks are rebuilt on
+    every write and only exist for `published` documents.
+- **Service** (`backend/app/services/context_catalog_service.py`): domain/document
+  CRUD, slug generation, paragraph-aware chunking, and the keyword `search()`
+  (tokenizes the query, OR-filters chunks with `ILIKE`, then scores by term
+  frequency with a title-match bonus). The API and the agent tools share this
+  exact retrieval path.
+- **Providers** (`backend/app/providers/context_catalog/`):
+  - `parser.py` — `parse_document(filename, bytes)` extracts text. Parser libs
+    (`python-docx`, `python-pptx`, `pypdf`) are imported lazily so a missing
+    optional dependency surfaces a clear upload error instead of breaking import.
+  - `storage.py` — `ContextCatalogStorage` best-effort writes uploaded originals
+    to a UC Volume via the Files API when `CONTEXT_CATALOG_VOLUME_PATH` is set;
+    a no-op otherwise (only extracted text is kept).
+- **API** (`backend/app/api/v1/context_catalog.py`, prefix `/context`): domain
+  CRUD, document CRUD, `POST /domains/{id}/documents/upload` (multipart), and
+  `POST /search`. Writes require **Platform/Governance Admin**
+  (`require_any_role`); reads and search are available to any authenticated user.
+  Every route 404s when the `context_catalog` feature flag is off.
+- **Agent tools** (`backend/app/tools/context_catalog/`, `feature_flag="context_catalog"`):
+  - `list_context_domains` — discover what the catalog covers.
+  - `search_context_catalog(query, domain_slug?)` — ranked passages with citations.
+  - `get_context_document(document_id)` — full body of one published document.
+- **Prompt wiring** (`backend/app/agents/prompts.py`): a Context Catalog section
+  in `UNIFIED_INSTRUCTIONS` tells the agent to search the catalog before
+  answering organization-specific questions and to cite document titles.
+  `_get_context_domains_section()` injects the live list of domains (queried each
+  prompt build, defensively) so the agent knows what exists without a tool call.
+- **Config** (`backend/app/core/config.py`): `CONTEXT_CATALOG_CHUNK_SIZE`,
+  `CONTEXT_CATALOG_SEARCH_LIMIT`, `CONTEXT_CATALOG_MAX_UPLOAD_MB`,
+  `CONTEXT_CATALOG_VOLUME_PATH`. Flags in `configuration.yaml`:
+  `features.context_catalog`, `ui.tabs.context_catalog`, and the three
+  `tools.*` entries.
+- **Frontend** (`src/pages/admin/ContextCatalog.tsx`): domain tree, domain/owner
+  metadata editing, markdown document editor, file upload, and a "test
+  retrieval" search box that exercises the same `/context/search` the agent uses.
+  Routed at `/governance/context-catalog`, gated by `uiTabs.context_catalog` and
+  `ProtectedRoute` (Platform/Governance Admin).
+
+> Note: parsing uploads requires the optional deps in `requirements.txt`
+> (`python-docx`, `python-pptx`, `pypdf`). Markdown authoring works without them.
+
 ## Future Considerations
 
 - **Provider Registry**: Central registry for provider discovery and configuration
@@ -1333,6 +1413,8 @@ jobs:
 - **Circuit Breaker Pattern**: Temporarily disable failing providers to prevent cascade failures
 - **Health Checks**: Monitor provider health and automatically failover
 - **Proactive Agentic Monitoring**: run without a user to provide proactive monitoring of system health and issues
+- **Context Catalog — richer UI**: surface quality/freshness/usage/reviewer signals and Wiki/Audit views (toward a full data-catalog-style experience)
+- **Onboarding & Pre-prompting**: on login, run a personalized "welcome" prompt (role + localStorage hints) that returns clickable starting suggestions, plus novice "front door to Databricks" guided journeys (planned, not yet implemented)
 
 ## Agent SSE Event Protocol
 

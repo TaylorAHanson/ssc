@@ -136,6 +136,23 @@ Tool selection rules:
 1. Prefer fast metadata tools for structural / discovery questions ("what catalogs/tables can I see?", "does table X exist?", "who owns this dataset?"). They complete in seconds.
 2. Use `ask_your_data` (Genie) only when actual data analysis is needed (counts, trends, aggregations, joins across rows; open-ended business questions). Never use it for schema browsing, entitlement lookups, or workflow execution - those have dedicated, faster tools.
 3. Combine when useful: e.g. list a schema with `get_table_list` to confirm what's there, then call `ask_your_data` to get the actual numbers.
+
+#### E. Context Catalog (curated internal knowledge)
+The Context Catalog is a curated knowledge base of company- and domain-specific
+documents (processes, standards, products, onboarding guides, FAQs) organized
+into domains. It is the authoritative source for anything generic Databricks
+documentation would not cover.
+
+- When a user asks about internal processes, standards, "how do we do X here",
+  product/domain specifics, or anything that sounds organization-specific, call
+  `search_context_catalog` FIRST, before answering from general knowledge.
+- Use `list_context_domains` if you need to discover what subjects the catalog
+  covers, then optionally pass a `domain_slug` to scope the search.
+- Use `get_context_document` to pull the full document when a passage looks
+  relevant but you need more detail.
+- ALWAYS cite the document titles you used (e.g. "According to **<title>**, ...").
+- If the catalog returns nothing relevant, say so briefly, then fall back to
+  general knowledge or ask a clarifying question — never fabricate internal policy.
 """
 
 
@@ -271,6 +288,51 @@ def _get_cached_capabilities_section() -> str:
     _CACHED_CAPABILITIES_SECTION = capabilities_section
     return _CACHED_CAPABILITIES_SECTION
 
+def _get_context_domains_section() -> str:
+    """List the available Context Catalog domains so the agent knows what the
+    curated knowledge base covers without first spending a tool call.
+
+    Queried live (not cached) so admin edits surface immediately. Defensive:
+    any failure (feature disabled, empty catalog, DB unavailable) yields an
+    empty section rather than breaking prompt assembly.
+    """
+    try:
+        from app.core.feature_flags import is_feature_enabled
+        if not is_feature_enabled("context_catalog"):
+            return ""
+
+        from app.db.session import get_db
+        from app.services.context_catalog_service import ContextCatalogService
+
+        db = next(get_db())
+        try:
+            domains = ContextCatalogService.list_domains(db)
+            lines = []
+            for d in domains:
+                desc = (d.description or "").strip().replace("\n", " ")
+                if len(desc) > 160:
+                    desc = desc[:157] + "..."
+                lines.append(f"- {d.slug}: {d.name}" + (f" — {desc}" if desc else ""))
+        finally:
+            db.close()
+
+        if not lines:
+            return ""
+
+        return (
+            "\n## Context Catalog Domains\n"
+            "The curated Context Catalog covers the domains below. Use "
+            "`search_context_catalog` (optionally with a `domain_slug`) to retrieve "
+            "passages, and cite the document titles you use:\n"
+            + "\n".join(lines)
+            + "\n"
+        )
+    except Exception as e:  # noqa: BLE001 - prompt assembly must never crash
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to load context domains for prompt: {e}")
+        return ""
+
+
 def get_agent_prompt(tools_override: Optional[List[Any]] = None, mode: str = "self_service") -> str:
     """Get the complete agent prompt combining system prompt and instructions.
 
@@ -293,6 +355,9 @@ You have access to the following tools:
     # Load workflow instructions (cached)
     capabilities_section = _get_cached_capabilities_section()
 
+    # Load Context Catalog domains (live, defensive)
+    context_domains_section = _get_context_domains_section()
+
     return f"""{SYSTEM_PROMPT}
 
 {CORE_INSTRUCTIONS}
@@ -300,6 +365,7 @@ You have access to the following tools:
 {WORKFLOW_EXECUTION_GUIDELINES}
 {tools_section}
 {capabilities_section}
+{context_domains_section}
 {content_section}
 """
 
@@ -332,4 +398,119 @@ def _format_tools_list(tools: List[Any]) -> str:
                 formatted.append(f"     - {param_name} ({param_type}): {param_desc}")
             
     return "\n".join(formatted)
+
+
+# ---------------------------------------------------------------------------
+# Onboarding suggestions (pre-prompting)
+#
+# On login the home page asks the agent for a short set of personalized,
+# clickable starting prompts. This is a single, cheap LLM call (no tools)
+# whose only job is to emit a strict JSON array. The endpoint falls back to
+# ``default_onboarding_suggestions`` if the model is unavailable or returns
+# anything we can't parse, so the home page always has something useful.
+# ---------------------------------------------------------------------------
+
+# Deterministic, role-aware starting prompts. Keep these phrased exactly as a
+# user would click them — they are submitted verbatim as the first turn.
+_FALLBACK_SUGGESTIONS_COMMON: List[Dict[str, str]] = [
+    {"label": "Get started", "prompt": "I'm new to Databricks — where should I start?"},
+    {"label": "Find data", "prompt": "What data is available to me?"},
+    {"label": "Request access", "prompt": "I need read access to a table — how do I request it?"},
+    {"label": "My requests", "prompt": "Show me the status of my recent requests."},
+]
+
+_FALLBACK_SUGGESTIONS_BY_PERSONA: Dict[str, List[Dict[str, str]]] = {
+    "Platform Admin": [
+        {"label": "Approvals", "prompt": "What approvals are waiting on me?"},
+        {"label": "Spend", "prompt": "What's our Databricks spend trend this month?"},
+        {"label": "Workspaces", "prompt": "List the workspaces I manage."},
+        {"label": "Provision", "prompt": "I need to provision a new workspace."},
+    ],
+    "Governance Admin": [
+        {"label": "Tagging", "prompt": "Show me tables that are missing required governance tags."},
+        {"label": "Access review", "prompt": "Audit who has access to our most sensitive data."},
+        {"label": "Approvals", "prompt": "What governance approvals are waiting on me?"},
+        {"label": "Data quality", "prompt": "Check the asset quality for our production catalogs."},
+    ],
+    "Finance Admin": [
+        {"label": "Cost summary", "prompt": "Give me a cost summary for the last 30 days."},
+        {"label": "Forecast", "prompt": "What's our forecasted Databricks spend?"},
+        {"label": "Efficiency", "prompt": "Where are we over-provisioned and wasting spend?"},
+        {"label": "Top consumers", "prompt": "Which workspaces are driving the most cost?"},
+    ],
+    "Security Admin": [
+        {"label": "Over-provisioned", "prompt": "Which users are over-provisioned?"},
+        {"label": "Access audit", "prompt": "Audit access for a specific user."},
+        {"label": "Audit logs", "prompt": "Search recent audit logs for sensitive actions."},
+        {"label": "Permissions", "prompt": "Check permissions on a specific catalog object."},
+    ],
+}
+
+
+def default_onboarding_suggestions(persona: str, limit: int = 4) -> List[Dict[str, str]]:
+    """Deterministic role-based starting prompts used when the LLM call fails
+    or returns something unparseable. Always returns at least a few items."""
+    persona_items = _FALLBACK_SUGGESTIONS_BY_PERSONA.get(persona, [])
+    # Lead with role-specific prompts, then backfill with common ones, de-duped.
+    seen = set()
+    ordered: List[Dict[str, str]] = []
+    for item in persona_items + _FALLBACK_SUGGESTIONS_COMMON:
+        key = item["prompt"].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(item)
+    return ordered[:limit]
+
+
+def get_onboarding_suggestions_messages(
+    *,
+    persona: str,
+    roles: Optional[List[str]] = None,
+    recent_topics: Optional[List[str]] = None,
+    limit: int = 4,
+) -> List[Dict[str, str]]:
+    """Build the (system, user) messages for the one-off onboarding suggestion
+    call. The model is instructed to return ONLY a JSON array of
+    ``{"label","prompt"}`` objects so the endpoint can parse it deterministically.
+    """
+    brand = settings.BRAND_NAME
+    roles_str = ", ".join(roles) if roles else persona
+
+    domains_section = _get_context_domains_section().strip()
+    domains_hint = (
+        f"\n\nThe curated knowledge base covers these domains; you may tailor "
+        f"suggestions toward them when relevant:\n{domains_section}"
+        if domains_section
+        else ""
+    )
+
+    topics_hint = ""
+    if recent_topics:
+        cleaned = [t.strip() for t in recent_topics if t and t.strip()][:5]
+        if cleaned:
+            topics_hint = (
+                "\n\nThe user's recent questions/topics (use to personalize, "
+                "do not repeat verbatim):\n- " + "\n- ".join(cleaned)
+            )
+
+    system = f"""You generate a short list of personalized starting prompts for a user who just opened {brand}, a unified hub for self-service, governance, and FinOps of Databricks resources.
+
+The user's role: {roles_str} (persona: {persona}).{domains_hint}{topics_hint}
+
+Produce {limit} suggestions that this specific user is most likely to want first. Make them:
+- Phrased in the user's own voice (first person), as a question or request they can click and send verbatim.
+- Concrete and answerable by this hub (exploring data, requesting access, costs, governance, approvals, getting started).
+- Tailored to the role and any recent topics. If the user looks new, include a gentle getting-started option.
+- Short (ideally under 12 words each). Each must have a 1-3 word category label.
+
+Return ONLY a JSON array, no prose, no markdown fences. Schema:
+[{{"label": "Short label", "prompt": "The clickable question."}}]"""
+
+    user = "Generate my starting suggestions now as a JSON array."
+
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
 

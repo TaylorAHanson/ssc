@@ -87,6 +87,20 @@ async def poll_genie(
     if hasattr(req, "state") and hasattr(req.state, "token"):
         obo_token = req.state.token
 
+    # Probe for streaming/progress support: log any progress notifications the
+    # Genie MCP server emits during the poll. If these never appear, Genie does
+    # not stream over MCP and we must keep relying on discrete polls.
+    async def _on_progress(
+        progress: float, total: Optional[float], message: Optional[str]
+    ) -> None:
+        logger.info(
+            "Genie poll progress [conv=%s]: progress=%s total=%s message=%s",
+            body.conversation_id,
+            progress,
+            total,
+            message,
+        )
+
     try:
         response = await call_genie_tool(
             tool_name="genie_poll_response",
@@ -100,6 +114,7 @@ async def poll_genie(
             },
             obo_token=obo_token,
             space_id=body.space_id or None,
+            progress_callback=_on_progress,
         )
     except GenieAuthUnavailableError as e:
         # No auth available at all (no OBO header, no SP fallback). 401
@@ -190,6 +205,61 @@ def _find_genie_deep_link_in_payload(payload: Dict[str, Any]) -> Optional[str]:
         if url:
             return url
     return None
+
+
+def _summarize_genie_payload(
+    response: Dict[str, Any], payload: Optional[Dict[str, Any]]
+) -> str:
+    """Compact, log-safe description of a Genie poll response shape.
+
+    Used to debug completion-detection gaps: it surfaces the raw status, the
+    payload's top-level keys, content length, and attachment shape without
+    dumping full (potentially large / sensitive) answer rows at INFO level.
+    """
+    content = response.get("content")
+    content_len = len(content) if isinstance(content, str) else 0
+    top_keys = sorted(k for k in payload.keys() if isinstance(k, str)) if isinstance(payload, dict) else []
+    raw_status = ""
+    nested_status = ""
+    attachments_summary = "none"
+    if isinstance(payload, dict):
+        raw_status = str(payload.get("status") or payload.get("state") or "")
+        # Look one level deeper — some MCP shapes nest the status under a
+        # ``message`` (or similar) object rather than at the top level.
+        for nest_key in ("message", "result", "data"):
+            nested = payload.get(nest_key)
+            if isinstance(nested, dict):
+                ns = nested.get("status") or nested.get("state")
+                if ns:
+                    nested_status = f"{nest_key}.status={ns}"
+                    break
+        atts = payload.get("attachments")
+        if isinstance(atts, list) and atts:
+            first = atts[0] if isinstance(atts[0], dict) else None
+            first_keys = sorted(k for k in first.keys() if isinstance(k, str)) if first else []
+            attachments_summary = f"{len(atts)} (first keys={first_keys})"
+    return (
+        f"raw_status={raw_status or '∅'} {nested_status} "
+        f"top_keys={top_keys} content_len={content_len} attachments={attachments_summary}"
+    ).strip()
+
+
+def _looks_like_answer(payload: Optional[Dict[str, Any]], response: Dict[str, Any]) -> bool:
+    """Heuristic: does this poll response appear to carry an actual answer?
+
+    Used only for logging — if a poll has answer-like content but we classified
+    it as still ``running``, that's the signature of a completion-detection gap
+    (Genie finished but its terminal status wasn't where we looked).
+    """
+    if isinstance(payload, dict):
+        atts = payload.get("attachments")
+        if isinstance(atts, list) and atts:
+            return True
+        for key in ("query", "query_result", "answer", "text", "result"):
+            if payload.get(key):
+                return True
+    content = response.get("content")
+    return isinstance(content, str) and len(content) > 200
 
 
 def _parse_genie_response(
@@ -317,5 +387,17 @@ def _parse_genie_response(
             attempt_after_ms=None,
         )
     # Default: still running. The UI uses attempt_after_ms to schedule
-    # the next poll.
+    # the next poll. Log the shape every poll so we can see, in a real
+    # environment, exactly what Genie returns while "running" — and flag the
+    # tell-tale case where an answer is present but we didn't recognize a
+    # terminal status (the likely cause of polls spinning until the UI cap).
+    summary = _summarize_genie_payload(response, payload)
+    if _looks_like_answer(payload, response):
+        logger.warning(
+            "Genie poll classified as RUNNING but the payload looks like a "
+            "completed answer — probable completion-detection gap. %s",
+            summary,
+        )
+    else:
+        logger.info("Genie poll still running: %s", summary)
     return GeniePollResponse(status="running", attempt_after_ms=3000)

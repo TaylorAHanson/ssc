@@ -1182,6 +1182,264 @@ export async function listTagChanges(): Promise<TagChange[]> {
   return response.json();
 }
 
+// ---------------------------------------------------------------------------
+// Context Catalog
+// ---------------------------------------------------------------------------
+
+export interface ContextDomain {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  parent_id: string | null;
+  domain_type: string;
+  primary_owner: string | null;
+  secondary_owner: string | null;
+  reviewers: string[];
+  categories: string[];
+  created_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  document_count?: number;
+}
+
+export interface ContextDocumentSummary {
+  id: string;
+  domain_id: string;
+  title: string;
+  doc_type: string;
+  source_filename: string | null;
+  source_url: string | null;
+  storage_path: string | null;
+  status: string;
+  tags: string[];
+  created_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  preview?: string;
+}
+
+export interface ContextDocument extends ContextDocumentSummary {
+  body_markdown: string | null;
+}
+
+export interface ContextDomainDetail extends ContextDomain {
+  documents: ContextDocumentSummary[];
+}
+
+export interface ContextDomainInput {
+  name: string;
+  description?: string;
+  parent_id?: string | null;
+  domain_type?: string;
+  primary_owner?: string;
+  secondary_owner?: string;
+  reviewers?: string[];
+  categories?: string[];
+}
+
+export interface ContextDocumentInput {
+  title: string;
+  body_markdown?: string;
+  doc_type?: string;
+  source_url?: string;
+  status?: string;
+  tags?: string[];
+}
+
+export interface ContextSearchResult {
+  document_id: string;
+  document_title: string;
+  doc_type: string;
+  source_filename: string | null;
+  source_url: string | null;
+  domain_id: string;
+  domain_name: string;
+  domain_slug: string;
+  chunk_index: number;
+  content: string;
+  score: number;
+}
+
+export async function listContextDomains(): Promise<ContextDomain[]> {
+  const response = await fetch(`${API_BASE_URL}/context/domains`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to list context domains: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getContextDomain(domainId: string): Promise<ContextDomainDetail> {
+  const response = await fetch(`${API_BASE_URL}/context/domains/${domainId}`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get context domain: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function createContextDomain(data: ContextDomainInput): Promise<ContextDomain> {
+  const response = await fetch(`${API_BASE_URL}/context/domains`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to create context domain: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function updateContextDomain(domainId: string, data: Partial<ContextDomainInput>): Promise<ContextDomain> {
+  const response = await fetch(`${API_BASE_URL}/context/domains/${domainId}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to update context domain: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function deleteContextDomain(domainId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/context/domains/${domainId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to delete context domain: ${response.status} ${errorText}`);
+  }
+}
+
+export async function getContextDocument(documentId: string): Promise<ContextDocument> {
+  const response = await fetch(`${API_BASE_URL}/context/documents/${documentId}`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get context document: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function createContextDocument(domainId: string, data: ContextDocumentInput): Promise<ContextDocument> {
+  const response = await fetch(`${API_BASE_URL}/context/domains/${domainId}/documents`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to create context document: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function uploadContextDocument(
+  domainId: string,
+  file: File,
+  title?: string,
+  status: string = 'published'
+): Promise<ContextDocument> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (title) formData.append('title', title);
+  formData.append('status', status);
+
+  const response = await fetch(`${API_BASE_URL}/context/domains/${domainId}/documents/upload`, {
+    method: 'POST',
+    headers: {
+      'X-Dev-Role-Override': getHeaders()['X-Dev-Role-Override'] || '',
+    },
+    body: formData,
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to upload context document: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function updateContextDocument(
+  documentId: string,
+  data: Partial<ContextDocumentInput> & { domain_id?: string }
+): Promise<ContextDocument> {
+  const response = await fetch(`${API_BASE_URL}/context/documents/${documentId}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to update context document: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function deleteContextDocument(documentId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/context/documents/${documentId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to delete context document: ${response.status} ${errorText}`);
+  }
+}
+
+export async function searchContextCatalog(
+  query: string,
+  domainSlug?: string,
+  limit?: number
+): Promise<{ query: string; results: ContextSearchResult[] }> {
+  const response = await fetch(`${API_BASE_URL}/context/search`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ query, domain_slug: domainSlug, limit }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to search context catalog: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+// --- Onboarding suggestions (pre-prompting) ---
+
+export interface AgentSuggestion {
+  label: string;
+  prompt: string;
+}
+
+export interface AgentSuggestionsResponse {
+  suggestions: AgentSuggestion[];
+  generated: boolean;
+}
+
+/**
+ * Fetch a short set of personalized starting prompts for the home page.
+ * `recentTopics` are lightweight personalization hints (e.g. the user's most
+ * recent chat topics). The backend caps the count and falls back to
+ * deterministic role-based prompts if the LLM is unavailable.
+ */
+export async function getAgentSuggestions(
+  recentTopics?: string[]
+): Promise<AgentSuggestionsResponse> {
+  const response = await fetch(`${API_BASE_URL}/agent/suggestions`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ recent_topics: recentTopics ?? null }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to fetch suggestions: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -1228,5 +1486,17 @@ export const api = {
   getTagDatasets,
   getDatasetTags,
   createTagChange,
-  listTagChanges
+  listTagChanges,
+  listContextDomains,
+  getContextDomain,
+  createContextDomain,
+  updateContextDomain,
+  deleteContextDomain,
+  getContextDocument,
+  createContextDocument,
+  uploadContextDocument,
+  updateContextDocument,
+  deleteContextDocument,
+  searchContextCatalog,
+  getAgentSuggestions
 };

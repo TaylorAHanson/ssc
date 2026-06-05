@@ -62,7 +62,17 @@ class Settings(BaseSettings):
     BRAND_COLOR_ALERT: str = _branding.get("alert_color", os.getenv("BRAND_COLOR_ALERT", "#98102A"))
     BRAND_COLOR_WARNING: str = _branding.get("warning_color", os.getenv("BRAND_COLOR_WARNING", "#FFAB00"))
     BRAND_COLOR_SUCCESS: str = _branding.get("success_color", os.getenv("BRAND_COLOR_SUCCESS", "#00A972"))
-    
+
+    # Context Catalog
+    # Curated knowledge base the agent retrieves from. Retrieval is lightweight
+    # keyword search over chunked document text (no vector DB).
+    CONTEXT_CATALOG_CHUNK_SIZE: int = int(os.getenv("CONTEXT_CATALOG_CHUNK_SIZE", "1200"))
+    CONTEXT_CATALOG_SEARCH_LIMIT: int = int(os.getenv("CONTEXT_CATALOG_SEARCH_LIMIT", "6"))
+    CONTEXT_CATALOG_MAX_UPLOAD_MB: int = int(os.getenv("CONTEXT_CATALOG_MAX_UPLOAD_MB", "20"))
+    # Optional UC Volume path for storing uploaded originals (docx/pdf/pptx).
+    # When empty, originals are not persisted (only the extracted text is kept).
+    CONTEXT_CATALOG_VOLUME_PATH: str = os.getenv("CONTEXT_CATALOG_VOLUME_PATH", "")
+
     # CORS (can be overridden in .env as JSON array or comma-separated)
     # Example in .env: CORS_ORIGINS=["http://localhost:5173","http://localhost:3000"]
     # Or: CORS_ORIGINS=http://localhost:5173,http://localhost:3000

@@ -16,7 +16,12 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, Optional, Tuple
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Optional, Tuple
+
+# Progress-notification callback shape used by the MCP SDK's ``call_tool``.
+# The server may emit zero or more of these mid-call (progress, total,
+# message); Genie's support is exactly what we're probing for here.
+ProgressCallback = Callable[[float, Optional[float], Optional[str]], Awaitable[None]]
 
 from app.core.config import settings
 
@@ -262,6 +267,7 @@ async def call_genie_tool(
     obo_token: Optional[str] = None,
     space_id: Optional[str] = None,
     host: Optional[str] = None,
+    progress_callback: Optional["ProgressCallback"] = None,
 ) -> Dict[str, Any]:
     """Invoke a single tool on the Databricks Genie MCP server.
 
@@ -322,7 +328,23 @@ async def call_genie_tool(
         list(arguments.keys()),
     )
     async with open_mcp_session(url=url, bearer_token=bearer_token) as session:
-        result = await session.call_tool(tool_name, arguments=arguments)
+        # ``progress_callback`` is supported by mcp>=1.x ``call_tool``. We pass
+        # it through so callers can observe any progress notifications Genie
+        # emits mid-call (our probe for whether Genie "streams"). Guard against
+        # older SDKs that don't accept the kwarg.
+        if progress_callback is not None:
+            try:
+                result = await session.call_tool(
+                    tool_name, arguments=arguments, progress_callback=progress_callback
+                )
+            except TypeError:
+                logger.warning(
+                    "Genie MCP: installed mcp SDK does not support progress_callback; "
+                    "falling back to a plain call_tool (no progress notifications)."
+                )
+                result = await session.call_tool(tool_name, arguments=arguments)
+        else:
+            result = await session.call_tool(tool_name, arguments=arguments)
 
     text_parts: list[str] = []
     structured: Optional[Dict[str, Any]] = None
@@ -334,8 +356,21 @@ async def call_genie_tool(
     if isinstance(structured_attr, dict):
         structured = structured_attr
 
+    content = "\n".join(t for t in text_parts if t).strip()
+
+    # Boundary-level visibility into what the MCP transport actually returned.
+    # This fires for both genie_ask and genie_poll_response and is the cheapest
+    # way to see the response shape in a customer environment.
+    logger.info(
+        "Genie MCP %s returned: is_error=%s content_len=%d structured_keys=%s",
+        tool_name,
+        bool(getattr(result, "isError", False)),
+        len(content),
+        sorted(structured.keys()) if isinstance(structured, dict) else "none",
+    )
+
     return {
-        "content": "\n".join(t for t in text_parts if t).strip(),
+        "content": content,
         "structured": structured,
         "is_error": bool(getattr(result, "isError", False)),
         "auth_source": source,
@@ -348,4 +383,5 @@ __all__ = [
     "call_genie_tool",
     "resolve_genie_bearer_token",
     "GenieAuthUnavailableError",
+    "ProgressCallback",
 ]
