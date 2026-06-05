@@ -55,7 +55,17 @@ async def search_context_catalog(query: str, domain_slug: Optional[str] = None) 
             "count": len(passages),
             "passages": passages,
             "note": (
-                "No matching context found. Answer from general knowledge or ask a clarifying question."
+                (
+                    "No curated context matched. Do NOT give up or just ask the user to "
+                    "rephrase. The user may be referring to DATA, not a document. Run a "
+                    "recovery ladder: (1) derive keywords from the query (e.g. "
+                    "'cancel-pushout data' -> 'cancel', 'pushout') and use get_table_list / "
+                    "get_schema_list / get_catalog_list (call get_target_workspaces first "
+                    "for a target_host) to surface matching assets; (2) offer to pull the "
+                    "actual data with ask_your_data (Genie) if their intent is analytical; "
+                    "(3) only then ask a focused clarifying question, made concrete with "
+                    "anything you found. Never fabricate internal policy."
+                )
                 if not passages
                 else "Cite the document_title(s) when you use these passages."
             ),
