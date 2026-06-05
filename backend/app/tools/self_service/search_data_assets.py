@@ -9,7 +9,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
+from sqlalchemy import String, cast, or_
 
 from app.tools.mcp import tool
 from app.db.session import get_db
@@ -54,7 +54,7 @@ class SearchDataAssetsInput(BaseModel):
             "Keywords or asset name to search the local data catalog for "
             "(e.g. 'cancel pushout', 'sales orders', 'customer retention'). "
             "Matched against the table name, fully-qualified name, description, "
-            "owner, catalog, and schema."
+            "owner, catalog, schema, domain, and tags."
         ),
     )
     asset_type: Optional[str] = Field(
@@ -84,9 +84,11 @@ class SearchDataAssetsInput(BaseModel):
         "have been synced into this app) by keyword. FAST — it scans the local "
         "database with no live Databricks calls, so prefer it as the FIRST step "
         "for data-discovery questions ('what data is there about X?', 'where is "
-        "the Y table?', 'do we have data on Z?'). Returns matching assets with "
-        "catalog/schema/table, type, owner, description, domain, tags, and "
-        "certification. Fall back to the live metadata tools (get_table_list / "
+        "the Y table?', 'do we have data on Z?'). Matches on name, "
+        "fully-qualified name, description, owner, catalog, schema, domain, and "
+        "tags, and returns catalog/schema/table, type, owner, description, "
+        "domain, tags, and certification. Fall back to the live metadata tools "
+        "(get_table_list / "
         "get_schema_list) only if this returns nothing, and use ask_your_data "
         "(Genie) when the user needs actual rows/analysis."
     ),
@@ -111,6 +113,10 @@ async def search_data_assets(
             DataAssetModel.owner,
             DataAssetModel.catalog,
             DataAssetModel.schema,
+            DataAssetModel.domain,
+            # Tags are JSON (SQLite) / JSONB (Postgres); cast to text so a plain
+            # ILIKE works the same on both — matches the tag NAMES we store.
+            cast(DataAssetModel.tags, String),
         ]
 
         q = db.query(DataAssetModel)
@@ -141,6 +147,7 @@ async def search_data_assets(
         def _score(asset: DataAssetModel) -> float:
             if not tokens:
                 return 1.0
+            tag_text = " ".join(asset.tags) if isinstance(asset.tags, list) else ""
             haystack = " ".join(
                 v.lower()
                 for v in (
@@ -150,6 +157,8 @@ async def search_data_assets(
                     asset.owner,
                     asset.catalog,
                     asset.schema,
+                    asset.domain,
+                    tag_text,
                 )
                 if v
             )
