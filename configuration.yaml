@@ -100,6 +100,10 @@ tools:
   get_schema_list: true
   get_table_list: true
   get_volume_list: true
+  # Fast keyword search over the locally-cached data catalog (synced UC
+  # tables/views). Preferred first step for data-discovery questions; gated by
+  # the data_discovery feature flag.
+  search_data_assets: true
   get_credential_list: true
   check_workspace_path: true
   get_target_workspaces: true
