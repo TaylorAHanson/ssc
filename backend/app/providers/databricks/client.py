@@ -89,7 +89,7 @@ class DatabricksProvider(BaseProvider):
 
     
     @retry_on_retryable(max_attempts=3)
-    async def execute_sql(self, query: str, warehouse: Optional[str] = None, timeout_seconds: int = 120) -> Dict[str, Any]:
+    async def execute_sql(self, query: str, warehouse: Optional[str] = None, timeout_seconds: int = 120, obo_token: Optional[str] = None) -> Dict[str, Any]:
         """
         Execute SQL query using Databricks SDK with async polling.
         
@@ -97,11 +97,20 @@ class DatabricksProvider(BaseProvider):
             query: SQL query to execute
             warehouse: SQL warehouse ID (optional, falls back to default if configured)
             timeout_seconds: Max seconds to wait for completion (default 120)
+            obo_token: Optional user On-Behalf-Of access token. When provided, the
+                statement runs as the USER (their Unity Catalog / system-table
+                permissions apply) instead of the app's service principal. Use
+                this for read tools that should reflect the caller's own access
+                (e.g. querying system.* tables the SP can't read).
             
         Returns:
             Dictionary with 'rows' and 'schema'
         """
         try:
+            # Run as the user (OBO) when a token is supplied, else the default
+            # service-principal client.
+            client = self.get_workspace_client(token=obo_token) if obo_token else self.client
+
             # use the statement execution API
             warehouse_id = warehouse or self.get_config("warehouse_id")
             
@@ -110,7 +119,7 @@ class DatabricksProvider(BaseProvider):
 
             # Execute the statement in ASYNC mode (wait_timeout="0s")
             response = await asyncio.to_thread(
-                self.client.statement_execution.execute_statement,
+                client.statement_execution.execute_statement,
                 statement=query,
                 warehouse_id=warehouse_id,
                 wait_timeout="0s" 
@@ -127,13 +136,13 @@ class DatabricksProvider(BaseProvider):
                 if (time.time() - start_time) > timeout_seconds:
                     # Cancel query if timed out
                     try:
-                        await asyncio.to_thread(self.client.statement_execution.cancel_execution, statement_id=statement_id)
+                        await asyncio.to_thread(client.statement_execution.cancel_execution, statement_id=statement_id)
                     except:
                         pass
                     raise RetryableError(f"SQL execution timed out after {timeout_seconds}s")
                 
                 # Get status
-                status_resp = await asyncio.to_thread(self.client.statement_execution.get_statement, statement_id=statement_id)
+                status_resp = await asyncio.to_thread(client.statement_execution.get_statement, statement_id=statement_id)
                 state = status_resp.status.state.value # Enum to string
                 
                 if state == "SUCCEEDED":

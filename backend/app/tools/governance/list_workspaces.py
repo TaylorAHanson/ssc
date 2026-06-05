@@ -15,7 +15,7 @@ class ListWorkspacesInput(BaseModel):
     description="Lists all workspaces in the Databricks account. Returns workspace IDs, names, and regions. Useful for determining which workspaces are available in the environment.",
     args_schema=ListWorkspacesInput
 )
-async def list_workspaces(status: Optional[str] = None) -> Dict[str, Any]:
+async def list_workspaces(status: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     try:
         provider = DatabricksProvider(
             host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
@@ -42,7 +42,10 @@ async def list_workspaces(status: Optional[str] = None) -> Dict[str, Any]:
             ORDER BY workspace_name ASC
         """
         
-        result = await provider.execute_sql(query, timeout_seconds=120)
+        # Run as the user (OBO) so their own access to system.access.* applies —
+        # the app's service principal typically can't read system tables.
+        obo_token = kwargs.get("_obo_token")
+        result = await provider.execute_sql(query, timeout_seconds=120, obo_token=obo_token)
         
         return {
             "workspaces": result.get("rows", []),

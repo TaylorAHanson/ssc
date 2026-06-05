@@ -128,18 +128,6 @@ export function Home() {
     }, [location.state, location.pathname, navigate]);
 
     const handleRoute = (route: ChatRouteInfo) => {
-        // Persist any prefill data the agent computed so the form page
-        // can pick it up out of localStorage on mount.
-        if (route.prefill && Object.keys(route.prefill).length > 0) {
-            try {
-                window.localStorage.setItem(
-                    `form_prefill_${route.path}`,
-                    JSON.stringify(route.prefill),
-                );
-            } catch {
-                /* swallow */
-            }
-        }
         navigate(route.path);
     };
 
