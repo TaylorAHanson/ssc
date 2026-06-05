@@ -18,6 +18,14 @@ export interface PendingPollState {
     status: 'idle' | 'running' | 'complete' | 'failed' | 'cancelled' | 'timeout';
     /** Resolved result (when status === 'complete'). */
     result: Record<string, unknown> | null;
+    /**
+     * Latest in-progress snapshot while running (the enriched Genie payload).
+     * Genie re-sends the full answer each poll and it can change
+     * non-additively, so consumers must RENDER BY REPLACING this each tick.
+     */
+    partialResult: Record<string, unknown> | null;
+    /** Convenience: the answer text pulled from `partialResult` (or result). */
+    partialAnswer: string | null;
     /** Failure description (status === 'failed' | 'timeout'). */
     error: string | null;
     /** Wall-clock elapsed milliseconds since the poll started. */
@@ -44,6 +52,53 @@ export interface UsePendingPollOptions {
 const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_INTERVAL_MS = 3_000;
 
+// Genie's terminal status can lag well past when the answer is actually ready
+// (the native Databricks UI shows it streaming and "done" long before our poll
+// sees a COMPLETED status). To avoid spinning until the hard timeout, we treat
+// a non-empty answer that hasn't changed across this many consecutive polls as
+// done. At the default 3s cadence that's ~15s of a stable answer — long enough
+// that we don't grab a pre-final snapshot during normal streaming, short enough
+// to rescue the customer-env case where the status flip never arrives in time.
+const STABLE_POLLS_TO_COMPLETE = 5;
+
+/**
+ * Pull the human-readable text out of a Genie payload snapshot.
+ *
+ * Genie keeps `final_answer` empty until the very end and streams its work as
+ * `progress_steps` (which the backend normalizes into `_stream_narration`). So
+ * during streaming we surface the narration; once the real answer lands we
+ * prefer that.
+ */
+function extractGenieAnswer(
+    obj: Record<string, unknown> | null | undefined,
+): string | null {
+    if (!obj || typeof obj !== 'object') return null;
+    const fa = obj.final_answer;
+    if (typeof fa === 'string' && fa.trim()) return fa;
+    const narration = obj._stream_narration;
+    if (typeof narration === 'string' && narration.trim()) return narration;
+    const txt = obj.text;
+    if (typeof txt === 'string' && txt.trim()) return txt;
+    return null;
+}
+
+/**
+ * The *real* answer only — used as the completion signal. Unlike
+ * `extractGenieAnswer` this ignores the streaming narration, so early
+ * completion never fires while `final_answer` is still empty (which would
+ * settle the turn with narration instead of the actual answer).
+ */
+function extractFinalAnswer(
+    obj: Record<string, unknown> | null | undefined,
+): string | null {
+    if (!obj || typeof obj !== 'object') return null;
+    const fa = obj.final_answer;
+    if (typeof fa === 'string' && fa.trim()) return fa;
+    const txt = obj.text;
+    if (typeof txt === 'string' && txt.trim()) return txt;
+    return null;
+}
+
 /**
  * Watch a `pending_poll` event and drain it until completion.
  *
@@ -60,6 +115,8 @@ export function usePendingPoll(
     const [state, setState] = useState<PendingPollState>({
         status: 'idle',
         result: null,
+        partialResult: null,
+        partialAnswer: null,
         error: null,
         elapsedMs: 0,
         cancel: () => {},
@@ -85,6 +142,8 @@ export function usePendingPoll(
             const failureState: PendingPollState = {
                 status: 'failed',
                 result: null,
+                partialResult: null,
+                partialAnswer: null,
                 error: `Unknown pending_poll kind: ${pollEvent.kind}`,
                 elapsedMs: 0,
                 cancel: () => {},
@@ -99,6 +158,9 @@ export function usePendingPoll(
         let cancelled = false;
         let elapsedTimer: ReturnType<typeof setInterval> | null = null;
         let nextPollTimeout: ReturnType<typeof setTimeout> | null = null;
+        // Stability tracking for early completion (see STABLE_POLLS_TO_COMPLETE).
+        let lastAnswer: string | null = null;
+        let stableCount = 0;
 
         const cancel = () => {
             if (cancelled) return;
@@ -120,6 +182,8 @@ export function usePendingPoll(
         setState({
             status: 'running',
             result: null,
+            partialResult: null,
+            partialAnswer: null,
             error: null,
             elapsedMs: 0,
             cancel,
@@ -133,13 +197,16 @@ export function usePendingPoll(
             setState((prev) => ({ ...prev, elapsedMs: Date.now() - startedAt }));
         }, 1000);
 
-        const settle = (next: PendingPollState) => {
+        const settle = (patch: Partial<PendingPollState>) => {
             if (cancelled) return;
             cancelled = true;
             if (elapsedTimer) clearInterval(elapsedTimer);
             if (nextPollTimeout) clearTimeout(nextPollTimeout);
-            setState(next);
-            onSettledRef.current?.(next, pollEvent);
+            setState((prev) => {
+                const next: PendingPollState = { ...prev, ...patch, cancel: () => {} };
+                onSettledRef.current?.(next, pollEvent);
+                return next;
+            });
         };
 
         const tick = async () => {
@@ -190,12 +257,14 @@ export function usePendingPoll(
             if (cancelled) return;
 
             if (response.status === 'complete') {
+                const result = response.result ?? null;
                 settle({
                     status: 'complete',
-                    result: response.result ?? null,
+                    result,
+                    partialResult: result,
+                    partialAnswer: extractGenieAnswer(result),
                     error: null,
                     elapsedMs: Date.now() - startedAt,
-                    cancel: () => {},
                 });
                 return;
             }
@@ -205,12 +274,50 @@ export function usePendingPoll(
                     result: null,
                     error: response.error ?? 'Genie reported a failure.',
                     elapsedMs: Date.now() - startedAt,
-                    cancel: () => {},
                 });
                 return;
             }
 
-            // Still running. Schedule the next poll.
+            // Still running. Surface the streamed snapshot live so the UI can
+            // render the answer as it forms (REPLACING each poll — Genie's
+            // answer can change non-additively, so we never append deltas).
+            const partial = response.partial ?? null;
+            const answer = extractGenieAnswer(partial);
+            setState((prev) => ({
+                ...prev,
+                partialResult: partial,
+                partialAnswer: answer ?? prev.partialAnswer,
+                elapsedMs: Date.now() - startedAt,
+            }));
+
+            // Early completion: only once the REAL answer (`final_answer`) is
+            // present and has stopped changing for several polls. We never
+            // early-complete on the streaming narration, since that would
+            // settle the turn before the actual answer exists. This rescues the
+            // customer-env case where Genie's terminal status lags long after
+            // the answer is ready.
+            const finalAnswer = extractFinalAnswer(partial);
+            if (finalAnswer) {
+                if (finalAnswer === lastAnswer) {
+                    stableCount += 1;
+                } else {
+                    lastAnswer = finalAnswer;
+                    stableCount = 0;
+                }
+                if (stableCount >= STABLE_POLLS_TO_COMPLETE) {
+                    settle({
+                        status: 'complete',
+                        result: partial,
+                        partialResult: partial,
+                        partialAnswer: finalAnswer,
+                        error: null,
+                        elapsedMs: Date.now() - startedAt,
+                    });
+                    return;
+                }
+            }
+
+            // Schedule the next poll.
             const wait = response.attempt_after_ms ?? intervalMs;
             nextPollTimeout = setTimeout(() => {
                 void tick();

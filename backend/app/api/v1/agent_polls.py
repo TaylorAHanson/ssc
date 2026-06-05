@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, Literal, Optional
+import re
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -62,6 +63,13 @@ class GeniePollResponse(BaseModel):
 
     status: PollStatus
     result: Optional[Dict[str, Any]] = None
+    # In-progress snapshot (same enriched shape as ``result``) returned while
+    # ``status == "running"``. Genie streams its answer by re-sending the full
+    # ``final_answer`` every poll — the value can grow *and shrink/change*, so
+    # the UI must render it by REPLACING the previous snapshot, never appending.
+    # Carrying the full enriched payload (not just the text) also lets the UI
+    # early-complete with it if the terminal status lags.
+    partial: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     # Hint to the UI for the next poll. The UI is free to ignore it
     # and use its own backoff schedule, but this lets the server
@@ -207,6 +215,95 @@ def _find_genie_deep_link_in_payload(payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+_STEP_TEXT_KEYS = (
+    "content",
+    "text",
+    "description",
+    "message",
+    "markdown",
+    "body",
+    "summary",
+    "detail",
+    "details",
+    "title",
+    "name",
+    "label",
+    "step",
+)
+
+
+def _extract_step_text(step: Any) -> str:
+    """Best-effort pull of the human-readable text from one progress step.
+
+    Genie's progress-step schema isn't stable across versions, so we try a set
+    of known text keys first, then fall back to the longest string value in the
+    dict. Returns an empty string when nothing usable is found.
+    """
+    if isinstance(step, str):
+        return step.strip()
+    if not isinstance(step, dict):
+        return ""
+    for key in _STEP_TEXT_KEYS:
+        val = step.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    # Fallback: the longest string value anywhere in the dict.
+    longest = ""
+    for val in step.values():
+        if isinstance(val, str) and len(val.strip()) > len(longest):
+            longest = val.strip()
+    return longest
+
+
+# Genie embeds raw query-result tables between HTML comment markers like
+# ``<!-- begin:query_abc123 -->...<!-- end:query_abc123 -->``. They're huge and
+# unreadable in a live progress feed, so we strip them out entirely.
+_QUERY_BLOCK_RE = re.compile(r"<!--\s*begin:.*?-->.*?<!--\s*end:.*?-->", re.DOTALL)
+# How many of the most recent steps to surface — a rolling window keeps the
+# progress feed compact and "live" instead of an ever-growing wall of text.
+_NARRATION_WINDOW = 6
+# Cap any single step (e.g. a long SQL statement) so it reads as a hint, not a
+# code dump.
+_STEP_MAX_LEN = 160
+
+
+def _clean_step_text(text: str) -> str:
+    """Turn a raw progress step into a short, readable one-liner.
+
+    Strips embedded query-result tables, collapses whitespace, and truncates
+    long statements (SQL) so the live feed shows intent ("Running SQL…",
+    "Query returned N rows") rather than raw data dumps.
+    """
+    text = _QUERY_BLOCK_RE.sub("", text)
+    # Drop any leftover markdown table rows (lines starting with a pipe).
+    lines = [ln for ln in text.splitlines() if not ln.strip().startswith("|")]
+    cleaned = " ".join(" ".join(lines).split())
+    # Trim a trailing "label:" left behind after stripping a result table.
+    cleaned = cleaned.rstrip(": ").strip()
+    if len(cleaned) > _STEP_MAX_LEN:
+        cleaned = cleaned[:_STEP_MAX_LEN].rstrip() + "…"
+    return cleaned
+
+
+def _build_stream_narration(steps: Any) -> str:
+    """Assemble a compact, readable narration from Genie's ``progress_steps``.
+
+    Shows the most recent steps (a rolling window) with raw result tables and
+    overly long SQL stripped/truncated. The list can revise/shrink between
+    polls, so the UI renders this by replacing the snapshot each tick.
+    """
+    if not isinstance(steps, list) or not steps:
+        return ""
+    lines: List[str] = []
+    for step in steps:
+        text = _clean_step_text(_extract_step_text(step))
+        if text:
+            lines.append(text)
+    if not lines:
+        return ""
+    return "\n".join(lines[-_NARRATION_WINDOW:]).strip()
+
+
 def _summarize_genie_payload(
     response: Dict[str, Any], payload: Optional[Dict[str, Any]]
 ) -> str:
@@ -222,6 +319,27 @@ def _summarize_genie_payload(
     raw_status = ""
     nested_status = ""
     attachments_summary = "none"
+    # Which field actually carries the streamed answer? Genie may stream
+    # narration via ``progress_steps`` while leaving ``final_answer`` empty
+    # until the end — this surfaces that so we can stream the right field.
+    stream_shape = ""
+    if isinstance(payload, dict):
+        fa = payload.get("final_answer")
+        fa_len = len(fa) if isinstance(fa, str) else 0
+        steps = payload.get("progress_steps")
+        steps_len = len(steps) if isinstance(steps, list) else 0
+        last_step = ""
+        if isinstance(steps, list) and steps:
+            last_step = _clean_step_text(_extract_step_text(steps[-1]))[:80]
+        narration = payload.get("narration_instruction")
+        narration_len = len(narration) if isinstance(narration, str) else 0
+        items = payload.get("query_items")
+        items_len = len(items) if isinstance(items, list) else 0
+        stream_shape = (
+            f"final_answer_len={fa_len} progress_steps={steps_len} "
+            f"query_items={items_len} narration_len={narration_len} "
+            f"last_step={last_step!r}"
+        )
     if isinstance(payload, dict):
         raw_status = str(payload.get("status") or payload.get("state") or "")
         # Look one level deeper — some MCP shapes nest the status under a
@@ -240,26 +358,9 @@ def _summarize_genie_payload(
             attachments_summary = f"{len(atts)} (first keys={first_keys})"
     return (
         f"raw_status={raw_status or '∅'} {nested_status} "
-        f"top_keys={top_keys} content_len={content_len} attachments={attachments_summary}"
+        f"top_keys={top_keys} content_len={content_len} attachments={attachments_summary} "
+        f"{stream_shape}"
     ).strip()
-
-
-def _looks_like_answer(payload: Optional[Dict[str, Any]], response: Dict[str, Any]) -> bool:
-    """Heuristic: does this poll response appear to carry an actual answer?
-
-    Used only for logging — if a poll has answer-like content but we classified
-    it as still ``running``, that's the signature of a completion-detection gap
-    (Genie finished but its terminal status wasn't where we looked).
-    """
-    if isinstance(payload, dict):
-        atts = payload.get("attachments")
-        if isinstance(atts, list) and atts:
-            return True
-        for key in ("query", "query_result", "answer", "text", "result"):
-            if payload.get(key):
-                return True
-    content = response.get("content")
-    return isinstance(content, str) and len(content) > 200
 
 
 def _parse_genie_response(
@@ -298,76 +399,8 @@ def _parse_genie_response(
         raw_status = str(payload.get("status") or payload.get("state") or "").upper()
 
     if raw_status in ("COMPLETED", "SUCCESS", "DONE"):
-        # Best-effort enrichment. Keys are namespaced with a single
-        # underscore prefix so they don't clash with Genie's own
-        # response fields if the upstream schema gains the same name.
-        result: Dict[str, Any] = dict(payload) if payload else {"text": response.get("content")}
-        conversation_id = (
-            result.get("conversation_id")
-            or result.get("conversationId")
-            or body.conversation_id
-        )
-        if conversation_id and "conversation_id" not in result:
-            result["conversation_id"] = conversation_id
-        # Surface a deep link only when Genie itself supplied one AND
-        # the call ran under the user's own identity. When we fall
-        # back to the service principal in local dev, the conversation
-        # is owned by the SP — clicking the link would land the user
-        # on Databricks One's "Conversation not found" page because
-        # their personal Genie chat history doesn't include SP-owned
-        # threads. The link works fine in deployed environments where
-        # OBO is mandatory.
-        deep_link: Optional[str] = None
-        auth_source = response.get("auth_source")
-        if isinstance(result, dict) and auth_source == "obo":
-            deep_link = _find_genie_deep_link_in_payload(result)
-        if deep_link:
-            result["_deep_link"] = deep_link
-        # Always echo the auth mode so the UI can render a small
-        # local-dev hint instead of leaving the panel feeling broken.
-        if auth_source:
-            result.setdefault("_auth_source", auth_source)
-        # Echo the space scope back so the UI can label cards
-        # appropriately (and disambiguate when one chat session has
-        # mixed general + space-scoped Genie calls).
-        if body.space_id:
-            result.setdefault("_space_id", body.space_id)
-        # Visibility: log the top-level keys, the actual deep_link
-        # value (truncated), and a sample of attachment keys so we can
-        # see what Genie returned without spamming the log with full
-        # payloads. Use DEBUG for the full dump.
-        try:
-            top_keys = sorted(k for k in result.keys() if isinstance(k, str))
-            attachment_summary: Optional[str] = None
-            atts = result.get("attachments")
-            if isinstance(atts, list) and atts:
-                first = atts[0] if isinstance(atts[0], dict) else None
-                if first is not None:
-                    attachment_summary = (
-                        f"{len(atts)} attachment(s); first keys="
-                        f"{sorted(k for k in first.keys() if isinstance(k, str))}"
-                    )
-            # Snapshot whatever value(s) Genie put in URL-shaped fields
-            # so we can debug "deep_link_found=false but a key is
-            # there" cases. Truncate to 200 chars to be safe.
-            url_field_snapshot: dict[str, str] = {}
-            for k in _URL_FIELD_NAMES:
-                v = result.get(k)
-                if v is not None:
-                    s = repr(v)
-                    url_field_snapshot[k] = s[:200] + ("…" if len(s) > 200 else "")
-            logger.info(
-                "Genie poll complete: auth=%s top_keys=%s attachments=%s "
-                "url_fields=%s deep_link_found=%s",
-                auth_source or "unknown",
-                top_keys,
-                attachment_summary or "none",
-                url_field_snapshot or "none",
-                bool(deep_link),
-            )
-            logger.debug("Genie poll full payload: %s", json.dumps(result, default=str))
-        except Exception:  # noqa: BLE001 — logging must never break the response
-            pass
+        result = _enrich_result(payload, response, body)
+        _log_terminal_poll(result, response, terminal=True)
         return GeniePollResponse(
             status="complete",
             result=result,
@@ -386,18 +419,93 @@ def _parse_genie_response(
             error=err or response.get("content") or "Genie query failed.",
             attempt_after_ms=None,
         )
-    # Default: still running. The UI uses attempt_after_ms to schedule
-    # the next poll. Log the shape every poll so we can see, in a real
-    # environment, exactly what Genie returns while "running" — and flag the
-    # tell-tale case where an answer is present but we didn't recognize a
-    # terminal status (the likely cause of polls spinning until the UI cap).
-    summary = _summarize_genie_payload(response, payload)
-    if _looks_like_answer(payload, response):
-        logger.warning(
-            "Genie poll classified as RUNNING but the payload looks like a "
-            "completed answer — probable completion-detection gap. %s",
-            summary,
+
+    # Still running. Genie streams the answer by re-sending the full
+    # ``final_answer`` snapshot every poll while ``status`` stays
+    # ``in_progress`` (the terminal flip can lag well past when the answer is
+    # actually ready). We surface that snapshot as ``partial`` so the UI can
+    # render it live (replacing, since it can change non-additively) and, if the
+    # terminal status lags, early-complete with it. This is normal behavior —
+    # not an error — so we log it at INFO/DEBUG.
+    partial = _enrich_result(payload, response, body) if isinstance(payload, dict) else None
+    logger.info(
+        "Genie poll still running: %s", _summarize_genie_payload(response, payload)
+    )
+    return GeniePollResponse(status="running", partial=partial, attempt_after_ms=3000)
+
+
+def _enrich_result(
+    payload: Optional[Dict[str, Any]],
+    response: Dict[str, Any],
+    body: GeniePollRequest,
+) -> Dict[str, Any]:
+    """Build the enriched result/partial dict from a Genie poll payload.
+
+    Shared by the terminal ``complete`` branch and the in-progress ``partial``
+    branch so a streamed snapshot and the final answer have identical shape
+    (conversation id, deep link, auth/space hints). Underscore-prefixed keys are
+    ours and won't clash with Genie's own fields.
+    """
+    result: Dict[str, Any] = dict(payload) if payload else {"text": response.get("content")}
+    conversation_id = (
+        result.get("conversation_id")
+        or result.get("conversationId")
+        or body.conversation_id
+    )
+    if conversation_id and "conversation_id" not in result:
+        result["conversation_id"] = conversation_id
+    # Genie streams its work as ``progress_steps`` while ``final_answer`` stays
+    # empty until the very end. Surface a normalized narration string the UI can
+    # render live so the user sees progress instead of a static spinner. (Once
+    # ``final_answer`` lands at completion the UI prefers that.)
+    narration = _build_stream_narration(result.get("progress_steps"))
+    if narration:
+        result["_stream_narration"] = narration
+    # Surface a deep link only when Genie supplied one AND the call ran under
+    # the user's own identity. Under the local-dev SP fallback the conversation
+    # is SP-owned, so the link would 404 in the user's Databricks One history.
+    deep_link: Optional[str] = None
+    auth_source = response.get("auth_source")
+    if auth_source == "obo":
+        deep_link = _find_genie_deep_link_in_payload(result)
+    if deep_link:
+        result["_deep_link"] = deep_link
+    if auth_source:
+        result.setdefault("_auth_source", auth_source)
+    if body.space_id:
+        result.setdefault("_space_id", body.space_id)
+    return result
+
+
+def _log_terminal_poll(
+    result: Dict[str, Any], response: Dict[str, Any], terminal: bool
+) -> None:
+    """Log a compact summary of a completed Genie poll (keys, deep link, etc.)."""
+    try:
+        auth_source = response.get("auth_source")
+        top_keys = sorted(k for k in result.keys() if isinstance(k, str))
+        atts = result.get("attachments")
+        attachment_summary = "none"
+        if isinstance(atts, list) and atts and isinstance(atts[0], dict):
+            attachment_summary = (
+                f"{len(atts)} attachment(s); first keys="
+                f"{sorted(k for k in atts[0].keys() if isinstance(k, str))}"
+            )
+        url_field_snapshot: dict[str, str] = {}
+        for k in _URL_FIELD_NAMES:
+            v = result.get(k)
+            if v is not None:
+                s = repr(v)
+                url_field_snapshot[k] = s[:200] + ("…" if len(s) > 200 else "")
+        logger.info(
+            "Genie poll complete: auth=%s top_keys=%s attachments=%s "
+            "url_fields=%s deep_link_found=%s",
+            auth_source or "unknown",
+            top_keys,
+            attachment_summary,
+            url_field_snapshot or "none",
+            "_deep_link" in result,
         )
-    else:
-        logger.info("Genie poll still running: %s", summary)
-    return GeniePollResponse(status="running", attempt_after_ms=3000)
+        logger.debug("Genie poll full payload: %s", json.dumps(result, default=str))
+    except Exception:  # noqa: BLE001 — logging must never break the response
+        pass

@@ -1006,6 +1006,29 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
                         {renderMessages(messages, pollElapsedLabel, pendingPoll?.tool_call_id)}
 
+                        {/* Live Genie progress as it works. Genie keeps its
+                            final answer empty until the end and streams its
+                            working steps instead, so we show a compact, muted
+                            "what it's doing now" feed (replaced each poll — the
+                            step list revises non-additively). It's superseded by
+                            the real answer once the poll settles. */}
+                        {pollState.status === 'running' && pollState.partialAnswer && (
+                            <div className="flex justify-start animate-in fade-in duration-200">
+                                <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-gray-50/70 border border-gray-200/50">
+                                    <div className="flex items-center gap-1.5 mb-1.5 text-[11px] font-medium text-gray-500">
+                                        <span className="relative flex h-1.5 w-1.5">
+                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                                            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500" />
+                                        </span>
+                                        Genie is working…
+                                    </div>
+                                    <div className="text-xs leading-relaxed text-gray-500 whitespace-pre-line">
+                                        {pollState.partialAnswer}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {hasReasoning && (
                             <div className="self-start">
                                 <button

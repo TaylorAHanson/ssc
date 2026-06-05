@@ -293,6 +293,10 @@ export interface GeniePollRequest {
 export interface GeniePollResponse {
     status: GeniePollStatus;
     result?: Record<string, unknown> | null;
+    // In-progress enriched snapshot (same shape as `result`) sent while
+    // `status === 'running'`. Genie re-sends the full answer each poll and it
+    // can change non-additively, so render it by REPLACING, not appending.
+    partial?: Record<string, unknown> | null;
     error?: string | null;
     attempt_after_ms?: number | null;
 }
