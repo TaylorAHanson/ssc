@@ -214,6 +214,19 @@ body {
 }
 .agent-prose code {
   font-size: 0.875em;
+  font-weight: 500;
+  background-color: rgb(243 244 246);
+  padding: 0.1em 0.35em;
+  border-radius: 0.25rem;
+}
+/* The typography plugin decorates inline <code> with literal backtick
+ * characters via ::before/::after. Genie/agent markdown already uses
+ * backticks for code spans, so the plugin's pseudo-elements render a
+ * second visible pair (`like_this`). Strip them — the background +
+ * monospace styling above already signals "code". */
+.agent-prose code::before,
+.agent-prose code::after {
+  content: none;
 }
 .agent-prose blockquote {
   margin-top: 0.5rem;

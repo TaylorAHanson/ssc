@@ -63,6 +63,11 @@ features:
   # personalized, clickable starting prompts (role + recent-activity hints).
   # One cached LLM call per session with a deterministic role-based fallback.
   onboarding_suggestions: true
+  # Web lookup: lets the agent search & read Databricks documentation (and any
+  # additional approved domains) to answer product/how-to questions with
+  # citations. Keyless by default (sitemap-backed discovery). Requires outbound
+  # HTTPS to the approved domains (see the web_search block below).
+  web_search: true
 
 ui:
   tabs:
@@ -128,6 +133,10 @@ tools:
   list_context_domains: true
   search_context_catalog: true
   get_context_document: true
+  # Web lookup tools (gated by the web_search feature flag). search_databricks_docs
+  # finds relevant doc pages; fetch_doc_page reads an approved page's text.
+  search_databricks_docs: true
+  fetch_doc_page: true
   # Databricks Genie (the general-purpose data chat in Databricks One)
   # via Managed MCP. Slow tool (30-120s per question); safeguarded by
   # the `ask_your_data` feature flag and an OBO-only auth path. By
@@ -172,3 +181,30 @@ workflows:
 
 notifications:
   governance_email_group: "data-governance@example.com"
+
+# Web lookup configuration (used by the search_databricks_docs / fetch_doc_page
+# tools when the `web_search` feature flag is on).
+web_search:
+  # Domains the agent is allowed to fetch pages from. Suffix-matched, so
+  # "databricks.com" also permits "docs.databricks.com". `docs.databricks.com`
+  # is always allowed even if this list is empty. Add approved sites here as
+  # you expand scope (e.g. an internal Confluence base host).
+  allowed_domains:
+    - docs.databricks.com
+  # Sitemaps used for keyless discovery in search_databricks_docs. Each must be
+  # on an allowed domain. The default covers the AWS English docs.
+  sitemaps:
+    - "https://docs.databricks.com/aws/en/sitemap.xml"
+  # OPTIONAL: Algolia DocSearch public (search-only) credentials. When all three
+  # are set, search_databricks_docs uses Algolia full-text search for higher
+  # recall; otherwise it falls back to sitemap keyword discovery. These are the
+  # public, safe-to-expose keys the docs site itself uses (find them in the
+  # browser devtools Network tab on a docs search request).
+  algolia:
+    app_id: ""
+    api_key: ""
+    index_name: ""
+  # Result/fetch guardrails.
+  max_results: 8 # Max search hits returned
+  fetch_timeout_seconds: 15 # Per-request HTTP timeout
+  max_fetch_chars: 20000 # Cap on extracted page text handed to the model

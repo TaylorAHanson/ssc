@@ -30,6 +30,7 @@ def load_config_yaml():
 _yaml_config = load_config_yaml()
 _branding = _yaml_config.get("branding", {})
 _notifications = _yaml_config.get("notifications", {})
+_web_search = _yaml_config.get("web_search", {}) or {}
 
 class Settings(BaseSettings):
     """
@@ -505,6 +506,51 @@ class Settings(BaseSettings):
         
         return ""
     
+    # ------------------------------------------------------------------
+    # Web lookup (search_databricks_docs / fetch_doc_page)
+    # ------------------------------------------------------------------
+    # docs.databricks.com is always permitted so the docs tools work even
+    # if an operator leaves `allowed_domains` empty.
+    WEB_SEARCH_DEFAULT_DOMAIN: str = "docs.databricks.com"
+
+    def web_search_config(self) -> dict:
+        """Normalized web-lookup config from configuration.yaml.
+
+        Returns a dict with always-sane defaults so callers don't have to
+        guard against missing keys. ``allowed_domains`` always includes the
+        Databricks docs host.
+        """
+        cfg = _web_search or {}
+        domains = [
+            str(d).strip().lower()
+            for d in (cfg.get("allowed_domains") or [])
+            if str(d).strip()
+        ]
+        if self.WEB_SEARCH_DEFAULT_DOMAIN not in domains:
+            domains.append(self.WEB_SEARCH_DEFAULT_DOMAIN)
+
+        sitemaps = [
+            str(s).strip()
+            for s in (cfg.get("sitemaps") or [])
+            if str(s).strip()
+        ]
+        if not sitemaps:
+            sitemaps = [f"https://{self.WEB_SEARCH_DEFAULT_DOMAIN}/aws/en/sitemap.xml"]
+
+        algolia = cfg.get("algolia") or {}
+        return {
+            "allowed_domains": domains,
+            "sitemaps": sitemaps,
+            "algolia": {
+                "app_id": str(algolia.get("app_id", "") or "").strip(),
+                "api_key": str(algolia.get("api_key", "") or "").strip(),
+                "index_name": str(algolia.get("index_name", "") or "").strip(),
+            },
+            "max_results": int(cfg.get("max_results", 8) or 8),
+            "fetch_timeout_seconds": float(cfg.get("fetch_timeout_seconds", 15) or 15),
+            "max_fetch_chars": int(cfg.get("max_fetch_chars", 20000) or 20000),
+        }
+
     def opa_provider_config(self) -> dict:
         """Build kwargs for OpaProvider from application settings.
 
