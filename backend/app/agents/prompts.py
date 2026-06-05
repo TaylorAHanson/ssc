@@ -397,6 +397,55 @@ def _get_web_search_section() -> str:
     )
 
 
+def _get_feedback_section() -> str:
+    """Guidance for the submit_feedback tool.
+
+    Only emitted when the ``feedback`` feature is enabled. The key point is
+    routing: feedback / feature requests / bug reports go through
+    `submit_feedback`, NOT the request/workflow machinery.
+    """
+    try:
+        from app.core.feature_flags import is_feature_enabled
+        if not is_feature_enabled("feedback"):
+            return ""
+    except Exception:  # noqa: BLE001 - prompt assembly must never crash
+        return ""
+
+    return (
+        "\n## Feedback, feature requests & bug reports\n"
+        "When the user wants to give feedback about THIS app, suggest a feature/"
+        "improvement, or report a bug/something broken in the app, use the "
+        "`submit_feedback` tool.\n"
+        "- This is NOT a provisioning request. Do NOT use `get_workflow_instructions` "
+        "or `execute_workflow` for feedback/feature/bug — those create access/"
+        "provisioning Requests and are the wrong destination. `submit_feedback` is "
+        "the only correct tool here.\n"
+        "- Pick `feedback_type`: `bug` (something is broken/not working), `feature` "
+        "(a request or idea), or `feedback` (general comment).\n"
+        "- Confirm a clear `title` and `description` in the user's OWN words before "
+        "submitting. Do NOT invent or embellish details, repro steps, or severity "
+        "the user didn't give. For bugs, you may ask for severity (low/medium/high/"
+        "critical) but don't guess it.\n"
+        "- After submitting, briefly confirm it was recorded for the admins with a "
+        "one-line recap. Do NOT present an ID, reference/request number, or a link — "
+        "feedback is not a trackable Request, so showing a 'Request ID' is wrong "
+        "and misleading. Note that bug reports filed from the avatar-menu form can "
+        "attach browser console/network diagnostics, but ones filed here via chat "
+        "cannot.\n"
+        "\n**Proactively offer to capture feedback** (don't wait to be asked) when:\n"
+        "- The user asks for something this app does NOT support yet — including the "
+        "out-of-scope features listed above, or any capability you have no tool/"
+        "workflow for. After explaining you can't do it, offer: \"Want me to log "
+        "this as a feature request so the team can consider it?\"\n"
+        "- The user seems frustrated, blocked, or repeatedly hits a dead end (e.g. "
+        "something failed, a tool errored, or they express annoyance). Acknowledge "
+        "it, help if you can, and offer: \"Want me to file this as feedback/a bug so "
+        "the team hears it?\"\n"
+        "Only call `submit_feedback` after the user accepts the offer, and capture "
+        "their own words — never file feedback on their behalf without agreement.\n"
+    )
+
+
 def get_agent_prompt(tools_override: Optional[List[Any]] = None, mode: str = "self_service") -> str:
     """Get the complete agent prompt combining system prompt and instructions.
 
@@ -425,6 +474,9 @@ You have access to the following tools:
     # Documentation lookup guidance (only when web_search is enabled)
     web_search_section = _get_web_search_section()
 
+    # Feedback routing guidance (only when feedback is enabled)
+    feedback_section = _get_feedback_section()
+
     return f"""{SYSTEM_PROMPT}
 
 {CORE_INSTRUCTIONS}
@@ -434,6 +486,7 @@ You have access to the following tools:
 {capabilities_section}
 {context_domains_section}
 {web_search_section}
+{feedback_section}
 {content_section}
 """
 

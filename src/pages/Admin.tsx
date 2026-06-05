@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
 import {
-  Save, Loader2, Clock, RotateCcw, FileText, Activity
+  Save, Loader2, Clock, RotateCcw, FileText, Activity, MessageSquarePlus
 } from 'lucide-react';
 import { format } from 'date-fns';
 import {
@@ -15,6 +15,8 @@ import type { ContentInfo, ContentVersionInfo } from '../services/api';
 import { TestRunner } from '../components/admin/TestRunner';
 import { Users } from './admin/Users';
 import { AdminDashboard } from './admin/AdminDashboard';
+import { FeedbackAdmin } from './admin/FeedbackAdmin';
+import { useBrandingStore } from '../stores/brandingStore';
 
 export function Admin() {
   const fetchRequests = useRequestStore((state) => state.fetchRequests);
@@ -27,9 +29,11 @@ export function Admin() {
 
   const { tab } = useParams<{ tab: string }>();
   const navigate = useNavigate();
+  const uiTabs = useBrandingStore((s) => s.uiTabs);
+  const feedbackEnabled = uiTabs?.feedback !== false;
 
-  const validTabs = ['dashboard', 'users', 'content-manager', 'test-runner'];
-  const activeTab = tab && validTabs.includes(tab) ? tab as 'dashboard' | 'users' | 'content-manager' | 'test-runner' : 'dashboard';
+  const validTabs = ['dashboard', 'users', 'content-manager', 'test-runner', ...(feedbackEnabled ? ['feedback'] : [])];
+  const activeTab = tab && validTabs.includes(tab) ? tab as 'dashboard' | 'users' | 'content-manager' | 'test-runner' | 'feedback' : 'dashboard';
 
   const handleTabChange = (newTab: string) => {
     navigate(`/admin/${newTab}`);
@@ -255,11 +259,24 @@ export function Admin() {
           <Activity className="w-4 h-4 inline mr-2" />
           Test Runner
         </button>
+        {feedbackEnabled && (
+          <button
+            onClick={() => handleTabChange('feedback')}
+            className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'feedback'
+              ? 'border-b-2 border-primary text-primary'
+              : 'text-gray-600 hover:text-gray-900'
+              }`}
+          >
+            <MessageSquarePlus className="w-4 h-4 inline mr-2" />
+            Feedback
+          </button>
+        )}
       </div>
 
       {activeTab === 'test-runner' && <TestRunner />}
       {activeTab === 'dashboard' && <AdminDashboard />}
       {activeTab === 'users' && <Users />}
+      {activeTab === 'feedback' && <FeedbackAdmin />}
 
       {activeTab === 'content-manager' && (
         <div className="flex gap-6 h-[calc(100vh-200px)]">

@@ -68,6 +68,11 @@ features:
   # citations. Keyless by default (sitemap-backed discovery). Requires outbound
   # HTTPS to the approved domains (see the web_search block below).
   web_search: true
+  # Feedback: lets any user submit feedback / feature requests / bug reports
+  # from the avatar menu (and via the chat agent). Bug reports can attach a
+  # client-side console + network-error snapshot. Admins triage submissions in
+  # the Admin panel. Gates the API, the admin tab, and the submit_feedback tool.
+  feedback: true
 
 ui:
   tabs:
@@ -89,6 +94,7 @@ ui:
     sentinel: true
     tag_management: true
     context_catalog: true
+    feedback: true
 
 tools:
   check_allowlist_status: true
@@ -114,7 +120,7 @@ tools:
   get_target_workspaces: true
   # Connectivity diagnostic: SDK "ping" of target workspaces to prove
   # cross-VPC / hub-spoke reachability (reuses existing credentials).
-  ping_workspaces: true
+  ping_workspaces: false
   list_github_templates: true
   list_workspaces: true
   search_events: true
@@ -140,6 +146,10 @@ tools:
   # finds relevant doc pages; fetch_doc_page reads an approved page's text.
   search_databricks_docs: true
   fetch_doc_page: true
+  # Lets the agent record a user's feedback / feature request / bug report into
+  # the feedback store (mirrors the avatar-menu form). Gated by the feedback
+  # feature flag at runtime.
+  submit_feedback: true
   # Databricks Genie (the general-purpose data chat in Databricks One)
   # via Managed MCP. Slow tool (30-120s per question); safeguarded by
   # the `ask_your_data` feature flag and an OBO-only auth path. By

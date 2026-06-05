@@ -25,8 +25,10 @@ import {
   ShieldAlert,
   Tags,
   Library,
+  MessageSquarePlus,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { FeedbackModal } from '../feedback/FeedbackModal';
 
 import { useBrandingStore } from '../../stores/brandingStore';
 import { useUserStore } from '../../stores/userStore';
@@ -240,6 +242,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   // User menu (account dropdown) is click-to-toggle for accessibility.
   // Close on outside click and on Escape.
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -380,6 +383,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   });
 
   return (
+    <>
     <div
       className={cn(
         "bg-nav-bg text-nav-text border-r border-nav-border transition-all duration-300 flex flex-col relative",
@@ -746,12 +750,19 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               </div>
 
               <div className="px-2 pt-2">
-                <button
-                  type="button"
-                  className="w-full text-left px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-md transition-colors font-medium"
-                >
-                  Settings
-                </button>
+                {uiTabs?.feedback !== false && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      setFeedbackOpen(true);
+                    }}
+                    className="w-full flex items-center gap-2 text-left px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-md transition-colors font-medium"
+                  >
+                    <MessageSquarePlus className="w-4 h-4" />
+                    Send feedback
+                  </button>
+                )}
                 <button
                   type="button"
                   className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-md transition-colors font-medium"
@@ -764,5 +775,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </div>
       </div>
     </div>
+    <FeedbackModal open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
+    </>
   );
 }

@@ -1440,6 +1440,125 @@ export async function getAgentSuggestions(
   return response.json();
 }
 
+// ---------------------------------------------------------------------------
+// Feedback / feature requests / bug reports
+// ---------------------------------------------------------------------------
+
+export type FeedbackType = 'bug' | 'feature' | 'feedback';
+export type FeedbackStatus = 'open' | 'in_progress' | 'resolved' | 'closed' | 'wont_fix';
+
+export interface FeedbackConsoleEntry {
+  level?: string;
+  message?: string;
+  ts?: string;
+}
+
+export interface FeedbackNetworkEntry {
+  method?: string;
+  url?: string;
+  status?: number;
+  status_text?: string;
+  ts?: string;
+}
+
+export interface FeedbackSubmitInput {
+  type: FeedbackType;
+  title: string;
+  description?: string;
+  severity?: string;
+  source?: 'web' | 'chat';
+  page_url?: string;
+  user_agent?: string;
+  app_version?: string;
+  console_logs?: FeedbackConsoleEntry[];
+  network_errors?: FeedbackNetworkEntry[];
+}
+
+export interface FeedbackItem {
+  id: string;
+  type: FeedbackType;
+  title: string;
+  description: string | null;
+  severity: string | null;
+  status: FeedbackStatus;
+  source: string;
+  submitted_by: string | null;
+  submitted_by_name: string | null;
+  page_url: string | null;
+  app_version: string | null;
+  admin_notes: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  // Present on list responses (lightweight); detail includes the arrays instead.
+  has_diagnostics?: boolean;
+  // Present on detail responses.
+  user_agent?: string | null;
+  console_logs?: FeedbackConsoleEntry[];
+  network_errors?: FeedbackNetworkEntry[];
+}
+
+export async function submitFeedback(data: FeedbackSubmitInput): Promise<FeedbackItem> {
+  const response = await fetch(`${API_BASE_URL}/feedback`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to submit feedback: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function listFeedback(params?: { type?: string; status?: string }): Promise<FeedbackItem[]> {
+  const qs = new URLSearchParams();
+  if (params?.type) qs.set('type', params.type);
+  if (params?.status) qs.set('status', params.status);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  const response = await fetch(`${API_BASE_URL}/feedback${suffix}`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to list feedback: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getFeedback(feedbackId: string): Promise<FeedbackItem> {
+  const response = await fetch(`${API_BASE_URL}/feedback/${feedbackId}`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get feedback: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function updateFeedback(
+  feedbackId: string,
+  data: { status?: FeedbackStatus; admin_notes?: string; severity?: string },
+): Promise<FeedbackItem> {
+  const response = await fetch(`${API_BASE_URL}/feedback/${feedbackId}`, {
+    method: 'PATCH',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to update feedback: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function deleteFeedback(feedbackId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/feedback/${feedbackId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to delete feedback: ${response.statusText}`);
+  }
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -1498,5 +1617,10 @@ export const api = {
   updateContextDocument,
   deleteContextDocument,
   searchContextCatalog,
-  getAgentSuggestions
+  getAgentSuggestions,
+  submitFeedback,
+  listFeedback,
+  getFeedback,
+  updateFeedback,
+  deleteFeedback
 };

@@ -2,7 +2,7 @@
 API v1 routes.
 """
 from fastapi import APIRouter
-from app.api.v1 import requests, agent, agent_polls, approvals, content, delegations, branding, callbacks, roles, reports, github, training, allowlist, data_assets, data_contracts, odps, system, tags, context_catalog
+from app.api.v1 import requests, agent, agent_polls, approvals, content, delegations, branding, callbacks, roles, reports, github, training, allowlist, data_assets, data_contracts, odps, system, tags, context_catalog, feedback
 
 router = APIRouter()
 
@@ -28,6 +28,7 @@ router.include_router(data_contracts.router, prefix="/data-contracts", tags=["da
 router.include_router(odps.router, prefix="/odps", tags=["odps"])
 router.include_router(tags.router, prefix="/tags", tags=["tags"])
 router.include_router(context_catalog.router, prefix="/context", tags=["context-catalog"])
+router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 # Dev/Test routes
 from app.api.v1 import dev
 router.include_router(dev.router, prefix="/dev", tags=["dev"])
