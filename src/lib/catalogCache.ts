@@ -196,6 +196,21 @@ export const discoveryCatalogResource = createResource<any[]>(async () => {
 export const useDiscoveryCatalog = discoveryCatalogResource.useResource;
 
 /**
+ * The set of asset IDs the current user can actually access, computed server
+ * side against Unity Catalog (OBO). `available` is false when real entitlement
+ * data can't be computed (e.g. local dev) — callers should then hide the
+ * "Accessible to me" filter rather than guess.
+ */
+export const accessibleAssetsResource = createResource<{
+  available: boolean;
+  mode: string;
+  accessible_ids: string[];
+}>(() => api.getAccessibleAssetIds(), { available: false, mode: 'unavailable', accessible_ids: [] });
+
+/** Hook for the current user's accessible-asset set. */
+export const useAccessibleAssets = accessibleAssetsResource.useResource;
+
+/**
  * Warm the cache ahead of navigation. Safe to call repeatedly; concurrent
  * calls dedupe and a fresh cache is a no-op. Errors are swallowed — this is
  * purely an optimization.

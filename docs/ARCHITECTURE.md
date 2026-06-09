@@ -1133,6 +1133,28 @@ through the same submit/poll/idempotency code path.
 4. Service creates state machine and initializes workflow
 5. API returns request object to frontend
 
+#### "Accessible to me" — real per-user catalog access (`GET /api/v1/data-assets/accessible`)
+
+The Discover page's "Accessible to me" filter is backed by **real Unity Catalog
+access**, not heuristics. The endpoint (`app/api/v1/data_assets.py`):
+
+1. Reads the caller's On-Behalf-Of token from `request.state.token` (set by the
+   auth middleware from the `X-Forwarded-Access-Token` header) and the SQL
+   warehouse from `settings.DATABRICKS_WAREHOUSE_ID`.
+2. For each catalog we hold assets in, runs
+   `SELECT table_schema, table_name FROM \`<catalog>\`.information_schema.tables`
+   **as the user** (OBO) via `DatabricksProvider.execute_sql(..., obo_token=...)`.
+   UC automatically restricts `information_schema` to objects the caller is
+   privileged to see, so the result reflects effective access (including grants
+   inherited from the catalog/schema).
+3. Maps the visible fully-qualified names back onto our asset IDs and returns
+   `{ available, mode, accessible_ids }`.
+
+When no OBO token or warehouse is available (e.g. local dev), the endpoint
+returns `available: false` and the frontend **hides** the filter rather than
+present a fabricated answer. The frontend caches the result for the session
+(`src/lib/catalogCache.ts`).
+
 ## Failure Handling Architecture
 
 ### Error Classification

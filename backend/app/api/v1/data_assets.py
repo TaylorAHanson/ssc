@@ -1,13 +1,22 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends
+import asyncio
+import logging
+import re
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict
 from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
+from app.api.deps import get_current_user
 from datetime import datetime
 import json
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
+
+# Catalog identifiers are interpolated into SQL, so restrict to a safe charset.
+_UC_IDENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 class DataQualitySchema(BaseModel):
     freshness: Optional[str] = None
@@ -99,6 +108,100 @@ def list_data_assets(
         })
         
     return result
+
+class AccessibleAssetsResponse(BaseModel):
+    available: bool
+    mode: str
+    accessible_ids: List[str] = []
+
+
+@router.get("/accessible", response_model=AccessibleAssetsResponse)
+async def get_accessible_assets(
+    req: Request,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return the IDs of catalog assets the CURRENT USER can actually access.
+
+    Accessibility is computed for real against Unity Catalog: for every catalog
+    we hold assets in, we query that catalog's ``information_schema.tables``
+    **as the user** (via their On-Behalf-Of token). Unity Catalog only surfaces
+    objects the caller is privileged to see, so the result reflects the user's
+    effective access (including grants inherited from the catalog/schema) — no
+    heuristics or owner-name guessing.
+
+    When the OBO token or a SQL warehouse isn't available (e.g. local dev),
+    ``available`` is False and the caller should simply omit the
+    "Accessible to me" filter rather than present a fabricated answer.
+    """
+    from app.core.config import settings
+    from app.providers.databricks import DatabricksProvider
+
+    obo_token = getattr(req.state, "token", None)
+    warehouse_id = settings.DATABRICKS_WAREHOUSE_ID
+    host = settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL
+
+    # Without a user token and a warehouse we cannot honestly answer "what can
+    # *you* access", so we say so instead of inventing a result.
+    if not obo_token or not warehouse_id or not host:
+        return AccessibleAssetsResponse(available=False, mode="unavailable", accessible_ids=[])
+
+    # Only scan catalogs we actually surface assets in — no full-metastore walk.
+    catalog_rows = db.query(DataAssetModel.catalog).distinct().all()
+    catalogs = [r[0] for r in catalog_rows if r[0] and _UC_IDENT_RE.match(str(r[0]))]
+    if not catalogs:
+        return AccessibleAssetsResponse(available=True, mode="obo", accessible_ids=[])
+
+    try:
+        provider = DatabricksProvider(
+            host=host,
+            token=settings.DATABRICKS_TOKEN,
+            client_id=settings.DATABRICKS_CLIENT_ID,
+            client_secret=settings.DATABRICKS_CLIENT_SECRET,
+            config={"warehouse_id": warehouse_id},
+        )
+    except Exception as e:
+        logger.warning(f"Accessible-assets: provider init failed: {e}")
+        return AccessibleAssetsResponse(available=False, mode="unavailable", accessible_ids=[])
+
+    async def _visible_fqns(catalog: str) -> set:
+        # information_schema is per-catalog and is automatically filtered to the
+        # objects the querying user can see.
+        query = (
+            f"SELECT table_schema, table_name "
+            f"FROM `{catalog}`.information_schema.tables"
+        )
+        try:
+            result = await provider.execute_sql(
+                query,
+                warehouse=warehouse_id,
+                obo_token=obo_token,
+                timeout_seconds=60,
+            )
+        except Exception as e:
+            # Most often: the user lacks USE CATALOG here → nothing visible.
+            logger.info(f"Accessible-assets: catalog '{catalog}' skipped: {e}")
+            return set()
+        fqns = set()
+        for row in result.get("rows", []):
+            schema = row.get("table_schema")
+            table = row.get("table_name")
+            if schema and table:
+                fqns.add(f"{catalog}.{schema}.{table}".lower())
+        return fqns
+
+    per_catalog = await asyncio.gather(*[_visible_fqns(c) for c in catalogs])
+    visible: set = set().union(*per_catalog) if per_catalog else set()
+
+    # Map UC visibility back onto our asset IDs by fully-qualified name.
+    accessible_ids: List[str] = []
+    for asset in db.query(DataAssetModel).all():
+        fqn = f"{asset.catalog}.{asset.schema}.{asset.table_name}".lower()
+        if fqn in visible:
+            accessible_ids.append(asset.id)
+
+    return AccessibleAssetsResponse(available=True, mode="obo", accessible_ids=accessible_ids)
+
 
 @router.get("/databricks/catalogs")
 def get_databricks_catalogs():

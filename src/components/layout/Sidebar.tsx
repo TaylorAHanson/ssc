@@ -503,7 +503,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   ? false
                   : item.path === '/admin/dashboard'
                     ? location.pathname.startsWith('/admin') && location.pathname !== '/admin/training'
-                    : location.pathname === item.path;
+                    : item.id === 'home'
+                      // The agent landing renders at both '/' and '/request'.
+                      ? location.pathname === '/' || location.pathname === '/request'
+                      : location.pathname === item.path;
                 // Icons in `navItems` are pre-built with `w-5 h-5`. In the
                 // collapsed rail they look puny, so re-clone them at a
                 // larger size so they read clearly.

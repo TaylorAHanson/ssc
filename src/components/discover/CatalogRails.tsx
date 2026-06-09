@@ -13,16 +13,6 @@ import { usePinnedItems, pinKey, type PinnedItem } from '../../lib/usePinnedItem
 import { useUserStore } from '../../stores/userStore';
 import { dataAssetsResource, odpsResource } from '../../lib/catalogCache';
 
-// The live data-products source (ODPS) is empty in this environment, so we
-// seed a small representative set here. These render only when the API
-// returns nothing real, and are clearly demonstrative.
-const SAMPLE_DATA_PRODUCTS = [
-  { id: 'sample-customer-360', name: 'Customer 360', description: 'Unified customer profiles across sales, support, and product.' },
-  { id: 'sample-finance-reporting', name: 'Finance Reporting', description: 'Curated GL, AR/AP and revenue tables for finance reporting.' },
-  { id: 'sample-supply-chain', name: 'Supply Chain Insights', description: 'Inventory, logistics, and supplier performance signals.' },
-  { id: 'sample-marketing-analytics', name: 'Marketing Analytics', description: 'Campaign, web, and attribution data for marketing.' },
-];
-
 export type BrowseAllTarget = 'data_product' | 'dataset';
 
 export function CatalogRails({
@@ -39,19 +29,16 @@ export function CatalogRails({
   const { pinned, isPinned, togglePin, unpin } = usePinnedItems(userEmail || undefined);
 
   // Served from the shared catalog cache: instant on revisit, revalidated in
-  // the background. Falls back to representative samples when ODPS is empty.
+  // the background. Only real catalog data is shown — empty rails are hidden.
   const { data: odps } = odpsResource.useResource();
   const { data: assets } = dataAssetsResource.useResource();
 
-  const dataProducts = useMemo(() => {
-    const dps = odps.length ? odps : SAMPLE_DATA_PRODUCTS;
-    return dps.slice(0, 4);
-  }, [odps]);
+  const dataProducts = useMemo(() => odps.slice(0, 4), [odps]);
 
-  const datasets = useMemo(() => {
-    const onlyDatasets = assets.filter((a) => normalizeAssetType(a.type) === 'dataset');
-    return (onlyDatasets.length ? onlyDatasets : assets).slice(0, 4);
-  }, [assets]);
+  const datasets = useMemo(
+    () => assets.filter((a) => normalizeAssetType(a.type) === 'dataset').slice(0, 4),
+    [assets],
+  );
 
   const askAbout = (title: string, typeLabel: string) =>
     onAsk(`Tell me about the "${title}" ${typeLabel}.`);

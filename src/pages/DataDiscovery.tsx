@@ -12,7 +12,6 @@ import {
 import { api } from '../services/api';
 import type { DataAsset, TableDetailsResponse } from '../services/api';
 import { useBrandingStore } from '../stores/brandingStore';
-import { useUserStore } from '../stores/userStore';
 import {
   assetWorkspaceUrl,
   catalogExplorerUrl,
@@ -29,7 +28,7 @@ import {
 } from '../lib/assetTypes';
 import { ChatView, type ChatViewHandle } from '../components/chat/ChatView';
 import { CatalogRails } from '../components/discover/CatalogRails';
-import { useDiscoveryCatalog } from '../lib/catalogCache';
+import { useDiscoveryCatalog, useAccessibleAssets } from '../lib/catalogCache';
 
 const getDomainIcon = (domain: string) => {
   const d = domain.toLowerCase();
@@ -51,8 +50,6 @@ const INLINE_AGENT_STORAGE_KEY = 'discover_inline_agent';
 export function DataDiscovery() {
   const navigate = useNavigate();
   const databricksWorkspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
-  const currentUser = useUserStore((s) => s.currentUser);
-
   // The search box now does two jobs at once: it always live-filters the
   // catalog as the user types, AND it can hand the query to the agent
   // (inline, without leaving the page) on submit.
@@ -78,6 +75,16 @@ export function DataDiscovery() {
   // The catalog is served from a shared stale-while-revalidate cache so this
   // page renders instantly on revisit and after a prefetch from the landing.
   const { data: datasets, loading: isLoading } = useDiscoveryCatalog();
+
+  // Real "accessible to me" data, computed server-side from Unity Catalog as
+  // the user (OBO). When unavailable (e.g. local dev without a user token) we
+  // hide the filter rather than guess.
+  const { data: accessInfo } = useAccessibleAssets();
+  const accessibleAvailable = accessInfo.available;
+  const accessibleIds = useMemo(
+    () => new Set(accessInfo.accessible_ids),
+    [accessInfo],
+  );
 
   // Contract details for the selected dataset (loaded lazily when modal opens for a dataset)
   const [selectedContract, setSelectedContract] = useState<any | null>(null);
@@ -209,17 +216,9 @@ export function DataDiscovery() {
     );
   };
 
-  // Best-effort "accessible to me" predicate. Without per-user entitlement
-  // data on the asset payload we treat an asset as accessible when the
-  // current user owns it or it is certified (governed + discoverable). This
-  // is the single chokepoint to swap in real entitlement checks later.
-  const isAccessibleToMe = (ds: any): boolean => {
-    if (ds.certified) return true;
-    const me = (currentUser?.email || currentUser?.full_name || '').toLowerCase();
-    if (!me) return false;
-    const owner = String(ds.owner || '').toLowerCase();
-    return !!owner && (owner.includes(me) || me.includes(owner));
-  };
+  // "Accessible to me" is backed by the server-computed Unity Catalog access
+  // set — an asset is accessible iff its ID is in that set.
+  const isAccessibleToMe = (ds: any): boolean => accessibleIds.has(ds.id);
 
   // Pull a classification tag (e.g. PII, U-NNPI) off an asset if present, for
   // the advanced classification filter.
@@ -243,7 +242,7 @@ export function DataDiscovery() {
     const matchesType = selectedType === 'all' || normalizeAssetType(ds.type) === selectedType;
 
     const matchesCertified = !showCertifiedOnly || ds.certified;
-    const matchesAccessible = !showAccessibleOnly || isAccessibleToMe(ds);
+    const matchesAccessible = !(showAccessibleOnly && accessibleAvailable) || isAccessibleToMe(ds);
     const matchesClassification = selectedClassification === 'all'
       || assetClassification(ds) === selectedClassification;
 
@@ -408,18 +407,21 @@ export function DataDiscovery() {
           All
         </button>
 
-        {/* First-class scope chips. */}
-        <button
-          onClick={() => setShowAccessibleOnly((v) => !v)}
-          aria-pressed={showAccessibleOnly}
-          className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
-            showAccessibleOnly
-              ? 'bg-primary/10 text-primary border-primary/30 shadow-sm'
-              : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-          }`}
-        >
-          <UserCheck className="w-4 h-4" /> Accessible to me
-        </button>
+        {/* First-class scope chips. "Accessible to me" only appears when the
+            backend can compute real Unity Catalog access for the user. */}
+        {accessibleAvailable && (
+          <button
+            onClick={() => setShowAccessibleOnly((v) => !v)}
+            aria-pressed={showAccessibleOnly}
+            className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
+              showAccessibleOnly
+                ? 'bg-primary/10 text-primary border-primary/30 shadow-sm'
+                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+            }`}
+          >
+            <UserCheck className="w-4 h-4" /> Accessible to me
+          </button>
+        )}
         <button
           onClick={() => setShowCertifiedOnly((v) => !v)}
           aria-pressed={showCertifiedOnly}

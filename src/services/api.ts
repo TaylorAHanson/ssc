@@ -804,6 +804,29 @@ export async function getDataAssets(params?: { domain?: string; certified?: bool
   return response.json();
 }
 
+export interface AccessibleAssetsResponse {
+  /** Whether real entitlement data could be computed (needs OBO + warehouse). */
+  available: boolean;
+  mode: string;
+  accessible_ids: string[];
+}
+
+/**
+ * Returns the IDs of catalog assets the current user can actually access,
+ * computed server-side from Unity Catalog as the user (OBO). When `available`
+ * is false the caller should hide the "Accessible to me" filter rather than
+ * present a fabricated result.
+ */
+export async function getAccessibleAssetIds(): Promise<AccessibleAssetsResponse> {
+  const response = await fetch(`${API_BASE_URL}/data-assets/accessible`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    return { available: false, mode: 'unavailable', accessible_ids: [] };
+  }
+  return response.json();
+}
+
 export interface DataContract {
   id: string;
   dataset_id: string;
@@ -1584,6 +1607,7 @@ export const api = {
   updateAllowlistEntry,
   deleteAllowlistEntry,
   getDataAssets,
+  getAccessibleAssetIds,
   getDataContracts,
   getContractHistory,
   createDataContract,

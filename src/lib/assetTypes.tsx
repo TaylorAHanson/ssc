@@ -204,7 +204,7 @@ export function AssetTaxonomyExplainer() {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left"
+        className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left rounded-xl hover:bg-gray-50 transition-colors"
       >
         <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap min-w-0">
           <span className="text-xs font-semibold uppercase tracking-wide text-gray-500 shrink-0">
@@ -224,9 +224,12 @@ export function AssetTaxonomyExplainer() {
             ))}
           </div>
         </div>
-        <ChevronDown
-          className={`w-4 h-4 text-gray-400 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
-        />
+        <span className="flex items-center gap-1 shrink-0 text-xs font-medium text-primary">
+          {open ? 'Show less' : 'Show more'}
+          <ChevronDown
+            className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''}`}
+          />
+        </span>
       </button>
 
       {open && (
@@ -246,12 +249,13 @@ export function AssetTaxonomyExplainer() {
  */
 function TaxonomyNestDiagram() {
   return (
-    <div className="rounded-2xl border-2 border-violet-200 bg-violet-50/40 p-4">
+    <div className="inline-block w-fit max-w-full rounded-2xl border-2 border-violet-200 bg-violet-50/40 p-4">
       {/* Outer container: Data Product */}
       <NestHeader icon={Box} label="Data Product" tone="text-violet-700" chip="bg-violet-100 text-violet-600" />
 
-      {/* Datasets sit inside the product, each holding multiple tables/views. */}
-      <div className="grid sm:grid-cols-2 gap-3 mt-3">
+      {/* Datasets sit inside the product, each holding multiple tables/views.
+          Sized to content (flex) so the diagram never stretches full width. */}
+      <div className="flex flex-wrap gap-3 mt-3">
         <DatasetBox tableCount={3} />
         <DatasetBox tableCount={2} />
       </div>
