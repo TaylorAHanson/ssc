@@ -2,7 +2,8 @@
  * Shared catalog "rails" used on both the agent landing and the Discover
  * page: Your Pinned Items → Data Products → (optional domains slot) →
  * Datasets. Items are pinnable (persisted per-user in localStorage) and
- * clicking a card calls `onAsk`. "Browse all" is delegated to the caller so
+ * clicking a card calls `onViewDetails` with a reference to the asset — it
+ * never issues an agent/LLM query. "Browse all" is delegated to the caller so
  * each surface can decide what it means (navigate vs. filter in place).
  */
 import { useMemo, type ReactNode } from 'react';
@@ -15,12 +16,20 @@ import { dataAssetsResource, odpsResource } from '../../lib/catalogCache';
 
 export type BrowseAllTarget = 'data_product' | 'dataset';
 
+/** Minimal reference passed to `onViewDetails` so the caller can resolve the
+ *  full asset (open a modal in place, or deep-link to Discover). */
+export interface AssetRef {
+  id: string;
+  type: string;
+  title: string;
+}
+
 export function CatalogRails({
-  onAsk,
+  onViewDetails,
   onBrowseAll,
   domainsSlot,
 }: {
-  onAsk: (query: string) => void;
+  onViewDetails: (ref: AssetRef) => void;
   onBrowseAll: (target: BrowseAllTarget) => void;
   /** Optional content rendered between the Data Products and Datasets rails. */
   domainsSlot?: ReactNode;
@@ -46,9 +55,6 @@ export function CatalogRails({
         .slice(0, 4),
     [assets],
   );
-
-  const askAbout = (title: string, typeLabel: string) =>
-    onAsk(`Tell me about the "${title}" ${typeLabel}.`);
 
   const dpItem = (dp: any): PinnedItem => ({
     key: pinKey('data_product', dp.id),
@@ -91,7 +97,7 @@ export function CatalogRails({
                 certified={item.certified}
                 pinned
                 onTogglePin={() => unpin(item.key)}
-                onClick={() => askAbout(item.title, item.type === 'data_product' ? 'data product' : 'dataset')}
+                onViewDetails={() => onViewDetails({ id: item.id, type: item.type, title: item.title })}
               />
             ))}
           </div>
@@ -115,7 +121,7 @@ export function CatalogRails({
               subtitle={dp.description || 'Governed data product'}
               pinned={isPinned(item.key)}
               onTogglePin={() => togglePin(item)}
-              onClick={() => askAbout(dp.name, 'data product')}
+              onViewDetails={() => onViewDetails({ id: dp.id, type: 'data_product', title: dp.name })}
             />
           );
         })}
@@ -141,11 +147,8 @@ export function CatalogRails({
               certified={ds.certified}
               pinned={isPinned(item.key)}
               onTogglePin={() => togglePin(item)}
-              onClick={() =>
-                askAbout(
-                  ds.table_name || ds.name,
-                  normalizeAssetType(ds.type) === 'dataset' ? 'dataset' : 'asset',
-                )
+              onViewDetails={() =>
+                onViewDetails({ id: ds.id, type: ds.type, title: ds.table_name || ds.name })
               }
             />
           );

@@ -329,15 +329,17 @@ function LeafChip({
 }
 
 /**
- * Compact, clickable tile for a single asset. Mirrors the Databricks One
- * "For you" card style — a colored type chip, a title, and a small subtitle.
+ * Compact tile for a single asset. Mirrors the Databricks One "For you" card
+ * style — a colored type chip, a title, a small subtitle, and a "View details"
+ * affordance. `onViewDetails` opens the asset's detail view; the card never
+ * issues an agent/LLM query on its own.
  */
 export function AssetCard({
   title,
   subtitle,
   type,
   certified,
-  onClick,
+  onViewDetails,
   pinned,
   onTogglePin,
 }: {
@@ -345,7 +347,7 @@ export function AssetCard({
   subtitle?: string | null;
   type: string | null | undefined;
   certified?: boolean;
-  onClick?: () => void;
+  onViewDetails?: () => void;
   /** When defined, a pin toggle renders in the card's top-right corner. */
   pinned?: boolean;
   onTogglePin?: () => void;
@@ -357,14 +359,14 @@ export function AssetCard({
   const handleKey = (e: ReactKeyboardEvent) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      onClick?.();
+      onViewDetails?.();
     }
   };
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={onClick}
+      onClick={onViewDetails}
       onKeyDown={handleKey}
       className="group relative text-left bg-white rounded-xl border border-gray-200 p-4 hover:border-primary/40 hover:shadow-md transition-all flex flex-col gap-3 min-w-0 cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary/40"
     >
@@ -407,6 +409,10 @@ export function AssetCard({
         {subtitle && (
           <div className="text-xs text-gray-500 line-clamp-2 mt-0.5 leading-relaxed">{subtitle}</div>
         )}
+      </div>
+      <div className="mt-auto pt-1 flex items-center text-xs font-medium text-gray-400 group-hover:text-primary transition-colors">
+        View details
+        <ChevronRight className="w-3.5 h-3.5 ml-0.5 group-hover:translate-x-0.5 transition-transform" />
       </div>
     </div>
   );

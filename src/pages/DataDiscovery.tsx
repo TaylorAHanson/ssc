@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { 
   Search, ShieldCheck, Database, Table as TableIcon, Info, X,
   AlertTriangle, Factory, Car, Server, TrendingUp, Heart, Users, Box,
@@ -49,6 +49,7 @@ const INLINE_AGENT_STORAGE_KEY = 'discover_inline_agent';
 
 export function DataDiscovery() {
   const navigate = useNavigate();
+  const location = useLocation();
   const databricksWorkspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
   // The search box now does two jobs at once: it always live-filters the
   // catalog as the user types, AND it can hand the query to the agent
@@ -249,6 +250,24 @@ export function DataDiscovery() {
     acc[t] = (acc[t] || 0) + 1;
     return acc;
   }, {} as Record<AssetTypeId, number>);
+
+  // Open an asset's detail view by id. Used both by the catalog rails ("View
+  // details") and by deep-links from the agent landing.
+  const openDetailsById = (id: string) => {
+    const found = datasets.find((d) => d.id === id);
+    if (found) setSelectedDataset(found);
+  };
+
+  // Deep-link from the landing: navigating here with `state.viewAssetId` opens
+  // that asset's details once the catalog is available. Clear the state after
+  // so a refresh doesn't replay it.
+  useEffect(() => {
+    const viewId = (location.state as { viewAssetId?: string } | null)?.viewAssetId;
+    if (!viewId || datasets.length === 0) return;
+    openDetailsById(viewId);
+    navigate(location.pathname, { replace: true, state: {} });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state, datasets]);
 
   const submitAgentQuery = (q: string) => {
     const trimmed = q.trim();
@@ -533,10 +552,10 @@ export function DataDiscovery() {
           <AssetTaxonomyExplainer />
 
           {/* Shared rails (Pinned → Data Products → Datasets), reused from the
-              agent landing. "Browse all" filters in place; a card hands the
-              question to the inline agent. */}
+              agent landing. "Browse all" filters in place; "View details" opens
+              the asset's detail panel. */}
           <CatalogRails
-            onAsk={submitAgentQuery}
+            onViewDetails={(ref) => openDetailsById(ref.id)}
             onBrowseAll={(target) => setSelectedType(target)}
           />
         </div>

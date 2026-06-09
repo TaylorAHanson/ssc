@@ -160,7 +160,9 @@ export function Home() {
                     emptyStateExtras={
                         <div className="max-w-5xl mx-auto w-full px-1 pb-6">
                             <CatalogRails
-                                onAsk={(q) => chatRef.current?.submitQuery(q)}
+                                onViewDetails={(ref) =>
+                                    navigate('/discovery', { state: { viewAssetId: ref.id } })
+                                }
                                 onBrowseAll={() => navigate('/discovery')}
                             />
                         </div>
