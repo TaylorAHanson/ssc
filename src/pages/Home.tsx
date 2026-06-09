@@ -16,6 +16,8 @@ import { AgentWelcome } from '../components/chat/AgentWelcome';
 import { api } from '../services/api';
 import { useUserStore } from '../stores/userStore';
 import { useBrandingStore } from '../stores/brandingStore';
+import { CatalogRails } from '../components/discover/CatalogRails';
+import { prefetchCatalog } from '../lib/catalogCache';
 
 const STORAGE_KEY = 'chatview_messages_unified';
 
@@ -127,14 +129,19 @@ export function Home() {
         return () => window.clearTimeout(id);
     }, [location.state, location.pathname, navigate]);
 
+    // Warm the catalog cache while the user reads the landing so that
+    // navigating into Discover ("Browse all") renders without a cold spinner.
+    useEffect(() => {
+        prefetchCatalog();
+    }, []);
+
     const handleRoute = (route: ChatRouteInfo) => {
         navigate(route.path);
     };
 
     const welcomeNode = (
         <AgentWelcome
-            title="How can I help?"
-            description="Ask about your data or make a request — just describe what you need in plain language."
+            title="What would you like to know?"
             icon={<Sparkles className="w-7 h-7 text-primary" />}
         />
     );
@@ -145,11 +152,19 @@ export function Home() {
                 <ChatView
                     ref={chatRef}
                     welcomeNode={welcomeNode}
-                    placeholder="Type your message..."
+                    placeholder="Ask a question..."
                     storageKey={STORAGE_KEY}
                     samplePrompts={suggestions.length > 0 ? suggestions : undefined}
                     onRoute={handleRoute}
                     formCtaLabelFor={getButtonLabel}
+                    emptyStateExtras={
+                        <div className="max-w-5xl mx-auto w-full px-1 pb-6">
+                            <CatalogRails
+                                onAsk={(q) => chatRef.current?.submitQuery(q)}
+                                onBrowseAll={() => navigate('/discovery')}
+                            />
+                        </div>
+                    }
                 />
             </div>
         </div>

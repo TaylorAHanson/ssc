@@ -1,22 +1,35 @@
-import { useState, useEffect, useMemo, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Search, ShieldCheck, Database, Table as TableIcon, Info, X,
   AlertTriangle, Factory, Car, Server, TrendingUp, Heart, Users, Box,
-  LayoutDashboard, PlaySquare, ChevronRight, Tag, FileText, Loader2,
+  Tag, FileText, Loader2,
   BookOpen, Calendar, GitBranch, AlertCircle, ChevronDown, ChevronUp,
   Link as LinkIcon, ArrowDownToLine, ArrowUpFromLine, Lock, Columns3,
-  Key, ExternalLink, Network, Activity, Sparkles, ArrowRight
+  Key, ExternalLink, Network, Activity, Sparkles,
+  SlidersHorizontal, UserCheck
 } from 'lucide-react';
 import { api } from '../services/api';
 import type { DataAsset, TableDetailsResponse } from '../services/api';
 import { useBrandingStore } from '../stores/brandingStore';
+import { useUserStore } from '../stores/userStore';
 import {
   assetWorkspaceUrl,
   catalogExplorerUrl,
   workspaceLinkLabel,
 } from '../lib/databricksLinks';
 import { LineageGraph, type LineageSeedTable } from '../components/discover/LineageGraph';
+import {
+  ASSET_TYPE_ORDER,
+  ASSET_TYPES,
+  AssetTaxonomyExplainer,
+  AssetTypeBadge,
+  normalizeAssetType,
+  type AssetTypeId,
+} from '../lib/assetTypes';
+import { ChatView, type ChatViewHandle } from '../components/chat/ChatView';
+import { CatalogRails } from '../components/discover/CatalogRails';
+import { useDiscoveryCatalog } from '../lib/catalogCache';
 
 const getDomainIcon = (domain: string) => {
   const d = domain.toLowerCase();
@@ -33,34 +46,38 @@ const getDomainIcon = (domain: string) => {
 
 import yaml from 'js-yaml';
 
-type DiscoverInputMode = 'search' | 'agent';
-const INPUT_MODE_STORAGE_KEY = 'discover_input_mode';
+const INLINE_AGENT_STORAGE_KEY = 'discover_inline_agent';
 
 export function DataDiscovery() {
   const navigate = useNavigate();
   const databricksWorkspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
+  const currentUser = useUserStore((s) => s.currentUser);
+
+  // The search box now does two jobs at once: it always live-filters the
+  // catalog as the user types, AND it can hand the query to the agent
+  // (inline, without leaving the page) on submit.
   const [searchTerm, setSearchTerm] = useState('');
-  // Toggle between filtering the asset list (default) and forwarding the
-  // input to the home page agent. We keep one input bound to `searchTerm`
-  // regardless of mode; in agent mode we just don't feed it to the filter.
-  const [inputMode, setInputMode] = useState<DiscoverInputMode>(() => {
-    const saved = typeof window !== 'undefined' ? window.localStorage.getItem(INPUT_MODE_STORAGE_KEY) : null;
-    return saved === 'agent' ? 'agent' : 'search';
-  });
-  useEffect(() => {
-    try { window.localStorage.setItem(INPUT_MODE_STORAGE_KEY, inputMode); } catch { /* ignore quota errors */ }
-  }, [inputMode]);
-  // When in agent mode the input represents a question, not a filter, so the
-  // asset list should NOT live-filter. We still keep `searchTerm` as the
-  // input value so toggling modes preserves what the user typed.
-  const effectiveSearchTerm = inputMode === 'search' ? searchTerm : '';
+  const effectiveSearchTerm = searchTerm;
+
+  // Inline agent panel. `agentQuery` holds the question that was sent; the
+  // panel mounts a <ChatView> and we forward the query via its ref.
+  const [agentQuery, setAgentQuery] = useState<string | null>(null);
+  const chatRef = useRef<ChatViewHandle | null>(null);
+
+  // Advanced filtering lives behind a filter icon to keep the toolbar clean.
+  const [showFilters, setShowFilters] = useState(false);
+  const filterRef = useRef<HTMLDivElement | null>(null);
+
   const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
-  const [selectedType, setSelectedType] = useState<string>('all');
+  const [selectedType, setSelectedType] = useState<AssetTypeId | 'all'>('all');
   const [showCertifiedOnly, setShowCertifiedOnly] = useState(false);
+  const [showAccessibleOnly, setShowAccessibleOnly] = useState(false);
+  const [selectedClassification, setSelectedClassification] = useState<string>('all');
   const [selectedDataset, setSelectedDataset] = useState<DataAsset | null>(null);
   
-  const [datasets, setDatasets] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  // The catalog is served from a shared stale-while-revalidate cache so this
+  // page renders instantly on revisit and after a prefetch from the landing.
+  const { data: datasets, loading: isLoading } = useDiscoveryCatalog();
 
   // Contract details for the selected dataset (loaded lazily when modal opens for a dataset)
   const [selectedContract, setSelectedContract] = useState<any | null>(null);
@@ -161,106 +178,30 @@ export function DataDiscovery() {
     return () => { mounted = false; };
   }, [selectedDataset]);
 
+  // Forward a submitted question to the inline agent once the panel has
+  // mounted and wired its imperative handle.
   useEffect(() => {
-    let mounted = true;
-    
-    async function loadData() {
-      setIsLoading(true);
-      try {
-        const [data, dashboards, jobs, apps, genieSpaces, odpsList] = await Promise.all([
-          api.getDataAssets(),
-          api.getDatabricksDashboards().catch(() => []),
-          api.getDatabricksJobs().catch(() => []),
-          api.getDatabricksApps().catch(() => []),
-          api.getDatabricksGenieSpaces().catch(() => []),
-          api.getOdpsList().catch(() => [])
-        ]);
-        
-        if (mounted) {
-          // Map DATA_PRODUCT from data_assets to 'dataset'
-          const mappedData = data.map(d => {
-            if (d.type === 'DATA_PRODUCT') {
-              return { ...d, type: 'dataset' };
-            }
-            return d;
-          });
+    if (!agentQuery) return;
+    const id = window.setTimeout(() => chatRef.current?.submitQuery(agentQuery), 0);
+    return () => window.clearTimeout(id);
+  }, [agentQuery]);
 
-          // Combine all assets into a single list
-          const combined = [
-            ...mappedData,
-            ...dashboards.map(d => ({
-              id: d.id,
-              table_name: d.name,
-              type: 'dashboard',
-              domain: 'Analytics',
-              description: 'Lakeview Dashboard',
-              catalog: 'workspace',
-              schema_name: 'dashboards',
-              certified: false,
-              tags: []
-            })),
-            ...jobs.map(j => ({
-              id: j.id,
-              table_name: j.name,
-              type: 'job',
-              domain: 'Engineering',
-              description: `Job created by ${j.creator}`,
-              catalog: 'workspace',
-              schema_name: 'jobs',
-              certified: false,
-              tags: []
-            })),
-            ...apps.map(a => ({
-              id: a.id,
-              table_name: a.name,
-              type: 'app',
-              domain: 'Engineering',
-              description: `App created by ${a.creator}`,
-              catalog: 'workspace',
-              schema_name: 'apps',
-              certified: false,
-              tags: []
-            })),
-            ...genieSpaces.map(g => ({
-              id: g.id,
-              table_name: g.name,
-              type: 'genie_space',
-              domain: 'Analytics',
-              description: g.description || 'Genie Space',
-              catalog: 'workspace',
-              schema_name: 'genie',
-              certified: false,
-              tags: []
-            })),
-            ...odpsList.map(o => ({
-              id: o.id,
-              table_name: o.name,
-              type: 'data_product',
-              domain: 'Analytics',
-              description: 'ODPS Data Product',
-              catalog: 'workspace',
-              schema_name: 'odps',
-              certified: false,
-              tags: []
-            }))
-          ];
-          setDatasets(combined);
-        }
-      } catch (e) {
-        console.error('Failed to load data assets', e);
-      } finally {
-        if (mounted) {
-          setIsLoading(false);
-        }
+  // Close the advanced-filter popover on outside click / Escape.
+  useEffect(() => {
+    if (!showFilters) return;
+    const onClick = (e: MouseEvent) => {
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
+        setShowFilters(false);
       }
-    }
-    
-    loadData();
-    
-    return () => {
-      mounted = false;
     };
-  }, []);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowFilters(false); };
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [showFilters]);
 
   const toggleDomain = (domain: string) => {
     setSelectedDomains(prev => 
@@ -268,29 +209,90 @@ export function DataDiscovery() {
     );
   };
 
+  // Best-effort "accessible to me" predicate. Without per-user entitlement
+  // data on the asset payload we treat an asset as accessible when the
+  // current user owns it or it is certified (governed + discoverable). This
+  // is the single chokepoint to swap in real entitlement checks later.
+  const isAccessibleToMe = (ds: any): boolean => {
+    if (ds.certified) return true;
+    const me = (currentUser?.email || currentUser?.full_name || '').toLowerCase();
+    if (!me) return false;
+    const owner = String(ds.owner || '').toLowerCase();
+    return !!owner && (owner.includes(me) || me.includes(owner));
+  };
+
+  // Pull a classification tag (e.g. PII, U-NNPI) off an asset if present, for
+  // the advanced classification filter.
+  const assetClassification = (ds: any): string | null => {
+    if (ds.classification) return String(ds.classification);
+    const tags: string[] = Array.isArray(ds.tags) ? ds.tags : [];
+    const hit = tags.find(t => /pii|nnpi|confidential|restricted|classification/i.test(t));
+    return hit || null;
+  };
+
   const filteredDatasets = datasets.filter(ds => {
     const term = effectiveSearchTerm.toLowerCase();
-    const matchesSearch =
+    const matchesSearch = !term ||
       ds.table_name.toLowerCase().includes(term) ||
       (ds.description && ds.description.toLowerCase().includes(term)) ||
-      (ds.owner && ds.owner.toLowerCase().includes(term));
-    
+      (ds.owner && ds.owner.toLowerCase().includes(term)) ||
+      (ds.domain && ds.domain.toLowerCase().includes(term));
+
     const matchesDomain = selectedDomains.length === 0 || (ds.domain && selectedDomains.includes(ds.domain));
-    
-    let matchesType = true;
-    if (selectedType !== 'all') {
-      const dsType = ds.type ? ds.type.toLowerCase() : '';
-      if (selectedType === 'table') {
-        matchesType = dsType === 'managed' || dsType === 'external' || dsType === 'view';
-      } else {
-        matchesType = dsType === selectedType;
-      }
-    }
+
+    const matchesType = selectedType === 'all' || normalizeAssetType(ds.type) === selectedType;
 
     const matchesCertified = !showCertifiedOnly || ds.certified;
+    const matchesAccessible = !showAccessibleOnly || isAccessibleToMe(ds);
+    const matchesClassification = selectedClassification === 'all'
+      || assetClassification(ds) === selectedClassification;
 
-    return matchesSearch && matchesDomain && matchesType && matchesCertified;
+    return matchesSearch && matchesDomain && matchesType && matchesCertified
+      && matchesAccessible && matchesClassification;
   });
+
+  const activeFilterCount =
+    selectedDomains.length +
+    (showCertifiedOnly ? 1 : 0) +
+    (showAccessibleOnly ? 1 : 0) +
+    (selectedClassification !== 'all' ? 1 : 0);
+
+  // Only the controls that live inside the Filters popover (the chips for
+  // accessible/certified are surfaced separately) drive the popover badge.
+  const popoverFilterCount =
+    selectedDomains.length + (selectedClassification !== 'all' ? 1 : 0);
+
+  const uniqueClassifications = Array.from(new Set(
+    datasets.map(assetClassification).filter(Boolean) as string[]
+  )).sort();
+
+  // Count of assets per normalized type, used to label the type pills.
+  const typeCounts = datasets.reduce((acc, ds) => {
+    const t = normalizeAssetType(ds.type);
+    acc[t] = (acc[t] || 0) + 1;
+    return acc;
+  }, {} as Record<AssetTypeId, number>);
+
+  const submitAgentQuery = (q: string) => {
+    const trimmed = q.trim();
+    if (!trimmed) return;
+    // Re-submitting the same text won't retrigger the mount effect, so push
+    // directly through the ref when the panel is already open.
+    if (agentQuery === trimmed) {
+      chatRef.current?.submitQuery(trimmed);
+    } else {
+      setAgentQuery(trimmed);
+    }
+  };
+
+  const clearAllFilters = () => {
+    setSearchTerm('');
+    setSelectedDomains([]);
+    setSelectedType('all');
+    setShowCertifiedOnly(false);
+    setShowAccessibleOnly(false);
+    setSelectedClassification('all');
+  };
 
   const handleRequestAccess = async (dataset: DataAsset) => {
     if (dataset.type === 'dataset') {
@@ -345,11 +347,8 @@ export function DataDiscovery() {
     count: datasets.filter(ds => ds.domain === domain).length
   }));
 
-  // Featured assets
-  const featuredAssets = datasets.filter(ds => ds.certified).slice(0, 4);
-
   // Determine if we should show the landing view or the search results view
-  const showResults = effectiveSearchTerm !== '' || selectedDomains.length > 0 || selectedType !== 'all' || showCertifiedOnly;
+  const showResults = effectiveSearchTerm !== '' || selectedType !== 'all' || activeFilterCount > 0;
 
   return (
     <div className="space-y-6 pb-20">
@@ -362,268 +361,266 @@ export function DataDiscovery() {
         </p>
       </div>
 
-      {/* Single input with an embedded mode chip on the right.
-          The chip is purely a mode toggle — clicks never submit. In agent
-          mode with text in the box, a separate Send button appears just
-          to the left of the chip, and Enter also submits. */}
+      {/* Prominent, combined search. Typing live-filters the catalog below.
+          Pressing Enter / clicking "Ask AI" ALSO sends the text to the agent
+          in an inline panel — we never navigate away from Discover. */}
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (inputMode !== 'agent') return;
-          const q = searchTerm.trim();
-          if (!q) return; // don't navigate on empty submit
-          navigate('/', { state: { autoQuery: q } });
+          submitAgentQuery(searchTerm);
         }}
         className="relative group"
       >
-        {inputMode === 'search' ? (
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 group-focus-within:text-primary transition-colors" />
-        ) : (
-          <Sparkles className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-primary" />
-        )}
+        <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 group-focus-within:text-primary transition-colors" />
         <input
           type="text"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder={
-            inputMode === 'search'
-              ? 'Search across assets...'
-              : 'Ask the agent — e.g. "How do I request access to a dataset?"'
-          }
-          aria-label={inputMode === 'search' ? 'Search assets' : 'Ask the agent'}
-          className={`w-full pl-12 pr-[19rem] py-4 bg-white border rounded-xl text-base shadow-sm focus:ring-2 focus:ring-primary focus:border-primary transition-all outline-none ${
-            inputMode === 'agent' ? 'border-primary/30' : 'border-gray-200'
-          }`}
+          placeholder="Search the catalog — or ask a question and press Enter"
+          aria-label="Search the catalog or ask the agent"
+          className="w-full pl-14 pr-40 py-5 bg-white border border-gray-200 rounded-2xl text-lg shadow-sm focus:ring-2 focus:ring-primary/40 focus:border-primary transition-all outline-none"
         />
 
-        {/* Right-side controls: optional Send button, then the mode chip. */}
-        <div className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center gap-2">
-          {/* Explicit submit affordance — only meaningful in agent mode
-              with content. Keeping submit separate from the mode chip
-              avoids the "click chip = navigate to home" surprise. */}
-          {inputMode === 'agent' && searchTerm.trim() && (
-            <button
-              type="submit"
-              title="Send to agent (Enter)"
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-primary text-white text-xs font-medium shadow-sm hover:bg-primary/90 transition-colors"
-            >
-              Send
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
-          )}
-
-          {/* Pure mode toggle — clicks only switch modes, never submit. */}
-          <div
-            className="inline-flex p-0.5 rounded-full bg-gray-100 border border-gray-200 text-xs font-medium"
-            role="tablist"
-            aria-label="Discover input mode"
-          >
-            <button
-              type="button"
-              onClick={() => setInputMode('search')}
-              aria-pressed={inputMode === 'search'}
-              title="Filter the asset list as you type"
-              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full transition-colors ${
-                inputMode === 'search'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              <Search className="w-3.5 h-3.5" />
-              Instant Search
-            </button>
-            <button
-              type="button"
-              onClick={() => setInputMode('agent')}
-              aria-pressed={inputMode === 'agent'}
-              title="Forward your question to the agent"
-              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full transition-colors ${
-                inputMode === 'agent'
-                  ? 'bg-white text-primary shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              Ask Agent
-            </button>
-          </div>
-        </div>
+        <button
+          type="submit"
+          disabled={!searchTerm.trim()}
+          title="Ask the agent (Enter)"
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary text-white text-sm font-medium shadow-sm hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <Sparkles className="w-4 h-4" />
+          <span className="hidden sm:inline">Ask AI</span>
+        </button>
       </form>
 
-      {/* Filter Pills */}
+      {/* Filter chip bar. Type pills follow the canonical order: Data Products
+          → Datasets → Dashboards → Apps → Genie Spaces → leftover (Tables).
+          "Accessible to me" and "Certified" are first-class toggle chips; the
+          Filters popover (right) holds the remaining advanced controls. */}
       <div className="flex flex-wrap gap-2 items-center">
-        {/* All & Certified Section */}
-        <button 
+        <button
           onClick={() => setSelectedType('all')}
           className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
             selectedType === 'all'
-              ? 'bg-blue-50 text-blue-800 border-blue-200 shadow-sm'
+              ? 'bg-gray-900 text-white border-gray-900 shadow-sm'
               : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
           }`}
         >
           All
         </button>
-        
+
+        {/* First-class scope chips. */}
         <button
-          onClick={() => setShowCertifiedOnly(!showCertifiedOnly)}
+          onClick={() => setShowAccessibleOnly((v) => !v)}
+          aria-pressed={showAccessibleOnly}
           className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
-            showCertifiedOnly 
-              ? 'bg-green-50 text-green-800 border-green-200 shadow-sm' 
+            showAccessibleOnly
+              ? 'bg-primary/10 text-primary border-primary/30 shadow-sm'
               : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
           }`}
         >
-          <ShieldCheck className="w-4 h-4" />
-          Certified
+          <UserCheck className="w-4 h-4" /> Accessible to me
+        </button>
+        <button
+          onClick={() => setShowCertifiedOnly((v) => !v)}
+          aria-pressed={showCertifiedOnly}
+          className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
+            showCertifiedOnly
+              ? 'bg-green-50 text-green-800 border-green-200 shadow-sm'
+              : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+          }`}
+        >
+          <ShieldCheck className="w-4 h-4" /> Certified
         </button>
 
-        <div className="h-6 w-px bg-gray-300 mx-1" />
+        <span className="h-6 w-px bg-gray-200 mx-1" aria-hidden="true" />
 
-        {/* Type filters */}
-        <button 
-          onClick={() => setSelectedType('table')}
-          className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
-            selectedType === 'table'
-              ? 'bg-blue-50 text-blue-800 border-blue-200 shadow-sm'
-              : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-          }`}
-        >
-          <TableIcon className="w-4 h-4" /> Tables & Views
-        </button>
-        <button 
-          onClick={() => setSelectedType('dataset')}
-          className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
-            selectedType === 'dataset'
-              ? 'bg-blue-50 text-blue-800 border-blue-200 shadow-sm'
-              : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-          }`}
-        >
-          <Database className="w-4 h-4" /> Datasets
-        </button>
-        <button 
-          onClick={() => setSelectedType('data_product')}
-          className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
-            selectedType === 'data_product'
-              ? 'bg-blue-50 text-blue-800 border-blue-200 shadow-sm'
-              : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-          }`}
-        >
-          <Box className="w-4 h-4" /> Data Products
-        </button>
-        <button 
-          onClick={() => setSelectedType('dashboard')}
-          className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
-            selectedType === 'dashboard'
-              ? 'bg-blue-50 text-blue-800 border-blue-200 shadow-sm'
-              : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-          }`}
-        >
-          <LayoutDashboard className="w-4 h-4" /> Dashboards
-        </button>
-        <button 
-          onClick={() => setSelectedType('job')}
-          className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
-            selectedType === 'job'
-              ? 'bg-blue-50 text-blue-800 border-blue-200 shadow-sm'
-              : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-          }`}
-        >
-          <PlaySquare className="w-4 h-4" /> Jobs
-        </button>
-        <button 
-          onClick={() => setSelectedType('app')}
-          className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
-            selectedType === 'app'
-              ? 'bg-blue-50 text-blue-800 border-blue-200 shadow-sm'
-              : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-          }`}
-        >
-          <Server className="w-4 h-4" /> Apps
-        </button>
-        <button 
-          onClick={() => setSelectedType('genie_space')}
-          className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
-            selectedType === 'genie_space'
-              ? 'bg-blue-50 text-blue-800 border-blue-200 shadow-sm'
-              : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-          }`}
-        >
-          <Users className="w-4 h-4" /> Genie Spaces
-        </button>
+        {/* Always surface the core categories (Data Products, Datasets,
+            Dashboards) even when empty so users know they exist; show the
+            rest only when populated. Jobs are intentionally excluded. */}
+        {ASSET_TYPE_ORDER
+          .filter((t) => t !== 'job' && (
+            (typeCounts[t] || 0) > 0 || t === 'data_product' || t === 'dataset' || t === 'dashboard'
+          ))
+          .map((t) => {
+            const meta = ASSET_TYPES[t];
+            const Icon = meta.icon;
+            const active = selectedType === t;
+            const count = typeCounts[t] || 0;
+            return (
+              <button
+                key={t}
+                onClick={() => setSelectedType(active ? 'all' : t)}
+                className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
+                  active
+                    ? `${meta.accentBg} ${meta.accentText} ${meta.accentBorder} shadow-sm`
+                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                <Icon className="w-4 h-4" /> {meta.plural}
+                <span className={`text-xs ${active ? 'opacity-70' : 'text-gray-400'}`}>{count}</span>
+              </button>
+            );
+          })}
+
+        {/* Advanced filters (classification + domains) live in this popover,
+            anchored to the right end of the chip bar. */}
+        <div ref={filterRef} className="relative ml-auto">
+          <button
+            type="button"
+            onClick={() => setShowFilters((v) => !v)}
+            aria-expanded={showFilters}
+            title="Filters"
+            className={`relative inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium border transition-colors ${
+              showFilters || popoverFilterCount > 0
+                ? 'bg-primary/10 text-primary border-primary/30'
+                : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+            }`}
+          >
+            <SlidersHorizontal className="w-4 h-4" />
+            <span className="hidden sm:inline">Filters</span>
+            {popoverFilterCount > 0 && (
+              <span className="ml-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-white text-[10px] font-bold flex items-center justify-center">
+                {popoverFilterCount}
+              </span>
+            )}
+          </button>
+
+          {showFilters && (
+            <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-gray-200 p-4 z-40 animate-in fade-in slide-in-from-top-1 duration-150 text-left">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-semibold text-gray-800">Filters</h4>
+                {activeFilterCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearAllFilters}
+                    className="text-xs text-gray-500 hover:text-gray-900"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+
+              {/* Classification */}
+              {uniqueClassifications.length > 0 && (
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">Classification</div>
+                  <select
+                    value={selectedClassification}
+                    onChange={(e) => setSelectedClassification(e.target.value)}
+                    className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:ring-2 focus:ring-primary/30 outline-none"
+                  >
+                    <option value="all">Any classification</option>
+                    {uniqueClassifications.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Domains */}
+              {uniqueDomains.length > 0 && (
+                <div className={uniqueClassifications.length > 0 ? 'mt-4' : ''}>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">Domains</div>
+                  <div className="max-h-44 overflow-y-auto pr-1 space-y-0.5 custom-scrollbar">
+                    {uniqueDomains.map((domain) => {
+                      const checked = selectedDomains.includes(domain as string);
+                      return (
+                        <label
+                          key={domain as string}
+                          className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-gray-50 cursor-pointer text-sm text-gray-700"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleDomain(domain as string)}
+                            className="rounded border-gray-300 text-primary focus:ring-primary/40"
+                          />
+                          <span className="truncate">{domain}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {uniqueClassifications.length === 0 && uniqueDomains.length === 0 && (
+                <p className="text-sm text-gray-500">No additional filters available.</p>
+              )}
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Inline agent panel — answers questions without leaving the page. */}
+      {agentQuery && (
+        <div className="bg-white rounded-2xl border border-primary/20 shadow-sm overflow-hidden animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-primary/5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-gray-800">
+              <Sparkles className="w-4 h-4 text-primary" /> Agent
+            </div>
+            <button
+              type="button"
+              onClick={() => setAgentQuery(null)}
+              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+              title="Close agent"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="h-[440px] p-4">
+            <ChatView
+              ref={chatRef}
+              storageKey={INLINE_AGENT_STORAGE_KEY}
+              placeholder="Ask a follow-up question..."
+              onRoute={(route) => navigate(route.path)}
+            />
+          </div>
+        </div>
+      )}
 
       {!showResults ? (
         <div className="space-y-10 animate-in fade-in duration-500">
-          {/* Browse by domain */}
-          <section className="space-y-4">
-            <div className="flex justify-between items-end">
-              <div>
-                <h2 className="text-xl font-bold text-gray-900">Browse by domain</h2>
-                <p className="text-sm text-gray-500 mt-1">Explore data and insights organized by business area.</p>
-              </div>
-              <button className="text-sm text-primary hover:text-primary/80 font-medium flex items-center group">
-                View all <ChevronRight className="w-4 h-4 ml-0.5 group-hover:translate-x-0.5 transition-transform" />
-              </button>
-            </div>
-            
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {domainCounts.map(domain => {
-                const Icon = getDomainIcon(domain.name as string);
-                return (
-                  <div 
-                    key={domain.name}
-                    onClick={() => toggleDomain(domain.name as string)}
-                    className="bg-white p-5 rounded-xl border border-gray-200 hover:border-primary hover:shadow-md cursor-pointer transition-all group flex flex-col"
-                  >
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="p-2.5 bg-blue-50/50 rounded-lg group-hover:bg-primary/10 transition-colors">
-                        <Icon className="w-5 h-5 text-blue-600 group-hover:text-primary" />
-                      </div>
-                    </div>
-                    <h3 className="font-semibold text-gray-900 mb-1 group-hover:text-primary transition-colors">{domain.name}</h3>
-                    <p className="text-sm text-gray-500">{domain.count} assets</p>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
+          {/* Catalog 101 — teaches the asset vocabulary before domains. */}
+          <AssetTaxonomyExplainer />
 
-          {/* Featured Assets */}
-          {featuredAssets.length > 0 && (
-            <section className="space-y-4">
-              <div className="flex justify-between items-end">
-                <h2 className="text-xl font-bold text-gray-900">Featured Datasets</h2>
-                <button className="text-sm text-primary hover:text-primary/80 font-medium flex items-center group">
-                  View all <ChevronRight className="w-4 h-4 ml-0.5 group-hover:translate-x-0.5 transition-transform" />
-                </button>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {featuredAssets.map(asset => (
-                  <div 
-                    key={asset.id}
-                    onClick={() => setSelectedDataset(asset)}
-                    className="bg-white rounded-xl border border-gray-200 hover:border-primary hover:shadow-md cursor-pointer transition-all overflow-hidden flex flex-col group"
-                  >
-                    <div className="h-32 bg-gradient-to-br from-gray-50 to-gray-100 border-b border-gray-100 flex items-center justify-center p-4 relative overflow-hidden">
-                      <div className="absolute inset-0 bg-grid-gray-900/[0.04] bg-[size:16px_16px]" />
-                      <TableIcon className="w-12 h-12 text-gray-300 group-hover:scale-110 group-hover:text-primary/20 transition-transform duration-500 relative z-10" />
-                    </div>
-                    <div className="p-4 flex-1 flex flex-col">
-                      <div className="flex items-center gap-2 mb-2">
-                        <h3 className="font-semibold text-gray-900 truncate group-hover:text-primary transition-colors" title={asset.table_name}>{asset.table_name}</h3>
-                        {asset.certified && <ShieldCheck className="w-4 h-4 text-green-600 shrink-0" />}
-                      </div>
-                      <p className="text-xs text-gray-500 mb-4 line-clamp-2 flex-1 leading-relaxed">{asset.description}</p>
-                      <div className="flex items-center justify-between text-xs text-gray-400 mt-auto pt-3 border-t border-gray-100">
-                        <span className="truncate font-medium text-gray-500">{asset.domain}</span>
-                        <span className="bg-gray-100 px-2 py-0.5 rounded text-gray-600">{asset.type}</span>
-                      </div>
-                    </div>
+          {/* Shared rails (Pinned → Data Products → domains → Datasets),
+              reused from the agent landing. "Browse all" filters in place; a
+              card hands the question to the inline agent. */}
+          <CatalogRails
+            onAsk={submitAgentQuery}
+            onBrowseAll={(target) => setSelectedType(target)}
+            domainsSlot={
+              domainCounts.length > 0 ? (
+                <section className="space-y-3">
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-900">Browse by domain</h2>
+                    <p className="text-sm text-gray-500 mt-1">Explore data and insights organized by business area.</p>
                   </div>
-                ))}
-              </div>
-            </section>
-          )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {domainCounts.map(domain => {
+                      const Icon = getDomainIcon(domain.name as string);
+                      return (
+                        <div
+                          key={domain.name}
+                          onClick={() => toggleDomain(domain.name as string)}
+                          className="bg-white p-5 rounded-xl border border-gray-200 hover:border-primary hover:shadow-md cursor-pointer transition-all group flex flex-col"
+                        >
+                          <div className="flex items-start justify-between mb-4">
+                            <div className="p-2.5 bg-blue-50/50 rounded-lg group-hover:bg-primary/10 transition-colors">
+                              <Icon className="w-5 h-5 text-blue-600 group-hover:text-primary" />
+                            </div>
+                          </div>
+                          <h3 className="font-semibold text-gray-900 mb-1 group-hover:text-primary transition-colors">{domain.name}</h3>
+                          <p className="text-sm text-gray-500">{domain.count} assets</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              ) : null
+            }
+          />
         </div>
       ) : (
         /* Table Section (Search Results) */
@@ -632,13 +629,8 @@ export function DataDiscovery() {
             <h3 className="font-semibold text-gray-700">
               {filteredDatasets.length} {filteredDatasets.length === 1 ? 'result' : 'results'} found
             </h3>
-            <button 
-              onClick={() => {
-                setSearchTerm('');
-                setSelectedDomains([]);
-                setSelectedType('all');
-                setShowCertifiedOnly(false);
-              }}
+            <button
+              onClick={clearAllFilters}
               className="text-sm text-gray-500 hover:text-gray-900 flex items-center gap-1"
             >
               <X className="w-4 h-4" /> Clear all filters
@@ -648,9 +640,9 @@ export function DataDiscovery() {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Domain</th>
                   <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
-                  <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Table</th>
+                  <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Name</th>
+                  <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Domain</th>
                   <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Location</th>
                   <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Description</th>
                   <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider text-left">Actions</th>
@@ -659,7 +651,7 @@ export function DataDiscovery() {
               <tbody className="divide-y divide-gray-200">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center text-sm text-gray-500">
+                    <td colSpan={6} className="px-6 py-12 text-center text-sm text-gray-500">
                       <div className="flex flex-col items-center justify-center space-y-3">
                         <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                         <p>Loading data assets...</p>
@@ -668,15 +660,14 @@ export function DataDiscovery() {
                   </tr>
                 ) : filteredDatasets.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center text-sm text-gray-500">
-                      No datasets found matching your criteria.
+                    <td colSpan={6} className="px-6 py-12 text-center text-sm text-gray-500">
+                      No assets found matching your criteria.
                     </td>
                   </tr>
                 ) : filteredDatasets.map((ds) => (
                   <tr key={ds.id} className="hover:bg-gray-50 transition-colors group">
-                    <td className="px-6 py-4 whitespace-nowrap align-middle text-sm font-medium text-gray-900">{ds.domain}</td>
-                    <td className="px-6 py-4 whitespace-nowrap align-middle text-sm text-gray-500">
-                      <span className="bg-gray-100 px-2 py-1 rounded text-xs">{ds.type}</span>
+                    <td className="px-6 py-4 whitespace-nowrap align-middle">
+                      <AssetTypeBadge type={ds.type} />
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap align-middle text-sm font-medium text-gray-900">
                       <div className="flex items-center space-x-2">
@@ -688,6 +679,7 @@ export function DataDiscovery() {
                         )}
                       </div>
                     </td>
+                    <td className="px-6 py-4 whitespace-nowrap align-middle text-sm font-medium text-gray-900">{ds.domain}</td>
                     <td className="px-6 py-4 whitespace-nowrap align-middle text-sm text-gray-500 font-mono text-xs">{`${ds.catalog}.${ds.schema_name}`}</td>
                     <td className="px-6 py-4 text-sm align-middle text-gray-500 max-w-xs">
                       <div className="truncate" title={ds.description || undefined}>{ds.description}</div>

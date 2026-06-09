@@ -43,8 +43,8 @@ import type { UserPersona } from '../../types';
 // Command Center, Lakehouse) get spliced in based on branding config.
 const GROUP_ORDER = [
   'Discover & Analyze',
-  'Access & Provision',
   'Build & Customize',
+  'Access & Provision',
   'Learn & Share',
   'Governance',
   'Admin',

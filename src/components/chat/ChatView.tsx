@@ -158,6 +158,14 @@ export interface ChatViewProps {
      * descriptive button (e.g. "View reusable assets").
      */
     formCtaLabelFor?: (path: string) => string;
+    /**
+     * Optional content rendered *below* the input in the empty state.
+     * When provided, the empty state switches to a "landing" layout —
+     * the welcome + input sit near the top (Databricks One style) and
+     * this node (e.g. Data Products / Datasets rails) scrolls below it,
+     * instead of the input being pinned to the bottom of the surface.
+     */
+    emptyStateExtras?: React.ReactNode;
 }
 
 /**
@@ -186,6 +194,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         onModeChange,
         onRoute,
         formCtaLabelFor,
+        emptyStateExtras,
     },
     ref,
 ) {
@@ -934,7 +943,64 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             )}
 
             {/* Empty state — welcome content + initial input */}
-            {messages.length === 0 ? (
+            {messages.length === 0 && emptyStateExtras ? (
+                /* Databricks One-style landing: a prominent, higher-up input
+                   with rich content (Data Products / Datasets) scrolling
+                   below it. */
+                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                    <div className="max-w-3xl mx-auto w-full pt-6 px-1">
+                        {welcomeNode}
+                        <form onSubmit={handleSubmit} className="mt-6">
+                            <div className="relative">
+                                <Textarea
+                                    value={draft}
+                                    onChange={(e) => setDraft(e.target.value)}
+                                    placeholder={placeholder}
+                                    rows={3}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                            e.preventDefault();
+                                            const form = e.currentTarget.closest('form');
+                                            if (form && !isStreaming) form.requestSubmit();
+                                        }
+                                    }}
+                                    className="w-full rounded-2xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 min-h-[96px] max-h-[240px] py-4 pl-5 pr-16 text-base shadow-sm"
+                                />
+                                <Button
+                                    type="submit"
+                                    disabled={isStreaming || !draft.trim()}
+                                    className="absolute right-2.5 bottom-2.5 rounded-xl shadow-md hover:shadow-lg transition-all duration-200 h-10 w-10 p-0"
+                                >
+                                    <Send className="w-4 h-4 text-white" />
+                                </Button>
+                            </div>
+                            {modePicker}
+                        </form>
+                        {samplePrompts && samplePrompts.length > 0 && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full mt-4">
+                                {samplePrompts.map((q) => (
+                                    <button
+                                        key={q}
+                                        type="button"
+                                        onClick={() => {
+                                            if (isStreaming || pendingPoll) return;
+                                            setDraft('');
+                                            void submitTurn(q);
+                                        }}
+                                        disabled={isStreaming || !!pendingPoll}
+                                        className="relative p-2.5 rounded-xl border border-gray-200 hover:shadow-md hover:bg-white/80 hover:border-primary/50 transition-all duration-200 text-left group disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        <div className="text-[13px] font-medium text-gray-900 group-hover:text-primary transition-colors">
+                                            {q}
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    <div className="mt-10">{emptyStateExtras}</div>
+                </div>
+            ) : messages.length === 0 ? (
                 <div className="flex-1 flex flex-col">
                     {/* Welcome + sample prompts hug each other at the
                         top; a flex-1 spacer below pushes the input form

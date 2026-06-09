@@ -23,8 +23,8 @@ export interface AgentWelcomeExample {
 export interface AgentWelcomeProps {
     /** Short title, e.g. the agent / page name. */
     title: string;
-    /** One-line description of what the agent does. */
-    description: string;
+    /** One-line description of what the agent does. Omit to reclaim space. */
+    description?: string;
     /**
      * Optional example questions, rendered as non-clickable emphasized
      * lines. Each hints at a capability bucket via its `label`. Omit when a
@@ -43,7 +43,7 @@ export function AgentWelcome({ title, description, examples = [], icon }: AgentW
             </div>
             <div className="max-w-md">
                 <h2 className="text-xl font-semibold text-gray-900">{title}</h2>
-                <p className="text-sm text-gray-500 mt-1">{description}</p>
+                {description && <p className="text-sm text-gray-500 mt-1">{description}</p>}
             </div>
             {examples.length > 0 && (
                 <div className="flex flex-col gap-1.5 max-w-md">
