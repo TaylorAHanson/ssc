@@ -7,7 +7,7 @@ import {
   BookOpen, Calendar, GitBranch, AlertCircle, ChevronDown, ChevronUp,
   Link as LinkIcon, ArrowDownToLine, ArrowUpFromLine, Lock, Columns3,
   Key, ExternalLink, Network, Activity, Sparkles,
-  SlidersHorizontal, UserCheck
+  UserCheck
 } from 'lucide-react';
 import { api } from '../services/api';
 import type { DataAsset, TableDetailsResponse } from '../services/api';
@@ -61,15 +61,14 @@ export function DataDiscovery() {
   const [agentQuery, setAgentQuery] = useState<string | null>(null);
   const chatRef = useRef<ChatViewHandle | null>(null);
 
-  // Advanced filtering lives behind a filter icon to keep the toolbar clean.
-  const [showFilters, setShowFilters] = useState(false);
-  const filterRef = useRef<HTMLDivElement | null>(null);
+  // Domain selector — a chip-style dropdown in the filter bar.
+  const [showDomainMenu, setShowDomainMenu] = useState(false);
+  const domainRef = useRef<HTMLDivElement | null>(null);
 
   const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
   const [selectedType, setSelectedType] = useState<AssetTypeId | 'all'>('all');
   const [showCertifiedOnly, setShowCertifiedOnly] = useState(false);
   const [showAccessibleOnly, setShowAccessibleOnly] = useState(false);
-  const [selectedClassification, setSelectedClassification] = useState<string>('all');
   const [selectedDataset, setSelectedDataset] = useState<DataAsset | null>(null);
   
   // The catalog is served from a shared stale-while-revalidate cache so this
@@ -193,22 +192,22 @@ export function DataDiscovery() {
     return () => window.clearTimeout(id);
   }, [agentQuery]);
 
-  // Close the advanced-filter popover on outside click / Escape.
+  // Close the domain dropdown on outside click / Escape.
   useEffect(() => {
-    if (!showFilters) return;
+    if (!showDomainMenu) return;
     const onClick = (e: MouseEvent) => {
-      if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
-        setShowFilters(false);
+      if (domainRef.current && !domainRef.current.contains(e.target as Node)) {
+        setShowDomainMenu(false);
       }
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowFilters(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowDomainMenu(false); };
     document.addEventListener('mousedown', onClick);
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('mousedown', onClick);
       document.removeEventListener('keydown', onKey);
     };
-  }, [showFilters]);
+  }, [showDomainMenu]);
 
   const toggleDomain = (domain: string) => {
     setSelectedDomains(prev => 
@@ -219,15 +218,6 @@ export function DataDiscovery() {
   // "Accessible to me" is backed by the server-computed Unity Catalog access
   // set — an asset is accessible iff its ID is in that set.
   const isAccessibleToMe = (ds: any): boolean => accessibleIds.has(ds.id);
-
-  // Pull a classification tag (e.g. PII, U-NNPI) off an asset if present, for
-  // the advanced classification filter.
-  const assetClassification = (ds: any): string | null => {
-    if (ds.classification) return String(ds.classification);
-    const tags: string[] = Array.isArray(ds.tags) ? ds.tags : [];
-    const hit = tags.find(t => /pii|nnpi|confidential|restricted|classification/i.test(t));
-    return hit || null;
-  };
 
   const filteredDatasets = datasets.filter(ds => {
     const term = effectiveSearchTerm.toLowerCase();
@@ -243,27 +233,15 @@ export function DataDiscovery() {
 
     const matchesCertified = !showCertifiedOnly || ds.certified;
     const matchesAccessible = !(showAccessibleOnly && accessibleAvailable) || isAccessibleToMe(ds);
-    const matchesClassification = selectedClassification === 'all'
-      || assetClassification(ds) === selectedClassification;
 
     return matchesSearch && matchesDomain && matchesType && matchesCertified
-      && matchesAccessible && matchesClassification;
+      && matchesAccessible;
   });
 
   const activeFilterCount =
     selectedDomains.length +
     (showCertifiedOnly ? 1 : 0) +
-    (showAccessibleOnly ? 1 : 0) +
-    (selectedClassification !== 'all' ? 1 : 0);
-
-  // Only the controls that live inside the Filters popover (the chips for
-  // accessible/certified are surfaced separately) drive the popover badge.
-  const popoverFilterCount =
-    selectedDomains.length + (selectedClassification !== 'all' ? 1 : 0);
-
-  const uniqueClassifications = Array.from(new Set(
-    datasets.map(assetClassification).filter(Boolean) as string[]
-  )).sort();
+    (showAccessibleOnly ? 1 : 0);
 
   // Count of assets per normalized type, used to label the type pills.
   const typeCounts = datasets.reduce((acc, ds) => {
@@ -290,7 +268,6 @@ export function DataDiscovery() {
     setSelectedType('all');
     setShowCertifiedOnly(false);
     setShowAccessibleOnly(false);
-    setSelectedClassification('all');
   };
 
   const handleRequestAccess = async (dataset: DataAsset) => {
@@ -340,11 +317,6 @@ export function DataDiscovery() {
   };
 
   const uniqueDomains = Array.from(new Set(datasets.map(ds => ds.domain).filter(Boolean))).sort();
-  
-  const domainCounts = uniqueDomains.map(domain => ({
-    name: domain,
-    count: datasets.filter(ds => ds.domain === domain).length
-  }));
 
   // Determine if we should show the landing view or the search results view
   const showResults = effectiveSearchTerm !== '' || selectedType !== 'all' || activeFilterCount > 0;
@@ -434,6 +406,68 @@ export function DataDiscovery() {
           <ShieldCheck className="w-4 h-4" /> Certified
         </button>
 
+        {/* Domain selector — chip-style dropdown. */}
+        {uniqueDomains.length > 0 && (
+          <div ref={domainRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setShowDomainMenu((v) => !v)}
+              aria-expanded={showDomainMenu}
+              className={`px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 transition-colors border ${
+                selectedDomains.length > 0
+                  ? 'bg-primary/10 text-primary border-primary/30 shadow-sm'
+                  : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              <Database className="w-4 h-4" />
+              {selectedDomains.length === 0
+                ? 'All domains'
+                : selectedDomains.length === 1
+                  ? selectedDomains[0]
+                  : `${selectedDomains.length} domains`}
+              <ChevronDown className={`w-4 h-4 transition-transform ${showDomainMenu ? 'rotate-180' : ''}`} />
+            </button>
+
+            {showDomainMenu && (
+              <div className="absolute left-0 top-full mt-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 p-2 z-40 animate-in fade-in slide-in-from-top-1 duration-150 text-left">
+                <div className="flex items-center justify-between px-2 py-1.5">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Domains</span>
+                  {selectedDomains.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDomains([])}
+                      className="text-xs text-gray-500 hover:text-gray-900"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <div className="max-h-64 overflow-y-auto pr-1 space-y-0.5 custom-scrollbar">
+                  {uniqueDomains.map((domain) => {
+                    const Icon = getDomainIcon(domain as string);
+                    const checked = selectedDomains.includes(domain as string);
+                    return (
+                      <label
+                        key={domain as string}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-gray-50 cursor-pointer text-sm text-gray-700"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleDomain(domain as string)}
+                          className="rounded border-gray-300 text-primary focus:ring-primary/40"
+                        />
+                        <Icon className="w-4 h-4 text-gray-400" />
+                        <span className="truncate">{domain}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <span className="h-6 w-px bg-gray-200 mx-1" aria-hidden="true" />
 
         {/* Always surface the core categories (Data Products, Datasets,
@@ -464,93 +498,6 @@ export function DataDiscovery() {
             );
           })}
 
-        {/* Advanced filters (classification + domains) live in this popover,
-            anchored to the right end of the chip bar. */}
-        <div ref={filterRef} className="relative ml-auto">
-          <button
-            type="button"
-            onClick={() => setShowFilters((v) => !v)}
-            aria-expanded={showFilters}
-            title="Filters"
-            className={`relative inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium border transition-colors ${
-              showFilters || popoverFilterCount > 0
-                ? 'bg-primary/10 text-primary border-primary/30'
-                : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-            }`}
-          >
-            <SlidersHorizontal className="w-4 h-4" />
-            <span className="hidden sm:inline">Filters</span>
-            {popoverFilterCount > 0 && (
-              <span className="ml-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-white text-[10px] font-bold flex items-center justify-center">
-                {popoverFilterCount}
-              </span>
-            )}
-          </button>
-
-          {showFilters && (
-            <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-gray-200 p-4 z-40 animate-in fade-in slide-in-from-top-1 duration-150 text-left">
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="text-sm font-semibold text-gray-800">Filters</h4>
-                {activeFilterCount > 0 && (
-                  <button
-                    type="button"
-                    onClick={clearAllFilters}
-                    className="text-xs text-gray-500 hover:text-gray-900"
-                  >
-                    Reset
-                  </button>
-                )}
-              </div>
-
-              {/* Classification */}
-              {uniqueClassifications.length > 0 && (
-                <div>
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">Classification</div>
-                  <select
-                    value={selectedClassification}
-                    onChange={(e) => setSelectedClassification(e.target.value)}
-                    className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:ring-2 focus:ring-primary/30 outline-none"
-                  >
-                    <option value="all">Any classification</option>
-                    {uniqueClassifications.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {/* Domains */}
-              {uniqueDomains.length > 0 && (
-                <div className={uniqueClassifications.length > 0 ? 'mt-4' : ''}>
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">Domains</div>
-                  <div className="max-h-44 overflow-y-auto pr-1 space-y-0.5 custom-scrollbar">
-                    {uniqueDomains.map((domain) => {
-                      const checked = selectedDomains.includes(domain as string);
-                      return (
-                        <label
-                          key={domain as string}
-                          className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-gray-50 cursor-pointer text-sm text-gray-700"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleDomain(domain as string)}
-                            className="rounded border-gray-300 text-primary focus:ring-primary/40"
-                          />
-                          <span className="truncate">{domain}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {uniqueClassifications.length === 0 && uniqueDomains.length === 0 && (
-                <p className="text-sm text-gray-500">No additional filters available.</p>
-              )}
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Inline agent panel — answers questions without leaving the page. */}
@@ -585,43 +532,12 @@ export function DataDiscovery() {
           {/* Catalog 101 — teaches the asset vocabulary before domains. */}
           <AssetTaxonomyExplainer />
 
-          {/* Shared rails (Pinned → Data Products → domains → Datasets),
-              reused from the agent landing. "Browse all" filters in place; a
-              card hands the question to the inline agent. */}
+          {/* Shared rails (Pinned → Data Products → Datasets), reused from the
+              agent landing. "Browse all" filters in place; a card hands the
+              question to the inline agent. */}
           <CatalogRails
             onAsk={submitAgentQuery}
             onBrowseAll={(target) => setSelectedType(target)}
-            domainsSlot={
-              domainCounts.length > 0 ? (
-                <section className="space-y-3">
-                  <div>
-                    <h2 className="text-lg font-bold text-gray-900">Browse by domain</h2>
-                    <p className="text-sm text-gray-500 mt-1">Explore data and insights organized by business area.</p>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {domainCounts.map(domain => {
-                      const Icon = getDomainIcon(domain.name as string);
-                      return (
-                        <div
-                          key={domain.name}
-                          onClick={() => toggleDomain(domain.name as string)}
-                          className="bg-white p-5 rounded-xl border border-gray-200 hover:border-primary hover:shadow-md cursor-pointer transition-all group flex flex-col"
-                        >
-                          <div className="flex items-start justify-between mb-4">
-                            <div className="p-2.5 bg-blue-50/50 rounded-lg group-hover:bg-primary/10 transition-colors">
-                              <Icon className="w-5 h-5 text-blue-600 group-hover:text-primary" />
-                            </div>
-                          </div>
-                          <h3 className="font-semibold text-gray-900 mb-1 group-hover:text-primary transition-colors">{domain.name}</h3>
-                          <p className="text-sm text-gray-500">{domain.count} assets</p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              ) : null
-            }
           />
         </div>
       ) : (

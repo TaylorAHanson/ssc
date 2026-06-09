@@ -36,7 +36,14 @@ export function CatalogRails({
   const dataProducts = useMemo(() => odps.slice(0, 4), [odps]);
 
   const datasets = useMemo(
-    () => assets.filter((a) => normalizeAssetType(a.type) === 'dataset').slice(0, 4),
+    () =>
+      assets
+        // The Discover page treats `DATA_PRODUCT` data-assets as datasets (the
+        // governed "data product" concept lives in ODPS). Mirror that mapping
+        // here so the rail stays consistent across surfaces.
+        .map((a) => (a.type === 'DATA_PRODUCT' ? { ...a, type: 'dataset' } : a))
+        .filter((a) => normalizeAssetType(a.type) === 'dataset')
+        .slice(0, 4),
     [assets],
   );
 
@@ -91,54 +98,59 @@ export function CatalogRails({
         )}
       </section>
 
-      {/* Data Products */}
-      {dataProducts.length > 0 && (
-        <Rail title="Data Products" onBrowseAll={() => onBrowseAll('data_product')}>
-          {dataProducts.map((dp) => {
-            const item = dpItem(dp);
-            return (
-              <AssetCard
-                key={dp.id}
-                type="data_product"
-                title={dp.name}
-                subtitle={dp.description || 'Governed data product'}
-                pinned={isPinned(item.key)}
-                onTogglePin={() => togglePin(item)}
-                onClick={() => askAbout(dp.name, 'data product')}
-              />
-            );
-          })}
-        </Rail>
-      )}
+      {/* Data Products — always shown so the section is discoverable, with an
+          empty state when there's nothing to list yet. */}
+      <Rail
+        title="Data Products"
+        onBrowseAll={() => onBrowseAll('data_product')}
+        emptyText={dataProducts.length === 0 ? 'No data products are available yet.' : undefined}
+      >
+        {dataProducts.map((dp) => {
+          const item = dpItem(dp);
+          return (
+            <AssetCard
+              key={dp.id}
+              type="data_product"
+              title={dp.name}
+              subtitle={dp.description || 'Governed data product'}
+              pinned={isPinned(item.key)}
+              onTogglePin={() => togglePin(item)}
+              onClick={() => askAbout(dp.name, 'data product')}
+            />
+          );
+        })}
+      </Rail>
 
       {/* Optional domains browser, slotted under Data Products. */}
       {domainsSlot}
 
-      {/* Datasets */}
-      {datasets.length > 0 && (
-        <Rail title="Datasets" onBrowseAll={() => onBrowseAll('dataset')}>
-          {datasets.map((ds) => {
-            const item = dsItem(ds);
-            return (
-              <AssetCard
-                key={ds.id}
-                type={ds.type}
-                title={ds.table_name || ds.name}
-                subtitle={ds.description}
-                certified={ds.certified}
-                pinned={isPinned(item.key)}
-                onTogglePin={() => togglePin(item)}
-                onClick={() =>
-                  askAbout(
-                    ds.table_name || ds.name,
-                    normalizeAssetType(ds.type) === 'dataset' ? 'dataset' : 'asset',
-                  )
-                }
-              />
-            );
-          })}
-        </Rail>
-      )}
+      {/* Datasets — always shown, with an empty state when none exist. */}
+      <Rail
+        title="Datasets"
+        onBrowseAll={() => onBrowseAll('dataset')}
+        emptyText={datasets.length === 0 ? 'No datasets are available yet.' : undefined}
+      >
+        {datasets.map((ds) => {
+          const item = dsItem(ds);
+          return (
+            <AssetCard
+              key={ds.id}
+              type={ds.type}
+              title={ds.table_name || ds.name}
+              subtitle={ds.description}
+              certified={ds.certified}
+              pinned={isPinned(item.key)}
+              onTogglePin={() => togglePin(item)}
+              onClick={() =>
+                askAbout(
+                  ds.table_name || ds.name,
+                  normalizeAssetType(ds.type) === 'dataset' ? 'dataset' : 'asset',
+                )
+              }
+            />
+          );
+        })}
+      </Rail>
     </div>
   );
 }
@@ -146,10 +158,13 @@ export function CatalogRails({
 function Rail({
   title,
   onBrowseAll,
+  emptyText,
   children,
 }: {
   title: string;
   onBrowseAll?: () => void;
+  /** When set, an empty-state card is rendered instead of the grid. */
+  emptyText?: string;
   children: ReactNode;
 }) {
   return (
@@ -167,7 +182,13 @@ function Rail({
           </button>
         )}
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">{children}</div>
+      {emptyText ? (
+        <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50/50 p-6 text-center">
+          <p className="text-sm text-gray-500">{emptyText}</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">{children}</div>
+      )}
     </section>
   );
 }
