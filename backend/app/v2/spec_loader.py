@@ -68,6 +68,8 @@ def _validate_gate(stage: Dict[str, Any], where: str) -> None:
         raise SpecError(f"{where}.type must be one of {sorted(GATE_TYPES)}")
     if "auto_approve" in stage and stage["auto_approve"] is not None:
         _validate_expr(stage["auto_approve"], f"{where}.auto_approve", allow_item=False)
+    if "approvers_from" in stage and stage["approvers_from"] is not None:
+        _validate_expr(stage["approvers_from"], f"{where}.approvers_from", allow_item=False)
 
 
 def _validate_step(stage: Dict[str, Any], where: str) -> None:
@@ -82,6 +84,11 @@ def _validate_step(stage: Dict[str, Any], where: str) -> None:
 
     if "run_if" in stage and stage["run_if"] is not None:
         _validate_expr(stage["run_if"], f"{where}.run_if", allow_item=False)
+
+    if "writes_context" in stage and stage["writes_context"] is not None:
+        wc = stage["writes_context"]
+        if not isinstance(wc, list) or not all(isinstance(k, str) and k for k in wc):
+            raise SpecError(f"{where}.writes_context must be a list of non-empty strings")
 
     args = stage.get("args", {})
     if not isinstance(args, dict):
@@ -135,6 +142,13 @@ def _auto_approve_fn(auto_spec: Any):
     return fn
 
 
+def _value_fn(value_spec: Any):
+    """Closure that evaluates an expression to its raw value (no bool coercion)."""
+    def fn(ctx: Dict[str, Any]) -> Any:
+        return expr.evaluate(value_spec, {"ctx": ctx, "item": None})
+    return fn
+
+
 def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
     """Compile a validated JSON spec into a runtime :class:`WorkflowSpec`."""
     validate_spec_dict(data)
@@ -147,6 +161,8 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
                 waiting_status=stage.get("waiting_status", "manager_approval"),
                 auto_approve=_auto_approve_fn(stage["auto_approve"])
                 if stage.get("auto_approve") is not None else None,
+                approvers_from=_value_fn(stage["approvers_from"])
+                if stage.get("approvers_from") is not None else None,
             ))
         else:
             step = Step(
@@ -162,6 +178,8 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
                 step.item_args = _item_args_fn(stage.get("item_args", {}))
             if stage.get("run_if") is not None:
                 step.run_if = _auto_approve_fn(stage["run_if"])  # bool predicate over ctx
+            if stage.get("writes_context") is not None:
+                step.writes_context = list(stage["writes_context"])
             stages.append(step)
 
     return WorkflowSpec(

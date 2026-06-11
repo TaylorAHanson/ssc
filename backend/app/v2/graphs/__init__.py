@@ -1,15 +1,13 @@
 """V2 graph registry: request type -> compiled-graph builder.
 
 The durable executor looks a request's type up here to get its graph. In V2
-these graphs are the published *Workflows* (M3); most are generated from
-declarative specs (``specs.py``), with ``data_access`` keeping a dedicated graph
-for multi-owner resolution.
+these graphs are the published *Workflows* (M3): a workflow is a ``graph_spec``
+(data). Every type is generated from the declarative spec catalog (``specs.py``)
+— there is no longer a dedicated hand-authored code-graph path. Code is just the
+seed; a published DB ``graph_spec`` overrides it (see ``build_graph_for``).
 """
 import logging
 from typing import Any, Callable, Dict, Optional
-
-from app.models.request import RequestType
-from app.v2.graphs import data_access
 
 logger = logging.getLogger(__name__)
 from app.v2.graphs.specs import (
@@ -19,17 +17,8 @@ from app.v2.graphs.specs import (
     ui_stage_ids,
 )
 
-# Dedicated (hand-authored) graphs.
-GRAPH_BUILDERS: Dict[str, Callable] = {
-    RequestType.DATA_ACCESS_REQUEST.value: data_access.build_graph,
-    RequestType.CATALOG_SCHEMA_TABLE_ACCESS.value: data_access.build_graph,
-    RequestType.BATCH_DATA_ACCESS.value: data_access.build_graph,
-}
-
-# Spec-generated graphs (everything else) compiled from the data catalog.
-# Dedicated entries win on conflict.
-for _rt, _builder in SPEC_FACTORIES.items():
-    GRAPH_BUILDERS.setdefault(_rt, _builder)
+# Every request type's graph is generated from the data catalog (specs.py).
+GRAPH_BUILDERS: Dict[str, Callable] = dict(SPEC_FACTORIES)
 
 
 def get_graph_builder(request_type) -> Callable:

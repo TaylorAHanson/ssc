@@ -1,11 +1,11 @@
 """
 Declarative workflow specs -> LangGraph graphs.
 
-The V2 "workflows as data" thesis: most workflows are a linear sequence of
-*stages* — human approval gates and provision steps — so we describe them as
-data (:class:`WorkflowSpec`) and compile them to a durable LangGraph graph with
-one generic builder. Specialized pipelines (enforcement, reporting, job runs,
-orchestrators) get dedicated builders in ``graphs/special.py``.
+The V2 "workflows as data" thesis: a workflow is a linear sequence of *stages* —
+human approval gates and provision steps — so we describe them as data
+(:class:`WorkflowSpec`) and compile them to a durable LangGraph graph with one
+generic builder. Every registered request type is expressed this way (the data
+catalog lives in ``graphs/specs.py``); there is no dedicated code-graph path.
 
 Stage ordering is preserved exactly, so a plan-between-gates flow like
 ``[Gate(manager), Step(plan), Gate(platform_admin, reviews plan), Step(apply)]``
@@ -47,6 +47,12 @@ class Gate:
     waiting_status: str = "manager_approval"   # RequestStatus while paused
     # Skip the gate entirely when this predicate of context is true (auto-approve).
     auto_approve: Optional[Callable[[Dict[str, Any]], bool]] = None
+    # Optional expression of context that resolves the gate's approver(s) at
+    # runtime — e.g. data-owner groups discovered by a prior resolve step. When
+    # set, the resolved value is surfaced in the interrupt payload (as both
+    # ``data_owners`` and ``approvers``) so the approval layer can route to the
+    # right people. This is what lets a data_owner gate be fully data-defined.
+    approvers_from: Optional[Callable[[Dict[str, Any]], Any]] = None
 
 
 @dataclass
@@ -66,6 +72,10 @@ class Step:
     # branching — e.g. only run an extra approval/notification step for certain
     # request shapes. When None, the step always runs.
     run_if: Optional[Callable[[Dict[str, Any]], bool]] = None
+    # Keys to lift from this step's (single, non-fan-out) tool result into the
+    # graph ``context`` so later stages can read them — e.g. a resolve_owners
+    # step writing ``data_owners`` for a downstream gate's ``approvers_from``.
+    writes_context: Optional[List[str]] = None
 
 
 Stage = Union[Gate, Step]
@@ -90,13 +100,18 @@ def _gate_node(gate: Gate):
             gates[gate.name] = True
             logger.info("[%s] gate '%s' auto-approved", state["request_id"], gate.name)
             return {"gates": gates, "status": gate.waiting_status}
-        decision = interrupt(
-            {
-                "type": gate.type,
-                "gate": gate.name,
-                "request_id": state["request_id"],
-            }
-        )
+        payload: Dict[str, Any] = {
+            "type": gate.type,
+            "gate": gate.name,
+            "request_id": state["request_id"],
+        }
+        if gate.approvers_from is not None:
+            approvers = gate.approvers_from(ctx)
+            # Surface under both keys: ``data_owners`` keeps parity with the old
+            # dedicated data-access graph; ``approvers`` is the generic name.
+            payload["data_owners"] = approvers
+            payload["approvers"] = approvers
+        decision = interrupt(payload)
         approved, reason = _decode_decision(decision)
         gates[gate.name] = approved
         out: WorkflowState = {"gates": gates}
@@ -159,7 +174,17 @@ def _step_node(step: Step):
                          {"step": step.name, "results": step_results}, actor="system")
         finally:
             db.close()
-        return {"results": results, "status": step.running_status}
+        out: WorkflowState = {"results": results, "status": step.running_status}
+        # Propagate selected result keys into context for downstream stages
+        # (e.g. resolved data_owners feeding a gate's approvers_from).
+        if step.writes_context and len(step_results) == 1 and isinstance(step_results[0], dict):
+            res0 = step_results[0]
+            new_ctx = dict(ctx)
+            for key in step.writes_context:
+                if key in res0:
+                    new_ctx[key] = res0[key]
+            out["context"] = new_ctx
+        return out
 
     return node
 

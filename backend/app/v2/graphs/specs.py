@@ -8,8 +8,9 @@ dicts are the single source of truth: they compile to runtime ``WorkflowSpec``s
 seed writes into a Workflow's ``graph_spec`` so an admin can edit a workflow's gates
 and provisioning steps in the UI instead of changing this file and redeploying.
 
-Only ``data_access`` keeps a dedicated hand-authored graph (multi-owner
-resolution); everything else lives here as data.
+Every executable workflow lives here as data — including data access, whose
+runtime multi-owner resolution is now expressed with a ``resolve_data_owners``
+step + a gate ``approvers_from`` expression rather than a dedicated code graph.
 """
 from app.models.request import RequestType
 from app.v2.spec import build_spec_graph
@@ -22,6 +23,50 @@ _REQ_ID = {"$var": "request_id"}
 
 def _var(path, default=None):
     return {"$var": {"path": path, "default": default}} if default is not None else {"$var": path}
+
+
+# Normalized asset list for data-access flows: prefer ctx["assets"], else
+# synthesize a single-element list from the flat asset_name/asset_type fields
+# (mirrors the old data_access graph's ``_assets`` helper).
+_ASSETS = {
+    "$coalesce": [
+        {"$var": "assets"},
+        {"$list": [{"$obj": {"asset_name": {"$var": "asset_name"},
+                             "asset_type": {"$var": "asset_type"}}}]},
+    ]
+}
+
+
+def _data_access_spec(name: str) -> dict:
+    """Data-access workflow as data: resolve owners -> data-owner gate -> grant.
+
+    Replaces the former dedicated ``graphs/data_access.py`` code graph. The
+    runtime owner discovery is a ``resolve_data_owners`` step whose result is
+    lifted into context (``writes_context``) so the gate's ``approvers_from``
+    can route the approval to the resolved owner group(s). Grants fan out one
+    per asset via ``for_each``, each through the governed ToolExecutor.
+    """
+    return {
+        "name": name,
+        # The grant step writes the access_granted fact (parity with the old
+        # graph, which emitted it at provision time), so no complete_fact here.
+        "stages": [
+            {"kind": "step", "name": "resolve_owners", "tool": "resolve_data_owners",
+             "running_status": "data_owner_approval",
+             "writes_context": ["data_owners"],
+             "args": {"assets": _ASSETS, "data_owners": {"$var": "data_owners"}}},
+            {"kind": "gate", "name": "await_approval", "type": "data_owner",
+             "waiting_status": "data_owner_approval",
+             "approvers_from": {"$var": "data_owners"}},
+            {"kind": "step", "name": "provision", "tool": "grant_uc_access",
+             "approvals": ["data_owner"], "success_fact": "access_granted",
+             "for_each": _ASSETS,
+             "item_args": {"asset_type": {"$item": "asset_type"},
+                           "asset_name": {"$item": "asset_name"},
+                           "principal": {"$var": "requested_by_email"},
+                           "access_level": {"$var": "access_level"}}},
+        ],
+    }
 
 
 # --------------------------------------------------------------------------
@@ -280,6 +325,10 @@ SPECS = {
              "args": {"subject": "Deduplication complete", "body": _var("summary", "")}},
         ],
     },
+    # Data access (was a dedicated code graph): one spec, three request types.
+    RequestType.DATA_ACCESS_REQUEST.value: _data_access_spec("data_access"),
+    RequestType.CATALOG_SCHEMA_TABLE_ACCESS.value: _data_access_spec("catalog_schema_table_access"),
+    RequestType.BATCH_DATA_ACCESS.value: _data_access_spec("batch_data_access"),
 }
 
 
@@ -290,28 +339,14 @@ def make_spec_builder(spec_dict):
     return builder
 
 
-# RequestType.value -> no-arg graph builder. data_access uses a dedicated graph.
+# RequestType.value -> no-arg graph builder. Every type is spec-generated.
 SPEC_FACTORIES = {rt: make_spec_builder(spec) for rt, spec in SPECS.items()}
-
-
-# Node order for the dedicated data_access graph (kept in sync with graphs/data_access.py).
-_DATA_ACCESS_STAGES = ["resolve_owners", "await_approval", "provision"]
-_DATA_ACCESS_TYPES = (
-    RequestType.DATA_ACCESS_REQUEST.value,
-    RequestType.CATALOG_SCHEMA_TABLE_ACCESS.value,
-    RequestType.BATCH_DATA_ACCESS.value,
-)
 
 
 def ui_stage_ids(request_type) -> list:
     """Ordered UI states for a request type: pending -> stages... -> completed."""
     key = getattr(request_type, "value", request_type)
-    if key in SPECS:
-        stage_names = [s["name"] for s in SPECS[key].get("stages", [])]
-    elif key in _DATA_ACCESS_TYPES:
-        stage_names = list(_DATA_ACCESS_STAGES)
-    else:
-        stage_names = []
+    stage_names = [s["name"] for s in SPECS[key].get("stages", [])] if key in SPECS else []
     return ["pending"] + stage_names + ["completed"]
 
 
@@ -323,12 +358,6 @@ def stage_specs(request_type) -> list:
     key = getattr(request_type, "value", request_type)
     if key in SPECS:
         return stage_specs_from_dict(SPECS[key])
-    if key in _DATA_ACCESS_TYPES:
-        return [
-            {"name": "resolve_owners", "kind": "step", "gate_type": None, "success_fact": None},
-            {"name": "await_approval", "kind": "gate", "gate_type": "data_owner", "success_fact": None},
-            {"name": "provision", "kind": "step", "gate_type": None, "success_fact": "access_granted"},
-        ]
     return []
 
 

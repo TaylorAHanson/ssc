@@ -25,7 +25,7 @@ _DOC_TITLE = "Authoring Workflows (Workflows) — Guide"
 
 # Bump when the canonical guide content changes and you want existing installs to
 # pick it up. The seed only rewrites the doc when its stored revision is older.
-GUIDE_REVISION = 3
+GUIDE_REVISION = 4
 _REVISION_TAG_PREFIX = "guide-rev:"
 
 GUIDE_MARKDOWN = """\
@@ -81,9 +81,35 @@ Rules:
 Gates can **auto-approve**: set `auto_approve` to an expression that returns true
 to skip the pause (e.g. low-risk scopes).
 
+### Runtime-resolved approvers (`approvers_from`)
+
+A gate's approver(s) don't have to be static. Set `approvers_from` to an
+expression of context, and its value is surfaced to the approval layer (as both
+`data_owners` and `approvers`). Pair it with a prior **resolve step** that
+discovers the approvers and writes them into context (see `writes_context`
+below). This is how the data-access workflow routes to whichever owner group
+owns the requested assets — no code:
+
+```json
+{"kind": "step", "name": "resolve_owners", "tool": "resolve_data_owners",
+ "writes_context": ["data_owners"],
+ "args": {"assets": {"$var": "assets"}}},
+{"kind": "gate", "name": "await_approval", "type": "data_owner",
+ "approvers_from": {"$var": "data_owners"}}
+```
+
+## Passing values between stages (`writes_context`)
+
+A step normally records its tool output under `results`. To make a value
+available to **later** stages (a gate's `approvers_from`, another step's `args`,
+a `run_if`), add `writes_context`: a list of keys to lift from the step's tool
+result into the shared context. Only applies to single (non-`for_each`) steps.
+The `resolve_data_owners` tool returns `{"data_owners": [...]}`, so
+`"writes_context": ["data_owners"]` puts that list in context for the gate.
+
 ## Expression mini-language
 
-Dynamic values (`args`, `auto_approve`, `for_each`, `item_args`) use a small JSON
+Dynamic values (`args`, `auto_approve`, `approvers_from`, `for_each`, `item_args`) use a small JSON
 expression language (no code). A one-key object whose key starts with `$` is an
 operation; anything else is a literal.
 

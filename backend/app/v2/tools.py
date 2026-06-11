@@ -87,6 +87,54 @@ async def grant_uc_access(asset_type: str, asset_name: str, principal: str,
     return {"asset_name": asset_name, "result": result}
 
 
+class ResolveDataOwnersInput(BaseModel):
+    assets: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Assets to resolve owners for: [{asset_name, asset_type}, ...]",
+    )
+    data_owners: Optional[List[str]] = Field(
+        None, description="Pre-supplied owners; when set they are returned as-is (no lookup)."
+    )
+
+
+@tool(name="resolve_data_owners", args_schema=ResolveDataOwnersInput, side_effect_class="read",
+      description="Resolve the data-owner approver group(s) for the requested assets from UC "
+                  "tags (approver_group), falling back to the asset owner. Read-only.")
+async def resolve_data_owners(assets: Optional[List[Dict[str, Any]]] = None,
+                              data_owners: Optional[List[str]] = None,
+                              **kwargs) -> Dict[str, Any]:
+    """Owner resolution for data-access gates, as a tool.
+
+    Lets the declarative spec engine express what used to require the dedicated
+    ``data_access`` code graph: a pre-gate step that discovers who must approve.
+    Best-effort — if the provider is unavailable we return whatever owners the
+    caller already had so the gate still renders.
+    """
+    owners = list(data_owners or [])
+    if not owners and assets:
+        from app.core.config import settings
+        tag_key = settings.APPROVER_GROUP_TAG_KEY
+        try:
+            provider = _get_databricks_provider()
+            found = set()
+            for asset in assets:
+                name, atype = asset.get("asset_name"), asset.get("asset_type")
+                if not (name and atype):
+                    continue
+                tags = await provider.get_asset_tags(atype, name, [tag_key])
+                grp = tags.get(tag_key)
+                if grp:
+                    found.add(grp)
+                else:
+                    owner = await provider.get_asset_owner(atype, name)
+                    if owner:
+                        found.add(owner)
+            owners = sorted(found)
+        except Exception as e:  # noqa: BLE001 - degrade gracefully like the old graph
+            logger.warning("resolve_data_owners degraded: %s", e)
+    return {"ok": True, "data_owners": owners}
+
+
 # --------------------------------------------------------------------------
 # Infra tools (Terraform / GitOps)
 # --------------------------------------------------------------------------

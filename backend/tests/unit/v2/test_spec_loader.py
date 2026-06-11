@@ -115,6 +115,85 @@ def test_run_if_absent_means_always_runs():
     assert compiled.stages[1].run_if is None
 
 
+def test_approvers_from_validates_and_compiles():
+    spec = _good_spec()
+    spec["stages"][0]["approvers_from"] = {"$var": "data_owners"}
+    validate_spec_dict(spec)  # no raise
+    gate = spec_from_dict(spec).stages[0]
+    assert gate.approvers_from is not None
+    assert gate.approvers_from({"data_owners": ["grp-a", "grp-b"]}) == ["grp-a", "grp-b"]
+    assert gate.approvers_from({}) is None  # raw value, not bool-coerced
+
+
+def test_approvers_from_rejects_bad_expression():
+    spec = _good_spec()
+    spec["stages"][0]["approvers_from"] = {"$nope": [1]}
+    with pytest.raises(SpecError, match="approvers_from"):
+        validate_spec_dict(spec)
+
+
+def test_approvers_from_absent_means_static_gate():
+    assert spec_from_dict(_good_spec()).stages[0].approvers_from is None
+
+
+def test_writes_context_validates_and_compiles():
+    spec = _good_spec()
+    spec["stages"][1]["writes_context"] = ["data_owners"]
+    validate_spec_dict(spec)  # no raise
+    step = spec_from_dict(spec).stages[1]
+    assert step.writes_context == ["data_owners"]
+
+
+@pytest.mark.parametrize("bad", ["data_owners", [1, 2], [""], {}])
+def test_writes_context_rejects_non_string_list(bad):
+    spec = _good_spec()
+    spec["stages"][1]["writes_context"] = bad
+    with pytest.raises(SpecError, match="writes_context"):
+        validate_spec_dict(spec)
+
+
+# --- data access: now data, not a dedicated code graph -------------------
+
+def test_data_access_is_data_defined_with_resolve_gate_grant():
+    """The former dedicated data_access graph is now a graph_spec: a
+    resolve_owners step lifts data_owners into context, the data_owner gate reads
+    them via approvers_from, and grants fan out per asset."""
+    from app.models.request import RequestType
+
+    data = SPECS[RequestType.DATA_ACCESS_REQUEST.value]
+    spec = spec_from_dict(data)            # validates + compiles
+    build_spec_graph(spec)                 # builds a StateGraph
+    resolve, gate, grant = spec.stages
+
+    assert resolve.tool.name == "resolve_data_owners"
+    assert resolve.writes_context == ["data_owners"]
+    assert resolve.tool.is_mutating is False  # owner discovery is read-only
+
+    assert gate.type == "data_owner"
+    assert gate.approvers_from is not None
+    assert gate.approvers_from({"data_owners": ["owners-grp"]}) == ["owners-grp"]
+
+    assert grant.tool.name == "grant_uc_access"
+    assert grant.for_each is not None
+    assets = [{"asset_name": "main.sales.orders", "asset_type": "table"}]
+    assert grant.for_each({"assets": assets}) == assets
+    # Single flat asset is synthesized into the list when `assets` is absent.
+    one = grant.for_each({"asset_name": "main.x.y", "asset_type": "schema"})
+    assert one == [{"asset_name": "main.x.y", "asset_type": "schema"}]
+    item = grant.item_args(
+        {"requested_by_email": "u@corp.com", "access_level": "read"}, assets[0])
+    assert item == {"asset_type": "table", "asset_name": "main.sales.orders",
+                    "principal": "u@corp.com", "access_level": "read"}
+
+
+def test_resolve_data_owners_is_registered_read_tool():
+    assert has_tool("resolve_data_owners")
+    meta = {t["name"]: t for t in available_tools()}["resolve_data_owners"]
+    assert meta["is_mutating"] is False
+    assert meta["side_effect_class"] == "read"
+    assert set(meta["args"]) == {"assets", "data_owners"}
+
+
 def test_for_each_and_item_args_closures():
     spec = spec_from_dict({
         "name": "fan_out",

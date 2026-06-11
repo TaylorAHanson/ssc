@@ -532,18 +532,21 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
   - Checkpointer factory (`backend/app/v2/checkpointer.py`): AsyncSqliteSaver (local) /
     AsyncPostgresSaver (Lakebase), thread = `request.id`.
   - `DurableWorkflowExecutor` (`backend/app/v2/executor.py`) + graph registry
-    (`backend/app/v2/graphs/`). `data_access` ported as a graph (`graphs/data_access.py`)
-    with native `interrupt()` HITL; provisioning runs through the M1 `ToolExecutor` via a
-    `data_grant` tool (`backend/app/v2/tools.py`, kept out of `app/tools/` so it isn't
-    chat-exposed pre-capability-scoping).
+    (`backend/app/v2/graphs/`). Every graph is generated from the declarative spec
+    catalog (`graphs/specs.py`) with native `interrupt()` HITL; provisioning runs through
+    the M1 `ToolExecutor` via tools like `grant_uc_access` (`backend/app/v2/tools.py`, kept
+    out of `app/tools/` so it isn't chat-exposed pre-capability-scoping).
   - Verified end-to-end: fresh run pauses at approval interrupt; idle tick makes no progress;
     **crash-resume** (new executor instance) resumes from the checkpoint and grants exactly
     once; rejection path terminates. (The old `V2_ENGINE_ENABLED` flag has been removed — V2
     is the only engine; the poller advances these graphs unconditionally.)
 - **M4 — Workflow coverage (DONE, verified).**
   - Declarative `WorkflowSpec` (gates + steps) -> generic `build_spec_graph` (`app/v2/spec.py`):
-    the "workflows as data" thesis. All 25 registered request types expressed as graphs
-    (`app/v2/graphs/specs.py`); `data_access` keeps a dedicated graph.
+    the "workflows as data" thesis. **All 25 registered request types** are data-defined
+    `graph_spec`s (`app/v2/graphs/specs.py`) — there is no dedicated code-graph path. Data
+    access (multi-owner) is expressed with a `resolve_data_owners` step that lifts the
+    resolved owners into context (`writes_context`) for a `data_owner` gate's
+    `approvers_from` expression, plus a `for_each` grant fan-out.
   - Provider operations wrapped as mutating V2 tools (`app/v2/tools.py`): `grant_uc_access`,
     `terraform_plan/apply`, `create_uc_object`, `create_service_principal`, `github_*`,
     `add_group_membership`, `send_notification`, `sentinel_*`, `run_notebook_job`,

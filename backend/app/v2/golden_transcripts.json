@@ -21,6 +21,7 @@
     "mutating": 1,
     "status": "completed",
     "tools": [
+      "resolve_data_owners",
       "grant_uc_access"
     ]
   },
@@ -47,6 +48,7 @@
     "mutating": 1,
     "status": "completed",
     "tools": [
+      "resolve_data_owners",
       "grant_uc_access"
     ]
   },
@@ -63,6 +65,7 @@
     "mutating": 1,
     "status": "completed",
     "tools": [
+      "resolve_data_owners",
       "grant_uc_access"
     ]
   },
