@@ -59,6 +59,22 @@ def test_in_operator():
     assert ev({"$in": ["x", {"$var": "roles"}]}, {"roles": ["manager"]}) is False
 
 
+def test_contains_operator_is_inverse_of_in():
+    # list membership: tags contains "pii"
+    assert ev({"$contains": [{"$var": "tags"}, "pii"]}, {"tags": ["pii", "sox"]}) is True
+    assert ev({"$contains": [{"$var": "tags"}, "x"]}, {"tags": ["pii"]}) is False
+    # substring membership
+    assert ev({"$contains": [{"$var": "topic"}, "Spark"]}, {"topic": "Spark Tuning"}) is True
+    # non-iterable haystack -> False, never raises
+    assert ev({"$contains": [{"$var": "n"}, "x"]}, {"n": 5}) is False
+    validate({"$contains": [{"$var": "tags"}, "pii"]})
+
+
+def test_unknown_operator_lists_supported_ops():
+    with pytest.raises(ExprError, match=r"\$contains"):
+        validate({"$regex": ["a", "b"]})
+
+
 # --- coalesce / obj / list ------------------------------------------------
 
 def test_coalesce_mirrors_or_chains():
@@ -70,6 +86,19 @@ def test_coalesce_mirrors_or_chains():
               {"recipients": []}) == [None]
     assert ev({"$coalesce": [{"$var": "recipients"}, {"$list": [None]}]},
               {"recipients": ["a@corp.com"]}) == ["a@corp.com"]
+
+
+def test_concat_joins_parts_and_drops_none():
+    # Literals + ctx vars, with a non-string coerced and a missing var dropped.
+    expr = {"$concat": ["New training request: ", {"$var": "topic"},
+                        " for ", {"$var": "count"}, " people", {"$var": "missing"}]}
+    validate(expr)
+    assert ev(expr, {"topic": "Spark Tuning", "count": 12}) == \
+        "New training request: Spark Tuning for 12 people"
+    # Nested inside a notification-body $obj.
+    body = {"$obj": {"subject": {"$concat": ["Req: ", {"$var": "topic"}]}}}
+    validate(body)
+    assert ev(body, {"topic": "X"}) == {"subject": "Req: X"}
 
 
 def test_obj_and_list_build_dynamic_structures():

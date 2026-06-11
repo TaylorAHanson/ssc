@@ -67,6 +67,57 @@ async def test_permanent_error_fails_immediately(db_session):
     assert req.last_error["permanent"] is True
 
 
+def test_ensure_approval_task_creates_pending_row_for_human_gate(db_session):
+    from app.db.approval import ApprovalModel
+
+    req = RequestFactory.create(
+        db_session, type="data_access_request", status="data_owner_approval",
+        requester_email="alice@corp.com",
+    )
+    payload = {"type": "data_owner", "gate": "await_approval",
+               "request_id": req.id, "approvers": ["governance_team"]}
+
+    poller._ensure_approval_task(db_session, req, payload)
+
+    rows = db_session.query(ApprovalModel).filter_by(request_id=req.id).all()
+    assert len(rows) == 1
+    appr = rows[0]
+    assert appr.approval_type == "data_owner"
+    assert appr.status == "pending"
+    # A non-email approver is stored as a role/group, not an assignee email.
+    assert appr.assigned_to_role == "governance_team"
+    assert appr.assigned_to_email is None
+    assert appr.requested_by_email == "alice@corp.com"
+
+    # Idempotent: a second call (next poll tick) doesn't duplicate the task.
+    poller._ensure_approval_task(db_session, req, payload)
+    assert db_session.query(ApprovalModel).filter_by(request_id=req.id).count() == 1
+
+
+def test_ensure_approval_task_routes_email_approver_as_assignee(db_session):
+    from app.db.approval import ApprovalModel
+
+    req = RequestFactory.create(db_session, status="data_owner_approval")
+    payload = {"type": "data_owner", "approvers": ["owner@corp.com"]}
+
+    poller._ensure_approval_task(db_session, req, payload)
+
+    appr = db_session.query(ApprovalModel).filter_by(request_id=req.id).one()
+    assert appr.assigned_to_email == "owner@corp.com"
+    assert appr.assigned_to_role is None
+
+
+def test_ensure_approval_task_skips_automated_gates(db_session):
+    from app.db.approval import ApprovalModel
+
+    req = RequestFactory.create(db_session, status="provisioning")
+    # training / pr_merge / children resolve via facts, not a human approval row.
+    poller._ensure_approval_task(db_session, req, {"type": "training"})
+    poller._ensure_approval_task(db_session, req, {"type": "pr_merge"})
+
+    assert db_session.query(ApprovalModel).filter_by(request_id=req.id).count() == 0
+
+
 @pytest.mark.asyncio
 async def test_mark_failed_sets_failed_state_in_memory(db_session):
     """``_mark_request_failed`` sets FAILED + exhausted retries on the instance.

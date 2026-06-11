@@ -1580,12 +1580,26 @@ export type GateType =
   | 'pr_merge'
   | 'children';
 
+/** Declarative approver routing for a human gate. When omitted, the gate uses
+ *  its type's built-in routing (e.g. `manager` → the requester's manager). */
+export type GateApprover =
+  | { source: 'group'; group: string }
+  | {
+      source: 'approver_group_tag';
+      assets_from?: SpecExpr | null;
+      fallback_to_owner?: boolean;
+    };
+
 export interface WorkflowGateStage {
   kind: 'gate';
   name: string;
   type: GateType;
   waiting_status?: string;
   auto_approve?: SpecExpr | null;
+  /** Optional: route this gate's approval to a specific group, or resolve the
+   *  group from the data's `approver_group` tag. Only meaningful for human
+   *  gate types (manager / platform_admin / data_owner). */
+  approver?: GateApprover | null;
 }
 
 export interface WorkflowStepStage {

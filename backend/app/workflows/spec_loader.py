@@ -21,6 +21,25 @@ from app.workflows.tool_registry import get_tool, has_tool
 # Gate kinds the renderer + executor understand (see render.gate_satisfied).
 GATE_TYPES = {"manager", "platform_admin", "data_owner", "training", "pr_merge", "children"}
 
+# Tokens that strongly suggest a value is a group/role name rather than a gate kind.
+_GROUP_NAME_TOKENS = ("admin", "group", "team", "approver", "owner", "_grp", "role")
+
+
+def _looks_like_group_name(value: str) -> bool:
+    """Heuristic: does an invalid gate type look like a group/role name?
+
+    Used only to enrich the validation error so authors are pointed at the
+    declarative ``approver`` block instead of guessing.
+    """
+    v = value.strip().lower()
+    if not v:
+        return False
+    if any(tok in v for tok in _GROUP_NAME_TOKENS):
+        return True
+    # e.g. "edh_training_admin", "acme_data_stewards" — multi-segment identifiers
+    # that aren't one of our known kinds are almost always group names.
+    return v.count("_") >= 2
+
 
 class SpecError(ValueError):
     """Raised when a data spec is structurally invalid (author-time)."""
@@ -65,11 +84,42 @@ def validate_spec_dict(data: Any) -> None:
 def _validate_gate(stage: Dict[str, Any], where: str) -> None:
     gtype = stage.get("type")
     if gtype not in GATE_TYPES:
-        raise SpecError(f"{where}.type must be one of {sorted(GATE_TYPES)}")
+        msg = f"{where}.type must be one of {sorted(GATE_TYPES)}"
+        # Common authoring mistake: putting a group/role name in `type`
+        # (e.g. "edh_training_admin" or "training_admin"). Point to the
+        # declarative approver block instead of leaving them stuck.
+        if isinstance(gtype, str) and _looks_like_group_name(gtype):
+            msg += (
+                f". '{gtype}' looks like a group/role name, not a gate kind. "
+                "To require approval from a specific group, use a human gate "
+                'type like "manager" and set '
+                f'"approver": {{"source": "group", "group": "{gtype}"}}.'
+            )
+        raise SpecError(msg)
     if "auto_approve" in stage and stage["auto_approve"] is not None:
         _validate_expr(stage["auto_approve"], f"{where}.auto_approve", allow_item=False)
     if "approvers_from" in stage and stage["approvers_from"] is not None:
         _validate_expr(stage["approvers_from"], f"{where}.approvers_from", allow_item=False)
+    if "approver" in stage and stage["approver"] is not None:
+        _validate_gate_approver(stage["approver"], f"{where}.approver")
+
+
+def _validate_gate_approver(approver: Any, where: str) -> None:
+    """Validate a gate's declarative ``approver`` block (group | tag source)."""
+    if not isinstance(approver, dict):
+        raise SpecError(f"{where} must be an object")
+    source = approver.get("source")
+    if source == "group":
+        group = approver.get("group")
+        if not isinstance(group, str) or not group.strip():
+            raise SpecError(f"{where}.group is required when source is 'group'")
+    elif source == "approver_group_tag":
+        if "assets_from" in approver and approver["assets_from"] is not None:
+            _validate_expr(approver["assets_from"], f"{where}.assets_from", allow_item=False)
+        if "fallback_to_owner" in approver and not isinstance(approver["fallback_to_owner"], bool):
+            raise SpecError(f"{where}.fallback_to_owner must be a boolean")
+    else:
+        raise SpecError(f"{where}.source must be 'group' or 'approver_group_tag'")
 
 
 def _validate_step(stage: Dict[str, Any], where: str) -> None:
@@ -155,7 +205,7 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
     stages: List[Any] = []
     for stage in data.get("stages", []):
         if stage["kind"] == "gate":
-            stages.append(Gate(
+            gate = Gate(
                 name=stage["name"],
                 type=stage["type"],
                 waiting_status=stage.get("waiting_status", "manager_approval"),
@@ -163,7 +213,18 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
                 if stage.get("auto_approve") is not None else None,
                 approvers_from=_value_fn(stage["approvers_from"])
                 if stage.get("approvers_from") is not None else None,
-            ))
+            )
+            approver = stage.get("approver")
+            if approver:
+                source = approver["source"]
+                gate.approver_source = source
+                if source == "group":
+                    gate.approver_group = approver["group"]
+                elif source == "approver_group_tag":
+                    assets_spec = approver.get("assets_from", {"$var": "assets"})
+                    gate.approver_assets_from = _value_fn(assets_spec)
+                    gate.approver_fallback_to_owner = approver.get("fallback_to_owner", True)
+            stages.append(gate)
         else:
             step = Step(
                 name=stage["name"],

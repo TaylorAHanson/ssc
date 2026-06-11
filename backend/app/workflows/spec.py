@@ -53,6 +53,19 @@ class Gate:
     # ``data_owners`` and ``approvers``) so the approval layer can route to the
     # right people. This is what lets a data_owner gate be fully data-defined.
     approvers_from: Optional[Callable[[Dict[str, Any]], Any]] = None
+    # Declarative approver source — the no-code way to point ANY gate at its
+    # approver(s) without wiring a separate resolve step. One of:
+    #   "group"              -> a hardcoded group/role name (``approver_group``)
+    #   "approver_group_tag" -> resolve the UC ``approver_group`` tag off the
+    #                           request's assets (``approver_assets_from``),
+    #                           optionally falling back to the asset owner.
+    # The gate node resolves this to a list of approver identifiers and surfaces
+    # them in the interrupt payload (``approvers``/``data_owners``). Takes
+    # precedence over ``approvers_from`` when set.
+    approver_source: Optional[str] = None
+    approver_group: Optional[str] = None
+    approver_assets_from: Optional[Callable[[Dict[str, Any]], Any]] = None
+    approver_fallback_to_owner: bool = True
 
 
 @dataclass
@@ -105,8 +118,8 @@ def _gate_node(gate: Gate):
             "gate": gate.name,
             "request_id": state["request_id"],
         }
-        if gate.approvers_from is not None:
-            approvers = gate.approvers_from(ctx)
+        approvers = await _resolve_gate_approvers(gate, ctx)
+        if approvers:
             # Surface under both keys: ``data_owners`` keeps parity with the old
             # dedicated data-access graph; ``approvers`` is the generic name.
             payload["data_owners"] = approvers
@@ -121,6 +134,37 @@ def _gate_node(gate: Gate):
         return out
 
     return node
+
+
+async def _resolve_gate_approvers(gate: "Gate", ctx: Dict[str, Any]) -> List[str]:
+    """Resolve a gate's approver identifier(s) to a flat list of strings.
+
+    Precedence: the declarative ``approver_source`` (``group`` literal or
+    ``approver_group_tag`` UC-tag lookup) wins; otherwise fall back to the
+    ``approvers_from`` expression for backward compatibility. Group/role names
+    and owner emails are both returned as-is — the approval layer decides how to
+    route each (email -> assignee, otherwise -> role/group).
+    """
+    if gate.approver_source == "group":
+        return [gate.approver_group] if gate.approver_group else []
+    if gate.approver_source == "approver_group_tag":
+        # Lazy import keeps the pure graph module free of provider/IO imports.
+        from app.workflows.tools import resolve_owner_groups_from_assets
+
+        assets = (
+            gate.approver_assets_from(ctx)
+            if gate.approver_assets_from is not None
+            else ctx.get("assets")
+        )
+        return await resolve_owner_groups_from_assets(
+            assets, fallback_to_owner=gate.approver_fallback_to_owner
+        )
+    if gate.approvers_from is not None:
+        val = gate.approvers_from(ctx)
+        if val is None:
+            return []
+        return list(val) if isinstance(val, (list, tuple)) else [val]
+    return []
 
 
 def _decode_decision(decision: Any):

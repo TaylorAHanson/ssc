@@ -71,6 +71,14 @@ def test_validate_rejects_bad_specs(mutate, match):
         validate_spec_dict(spec)
 
 
+@pytest.mark.parametrize("bad_type", ["edh_training_admin", "training_admin", "data_stewards_group"])
+def test_group_name_in_type_suggests_approver_block(bad_type):
+    spec = _good_spec()
+    spec["stages"][0]["type"] = bad_type
+    with pytest.raises(SpecError, match=r"approver.*source.*group"):
+        validate_spec_dict(spec)
+
+
 def test_item_expr_only_valid_in_item_args():
     spec = _good_spec()
     spec["stages"][1]["args"]["bad"] = {"$item": True}
@@ -134,6 +142,53 @@ def test_approvers_from_rejects_bad_expression():
 
 def test_approvers_from_absent_means_static_gate():
     assert spec_from_dict(_good_spec()).stages[0].approvers_from is None
+
+
+# --- declarative approver source (group | approver_group_tag) -------------
+
+def test_gate_approver_group_source_compiles_and_resolves():
+    import asyncio
+    from app.workflows.spec import _resolve_gate_approvers
+
+    spec = _good_spec()
+    spec["stages"][0]["approver"] = {"source": "group", "group": "training_managers"}
+    validate_spec_dict(spec)  # no raise
+    gate = spec_from_dict(spec).stages[0]
+    assert gate.approver_source == "group"
+    assert gate.approver_group == "training_managers"
+    # Resolves to the hardcoded group regardless of context (pure, no IO).
+    assert asyncio.run(_resolve_gate_approvers(gate, {})) == ["training_managers"]
+
+
+def test_gate_approver_tag_source_compiles_assets_closure():
+    spec = _good_spec()
+    spec["stages"][0]["approver"] = {
+        "source": "approver_group_tag",
+        "assets_from": {"$var": "assets"},
+        "fallback_to_owner": False,
+    }
+    validate_spec_dict(spec)  # no raise
+    gate = spec_from_dict(spec).stages[0]
+    assert gate.approver_source == "approver_group_tag"
+    assert gate.approver_fallback_to_owner is False
+    # The assets expression is compiled to a closure over context.
+    assert gate.approver_assets_from({"assets": [{"asset_name": "a", "asset_type": "table"}]}) == [
+        {"asset_name": "a", "asset_type": "table"}
+    ]
+
+
+@pytest.mark.parametrize("approver,match", [
+    ({"source": "group"}, "group is required"),
+    ({"source": "nope"}, "must be 'group' or 'approver_group_tag'"),
+    ({"source": "approver_group_tag", "assets_from": {"$nope": [1]}}, "unknown operator"),
+    ({"source": "approver_group_tag", "fallback_to_owner": "yes"}, "must be a boolean"),
+    ("not-an-object", "must be an object"),
+])
+def test_gate_approver_rejects_bad_config(approver, match):
+    spec = _good_spec()
+    spec["stages"][0]["approver"] = approver
+    with pytest.raises(SpecError, match=match):
+        validate_spec_dict(spec)
 
 
 def test_writes_context_validates_and_compiles():

@@ -25,7 +25,7 @@ _DOC_TITLE = "Authoring Workflows (Workflows) — Guide"
 
 # Bump when the canonical guide content changes and you want existing installs to
 # pick it up. The seed only rewrites the doc when its stored revision is older.
-GUIDE_REVISION = 5
+GUIDE_REVISION = 7
 _REVISION_TAG_PREFIX = "guide-rev:"
 
 GUIDE_MARKDOWN = """\
@@ -71,15 +71,52 @@ Rules:
 
 ## Gate types
 
-- `manager` — requester's manager approves.
+A gate's **`type`** is the *kind* of approval — it must be one of the fixed
+values below. It is **NOT** a group/role name. To require approval from a
+specific group (e.g. `edh_training_admin`), use a human gate type such as
+`manager` and point it at the group with the **`approver`** block (see below) —
+do **not** put the group name in `type` (that fails validation).
+
+- `manager` — a human approval gate; pair with `approver` to route to a specific
+  person/group. (Despite the name, use this generic human gate for any
+  group-based approval.)
 - `platform_admin` — a platform admin approves (use for plan→review→apply flows).
 - `data_owner` — the resolved owner of the data approves.
-- `training` — proceeds once training completion is recorded.
+- `training` — proceeds once training completion is recorded (NOT a human
+  approval; don't use it to mean "a training admin approves").
 - `pr_merge` — proceeds once the linked PR is merged.
 - `children` — proceeds once all spawned child requests complete.
 
+Example — "approval from anyone in group `edh_training_admin`":
+
+```json
+{"kind": "gate", "name": "training_admin_approval", "type": "manager",
+ "approver": {"source": "group", "group": "edh_training_admin"}}
+```
+
 Gates can **auto-approve**: set `auto_approve` to an expression that returns true
 to skip the pause (e.g. low-risk scopes).
+
+### Declarative approver source (`approver`) — preferred
+
+Any gate can name its approver(s) directly with an `approver` block — no resolve
+step needed. Two sources:
+
+```json
+// 1) Hardcoded group/role:
+{"kind": "gate", "name": "training_approval", "type": "manager",
+ "approver": {"source": "group", "group": "training_managers"}}
+
+// 2) Read the UC approver_group tag off the request's assets (owner fallback):
+{"kind": "gate", "name": "await_approval", "type": "data_owner",
+ "approver": {"source": "approver_group_tag",
+              "assets_from": {"$var": "assets"}, "fallback_to_owner": true}}
+```
+
+The resolved approver is surfaced to the approval layer (an `@`-bearing value is
+treated as a person; otherwise a group/role) and a pending approval task is
+created automatically so it shows on the Approvals page. Use this for most new
+workflows; reach for `approvers_from` + a resolve step only for bespoke logic.
 
 ### Runtime-resolved approvers (`approvers_from`)
 
@@ -116,9 +153,15 @@ operation; anything else is a literal.
 - `{"$var": "scope"}` — context field (dotted paths ok); `{"$var": {"path": "a.b", "default": "x"}}` for a default.
 - `{"$item": "child_type"}` — the current `for_each` item (only inside `for_each`/`item_args`).
 - `{"$ctx": true}` — the whole context. `{"$literal": <any>}` — value as-is.
-- `{"$eq": [a, b]}`, `{"$ne": [a, b]}`, `{"$in": [a, b]}`
+- `{"$eq": [a, b]}`, `{"$ne": [a, b]}`, `{"$in": [a, b]}` (a in b)
+- `{"$contains": [a, b]}` — `b in a` (a contains b); inverse of `$in`. Use for
+  list/substring membership, e.g. `{"$contains": [{"$var": "tags"}, "pii"]}`.
+  There is no `$contains_any`/regex — for "any of" use `$or` of `$contains`.
 - `{"$and": [..]}`, `{"$or": [..]}`, `{"$not": a}`, `{"$bool": a}`
 - `{"$coalesce": [a, b]}` — first truthy (like `a or b`).
+- `{"$concat": [a, b, ..]}` — string-join the evaluated parts (None renders as
+  ""); use this to build a notification `body`/`subject` from literals + vars,
+  e.g. `{"$concat": ["New training request: ", {"$var": "topic"}]}`.
 - `{"$obj": {"k": expr}}`, `{"$list": [expr, ..]}`
 
 ## Fan-out (one step per item)

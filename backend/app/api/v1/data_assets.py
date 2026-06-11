@@ -544,11 +544,30 @@ def get_databricks_genie_spaces():
             client_id=settings.DATABRICKS_CLIENT_ID,
             client_secret=settings.DATABRICKS_CLIENT_SECRET
         )
-        # Handle potential absence of genie attribute in older SDKs or if not configured
-        if hasattr(provider.client, 'genie'):
-            spaces = provider.client.genie.list()
-            return [{"id": s.id, "name": s.name, "type": "genie_space", "description": s.description} for s in spaces]
-        return []
+        # Handle potential absence of the genie API in older SDKs or if not configured.
+        genie = getattr(provider.client, "genie", None)
+        if genie is None or not hasattr(genie, "list_spaces"):
+            return []
+
+        # list_spaces() returns a GenieListSpacesResponse (.spaces + .next_page_token);
+        # follow pagination so we don't silently truncate the catalog.
+        results = []
+        page_token = None
+        while True:
+            resp = genie.list_spaces(page_token=page_token)
+            for s in resp.spaces or []:
+                results.append(
+                    {
+                        "id": s.space_id,
+                        "name": s.title,
+                        "type": "genie_space",
+                        "description": s.description,
+                    }
+                )
+            page_token = resp.next_page_token
+            if not page_token:
+                break
+        return results
     except Exception as e:
         logger.error(f"Failed to fetch genie spaces: {e}")
         return []

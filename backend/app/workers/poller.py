@@ -747,6 +747,11 @@ async def _process_request_state_machine(db, request: RequestModel):
             break
         result = await v2_executor.resume(request, resume_value)
 
+    # When parked on a human approval gate, materialize the approval task so it
+    # surfaces on the Approvals page and the /approve endpoint can act on it.
+    if result.interrupted:
+        _ensure_approval_task(db, request, result.interrupt_payload)
+
     # Sync request.status for the UI/poller selection.
     new_status = to_request_status(result.status)
     if new_status is not None and request.status != new_status.value:
@@ -754,6 +759,81 @@ async def _process_request_state_machine(db, request: RequestModel):
         request.status = new_status.value
         request.current_state = result.current_node or result.status
         db.commit()
+
+
+# Gate types that route to a human approver (and therefore need an approval
+# task row). Automated gates (training, pr_merge, children) resolve via facts.
+_HUMAN_GATE_TYPES = {"manager", "platform_admin", "data_owner"}
+
+
+def _split_assignee(approver: Optional[str]):
+    """Map a resolved approver identifier to (assigned_to_email, assigned_to_role).
+
+    An ``@``-bearing value is treated as a specific person; anything else is a
+    group/role name. Returns (None, None) when no approver was resolved (the
+    approve endpoint then restricts the task to a platform-admin override).
+    """
+    if not approver or not isinstance(approver, str):
+        return None, None
+    if "@" in approver:
+        return approver, None
+    return None, approver
+
+
+def _ensure_approval_task(db: Session, request: RequestModel, payload) -> None:
+    """Idempotently create the pending ApprovalModel for a human gate.
+
+    The V2 graph parks on a gate and the poller waits for an ``approval_received``
+    fact. That fact is produced by the /approve endpoint, which requires a
+    pending approval row to act on — so without this nobody could ever approve.
+    We create exactly one pending row per (request, approval_type), assigned to
+    the gate's resolved approver (a hardcoded group, a UC ``approver_group`` tag
+    value, or an owner email — all surfaced in the interrupt payload).
+    """
+    if not payload or not isinstance(payload, dict):
+        return
+    gtype = payload.get("type")
+    if gtype not in _HUMAN_GATE_TYPES:
+        return
+
+    from app.db.approval import ApprovalModel
+
+    existing = (
+        db.query(ApprovalModel)
+        .filter(
+            ApprovalModel.request_id == request.id,
+            ApprovalModel.approval_type == gtype,
+            ApprovalModel.status == "pending",
+        )
+        .first()
+    )
+    if existing:
+        return
+
+    approvers = payload.get("approvers") or payload.get("data_owners") or []
+    first = approvers[0] if isinstance(approvers, (list, tuple)) and approvers else None
+    assigned_email, assigned_role = _split_assignee(first)
+
+    try:
+        db.add(
+            ApprovalModel(
+                id=f"appr-{uuid.uuid4()}",
+                request_id=request.id,
+                approval_type=gtype,
+                requested_by_email=request.requester_email,
+                assigned_to_email=assigned_email,
+                assigned_to_role=assigned_role,
+                status="pending",
+            )
+        )
+        db.commit()
+        logger.info(
+            f"[{request.id}] created pending {gtype} approval "
+            f"(assignee={assigned_email or assigned_role or 'platform-admin-only'})"
+        )
+    except Exception as e:  # noqa: BLE001 - non-fatal; next tick retries
+        logger.warning(f"[{request.id}] could not create approval task: {e}")
+        db.rollback()
 
 
 def _mark_request_failed(

@@ -422,6 +422,39 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     // answer is included even if React hasn't flushed the success
     // update yet). We dedupe against extras' ``tool_call_id``s so a
     // raced flush doesn't produce duplicates.
+    // Serialize a completed synchronous tool's payload into the ``tool``
+    // message content we replay on later turns. Capped so a large listing
+    // (e.g. a wide ``get_table_list``) can't dominate the context window;
+    // the backend runner prunes oversized tool messages as a further
+    // backstop. Falls back to the error text or the human label.
+    const HISTORY_TOOL_RESULT_MAX_CHARS = 4000;
+    const toolResultForHistory = (
+        m: Extract<DisplayMessage, { kind: 'tool' }>,
+    ): string => {
+        if (m.status === 'error') {
+            return `Tool error: ${m.errorMessage ?? 'unknown error'}`;
+        }
+        let serialized: string;
+        if (m.toolResult === undefined || m.toolResult === null) {
+            serialized = m.detail ?? m.label ?? '(no output)';
+        } else if (typeof m.toolResult === 'string') {
+            serialized = m.toolResult;
+        } else {
+            try {
+                serialized = JSON.stringify(m.toolResult);
+            } catch {
+                serialized = String(m.toolResult);
+            }
+        }
+        if (serialized.length > HISTORY_TOOL_RESULT_MAX_CHARS) {
+            return (
+                serialized.slice(0, HISTORY_TOOL_RESULT_MAX_CHARS) +
+                ' …[truncated; re-run the tool with tighter filters if you need the rest]'
+            );
+        }
+        return serialized;
+    };
+
     const buildHistory = (extras: AgentChatMessage[] = []): AgentChatMessage[] => {
         const skipToolCallIds = new Set<string>();
         for (const e of extras) {
@@ -468,6 +501,43 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     id: m.id,
                     type: 'tool',
                     content: m.detail ?? `Genie answered "${m.label}"`,
+                    timestamp: completedAt,
+                    tool_call_id: m.toolCallId,
+                    name: m.toolName,
+                });
+            } else if (
+                m.kind === 'tool' &&
+                !m.poll &&
+                (m.status === 'success' || m.status === 'error')
+            ) {
+                // Round-trip completed *synchronous* tool calls (metadata
+                // listings, search, find_owner, workflow execution, …) so
+                // the model remembers what it already looked up. Without
+                // this, only pending-poll (Genie) results survived across
+                // turns and the agent re-ran the same tool (e.g.
+                // ``get_table_list``) on every follow-up message.
+                if (skipToolCallIds.has(m.toolCallId)) continue;
+                const completedAt = new Date(m.completedAt ?? Date.now()).toISOString();
+                out.push({
+                    id: `${m.id}-tc`,
+                    type: 'agent',
+                    content: '',
+                    timestamp: completedAt,
+                    tool_calls: [
+                        {
+                            id: m.toolCallId,
+                            type: 'function',
+                            function: {
+                                name: m.toolName,
+                                arguments: JSON.stringify(m.toolArguments ?? {}),
+                            },
+                        },
+                    ],
+                });
+                out.push({
+                    id: m.id,
+                    type: 'tool',
+                    content: toolResultForHistory(m),
                     timestamp: completedAt,
                     tool_call_id: m.toolCallId,
                     name: m.toolName,
@@ -1614,6 +1684,33 @@ function collapseSelfDuplication(raw: string): string {
             for (let i = 1; i < text.length; i++) {
                 if (normalizeForDedup(text.slice(0, i)) === prefix) {
                     return text.slice(0, i).trim();
+                }
+            }
+        }
+    }
+
+    // Near-duplicate restart: the model re-answered the whole thing, repeating a
+    // substantial opening verbatim before diverging with light rewording (e.g.
+    // "...should the approval be..." vs "...should approval be..."). The
+    // exact-match paths above can't catch this because the two copies aren't
+    // byte-identical. We look for a second occurrence of a long opening head and
+    // require the two copies to be similar in length (so we never swallow
+    // genuinely different trailing content), then keep the first copy.
+    if (n.length >= 160) {
+        const HEAD = 40;
+        const head = n.slice(0, HEAD);
+        const second = n.indexOf(head, HEAD);
+        if (second > 0) {
+            const copy1 = n.slice(0, second).trim();
+            const copy2 = n.slice(second).trim();
+            const ratio =
+                Math.min(copy1.length, copy2.length) /
+                Math.max(copy1.length, copy2.length);
+            if (copy1.length >= 60 && copy2.length >= 60 && ratio >= 0.6) {
+                for (let i = 1; i <= text.length; i++) {
+                    if (normalizeForDedup(text.slice(0, i)) === copy1) {
+                        return text.slice(0, i).trim();
+                    }
                 }
             }
         }

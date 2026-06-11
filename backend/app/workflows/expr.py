@@ -22,11 +22,15 @@ An expression is plain JSON. A JSON object with exactly one key that starts with
     {"$eq": [a, b]}                        eval(a) == eval(b)
     {"$ne": [a, b]}                        eval(a) != eval(b)
     {"$in": [a, b]}                        eval(a) in eval(b)
+    {"$contains": [a, b]}                  eval(b) in eval(a)  (a contains b;
+                                           inverse of $in — list/substr membership)
     {"$and": [a, b, ...]}                  all truthy  -> bool
     {"$or":  [a, b, ...]}                  any truthy  -> bool
     {"$not": a}                            not truthy  -> bool
     {"$bool": a}                           bool(eval(a))
     {"$coalesce": [a, b, ...]}             first truthy eval (mirrors `a or b`)
+    {"$concat": [a, b, ...]}               string-join the evaluated operands
+                                           (None -> "", so missing vars vanish)
     {"$obj": {"k": expr, ...}}             dict literal with evaluated values
     {"$list": [expr, ...]}                 list with evaluated elements
 
@@ -39,12 +43,22 @@ from __future__ import annotations
 from typing import Any, Dict, List, Mapping
 
 # Operators that take a list of operand expressions.
-_LIST_OPS = {"$eq", "$ne", "$in", "$and", "$or", "$coalesce", "$list"}
+_LIST_OPS = {"$eq", "$ne", "$in", "$contains", "$and", "$or", "$coalesce", "$concat", "$list"}
+# Binary comparison/membership operators (exactly 2 operands).
+_BINARY_OPS = ("$eq", "$ne", "$in", "$contains")
 _ALL_OPS = _LIST_OPS | {"$var", "$item", "$ctx", "$literal", "$not", "$bool", "$obj"}
 
 
 class ExprError(ValueError):
     """Raised for malformed or unsupported expressions (author-time error)."""
+
+
+def _unknown_operator_msg(op: str) -> str:
+    """Error for an unsupported operator that lists what *is* supported."""
+    return (
+        f"unknown operator '{op}'. Supported operators: "
+        f"{', '.join(sorted(_ALL_OPS))}"
+    )
 
 
 def is_operation(node: Any) -> bool:
@@ -114,7 +128,16 @@ def evaluate(node: Any, env: Dict[str, Any]) -> Any:
             if _truthy(result):
                 return result
         return result
-    if op in ("$eq", "$ne", "$in"):
+    if op == "$concat":
+        # String-join the evaluated operands. None renders as "" so an absent
+        # ctx var (e.g. {"$var": "topic"}) simply drops out instead of printing
+        # "None" in a notification body/title.
+        parts = []
+        for v in _as_list(arg, op):
+            ev = evaluate(v, env)
+            parts.append("" if ev is None else str(ev))
+        return "".join(parts)
+    if op in _BINARY_OPS:
         operands = _as_list(arg, op)
         if len(operands) != 2:
             raise ExprError(f"{op} expects exactly 2 operands")
@@ -123,12 +146,14 @@ def evaluate(node: Any, env: Dict[str, Any]) -> Any:
             return a == b
         if op == "$ne":
             return a != b
+        # Membership: $in -> a in b; $contains -> b in a (a contains b).
+        haystack, needle = (b, a) if op == "$in" else (a, b)
         try:
-            return a in b
+            return needle in haystack
         except TypeError:
             return False
 
-    raise ExprError(f"unknown operator '{op}'")
+    raise ExprError(_unknown_operator_msg(op))
 
 
 def _var(node: Mapping[str, Any], container: Any, key: str = "$var") -> Any:
@@ -165,7 +190,7 @@ def validate(node: Any, *, allow_item: bool = False, _depth: int = 0) -> None:
         return  # literal (incl. plain dict/list) is always valid
     op = _op_name(node)
     if op not in _ALL_OPS:
-        raise ExprError(f"unknown operator '{op}'")
+        raise ExprError(_unknown_operator_msg(op))
     if op == "$item" and not allow_item:
         raise ExprError("$item is only valid in per-item (for_each) context")
     arg = node[op]
@@ -188,7 +213,7 @@ def validate(node: Any, *, allow_item: bool = False, _depth: int = 0) -> None:
         validate(arg, allow_item=allow_item, _depth=_depth + 1)
         return
     operands = _as_list(arg, op)
-    if op in ("$eq", "$ne", "$in") and len(operands) != 2:
+    if op in _BINARY_OPS and len(operands) != 2:
         raise ExprError(f"{op} expects exactly 2 operands")
     for v in operands:
         validate(v, allow_item=allow_item, _depth=_depth + 1)

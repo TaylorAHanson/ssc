@@ -102,6 +102,44 @@ class ResolveDataOwnersInput(BaseModel):
     )
 
 
+async def resolve_owner_groups_from_assets(
+    assets: Optional[List[Dict[str, Any]]],
+    *,
+    fallback_to_owner: bool = True,
+) -> List[str]:
+    """Resolve approver group(s) for ``assets`` from the UC ``approver_group`` tag.
+
+    Reusable core shared by the ``resolve_data_owners`` tool (pre-gate step) and
+    the generic gate ``approver_group_tag`` source. Reads the configured tag from
+    each asset; when a tag is missing and ``fallback_to_owner`` is set, uses the
+    asset owner. Best-effort: returns ``[]`` (degrades gracefully) if the provider
+    is unavailable so the gate still renders.
+    """
+    if not assets:
+        return []
+    from app.core.config import settings
+
+    tag_key = settings.APPROVER_GROUP_TAG_KEY
+    found: set = set()
+    try:
+        provider = _get_databricks_provider()
+        for asset in assets:
+            name, atype = asset.get("asset_name"), asset.get("asset_type")
+            if not (name and atype):
+                continue
+            tags = await provider.get_asset_tags(atype, name, [tag_key])
+            grp = tags.get(tag_key)
+            if grp:
+                found.add(grp)
+            elif fallback_to_owner:
+                owner = await provider.get_asset_owner(atype, name)
+                if owner:
+                    found.add(owner)
+    except Exception as e:  # noqa: BLE001 - degrade gracefully like the old graph
+        logger.warning("resolve_owner_groups_from_assets degraded: %s", e)
+    return sorted(found)
+
+
 @tool(name="resolve_data_owners", args_schema=ResolveDataOwnersInput, side_effect_class="read",
       description="Resolve the data-owner approver group(s) for the requested assets from UC "
                   "tags (approver_group), falling back to the asset owner. Read-only.")
@@ -116,27 +154,8 @@ async def resolve_data_owners(assets: Optional[List[Dict[str, Any]]] = None,
     caller already had so the gate still renders.
     """
     owners = list(data_owners or [])
-    if not owners and assets:
-        from app.core.config import settings
-        tag_key = settings.APPROVER_GROUP_TAG_KEY
-        try:
-            provider = _get_databricks_provider()
-            found = set()
-            for asset in assets:
-                name, atype = asset.get("asset_name"), asset.get("asset_type")
-                if not (name and atype):
-                    continue
-                tags = await provider.get_asset_tags(atype, name, [tag_key])
-                grp = tags.get(tag_key)
-                if grp:
-                    found.add(grp)
-                else:
-                    owner = await provider.get_asset_owner(atype, name)
-                    if owner:
-                        found.add(owner)
-            owners = sorted(found)
-        except Exception as e:  # noqa: BLE001 - degrade gracefully like the old graph
-            logger.warning("resolve_data_owners degraded: %s", e)
+    if not owners:
+        owners = await resolve_owner_groups_from_assets(assets)
     return {"ok": True, "data_owners": owners}
 
 

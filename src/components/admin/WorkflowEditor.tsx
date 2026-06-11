@@ -14,6 +14,7 @@ import {
 import { Button } from '../ui/button';
 import { api } from '../../services/api';
 import type {
+  GateApprover,
   GateType,
   SpecExpr,
   WorkflowGateStage,
@@ -281,7 +282,7 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
                 ) : (
                   <Wrench className="w-4 h-4 text-blue-600" />
                 )}
-                {selected.kind === 'gate' ? 'Approval gate' : 'Provision step'}
+                {selected.kind === 'gate' ? 'Gate' : 'Provision step'}
                 <span className="text-xs font-normal text-gray-400">
                   · stage {selectedIdx! + 1} of {stages.length}
                 </span>
@@ -378,8 +379,8 @@ function GateForm({
     <>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <LabelWithHelp className={labelClass} help="Who must approve before the workflow continues: manager (requester's manager), platform_admin, data_owner, training (completed), pr_merge (PR merged), or children (all spawned child requests done).">
-            Approver
+          <LabelWithHelp className={labelClass} help="The kind of gate the request pauses on — NOT a group name. manager / platform_admin / data_owner are human approvals; training waits for a completed training, pr_merge for a merged PR, and children for all spawned child requests. To send approval to a specific group, pick a human type and set the Approver group below.">
+            Gate type
           </LabelWithHelp>
           <select
             className={inputClass}
@@ -403,6 +404,8 @@ function GateForm({
           />
         </div>
       </div>
+
+      <GateApproverField gate={gate} onChange={onChange} />
 
       <div>
         <LabelWithHelp className={labelClass} help="Optionally skip the human approval when a condition holds (e.g. low-risk scope). 'Never' always requires approval; 'When a condition is met' builds a simple rule; 'Advanced' is a raw expression for complex logic.">
@@ -449,6 +452,105 @@ function GateForm({
         </div>
       )}
     </>
+  );
+}
+
+// Human gate types where routing an approval to a specific group makes sense.
+const HUMAN_GATE_TYPES: GateType[] = ['manager', 'platform_admin', 'data_owner'];
+
+type ApproverSource = 'default' | 'group' | 'approver_group_tag';
+
+function GateApproverField({
+  gate,
+  onChange,
+}: {
+  gate: WorkflowGateStage;
+  onChange: (patch: Partial<WorkflowGateStage>) => void;
+}) {
+  const isHuman = HUMAN_GATE_TYPES.includes(gate.type);
+  const source: ApproverSource = gate.approver?.source ?? 'default';
+
+  if (!isHuman) {
+    return (
+      <div className="text-[11px] text-gray-400">
+        Approver routing doesn't apply to a <span className="font-mono">{gate.type}</span> gate — it
+        proceeds on the event, not a person's approval.
+      </div>
+    );
+  }
+
+  const setSource = (next: ApproverSource) => {
+    if (next === 'default') {
+      onChange({ approver: null });
+    } else if (next === 'group') {
+      const group = gate.approver?.source === 'group' ? gate.approver.group : '';
+      onChange({ approver: { source: 'group', group } });
+    } else {
+      const fallback =
+        gate.approver?.source === 'approver_group_tag'
+          ? gate.approver.fallback_to_owner ?? true
+          : true;
+      onChange({ approver: { source: 'approver_group_tag', fallback_to_owner: fallback } });
+    }
+  };
+
+  const setApprover = (next: GateApprover) => onChange({ approver: next });
+
+  return (
+    <div className="rounded-md border border-gray-200 bg-gray-50/40 p-3 space-y-3">
+      <div>
+        <LabelWithHelp
+          className={labelClass}
+          help="Who can approve this human gate. 'Default' uses the gate type's built-in routing (e.g. manager → the requester's manager). 'Specific group' sends it to any member of a group you name. 'From data's approver_group tag' resolves the group from the Unity Catalog approver_group tag on the requested assets."
+        >
+          Approver group
+        </LabelWithHelp>
+        <select
+          className={inputClass}
+          value={source}
+          onChange={(e) => setSource(e.target.value as ApproverSource)}
+        >
+          <option value="default">Default for this gate type</option>
+          <option value="group">Specific group</option>
+          <option value="approver_group_tag">From data's approver_group tag</option>
+        </select>
+      </div>
+
+      {source === 'group' && (
+        <div>
+          <LabelWithHelp
+            className={labelClass}
+            help="Any member of this group (a Databricks account group or role name) can approve. The pending approval task is assigned to this group."
+          >
+            Group name
+          </LabelWithHelp>
+          <input
+            className={inputClass}
+            value={gate.approver?.source === 'group' ? gate.approver.group : ''}
+            placeholder="e.g. edh_training_admin"
+            onChange={(e) => setApprover({ source: 'group', group: e.target.value })}
+          />
+        </div>
+      )}
+
+      {source === 'approver_group_tag' && (
+        <label className="flex items-center gap-2 text-xs text-gray-600">
+          <input
+            type="checkbox"
+            checked={
+              gate.approver?.source === 'approver_group_tag'
+                ? gate.approver.fallback_to_owner ?? true
+                : true
+            }
+            onChange={(e) =>
+              setApprover({ source: 'approver_group_tag', fallback_to_owner: e.target.checked })
+            }
+          />
+          Fall back to the data owner when no <span className="font-mono">approver_group</span> tag is
+          set
+        </label>
+      )}
+    </div>
   );
 }
 

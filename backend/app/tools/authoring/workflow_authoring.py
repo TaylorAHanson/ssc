@@ -44,8 +44,10 @@ _EXPR_OPS = [
     "$var (ctx field, dotted paths, optional default)",
     "$item (for_each item, only in item_args/for_each)",
     "$ctx (whole context)", "$literal (value as-is)",
-    "$eq/$ne/$in [a,b]", "$and/$or [..]", "$not a", "$bool a",
-    "$coalesce [..] (first truthy)", "$obj {k: expr}", "$list [expr,..]",
+    "$eq/$ne/$in [a,b]", "$contains [a,b] (a contains b; inverse of $in)",
+    "$and/$or [..]", "$not a", "$bool a",
+    "$coalesce [..] (first truthy)", "$concat [..] (string-join, None->'')",
+    "$obj {k: expr}", "$list [expr,..]",
 ]
 
 
@@ -80,7 +82,11 @@ async def list_workflow_building_blocks() -> Dict[str, Any]:
             "complete_fact": "optional fact written on completion",
             "stages": "ordered list of gate/step objects",
             "gate": {"kind": "gate", "name": "str", "type": "one of gate_types",
-                     "waiting_status": "optional", "auto_approve": "optional expression -> bool"},
+                     "waiting_status": "optional", "auto_approve": "optional expression -> bool",
+                     "approver": "optional approver source: {source:'group', group:'<name>'} for a "
+                                 "hardcoded group/role, OR {source:'approver_group_tag', "
+                                 "assets_from:<expr=assets>, fallback_to_owner:true} to read the UC "
+                                 "approver_group tag off the request's assets"},
             "step": {"kind": "step", "name": "str", "tool": "a step_tools name",
                      "args": "object of name -> expression", "approvals": "list of prior gate types",
                      "success_fact": "optional", "for_each": "optional expression -> list",
@@ -89,6 +95,12 @@ async def list_workflow_building_blocks() -> Dict[str, Any]:
                                "(conditional branching). Omit it to always run."},
         },
         "note": (
+            "A gate's 'type' is the KIND of approval (one of gate_types) — it is NOT a "
+            "group/role name. To require approval from a specific group (e.g. "
+            "'edh_training_admin'), use a human gate type like 'manager' and set "
+            "approver={'source':'group','group':'edh_training_admin'}; do NOT put the "
+            "group name in 'type' (it fails validation). Use gate type 'training' only "
+            "for training-completion gates, not to mean 'a training admin approves'. "
             "Reserved stage names: complete, rejected, pending, completed. A step that "
             "runs after a gate should list that gate's type in 'approvals' so policy "
             "enforcement sees the approval. Use a step's 'run_if' for conditional "

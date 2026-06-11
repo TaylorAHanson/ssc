@@ -185,8 +185,21 @@ export function Workflows() {
     if (!AUTHORING_SPEC_TOOLS.has(toolName)) return;
 
     // 1) Live hydrate from the call arguments (works even before a save).
+    //
+    // Only hydrate from a *renderable* spec (an object with at least one
+    // stage). A follow-up turn sometimes calls a spec tool with a partial,
+    // empty, or stage-less ``graph_spec`` (e.g. while the model is still
+    // gathering an answer, or a validation/preview that errored). Overwriting
+    // unconditionally there blanked the graph the admin was just looking at —
+    // the reported "I answered the follow-up and the graph went away". Keeping
+    // the last good graph makes the live preview sticky across turns.
     const spec = (args?.graph_spec ?? null) as WorkflowGraphSpec | null;
-    if (spec && typeof spec === 'object') {
+    const specHasStages =
+      !!spec &&
+      typeof spec === 'object' &&
+      Array.isArray((spec as WorkflowGraphSpec).stages) &&
+      (spec as WorkflowGraphSpec).stages.length > 0;
+    if (specHasStages) {
       const argKey = typeof args?.key === 'string' ? (args.key as string) : '';
       const specName = typeof (spec as { name?: unknown }).name === 'string'
         ? ((spec as { name?: string }).name as string)

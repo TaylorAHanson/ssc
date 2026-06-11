@@ -248,8 +248,15 @@ export function specToFlow(spec: WorkflowGraphSpec): { nodes: FlowNode[]; edges:
     const id = s.name;
     if (s.kind === 'gate') {
       anyGate = true;
+      let sublabel = `${s.type} gate`;
+      const approver = (s as { approver?: { source?: string; group?: string } }).approver;
+      if (approver?.source === 'group' && approver.group) {
+        sublabel = `${s.type} · ${approver.group}`;
+      } else if (approver?.source === 'approver_group_tag') {
+        sublabel = `${s.type} · owner tag`;
+      }
       nodes.push({
-        id, label: s.name, sublabel: `${s.type} gate`, kind: 'gate', x: COL_X, y: row * ROW,
+        id, label: s.name, sublabel, kind: 'gate', x: COL_X, y: row * ROW,
       });
       edges.push({ id: `${prev}->${id}`, source: prev, target: id });
       edges.push({ id: `${id}->rejected`, source: id, target: 'rejected', label: 'reject', tone: 'reject' });
