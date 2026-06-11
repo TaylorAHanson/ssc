@@ -26,6 +26,7 @@ import {
   Tags,
   Library,
   MessageSquarePlus,
+  Eraser,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { FeedbackModal } from '../feedback/FeedbackModal';
@@ -251,6 +252,33 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+
+  // Wipe locally-stored personalization (chat history + cached suggestions).
+  // This data lives only in this browser profile; on a shared machine the next
+  // person would otherwise inherit it. Clears anything we persist, then reloads
+  // so the in-memory chat state resets too.
+  const handleClearMyData = useCallback(() => {
+    const confirmed = window.confirm(
+      'Clear locally stored data on this device?\n\n' +
+        'This removes your chat history and personalized suggestions saved in ' +
+        'this browser. It does not delete any server-side records.',
+    );
+    if (!confirmed) return;
+    try {
+      const prefixes = ['chatview_messages_', 'home_suggestions_'];
+      for (const store of [window.localStorage, window.sessionStorage]) {
+        const keys: string[] = [];
+        for (let i = 0; i < store.length; i++) {
+          const k = store.key(i);
+          if (k && prefixes.some((p) => k.startsWith(p))) keys.push(k);
+        }
+        keys.forEach((k) => store.removeItem(k));
+      }
+    } catch {
+      /* storage disabled — nothing to clear */
+    }
+    window.location.reload();
+  }, []);
 
   useEffect(() => {
     if (!userMenuOpen) return;
@@ -775,10 +803,18 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 )}
                 <button
                   type="button"
-                  className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-md transition-colors font-medium"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    handleClearMyData();
+                  }}
+                  className="w-full flex items-center gap-2 text-left px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-md transition-colors font-medium"
                 >
-                  Sign out
+                  <Eraser className="w-4 h-4" />
+                  Clear my data
                 </button>
+                {/* No app-managed session to end: auth is Databricks Apps
+                    header-based (OBO), so sign-out is owned by the workspace,
+                    not this app. A button here would be a misleading no-op. */}
               </div>
             </div>
           )}

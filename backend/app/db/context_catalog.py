@@ -74,6 +74,17 @@ class ContextDocumentModel(Base):
     created_by: Mapped[Optional[str]] = Column(String, nullable=True, comment="Email of the admin who created it")
     created_at: Mapped[datetime] = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    # Retrieval usage signal: how often the agent has actually retrieved this
+    # document, and when last. Foundation for a "Usage" column in the catalog UI
+    # and for surfacing stale/unused docs to reviewers. Only agent retrievals
+    # increment these — admin browsing/search in the UI does not.
+    retrieval_count: Mapped[int] = Column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Times the agent has retrieved this document",
+    )
+    last_retrieved_at: Mapped[Optional[datetime]] = Column(
+        DateTime, nullable=True, comment="When the agent last retrieved this document",
+    )
 
 
 class ContextChunkModel(Base):

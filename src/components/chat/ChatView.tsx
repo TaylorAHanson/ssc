@@ -32,6 +32,7 @@ import {
     type PendingPollEvent,
 } from '../../lib/agentStream';
 import { usePendingPoll } from '../../hooks/usePendingPoll';
+import { useBrandingStore } from '../../stores/brandingStore';
 import { ToolCallPill, type ToolCallStatus } from './ToolCallPill';
 import { GenieDetailsPanel } from './GenieDetailsPanel';
 import { ToolRawOutputPanel } from './ToolRawOutputPanel';
@@ -113,7 +114,6 @@ export interface ChatModeOption {
 export interface ChatRouteInfo {
     path: string;
     title: string;
-    prefill?: Record<string, unknown> | null;
 }
 
 export interface ChatViewProps {
@@ -237,6 +237,12 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     const [showThinking, setShowThinking] = useState(false);
     const [routeCta, setRouteCta] = useState<ChatRouteInfo | null>(null);
     const [showModeDropdown, setShowModeDropdown] = useState(false);
+    // When true, feed Genie's answer back through the agent for a final
+    // summarization turn instead of surfacing its ``final_answer`` verbatim.
+    // Defaults off (verbatim) — see configuration.yaml `genie_summarize_answer`.
+    const genieSummarizeAnswer = useBrandingStore(
+        (s) => s.features?.genie_summarize_answer === true,
+    );
     const messagesEndRef = useRef<HTMLDivElement | null>(null);
     const abortRef = useRef<AbortController | null>(null);
     const modeDropdownRef = useRef<HTMLDivElement | null>(null);
@@ -800,7 +806,6 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 setRouteCta({
                     path: event.path,
                     title: event.title,
-                    prefill: event.prefill ?? null,
                 });
                 break;
             }
@@ -845,7 +850,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             result && typeof result === 'object' && typeof result.final_answer === 'string'
                 ? (result.final_answer as string).trim()
                 : '';
-        if (finalAnswer) {
+        // ``features.genie_summarize_answer`` (default false) lets an operator
+        // force the LLM summarization turn instead of surfacing Genie's answer
+        // verbatim. When it's off (the default) we short-circuit below.
+        if (finalAnswer && !genieSummarizeAnswer) {
             // Store the raw markdown — the agent message renderer
             // will run it through `renderMarkdownSafe` at view time.
             // Keeping the storage format consistent with LLM-authored
@@ -1626,9 +1634,6 @@ function stringifyResult(result: Record<string, unknown> | null): string {
 /** Default label for the route CTA when the parent doesn't override. */
 function defaultRouteLabel(path: string): string {
     if (!path) return 'Continue to form';
-    if (path.startsWith('/paas/') || path.startsWith('/daas/')) {
-        return 'Go to pre-filled form';
-    }
     if (path.includes('/community/links') || path === '/community-links') {
         return 'Go to community links';
     }

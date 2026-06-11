@@ -72,24 +72,13 @@ def test_reasoning_message_done_error_events():
         assert parsed["type"] == ev.type
 
 
-def test_route_event_carries_path_title_and_optional_prefill():
-    ev = RouteEvent(
-        path="/paas/request-access",
-        title="Request Access",
-        prefill={"workspace": "prod"},
-    )
+def test_route_event_carries_path_and_title():
+    ev = RouteEvent(path="/training", title="Training")
     parsed = parse_sse_frame(serialize_sse(ev))
     assert parsed is not None
     assert parsed["type"] == "route"
-    assert parsed["path"] == "/paas/request-access"
-    assert parsed["title"] == "Request Access"
-    assert parsed["prefill"] == {"workspace": "prod"}
-
-    # `prefill` is optional and omitted via exclude_none when absent.
-    ev_no_prefill = RouteEvent(path="/training", title="Training")
-    parsed = parse_sse_frame(serialize_sse(ev_no_prefill))
-    assert parsed is not None
-    assert "prefill" not in parsed
+    assert parsed["path"] == "/training"
+    assert parsed["title"] == "Training"
 
 
 def test_parse_sse_frame_ignores_keepalive_comments():

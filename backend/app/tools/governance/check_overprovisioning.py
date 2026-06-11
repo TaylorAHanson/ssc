@@ -24,8 +24,11 @@ Capabilities:
     required_role="governance_admin",
     args_schema=CheckOverprovisionedUsersInput
 )
-async def check_overprovisioned_users(check_type: str = "risk_score") -> Dict[str, Any]:
+async def check_overprovisioned_users(check_type: str = "risk_score", **kwargs) -> Dict[str, Any]:
     try:
+        # Read-only governance scan runs as the calling user (OBO) when
+        # available; falls back to the service principal otherwise.
+        obo_token = kwargs.get("_obo_token")
         provider = DatabricksProvider(
             host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
             token=settings.DATABRICKS_TOKEN,
@@ -141,7 +144,7 @@ async def check_overprovisioned_users(check_type: str = "risk_score") -> Dict[st
             ORDER BY over_provisioning_score DESC, privilege_grants DESC
             LIMIT 100
             """
-            result = await provider.execute_sql(query, timeout_seconds=300)
+            result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token)
             return {
                 "risk_assessment": result.get("rows", []),
                 "methodology": "Combines privilege counts with 90-day activity logs (ACL changes, last login, workspaces touched).",
@@ -197,7 +200,7 @@ async def check_overprovisioned_users(check_type: str = "risk_score") -> Dict[st
             ORDER BY number_of_grants DESC
             LIMIT 100
             """
-            result = await provider.execute_sql(query, timeout_seconds=600)
+            result = await provider.execute_sql(query, timeout_seconds=600, obo_token=obo_token)
             return {
                 "grants_by_user": result.get("rows", []),
                 "check_type": "grants_summary"
@@ -211,7 +214,7 @@ async def check_overprovisioned_users(check_type: str = "risk_score") -> Dict[st
                 WHERE g.display_name = 'admins'
                 LIMIT 100
             """
-            result = await provider.execute_sql(query, timeout_seconds=600)
+            result = await provider.execute_sql(query, timeout_seconds=600, obo_token=obo_token)
             return {
                 "workspace_admins": result.get("rows", []),
                 "check_type": "workspace_admins"

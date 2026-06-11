@@ -21,8 +21,11 @@ class GetForecastedSpendInput(BaseModel):
     required_role="finance_admin",
     args_schema=GetForecastedSpendInput
 )
-async def get_forecasted_spend(start_date: Optional[str] = None, end_date: Optional[str] = None, forecast_days: int = 30) -> Dict[str, Any]:
+async def get_forecasted_spend(start_date: Optional[str] = None, end_date: Optional[str] = None, forecast_days: int = 30, **kwargs) -> Dict[str, Any]:
     try:
+        # Read-only billing query runs as the calling user (OBO) when available;
+        # falls back to the service principal otherwise.
+        obo_token = kwargs.get("_obo_token")
         provider = DatabricksProvider(
             host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
             token=settings.DATABRICKS_TOKEN,
@@ -53,7 +56,7 @@ async def get_forecasted_spend(start_date: Optional[str] = None, end_date: Optio
             WHERE u.usage_date BETWEEN '{start_date}' AND '{end_date}'
         """
         
-        result = await provider.execute_sql(query, timeout_seconds=300)
+        result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token)
         rows = result.get("rows", [])
         total_30d_cost = 0.0
         if rows and rows[0].get("total_cost") is not None:
@@ -71,7 +74,7 @@ async def get_forecasted_spend(start_date: Optional[str] = None, end_date: Optio
             WHERE u.usage_date BETWEEN '{month_start}' AND '{end_date}'
         """
         
-        result_mtd = await provider.execute_sql(query_mtd, timeout_seconds=300)
+        result_mtd = await provider.execute_sql(query_mtd, timeout_seconds=300, obo_token=obo_token)
         rows_mtd = result_mtd.get("rows", [])
         mtd_cost = 0.0
         if rows_mtd and rows_mtd[0].get("total_cost") is not None:

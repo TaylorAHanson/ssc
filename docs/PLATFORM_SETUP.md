@@ -38,7 +38,7 @@ ATLAS requires a secret scope and a Unity Catalog Volume to store its configurat
 5. Fill out the widget parameters at the top of the notebook:
    - **Secret Scope Name** (default: `atlas-hub`)
    - **Catalog, Schema, and Volume Names** (where configuration will be stored)
-   - **GitHub PAT** (Optional: requires `repo` scope if using direct GitOps integrations)
+   - **GitHub PAT** (Optional: requires `repo` scope if using direct GitOps integrations). For the exact API-call-to-permission mapping, fine-grained alternatives, and a request message for your GitHub org admin, see [GITHUB_TOKEN_PERMISSIONS.md](./GITHUB_TOKEN_PERMISSIONS.md).
 6. Click **Run All**.
 
 The notebook will automatically create the infrastructure, securely store your secrets, and place a default `configuration.yaml` file into the new volume.

@@ -39,6 +39,25 @@ def _rename_column(engine: Engine, table: str, old: str, new: str) -> None:
         logger.info("Migration: renamed %s.%s -> %s", table, old, new)
 
 
+def _add_column(engine: Engine, table: str, column: str, ddl_type: str) -> None:
+    """Add ``column`` to ``table`` if it doesn't exist yet (idempotent).
+
+    ``create_all`` only creates missing *tables*, never missing *columns* on an
+    existing table — so a new column on an existing model needs this. The DDL
+    type string must be valid on both SQLite (local) and Postgres (Lakebase);
+    ``INTEGER``, ``TIMESTAMP``, and ``TEXT`` all are.
+    """
+    insp = inspect(engine)
+    if table not in set(insp.get_table_names()):
+        return  # fresh DB: create_all will build the table with the column
+    cols = {c["name"] for c in insp.get_columns(table)}
+    if column in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+    logger.info("Migration: added column %s.%s", table, column)
+
+
 def run_startup_migrations(engine: Engine) -> None:
     """Apply in-place schema renames. Safe to call on every startup."""
     try:
@@ -47,5 +66,8 @@ def run_startup_migrations(engine: Engine) -> None:
         _rename_table(engine, "skill_versions", "workflow_versions")
         _rename_column(engine, "workflow_versions", "skill_id", "workflow_id")
         _rename_column(engine, "workflow_versions", "skill_key", "workflow_key")
+        # Context Catalog retrieval-usage signal columns.
+        _add_column(engine, "context_documents", "retrieval_count", "INTEGER DEFAULT 0")
+        _add_column(engine, "context_documents", "last_retrieved_at", "TIMESTAMP")
     except Exception as e:  # noqa: BLE001 - never block startup on a migration
         logger.warning("Startup migration step failed (continuing): %s", e)

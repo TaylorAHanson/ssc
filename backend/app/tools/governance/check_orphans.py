@@ -17,8 +17,11 @@ class CheckOrphanedAssetsInput(BaseModel):
     required_role="governance_admin",
     args_schema=CheckOrphanedAssetsInput
 )
-async def check_orphaned_assets(asset_type: str = "CATALOG") -> Dict[str, Any]:
+async def check_orphaned_assets(asset_type: str = "CATALOG", **kwargs) -> Dict[str, Any]:
     try:
+        # Read-only scan runs as the calling user (OBO) when available; falls
+        # back to the service principal otherwise.
+        obo_token = kwargs.get("_obo_token")
         provider = DatabricksProvider(
             host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
             token=settings.DATABRICKS_TOKEN,
@@ -60,7 +63,7 @@ async def check_orphaned_assets(asset_type: str = "CATALOG") -> Dict[str, Any]:
         if not full_query:
              full_query = "SELECT 'CATALOG' as type, catalog_name as name, catalog_owner as owner FROM system.information_schema.catalogs"
 
-        result = await provider.execute_sql(full_query)
+        result = await provider.execute_sql(full_query, obo_token=obo_token)
         rows = result.get("rows", [])
         
         # In memory processing (mocking logic of 'inactive')

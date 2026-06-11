@@ -51,9 +51,13 @@ async def search_audit_logs(
     email: Optional[str] = None,
     aggregation_type: str = "list",
     group_by_columns: Optional[List[str]] = None,
-    additional_where: Optional[str] = None
+    additional_where: Optional[str] = None,
+    **kwargs,
 ) -> Dict[str, Any]:
     try:
+        # Read audit logs as the calling user (OBO) when available; falls back
+        # to the service principal otherwise.
+        obo_token = kwargs.get("_obo_token")
         provider = DatabricksProvider(
             host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
             token=settings.DATABRICKS_TOKEN,
@@ -106,7 +110,7 @@ async def search_audit_logs(
                 LIMIT 100
             """
         
-        result = await provider.execute_sql(query, timeout_seconds=300)
+        result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token)
         
         return {
             "results": result.get("rows", []),

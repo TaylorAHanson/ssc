@@ -18,8 +18,12 @@ class CheckObjectPermissionsInput(BaseModel):
     required_role="governance_admin",
     args_schema=CheckObjectPermissionsInput
 )
-async def check_object_permissions(object_type: str, object_name: str) -> Dict[str, Any]:
+async def check_object_permissions(object_type: str, object_name: str, **kwargs) -> Dict[str, Any]:
     try:
+        # Run read-only governance queries as the calling user (OBO) when a
+        # token is present; falls back to the service principal otherwise
+        # (e.g. background poller runs with no user token).
+        obo_token = kwargs.get("_obo_token")
         provider = DatabricksProvider(
             host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
             token=settings.DATABRICKS_TOKEN,
@@ -38,7 +42,7 @@ async def check_object_permissions(object_type: str, object_name: str) -> Dict[s
         
         query = f"SHOW GRANTS ON {object_type} {object_name}"
         
-        result = await provider.execute_sql(query, timeout_seconds=300)
+        result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token)
         
         # Also get owner
         # DESCRIBE [TYPE] [NAME] usually shows owner? Or use system.information_schema

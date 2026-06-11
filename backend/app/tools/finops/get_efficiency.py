@@ -18,8 +18,11 @@ class GetEfficiencyInput(BaseModel):
     required_role="finance_admin",
     args_schema=GetEfficiencyInput
 )
-async def get_resource_efficiency_metrics(metric: str, threshold_hours: int = 24) -> Dict[str, Any]:
+async def get_resource_efficiency_metrics(metric: str, threshold_hours: int = 24, **kwargs) -> Dict[str, Any]:
     try:
+        # Read-only system-table query runs as the calling user (OBO) when
+        # available; falls back to the service principal otherwise.
+        obo_token = kwargs.get("_obo_token")
         provider = DatabricksProvider(
             host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
             token=settings.DATABRICKS_TOKEN,
@@ -49,7 +52,7 @@ async def get_resource_efficiency_metrics(metric: str, threshold_hours: int = 24
                 LIMIT 100
             """
             
-            result = await provider.execute_sql(query)
+            result = await provider.execute_sql(query, obo_token=obo_token)
             return {
                 "inefficient_resources": result.get("rows", []),
                 "metric": metric,

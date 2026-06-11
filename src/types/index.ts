@@ -178,7 +178,6 @@ export interface ConversationState {
     path: string;
     title: string;
   };
-  formPrefillData?: Record<string, any>;
   context?: {
     type: 'paas' | 'daas';
     title: string;

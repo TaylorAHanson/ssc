@@ -1,6 +1,7 @@
 """
 Agent prompts, context, and instructions for the home page agent.
 """
+import re
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
 
@@ -703,6 +704,28 @@ def default_onboarding_suggestions(persona: str, limit: int = 4) -> List[Dict[st
     return ordered[:limit]
 
 
+# Patterns scrubbed from client-supplied "recent topics" before they're injected
+# into the suggestion prompt. These hints come from the user's own past questions,
+# so we strip anything that looks like a credential or direct identifier before it
+# reaches the model (defense-in-depth; the topics are only a personalization aid).
+_REDACTIONS = [
+    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "[redacted-email]"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?"), "[redacted-token]"),
+    (re.compile(r"\bdapi[0-9a-fA-F]{16,}\b"), "[redacted-token]"),
+    (re.compile(r"\bAKIA[0-9A-Z]{12,}\b"), "[redacted-token]"),
+    (re.compile(r"\b[0-9a-fA-F]{32,}\b"), "[redacted-token]"),
+    (re.compile(r"\b(?:sk|ghp|gho|xox[baprs])[-_][A-Za-z0-9]{12,}\b"), "[redacted-token]"),
+    (re.compile(r"\b\+?\d[\d ().-]{8,}\d\b"), "[redacted-number]"),
+]
+
+
+def _redact_sensitive(text: str) -> str:
+    """Scrub credential/PII-looking substrings from a free-text topic."""
+    for pattern, replacement in _REDACTIONS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def get_onboarding_suggestions_messages(
     *,
     persona: str,
@@ -727,7 +750,11 @@ def get_onboarding_suggestions_messages(
 
     topics_hint = ""
     if recent_topics:
-        cleaned = [t.strip() for t in recent_topics if t and t.strip()][:5]
+        cleaned = [
+            _redact_sensitive(t.strip())
+            for t in recent_topics
+            if t and t.strip()
+        ][:5]
         if cleaned:
             topics_hint = (
                 "\n\nThe user's recent questions/topics (use to personalize, "

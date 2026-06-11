@@ -18,8 +18,11 @@ class CheckAssetQualityInput(BaseModel):
     required_role="governance_admin",
     args_schema=CheckAssetQualityInput
 )
-async def check_asset_quality(check_type: str, scope: str = "TABLE") -> Dict[str, Any]:
+async def check_asset_quality(check_type: str, scope: str = "TABLE", **kwargs) -> Dict[str, Any]:
     try:
+        # Read-only quality scan runs as the calling user (OBO) when available;
+        # falls back to the service principal otherwise.
+        obo_token = kwargs.get("_obo_token")
         provider = DatabricksProvider(
             host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
             token=settings.DATABRICKS_TOKEN,
@@ -45,7 +48,7 @@ async def check_asset_quality(check_type: str, scope: str = "TABLE") -> Dict[str
                 LIMIT 100
             """
             
-            result = await provider.execute_sql(query)
+            result = await provider.execute_sql(query, obo_token=obo_token)
             return {
                 "issues": result.get("rows", []),
                 "check": "missing_description",

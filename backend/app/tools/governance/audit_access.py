@@ -18,8 +18,11 @@ class AuditUserAccessInput(BaseModel):
     required_role="governance_admin",
     args_schema=AuditUserAccessInput
 )
-async def audit_user_access(user_email: str, catalog: str) -> Dict[str, Any]:
+async def audit_user_access(user_email: str, catalog: str, **kwargs) -> Dict[str, Any]:
     try:
+        # Read-only access audit runs as the calling user (OBO) when available;
+        # falls back to the service principal otherwise.
+        obo_token = kwargs.get("_obo_token")
         provider = DatabricksProvider(
             host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
             token=settings.DATABRICKS_TOKEN,
@@ -41,7 +44,7 @@ async def audit_user_access(user_email: str, catalog: str) -> Dict[str, Any]:
         final_results = {}
         for key, q in queries.items():
             try:
-                res = await provider.execute_sql(q, timeout_seconds=120)
+                res = await provider.execute_sql(q, timeout_seconds=120, obo_token=obo_token)
                 final_results[key] = res.get("rows", [])
             except Exception as e:
                 final_results[key] = f"Error: {str(e)}"

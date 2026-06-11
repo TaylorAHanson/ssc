@@ -47,49 +47,6 @@ export interface FollowUpQuestion {
   required: boolean;
 }
 
-export interface ConversationRequest {
-  query: string;
-  conversation_history?: ChatMessage[];
-  context?: Record<string, any>;
-}
-
-export interface AgentResponse {
-  message: string;
-  follow_up_questions?: FollowUpQuestion[];
-  form_route?: {
-    path: string;
-    title: string;
-  };
-  requires_more_info: boolean;
-  form_prefill_data?: Record<string, any>;
-}
-
-/**
- * Call the agent conversation endpoint.
- */
-export async function callAgent(request: ConversationRequest): Promise<AgentResponse> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/agent/conversation`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(request),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(error.detail || `HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    return response.json();
-  } catch (error) {
-    // Re-throw with more context for network errors
-    if (error instanceof TypeError && error.message.includes('fetch')) {
-      throw new Error(`Failed to connect to backend at ${API_BASE_URL}. Is the server running?`);
-    }
-    throw error;
-  }
-}
-
 /**
  * Check agent health.
  */
@@ -1246,6 +1203,8 @@ export interface ContextDomain {
   created_at: string | null;
   updated_at: string | null;
   document_count?: number;
+  // Aggregate agent-retrieval count across this domain's documents.
+  retrieval_count?: number;
 }
 
 export interface ContextDocumentSummary {
@@ -1262,6 +1221,10 @@ export interface ContextDocumentSummary {
   created_at: string | null;
   updated_at: string | null;
   preview?: string;
+  // Retrieval-usage signal: how many times the agent has retrieved this
+  // document, and when it last did. Surfaced as a "Usage" indicator.
+  retrieval_count?: number;
+  last_retrieved_at?: string | null;
 }
 
 export interface ContextDocument extends ContextDocumentSummary {

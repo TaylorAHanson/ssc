@@ -79,7 +79,6 @@ export interface RouteEvent {
     type: 'route';
     path: string;
     title: string;
-    prefill?: Record<string, unknown> | null;
 }
 
 export interface DoneEvent {

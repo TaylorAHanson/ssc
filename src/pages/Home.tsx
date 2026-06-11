@@ -42,9 +42,6 @@ function getRecentTopics(): string[] {
 
 function getButtonLabel(path: string): string {
     if (!path) return 'Continue to form';
-    if (path.startsWith('/paas/') || path.startsWith('/daas/')) {
-        return 'Go to pre-filled form';
-    }
     if (path.includes('/community/links') || path === '/community-links') {
         return 'Go to community links';
     }

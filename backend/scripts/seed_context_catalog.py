@@ -11,7 +11,13 @@ matched by name and documents by (domain, title), so re-running won't duplicate.
 Usage:
     python3 backend/scripts/seed_context_catalog.py
     API_BASE=http://localhost:8000/api/v1 DEV_ROLE="Platform Admin" python3 backend/scripts/seed_context_catalog.py
+
+    # Wipe the seeded placeholder domains (and their docs/sub-domains) before
+    # loading your real Confluence content:
+    python3 backend/scripts/seed_context_catalog.py --reset
+    python3 backend/scripts/seed_context_catalog.py --reset --seed   # wipe then re-seed
 """
+import argparse
 import json
 import os
 import urllib.error
@@ -295,6 +301,27 @@ DOCUMENTS = {
 }
 
 
+def reset_seed():
+    """Delete the placeholder domains this script seeds.
+
+    Only removes the top-level domains defined in ``DOMAINS`` (matched by name);
+    the delete cascades to their sub-domains, documents, and chunks. Real
+    domains created by other means are left untouched.
+    """
+    print(f"Resetting seeded Context Catalog domains at {API_BASE} (role={DEV_ROLE})\n")
+    by_name = {d["name"]: d for d in list_domains()}
+    seeded_names = [spec["name"] for spec in DOMAINS]
+    removed = 0
+    for name in seeded_names:
+        domain = by_name.get(name)
+        if not domain:
+            continue
+        _request("DELETE", f"/context/domains/{domain['id']}")
+        print(f"  - removed domain (and descendants): {name}")
+        removed += 1
+    print(f"\nReset complete. Removed {removed} seeded domain(s).")
+
+
 def main():
     print(f"Seeding Context Catalog at {API_BASE} (role={DEV_ROLE})\n")
     existing = list_domains()
@@ -327,4 +354,21 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Seed or reset the Context Catalog.")
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Delete the seeded placeholder domains (and their docs/sub-domains).",
+    )
+    parser.add_argument(
+        "--seed",
+        action="store_true",
+        help="Seed the placeholder content. Implied when neither flag is given.",
+    )
+    args = parser.parse_args()
+
+    if args.reset:
+        reset_seed()
+    # Default behavior (no flags) is to seed; --reset alone only wipes.
+    if args.seed or not args.reset:
+        main()

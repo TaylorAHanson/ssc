@@ -38,7 +38,9 @@ async def search_context_catalog(query: str, domain_slug: Optional[str] = None) 
     """Return ranked passages matching the query."""
     db = next(get_db())
     try:
-        results = ContextCatalogService.search(db, query, domain_slug=domain_slug)
+        results = ContextCatalogService.search(
+            db, query, domain_slug=domain_slug, track_usage=True
+        )
         passages = [
             {
                 "document_id": r["document_id"],

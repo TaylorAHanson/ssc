@@ -21,6 +21,7 @@ import {
   Boxes,
   Tag,
   User,
+  TrendingUp,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import type {
@@ -767,6 +768,18 @@ export function ContextCatalog() {
                           <div className="flex items-center gap-3 flex-wrap mt-1.5 text-[11px] text-gray-400">
                             <span className="inline-flex items-center gap-1">
                               <Clock className="w-3 h-3" /> Updated {relativeTime(doc.updated_at)}
+                            </span>
+                            <span
+                              className="inline-flex items-center gap-1"
+                              title={
+                                doc.last_retrieved_at
+                                  ? `Last retrieved by the agent ${relativeTime(doc.last_retrieved_at)}`
+                                  : 'Never retrieved by the agent yet'
+                              }
+                            >
+                              <TrendingUp className="w-3 h-3" />{' '}
+                              {doc.retrieval_count ?? 0} retrieval
+                              {(doc.retrieval_count ?? 0) === 1 ? '' : 's'}
                             </span>
                             {doc.created_by && (
                               <span className="inline-flex items-center gap-1">

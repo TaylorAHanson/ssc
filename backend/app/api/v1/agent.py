@@ -138,7 +138,6 @@ class AgentResponse(BaseModel):
     follow_up_questions: Optional[List[FollowUpQuestion]] = None
     form_route: Optional[Dict[str, str]] = None
     requires_more_info: bool = True
-    form_prefill_data: Optional[Dict[str, Any]] = None
 
 @router.get("/tools")
 async def get_agent_tools(current_user: User = Depends(get_current_user)):
@@ -292,9 +291,7 @@ async def handle_conversation(
         
         # Post-processing: Extract JSON instructions
         json_instructions = _extract_json_instructions(agent_message)
-        form_prefill_data = None
         if json_instructions:
-            form_prefill_data = json_instructions.get("values_to_insert", {})
             agent_message = _clean_message_remove_json(agent_message)
             if not agent_message.strip():
                 agent_message = "Perfect! I have all the information I need. Ready to proceed to the form."
@@ -317,7 +314,6 @@ async def handle_conversation(
             follow_up_questions=follow_up_questions,
             form_route=form_route,
             requires_more_info=requires_more_info,
-            form_prefill_data=form_prefill_data
         )
         
     except HTTPException:
@@ -383,7 +379,6 @@ async def stream_conversation(
                                 "Ready to proceed to the form."
                             )
                         form_path = instructions.get("form_path", "")
-                        prefill = instructions.get("values_to_insert") or None
                         if form_path:
                             path_parts = form_path.strip("/").split("/")
                             title = " ".join(
@@ -391,11 +386,7 @@ async def stream_conversation(
                                 for part in path_parts
                             )
                             yield serialize_sse(
-                                RouteEvent(
-                                    path=form_path,
-                                    title=title,
-                                    prefill=prefill if isinstance(prefill, dict) else None,
-                                )
+                                RouteEvent(path=form_path, title=title)
                             ).encode("utf-8")
                         # Replace the original message with the cleaned
                         # one so the user never sees the raw JSON block.

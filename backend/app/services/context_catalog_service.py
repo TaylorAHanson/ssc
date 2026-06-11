@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -276,10 +276,15 @@ class ContextCatalogService:
 
     @staticmethod
     def search(db: Session, query: str, *, domain_slug: Optional[str] = None,
-               limit: Optional[int] = None) -> List[Dict[str, Any]]:
+               limit: Optional[int] = None, track_usage: bool = False) -> List[Dict[str, Any]]:
         """Keyword search over published document chunks.
 
         Returns ranked chunks with enough metadata to cite the source.
+
+        When ``track_usage`` is True, the documents that appear in the returned
+        results have their retrieval-usage counters bumped (best-effort). Pass
+        it from the *agent* retrieval path only — admin UI search should leave
+        it False so browsing doesn't inflate the usage signal.
         """
         limit = limit or settings.CONTEXT_CATALOG_SEARCH_LIMIT
         terms = _tokenize(query)
@@ -338,7 +343,45 @@ class ContextCatalogService:
             })
 
         scored.sort(key=lambda r: r["score"], reverse=True)
-        return scored[:limit]
+        results = scored[:limit]
+
+        if track_usage and results:
+            ContextCatalogService._bump_retrieval_usage(
+                db, [r["document_id"] for r in results]
+            )
+
+        return results
+
+    @staticmethod
+    def _bump_retrieval_usage(db: Session, document_ids: List[str]) -> None:
+        """Increment retrieval counters for the given documents (best-effort).
+
+        Never raises: a failure to record the usage signal must not break the
+        retrieval the agent depends on. Distinct ids only, so a doc that matched
+        via several chunks is counted once per search.
+        """
+        unique_ids = list(dict.fromkeys(document_ids))
+        if not unique_ids:
+            return
+        try:
+            now = datetime.utcnow()
+            (
+                db.query(ContextDocumentModel)
+                .filter(ContextDocumentModel.id.in_(unique_ids))
+                .update(
+                    {
+                        ContextDocumentModel.retrieval_count: (
+                            ContextDocumentModel.retrieval_count + 1
+                        ),
+                        ContextDocumentModel.last_retrieved_at: now,
+                    },
+                    synchronize_session=False,
+                )
+            )
+            db.commit()
+        except Exception as e:  # noqa: BLE001 - usage signal is non-critical
+            logger.warning("Context Catalog: failed to record retrieval usage: %s", e)
+            db.rollback()
 
     # ------------------------------------------------------------ serialization
 
@@ -366,6 +409,13 @@ class ContextCatalogService:
                 .filter(ContextDocumentModel.domain_id == domain.id)
                 .count()
             )
+            # Domain-level usage signal: total agent retrievals across this
+            # domain's documents (direct children only, matching document_count).
+            data["retrieval_count"] = (
+                db.query(func.coalesce(func.sum(ContextDocumentModel.retrieval_count), 0))
+                .filter(ContextDocumentModel.domain_id == domain.id)
+                .scalar()
+            ) or 0
         return data
 
     @staticmethod
@@ -383,6 +433,12 @@ class ContextCatalogService:
             "created_by": document.created_by,
             "created_at": document.created_at.isoformat() if document.created_at else None,
             "updated_at": document.updated_at.isoformat() if document.updated_at else None,
+            "retrieval_count": document.retrieval_count or 0,
+            "last_retrieved_at": (
+                document.last_retrieved_at.isoformat()
+                if document.last_retrieved_at
+                else None
+            ),
         }
         if include_body:
             data["body_markdown"] = document.body_markdown

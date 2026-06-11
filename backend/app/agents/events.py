@@ -121,7 +121,6 @@ class RouteEvent(BaseModel):
     type: Literal["route"] = "route"
     path: str
     title: str
-    prefill: Optional[Dict[str, Any]] = None
 
 
 class DoneEvent(BaseModel):

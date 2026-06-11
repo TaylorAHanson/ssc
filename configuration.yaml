@@ -65,6 +65,14 @@ features:
   # Backed by Databricks Genie (Managed MCP). Disable this in environments
   # where Genie isn't available or OBO auth isn't configured.
   ask_your_data: true
+  # Genie answer presentation. By default (false) the agent surfaces Genie's
+  # own ``final_answer`` markdown verbatim — Genie already returns a polished,
+  # grounded answer, so the extra LLM "summarization" turn only adds latency,
+  # cost, and a chance to rephrase the answer less precisely. Set this to true
+  # to feed Genie's answer back through the agent for a final summarization
+  # turn (useful if you want the answer reworded in the agent's voice or merged
+  # with other tool results).
+  genie_summarize_answer: false
   # Context Catalog: curated knowledge base (context domains + documents) that
   # the agent retrieves from. Gates the admin UI, the API, and the retrieval
   # tools below.

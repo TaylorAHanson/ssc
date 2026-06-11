@@ -21,10 +21,13 @@ class GetCostSummaryInput(BaseModel):
     required_role="finance_admin",
     args_schema=GetCostSummaryInput
 )
-async def get_cost_summary(start_date: str, end_date: str, granularity: str = "total", group_by: Optional[str] = None) -> Dict[str, Any]:
+async def get_cost_summary(start_date: str, end_date: str, granularity: str = "total", group_by: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     logger = logging.getLogger(__name__)
     
     try:
+        # Read-only billing query runs as the calling user (OBO) when available;
+        # falls back to the service principal otherwise.
+        obo_token = kwargs.get("_obo_token")
         provider = DatabricksProvider(
             host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
             token=settings.DATABRICKS_TOKEN,
@@ -76,7 +79,7 @@ async def get_cost_summary(start_date: str, end_date: str, granularity: str = "t
         logger.info(f"Executing Cost SQL: {query}")
         
         # Developer decision: Set timeout to 300s (5 mins) for heavy cost queries
-        result = await provider.execute_sql(query, timeout_seconds=300)
+        result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token)
         rows = result.get("rows", [])
         logger.info(f"Cost SQL Result: {len(rows)} rows returned")
         

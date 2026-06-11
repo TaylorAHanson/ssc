@@ -17,8 +17,11 @@ class CheckTaggingInput(BaseModel):
     required_role="finance_admin",
     args_schema=CheckTaggingInput
 )
-async def check_tagging_compliance(required_tags: List[str]) -> Dict[str, Any]:
+async def check_tagging_compliance(required_tags: List[str], **kwargs) -> Dict[str, Any]:
     try:
+        # Read-only system-table query runs as the calling user (OBO) when
+        # available; falls back to the service principal otherwise.
+        obo_token = kwargs.get("_obo_token")
         provider = DatabricksProvider(
             host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
             token=settings.DATABRICKS_TOKEN,
@@ -58,7 +61,7 @@ async def check_tagging_compliance(required_tags: List[str]) -> Dict[str, Any]:
         # Note: Warehouses table might be different (system.compute.warehouses?) 
         # Sticking to clusters for now as primary target.
         
-        result = await provider.execute_sql(query)
+        result = await provider.execute_sql(query, obo_token=obo_token)
         
         return {
             "non_compliant_resources": result.get("rows", []),
