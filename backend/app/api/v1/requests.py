@@ -10,8 +10,8 @@ from app.models.request import Request, RequestCreate, RequestUpdate, StateMachi
 from app.services.request_service import RequestService
 from app.db.session import get_db
 from app.db import ApprovalModel, RequestModel
-from app.state_machines.persistence import load_state_machine
 from app.state_machines.facts import add_fact
+from app.v2.render import render_state
 from datetime import datetime, timezone
 import json
 import logging
@@ -40,10 +40,9 @@ def _format_request(req: RequestModel, db: Session) -> Optional[Request]:
                 currentProgress=None
             )
         else:
-            sm = load_state_machine(req, db)
-            sm_state = sm.to_state_machine_state()
+            sm_state = render_state(req, db)
     except Exception as e:
-        logger.error(f"ERROR loading SM for {req.id}: {e}", exc_info=True)
+        logger.error(f"ERROR rendering V2 state for {req.id}: {e}", exc_info=True)
         sm_state = StateMachineState(
             currentState=req.current_state or "unknown",
             states=[],
@@ -516,7 +515,8 @@ async def edit_parameters(
     Requires: platform_admin role.
     Only valid when current_state is in the SM's get_editable_states() list.
     """
-    from app.state_machines.persistence import load_state_machine
+    from app.v2.graphs import editable_states as v2_editable_states
+    from app.v2.render import render_state
 
     if not current_user.has_role("platform_admin"):
         raise HTTPException(status_code=403, detail="Only platform admins can edit workflow parameters")
@@ -525,19 +525,14 @@ async def edit_parameters(
     if not request_model:
         raise HTTPException(status_code=404, detail="Request not found")
 
-    try:
-        sm = load_state_machine(request_model, db)
-    except Exception as e:
-        logger.error(f"[edit-parameters] Failed to load state machine for {request_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load state machine")
-
-    editable_states = sm.get_editable_states()
-    if request_model.current_state not in editable_states:
+    allowed = v2_editable_states(request_model.type)
+    current_state = render_state(request_model, db).currentState
+    if current_state not in allowed:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Cannot edit parameters in state '{request_model.current_state}'. "
-                f"Edit is only allowed in: {editable_states}"
+                f"Cannot edit parameters in state '{current_state}'. "
+                f"Edit is only allowed in: {allowed}"
             )
         )
 

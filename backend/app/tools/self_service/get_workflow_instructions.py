@@ -19,10 +19,35 @@ class GetWorkflowInstructionsInput(BaseModel):
 async def get_workflow_instructions(workflow_name: str) -> Dict[str, Any]:
     """
     Fetch the markdown instructions for a specific workflow.
+
+    Reads the published Skill from the DB first ("skills as data"); falls back
+    to the legacy filesystem instruction markdown if the DB has no matching
+    published skill or is unavailable.
     """
+    clean_name = re.sub(r'[^a-zA-Z0-9_]', '', workflow_name.replace('.md', ''))
+
+    # DB-backed Skills take precedence.
     try:
-        # Sanitize workflow name just in case
-        clean_name = re.sub(r'[^a-zA-Z0-9_]', '', workflow_name.replace('.md', ''))
+        from app.db.session import get_session_local
+        from app.services.skill_service import SkillService
+
+        db = get_session_local()()
+        try:
+            skill = SkillService.get_by_key(db, clean_name, published_only=True)
+            if skill and skill.instructions_markdown:
+                return {
+                    "workflow": skill.key,
+                    "instructions": skill.instructions_markdown,
+                    "found": True,
+                    "source": "skill",
+                }
+        finally:
+            db.close()
+    except Exception:
+        # DB unavailable -> fall through to filesystem.
+        pass
+
+    try:
         filename = f"{clean_name}.md"
         
         # Path to instructions directory relative to this file

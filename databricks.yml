@@ -62,6 +62,19 @@ resources:
             value: "${var.sql_warehouse_id}"
           - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
             value: "${var.model_serving_endpoint}"
+          # AI Gateway (best practice): when set, agent LLM calls route through
+          # this gateway endpoint (model routing/A-B, rate+cost limits, input
+          # guardrails configured in the gateway, not in app code).
+          - name: AI_GATEWAY_ENDPOINT
+            value: "${var.ai_gateway_endpoint}"
+          # MLflow tracing/observability (best practice).
+          - name: MLFLOW_TRACING_ENABLED
+            value: "${var.mlflow_tracing_enabled}"
+          - name: MLFLOW_EXPERIMENT
+            value: "${var.mlflow_experiment}"
+          # Pluggable identity-group provider (noop|rest|lmws).
+          - name: IDENTITY_PROVIDER
+            value: "${var.identity_provider}"
           - name: AGENT_ENABLED
             value: "true"
           - name: AGENT_MAX_ITERATIONS
@@ -133,6 +146,35 @@ resources:
           user_name: "${workspace.current_user.userName}"
         - level: CAN_USE
           group_name: "users"
+
+  # Scheduled LLM-as-judge quality job (best practice). Scores recent agent
+  # traces (from the MLflow experiment) for helpfulness/groundedness and writes
+  # the verdict back as an LLM_JUDGE assessment keyed by trace_id, to compare
+  # against the human feedback captured via POST /api/v1/agent/feedback.
+  jobs:
+    agent_quality_judge:
+      name: "${var.app_name}-agent-quality-judge-${var.environment}"
+      schedule:
+        quartz_cron_expression: "${var.llm_judge_cron}"
+        timezone_id: "UTC"
+        pause_status: "${var.llm_judge_pause_status}"
+      tasks:
+        - task_key: judge
+          environment_key: default
+          spark_python_task:
+            python_file: "backend/app/jobs/llm_judge.py"
+            parameters: ["--limit", "100"]
+      environments:
+        - environment_key: default
+          spec:
+            client: "3"
+            dependencies:
+              - mlflow-skinny>=2.20.0
+              - httpx
+              - pydantic
+      permissions:
+        - level: CAN_MANAGE
+          user_name: "${workspace.current_user.userName}"
 
 # Sync configuration
 sync:
@@ -227,6 +269,24 @@ variables:
   model_serving_endpoint:
     description: "Model Serving Endpoint for Agent LLM"
     default: "databricks-claude-sonnet-4-6"
+  ai_gateway_endpoint:
+    description: "AI Gateway serving endpoint for agent LLM (blank = call model_serving_endpoint directly). Configure A-B routing, rate/cost limits, and input guardrails on this endpoint."
+    default: ""
+  mlflow_tracing_enabled:
+    description: "Enable MLflow tracing for the agent (true/false)"
+    default: "false"
+  mlflow_experiment:
+    description: "MLflow experiment path for agent traces (blank = default), e.g. /Shared/atlas-agent"
+    default: ""
+  identity_provider:
+    description: "Identity-group provider backend: noop | rest | lmws"
+    default: "noop"
+  llm_judge_cron:
+    description: "Quartz cron for the scheduled LLM-as-judge quality job"
+    default: "0 0 6 * * ?"
+  llm_judge_pause_status:
+    description: "PAUSED or UNPAUSED for the LLM-as-judge job schedule"
+    default: "PAUSED"
   data_quality_table:
     description: "Table where data quality results are stored"
     default: "edh-ssc_local_catalog.edh-ssc.data_quality_results"
@@ -250,7 +310,7 @@ variables:
     default: "us-west-2"
   ses_source_email:
     description: "SES-verified source email address for notifications"
-    default: "edh.test.notification@qualcomm.com"
+    default: "notifications@example.com"
   ses_secret_scope:
     description: "Databricks secret scope holding the SES IAM credentials"
     default: "edh-ssc-hub"

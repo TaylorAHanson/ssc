@@ -14,7 +14,12 @@ class ExecuteWorkflowInput(BaseModel):
 @tool(
     name="execute_workflow",
     description="Executes a specified workflow with the given parameters and initiates the corresponding state machine.",
-    args_schema=ExecuteWorkflowInput
+    args_schema=ExecuteWorkflowInput,
+    # Gateway to every provisioning workflow (catalog/schema/volume/SP/repo,
+    # Terraform apply, UC grants, identity-group membership). The downstream
+    # blast radius depends on `workflow_type`; classified `infra` as the
+    # broadest bound. The workflow's own HITL approvals still apply.
+    side_effect_class="infra",
 )
 async def execute_workflow(workflow_type: str, parameters: Dict[str, Any], conversation_history: Optional[list] = None, **kwargs) -> Dict[str, Any]:
     """

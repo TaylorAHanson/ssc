@@ -181,6 +181,14 @@ const navItems: NavItem[] = [
     group: 'Governance',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
+  {
+    id: 'skills',
+    title: 'Skills',
+    icon: <Sparkles className="w-5 h-5" />,
+    path: '/build/skills',
+    group: 'Build & Customize',
+    allowedPersonas: ['Platform Admin', 'Governance Admin']
+  },
 
   // Admin - Restricted
   {
@@ -422,7 +430,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             </button>
           </div>
         ) : (
-          // Stacked layout: a wide wordmark logo (e.g. Qualcomm) plus
+          // Stacked layout: a wide wordmark logo plus
           // a multi-word brand name (e.g. "Enterprise Data Hub") won't
           // fit on one line inside the 288px sidebar without truncating
           // one or the other. Put the logo + toggle on the top row and

@@ -20,6 +20,15 @@ cryptography==46.0.6
 requests==2.33.0
 icalendar==7.0.0
 mcp==1.20.0
+# V2 durable agentic execution engine (replaces the custom state machine engine).
+langgraph==1.2.4
+langgraph-checkpoint-sqlite==3.1.0
+langgraph-checkpoint-postgres==3.1.0
+# Databricks best practices: native ResponsesAgent contract + MLflow tracing /
+# LLM-as-judge observability. mlflow-skinny pulls numpy/pandas via pyfunc.
+mlflow-skinny==3.13.0
+numpy==2.4.6
+pandas==3.0.3
 boto3==1.40.66
 python-docx==1.1.2
 python-pptx==1.0.2

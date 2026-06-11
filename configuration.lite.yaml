@@ -75,8 +75,8 @@ tools:
   list_workspaces: true
   search_events: true
   search_requests: true
-  lmws_list_retrieve: false
-  lmws_member_retrieve: false
+  group_lookup: false
+  member_lookup: false
   check_resource_access: true
   search_approvals: true
   search_user_entitlements: true

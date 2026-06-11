@@ -514,6 +514,43 @@ async def get_onboarding_suggestions(
     )
 
 
+class FeedbackRequest(BaseModel):
+    # trace_id returned on the terminal SSE ``done`` event for the turn.
+    trace_id: str
+    # Thumbs up/down or a numeric rating; free-form value the judge correlates.
+    value: Any
+    comment: Optional[str] = None
+
+
+@router.post("/feedback")
+async def submit_agent_feedback(
+    request: FeedbackRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Attach user feedback to an agent turn's MLflow trace (best practice).
+
+    Feedback keyed by ``trace_id`` powers the quality dashboard and the
+    scheduled LLM-as-judge comparison (human vs. judge agreement).
+    """
+    from app.agents.tracing import log_feedback, tracing_active
+
+    if not tracing_active():
+        # Tracing off: accept but no-op so the UI doesn't error.
+        logger.info(
+            "Feedback received but tracing disabled (trace=%s value=%s)",
+            request.trace_id, request.value,
+        )
+        return {"recorded": False, "reason": "tracing_disabled"}
+
+    recorded = log_feedback(
+        trace_id=request.trace_id,
+        value=request.value,
+        comment=request.comment,
+        user=current_user.email,
+    )
+    return {"recorded": recorded}
+
+
 @router.get("/health")
 async def agent_health():
     """Health check for agent endpoint."""

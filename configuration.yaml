@@ -20,7 +20,8 @@
 
 branding:
   name: "Enterprise Data Hub"
-  logo_url: "https://upload.wikimedia.org/wikipedia/commons/f/fc/Qualcomm-Logo.svg"
+  # Your organization's wordmark/logo URL. Leave blank to render the name only.
+  logo_url: ""
   # Accent blue aligned with the companion Command Center app's design tokens
   # (see src/theme.ts). The dark navy sidebar / heading color is structural
   # and lives in CSS variables (--theme-nav-bg, --theme-heading).
@@ -32,7 +33,7 @@ branding:
   success_color: "#388E3C"
   # External URL for the companion Command Center app. When set, a
   # "Command Center" link appears in the "Build & Customize" sidebar group.
-  command_center_url: "https://fevm-taylor-hanson-build.cloud.databricks.com/apps/command-center"
+  command_center_url: ""
 
 links:
   # External "Open in Databricks" deep link surfaced inside the
@@ -59,6 +60,10 @@ features:
   # the agent retrieves from. Gates the admin UI, the API, and the retrieval
   # tools below.
   context_catalog: true
+  # Skill authoring: DB-backed, admin-editable workflow definitions ("skills as
+  # data") that replace the filesystem instruction markdown. Gates the admin UI
+  # and the /skills API; the agent always reads published skills.
+  skill_authoring: true
   # Onboarding suggestions: on login, the home page asks the agent for a few
   # personalized, clickable starting prompts (role + recent-activity hints).
   # One cached LLM call per session with a deterministic role-based fallback.
@@ -94,6 +99,7 @@ ui:
     sentinel: true
     tag_management: true
     context_catalog: true
+    skills: true
     feedback: true
 
 tools:
@@ -125,8 +131,8 @@ tools:
   list_workspaces: true
   search_events: true
   search_requests: true
-  lmws_list_retrieve: true
-  lmws_member_retrieve: true
+  group_lookup: true
+  member_lookup: true
   check_resource_access: true
   search_approvals: true
   search_user_entitlements: true

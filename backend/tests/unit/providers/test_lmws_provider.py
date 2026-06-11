@@ -4,6 +4,7 @@ import os
 import pytest
 from unittest.mock import AsyncMock, patch
 
+from app.core.config import settings
 from app.core.exceptions import PermanentError, RetryableError
 from app.providers.lmws import LmwsAction, LmwsProvider
 
@@ -27,7 +28,11 @@ def test_build_parameters_normalizes_and_defaults():
     assert params["secret_scope"] == provider.secret_scope
     # defaults applied
     assert params["justification"]
-    assert params["clone_source"]
+    # clone_source is now a per-deployment config (blank by default after the
+    # de-Qualcomm generalization), so we only assert it's wired through from
+    # settings, not that it carries a hardcoded value.
+    assert "clone_source" in params
+    assert params["clone_source"] == settings.LMWS_DEFAULT_CLONE_SOURCE
     # every value is a string (notebook widgets are strings)
     assert all(isinstance(v, str) for v in params.values())
 

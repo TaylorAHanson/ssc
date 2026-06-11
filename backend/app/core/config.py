@@ -198,6 +198,22 @@ class Settings(BaseSettings):
     MODEL_SERVING_CLASSIFIER_ENDPOINT: str = ""
     MODEL_SERVING_API_KEY: str = ""  # SECRET: Set in .env
     MODEL_SERVING_TIMEOUT_SECONDS: float = 300.0
+
+    # Databricks AI Gateway (best practice).
+    # When set, the agent routes LLM calls through this gateway endpoint instead
+    # of MODEL_SERVING_AGENT_LLM_ENDPOINT. The gateway is where model routing /
+    # A-B traffic split, centralized rate + cost limits, and INPUT guardrails
+    # (PII/safety) are configured by an admin -- no app code change to swap models.
+    # NOTE: output guardrails are intentionally NOT used so SSE token streaming
+    # stays always-on (a blocking output filter would buffer the stream).
+    AI_GATEWAY_ENDPOINT: str = ""
+
+    # MLflow tracing / observability (best practice).
+    MLFLOW_TRACING_ENABLED: bool = False
+    MLFLOW_TRACKING_URI: str = "databricks"  # "databricks" in-workspace; "" disables remote
+    MLFLOW_EXPERIMENT: str = ""  # e.g. /Shared/atlas-agent; blank => default
+    # Delta table (catalog.schema.table) for agent feedback keyed by trace_id.
+    MLFLOW_FEEDBACK_TABLE: str = ""
     
     # Poller Settings
     POLLER_INTERVAL_SECONDS: int = 5  # How often to poll for new requests
@@ -219,6 +235,15 @@ class Settings(BaseSettings):
     # runner replaces the oldest tool messages with placeholders before the
     # next LLM call. ~600k chars ≈ ~150k tokens, well under typical 1M limits.
     AGENT_MAX_PROMPT_CHARS: int = 600000
+    # V2 durable engine (LangGraph). Additive + off by default until the M5
+    # cutover wires it into the poller in place of the legacy state machines.
+    V2_ENGINE_ENABLED: bool = False
+    # V2 ToolExecutor: when False (default) the agent-tool OPA package
+    # (`data.agent.tools`) runs in SHADOW mode — decisions are evaluated and
+    # logged but never block a tool call. Flip to True to ENFORCE (deny +
+    # approval gates actually halt mutating tools). Kept off until the
+    # `data.agent.tools` policy is tuned against real traffic.
+    AGENT_TOOL_OPA_ENFORCE: bool = False
 
     # Open Policy Agent (governance / Rego)
     # Empty OPA_URL → app starts an embedded `opa run --server` child process
@@ -282,7 +307,22 @@ class Settings(BaseSettings):
     IDP_BASE_URL: str = ""  # Base URL for IDP API
     IDP_API_KEY: str = ""  # SECRET: Set in .env
 
-    # LMWS / FWS-API Group Management
+    # Identity-group provider (vendor-neutral membership management).
+    # noop (default, records-only) | rest (SCIM/REST) | lmws (Qualcomm legacy).
+    IDENTITY_PROVIDER: str = "noop"
+    # UC tag keys that map an asset to its access/approver group (configurable so
+    # customers use their own tagging conventions instead of hardcoded names).
+    ACCESS_GROUP_TAG_KEY: str = "access_group"
+    APPROVER_GROUP_TAG_KEY: str = "approver_group"
+    # Generic REST/SCIM identity backend (used when IDENTITY_PROVIDER=rest).
+    IDENTITY_REST_BASE_URL: str = ""
+    IDENTITY_REST_TOKEN: str = ""
+    IDENTITY_REST_ADD_PATH: str = ""
+    IDENTITY_REST_REMOVE_PATH: str = ""
+    IDENTITY_REST_GROUP_PATH: str = ""
+    IDENTITY_REST_MEMBER_PATH: str = ""
+
+    # LMWS / FWS-API Group Management (legacy; only used when IDENTITY_PROVIDER=lmws)
     # Group/user management runs as a Databricks job (classic compute) against
     # the vendored LMWS notebook. The notebook reads the service-account
     # credentials from this Databricks secret scope (keys: username/password)
@@ -291,7 +331,7 @@ class Settings(BaseSettings):
     LMWS_SECRET_SCOPE: str = "lmws"  # Databricks secret scope (keys: username, password)
     LMWS_JOB_TIMEOUT_SECONDS: int = 1800  # Job-level timeout for an LMWS action run
     LMWS_DEFAULT_JUSTIFICATION: str = "Automated via Databricks job"
-    LMWS_DEFAULT_CLONE_SOURCE: str = "qcc.dsf.eccn.reference"  # Default clone source for createSPGroup
+    LMWS_DEFAULT_CLONE_SOURCE: str = ""  # Default clone source for createSPGroup (set per-deployment)
     # Inline (agent-tool) read path polling: how long a stateless tool will
     # wait for a job-backed read (list_retrieve / member_retrieve) before
     # giving up. State-machine writes poll across ticks instead.

@@ -131,6 +131,9 @@ class DoneEvent(BaseModel):
     # Carry the full message history back so the caller can persist it
     # if needed - matches the legacy non-streaming response shape.
     messages: Optional[List[Dict[str, Any]]] = None
+    # MLflow trace id for this turn (when tracing is enabled). The UI attaches
+    # feedback to this id so a thumbs-up/down lands on the exact run.
+    trace_id: Optional[str] = None
 
 
 class ErrorEvent(BaseModel):

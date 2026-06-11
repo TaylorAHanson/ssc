@@ -1,0 +1,712 @@
+import { useCallback, useMemo, useState } from 'react';
+import {
+  CheckCircle2,
+  GitBranch,
+  GripVertical,
+  Loader2,
+  Play,
+  Plus,
+  ShieldCheck,
+  Trash2,
+  Wrench,
+  X,
+} from 'lucide-react';
+import { Button } from '../ui/button';
+import { api } from '../../services/api';
+import type {
+  GateType,
+  SpecExpr,
+  WorkflowGateStage,
+  WorkflowGraphSpec,
+  WorkflowStage,
+  WorkflowStepStage,
+  WorkflowTool,
+} from '../../services/api';
+import {
+  GATE_TYPES,
+  argValueToExpr,
+  autoApproveToModel,
+  exprToArgValue,
+  modelToAutoApprove,
+  newGate,
+  newStep,
+  type ArgKind,
+  type ArgValue,
+  type AutoApproveModel,
+  type Condition,
+} from '../../lib/workflowSpec';
+import WorkflowGraphPreview from './WorkflowGraphPreview';
+import WorkflowTestModal from './WorkflowTestModal';
+
+// `inputBase` has no width so it can be combined with flex/explicit widths
+// without the `w-full` conflict that otherwise collapses flex children.
+const inputBase =
+  'border border-gray-300 rounded-md h-9 px-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent';
+const inputClass = `w-full ${inputBase}`;
+const labelClass = 'block text-[11px] font-medium text-gray-600 mb-1';
+
+interface Props {
+  spec: WorkflowGraphSpec;
+  tools: WorkflowTool[];
+  onChange: (spec: WorkflowGraphSpec) => void;
+}
+
+export function WorkflowEditor({ spec, tools, onChange }: Props) {
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(
+    spec.stages.length ? 0 : null,
+  );
+  const [validating, setValidating] = useState(false);
+  const [validation, setValidation] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [showTest, setShowTest] = useState(false);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [dropIdx, setDropIdx] = useState<number | null>(null);
+
+  const defaultTool = tools[0]?.name || 'send_notification';
+  const stages = spec.stages;
+
+  const setStages = (next: WorkflowStage[]) => {
+    onChange({ ...spec, stages: next });
+    setValidation(null);
+  };
+
+  const updateStage = (idx: number, patch: Partial<WorkflowStage>) => {
+    const next = stages.map((s, i) => (i === idx ? ({ ...s, ...patch } as WorkflowStage) : s));
+    setStages(next);
+  };
+
+  const move = (idx: number, dir: -1 | 1) => {
+    const j = idx + dir;
+    if (j < 0 || j >= stages.length) return;
+    const next = [...stages];
+    [next[idx], next[j]] = [next[j], next[idx]];
+    setStages(next);
+    setSelectedIdx(j);
+  };
+
+  const remove = (idx: number) => {
+    const next = stages.filter((_, i) => i !== idx);
+    setStages(next);
+    setSelectedIdx(next.length ? Math.max(0, idx - 1) : null);
+  };
+
+  const addGate = () => {
+    const next = [...stages, newGate(stages.length + 1)];
+    setStages(next);
+    setSelectedIdx(next.length - 1);
+  };
+
+  const addStep = () => {
+    const next = [...stages, newStep(stages.length + 1, defaultTool)];
+    setStages(next);
+    setSelectedIdx(next.length - 1);
+  };
+
+  // Stable identity so the graph preview's memo/effects don't churn (which can
+  // blank the canvas). Resolve the name against the latest stages at call time.
+  const selectByName = useCallback(
+    (name: string) => {
+      const idx = spec.stages.findIndex((s) => s.name === name);
+      if (idx >= 0) setSelectedIdx(idx);
+    },
+    [spec.stages],
+  );
+
+  const reorder = (from: number, to: number) => {
+    if (from === to || from < 0 || to < 0) return;
+    const next = [...stages];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    setStages(next);
+    setSelectedIdx(to);
+  };
+
+  const runValidate = async () => {
+    setValidating(true);
+    setValidation(null);
+    try {
+      await api.validateSpec(spec);
+      setValidation({ ok: true, msg: 'Valid workflow — ready to publish.' });
+    } catch (e) {
+      setValidation({ ok: false, msg: e instanceof Error ? e.message : 'Invalid workflow' });
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  const selected = selectedIdx !== null ? stages[selectedIdx] : null;
+  // Gate types available as step approvals = gate types appearing before the step.
+  const approvalOptions = useMemo(() => {
+    if (selectedIdx === null) return [];
+    const set = new Set<string>();
+    for (let i = 0; i < selectedIdx; i += 1) {
+      const s = stages[i];
+      if (s.kind === 'gate') set.add(s.type);
+    }
+    return Array.from(set);
+  }, [stages, selectedIdx]);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={addGate}>
+            <GitBranch className="w-3.5 h-3.5 mr-1" /> Add gate
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={addStep}>
+            <Wrench className="w-3.5 h-3.5 mr-1" /> Add step
+          </Button>
+        </div>
+        <div className="flex items-center gap-3">
+          {validation && (
+            <span
+              className={`text-xs inline-flex items-center gap-1 ${
+                validation.ok ? 'text-green-700' : 'text-red-600'
+              }`}
+            >
+              {validation.ok ? (
+                <CheckCircle2 className="w-3.5 h-3.5" />
+              ) : (
+                <X className="w-3.5 h-3.5" />
+              )}
+              {validation.msg}
+            </span>
+          )}
+          <Button type="button" variant="outline" size="sm" onClick={runValidate} disabled={validating}>
+            {validating ? (
+              <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+            ) : (
+              <ShieldCheck className="w-3.5 h-3.5 mr-1" />
+            )}
+            Validate
+          </Button>
+          <Button type="button" size="sm" onClick={() => setShowTest(true)} disabled={stages.length === 0}>
+            <Play className="w-3.5 h-3.5 mr-1" /> Test
+          </Button>
+        </div>
+      </div>
+
+      {/* Visual zone: stage list + canvas. Drag the bottom-right handle to resize. */}
+      <div
+        className="flex flex-col lg:flex-row gap-3 resize-y overflow-hidden min-h-[260px] rounded-md"
+        style={{ height: 420 }}
+      >
+        {/* Stage list */}
+        <div className="lg:w-60 shrink-0 lg:h-full overflow-y-auto border border-gray-200 rounded-md p-2 space-y-1">
+          <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1 px-1">
+            Stages ({stages.length})
+          </div>
+          {stages.length === 0 && (
+            <div className="text-xs text-gray-400 border border-dashed border-gray-200 rounded-md p-3 text-center">
+              No stages yet. Add a gate or step to begin.
+            </div>
+          )}
+          {stages.map((s, idx) => (
+            <div
+              key={idx}
+              draggable
+              onClick={() => setSelectedIdx(idx)}
+              onDragStart={() => setDragIdx(idx)}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (dropIdx !== idx) setDropIdx(idx);
+              }}
+              onDragEnd={() => {
+                setDragIdx(null);
+                setDropIdx(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (dragIdx !== null) reorder(dragIdx, idx);
+                setDragIdx(null);
+                setDropIdx(null);
+              }}
+              className={`w-full text-left flex items-center gap-1.5 rounded-md px-2 py-1.5 border cursor-pointer ${
+                selectedIdx === idx ? 'border-accent bg-accent/5' : 'border-transparent hover:bg-gray-50'
+              } ${dropIdx === idx && dragIdx !== null && dragIdx !== idx ? 'border-t-2 border-t-accent' : ''} ${
+                dragIdx === idx ? 'opacity-40' : ''
+              }`}
+            >
+              <GripVertical className="w-3.5 h-3.5 text-gray-300 shrink-0 cursor-grab" />
+              <span className="text-[10px] text-gray-400 w-4">{idx + 1}</span>
+              {s.kind === 'gate' ? (
+                <GitBranch className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+              ) : (
+                <Wrench className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+              )}
+              <span className="text-sm truncate flex-1">{s.name || '(unnamed)'}</span>
+              <span className="text-[10px] text-gray-400 truncate max-w-[64px]">
+                {s.kind === 'gate' ? s.type : (s as WorkflowStepStage).tool}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {/* Canvas */}
+        <div className="flex-1 h-[260px] lg:h-full min-w-0">
+          <WorkflowGraphPreview
+            spec={spec}
+            selectedStage={selected?.name ?? null}
+            onSelectStage={selectByName}
+            height="100%"
+          />
+        </div>
+      </div>
+
+      {/* Stage inspector — full width below the canvas so fields have room. */}
+      <div>
+        {selected === null ? (
+          <div className="text-sm text-gray-400 border border-dashed border-gray-200 rounded-md p-6 text-center">
+            Select a stage in the list above or click a node in the canvas to edit it.
+          </div>
+        ) : (
+          <div className="border border-gray-200 rounded-md">
+            <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2.5 bg-gray-50/60 rounded-t-md">
+              <div className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+                {selected.kind === 'gate' ? (
+                  <GitBranch className="w-4 h-4 text-amber-600" />
+                ) : (
+                  <Wrench className="w-4 h-4 text-blue-600" />
+                )}
+                {selected.kind === 'gate' ? 'Approval gate' : 'Provision step'}
+                <span className="text-xs font-normal text-gray-400">
+                  · stage {selectedIdx! + 1} of {stages.length}
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <Button type="button" variant="ghost" size="sm" onClick={() => move(selectedIdx!, -1)}
+                  disabled={selectedIdx === 0} title="Move earlier">↑</Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => move(selectedIdx!, 1)}
+                  disabled={selectedIdx === stages.length - 1} title="Move later">↓</Button>
+                <Button type="button" variant="ghost" size="sm"
+                  className="text-red-600 hover:bg-red-50" onClick={() => remove(selectedIdx!)} title="Delete stage">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            </div>
+
+            <div className="p-4 space-y-4 max-w-3xl">
+              <div>
+                <label className={labelClass}>Stage name (internal id)</label>
+                <input
+                  className={inputClass}
+                  value={selected.name}
+                  onChange={(e) => updateStage(selectedIdx!, { name: e.target.value })}
+                />
+              </div>
+
+              {selected.kind === 'gate' ? (
+                <GateForm
+                  gate={selected}
+                  onChange={(patch) => updateStage(selectedIdx!, patch)}
+                />
+              ) : (
+                <StepForm
+                  step={selected}
+                  tools={tools}
+                  approvalOptions={approvalOptions}
+                  onChange={(patch) => updateStage(selectedIdx!, patch)}
+                />
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {showTest && <WorkflowTestModal spec={spec} onClose={() => setShowTest(false)} />}
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Gate form
+// --------------------------------------------------------------------------
+const ADVANCED_AUTO_APPROVE_SEED = JSON.stringify(
+  { $bool: { $var: 'is_auto_approve' } },
+  null,
+  2,
+);
+
+function GateForm({
+  gate,
+  onChange,
+}: {
+  gate: WorkflowGateStage;
+  onChange: (patch: Partial<WorkflowGateStage>) => void;
+}) {
+  const model = autoApproveToModel(gate.auto_approve);
+  // Local draft for the advanced JSON editor so invalid intermediate text isn't
+  // discarded; we only commit to the spec when it parses.
+  const [advDraft, setAdvDraft] = useState<string | null>(null);
+  const [advError, setAdvError] = useState<string | null>(null);
+
+  const setModel = (m: AutoApproveModel) => {
+    try {
+      onChange({ auto_approve: modelToAutoApprove(m) });
+    } catch {
+      // invalid advanced JSON — keep editing, validation will flag it on save
+      onChange({ auto_approve: gate.auto_approve });
+    }
+  };
+
+  const onAdvancedChange = (text: string) => {
+    setAdvDraft(text);
+    try {
+      onChange({ auto_approve: JSON.parse(text) });
+      setAdvError(null);
+    } catch {
+      setAdvError('Invalid JSON');
+    }
+  };
+
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={labelClass}>Approver</label>
+          <select
+            className={inputClass}
+            value={gate.type}
+            onChange={(e) => onChange({ type: e.target.value as GateType })}
+          >
+            {GATE_TYPES.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={labelClass}>Status while waiting</label>
+          <input
+            className={inputClass}
+            value={gate.waiting_status || ''}
+            placeholder="manager_approval"
+            onChange={(e) => onChange({ waiting_status: e.target.value })}
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className={labelClass}>Auto-approve (skip this gate when…)</label>
+        <select
+          className={inputClass}
+          value={model.mode}
+          onChange={(e) => {
+            const mode = e.target.value as AutoApproveModel['mode'];
+            setAdvDraft(null);
+            setAdvError(null);
+            if (mode === 'always') setModel({ mode, conditions: [] });
+            else if (mode === 'conditions')
+              setModel({ mode, conditions: model.conditions.length ? model.conditions : [{ field: '', op: 'truthy' }] });
+            else {
+              const seed = model.raw || ADVANCED_AUTO_APPROVE_SEED;
+              setAdvDraft(seed);
+              setModel({ mode, conditions: [], raw: seed });
+            }
+          }}
+        >
+          <option value="always">Never — always require approval</option>
+          <option value="conditions">When a condition is met</option>
+          <option value="advanced">Advanced (raw expression)</option>
+        </select>
+      </div>
+
+      {model.mode === 'conditions' && (
+        <ConditionList
+          conditions={model.conditions}
+          onChange={(conditions) => setModel({ mode: 'conditions', conditions })}
+        />
+      )}
+      {model.mode === 'advanced' && (
+        <div>
+          <textarea
+            className="w-full border border-gray-300 rounded-md p-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+            rows={5}
+            value={advDraft ?? model.raw ?? ''}
+            onChange={(e) => onAdvancedChange(e.target.value)}
+          />
+          {advError && <div className="text-[11px] text-red-500 mt-1">{advError}</div>}
+        </div>
+      )}
+    </>
+  );
+}
+
+function ConditionList({
+  conditions,
+  onChange,
+}: {
+  conditions: Condition[];
+  onChange: (c: Condition[]) => void;
+}) {
+  const update = (i: number, patch: Partial<Condition>) =>
+    onChange(conditions.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
+  return (
+    <div className="space-y-2 pl-2 border-l-2 border-amber-200">
+      <div className="text-[11px] text-gray-500">Auto-approve if ANY of these are true:</div>
+      {conditions.map((c, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <span className="text-[11px] text-gray-400 shrink-0">field</span>
+          <input
+            className={`${inputBase} flex-1 min-w-0`}
+            placeholder="request field (e.g. scope, tier)"
+            value={c.field}
+            onChange={(e) => update(i, { field: e.target.value })}
+          />
+          <select
+            className={`${inputBase} w-40 shrink-0`}
+            value={c.op}
+            onChange={(e) => update(i, { op: e.target.value as Condition['op'] })}
+          >
+            <option value="truthy">is set / true</option>
+            <option value="falsy">is empty / false</option>
+            <option value="equals">equals</option>
+          </select>
+          {c.op === 'equals' && (
+            <input
+              className={`${inputBase} flex-1 min-w-0`}
+              placeholder="value"
+              value={c.value || ''}
+              onChange={(e) => update(i, { value: e.target.value })}
+            />
+          )}
+          <button type="button" className="text-gray-400 hover:text-red-500"
+            onClick={() => onChange(conditions.filter((_, idx) => idx !== i))}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      ))}
+      <Button type="button" variant="ghost" size="sm"
+        onClick={() => onChange([...conditions, { field: '', op: 'truthy' }])}>
+        <Plus className="w-3.5 h-3.5 mr-1" /> Add condition
+      </Button>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Step form
+// --------------------------------------------------------------------------
+function StepForm({
+  step,
+  tools,
+  approvalOptions,
+  onChange,
+}: {
+  step: WorkflowStepStage;
+  tools: WorkflowTool[];
+  approvalOptions: string[];
+  onChange: (patch: Partial<WorkflowStepStage>) => void;
+}) {
+  const tool = tools.find((t) => t.name === step.tool);
+  const argEntries = Object.entries(step.args || {});
+
+  const setArgs = (entries: [string, SpecExpr][]) => {
+    const obj: Record<string, SpecExpr> = {};
+    entries.forEach(([k, v]) => { obj[k] = v; });
+    onChange({ args: obj });
+  };
+
+  const toggleApproval = (gateType: string) => {
+    const cur = new Set(step.approvals || []);
+    if (cur.has(gateType)) cur.delete(gateType);
+    else cur.add(gateType);
+    onChange({ approvals: Array.from(cur) });
+  };
+
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={labelClass}>Tool</label>
+          <select
+            className={inputClass}
+            value={step.tool}
+            onChange={(e) => onChange({ tool: e.target.value })}
+          >
+            {tools.map((t) => (
+              <option key={t.name} value={t.name}>
+                {t.name}
+                {t.is_mutating ? ' \u2022 mutating' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={labelClass}>Success fact (optional)</label>
+          <input
+            className={inputClass}
+            value={step.success_fact || ''}
+            placeholder="access_granted"
+            onChange={(e) => onChange({ success_fact: e.target.value || null })}
+          />
+        </div>
+      </div>
+
+      {tool && (
+        <div className="text-[11px] text-gray-500 -mt-1">
+          {tool.description}{' '}
+          <span className={`ml-1 px-1.5 py-0.5 rounded text-[10px] ${
+            tool.is_mutating ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-500'
+          }`}>{tool.side_effect_class}</span>
+        </div>
+      )}
+
+      {approvalOptions.length > 0 && (
+        <div>
+          <label className={labelClass}>Requires prior approval (gate)</label>
+          <div className="flex flex-wrap gap-2">
+            {approvalOptions.map((g) => (
+              <label key={g} className="inline-flex items-center gap-1.5 text-xs border border-gray-200 rounded-md px-2 py-1 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={(step.approvals || []).includes(g)}
+                  onChange={() => toggleApproval(g)}
+                />
+                {g}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div>
+        <label className={labelClass}>Tool arguments</label>
+        <div className="space-y-2">
+          {argEntries.map(([key, val], i) => (
+            <ArgRow
+              key={i}
+              name={key}
+              value={val}
+              onRename={(newName) => {
+                const next = argEntries.map((e, idx): [string, SpecExpr] => (idx === i ? [newName, e[1]] : e));
+                setArgs(next);
+              }}
+              onChangeValue={(expr) => {
+                const next = argEntries.map((e, idx): [string, SpecExpr] => (idx === i ? [e[0], expr] : e));
+                setArgs(next);
+              }}
+              onRemove={() => setArgs(argEntries.filter((_, idx) => idx !== i))}
+            />
+          ))}
+          <Button type="button" variant="ghost" size="sm"
+            onClick={() => setArgs([...argEntries, [`arg_${argEntries.length + 1}`, { $var: '' }]])}>
+            <Plus className="w-3.5 h-3.5 mr-1" /> Add argument
+          </Button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Argument row (friendly expression editor)
+// --------------------------------------------------------------------------
+const ARG_KINDS: { value: ArgKind; label: string }[] = [
+  { value: 'field', label: 'From request field' },
+  { value: 'text', label: 'Fixed text' },
+  { value: 'context', label: 'Entire request' },
+  { value: 'list', label: 'List of fields' },
+  { value: 'advanced', label: 'Advanced (JSON)' },
+];
+
+function ArgRow({
+  name,
+  value,
+  onRename,
+  onChangeValue,
+  onRemove,
+}: {
+  name: string;
+  value: SpecExpr;
+  onRename: (n: string) => void;
+  onChangeValue: (expr: SpecExpr) => void;
+  onRemove: () => void;
+}) {
+  const av = exprToArgValue(value);
+  const [advDraft, setAdvDraft] = useState<string | null>(null);
+  const [advError, setAdvError] = useState<string | null>(null);
+
+  const emit = (next: ArgValue) => {
+    if (next.kind !== 'advanced') {
+      onChangeValue(argValueToExpr(next));
+      return;
+    }
+    setAdvDraft(next.raw ?? '');
+    try {
+      onChangeValue(JSON.parse(next.raw || 'null'));
+      setAdvError(null);
+    } catch {
+      // keep the user's draft; surface the error and don't corrupt the spec
+      setAdvError('Invalid JSON');
+    }
+  };
+
+  const changeKind = (kind: ArgKind) => {
+    setAdvDraft(null);
+    setAdvError(null);
+    if (kind === 'field') emit({ kind, field: av.field || '', hasDefault: false });
+    else if (kind === 'text') emit({ kind, text: av.text || '' });
+    else if (kind === 'context') emit({ kind });
+    else if (kind === 'list') emit({ kind, items: av.items || [] });
+    else emit({ kind, raw: av.raw || JSON.stringify(value, null, 2) });
+  };
+
+  return (
+    <div className="flex items-start gap-2">
+      <input
+        className={`${inputBase} w-40 shrink-0`}
+        value={name}
+        placeholder="param"
+        onChange={(e) => onRename(e.target.value)}
+      />
+      <select className={`${inputBase} w-44 shrink-0`} value={av.kind}
+        onChange={(e) => changeKind(e.target.value as ArgKind)}>
+        {ARG_KINDS.map((k) => (
+          <option key={k.value} value={k.value}>{k.label}</option>
+        ))}
+      </select>
+      <div className="flex-1">
+        {av.kind === 'field' && (
+          <div className="flex items-center gap-2">
+            <input className={inputClass} placeholder="field name" value={av.field || ''}
+              onChange={(e) => emit({ ...av, field: e.target.value })} />
+            <label className="inline-flex items-center gap-1 text-[11px] text-gray-500 whitespace-nowrap">
+              <input type="checkbox" checked={!!av.hasDefault}
+                onChange={(e) => emit({ ...av, hasDefault: e.target.checked })} />
+              default
+            </label>
+            {av.hasDefault && (
+              <input className={`${inputBase} w-28 shrink-0`} placeholder="default" value={av.default || ''}
+                onChange={(e) => emit({ ...av, default: e.target.value })} />
+            )}
+          </div>
+        )}
+        {av.kind === 'text' && (
+          <input className={inputClass} placeholder="fixed value" value={av.text || ''}
+            onChange={(e) => emit({ ...av, text: e.target.value })} />
+        )}
+        {av.kind === 'context' && (
+          <div className="text-xs text-gray-500 h-9 flex items-center">Passes the entire request payload.</div>
+        )}
+        {av.kind === 'list' && (
+          <input className={inputClass} placeholder="field1, field2"
+            value={(av.items || []).join(', ')}
+            onChange={(e) => emit({ ...av, items: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
+        )}
+        {av.kind === 'advanced' && (
+          <div>
+            <textarea
+              className="w-full border border-gray-300 rounded-md p-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+              rows={3} value={advDraft ?? av.raw ?? ''}
+              onChange={(e) => emit({ ...av, raw: e.target.value })} />
+            {advError && <div className="text-[11px] text-red-500 mt-0.5">{advError}</div>}
+          </div>
+        )}
+      </div>
+      <button type="button" className="text-gray-400 hover:text-red-500 mt-2" onClick={onRemove}>
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  );
+}
+
+export default WorkflowEditor;

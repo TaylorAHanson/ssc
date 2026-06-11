@@ -1582,6 +1582,348 @@ export async function deleteFeedback(feedbackId: string): Promise<void> {
   }
 }
 
+// --- Skills (no-code authoring) ---
+
+/** A JSON expression in the safe spec mini-language (see backend app/v2/expr.py). */
+export type SpecExpr = unknown;
+
+export type GateType =
+  | 'manager'
+  | 'platform_admin'
+  | 'data_owner'
+  | 'training'
+  | 'pr_merge'
+  | 'children';
+
+export interface WorkflowGateStage {
+  kind: 'gate';
+  name: string;
+  type: GateType;
+  waiting_status?: string;
+  auto_approve?: SpecExpr | null;
+}
+
+export interface WorkflowStepStage {
+  kind: 'step';
+  name: string;
+  tool: string;
+  approvals?: string[];
+  running_status?: string;
+  success_fact?: string | null;
+  args?: Record<string, SpecExpr>;
+  for_each?: SpecExpr | null;
+  item_args?: Record<string, SpecExpr>;
+}
+
+export type WorkflowStage = WorkflowGateStage | WorkflowStepStage;
+
+export interface WorkflowGraphSpec {
+  name: string;
+  complete_fact?: string | null;
+  completed_status?: string;
+  stages: WorkflowStage[];
+}
+
+export interface WorkflowTool {
+  name: string;
+  description: string;
+  side_effect_class: string;
+  is_mutating: boolean;
+  external: boolean;
+}
+
+export interface DryRunStage {
+  kind: 'gate' | 'step';
+  name: string;
+  // gate
+  type?: string;
+  waiting_status?: string;
+  can_auto_approve?: boolean;
+  decision?: 'auto_approve' | 'requires_approval';
+  // step
+  tool?: string;
+  is_mutating?: boolean;
+  side_effect_class?: string;
+  approvals?: string[];
+  success_fact?: string | null;
+  fan_out?: number;
+  calls?: Record<string, unknown>[];
+  truncated?: boolean;
+  // shared
+  error?: string;
+}
+
+export interface DryRunResult {
+  name: string;
+  completed_status: string;
+  complete_fact: string | null;
+  stages: DryRunStage[];
+  requires_approval: boolean;
+  mutating_steps: number;
+}
+
+export interface SkillVersion {
+  id: string;
+  skill_id: string;
+  skill_key: string;
+  version: number;
+  name: string | null;
+  goal: string | null;
+  request_type: string | null;
+  published_by: string | null;
+  published_at: string | null;
+  has_graph: boolean;
+  stage_count: number;
+}
+
+export interface SkillBundle {
+  format: string;
+  exported_at?: string;
+  skills: Record<string, unknown>[];
+}
+
+export interface ImportReport {
+  created: string[];
+  updated: string[];
+  skipped: string[];
+  errors: { key: string | null; error: string }[];
+}
+
+export interface Skill {
+  id: string;
+  key: string;
+  name: string;
+  goal: string | null;
+  instructions_markdown?: string | null;
+  allowed_tools: string[] | null;
+  policy_ref: string | null;
+  params_schema: Record<string, unknown> | null;
+  graph_spec?: WorkflowGraphSpec | null;
+  request_type: string | null;
+  status: string;
+  version: number;
+  source: string;
+  created_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface SkillInput {
+  key?: string;
+  name?: string;
+  goal?: string | null;
+  instructions_markdown?: string | null;
+  allowed_tools?: string[] | null;
+  policy_ref?: string | null;
+  params_schema?: Record<string, unknown> | null;
+  graph_spec?: WorkflowGraphSpec | null;
+  request_type?: string | null;
+  status?: string;
+}
+
+export async function listSkills(includeDrafts = true): Promise<Skill[]> {
+  const response = await fetch(`${API_BASE_URL}/skills?include_drafts=${includeDrafts}`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to list skills: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getSkill(skillId: string): Promise<Skill> {
+  const response = await fetch(`${API_BASE_URL}/skills/${skillId}`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get skill: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function createSkill(data: SkillInput): Promise<Skill> {
+  const response = await fetch(`${API_BASE_URL}/skills`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to create skill: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function updateSkill(skillId: string, data: SkillInput): Promise<Skill> {
+  const response = await fetch(`${API_BASE_URL}/skills/${skillId}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to update skill: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function publishSkill(skillId: string): Promise<Skill> {
+  const response = await fetch(`${API_BASE_URL}/skills/${skillId}/publish`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to publish skill: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function unpublishSkill(skillId: string): Promise<Skill> {
+  const response = await fetch(`${API_BASE_URL}/skills/${skillId}/unpublish`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to unpublish skill: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function deleteSkill(skillId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/skills/${skillId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to delete skill: ${response.status} ${errorText}`);
+  }
+}
+
+/** Author-time validation of a workflow graph_spec. Resolves on valid, throws the
+ *  backend's detail message (e.g. "stages[1].tool '...' is not a known V2 tool") otherwise. */
+export async function validateSpec(graphSpec: WorkflowGraphSpec): Promise<{ valid: boolean }> {
+  const response = await fetch(`${API_BASE_URL}/skills/validate-spec`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ graph_spec: graphSpec }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Invalid spec: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/** The wireable V2 tools (name + side-effect class) for the workflow editor's tool picker. */
+export async function listWorkflowTools(): Promise<WorkflowTool[]> {
+  const response = await fetch(`${API_BASE_URL}/skills/meta/tools`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to list workflow tools: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+/** Dry-run a draft workflow against a sample request: projects which gates auto-approve
+ *  and what arguments each step's tool would receive. No tools run, no DB writes. */
+export async function testSpec(
+  graphSpec: WorkflowGraphSpec,
+  sampleContext: Record<string, unknown>,
+): Promise<DryRunResult> {
+  const response = await fetch(`${API_BASE_URL}/skills/test-spec`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ graph_spec: graphSpec, sample_context: sampleContext }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Dry-run failed: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/** Published-version history for a skill (newest first). */
+export async function listSkillVersions(skillId: string): Promise<SkillVersion[]> {
+  const response = await fetch(`${API_BASE_URL}/skills/${skillId}/versions`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to load history: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+/** Restore a prior published version's body into the skill as a fresh draft. */
+export async function rollbackSkill(skillId: string, version: number): Promise<Skill> {
+  const response = await fetch(`${API_BASE_URL}/skills/${skillId}/rollback`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ version }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to roll back: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/** Export skills as a portable bundle for promotion to another environment. */
+export async function exportSkillsBundle(
+  opts: { ids?: string[]; publishedOnly?: boolean } = {},
+): Promise<SkillBundle> {
+  const params = new URLSearchParams();
+  if (opts.ids?.length) params.set('ids', opts.ids.join(','));
+  if (opts.publishedOnly) params.set('published_only', 'true');
+  const qs = params.toString();
+  const response = await fetch(`${API_BASE_URL}/skills/export/bundle${qs ? `?${qs}` : ''}`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to export: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+/** Import a bundle into this environment (upsert by key). Defaults to drafts. */
+export async function importSkillsBundle(
+  bundle: SkillBundle,
+  opts: { asStatus?: 'draft' | 'published'; overwrite?: boolean } = {},
+): Promise<ImportReport> {
+  const response = await fetch(`${API_BASE_URL}/skills/import/bundle`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({
+      bundle,
+      as_status: opts.asStatus ?? 'draft',
+      overwrite: opts.overwrite ?? true,
+    }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to import: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/** Duplicate a skill into a fresh draft. Implemented client-side via create so it works
+ *  without a dedicated endpoint; request_type is cleared so the copy is a safe template. */
+export async function cloneSkill(skillId: string): Promise<Skill> {
+  const full = await getSkill(skillId);
+  return createSkill({
+    key: `${full.key}_copy`,
+    name: full.name ? `${full.name} (copy)` : `${full.key}_copy`,
+    goal: full.goal,
+    instructions_markdown: full.instructions_markdown,
+    allowed_tools: full.allowed_tools,
+    policy_ref: full.policy_ref,
+    params_schema: full.params_schema,
+    graph_spec: full.graph_spec ?? null,
+    request_type: null,
+    status: 'draft',
+  });
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -1646,5 +1988,20 @@ export const api = {
   listFeedback,
   getFeedback,
   updateFeedback,
-  deleteFeedback
+  deleteFeedback,
+  listSkills,
+  getSkill,
+  createSkill,
+  updateSkill,
+  publishSkill,
+  unpublishSkill,
+  deleteSkill,
+  validateSpec,
+  listWorkflowTools,
+  testSpec,
+  cloneSkill,
+  listSkillVersions,
+  rollbackSkill,
+  exportSkillsBundle,
+  importSkillsBundle
 };

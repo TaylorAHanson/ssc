@@ -5,8 +5,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from app.db.request import RequestModel
 from app.models.request import RequestType, RequestCreate, Request
-from app.state_machines.persistence import save_state_machine
-from app.state_machines.factory import get_state_machine
+from app.models.request import RequestStatus
 from datetime import datetime, timezone
 import uuid
 
@@ -45,16 +44,15 @@ class RequestService:
             updated_at=datetime.now(timezone.utc)
         )
         
-        # Initialize state machine (this will set up parallel paths)
-        sm = get_state_machine(request, db)
-        
-        # Save initial state back to request
-        sm.save()
-        
+        # V2: no state-machine init. The durable graph starts on the first
+        # poller pass; we just persist the request in its initial state.
+        request.status = RequestStatus.PENDING.value
+        request.current_state = "pending"
+
         db.add(request)
         db.commit()
         db.refresh(request)
-        
+
         return request
 
     @staticmethod

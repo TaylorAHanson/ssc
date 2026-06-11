@@ -36,9 +36,11 @@ from app.agents.events import (
     ToolCallEvent,
     ToolResultEvent,
 )
+from app.agents import tracing
 from app.agents.prompts import get_agent_prompt
 from app.core.config import settings
 from app.model_serving.agent_llm import AgentLLMClient
+from app.tools.tool_executor import ToolContext, executor
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +238,18 @@ class AgentRunner:
         agent_message = ""
         last_tool_calls: List[Dict[str, Any]] = []
 
+        # One MLflow trace per turn; child LLM/tool spans group under it. No-op
+        # when tracing is disabled. trace_id is surfaced on the terminal events.
+        turn_span = tracing.start_root_span(
+            "agent_turn",
+            inputs={"query": query, "tool_count": len(self.tools), "mode": self.mode},
+        )
+        trace_id = tracing.root_trace_id(turn_span)
+        if self.user_identity:
+            tracing.update_trace_metadata(
+                {"user": self.user_identity.get("email", ""), "mode": self.mode}
+            )
+
         try:
             while iteration < self.max_iterations:
                 iteration += 1
@@ -260,11 +274,25 @@ class AgentRunner:
                     label="Thinking..." if iteration == 1 else "Working on it..."
                 )
 
-                response = await self.llm_client.generate_response(
-                    messages=messages,
-                    tools=formatted_tools,
-                    temperature=0.0,  # 0.0 for deterministic reporting
-                )
+                with tracing.span(
+                    f"llm_call_{iteration}", "LLM",
+                    inputs={"message_count": len(messages)},
+                ) as llm_span:
+                    response = await self.llm_client.generate_response(
+                        messages=messages,
+                        tools=formatted_tools,
+                        temperature=0.0,  # 0.0 for deterministic reporting
+                    )
+                    tracing.set_span_outputs(
+                        llm_span,
+                        {
+                            "content": (response or {}).get("content"),
+                            "tool_calls": [
+                                tc.get("function", {}).get("name")
+                                for tc in (response or {}).get("tool_calls", []) or []
+                            ],
+                        },
+                    )
 
                 agent_message = response.get("content") or ""
                 tool_calls = response.get("tool_calls", []) or []
@@ -344,29 +372,40 @@ class AgentRunner:
                     try:
                         logger.info(f"Executing tool: {fn_name}")
 
-                        # Inject conversation history/context for execute_workflow
+                        # Route through the shared ToolExecutor. Identity
+                        # injection (_obo_token / _user_*) is centralized there
+                        # so the /mcp path gets the same treatment, and mutating
+                        # tools get OPA pre-flight + audit. conversation_history
+                        # is passed as injected context, not a model-supplied arg.
+                        injected_args: Dict[str, Any] = {}
                         if fn_name == "execute_workflow":
                             history_for_tool = []
                             for m in messages:
                                 if m.get("role") not in ("system", "tool"):
                                     m_copy = {k: v for k, v in m.items() if k != "tool_calls"}
                                     history_for_tool.append(m_copy)
-                            fn_args["conversation_history"] = history_for_tool
+                            injected_args["conversation_history"] = history_for_tool
 
-                        if obo_token:
-                            logger.info(
-                                f"AgentRunner: Injecting OBO token into tool {fn_name}"
-                            )
-                            fn_args["_obo_token"] = obo_token
-
-                        if self.user_identity:
-                            fn_args["_user_email"] = self.user_identity.get("email")
-                            fn_args["_user_roles"] = self.user_identity.get("roles")
-                            fn_args["_user_entitlements"] = self.user_identity.get(
-                                "entitlements"
-                            )
-
-                        result = await matching_tool.execute(**fn_args)
+                        tool_ctx = ToolContext(
+                            tool_call_id=tool_call_id,
+                            obo_token=obo_token,
+                            user_identity=self.user_identity,
+                            injected_args=injected_args,
+                        )
+                        with tracing.span(
+                            f"tool:{fn_name}", "TOOL",
+                            inputs=fn_args,
+                            attributes={
+                                "side_effect_class": getattr(
+                                    matching_tool, "side_effect_class", "read"
+                                ),
+                                "is_mutating": getattr(
+                                    matching_tool, "is_mutating", False
+                                ),
+                            },
+                        ) as tool_span:
+                            result = await executor.run(matching_tool, tool_ctx, **fn_args)
+                            tracing.set_span_outputs(tool_span, result)
 
                         # Async hand-off: the tool returned a poll envelope
                         # rather than a final result. We surface it to the
@@ -465,7 +504,9 @@ class AgentRunner:
                 if pending_poll_event is not None:
                     yield pending_poll_event
                     final_content = agent_message
-                    yield DoneEvent(messages=messages)
+                    tracing.end_root_span(turn_span, outputs={"pending_poll": True})
+                    turn_span = None
+                    yield DoneEvent(messages=messages, trace_id=trace_id)
                     return
 
                 if iteration >= self.max_iterations:
@@ -497,11 +538,15 @@ class AgentRunner:
 
             # Normal exit: emit the final message + done.
             final_text = final_content or agent_message
+            tracing.end_root_span(turn_span, outputs={"final_message": final_text})
+            turn_span = None
             if final_text:
                 yield MessageEvent(content=final_text)
-            yield DoneEvent(messages=messages)
+            yield DoneEvent(messages=messages, trace_id=trace_id)
         except Exception as e:
             logger.error(f"AgentRunner.run_stream failed: {e}", exc_info=True)
+            tracing.end_root_span(turn_span)
+            turn_span = None
             yield ErrorEvent(message=str(e), fatal=True)
 
     async def run(
@@ -527,6 +572,7 @@ class AgentRunner:
         messages: List[Dict[str, Any]] = []
         pending_poll: Optional[Dict[str, Any]] = None
         last_tool_call_event: Optional[ToolCallEvent] = None
+        trace_id: Optional[str] = None
 
         async for ev in self.run_stream(
             query=query, history=history, context=context, obo_token=obo_token
@@ -547,6 +593,7 @@ class AgentRunner:
             elif isinstance(ev, DoneEvent):
                 if ev.messages is not None:
                     messages = ev.messages
+                trace_id = ev.trace_id
             elif isinstance(ev, ErrorEvent) and ev.fatal:
                 final_content = (
                     final_content
@@ -558,6 +605,7 @@ class AgentRunner:
             "tool_calls": tool_calls,
             "messages": messages,
             "pending_poll": pending_poll,
+            "trace_id": trace_id,
         }
 
     def _format_tools_for_llm(self, tools: List[Any]) -> Optional[List[Dict[str, Any]]]:

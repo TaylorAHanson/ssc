@@ -43,6 +43,7 @@ class SubmitFeedbackInput(BaseModel):
 
 @tool(
     name="submit_feedback",
+    side_effect_class="app_write",
     description=(
         "Submit the user's feedback, feature request, or bug report so it's "
         "recorded for the admins to triage. Use this when the user wants to "

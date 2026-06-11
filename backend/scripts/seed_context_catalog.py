@@ -1,8 +1,9 @@
 """
-Seed the Context Catalog with placeholder Qualcomm-flavored domains/documents.
+Seed the Context Catalog with neutral, industry-agnostic placeholder content.
 
 These are made-up starter docs to exercise the catalog and the agent retrieval
-path; replace them with real content (e.g. from Confluence) later.
+path; replace them with your organization's real content (e.g. from Confluence)
+later.
 
 Talks to the running API (stdlib only, no venv needed). Idempotent: domains are
 matched by name and documents by (domain, title), so re-running won't duplicate.
@@ -75,48 +76,48 @@ def existing_doc_titles(domain_id):
 
 DOMAINS = [
     {
-        "name": "New to Databricks @ Qualcomm",
+        "name": "New to Databricks",
         "description": "Front-door guides for employees who have never used Databricks.",
         "domain_type": "system",
         "categories": ["onboarding", "getting-started"],
-        "primary_owner": "data-enablement@qualcomm.com",
+        "primary_owner": "data-enablement@example.com",
     },
     {
         "name": "Data Platform & Governance",
         "description": "How data access, classification, and Unity Catalog governance work internally.",
         "categories": ["governance", "access"],
-        "primary_owner": "data-governance@qualcomm.com",
-        "reviewers": ["uc-stewards@qualcomm.com"],
+        "primary_owner": "data-governance@example.com",
+        "reviewers": ["uc-stewards@example.com"],
     },
     {
-        "name": "GTM Operations",
+        "name": "Sales & GTM Operations",
         "description": "Go-to-market processes: deal desk, quoting, and sales operations.",
         "categories": ["sales", "ops"],
-        "primary_owner": "gtm-ops@qualcomm.com",
+        "primary_owner": "gtm-ops@example.com",
     },
     {
-        "name": "Semiconductor Engineering",
-        "description": "Silicon design, bring-up, and chip program data practices.",
-        "categories": ["engineering", "silicon"],
-        "primary_owner": "soc-data@qualcomm.com",
+        "name": "Engineering & Product",
+        "description": "Product engineering data practices and project onboarding.",
+        "categories": ["engineering", "product"],
+        "primary_owner": "eng-data@example.com",
     },
     {
-        "name": "Supply Chain & Manufacturing",
-        "description": "Foundry, yield, and manufacturing operations data.",
-        "categories": ["manufacturing", "supply-chain"],
-        "primary_owner": "ops-analytics@qualcomm.com",
+        "name": "Supply Chain & Operations",
+        "description": "Operations, logistics, and manufacturing analytics data.",
+        "categories": ["operations", "supply-chain"],
+        "primary_owner": "ops-analytics@example.com",
     },
     {
-        "name": "Licensing (QTL)",
-        "description": "Qualcomm Technology Licensing reporting and royalty data.",
-        "categories": ["licensing", "finance"],
-        "primary_owner": "qtl-analytics@qualcomm.com",
+        "name": "Finance & Reporting",
+        "description": "Financial reporting, billing, and revenue data.",
+        "categories": ["finance", "reporting"],
+        "primary_owner": "finance-analytics@example.com",
     },
 ]
 
 # Sub-domains: (parent name, child spec)
 SUBDOMAINS = [
-    ("GTM Operations", {
+    ("Sales & GTM Operations", {
         "name": "Sales Engineering",
         "description": "Pre-sales technical support and solution scoping.",
         "categories": ["sales-engineering"],
@@ -125,12 +126,12 @@ SUBDOMAINS = [
 
 # Documents keyed by domain name.
 DOCUMENTS = {
-    "New to Databricks @ Qualcomm": [
+    "New to Databricks": [
         {
             "title": "Getting Started: Your First Week on Databricks",
             "tags": ["onboarding"],
             "body_markdown": (
-                "# Getting Started on Databricks at Qualcomm\n\n"
+                "# Getting Started on Databricks\n\n"
                 "Welcome! This guide is for employees who have never used Databricks.\n\n"
                 "## 1. Get access\n"
                 "Everyone starts in the **enterprise_analytics** workspace. If you can't log in, "
@@ -150,7 +151,7 @@ DOCUMENTS = {
             ),
         },
         {
-            "title": "Glossary: Common Databricks & Qualcomm Data Terms",
+            "title": "Glossary: Common Databricks & Data Terms",
             "tags": ["glossary"],
             "body_markdown": (
                 "# Glossary\n\n"
@@ -159,7 +160,7 @@ DOCUMENTS = {
                 "- **Lakehouse**: combined data lake + warehouse architecture.\n"
                 "- **Job/Workflow**: a scheduled or triggered pipeline.\n"
                 "- **Cost Center**: the billing code charged for infrastructure you provision.\n"
-                "- **LMWS group**: the identity group used for ownership and access (not a personal email).\n"
+                "- **Identity group**: the group used for ownership and access (not a personal email).\n"
                 "- **PII**: personally identifiable information; governed under the data classification standard."
             ),
         },
@@ -170,7 +171,7 @@ DOCUMENTS = {
             "tags": ["access"],
             "body_markdown": (
                 "# Requesting Access to Data\n\n"
-                "All data access at Qualcomm is request-based and time-bound by default.\n\n"
+                "All data access is request-based and time-bound by default.\n\n"
                 "## How to request\n"
                 "Ask the Enterprise Data Hub agent for access to the specific table, schema, or volume "
                 "(e.g. `enterprise_prod.sales.orders`). Provide a **business justification** and a "
@@ -194,7 +195,7 @@ DOCUMENTS = {
                 "| --- | --- | --- |\n"
                 "| Public | Press releases | No restrictions |\n"
                 "| Internal | Org charts, roadmaps | Employees only |\n"
-                "| Confidential | Unreleased chip specs, pricing | Need-to-know + approval |\n"
+                "| Confidential | Unreleased product plans, pricing | Need-to-know + approval |\n"
                 "| Restricted/PII | Customer/employee personal data | Strict, audited access |\n\n"
                 "Tags are managed via the **Tag Management** GitOps flow — never `ALTER TABLE ... SET TAGS` "
                 "by hand. Untagged production tables are flagged by the governance scan."
@@ -210,14 +211,14 @@ DOCUMENTS = {
                 "Before committing to a customer POC, capture:\n\n"
                 "1. **Use case** and success metric.\n"
                 "2. **Data sources** and rough volume.\n"
-                "3. **Target chips/platforms** involved.\n"
+                "3. **Target platforms** involved.\n"
                 "4. **Timeline** and key stakeholders.\n"
-                "5. **Compliance constraints** (export control, customer NDA).\n\n"
+                "5. **Compliance constraints** (e.g. customer NDA).\n\n"
                 "Log the scoped opportunity in the GTM deal desk before requesting any internal data access."
             ),
         },
     ],
-    "GTM Operations": [
+    "Sales & GTM Operations": [
         {
             "title": "Deal Desk & Quoting Process",
             "tags": ["quoting", "deal-desk"],
@@ -236,62 +237,58 @@ DOCUMENTS = {
             ),
         },
     ],
-    "Semiconductor Engineering": [
+    "Engineering & Product": [
         {
-            "title": "Chip Program Naming Conventions",
+            "title": "Project Data Onboarding",
+            "tags": ["onboarding", "projects"],
+            "body_markdown": (
+                "# Project Data Onboarding\n\n"
+                "Raw project data lands in `eng_raw.<project>` via the ingestion jobs.\n\n"
+                "## Steps\n"
+                "1. Register the project with the engineering data team.\n"
+                "2. Producers publish CSV/Parquet to the landing volume.\n"
+                "3. Nightly jobs curate into `eng_curated.<project>.*` with units normalized.\n\n"
+                "Raw project data is **Confidential** by default. Request access through the standard flow."
+            ),
+        },
+        {
+            "title": "Internal Naming Conventions",
             "tags": ["naming"],
             "body_markdown": (
-                "# Chip Program Naming\n\n"
-                "Internal programs follow `<family><generation>-<stepping>`, e.g. `SD9-A0`.\n\n"
-                "- **Family**: marketing-independent codename (rotated each year).\n"
-                "- **Generation**: integer, increments per major architecture.\n"
-                "- **Stepping**: silicon revision (A0, B0, ...).\n\n"
-                "Never use external marketing names in internal data tables — use the program codename "
-                "so pre-announcement programs stay confidential."
-            ),
-        },
-        {
-            "title": "Silicon Bring-up Lab Data Onboarding",
-            "tags": ["bring-up", "lab"],
-            "body_markdown": (
-                "# Bring-up Lab Data Onboarding\n\n"
-                "Lab measurement data lands in `eng_raw.bringup.<program>` via the bench ingestion jobs.\n\n"
-                "## Steps\n"
-                "1. Register the program codename with the SoC data team.\n"
-                "2. Bench rigs publish CSV/Parquet to the landing volume.\n"
-                "3. Nightly jobs curate into `eng_curated.bringup.*` with units normalized.\n\n"
-                "Raw bring-up data is **Confidential** by default. Request access through the standard flow."
+                "# Internal Naming Conventions\n\n"
+                "Use stable internal codenames for pre-release projects in data tables — never "
+                "external marketing names — so unannounced work stays confidential.\n\n"
+                "Follow `<area>_<env>_<domain>` for catalog naming, e.g. `eng_prod_telemetry`."
             ),
         },
     ],
-    "Supply Chain & Manufacturing": [
+    "Supply Chain & Operations": [
         {
-            "title": "Foundry Yield Data Glossary",
-            "tags": ["yield", "foundry"],
+            "title": "Operations Metrics Glossary",
+            "tags": ["operations", "metrics"],
             "body_markdown": (
-                "# Foundry Yield Glossary\n\n"
-                "- **Wafer**: silicon disk containing many die.\n"
-                "- **Die**: an individual chip on the wafer.\n"
-                "- **Yield**: percent of good die per wafer.\n"
-                "- **Bin**: test classification bucket for a die (bin 1 = pass).\n"
+                "# Operations Metrics Glossary\n\n"
+                "- **Lead time**: time from order to delivery.\n"
+                "- **Throughput**: units processed per period.\n"
+                "- **Yield**: percent of good units produced.\n"
                 "- **DPPM**: defective parts per million, a quality metric.\n\n"
-                "Yield data from foundry partners lands in `mfg_prod.yield.*` and is partner-confidential "
-                "under NDA — access is tightly restricted."
+                "Partner-sourced data lands in `ops_prod.*` and may be partner-confidential under NDA — "
+                "access is tightly restricted."
             ),
         },
     ],
-    "Licensing (QTL)": [
+    "Finance & Reporting": [
         {
-            "title": "Royalty Reporting Data Pipeline Overview",
-            "tags": ["royalty", "qtl"],
+            "title": "Revenue Reporting Data Pipeline Overview",
+            "tags": ["revenue", "finance"],
             "body_markdown": (
-                "# Royalty Reporting Pipeline\n\n"
-                "Licensee royalty reports are ingested monthly into `qtl_prod.royalty.reports`.\n\n"
+                "# Revenue Reporting Pipeline\n\n"
+                "Source reports are ingested monthly into `finance_prod.revenue.reports`.\n\n"
                 "## Flow\n"
-                "1. Licensees submit reports via the partner portal.\n"
+                "1. Source systems submit reports via the partner portal.\n"
                 "2. Reports are validated against contract terms.\n"
                 "3. Curated tables feed finance dashboards and audit.\n\n"
-                "Royalty data is **Restricted** — access requires QTL leadership approval and is fully audited."
+                "Revenue data is **Restricted** — access requires finance leadership approval and is fully audited."
             ),
         },
     ],

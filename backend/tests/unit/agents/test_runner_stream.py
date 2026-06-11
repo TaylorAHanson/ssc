@@ -57,6 +57,10 @@ class _FakeTool:
         self.input_schema = {"type": "object", "properties": {}, "required": []}
         self.description = "fake"
         self.required_role = None
+        # Classification metadata the V2 ToolExecutor reads on every call.
+        self.is_mutating = False
+        self.side_effect_class = "read"
+        self.policy_ref = None
 
     @property
     def friendly_label(self) -> str:

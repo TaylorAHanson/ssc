@@ -281,42 +281,71 @@ def _get_cached_content_section() -> str:
     _CACHED_CONTENT_SECTION = content_section
     return _CACHED_CONTENT_SECTION
 
-def _get_cached_capabilities_section() -> str:
-    global _CACHED_CAPABILITIES_SECTION
-    if _CACHED_CAPABILITIES_SECTION is not None:
-        return _CACHED_CAPABILITIES_SECTION
-        
-    capabilities_list = []
+def _capabilities_from_db() -> Optional[List[str]]:
+    """Capabilities list from published Skills (the "skills as data" source).
+
+    Returns ``None`` (not ``[]``) when the DB is unavailable so the caller can
+    fall back to the filesystem; an empty published set returns ``[]``.
+    """
+    try:
+        from app.db.session import get_session_local
+        from app.services.skill_service import SkillService
+
+        db = get_session_local()()
+        try:
+            skills = SkillService.list_published(db)
+            return [f"- {s.key}: {s.goal}" for s in skills if s.goal]
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning(f"Skill DB capabilities unavailable: {e}")
+        return None
+
+
+def _capabilities_from_filesystem() -> List[str]:
+    capabilities_list: List[str] = []
     try:
         import os
         import re
         instructions_dir = os.path.join(os.path.dirname(__file__), "instructions")
         if os.path.exists(instructions_dir):
-            instructions_files = [f for f in os.listdir(instructions_dir) if f.endswith(".md")]
-            if instructions_files:
-                
-                for filename in instructions_files:
-                    path = os.path.join(instructions_dir, filename)
-                    with open(path, "r") as f:
-                        content = f.read()
-                        
-                        # Extract Goal/Description for capabilities list
-                        goal_match = re.search(r'\*\*Goal\*\*: (.*?)(?:\n|$)', content)
-                        if goal_match:
-                            goal = goal_match.group(1).strip()
-                            clean_name = filename.replace('.md', '')
-                            capabilities_list.append(f"- {clean_name}: {goal}")
+            for filename in os.listdir(instructions_dir):
+                if not filename.endswith(".md"):
+                    continue
+                with open(os.path.join(instructions_dir, filename), "r") as f:
+                    content = f.read()
+                goal_match = re.search(r'\*\*Goal\*\*: (.*?)(?:\n|$)', content)
+                if goal_match:
+                    capabilities_list.append(
+                        f"- {filename.replace('.md', '')}: {goal_match.group(1).strip()}"
+                    )
     except Exception as e:
         import logging
-        logger = logging.getLogger(__name__)
-        logger.warning(f"Failed to load workflow instructions: {e}")
+        logging.getLogger(__name__).warning(f"Failed to load workflow instructions: {e}")
+    return capabilities_list
 
-    capabilities_section = ""
-    if capabilities_list:
-        capabilities_section = "\n## Capabilities & Workflows\nYou can perform the following workflows. If a user asks for one of these, you MUST use the `get_workflow_instructions` tool to retrieve the specific instructions for that workflow (using the exact internal name listed below) and then strictly follow them:\n" + "\n".join(capabilities_list) + "\n"
-        
-    _CACHED_CAPABILITIES_SECTION = capabilities_section
-    return _CACHED_CAPABILITIES_SECTION
+
+def _get_cached_capabilities_section() -> str:
+    """Build the capabilities section live from published Skills (DB), falling
+    back to the legacy filesystem instructions if the DB has none/unavailable.
+
+    Read live (not cached) so admin edits in the Skill authoring UI take effect
+    on the next turn without a restart -- mirrors the Context Catalog section.
+    """
+    capabilities_list = _capabilities_from_db()
+    if not capabilities_list:  # None (DB down) or [] (no published skills)
+        capabilities_list = _capabilities_from_filesystem()
+
+    if not capabilities_list:
+        return ""
+    return (
+        "\n## Capabilities & Workflows\nYou can perform the following workflows. "
+        "If a user asks for one of these, you MUST use the `get_workflow_instructions` "
+        "tool to retrieve the specific instructions for that workflow (using the exact "
+        "internal name listed below) and then strictly follow them:\n"
+        + "\n".join(capabilities_list) + "\n"
+    )
 
 def _get_context_domains_section() -> str:
     """List the available Context Catalog domains so the agent knows what the

@@ -22,10 +22,19 @@ class AgentLLMClient:
     
     def __init__(self):
         self.client = ModelServingClient()
-        self.endpoint_name = settings.MODEL_SERVING_AGENT_LLM_ENDPOINT
-        
+        # Best practice: prefer the AI Gateway endpoint when configured so model
+        # routing / A-B split, rate + cost limits, and input guardrails live in
+        # the gateway (config, not code). Falls back to the direct serving
+        # endpoint otherwise.
+        self.endpoint_name = (
+            settings.AI_GATEWAY_ENDPOINT or settings.MODEL_SERVING_AGENT_LLM_ENDPOINT
+        )
+        self.via_gateway = bool(settings.AI_GATEWAY_ENDPOINT)
+
         if not self.endpoint_name:
-            raise ValueError("MODEL_SERVING_AGENT_LLM_ENDPOINT must be set in configuration")
+            raise ValueError(
+                "AI_GATEWAY_ENDPOINT or MODEL_SERVING_AGENT_LLM_ENDPOINT must be set"
+            )
     
     async def generate_response(
         self,

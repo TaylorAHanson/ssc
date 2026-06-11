@@ -12,3 +12,4 @@ from app.db.data_asset import DataAssetModel
 from app.db.data_contract import DataContractModel
 from app.db.context_catalog import ContextDomainModel, ContextDocumentModel, ContextChunkModel
 from app.db.feedback import FeedbackModel
+from app.db.skill import SkillModel, SkillVersionModel

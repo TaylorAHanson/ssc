@@ -6,6 +6,22 @@ import functools
 from typing import Any, Callable, Dict, Optional, Type, get_type_hints, Union
 from pydantic import BaseModel, create_model
 
+# Canonical side-effect classes used by the V2 ToolExecutor + the
+# `data.agent.tools` OPA package to decide bounding (approval gates, idempotency,
+# audit). `read` is the safe default; everything else mutates some system.
+#   read       - queries/lists/searches; no external mutation
+#   app_write  - writes app-internal state only (e.g. feedback rows)
+#   data_grant - grants/revokes Unity Catalog access
+#   infra      - Terraform apply, workspace/volume/SP/repo creation, workflow kickoff
+#   membership - identity-group membership changes (e.g. LMWS / Entra / Okta)
+#   notify     - email/slack/teams notifications
+#   destructive- enforcement kill / delete / uncertify (irreversible-ish)
+SIDE_EFFECT_CLASSES = frozenset(
+    {"read", "app_write", "data_grant", "infra", "membership", "notify", "destructive"}
+)
+MUTATING_SIDE_EFFECT_CLASSES = SIDE_EFFECT_CLASSES - {"read"}
+
+
 class McpTool:
     """
     Wrapper for a function to make it look like a BaseTool.
@@ -22,6 +38,10 @@ class McpTool:
         feature_flag: Optional[str] = None,
         friendly_label: Optional[str] = None,
         friendly_completion_label: Optional[str] = None,
+        external: bool = False,
+        side_effect_class: str = "read",
+        is_mutating: Optional[bool] = None,
+        policy_ref: Optional[str] = None,
     ):
         self._func = func
         self._args_schema = args_schema
@@ -31,6 +51,21 @@ class McpTool:
         self._feature_flag = feature_flag
         self._friendly_label = friendly_label
         self._friendly_completion_label = friendly_completion_label
+        self._external = external
+        if side_effect_class not in SIDE_EFFECT_CLASSES:
+            raise ValueError(
+                f"Tool '{self._name}': invalid side_effect_class "
+                f"'{side_effect_class}'. Must be one of {sorted(SIDE_EFFECT_CLASSES)}."
+            )
+        self._side_effect_class = side_effect_class
+        # `is_mutating` defaults to "anything not a plain read". An author may
+        # override (e.g. a read-classified tool that still has a benign write).
+        self._is_mutating = (
+            is_mutating
+            if is_mutating is not None
+            else side_effect_class in MUTATING_SIDE_EFFECT_CLASSES
+        )
+        self._policy_ref = policy_ref
         
     @property
     def name(self) -> str:
@@ -47,6 +82,36 @@ class McpTool:
     @property
     def feature_flag(self) -> Optional[str]:
         return self._feature_flag
+
+    @property
+    def external(self) -> bool:
+        """Whether this tool may be exposed outside the app.
+
+        When ``True`` the tool is published over the in-app MCP server
+        (``mcp_server.py``, mounted at ``/mcp``), which can be registered as a
+        custom MCP provider in Databricks AI Gateway so other agents/apps can
+        reuse it.         Defaults to ``False`` so tools stay app-internal unless an
+        author explicitly opts in.
+        """
+        return self._external
+
+    @property
+    def side_effect_class(self) -> str:
+        """One of :data:`SIDE_EFFECT_CLASSES`. Drives ToolExecutor + OPA bounding."""
+        return self._side_effect_class
+
+    @property
+    def is_mutating(self) -> bool:
+        """Whether this tool mutates external/app state (vs. a pure read)."""
+        return self._is_mutating
+
+    @property
+    def policy_ref(self) -> Optional[str]:
+        """Optional OPA rule/identifier this tool maps to inside ``data.agent.tools``.
+
+        ``None`` => the policy keys off ``side_effect_class`` alone.
+        """
+        return self._policy_ref
 
     @property
     def friendly_label(self) -> str:
@@ -112,6 +177,10 @@ def tool(
     feature_flag: Optional[str] = None,
     friendly_label: Optional[str] = None,
     friendly_completion_label: Optional[str] = None,
+    external: bool = False,
+    side_effect_class: str = "read",
+    is_mutating: Optional[bool] = None,
+    policy_ref: Optional[str] = None,
 ):
     """
     Decorator to register a function as a tool.
@@ -128,6 +197,16 @@ def tool(
         @tool()
         def my_tool(arg1: str, arg2: int = 5):
             ...
+
+    Set ``external=True`` to publish the tool over the in-app MCP server so it
+    can be registered as a custom MCP provider in AI Gateway and reused by other
+    agents/apps. Tools are app-internal (``external=False``) by default.
+
+    ``side_effect_class`` (default ``"read"``) tags the tool's blast radius for
+    the V2 ToolExecutor + ``data.agent.tools`` OPA policy. Anything other than
+    ``"read"`` is treated as mutating (auto-sets ``is_mutating``) and is subject
+    to OPA pre-flight / approval gates. ``policy_ref`` optionally pins the tool
+    to a specific OPA rule.
     """
     def decorator(func: Callable) -> McpTool:
         # Determine schema
@@ -162,6 +241,10 @@ def tool(
             feature_flag,
             friendly_label,
             friendly_completion_label,
+            external,
+            side_effect_class,
+            is_mutating,
+            policy_ref,
         )
         
     return decorator

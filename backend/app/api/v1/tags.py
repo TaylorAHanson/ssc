@@ -22,7 +22,7 @@ from app.db.request import RequestModel
 from app.db.session import get_db
 from app.models.request import RequestType
 from app.state_machines.facts import get_latest_fact
-from app.state_machines.tag_change.state_machine import build_tag_sql
+from app.v2.tag_sql import build_tag_sql
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

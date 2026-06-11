@@ -25,6 +25,7 @@ import { DataCertification } from './pages/admin/DataCertification';
 import { ODPS } from './pages/admin/ODPS';
 import { TagManagement } from './pages/admin/TagManagement';
 import { ContextCatalog } from './pages/admin/ContextCatalog';
+import { Skills } from './pages/admin/Skills';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -131,6 +132,16 @@ function App() {
               element={
                 <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
                   <ContextCatalog />
+                </ProtectedRoute>
+              }
+            />
+          )}
+          {uiTabs?.skills !== false && (
+            <Route
+              path="/build/skills"
+              element={
+                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                  <Skills />
                 </ProtectedRoute>
               }
             />

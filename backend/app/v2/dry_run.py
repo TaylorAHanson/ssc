@@ -1,0 +1,111 @@
+"""
+Dry-run / projection for data-defined workflow specs.
+
+Lets an author *test* a draft workflow before publishing: given a sample request
+context, it compiles the spec and walks the stages, evaluating the same
+expressions the executor would (gate auto-approve predicates, step ``args``,
+``for_each`` fan-out, per-item ``item_args``) **without executing any tool or
+touching the database**. The result is a stage-by-stage projection an admin can
+read to confirm "with this input, who approves and what each step receives".
+
+This is deliberately side-effect free: it only resolves tools by name and runs
+the safe expression evaluator (:mod:`app.v2.expr`), so it is safe to call on an
+unsaved draft from the editor.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, List, Optional
+
+from app.v2.spec import Gate, Step
+from app.v2.spec_loader import spec_from_dict, validate_spec_dict
+
+logger = logging.getLogger(__name__)
+
+# Cap fan-out enumeration so a sample that produces a huge list can't blow up the
+# projection payload; we report the true count and flag truncation.
+_MAX_ITEMS = 25
+
+
+def project_run(
+    spec_dict: Dict[str, Any],
+    sample_context: Optional[Dict[str, Any]] = None,
+    *,
+    max_items: int = _MAX_ITEMS,
+) -> Dict[str, Any]:
+    """Project how ``spec_dict`` would run for ``sample_context`` (no execution).
+
+    Raises ``SpecError`` (via :func:`spec_from_dict`) if the spec is malformed.
+    Per-stage expression failures are captured as ``error`` on that stage rather
+    than aborting the whole projection, so authors see exactly where input is
+    missing.
+    """
+    validate_spec_dict(spec_dict)
+    spec = spec_from_dict(spec_dict)
+    ctx: Dict[str, Any] = dict(sample_context or {})
+
+    stages_out: List[Dict[str, Any]] = []
+    requires_approval = False
+    mutating_steps = 0
+
+    for stage in spec.stages:
+        if isinstance(stage, Gate):
+            entry: Dict[str, Any] = {
+                "kind": "gate",
+                "name": stage.name,
+                "type": stage.type,
+                "waiting_status": stage.waiting_status,
+                "can_auto_approve": stage.auto_approve is not None,
+            }
+            try:
+                if stage.auto_approve is not None and stage.auto_approve(ctx):
+                    entry["decision"] = "auto_approve"
+                else:
+                    entry["decision"] = "requires_approval"
+            except Exception as e:  # noqa: BLE001 - surface eval errors to the author
+                entry["decision"] = "requires_approval"
+                entry["error"] = str(e)
+            if entry["decision"] == "requires_approval":
+                requires_approval = True
+            stages_out.append(entry)
+        else:
+            step: Step = stage
+            entry = {
+                "kind": "step",
+                "name": step.name,
+                "tool": getattr(step.tool, "name", "?"),
+                "is_mutating": bool(getattr(step.tool, "is_mutating", False)),
+                "side_effect_class": getattr(step.tool, "side_effect_class", "read"),
+                "approvals": list(step.approvals),
+                "success_fact": step.success_fact,
+            }
+            try:
+                if step.for_each is not None:
+                    items = step.for_each(ctx) or []
+                    entry["fan_out"] = len(items)
+                    calls = []
+                    for item in items[:max_items]:
+                        calls.append(
+                            step.item_args(ctx, item) if step.item_args else step.args(ctx)
+                        )
+                    entry["calls"] = calls
+                    if len(items) > max_items:
+                        entry["truncated"] = True
+                else:
+                    entry["fan_out"] = 1
+                    entry["calls"] = [step.args(ctx)]
+            except Exception as e:  # noqa: BLE001
+                entry["error"] = str(e)
+                entry["calls"] = []
+            if entry["is_mutating"]:
+                mutating_steps += 1
+            stages_out.append(entry)
+
+    return {
+        "name": spec.name,
+        "completed_status": spec.completed_status,
+        "complete_fact": spec.complete_fact,
+        "stages": stages_out,
+        "requires_approval": requires_approval,
+        "mutating_steps": mutating_steps,
+    }

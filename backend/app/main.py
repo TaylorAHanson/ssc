@@ -29,6 +29,13 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start background tasks and initialize DB."""
     logger.info("Application starting up...")
+
+    # Initialize MLflow tracing (no-op unless MLFLOW_TRACING_ENABLED).
+    try:
+        from app.agents.tracing import init_tracing
+        init_tracing()
+    except Exception as e:
+        logger.warning(f"MLflow tracing init skipped: {e}")
     
     # Initialize DB (Seed Roles)
     try:
@@ -45,6 +52,16 @@ async def lifespan(app: FastAPI):
         db = get_session_local()()
         try:
             init_db(db)
+            # Seed DB-backed Skills from the legacy filesystem instructions once
+            # (idempotent) so "skills as data" has content on first boot.
+            try:
+                from app.services.skill_service import SkillService
+                SkillService.seed_from_filesystem(db)
+                # Attach the workflow graph catalog as editable graph_spec data so
+                # the no-code executor can run DB-authored graphs.
+                SkillService.seed_specs_from_catalog(db)
+            except Exception as e:
+                logger.warning(f"Skill seeding skipped: {e}")
         finally:
             db.close()
     except Exception as e:

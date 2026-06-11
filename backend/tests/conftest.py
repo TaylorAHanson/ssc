@@ -4,6 +4,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from app.db.base import Base
 from app.core.config import settings
+# Import the model package so every table (including newer ones like skills)
+# is registered on Base.metadata before create_all runs.
+import app.db  # noqa: F401
 
 # Use an in-memory database for testing
 TEST_DB_URL = "sqlite:///:memory:"

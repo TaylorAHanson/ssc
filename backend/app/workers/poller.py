@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db, get_engine, reset_database_connection
 from app.db.base import Base
 from app.db import RequestModel, FailureModel
-from app.state_machines.persistence import load_state_machine, save_state_machine
 from app.state_machines.lock import acquire_lock, release_lock, heartbeat_lock
 from app.models.request import RequestStatus, RequestType
 from app.db.report_subscription import ReportSubscription
@@ -653,59 +652,70 @@ async def _check_gitops_volume_status(db: Session, request: RequestModel):
         logger.warning(f"[{request.id}] Failed to check volume status: {e}")
 
 
+def _v2_resume_value(db, request, result):
+    """Map approval/event facts to a gate resume value, or None if still waiting.
+
+    Bridges the existing fact/approval API (``approval_received``,
+    ``training_completed``, ``pr_merged``, ``request_rejected``) to the V2
+    graph's uniform gate-resume contract ``{"approved": bool}``.
+    """
+    from app.state_machines.facts import get_facts, has_fact
+
+    if not result.interrupted:
+        return None
+
+    # Rejection short-circuits any gate.
+    if has_fact(db, request.id, "request_rejected"):
+        return {"approved": False, "reason": "rejected"}
+
+    gtype = (result.interrupt_payload or {}).get("type")
+    if gtype in ("manager", "platform_admin", "data_owner"):
+        approved = any(
+            f.event_type == "approval_received"
+            and (f.event_data or {}).get("approval_type") == gtype
+            for f in get_facts(db, request.id)
+        )
+        return {"approved": True} if approved else None
+    if gtype == "training":
+        return {"approved": True} if has_fact(db, request.id, "training_completed") else None
+    if gtype == "pr_merge":
+        return {"approved": True} if has_fact(db, request.id, "pr_merged") else None
+    if gtype == "children":
+        return {"approved": True} if has_fact(db, request.id, "all_children_completed") else None
+    return None
+
+
 async def _process_request_state_machine(db, request: RequestModel):
+    """Advance a request through its V2 durable LangGraph workflow.
+
+    The poller stays ignorant of business logic: it advances the graph, and when
+    the graph is paused on a HITL gate, resumes it iff the corresponding
+    approval/event fact is present. State is owned by the durable checkpointer;
+    we only sync ``request.status`` for the UI.
     """
-    Process state machine - delegate all logic to the state machine.
-    
-    The poller is completely ignorant of business logic.
-    It just loads the state machine and calls tick().
-    Also handles async tool execution for provisioning states.
-    """
-    from app.state_machines.facts import has_fact, get_latest_fact
-    
-    logger.debug(f"[{request.id}] Processing request - Current state: {request.current_state}, Status: {request.status}")
-    
-    # Load the polymorphic state machine
-    sm = load_state_machine(request, db)
-    initial_state = sm.current_state_value
-    logger.debug(f"[{request.id}] Loaded state machine - Current state: {initial_state}")
-    
-    # Log relevant facts for debugging
-    from app.db import EventModel
-    facts = db.query(EventModel).filter(
-        EventModel.request_id == request.id,
-        EventModel.event_type.in_(["request_submitted", "approval_received", "training_completed", "workspace_created", "provisioning_started", "request_rejected"])
-    ).all()
-    if facts:
-        fact_summary = {f.event_type: getattr(f, 'event_data', {}) for f in facts}
-        logger.debug(f"[{request.id}] Relevant facts: {fact_summary}")
-    
-    # Check GitOps volume for status updates before tick()
-    # This adds facts if the volume shows PR created or apply complete
-    await _check_gitops_volume_status(db, request)
-    
-    # Let the state machine handle all logic
-    logger.debug(f"[{request.id}] Calling state machine tick()...")
-    changed = sm.tick()
-    new_state = sm.current_state_value
-    
-    # Save state machine to sync status and state
-    # We do this every time to ensure the database matches the state machine's internal view
-    # even if no state transition occurred (e.g. manual status resets)
-    if changed or request.status != sm.get_mapped_status().value:
-        logger.info(f"[{request.id}] Syncing state machine status: {request.status} -> {sm.get_mapped_status().value}")
-        save_state_machine(db, request, sm)
+    from app.models.request import RequestStatus
+    from app.v2.executor import executor as v2_executor, to_request_status
+
+    logger.debug(f"[{request.id}] V2 advance - status: {request.status}")
+
+    # Run from the last checkpoint (first pass runs from START to the first gate).
+    result = await v2_executor.advance(request)
+
+    # Resume as many satisfied gates as we can this tick (a gate may unblock the
+    # next one, e.g. manager -> platform_admin in the same poll cycle).
+    for _ in range(12):
+        resume_value = _v2_resume_value(db, request, result)
+        if resume_value is None:
+            break
+        result = await v2_executor.resume(request, resume_value)
+
+    # Sync request.status for the UI/poller selection.
+    new_status = to_request_status(result.status)
+    if new_status is not None and request.status != new_status.value:
+        logger.info(f"[{request.id}] V2 status: {request.status} -> {new_status.value}")
+        request.status = new_status.value
+        request.current_state = result.current_node or result.status
         db.commit()
-        logger.info(f"[{request.id}] Saved state machine - Current state: {sm.current_state_value}, Status: {request.status}")
-    else:
-        logger.debug(f"[{request.id}] No state change or status sync needed (still in {initial_state})")
-    
-    # Execute any tasks associated with the current state
-    # These tasks (like provisioning) can be long-running
-    await sm.execute_tasks()
-    
-    # If tasks added facts that might change state further, the next poll cycle will handle it
-    # We don't save again here to avoid redundant commits, tick() is what matters
 
 
 async def _handle_retryable_error(
@@ -786,14 +796,14 @@ async def _handle_permanent_error(
         resolved=False
     )
     db.add(failure)
-    
-    # Save state machine (mark as failed)
+
+    # V2: mark the request failed directly (no state machine to persist).
     try:
-        sm = load_state_machine(request, db)
-        save_state_machine(db, request, sm)
+        from app.models.request import RequestStatus
+        request.status = RequestStatus.FAILED.value
     except Exception as e:
-        logger.error(f"Failed to save state machine for failed request {request.id}: {e}")
-    
+        logger.error(f"Failed to mark request {request.id} failed: {e}")
+
     db.commit()
     
     logger.error(

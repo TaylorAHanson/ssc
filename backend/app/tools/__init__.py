@@ -51,3 +51,12 @@ def get_read_only_tools():
     """Returns tools that don't perform destructive actions or workflow executions."""
     # Exclude execute_workflow
     return [t for t in AVAILABLE_TOOLS if t.name != "execute_workflow"]
+
+def get_external_tools():
+    """Returns tools opted in to external exposure (``external=True``).
+
+    These are the only tools published over the in-app MCP server
+    (``app.mcp_server``), which can be registered as a custom MCP provider in
+    Databricks AI Gateway. All other tools remain app-internal.
+    """
+    return [t for t in AVAILABLE_TOOLS if getattr(t, "external", False)]
