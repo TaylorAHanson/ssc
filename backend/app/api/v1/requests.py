@@ -230,6 +230,28 @@ async def get_request_status(
     }
 
 
+@router.get("/{request_id}/graph")
+async def get_request_graph(
+    request_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """The authored workflow graph for this request plus live per-node status.
+
+    Powers the request-detail visual runner: the same graph_spec the no-code
+    editor draws, annotated with which nodes are done / current / pending /
+    rejected (derived from the fact log + status).
+    """
+    request = RequestService.get_request(db, request_id)
+    if not request:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if not current_user.has_role("platform_admin") and request.requester_email != current_user.email:
+        raise HTTPException(status_code=403, detail="Not authorized to view this request")
+
+    from app.v2.render import live_graph
+    return live_graph(request, db)
+
+
 @router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_request(
     request_data: RequestCreate,

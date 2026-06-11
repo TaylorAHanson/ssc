@@ -13,7 +13,7 @@ their gate, so the first stage *not* satisfied is the active one (where the
 user is waiting). Terminal statuses (completed/rejected/failed) short-circuit.
 """
 import logging
-from typing import List
+from typing import Any, Dict, List
 
 from app.models.request import StateInfo, StateMachineState
 from app.v2.graphs import stage_specs
@@ -27,6 +27,23 @@ def _humanize(node_id: str) -> str:
     return node_id.replace("_", " ").title()
 
 
+def _gate_satisfied(gtype: str, have: set, facts: list) -> bool:
+    """Whether a gate's approval/event fact is present (shared by views)."""
+    if gtype in ("manager", "platform_admin", "data_owner"):
+        return any(
+            f.event_type == "approval_received"
+            and (f.event_data or {}).get("approval_type") == gtype
+            for f in facts
+        )
+    if gtype == "training":
+        return "training_completed" in have
+    if gtype == "pr_merge":
+        return "pr_merged" in have
+    if gtype == "children":
+        return "all_children_completed" in have
+    return False
+
+
 def render_state(request, db) -> StateMachineState:
     """Build the StateMachineState view for a request from stages + facts."""
     from app.state_machines.facts import get_facts
@@ -36,23 +53,8 @@ def render_state(request, db) -> StateMachineState:
     facts = get_facts(db, request.id)
     have = {f.event_type for f in facts}
 
-    def approval_present(gtype: str) -> bool:
-        return any(
-            f.event_type == "approval_received"
-            and (f.event_data or {}).get("approval_type") == gtype
-            for f in facts
-        )
-
     def gate_satisfied(gtype: str) -> bool:
-        if gtype in ("manager", "platform_admin", "data_owner"):
-            return approval_present(gtype)
-        if gtype == "training":
-            return "training_completed" in have
-        if gtype == "pr_merge":
-            return "pr_merged" in have
-        if gtype == "children":
-            return "all_children_completed" in have
-        return False
+        return _gate_satisfied(gtype, have, facts)
 
     # Determine the active node.
     if status in _TERMINAL:
@@ -91,3 +93,102 @@ def render_state(request, db) -> StateMachineState:
         ))
 
     return StateMachineState(currentState=current, states=states_view, currentProgress=None)
+
+
+# --------------------------------------------------------------------------
+# Live graph view (for the request-detail visual workflow runner)
+# --------------------------------------------------------------------------
+def _resolve_spec_dict(request, db) -> Dict[str, Any]:
+    """The serializable graph_spec actually governing this request.
+
+    Prefers a published skill's authored ``graph_spec`` (the no-code override),
+    then the code catalog, then a synthesized shape for dedicated graphs
+    (e.g. data_access) so the UI always has something to draw.
+    """
+    from app.v2.graphs import published_graph_spec
+    from app.v2.graphs.specs import SPECS
+
+    spec = published_graph_spec(db, request.type)
+    if spec:
+        return spec
+    key = getattr(request.type, "value", request.type)
+    if key in SPECS:
+        return SPECS[key]
+    stages = []
+    for s in stage_specs(request.type):
+        if s["kind"] == "gate":
+            stages.append({"kind": "gate", "name": s["name"], "type": s.get("gate_type") or "manager"})
+        else:
+            stages.append({"kind": "step", "name": s["name"], "tool": "(provision)",
+                           "success_fact": s.get("success_fact")})
+    return {"name": str(key), "stages": stages}
+
+
+def live_graph(request, db) -> Dict[str, Any]:
+    """Return the request's authored graph plus per-node live status.
+
+    ``node_states`` keys match the graph node ids the frontend renders
+    (``pending`` start, each stage name, ``complete``, ``rejected``); values are
+    ``done`` | ``current`` | ``pending`` | ``rejected``. Derived from the same
+    fact log + ``request.status`` the timeline uses, so the picture stays honest.
+    """
+    from app.state_machines.facts import get_facts
+
+    spec_dict = _resolve_spec_dict(request, db)
+    stages = spec_dict.get("stages", []) or []
+    facts = get_facts(db, request.id)
+    have = {f.event_type for f in facts}
+    status = request.status
+
+    def satisfied(stage: Dict[str, Any]) -> bool:
+        if stage.get("kind") == "gate":
+            return _gate_satisfied(stage.get("type"), have, facts)
+        sf = stage.get("success_fact")
+        return (sf in have) if sf else True
+
+    node_states: Dict[str, str] = {"pending": "done"}
+    current = status
+
+    if status == "completed":
+        for s in stages:
+            node_states[s["name"]] = "done"
+        node_states["complete"] = "done"
+        current = "complete"
+    elif status in _TERMINAL:  # rejected / failed
+        stopped = False
+        for s in stages:
+            if stopped:
+                node_states[s["name"]] = "pending"
+            elif satisfied(s):
+                node_states[s["name"]] = "done"
+            else:
+                node_states[s["name"]] = "rejected"
+                current = s["name"]
+                stopped = True
+        node_states["complete"] = "pending"
+        node_states["rejected"] = "rejected"
+    else:
+        found = False
+        for s in stages:
+            if found:
+                node_states[s["name"]] = "pending"
+            elif satisfied(s):
+                node_states[s["name"]] = "done"
+            else:
+                node_states[s["name"]] = "current"
+                current = s["name"]
+                found = True
+        if not found:
+            node_states["complete"] = "current"
+            current = "complete"
+        else:
+            node_states["complete"] = "pending"
+
+    return {
+        "request_id": request.id,
+        "request_type": getattr(request.type, "value", request.type),
+        "status": status,
+        "current": current,
+        "graph_spec": spec_dict,
+        "node_states": node_states,
+    }

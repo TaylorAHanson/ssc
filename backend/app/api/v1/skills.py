@@ -86,6 +86,29 @@ def _validate_graph_spec(spec: Optional[Dict[str, Any]]) -> None:
         raise HTTPException(status_code=400, detail=f"Invalid graph_spec: {e}")
 
 
+def _behavioral_publish_gate(spec: Optional[Dict[str, Any]]) -> None:
+    """Side-effect-free pre-publish behavioral check.
+
+    Beyond structural validation, this compiles the spec and resolves every
+    referenced tool by name via the dry-run projector (no tools run, no DB
+    touched). It catches unknown tool names and compile errors that structural
+    validation alone misses — the cheap, safe gate we can run inside the live
+    API process (the full hermetic harness monkeypatches module globals and must
+    never run in-process).
+    """
+    if spec is None:
+        return
+    from app.v2.dry_run import project_run
+
+    try:
+        project_run(spec, {})
+    except Exception as e:  # noqa: BLE001 - surface as a 400 to the author
+        raise HTTPException(
+            status_code=400,
+            detail=f"graph_spec failed pre-publish check: {e}",
+        )
+
+
 @router.get("")
 def list_skills(
     include_drafts: bool = True,
@@ -200,6 +223,7 @@ def publish_skill(
     existing = SkillService.get(db, skill_id)
     if existing and existing.graph_spec:
         _validate_graph_spec(existing.graph_spec)
+        _behavioral_publish_gate(existing.graph_spec)
     try:
         skill = SkillService.publish(db, skill_id, published_by=current_user.email)
     except ValueError as e:

@@ -83,3 +83,41 @@ async def test_enforce_mode_blocks_unapproved_mutation(monkeypatch):
                          approvals=["manager"])
     out_ok = await executor.run(tool, ctx_ok, target="grp")
     assert out_ok == {"granted": True}
+
+
+@pytest.mark.asyncio
+async def test_capability_scope_refuses_out_of_scope_mutating_tool(monkeypatch):
+    """A mutating tool outside the active skill's allowed_tools is refused
+    structurally, before policy/execution. Reads and in-scope tools pass."""
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "AGENT_TOOL_OPA_ENFORCE", False, raising=False)
+
+    executor = ToolExecutor()
+
+    async def _allow(t, args, c):
+        return {"allow": True, "requires_approval": False, "approval_type": "", "reason": "ok"}
+    monkeypatch.setattr(executor, "_evaluate_policy", _allow)
+
+    grant = _FakeTool("grant", is_mutating=True, result={"granted": True}, side_effect_class="data_grant")
+
+    # Out of scope -> refused, tool never runs.
+    ctx_oos = ToolContext(tool_call_id="t1", user_identity={"email": "u@corp.com"},
+                          allowed_tools=["send_notification"])
+    out = await executor.run(grant, ctx_oos, target="grp")
+    assert out.get("out_of_scope") is True
+    assert grant.received_kwargs is None
+
+    # In scope -> executes.
+    ctx_ok = ToolContext(tool_call_id="t2", user_identity={"email": "u@corp.com"},
+                         allowed_tools=["grant", "send_notification"])
+    assert await executor.run(grant, ctx_ok, target="grp") == {"granted": True}
+
+    # Unscoped (None) -> no capability restriction (legacy global agent).
+    ctx_unscoped = ToolContext(tool_call_id="t3", user_identity={"email": "u@corp.com"})
+    assert await executor.run(grant, ctx_unscoped, target="grp") == {"granted": True}
+
+    # Reads are never capability-blocked (info gathering stays broad).
+    read = _FakeTool("lookup", is_mutating=False, result={"ok": True})
+    ctx_read = ToolContext(tool_call_id="t4", user_identity={"email": "u@corp.com"},
+                           allowed_tools=["grant"])
+    assert await executor.run(read, ctx_read, q="x") == {"ok": True}

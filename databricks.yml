@@ -72,6 +72,11 @@ resources:
             value: "${var.mlflow_tracing_enabled}"
           - name: MLFLOW_EXPERIMENT
             value: "${var.mlflow_experiment}"
+          # Governance: enforce the agent-tool OPA policy (deny + approval gates
+          # actually halt mutating tools) in deployed environments. Code default
+          # is shadow so local/test runs without a policy server don't fail closed.
+          - name: AGENT_TOOL_OPA_ENFORCE
+            value: "${var.agent_tool_opa_enforce}"
           # Pluggable identity-group provider (noop|rest|lmws).
           - name: IDENTITY_PROVIDER
             value: "${var.identity_provider}"
@@ -278,6 +283,9 @@ variables:
   mlflow_experiment:
     description: "MLflow experiment path for agent traces (blank = default), e.g. /Shared/atlas-agent"
     default: ""
+  agent_tool_opa_enforce:
+    description: "Enforce the agent-tool OPA policy (true) vs. shadow/log-only (false). Deployed envs should enforce; requires a reachable OPA (embedded by default)."
+    default: "true"
   identity_provider:
     description: "Identity-group provider backend: noop | rest | lmws"
     default: "noop"

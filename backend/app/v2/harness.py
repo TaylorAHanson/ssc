@@ -6,21 +6,37 @@ For every registered graph it asserts:
   * a fresh run pauses at each gate (HITL is wired),
   * resuming gates drives it to a terminal ``completed`` state,
   * every mutating side effect went through the shared ``ToolExecutor``
-    (capability/OPA choke point) — never a raw provider call.
+    (capability/OPA choke point) — never a raw provider call,
+  * the run's *transcript* (ordered tool calls + gates + final status) matches
+    the committed golden — catching behavioral regressions in authored graphs.
 
-Run hermetically (no live Databricks/GitHub/SMTP): provider getters are
-monkeypatched with a fake, and fact writes are no-ops. This is the gate a Skill
-must pass before publish (M3); it also guards the M4 workflow port.
+Modes:
+  * hermetic (default): provider getters are monkeypatched with a fake and fact
+    writes are no-ops — no live Databricks/GitHub/SMTP. Safe for CI.
+  * ``--sandbox``: skips the fakes and runs against the *real* providers, for
+    validating against a throwaway sandbox workspace. Requires real credentials
+    and an isolated workspace; never run this in CI or against production.
 
-    python -m app.v2.harness
+Golden transcripts:
+  * ``--capture`` (re)writes ``golden_transcripts.json`` from the current run.
+  * default compares against it and fails on drift.
+
+    python -m app.v2.harness            # hermetic + golden compare (the CI gate)
+    python -m app.v2.harness --capture  # refresh goldens after an intended change
+    python -m app.v2.harness --sandbox  # run against a real sandbox workspace
 """
+import argparse
 import asyncio
+import json
 import logging
+import os
 import types
 import uuid
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
+
+GOLDEN_PATH = os.path.join(os.path.dirname(__file__), "golden_transcripts.json")
 
 
 class _FakeProvider:
@@ -102,19 +118,70 @@ async def _run_one(executor, rtype_value: str, max_steps: int = 15) -> Tuple[str
     return rtype_value, ok, result.status, gates_resumed
 
 
-async def main() -> int:
-    logging.disable(logging.CRITICAL)  # quiet the run; we print a table
-    _install_fakes()
+# --------------------------------------------------------------------------
+# Golden transcripts
+# --------------------------------------------------------------------------
+def _load_golden() -> Dict[str, dict]:
+    try:
+        with open(GOLDEN_PATH, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return {}
 
-    # Spy on the ToolExecutor to prove mutations route through it.
+
+def _save_golden(transcripts: Dict[str, dict]) -> None:
+    with open(GOLDEN_PATH, "w", encoding="utf-8") as fh:
+        json.dump(transcripts, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+
+def _diff_transcripts(golden: Dict[str, dict], current: Dict[str, dict]) -> List[str]:
+    """Human-readable drift lines between the committed golden and this run."""
+    drift: List[str] = []
+    for rt in sorted(set(golden) | set(current)):
+        g, c = golden.get(rt), current.get(rt)
+        if g is None:
+            drift.append(f"  + {rt}: new graph (not in golden)")
+        elif c is None:
+            drift.append(f"  - {rt}: missing from this run (in golden)")
+        elif g != c:
+            for key in ("status", "gates", "mutating", "tools"):
+                if g.get(key) != c.get(key):
+                    drift.append(f"  ~ {rt}.{key}: golden={g.get(key)} current={c.get(key)}")
+    return drift
+
+
+async def main(*, capture: bool = False, sandbox: bool = False) -> int:
+    logging.disable(logging.CRITICAL)  # quiet the run; we print a table
+
+    if sandbox:
+        logging.disable(logging.NOTSET)
+        logger.warning(
+            "HARNESS --sandbox: running against REAL providers. This requires "
+            "valid credentials and an isolated sandbox workspace. Never run this "
+            "in CI or against a production workspace."
+        )
+        logging.disable(logging.CRITICAL)
+    else:
+        _install_fakes()
+
+    # Spy on the ToolExecutor to prove mutations route through it AND to record
+    # the ordered tool transcript per request type for golden comparison.
     import app.tools.tool_executor as te
     calls = {"n": 0, "mutating": 0}
+    transcripts: Dict[str, dict] = {}
+    current_rt = {"v": ""}
     orig_run = te.executor.run
 
     async def spy_run(tool, ctx, **kw):
         calls["n"] += 1
-        if getattr(tool, "is_mutating", False):
+        is_mut = getattr(tool, "is_mutating", False)
+        if is_mut:
             calls["mutating"] += 1
+        t = transcripts.setdefault(current_rt["v"], {"tools": [], "mutating": 0})
+        t["tools"].append(tool.name)
+        if is_mut:
+            t["mutating"] += 1
         return await orig_run(tool, ctx, **kw)
 
     te.executor.run = spy_run
@@ -125,10 +192,17 @@ async def main() -> int:
     ex = DurableWorkflowExecutor()
     results: List[Tuple[str, bool, str, int]] = []
     for rt in registered_types():
+        current_rt["v"] = rt
+        transcripts.setdefault(rt, {"tools": [], "mutating": 0})
         try:
-            results.append(await _run_one(ex, rt))
+            res = await _run_one(ex, rt)
+            results.append(res)
+            transcripts[rt]["status"] = res[2]
+            transcripts[rt]["gates"] = res[3]
         except Exception as e:
             results.append((rt, False, f"ERROR: {e}", 0))
+            transcripts[rt]["status"] = f"ERROR: {e}"
+            transcripts[rt]["gates"] = 0
 
     te.executor.run = orig_run
     logging.disable(logging.NOTSET)
@@ -143,8 +217,38 @@ async def main() -> int:
     print("-" * (width + 28))
     print(f"{passed}/{len(results)} graphs green | ToolExecutor calls={calls['n']} "
           f"(mutating={calls['mutating']})")
-    return 0 if passed == len(results) else 1
+
+    structural_ok = passed == len(results)
+
+    # Golden transcript comparison (skipped in sandbox mode — real side effects
+    # make tool counts environment-dependent).
+    golden_ok = True
+    if capture:
+        _save_golden(transcripts)
+        print(f"golden transcripts captured -> {GOLDEN_PATH} ({len(transcripts)} graphs)")
+    elif sandbox:
+        print("golden comparison skipped (sandbox mode)")
+    else:
+        drift = _diff_transcripts(_load_golden(), transcripts)
+        if drift:
+            golden_ok = False
+            print("TRANSCRIPT DRIFT vs golden (run --capture if intended):")
+            print("\n".join(drift))
+        else:
+            print("transcripts match golden")
+
+    return 0 if (structural_ok and golden_ok) else 1
+
+
+def _parse_args(argv=None):
+    p = argparse.ArgumentParser(description="V2 pre-publish eval / sandbox harness")
+    p.add_argument("--capture", action="store_true",
+                   help="(re)write golden_transcripts.json from this run")
+    p.add_argument("--sandbox", action="store_true",
+                   help="run against REAL providers (isolated sandbox workspace; not for CI)")
+    return p.parse_args(argv)
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    _args = _parse_args()
+    raise SystemExit(asyncio.run(main(capture=_args.capture, sandbox=_args.sandbox)))

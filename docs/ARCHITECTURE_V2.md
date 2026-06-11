@@ -538,7 +538,8 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
     chat-exposed pre-capability-scoping).
   - Verified end-to-end: fresh run pauses at approval interrupt; idle tick makes no progress;
     **crash-resume** (new executor instance) resumes from the checkpoint and grants exactly
-    once; rejection path terminates. Feature-flagged `V2_ENGINE_ENABLED` (off; not in poller).
+    once; rejection path terminates. (The old `V2_ENGINE_ENABLED` flag has been removed — V2
+    is the only engine; the poller advances these graphs unconditionally.)
 - **M4 — Workflow coverage (DONE, verified).**
   - Declarative `WorkflowSpec` (gates + steps) -> generic `build_spec_graph` (`app/v2/spec.py`):
     the "skills as data" thesis. All 25 registered request types expressed as graphs
@@ -643,7 +644,33 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
   **export/import** (`GET /skills/export/bundle`, `POST /skills/import/bundle`, format `atlas.skills/v1`,
   keyed by `key` with no ids/status/version) supports the **dev → staging → prod** flow: export published
   workflows from one env, import into the next as **drafts** (default), dry-run them, then publish.
-- **Remaining:** **live graph run visualization** in the request-detail UI (watch a real request move
-  through the authored graph) is the next UX piece. Smaller follow-ups: pooled Postgres checkpointer;
-  wire the SSE `trace_id` into the chat-UI feedback control; register `AtlasResponsesAgent` to a
-  Model Serving endpoint; per-skill capability-scope *enforcement* in the runner.
+- **Guardrail hardening (DONE).** Capability scope is now a structural bound in the `ToolExecutor`:
+  a `ToolContext.allowed_tools` list refuses any out-of-scope *mutating* tool before policy/execution
+  (reads stay broad for info-gathering; `None` = unscoped legacy agent). The agent-tool **OPA policy is
+  enforced in deployed envs** (`databricks.yml` var `agent_tool_opa_enforce` defaults true; code default
+  stays shadow so local/CI runs without a policy server don't fail closed), with a loud startup warning
+  whenever mutating-tool OPA is in shadow. `agent_tools.rego` carves out `execute_workflow` (the entry
+  tool) from approval-gating so enforce mode can't deadlock initiation — real infra/data approvals fire
+  in-graph. The dead `V2_ENGINE_ENABLED` flag was removed.
+- **Live graph run visualization (DONE).** `GET /api/v1/requests/{id}/graph` (`app/v2/render.py::live_graph`)
+  returns the request's authored `graph_spec` plus per-node live status (`done`/`current`/`pending`/
+  `rejected`), derived from the same fact log + status the timeline uses (published DB spec preferred, then
+  code catalog, then a synthesized shape). The request-detail modal gained a **Workflow** tab
+  (`src/components/RequestGraphView.tsx`) that renders the graph via `WorkflowGraphPreview` with run-state
+  rings/badges and polls until terminal.
+- **Eval harness upgrade (DONE).** The harness now captures a **golden transcript** per graph (ordered
+  tool calls + mutating count + gates + final status) to `app/v2/golden_transcripts.json`; the default
+  run compares against it and fails on drift (`--capture` to refresh after intended changes). A
+  `--sandbox` mode skips the fakes to run against real providers in a throwaway workspace (not for CI).
+  Publish gained a **side-effect-free behavioral gate** (`_behavioral_publish_gate` → dry-run projection)
+  that compiles the spec and resolves every tool by name before a skill goes live (the full hermetic
+  harness can't run in-process — it monkeypatches module globals).
+- **ResponsesAgent deployment (DONE, workspace-run).** `app/agents/agent_entry.py` is the MLflow
+  models-from-code entry; `scripts/register_responses_agent.py` logs + registers it to Unity Catalog and
+  (with `--deploy`) provisions a Model Serving endpoint via `databricks-agents`, attaching the LLM/gateway
+  serving endpoints as resources. Decoupled from `databricks.yml` because the new Unity AI Gateway serving
+  objects aren't yet bundle-declarable; the running app adopts a gateway purely via `AI_GATEWAY_ENDPOINT`.
+  Startup now logs the active governance posture, LLM routing (gateway vs. direct), and tracing state.
+- **Remaining:** pooled Postgres checkpointer; wire the SSE `trace_id` into the chat-UI feedback control;
+  end-to-end validation of the ResponsesAgent registration + `--sandbox` harness against a live workspace
+  (both require workspace credentials).

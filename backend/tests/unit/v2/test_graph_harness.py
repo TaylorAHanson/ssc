@@ -35,3 +35,30 @@ def test_all_v2_graphs_green():
     # Mutations must flow through the governed executor, never raw providers.
     assert mutating >= 1, "expected at least one mutating ToolExecutor call"
     assert calls >= mutating
+    # The authored graphs must still match their committed golden transcripts.
+    assert "transcripts match golden" in output, (
+        f"transcript drift vs golden (run `python -m app.v2.harness --capture` "
+        f"if intended):\n{output}"
+    )
+
+
+def test_transcript_diff_detects_drift():
+    """The golden diff flags status/tool/gate changes and add/remove of graphs."""
+    from app.v2.harness import _diff_transcripts
+
+    golden = {
+        "wf_a": {"tools": ["t1"], "mutating": 1, "gates": 1, "status": "completed"},
+        "wf_gone": {"tools": [], "mutating": 0, "gates": 0, "status": "completed"},
+    }
+    current = {
+        "wf_a": {"tools": ["t1", "t2"], "mutating": 1, "gates": 1, "status": "completed"},
+        "wf_new": {"tools": ["t3"], "mutating": 1, "gates": 0, "status": "completed"},
+    }
+    drift = _diff_transcripts(golden, current)
+    blob = "\n".join(drift)
+    assert "wf_a.tools" in blob       # changed tool list
+    assert "wf_new: new graph" in blob
+    assert "wf_gone: missing" in blob
+
+    # Identical -> no drift.
+    assert _diff_transcripts(golden, golden) == []

@@ -17,6 +17,8 @@ import { CheckCircle2, GitBranch, Play, Wrench, XCircle } from 'lucide-react';
 import type { WorkflowGraphSpec } from '../../services/api';
 import { specToFlow, type FlowNode } from '../../lib/workflowSpec';
 
+export type RunState = 'done' | 'current' | 'pending' | 'rejected';
+
 interface PreviewNodeData {
   label: string;
   sublabel?: string;
@@ -24,7 +26,22 @@ interface PreviewNodeData {
   selected?: boolean;
   onSelect?: (id: string) => void;
   nodeId: string;
+  runState?: RunState;
 }
+
+// Live-run overlay styling (used by the request-detail graph runner).
+const RUN_RING: Record<RunState, string> = {
+  done: 'ring-2 ring-green-400',
+  current: 'ring-2 ring-accent animate-pulse',
+  pending: 'opacity-50',
+  rejected: 'ring-2 ring-red-400',
+};
+const RUN_DOT: Record<RunState, string> = {
+  done: 'bg-green-500',
+  current: 'bg-accent',
+  pending: 'bg-gray-300',
+  rejected: 'bg-red-500',
+};
 
 const KIND_STYLES: Record<FlowNode['kind'], { border: string; bg: string; icon: ReactNode }> = {
   start: { border: 'border-gray-300', bg: 'bg-gray-50', icon: <Play className="w-3.5 h-3.5 text-gray-500" /> },
@@ -37,12 +54,21 @@ const KIND_STYLES: Record<FlowNode['kind'], { border: string; bg: string; icon: 
 function PreviewNode({ data }: NodeProps<PreviewNodeData>) {
   const s = KIND_STYLES[data.kind];
   const clickable = data.kind === 'gate' || data.kind === 'step';
+  // Live-run overlay wins over the static "selected" ring when present.
+  const runRing = data.runState ? RUN_RING[data.runState] : '';
+  const selectedRing = !data.runState && data.selected ? 'ring-2 ring-accent' : '';
   return (
     <div
-      className={`rounded-md border ${s.border} ${s.bg} px-2.5 py-1.5 w-[180px] shadow-sm ${
+      className={`relative rounded-md border ${s.border} ${s.bg} px-2.5 py-1.5 w-[180px] shadow-sm ${
         clickable ? 'cursor-pointer' : ''
-      } ${data.selected ? 'ring-2 ring-accent' : ''}`}
+      } ${runRing} ${selectedRing}`}
     >
+      {data.runState && (
+        <span
+          className={`absolute -top-1.5 -right-1.5 w-3 h-3 rounded-full border-2 border-white ${RUN_DOT[data.runState]}`}
+          title={data.runState}
+        />
+      )}
       <Handle type="target" position={Position.Top} style={{ background: '#cbd5e1', width: 6, height: 6 }} />
       <Handle type="source" position={Position.Bottom} style={{ background: '#cbd5e1', width: 6, height: 6 }} />
       <Handle type="source" position={Position.Right} id="r" style={{ background: '#fca5a5', width: 6, height: 6 }} />
@@ -64,9 +90,11 @@ interface Props {
   selectedStage?: string | null;
   onSelectStage?: (name: string) => void;
   height?: number | string;
+  /** Optional live run status per node id (pending|stage names|complete|rejected). */
+  nodeStates?: Record<string, RunState>;
 }
 
-function Flow({ spec, selectedStage, onSelectStage }: Props) {
+function Flow({ spec, selectedStage, onSelectStage, nodeStates }: Props) {
   // Derive the desired graph from the spec. This is recomputed whenever the
   // workflow definition or selection changes.
   const derived = useMemo(() => {
@@ -82,6 +110,7 @@ function Flow({ spec, selectedStage, onSelectStage }: Props) {
         selected: selectedStage === n.id,
         onSelect: onSelectStage,
         nodeId: n.id,
+        runState: nodeStates?.[n.id],
       },
       draggable: false,
     }));
@@ -97,7 +126,7 @@ function Flow({ spec, selectedStage, onSelectStage }: Props) {
       type: 'smoothstep',
     }));
     return { nodes: rfNodes, edges: rfEdges };
-  }, [spec, selectedStage, onSelectStage]);
+  }, [spec, selectedStage, onSelectStage, nodeStates]);
 
   // ReactFlow keeps its own copy of nodes/edges. We must push the derived graph
   // into it whenever it changes, otherwise the canvas can go blank after the

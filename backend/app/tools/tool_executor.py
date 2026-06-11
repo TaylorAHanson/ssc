@@ -58,6 +58,11 @@ class ToolContext:
     db: Optional[Any] = None
     scope_id: Optional[str] = None
     approvals: List[str] = field(default_factory=list)
+    # Capability scope: when set (not None), a *mutating* tool whose name is not
+    # in this list is structurally refused before any policy/execution — the
+    # active skill's ``allowed_tools`` bound. ``None`` means "unscoped" (the
+    # legacy/global chat agent), an empty list means "no mutating tools allowed".
+    allowed_tools: Optional[List[str]] = None
     # Extra kwargs the caller wants injected into the tool call (e.g.
     # execute_workflow's conversation_history) that aren't model-supplied args.
     injected_args: Dict[str, Any] = field(default_factory=dict)
@@ -190,6 +195,24 @@ class ToolExecutor:
         # 2. Validate model-supplied args against the tool's schema (non-fatal in
         #    shadow mode: log and continue so we don't regress current behavior).
         self._validate_args(tool, model_args)
+
+        # 2b. Capability scope (structural bound, runs before policy). A skill
+        #     declares which tools it may use; a mutating tool outside that set
+        #     is refused regardless of OPA — bounding blast radius first.
+        if tool.is_mutating and ctx.allowed_tools is not None and tool.name not in ctx.allowed_tools:
+            refusal = {
+                "error": (
+                    f"Tool '{tool.name}' is not in the active skill's capability scope "
+                    f"(allowed_tools). Refusing out-of-scope mutating call."
+                ),
+                "out_of_scope": True,
+            }
+            logger.warning(
+                "[capability-scope] refused out-of-scope mutating tool '%s' (allowed=%s)",
+                tool.name, ctx.allowed_tools,
+            )
+            self._audit(tool, ctx, ok=False, decision=None, error=refusal["error"])
+            return refusal
 
         # 3 + 4. Policy pre-flight for mutating tools.
         decision: Optional[Dict[str, Any]] = None

@@ -95,6 +95,28 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Embedded OPA server failed to start: {e}", exc_info=True)
 
+    # Governance & routing posture — make the active configuration explicit in
+    # the logs so "built but dormant" guardrails are never silently off.
+    if settings.AGENT_TOOL_OPA_ENFORCE:
+        logger.info("GOVERNANCE: agent-tool OPA is in ENFORCE mode (mutating policy gates active).")
+    else:
+        logger.warning(
+            "GOVERNANCE: agent-tool OPA is in SHADOW mode (AGENT_TOOL_OPA_ENFORCE=false) — "
+            "mutating tool-call decisions are logged but NOT enforced. "
+            "Set AGENT_TOOL_OPA_ENFORCE=true in any non-dev environment."
+        )
+    if (settings.AI_GATEWAY_ENDPOINT or "").strip():
+        logger.info("LLM routing: via AI Gateway endpoint '%s'.", settings.AI_GATEWAY_ENDPOINT)
+    else:
+        logger.info(
+            "LLM routing: direct to Model Serving (AI_GATEWAY_ENDPOINT unset) — "
+            "set it to route through the gateway for A/B, input guardrails, and rate/cost limits."
+        )
+    logger.info(
+        "Observability: MLflow tracing %s.",
+        "ENABLED" if settings.MLFLOW_TRACING_ENABLED else "disabled (set MLFLOW_TRACING_ENABLED=true)",
+    )
+
     if not os.environ.get("TESTING"):
         logger.info("Starting background poller thread...")
         import threading

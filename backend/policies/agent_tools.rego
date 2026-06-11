@@ -41,9 +41,17 @@ _approval_type_by_class := {
 	"destructive": "admin",
 }
 
-# Resolve approval type for the call. Unknown *mutating* classes fail safe to
-# "manager"; non-mutating/unknown falls through to "none".
-approval_type := t if {
+# The workflow entry tool (`execute_workflow`) creates a *governed request* and
+# hands off to the durable graph, which runs its own HITL approval gates on the
+# real infra/data mutations. Approval therefore happens in-graph, not at chat
+# entry; gating initiation here would deadlock every workflow. It still carries
+# its `infra` side_effect_class for audit fidelity.
+#
+# Otherwise: resolve approval type by side-effect class. Unknown *mutating*
+# classes fail safe to "manager"; non-mutating/unknown falls through to "none".
+approval_type := "none" if {
+	input.tool == "execute_workflow"
+} else := t if {
 	t := _approval_type_by_class[input.side_effect_class]
 } else := "manager" if {
 	input.is_mutating

@@ -1,0 +1,205 @@
+{
+  "allowlist_exception": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "update_allowlist"
+    ]
+  },
+  "asset_deduplication": {
+    "gates": 0,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "run_notebook_job",
+      "send_notification"
+    ]
+  },
+  "batch_data_access": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "grant_uc_access"
+    ]
+  },
+  "campaign": {
+    "gates": 2,
+    "mutating": 2,
+    "status": "completed",
+    "tools": [
+      "spawn_child_request",
+      "spawn_child_request"
+    ]
+  },
+  "catalog_schema_table": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "terraform_plan",
+      "terraform_apply"
+    ]
+  },
+  "catalog_schema_table_access": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "grant_uc_access"
+    ]
+  },
+  "credential_creation": {
+    "gates": 2,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "create_uc_object"
+    ]
+  },
+  "data_access_request": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "grant_uc_access"
+    ]
+  },
+  "enforcement_sentinel": {
+    "gates": 0,
+    "mutating": 2,
+    "status": "completed",
+    "tools": [
+      "sentinel_discover",
+      "sentinel_enforce",
+      "send_notification"
+    ]
+  },
+  "github_repo_access": {
+    "gates": 2,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "github_set_permissions"
+    ]
+  },
+  "github_repo_creation": {
+    "gates": 0,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "github_create_repo"
+    ]
+  },
+  "project_onboarding": {
+    "gates": 2,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "spawn_child_request"
+    ]
+  },
+  "report_execution": {
+    "gates": 0,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "execute_report",
+      "send_notification"
+    ]
+  },
+  "rest_api_access": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "create_uc_object"
+    ]
+  },
+  "reusable_assets": {
+    "gates": 0,
+    "mutating": 0,
+    "status": "completed",
+    "tools": []
+  },
+  "service_principal": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "terraform_plan",
+      "create_service_principal"
+    ]
+  },
+  "simple_email": {
+    "gates": 0,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "send_notification"
+    ]
+  },
+  "tag_change": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "open_tag_change_pr"
+    ]
+  },
+  "tag_creation": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "create_uc_object"
+    ]
+  },
+  "training_links": {
+    "gates": 0,
+    "mutating": 0,
+    "status": "completed",
+    "tools": []
+  },
+  "training_verification": {
+    "gates": 1,
+    "mutating": 0,
+    "status": "completed",
+    "tools": []
+  },
+  "volume_creation": {
+    "gates": 2,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "terraform_plan",
+      "terraform_apply"
+    ]
+  },
+  "workspace_access": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "add_group_membership"
+    ]
+  },
+  "workspace_folder_creation": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "create_uc_object"
+    ]
+  },
+  "workspace_provision": {
+    "gates": 3,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "terraform_plan",
+      "terraform_apply"
+    ]
+  }
+}

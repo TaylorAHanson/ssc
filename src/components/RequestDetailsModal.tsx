@@ -1,9 +1,10 @@
-import { X, MessageSquare, Info } from 'lucide-react';
+import { X, MessageSquare, Info, Workflow } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { useState } from 'react';
 import type { Request } from '../types';
 import { renderMarkdownSafe } from '../lib/markdown';
+import { RequestGraphView } from './RequestGraphView';
 
 interface RequestDetailsModalProps {
     request: Request;
@@ -15,7 +16,7 @@ interface RequestDetailsModalProps {
 }
 
 export function RequestDetailsModal({ request, onClose, RequestStateList }: RequestDetailsModalProps) {
-    const [activeTab, setActiveTab] = useState<'status' | 'conversation'>('status');
+    const [activeTab, setActiveTab] = useState<'status' | 'workflow' | 'conversation'>('status');
 
     return (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-100 p-4 animate-in fade-in duration-200">
@@ -48,6 +49,16 @@ export function RequestDetailsModal({ request, onClose, RequestStateList }: Requ
                         Request Status
                     </button>
                     <button
+                        onClick={() => setActiveTab('workflow')}
+                        className={`flex-1 py-3 text-sm font-semibold transition-all ${activeTab === 'workflow'
+                            ? 'text-primary border-b-2 border-primary bg-primary/5'
+                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                            } flex items-center justify-center gap-2`}
+                    >
+                        <Workflow className="w-4 h-4" />
+                        Workflow
+                    </button>
+                    <button
                         onClick={() => setActiveTab('conversation')}
                         className={`flex-1 py-3 text-sm font-semibold transition-all ${activeTab === 'conversation'
                             ? 'text-primary border-b-2 border-primary bg-primary/5'
@@ -62,6 +73,8 @@ export function RequestDetailsModal({ request, onClose, RequestStateList }: Requ
                 <CardContent className="flex-1 overflow-y-auto p-6 bg-gray-50/30">
                     {activeTab === 'status' ? (
                         <RequestStateList request={request} />
+                    ) : activeTab === 'workflow' ? (
+                        <RequestGraphView requestId={request.id} />
                     ) : (
                         <div className="space-y-4">
                             {request.conversation && request.conversation.length > 0 ? (

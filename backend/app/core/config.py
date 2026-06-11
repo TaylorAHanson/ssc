@@ -235,9 +235,6 @@ class Settings(BaseSettings):
     # runner replaces the oldest tool messages with placeholders before the
     # next LLM call. ~600k chars ≈ ~150k tokens, well under typical 1M limits.
     AGENT_MAX_PROMPT_CHARS: int = 600000
-    # V2 durable engine (LangGraph). Additive + off by default until the M5
-    # cutover wires it into the poller in place of the legacy state machines.
-    V2_ENGINE_ENABLED: bool = False
     # V2 ToolExecutor: when False (default) the agent-tool OPA package
     # (`data.agent.tools`) runs in SHADOW mode — decisions are evaluated and
     # logged but never block a tool call. Flip to True to ENFORCE (deny +

@@ -377,6 +377,27 @@ export async function getRequest(requestId: string): Promise<Request> {
   return response.json();
 }
 
+export type GraphRunState = 'done' | 'current' | 'pending' | 'rejected';
+
+export interface RequestGraph {
+  request_id: string;
+  request_type: string;
+  status: string;
+  current: string;
+  graph_spec: WorkflowGraphSpec;
+  node_states: Record<string, GraphRunState>;
+}
+
+export async function getRequestGraph(requestId: string): Promise<RequestGraph> {
+  const response = await fetch(`${API_BASE_URL}/requests/${requestId}/graph`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to get request graph: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export async function approveRequest(requestId: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/requests/${requestId}/approve`, {
     method: 'POST',
@@ -1929,6 +1950,7 @@ export const api = {
   getRequests,
   getPaginatedRequests,
   getRequest,
+  getRequestGraph,
   approveRequest,
   rejectRequest,
   deleteRequest,

@@ -7,6 +7,7 @@ the request id. Mutating work inside a graph runs through the shared
 ``app.tools.tool_executor.ToolExecutor`` so the M1 guardrail stack (OPA
 pre-flight, idempotency, audit) applies uniformly.
 
-This package is additive and feature-flagged (``V2_ENGINE_ENABLED``); it is NOT
-wired into the poller until the M5 cutover.
+As of the M5 cutover this is the **only** execution engine: the poller
+(``app.workers.poller._process_request_state_machine``) advances these graphs
+directly and the legacy state-machine engine has been removed.
 """
