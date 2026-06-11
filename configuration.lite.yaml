@@ -99,7 +99,6 @@ workflows:
   RequestType.DATA_ACCESS_REQUEST: true
   RequestType.ENFORCEMENT_SENTINEL: false
   RequestType.GITHUB_REPO_CREATION: true
-  RequestType.MARKETPLACE_CERTIFICATION: false
   RequestType.PROJECT_ONBOARDING: true
   RequestType.REPORT_EXECUTION: true
   RequestType.REST_API_ACCESS: false

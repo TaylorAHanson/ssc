@@ -136,6 +136,41 @@ class McpTool:
         return self._friendly_completion_label
         
     @property
+    def accepted_args(self) -> Dict[str, Any]:
+        """Introspect the wrapped function's *named* parameters for author-time
+        arg linting.
+
+        Returns ``{"named": set, "required": set, "accepts_var_kw": bool}`` where
+        ``named`` is the explicit (non ``**kwargs``) parameters an author may set,
+        ``required`` is those without a default, and ``accepts_var_kw`` is True if
+        the function has a ``**kwargs`` catch-all. Parameters beginning with ``_``
+        (executor-injected context like ``_user_email``) are excluded. When the
+        tool only takes ``**kwargs`` (no named params) the contract is open and
+        ``named`` is empty, so callers should skip the unknown-arg check.
+        """
+        import inspect as _inspect
+
+        named: set = set()
+        required: set = set()
+        accepts_var_kw = False
+        try:
+            sig = _inspect.signature(self._func)
+        except (TypeError, ValueError):
+            return {"named": named, "required": required, "accepts_var_kw": True}
+        for pname, p in sig.parameters.items():
+            if p.kind == _inspect.Parameter.VAR_KEYWORD:
+                accepts_var_kw = True
+                continue
+            if p.kind == _inspect.Parameter.VAR_POSITIONAL:
+                continue
+            if pname.startswith("_") or pname == "kwargs":
+                continue
+            named.add(pname)
+            if p.default is _inspect.Parameter.empty:
+                required.add(pname)
+        return {"named": named, "required": required, "accepts_var_kw": accepts_var_kw}
+
+    @property
     def input_schema(self) -> Dict[str, Any]:
         """Returns the JSON schema for the input parameters."""
         schema = self._args_schema.model_json_schema()

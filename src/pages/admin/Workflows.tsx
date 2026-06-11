@@ -156,19 +156,75 @@ export function Workflows() {
     window.addEventListener('mouseup', onUp);
   };
 
-  // After the agent saves/publishes a workflow via its tools, reload the list
-  // and open that workflow in the editor so the draft shows up in the fields.
-  const handleAuthoringToolResult = async (toolName: string, result: unknown) => {
-    if (toolName !== 'save_workflow_draft' && toolName !== 'publish_workflow') return;
+  // React to the authoring assistant's tool calls so the editor on the left
+  // mirrors what the agent is doing on the right:
+  //   * validate / preview / save / publish all carry the drafted `graph_spec`
+  //     in their *arguments* — hydrate the editor live so the admin sees the
+  //     design take shape (not just a wall of chat).
+  //   * save / publish additionally persist it; reload the list and open the
+  //     real (id-bearing) record so subsequent edits/Save target it.
+  const AUTHORING_SPEC_TOOLS = new Set([
+    'validate_workflow_spec',
+    'preview_workflow_spec',
+    'save_workflow_draft',
+    'publish_workflow',
+  ]);
+
+  const handleAuthoringToolResult = async (
+    toolName: string,
+    result: unknown,
+    ok: boolean,
+    args?: Record<string, unknown>,
+  ) => {
+    if (!AUTHORING_SPEC_TOOLS.has(toolName)) return;
+
+    // 1) Live hydrate from the call arguments (works even before a save).
+    const spec = (args?.graph_spec ?? null) as WorkflowGraphSpec | null;
+    if (spec && typeof spec === 'object') {
+      const argKey = typeof args?.key === 'string' ? (args.key as string) : '';
+      const specName = typeof (spec as { name?: unknown }).name === 'string'
+        ? ((spec as { name?: string }).name as string)
+        : '';
+      const argName = typeof args?.name === 'string' ? (args.name as string) : '';
+      const argRt = typeof args?.request_type === 'string' ? (args.request_type as string) : '';
+      const argGoal = typeof args?.goal === 'string' ? (args.goal as string) : '';
+      setForm((prev) => {
+        const targetKey = argKey || specName || prev.key;
+        // If the agent is drafting a *different* workflow than what's open,
+        // start clean so we don't inherit the open record's id (which would
+        // make a manual Save update the wrong workflow).
+        const base = prev.key && targetKey && targetKey !== prev.key ? emptyForm : prev;
+        return {
+          ...base,
+          key: base.key || targetKey,
+          name: base.name || argName || targetKey,
+          request_type: base.request_type || argRt,
+          goal: base.goal || argGoal,
+          graph_spec: spec,
+        };
+      });
+      setTab('workflow');
+    }
+
+    // 2) On a successful persist, reload and open the canonical record.
     const r = result as { ok?: boolean; key?: string } | null;
-    if (!r || !r.ok || !r.key) return;
-    try {
-      const fresh = await api.listWorkflows(true);
-      setWorkflows(fresh);
-      const match = fresh.find((w) => w.key === r.key);
-      if (match) setWorkflowParam(match.id);
-    } catch {
-      /* non-fatal: the manual reload button is still available */
+    const persisted = toolName === 'save_workflow_draft' || toolName === 'publish_workflow';
+    if (persisted && ok && r?.ok && r.key) {
+      try {
+        const fresh = await api.listWorkflows(true);
+        setWorkflows(fresh);
+        const match = fresh.find((w) => w.key === r.key);
+        if (match) {
+          // Set loadedIdRef === param so the URL effect doesn't re-prompt the
+          // unsaved-changes guard (we just loaded the canonical version).
+          loadedIdRef.current = match.id;
+          setFormBaselined(toForm(match));
+          setWorkflowParam(match.id);
+          setTab('workflow');
+        }
+      } catch {
+        /* non-fatal: the manual reload button is still available */
+      }
     }
   };
   // When true (e.g. prod), this environment locks in-place authoring: workflows

@@ -168,11 +168,18 @@ export interface ChatViewProps {
     emptyStateExtras?: React.ReactNode;
     /**
      * Fired when a tool call resolves, with the tool name, its raw result
-     * payload, and whether it succeeded. Lets a host surface react to agent
-     * side effects — e.g. the workflow authoring panel reloads + opens the
-     * draft the agent just saved. Fires once per tool result.
+     * payload, whether it succeeded, and the raw arguments the agent passed to
+     * the call. Lets a host surface react to agent side effects — e.g. the
+     * workflow authoring panel hydrates the editor with the drafted `graph_spec`
+     * (which lives in the call's arguments) and opens the saved draft. Fires
+     * once per tool result.
      */
-    onToolResult?: (toolName: string, result: unknown, ok: boolean) => void;
+    onToolResult?: (
+        toolName: string,
+        result: unknown,
+        ok: boolean,
+        args?: Record<string, unknown>,
+    ) => void;
 }
 
 /**
@@ -242,9 +249,12 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     const pendingPollRef = useRef<PendingPollEvent | null>(null);
     pendingPollRef.current = pendingPoll;
 
-    // Map tool_call id -> tool name so we can report the resolving tool's name
-    // to `onToolResult` (the tool_result event carries only the id).
+    // Map tool_call id -> tool name and raw arguments so we can report both to
+    // `onToolResult` (the tool_result event carries only the id + result). The
+    // arguments matter for authoring tools where the useful payload (the drafted
+    // graph_spec) lives in the *call*, not the result.
     const toolNamesRef = useRef<Record<string, string>>({});
+    const toolArgsRef = useRef<Record<string, Record<string, unknown> | undefined>>({});
 
     // Whitespace-normalized signature of the most recently *applied* agent
     // message. Backs a hard guard against rendering the same bubble twice:
@@ -590,6 +600,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             case 'tool_call': {
                 setStatusLabel(event.friendly_label);
                 toolNamesRef.current[event.id] = event.name;
+                toolArgsRef.current[event.id] = event.arguments;
                 setMessages((prev) => [
                     ...prev,
                     {
@@ -610,7 +621,12 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 // Notify the host of the resolved tool + payload immediately
                 // (independent of the pill's delayed visual settle below) so
                 // it can react to agent side effects without waiting.
-                onToolResult?.(toolNamesRef.current[event.id] || '', event.result, event.ok);
+                onToolResult?.(
+                    toolNamesRef.current[event.id] || '',
+                    event.result,
+                    event.ok,
+                    toolArgsRef.current[event.id],
+                );
                 // Hold the "running" pill on screen for a short
                 // minimum so synchronous tools (e.g. execute_workflow,
                 // metadata listings) don't flash from "Running …" to
@@ -725,10 +741,24 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                         if (incomingSig && incomingSig === lastAgentSigRef.current) {
                             return prev;
                         }
-                        const lastAgent = [...prev]
+                        // Find the most recent *conversational* bubble (ignore
+                        // tool pills / reasoning). The backend yields at most one
+                        // agent MessageEvent per turn, so if the last such bubble
+                        // is already an agent message — with no user turn since —
+                        // a second agent bubble is a duplicate. We accept it only
+                        // if it's genuinely different content; near-identical text
+                        // (same long prefix, e.g. the model re-emitting a slightly
+                        // reworded answer at temperature 0.0) is swallowed.
+                        const lastConversational = [...prev]
                             .reverse()
-                            .find((m): m is Extract<DisplayMessage, { kind: 'agent' }> => m.kind === 'agent');
-                        if (lastAgent && normalizeForDedup(lastAgent.content) === incomingSig) {
+                            .find(
+                                (m): m is Extract<DisplayMessage, { kind: 'user' | 'agent' }> =>
+                                    m.kind === 'agent' || m.kind === 'user',
+                            );
+                        if (
+                            lastConversational?.kind === 'agent' &&
+                            isLikelyDuplicateAgentMessage(lastConversational.content, event.content)
+                        ) {
                             return prev;
                         }
                         lastAgentSigRef.current = incomingSig;
@@ -997,6 +1027,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                     onChange={(e) => setDraft(e.target.value)}
                                     placeholder={placeholder}
                                     rows={3}
+                                    autoResize
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter' && !e.shiftKey) {
                                             e.preventDefault();
@@ -1078,6 +1109,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                 onChange={(e) => setDraft(e.target.value)}
                                 placeholder={placeholder}
                                 rows={1}
+                                autoResize
                                 onKeyDown={(e) => {
                                     if (e.key === 'Enter' && !e.shiftKey) {
                                         e.preventDefault();
@@ -1184,6 +1216,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                 onChange={(e) => setDraft(e.target.value)}
                                 placeholder={placeholder}
                                 rows={1}
+                                autoResize
                                 onKeyDown={(e) => {
                                     if (e.key === 'Enter' && !e.shiftKey) {
                                         e.preventDefault();
@@ -1479,6 +1512,27 @@ function escapeHtml(s: string): string {
 // trailing spaces / CRLFs / blank-line count are treated as the same.
 function normalizeForDedup(s: string): string {
     return s.replace(/\s+/g, ' ').trim();
+}
+
+// Decide whether `incoming` is a duplicate of the immediately-preceding agent
+// bubble `prevContent`. Used only when no user turn separates them (the backend
+// emits one agent message per turn). Catches both exact repeats and the
+// "reworded near-duplicate" case (identical long prefix) we've seen the model
+// produce across iterations at temperature 0.0.
+function isLikelyDuplicateAgentMessage(prevContent: string, incoming: string): boolean {
+    const a = normalizeForDedup(prevContent);
+    const b = normalizeForDedup(incoming);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    // Identical opening of a substantial message ⇒ same answer, lightly reworded.
+    const PREFIX = 80;
+    if (a.length >= PREFIX && b.length >= PREFIX && a.slice(0, PREFIX) === b.slice(0, PREFIX)) {
+        return true;
+    }
+    // One fully contains the other (e.g. a trailing sentence was added/removed).
+    const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+    if (shorter.length >= 40 && longer.includes(shorter)) return true;
+    return false;
 }
 
 function stringifyResult(result: Record<string, unknown> | null): string {

@@ -172,6 +172,51 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
     )
 
 
+# --------------------------------------------------------------------------
+# Author-time arg linting (non-blocking warnings)
+# --------------------------------------------------------------------------
+# Context keys the executor/tool layer injects automatically — an author may
+# reference them in a step's args without the tool declaring them as a named
+# parameter, so they must never be flagged as "unknown".
+_INJECTED_ARG_KEYS = {"request_id", "parameters"}
+
+
+def lint_step_tool_args(data: Dict[str, Any]) -> List[str]:
+    """Non-blocking lint: flag step args that don't match their tool's schema.
+
+    The structural validator can't catch this because every tool accepts a
+    ``**kwargs`` catch-all (for executor-injected context), so a wrong arg name
+    (e.g. ``to`` instead of ``to_email``) is silently dropped at runtime. Here we
+    compare each step's authored ``args``/``item_args`` keys against the tool's
+    *declared* named parameters and return human-readable warnings. Tools whose
+    only parameter is ``**kwargs`` have an open contract and are skipped.
+    """
+    warnings: List[str] = []
+    for i, stage in enumerate(data.get("stages", []) or []):
+        if not isinstance(stage, dict) or stage.get("kind") != "step":
+            continue
+        tool_name = stage.get("tool")
+        if not isinstance(tool_name, str) or not has_tool(tool_name):
+            continue  # unknown tool already caught by validate_spec_dict
+        accepted = get_tool(tool_name).accepted_args
+        named = accepted["named"]
+        if not named:
+            continue  # open contract (**kwargs only) — nothing to check
+        where = f"stage '{stage.get('name', f'#{i}')}' (tool '{tool_name}')"
+
+        provided = set((stage.get("args") or {}).keys()) | set((stage.get("item_args") or {}).keys())
+        allowed = named | _INJECTED_ARG_KEYS
+        for key in sorted(provided - allowed):
+            warnings.append(
+                f"{where}: arg '{key}' is not accepted by the tool "
+                f"(accepts: {', '.join(sorted(named))})"
+            )
+        missing = accepted["required"] - provided - _INJECTED_ARG_KEYS
+        for key in sorted(missing):
+            warnings.append(f"{where}: required arg '{key}' is not set")
+    return warnings
+
+
 def stage_specs_from_dict(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """UI-renderer stage introspection straight from the data spec (no compile)."""
     out: List[Dict[str, Any]] = []

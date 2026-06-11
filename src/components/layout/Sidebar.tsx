@@ -181,15 +181,6 @@ const navItems: NavItem[] = [
     group: 'Governance',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
-  {
-    id: 'workflows',
-    title: 'Workflows',
-    icon: <Sparkles className="w-5 h-5" />,
-    path: '/build/workflows',
-    group: 'Build & Customize',
-    allowedPersonas: ['Platform Admin', 'Governance Admin']
-  },
-
   // Admin - Restricted
   {
     id: 'admin',
@@ -198,6 +189,14 @@ const navItems: NavItem[] = [
     path: '/admin/dashboard',
     group: 'Admin',
     allowedPersonas: ['Platform Admin']
+  },
+  {
+    id: 'workflows',
+    title: 'Workflows',
+    icon: <Sparkles className="w-5 h-5" />,
+    path: '/build/workflows',
+    group: 'Admin',
+    allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
 
   {

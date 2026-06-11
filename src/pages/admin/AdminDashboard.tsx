@@ -21,7 +21,6 @@ const EFFORT_ESTIMATES: Record<string, number> = {
     'catalog_schema_table': 1,
     'catalog_schema_table_access': 0.5,
     'service_principal': 2,
-    'marketplace_certification': 8,
     'data_certification': 8,
     'github_repo_creation': 0.5,
     'github_repo_access': 0.5,

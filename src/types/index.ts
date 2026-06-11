@@ -13,7 +13,6 @@ export type RequestType =
   | 'catalog_schema_table_access'
   | 'workspace_provision'
   | 'service_principal'
-  | 'marketplace_certification'
   | 'rest_api_access'
   | 'batch_data_access'
   | 'github_repo_creation'

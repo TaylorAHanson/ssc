@@ -156,13 +156,16 @@ class ValidateSpecInput(BaseModel):
     friendly_label="Validating workflow...",
 )
 async def validate_workflow_spec(graph_spec: Dict[str, Any]) -> Dict[str, Any]:
-    from app.v2.spec_loader import SpecError, validate_spec_dict
+    from app.v2.spec_loader import SpecError, lint_step_tool_args, validate_spec_dict
 
     try:
         validate_spec_dict(graph_spec)
-        return {"valid": True}
     except SpecError as e:
         return {"valid": False, "error": str(e)}
+    # Structurally valid — surface non-blocking arg-name lint so the author
+    # catches wrong/missing tool args (which **kwargs would otherwise swallow).
+    warnings = lint_step_tool_args(graph_spec)
+    return {"valid": True, "warnings": warnings}
 
 
 class PreviewSpecInput(BaseModel):
@@ -189,11 +192,13 @@ async def preview_workflow_spec(
     graph_spec: Dict[str, Any], sample_context: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     from app.v2.dry_run import project_run
+    from app.v2.spec_loader import lint_step_tool_args
 
     try:
-        return {"ok": True, "projection": project_run(graph_spec, sample_context or {})}
+        projection = project_run(graph_spec, sample_context or {})
     except Exception as e:  # noqa: BLE001 - surface to the agent so it can fix the spec
         return {"ok": False, "error": str(e)}
+    return {"ok": True, "projection": projection, "warnings": lint_step_tool_args(graph_spec)}
 
 
 # --------------------------------------------------------------------------
@@ -244,7 +249,7 @@ async def save_workflow_draft(
 ) -> Dict[str, Any]:
     from app.services.workflow_service import WorkflowService
     from app.v2.instructions import render_instructions_markdown
-    from app.v2.spec_loader import SpecError, validate_spec_dict
+    from app.v2.spec_loader import SpecError, lint_step_tool_args, validate_spec_dict
 
     if _authoring_locked():
         return {"ok": False, "locked": True, "error": _LOCKED_MSG}
@@ -253,6 +258,8 @@ async def save_workflow_draft(
         validate_spec_dict(graph_spec)
     except SpecError as e:
         return {"ok": False, "error": f"Invalid graph_spec, not saved: {e}"}
+
+    arg_warnings = lint_step_tool_args(graph_spec)
 
     actor = kwargs.get("_user_email")
     db = _db()
@@ -282,7 +289,7 @@ async def save_workflow_draft(
         else:
             workflow = WorkflowService.create(db, created_by=actor, key=key, **fields)
             action = "created"
-        warnings: List[str] = []
+        warnings: List[str] = list(arg_warnings)
         if not workflow.request_type:
             warnings.append("No request_type set — set one before publishing or the graph won't run.")
         return {

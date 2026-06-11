@@ -196,7 +196,9 @@ def validate_spec(
 ) -> Any:
     """Author-time check of a workflow graph_spec (used by the editor)."""
     _validate_graph_spec(body.graph_spec)
-    return {"valid": True}
+    from app.v2.spec_loader import lint_step_tool_args
+
+    return {"valid": True, "warnings": lint_step_tool_args(body.graph_spec or {})}
 
 
 @router.get("/meta/tools")
@@ -224,11 +226,14 @@ def test_spec(
     """
     _validate_graph_spec(body.graph_spec)
     from app.v2.dry_run import project_run
+    from app.v2.spec_loader import lint_step_tool_args
 
     try:
-        return project_run(body.graph_spec, body.sample_context or {})
+        projection = project_run(body.graph_spec, body.sample_context or {})
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Dry-run failed: {e}")
+    projection["warnings"] = lint_step_tool_args(body.graph_spec or {})
+    return projection
 
 
 @router.post("/{workflow_id}/publish")

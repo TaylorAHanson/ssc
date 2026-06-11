@@ -25,7 +25,7 @@ _DOC_TITLE = "Authoring Workflows (Workflows) — Guide"
 
 # Bump when the canonical guide content changes and you want existing installs to
 # pick it up. The seed only rewrites the doc when its stored revision is older.
-GUIDE_REVISION = 2
+GUIDE_REVISION = 3
 _REVISION_TAG_PREFIX = "guide-rev:"
 
 GUIDE_MARKDOWN = """\
@@ -124,9 +124,22 @@ in the live graph. For divergent multi-step paths, pair `run_if` with
 ## Steps wire to real tools
 
 Call `list_workflow_building_blocks` to see every available step tool with its
-`side_effect_class` and whether it mutates. `validate_workflow_spec` rejects a
+`side_effect_class`, whether it mutates, and — importantly — its real argument
+names (`args`) and which are `required_args`. `validate_workflow_spec` rejects a
 step whose `tool` isn't a real tool. To run, a published workflow's
 **`request_type`** must match a known request type.
+
+### Use the exact arg names
+
+Each tool accepts specific argument names (e.g. `send_notification` takes
+`to_email`, `subject`, `body` — *not* `to`; `spawn_child_request` takes
+`child_type` and `parameters` — *not* `request_type`/`payload`). Because tools
+have a `**kwargs` catch-all, a wrong name is **silently dropped at runtime** and
+the value never reaches the tool. To prevent this, `validate_workflow_spec` and
+`preview_workflow_spec` return a `warnings` list flagging any arg that doesn't
+match the tool's parameters and any required arg you left unset. Treat warnings
+as errors: fix every one (check `list_workflow_building_blocks` → the tool's
+`args`) before saving or publishing.
 
 ## The safe authoring loop
 

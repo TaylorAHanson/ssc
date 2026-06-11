@@ -127,8 +127,16 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
     setValidating(true);
     setValidation(null);
     try {
-      await api.validateSpec(spec);
-      setValidation({ ok: true, msg: 'Valid workflow — ready to publish.' });
+      const res = await api.validateSpec(spec);
+      const warnings = res.warnings ?? [];
+      if (warnings.length > 0) {
+        setValidation({
+          ok: false,
+          msg: `Valid structure, but ${warnings.length} arg warning${warnings.length === 1 ? '' : 's'} (won't reach the tool): ${warnings.join('; ')}`,
+        });
+      } else {
+        setValidation({ ok: true, msg: 'Valid workflow — ready to publish.' });
+      }
     } catch (e) {
       setValidation({ ok: false, msg: e instanceof Error ? e.message : 'Invalid workflow' });
     } finally {
@@ -683,6 +691,45 @@ function StepForm({
         <LabelWithHelp className={labelClass} help="The values passed to the tool. Each argument can be pulled 'From request field', set as 'Fixed text', the 'Entire request', a 'List of fields', or an 'Advanced' raw expression. Field values are filled in from the actual request at run time.">
           Tool arguments
         </LabelWithHelp>
+        {tool && (tool.args?.length ?? 0) > 0 && (() => {
+          const accepted = tool.args ?? [];
+          const required = tool.required_args ?? [];
+          const setKeys = new Set(argEntries.map(([k]) => k));
+          const unknown = argEntries.map(([k]) => k).filter((k) => !accepted.includes(k));
+          return (
+            <div className="text-[11px] text-gray-500 mb-1.5 space-y-1">
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="text-gray-400">Accepts:</span>
+                {accepted.map((a) => {
+                  const isSet = setKeys.has(a);
+                  const isReq = required.includes(a);
+                  return (
+                    <button
+                      key={a}
+                      type="button"
+                      disabled={isSet}
+                      onClick={() => setArgs([...argEntries, [a, { $var: '' }]])}
+                      title={isSet ? 'Already set' : `Add ${a}`}
+                      className={`px-1.5 py-0.5 rounded border text-[10px] ${
+                        isSet
+                          ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-default'
+                          : 'bg-white text-blue-700 border-blue-200 hover:bg-blue-50'
+                      }`}
+                    >
+                      {a}{isReq ? '*' : ''}
+                    </button>
+                  );
+                })}
+                {required.length > 0 && <span className="text-gray-400">(* required)</span>}
+              </div>
+              {unknown.length > 0 && (
+                <div className="text-amber-700">
+                  Not accepted by this tool (dropped at runtime): {unknown.join(', ')}
+                </div>
+              )}
+            </div>
+          );
+        })()}
         <div className="space-y-2">
           {argEntries.map(([key, val], i) => (
             <ArgRow

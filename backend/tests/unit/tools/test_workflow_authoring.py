@@ -21,7 +21,11 @@ def _valid_spec():
         "stages": [
             {"kind": "gate", "name": "manager_approval", "type": "manager"},
             {"kind": "step", "name": "notify", "tool": "send_notification",
-             "approvals": ["manager"], "args": {"subject": {"$literal": "hi"}}},
+             "approvals": ["manager"], "args": {
+                 "subject": {"$literal": "hi"},
+                 "body": {"$literal": "body"},
+                 "to_email": {"$literal": "u@corp.com"},
+             }},
         ],
     }
 
@@ -46,12 +50,30 @@ async def test_building_blocks_lists_real_tools_and_gates():
 @pytest.mark.asyncio
 async def test_validate_accepts_good_and_rejects_unknown_tool():
     ok = await wa.validate_workflow_spec.execute(graph_spec=_valid_spec())
-    assert ok == {"valid": True}
+    assert ok == {"valid": True, "warnings": []}
 
     bad = dict(_valid_spec())
     bad["stages"] = [{"kind": "step", "name": "x", "tool": "not_a_real_tool", "args": {}}]
     res = await wa.validate_workflow_spec.execute(graph_spec=bad)
     assert res["valid"] is False and "not_a_real_tool" in res["error"]
+
+
+@pytest.mark.asyncio
+async def test_validate_warns_on_unknown_and_missing_tool_args():
+    """Structurally valid but the tool would silently drop wrong args (**kwargs)."""
+    spec = {
+        "name": "wf", "complete_fact": "done",
+        "stages": [
+            {"kind": "gate", "name": "g", "type": "manager"},
+            {"kind": "step", "name": "notify", "tool": "send_notification",
+             "approvals": ["manager"], "args": {"to": {"$literal": "x@y"}, "subject": {"$literal": "s"}}},
+        ],
+    }
+    res = await wa.validate_workflow_spec.execute(graph_spec=spec)
+    assert res["valid"] is True
+    joined = " | ".join(res["warnings"])
+    assert "'to' is not accepted" in joined  # wrong name (should be to_email)
+    assert "required arg 'body' is not set" in joined
 
 
 @pytest.mark.asyncio
@@ -135,6 +157,6 @@ async def test_write_tools_refuse_when_authoring_locked(patched_db, monkeypatch)
 async def test_read_tools_still_work_when_locked(patched_db, monkeypatch):
     """Inspection/validation/preview remain available even when locked."""
     monkeypatch.setattr(app_settings, "WORKFLOW_AUTHORING_LOCKED", True)
-    assert (await wa.validate_workflow_spec.execute(graph_spec=_valid_spec())) == {"valid": True}
+    assert (await wa.validate_workflow_spec.execute(graph_spec=_valid_spec())) == {"valid": True, "warnings": []}
     preview = await wa.preview_workflow_spec.execute(graph_spec=_valid_spec(), sample_context={})
     assert preview["ok"] is True

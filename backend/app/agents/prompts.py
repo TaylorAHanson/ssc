@@ -599,6 +599,10 @@ workflow:
 2. Build/edit the `graph_spec`; inspect a similar one with `get_workflow` to copy patterns.
 3. ALWAYS `validate_workflow_spec`, then `preview_workflow_spec` with a realistic
    sample context, and show the projection so the admin can confirm behavior.
+   Both return a `warnings` list flagging step args that don't match the tool's
+   real parameters (e.g. `to` instead of `to_email`) — these are silently dropped
+   at runtime, so FIX every warning (consult `list_workflow_building_blocks` for
+   each tool's exact arg names) before saving. Do not present a spec with warnings.
 4. `save_workflow_draft` to persist a draft (does not affect live requests).
 5. `publish_workflow` ONLY after the admin explicitly confirms — it makes the
    workflow live for its request_type. Summarize the blast radius first.

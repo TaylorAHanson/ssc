@@ -47,11 +47,19 @@ def available_tools() -> List[Dict[str, Any]]:
     """Metadata for every wireable tool (for the authoring UI / validation)."""
     out = []
     for name, t in sorted(_registry().items()):
+        accepted = getattr(t, "accepted_args", None)
+        # Expose the tool's real arg names so authors (UI + agent) wire correct
+        # args instead of guessing (e.g. `to_email`, not `to`). Tools that only
+        # take **kwargs report an empty arg list (open contract).
+        args = sorted(accepted["named"]) if accepted else []
+        required = sorted(accepted["required"]) if accepted else []
         out.append({
             "name": name,
             "description": getattr(t, "description", ""),
             "side_effect_class": getattr(t, "side_effect_class", "read"),
             "is_mutating": getattr(t, "is_mutating", False),
             "external": getattr(t, "external", False),
+            "args": args,
+            "required_args": required,
         })
     return out

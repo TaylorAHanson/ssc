@@ -1655,6 +1655,8 @@ export interface WorkflowTool {
   side_effect_class: string;
   is_mutating: boolean;
   external: boolean;
+  args?: string[];
+  required_args?: string[];
 }
 
 export interface DryRunStage {
@@ -1689,6 +1691,7 @@ export interface DryRunResult {
   stages: DryRunStage[];
   requires_approval: boolean;
   mutating_steps: number;
+  warnings?: string[];
 }
 
 export interface WorkflowVersion {
@@ -1831,7 +1834,7 @@ export async function deleteWorkflow(workflowId: string): Promise<void> {
 
 /** Author-time validation of a workflow graph_spec. Resolves on valid, throws the
  *  backend's detail message (e.g. "stages[1].tool '...' is not a known V2 tool") otherwise. */
-export async function validateSpec(graphSpec: WorkflowGraphSpec): Promise<{ valid: boolean }> {
+export async function validateSpec(graphSpec: WorkflowGraphSpec): Promise<{ valid: boolean; warnings?: string[] }> {
   const response = await fetch(`${API_BASE_URL}/workflows/validate-spec`, {
     method: 'POST',
     headers: getHeaders(),
