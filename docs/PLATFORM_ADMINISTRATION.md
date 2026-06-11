@@ -126,9 +126,9 @@ The workflow **eval harness** compiles every registered graph, proves gates paus
 
 ```bash
 cd backend
-python -m app.v2.harness            # hermetic run + golden compare
-python -m app.v2.harness --capture  # refresh goldens after an intended change
-python -m app.v2.harness --sandbox  # run against a real throwaway workspace (not for CI)
+python -m app.workflows.harness            # hermetic run + golden compare
+python -m app.workflows.harness --capture  # refresh goldens after an intended change
+python -m app.workflows.harness --sandbox  # run against a real throwaway workspace (not for CI)
 ```
 
 ### Governance posture
@@ -160,11 +160,11 @@ Role scoping is enforced at the chat endpoint: tools tagged for admins are filte
 | Visual workflow editor | App → **Admin → Workflows** |
 | Authoring guide (editable) | App → **Admin → Context Catalog → Platform Administration** |
 | Live graph for a request | App → request detail → **Workflow** tab |
-| Workflow definitions (code catalog seed) | `backend/app/v2/graphs/specs.py` |
-| Spec schema / expression language | `backend/app/v2/spec_loader.py`, `backend/app/v2/expr.py` |
+| Workflow definitions (code catalog seed) | `backend/app/workflows/graphs/specs.py` |
+| Spec schema / expression language | `backend/app/workflows/spec_loader.py`, `backend/app/workflows/expr.py` |
 | Governed tool executor | `backend/app/tools/tool_executor.py` |
 | Agent authoring tools | `backend/app/tools/authoring/workflow_authoring.py` |
 | OPA policies (Rego) | `backend/policies/` |
-| Eval harness + goldens | `backend/app/v2/harness.py`, `backend/app/v2/golden_transcripts.json` |
+| Eval harness + goldens | `backend/app/workflows/harness.py`, `backend/app/workflows/golden_transcripts.json` |
 | Governance posture / feature flags | `databricks.yml` variables, `configuration.yaml` |
 | Lock authoring in an environment | `databricks.yml` var `workflow_authoring_locked` (→ `WORKFLOW_AUTHORING_LOCKED`) |

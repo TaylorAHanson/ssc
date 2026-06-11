@@ -1,0 +1,23 @@
+{
+  "key": "report_execution",
+  "name": "report_execution",
+  "complete_fact": "distribution_completed",
+  "stages": [
+    {
+      "kind": "step",
+      "name": "execute",
+      "tool": "execute_report",
+      "args": {"prompts": {"$var": {"path": "prompts", "default": []}}}
+    },
+    {
+      "kind": "step",
+      "name": "distribute",
+      "tool": "send_notification",
+      "success_fact": "distribution_completed",
+      "args": {
+        "subject": {"$var": {"path": "subject", "default": "Report"}},
+        "body": {"$var": {"path": "body", "default": ""}}
+      }
+    }
+  ]
+}

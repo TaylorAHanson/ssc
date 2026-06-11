@@ -205,7 +205,7 @@ class WorkflowService:
         Defaults to importing as **draft** so a promoted workflow is reviewed and
         tested in the target env before it is published.
         """
-        from app.v2.spec_loader import SpecError, validate_spec_dict
+        from app.workflows.spec_loader import SpecError, validate_spec_dict
 
         if not isinstance(bundle, dict) or bundle.get("format") != BUNDLE_FORMAT:
             raise ValueError(f"Unrecognized bundle format (expected {BUNDLE_FORMAT})")
@@ -316,12 +316,12 @@ class WorkflowService:
     def seed_specs_from_catalog(db: Session) -> int:
         """Attach the code spec catalog to Workflows as editable ``graph_spec`` data.
 
-        For each workflow in ``app.v2.graphs.specs.SPECS`` (keyed by RequestType
+        For each workflow in ``app.workflows.graphs.specs.SPECS`` (keyed by RequestType
         value): if a workflow with that key exists, backfill its ``graph_spec`` +
         ``request_type`` only when not already set (never clobbers admin edits);
         otherwise create a published workflow carrying the graph. Idempotent.
         """
-        from app.v2.graphs.specs import SPECS
+        from app.workflows.graphs.specs import SPECS
 
         inserted = 0
         updated = 0

@@ -51,7 +51,7 @@ async def check_resource_access(target_host: str, resource_name: str, principal:
             return {
                 "success": True,
                 "exists": False,
-                "message": f"Resource '{resource_name}' not found in our GitOps configuration. It may not be managed by ATLAS yet.",
+                "message": f"Resource '{resource_name}' not found in our GitOps configuration. It may not be managed by {settings.BRAND_NAME} yet.",
                 "grants": []
             }
         

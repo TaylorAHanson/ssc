@@ -16,7 +16,7 @@ import logging
 from typing import Any, Dict, List
 
 from app.models.request import StateInfo, StateMachineState
-from app.v2.graphs import stage_specs
+from app.workflows.graphs import stage_specs
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +105,8 @@ def _resolve_spec_dict(request, db) -> Dict[str, Any]:
     then the code catalog, then a synthesized shape for dedicated graphs
     (e.g. data_access) so the UI always has something to draw.
     """
-    from app.v2.graphs import published_graph_spec
-    from app.v2.graphs.specs import SPECS
+    from app.workflows.graphs import published_graph_spec
+    from app.workflows.graphs.specs import SPECS
 
     spec = published_graph_spec(db, request.type)
     if spec:
@@ -146,7 +146,7 @@ def live_graph(request, db) -> Dict[str, Any]:
         if stage.get("kind") != "step" or stage.get("run_if") is None:
             return False
         try:
-            from app.v2 import expr
+            from app.workflows import expr
             return not bool(expr.evaluate(stage["run_if"], {"ctx": ctx, "item": None}))
         except Exception:  # noqa: BLE001 - never let a bad expr break the view
             return False

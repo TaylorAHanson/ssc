@@ -4,7 +4,7 @@ A published workflow's ``graph_spec`` must win over the code catalog; a missing 
 malformed DB spec must fall back to code so execution never breaks.
 """
 from app.services.workflow_service import WorkflowService
-from app.v2.graphs import build_graph_for, published_graph_spec
+from app.workflows.graphs import build_graph_for, published_graph_spec
 
 _MINIMAL_SPEC = {
     "name": "workspace_access",

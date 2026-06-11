@@ -1,8 +1,8 @@
 """
 Serializable workflow-spec catalog (the no-code "workflows as data" source).
 
-Every workflow is described as a **JSON-able dict** (see :mod:`app.v2.spec_loader`
-for the schema and :mod:`app.v2.expr` for the expression mini-language). The
+Every workflow is described as a **JSON-able dict** (see :mod:`app.workflows.spec_loader`
+for the schema and :mod:`app.workflows.expr` for the expression mini-language). The
 dicts are the single source of truth: they compile to runtime ``WorkflowSpec``s
 (and durable LangGraph graphs) via :func:`spec_from_dict`, *and* they are what the
 seed writes into a Workflow's ``graph_spec`` so an admin can edit a workflow's gates
@@ -13,8 +13,8 @@ runtime multi-owner resolution is now expressed with a ``resolve_data_owners``
 step + a gate ``approvers_from`` expression rather than a dedicated code graph.
 """
 from app.models.request import RequestType
-from app.v2.spec import build_spec_graph
-from app.v2.spec_loader import spec_from_dict, stage_specs_from_dict
+from app.workflows.spec import build_spec_graph
+from app.workflows.spec_loader import spec_from_dict, stage_specs_from_dict
 
 # Reusable expression fragments (kept readable; these are plain JSON).
 _PARAMS = {"$ctx": True}                                  # the whole context dict

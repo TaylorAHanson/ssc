@@ -5,7 +5,7 @@ This is the bridge that makes "workflows as data" real: an admin authors (or the
 seed imports) a JSON spec, and :func:`spec_from_dict` compiles it into the same
 ``WorkflowSpec`` the generic graph builder already consumes — replacing the
 hand-written Python lambdas with closures over the safe expression evaluator
-(:mod:`app.v2.expr`) and resolving each step's tool by name via the registry.
+(:mod:`app.workflows.expr`) and resolving each step's tool by name via the registry.
 
 :func:`validate_spec_dict` is the author-time gate (used by the API and the seed)
 so malformed specs are rejected before they can be published or run.
@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from app.v2 import expr
-from app.v2.spec import Gate, Step, WorkflowSpec
-from app.v2.tool_registry import get_tool, has_tool
+from app.workflows import expr
+from app.workflows.spec import Gate, Step, WorkflowSpec
+from app.workflows.tool_registry import get_tool, has_tool
 
 # Gate kinds the renderer + executor understand (see render.gate_satisfied).
 GATE_TYPES = {"manager", "platform_admin", "data_owner", "training", "pr_merge", "children"}

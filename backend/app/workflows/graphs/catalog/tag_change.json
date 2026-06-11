@@ -1,0 +1,22 @@
+{
+  "key": "tag_change",
+  "name": "tag_change",
+  "complete_fact": "pr_merged",
+  "stages": [
+    {
+      "kind": "step",
+      "name": "open_pr",
+      "tool": "open_tag_change_pr",
+      "args": {
+        "title": {"$var": {"path": "title", "default": "Tag change"}},
+        "body": {"$var": {"path": "justification", "default": ""}}
+      }
+    },
+    {
+      "kind": "gate",
+      "name": "pr_open",
+      "type": "pr_merge",
+      "waiting_status": "provisioning"
+    }
+  ]
+}

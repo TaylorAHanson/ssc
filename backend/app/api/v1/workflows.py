@@ -96,7 +96,7 @@ def _validate_graph_spec(spec: Optional[Dict[str, Any]]) -> None:
     """Reject malformed workflow graphs before they are saved/published."""
     if spec is None:
         return
-    from app.v2.spec_loader import SpecError, validate_spec_dict
+    from app.workflows.spec_loader import SpecError, validate_spec_dict
 
     try:
         validate_spec_dict(spec)
@@ -116,7 +116,7 @@ def _behavioral_publish_gate(spec: Optional[Dict[str, Any]]) -> None:
     """
     if spec is None:
         return
-    from app.v2.dry_run import project_run
+    from app.workflows.dry_run import project_run
 
     try:
         project_run(spec, {})
@@ -196,7 +196,7 @@ def validate_spec(
 ) -> Any:
     """Author-time check of a workflow graph_spec (used by the editor)."""
     _validate_graph_spec(body.graph_spec)
-    from app.v2.spec_loader import lint_step_tool_args
+    from app.workflows.spec_loader import lint_step_tool_args
 
     return {"valid": True, "warnings": lint_step_tool_args(body.graph_spec or {})}
 
@@ -207,7 +207,7 @@ def list_workflow_tools(
     _: None = Depends(_require_feature),
 ) -> Any:
     """Wireable V2 tools (name + side-effect class) for the workflow editor."""
-    from app.v2.tool_registry import available_tools
+    from app.workflows.tool_registry import available_tools
 
     return available_tools()
 
@@ -225,8 +225,8 @@ def test_spec(
     human, and the exact arguments each step's tool would receive.
     """
     _validate_graph_spec(body.graph_spec)
-    from app.v2.dry_run import project_run
-    from app.v2.spec_loader import lint_step_tool_args
+    from app.workflows.dry_run import project_run
+    from app.workflows.spec_loader import lint_step_tool_args
 
     try:
         projection = project_run(body.graph_spec, body.sample_context or {})

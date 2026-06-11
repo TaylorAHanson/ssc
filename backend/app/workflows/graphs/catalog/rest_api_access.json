@@ -1,0 +1,25 @@
+{
+  "key": "rest_api_access",
+  "name": "rest_api_access",
+  "complete_fact": "workspace_created",
+  "stages": [
+    {
+      "kind": "gate",
+      "name": "platform_admin_approval",
+      "type": "platform_admin",
+      "waiting_status": "manager_approval"
+    },
+    {
+      "kind": "step",
+      "name": "provision",
+      "tool": "create_uc_object",
+      "approvals": ["platform_admin"],
+      "success_fact": "workspace_created",
+      "args": {
+        "object_type": "rest_api_access",
+        "name": {"$var": {"path": "name", "default": ""}},
+        "parameters": {"$ctx": true}
+      }
+    }
+  ]
+}

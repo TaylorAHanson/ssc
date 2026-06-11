@@ -1606,7 +1606,7 @@ export async function deleteFeedback(feedbackId: string): Promise<void> {
 
 // --- Workflows (no-code authoring) ---
 
-/** A JSON expression in the safe spec mini-language (see backend app/v2/expr.py). */
+/** A JSON expression in the safe spec mini-language (see backend app/workflows/expr.py). */
 export type SpecExpr = unknown;
 
 export type GateType =

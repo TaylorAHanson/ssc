@@ -1,0 +1,30 @@
+{
+  "key": "workspace_access",
+  "name": "workspace_access",
+  "complete_fact": "access_granted",
+  "stages": [
+    {
+      "kind": "gate",
+      "name": "manager_approval",
+      "type": "manager",
+      "waiting_status": "manager_approval",
+      "auto_approve": {
+        "$or": [
+          {"$var": "is_auto_approve"},
+          {"$eq": [{"$var": "scope"}, "enterprise"]}
+        ]
+      }
+    },
+    {
+      "kind": "step",
+      "name": "provision",
+      "tool": "add_group_membership",
+      "approvals": ["manager"],
+      "success_fact": "access_granted",
+      "args": {
+        "group": {"$coalesce": [{"$var": "access_group"}, {"$var": "workspace"}]},
+        "members": {"$list": [{"$var": "requested_by_email"}]}
+      }
+    }
+  ]
+}

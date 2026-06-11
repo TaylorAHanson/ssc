@@ -13,6 +13,7 @@ from pydantic_settings import BaseSettings
 from pydantic import field_validator, Field
 from typing import List, Union, Any, Optional
 import os
+import re
 import json
 import yaml
 
@@ -32,6 +33,26 @@ _branding = _yaml_config.get("branding", {})
 _notifications = _yaml_config.get("notifications", {})
 _web_search = _yaml_config.get("web_search", {}) or {}
 
+
+def _slugify_brand(value: str) -> str:
+    """Identifier-safe slug of a brand name (lowercase, hyphen-separated).
+
+    Used for the contexts where the brand surfaces as an identifier rather than
+    display text (git author, repo-name prefixes, etc.) so nothing is hardcoded
+    to a single deployment's name.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", (value or "").lower()).strip("-")
+    return slug or "app"
+
+
+# Resolved once at import: the configurable brand the whole app renders. Falls
+# back to env then a neutral default so an unbranded deploy still works.
+_brand_name = _branding.get("name", os.getenv("BRAND_NAME", "ATLAS"))
+# Short form for identifier-y contexts (repo prefixes, git bot). Defaults to the
+# full name when not separately configured.
+_brand_short_name = _branding.get("short_name", os.getenv("BRAND_SHORT_NAME", _brand_name))
+_brand_slug = _slugify_brand(_brand_short_name)
+
 class Settings(BaseSettings):
     """
     Application settings.
@@ -48,14 +69,17 @@ class Settings(BaseSettings):
     
     # API Settings
     API_V1_PREFIX: str = "/api/v1"
-    PROJECT_NAME: str = f"{_branding.get('name', 'ATLAS')} API"
+    PROJECT_NAME: str = f"{_brand_name} API"
     DESCRIPTION: str = "Agentic Control Tower for Lakehouse Automation & Self-Service Experience"
     VERSION: str = "1.0.0"
     LOG_LEVEL: str = "INFO"
     
     # Branding Settings
     # Loaded from configuration.yaml with fallback to environment variables
-    BRAND_NAME: str = _branding.get("name", os.getenv("BRAND_NAME", "ATLAS"))
+    BRAND_NAME: str = _brand_name
+    # Short, identifier-friendly brand used where the name appears as a slug
+    # rather than display text (e.g. provisioned repo-name prefixes, git author).
+    BRAND_SHORT_NAME: str = _brand_short_name
     BRAND_LOGO_URL: str = _branding.get("logo_url", os.getenv("BRAND_LOGO_URL", ""))
     BRAND_COLOR_PRIMARY: str = _branding.get("primary_color", os.getenv("BRAND_COLOR_PRIMARY", "#FF3621"))
     BRAND_COLOR_SECONDARY: str = _branding.get("secondary_color", os.getenv("BRAND_COLOR_SECONDARY", "#1B5162"))
@@ -286,8 +310,10 @@ class Settings(BaseSettings):
     INFRA_REPO_URL: str = "" # URL of the infrastructure git repository (used for direct Git mode)
     INFRA_REPO_BRANCH: str = "main" # Main branch for infrastructure repo
     DEFAULT_ENVIRONMENT: str = "dev" # Default environment for GitOps (dev, staging, prod)
-    GIT_USERNAME: str = "ATLAS Bot"
-    GIT_EMAIL: str = "atlas-bot@databricks.com"
+    # Git commit author for bot-authored PRs/commits (visible to customers in
+    # their git history). Defaults are brand-derived so nothing hardcodes a name.
+    GIT_USERNAME: str = _branding.get("git_username", os.getenv("GIT_USERNAME", f"{_brand_short_name} Bot"))
+    GIT_EMAIL: str = _branding.get("git_email", os.getenv("GIT_EMAIL", f"{_brand_slug}-bot@databricks.com"))
     GIT_SSH_KEY_PATH: str = "" # Path to SSH key for git operations
     GIT_TOKEN: str = "" # GitHub personal access token for HTTPS auth (fallback)
     GIT_TOKEN_SECRET_SCOPE: str = ""  # Databricks secret scope for PAT
@@ -623,6 +649,27 @@ class Settings(BaseSettings):
             "use_local_binary": not bool(url),
             "policies_dir": (self.OPA_POLICIES_DIR or "policies").strip(),
         }
+
+    @property
+    def brand_slug(self) -> str:
+        """Identifier-safe slug of the (short) brand name."""
+        return _slugify_brand(self.BRAND_SHORT_NAME or self.BRAND_NAME)
+
+    def apply_brand_tokens(self, text: Optional[str]) -> Optional[str]:
+        """Substitute brand placeholders in served text (e.g. workflow instructions).
+
+        Lets bundled, customer-editable content stay brand-neutral: authors write
+        ``{{brand_name}}`` / ``{{brand_short_name}}`` / ``{{brand_slug}}`` and the
+        configured brand is filled in at serve time, so no deployment's name is
+        baked into the defaults.
+        """
+        if not text:
+            return text
+        return (
+            text.replace("{{brand_name}}", self.BRAND_NAME)
+            .replace("{{brand_short_name}}", self.BRAND_SHORT_NAME or self.BRAND_NAME)
+            .replace("{{brand_slug}}", self.brand_slug)
+        )
 
     model_config = {
         "env_file": ".env",

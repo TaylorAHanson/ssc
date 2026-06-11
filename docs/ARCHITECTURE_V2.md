@@ -529,38 +529,38 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
     (`AGENT_TOOL_OPA_ENFORCE`); enforce mode verified to gate `manager`/`admin` approvals.
 - **M2 — Durable engine (DONE, verified).**
   - LangGraph + checkpointer (`langgraph`, `langgraph-checkpoint-sqlite/postgres`).
-  - Checkpointer factory (`backend/app/v2/checkpointer.py`): AsyncSqliteSaver (local) /
+  - Checkpointer factory (`backend/app/workflows/checkpointer.py`): AsyncSqliteSaver (local) /
     AsyncPostgresSaver (Lakebase), thread = `request.id`.
-  - `DurableWorkflowExecutor` (`backend/app/v2/executor.py`) + graph registry
-    (`backend/app/v2/graphs/`). Every graph is generated from the declarative spec
+  - `DurableWorkflowExecutor` (`backend/app/workflows/executor.py`) + graph registry
+    (`backend/app/workflows/graphs/`). Every graph is generated from the declarative spec
     catalog (`graphs/specs.py`) with native `interrupt()` HITL; provisioning runs through
-    the M1 `ToolExecutor` via tools like `grant_uc_access` (`backend/app/v2/tools.py`, kept
+    the M1 `ToolExecutor` via tools like `grant_uc_access` (`backend/app/workflows/tools.py`, kept
     out of `app/tools/` so it isn't chat-exposed pre-capability-scoping).
   - Verified end-to-end: fresh run pauses at approval interrupt; idle tick makes no progress;
     **crash-resume** (new executor instance) resumes from the checkpoint and grants exactly
     once; rejection path terminates. (The old `V2_ENGINE_ENABLED` flag has been removed — V2
     is the only engine; the poller advances these graphs unconditionally.)
 - **M4 — Workflow coverage (DONE, verified).**
-  - Declarative `WorkflowSpec` (gates + steps) -> generic `build_spec_graph` (`app/v2/spec.py`):
+  - Declarative `WorkflowSpec` (gates + steps) -> generic `build_spec_graph` (`app/workflows/spec.py`):
     the "workflows as data" thesis. **All 25 registered request types** are data-defined
-    `graph_spec`s (`app/v2/graphs/specs.py`) — there is no dedicated code-graph path. Data
+    `graph_spec`s (`app/workflows/graphs/specs.py`) — there is no dedicated code-graph path. Data
     access (multi-owner) is expressed with a `resolve_data_owners` step that lifts the
     resolved owners into context (`writes_context`) for a `data_owner` gate's
     `approvers_from` expression, plus a `for_each` grant fan-out.
-  - Provider operations wrapped as mutating V2 tools (`app/v2/tools.py`): `grant_uc_access`,
+  - Provider operations wrapped as mutating V2 tools (`app/workflows/tools.py`): `grant_uc_access`,
     `terraform_plan/apply`, `create_uc_object`, `create_service_principal`, `github_*`,
     `add_group_membership`, `send_notification`, `sentinel_*`, `run_notebook_job`,
     `spawn_child_request`, `update_allowlist`, `execute_report` — each tagged with a
     `side_effect_class`, all executed through the M1 `ToolExecutor`.
-  - Eval/sandbox harness (`app/v2/harness.py`): **25/25 graphs green**, gates pause/resume,
+  - Eval/sandbox harness (`app/workflows/harness.py`): **25/25 graphs green**, gates pause/resume,
     all 24 mutating ops routed through the `ToolExecutor` (no raw provider calls).
 - **M5 — Cutover (DONE, verified).**
   - Poller `_process_request_state_machine` now advances the V2 durable executor and resumes
     gates from approval/event facts (`approval_received`/`training_completed`/`pr_merged`/
     `request_rejected`); only `request.status` is synced for the UI.
-  - V2 UI-state renderer (`app/v2/render.py`) replaces `to_state_machine_state()`; API
+  - V2 UI-state renderer (`app/workflows/render.py`) replaces `to_state_machine_state()`; API
     (`requests.py`, `request_service.py`, `tags.py`) repointed; `build_tag_sql` relocated to
-    `app/v2/tag_sql.py`.
+    `app/workflows/tag_sql.py`.
   - **Legacy engine deleted**: all 23 state-machine packages + `base.py`/`factory.py`/
     `persistence.py`/`decorators.py`/`databricks_job_*` removed. Only `facts.py` (audit/
     idempotency store) and `lock.py` (poller locks) survive in `app/state_machines/`.
@@ -617,10 +617,10 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
   `WorkflowService` CRUD/publish/seed, the pluggable `IdentityGroupProvider`, the `ToolExecutor`
   (shadow vs. enforce posture), and the MLflow tracing no-op path. **Full suite: 155 passed.**
 - **No-code workflow core (DONE).** The execution graph itself is now data, not just the
-  instruction/prompt layer. A safe JSON **expression mini-language** (`app/v2/expr.py`, no
+  instruction/prompt layer. A safe JSON **expression mini-language** (`app/workflows/expr.py`, no
   `eval`/`exec`) replaces the Python lambdas for `args`/`auto_approve`/`for_each`/`item_args`; a
-  **tool registry** (`app/v2/tool_registry.py`) resolves a step's tool by name; and
-  `spec_from_dict` + `validate_spec_dict` (`app/v2/spec_loader.py`) compile a serializable spec
+  **tool registry** (`app/workflows/tool_registry.py`) resolves a step's tool by name; and
+  `spec_from_dict` + `validate_spec_dict` (`app/workflows/spec_loader.py`) compile a serializable spec
   into the same runtime `WorkflowSpec` the graph builder consumes. `graphs/specs.py` is now a
   **`SPECS` dict catalog** (all 22 workflows as data) — the harness still reports 25/25 green with
   identical ToolExecutor counts (31/24), proving parity with the old lambda specs. Workflows gained a
@@ -635,7 +635,7 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
   auto-approve condition builder) and steps (tool picker from `meta/tools`, approvals, expression-aware
   args editor with a raw-JSON escape hatch), and an unsaved-changes guard. `src/lib/workflowSpec.ts`
   translates the `$`-expression language to/from the friendly models.
-- **Author lifecycle: test → ship safely (DONE).** A **dry-run** (`POST /workflows/test-spec` → `app/v2/dry_run.py`)
+- **Author lifecycle: test → ship safely (DONE).** A **dry-run** (`POST /workflows/test-spec` → `app/workflows/dry_run.py`)
   compiles a *draft* spec and walks it against a sample request — evaluating the same expressions the
   executor would, **running no tools and writing nothing** — to project which gates auto-approve and the
   exact args each step receives (sample input is auto-scaffolded from the fields the workflow reads).
@@ -655,14 +655,14 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
   whenever mutating-tool OPA is in shadow. `agent_tools.rego` carves out `execute_workflow` (the entry
   tool) from approval-gating so enforce mode can't deadlock initiation — real infra/data approvals fire
   in-graph. The dead `V2_ENGINE_ENABLED` flag was removed.
-- **Live graph run visualization (DONE).** `GET /api/v1/requests/{id}/graph` (`app/v2/render.py::live_graph`)
+- **Live graph run visualization (DONE).** `GET /api/v1/requests/{id}/graph` (`app/workflows/render.py::live_graph`)
   returns the request's authored `graph_spec` plus per-node live status (`done`/`current`/`pending`/
   `rejected`), derived from the same fact log + status the timeline uses (published DB spec preferred, then
   code catalog, then a synthesized shape). The request-detail modal gained a **Workflow** tab
   (`src/components/RequestGraphView.tsx`) that renders the graph via `WorkflowGraphPreview` with run-state
   rings/badges and polls until terminal.
 - **Eval harness upgrade (DONE).** The harness now captures a **golden transcript** per graph (ordered
-  tool calls + mutating count + gates + final status) to `app/v2/golden_transcripts.json`; the default
+  tool calls + mutating count + gates + final status) to `app/workflows/golden_transcripts.json`; the default
   run compares against it and fails on drift (`--capture` to refresh after intended changes). A
   `--sandbox` mode skips the fakes to run against real providers in a throwaway workspace (not for CI).
   Publish gained a **side-effect-free behavioral gate** (`_behavioral_publish_gate` → dry-run projection)

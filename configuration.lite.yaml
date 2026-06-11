@@ -19,7 +19,10 @@
 #     client_secret_env: "DEV_WS_CLIENT_SECRET"
 
 branding:
-  name: "ATLAS Self-Service Center"
+  name: "Self-Service Center"
+  # Short, identifier-friendly brand used for generated identifiers (repo-name
+  # prefixes, git bot author). Defaults to `name` when omitted.
+  # short_name: "ssc"
   logo_url: ""
   primary_color: "#3253DC"
   secondary_color: "#000000"

@@ -1,0 +1,31 @@
+{
+  "key": "github_repo_access",
+  "name": "github_repo_access",
+  "complete_fact": "provisioning_completed",
+  "stages": [
+    {
+      "kind": "gate",
+      "name": "manager_approval",
+      "type": "manager",
+      "waiting_status": "manager_approval"
+    },
+    {
+      "kind": "gate",
+      "name": "data_owner_approval",
+      "type": "data_owner",
+      "waiting_status": "data_owner_approval"
+    },
+    {
+      "kind": "step",
+      "name": "provision",
+      "tool": "github_set_permissions",
+      "approvals": ["data_owner"],
+      "success_fact": "provisioning_completed",
+      "args": {
+        "repo_name": {"$var": {"path": "repo_name", "default": ""}},
+        "username": {"$var": {"path": "github_username", "default": ""}},
+        "permission": {"$var": {"path": "permission", "default": "push"}}
+      }
+    }
+  ]
+}

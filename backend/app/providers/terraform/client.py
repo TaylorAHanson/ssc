@@ -3,6 +3,7 @@ Terraform provider client (GitOps Pattern).
 """
 from typing import Dict, Any, Optional, List
 from app.providers.base import BaseProvider
+from app.core.config import settings
 from app.core.exceptions import RetryableError, PermanentError
 from app.core.retry import retry_on_retryable
 import os
@@ -117,8 +118,8 @@ class TerraformProvider(BaseProvider):
         self.repo_url = repo_url
         self.main_branch = branch
         self.local_repo_path = self.config.get("local_repo_path", "/tmp/infra-repo")
-        self.username = self.config.get("git_username", "ATLAS Bot")
-        self.email = self.config.get("git_email", "atlas-bot@databricks.com")
+        self.username = self.config.get("git_username", settings.GIT_USERNAME)
+        self.email = self.config.get("git_email", settings.GIT_EMAIL)
         self.ssh_key_path = self.config.get("ssh_key_path")
         self.git_token = self.config.get("git_token")  # GitHub PAT for HTTPS auth
         

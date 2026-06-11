@@ -1,0 +1,48 @@
+{
+  "key": "data_access_request",
+  "name": "data_access",
+  "stages": [
+    {
+      "kind": "step",
+      "name": "resolve_owners",
+      "tool": "resolve_data_owners",
+      "running_status": "data_owner_approval",
+      "writes_context": ["data_owners"],
+      "args": {
+        "assets": {
+          "$coalesce": [
+            {"$var": "assets"},
+            {"$list": [{"$obj": {"asset_name": {"$var": "asset_name"}, "asset_type": {"$var": "asset_type"}}}]}
+          ]
+        },
+        "data_owners": {"$var": "data_owners"}
+      }
+    },
+    {
+      "kind": "gate",
+      "name": "await_approval",
+      "type": "data_owner",
+      "waiting_status": "data_owner_approval",
+      "approvers_from": {"$var": "data_owners"}
+    },
+    {
+      "kind": "step",
+      "name": "provision",
+      "tool": "grant_uc_access",
+      "approvals": ["data_owner"],
+      "success_fact": "access_granted",
+      "for_each": {
+        "$coalesce": [
+          {"$var": "assets"},
+          {"$list": [{"$obj": {"asset_name": {"$var": "asset_name"}, "asset_type": {"$var": "asset_type"}}}]}
+        ]
+      },
+      "item_args": {
+        "asset_type": {"$item": "asset_type"},
+        "asset_name": {"$item": "asset_name"},
+        "principal": {"$var": "requested_by_email"},
+        "access_level": {"$var": "access_level"}
+      }
+    }
+  ]
+}

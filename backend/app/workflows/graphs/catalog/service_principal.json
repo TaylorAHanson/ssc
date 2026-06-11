@@ -1,0 +1,30 @@
+{
+  "key": "service_principal",
+  "name": "service_principal",
+  "complete_fact": "terraform_apply_success",
+  "stages": [
+    {
+      "kind": "step",
+      "name": "plan",
+      "tool": "terraform_plan",
+      "args": {"request_id": {"$var": "request_id"}, "parameters": {"$ctx": true}}
+    },
+    {
+      "kind": "gate",
+      "name": "platform_admin_approval",
+      "type": "platform_admin",
+      "waiting_status": "manager_approval"
+    },
+    {
+      "kind": "step",
+      "name": "apply",
+      "tool": "create_service_principal",
+      "approvals": ["platform_admin"],
+      "success_fact": "terraform_apply_success",
+      "args": {
+        "display_name": {"$var": {"path": "display_name", "default": "sp"}},
+        "parameters": {"$ctx": true}
+      }
+    }
+  ]
+}

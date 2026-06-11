@@ -1,0 +1,25 @@
+{
+  "key": "tag_creation",
+  "name": "tag_creation",
+  "complete_fact": "provisioning_completed",
+  "stages": [
+    {
+      "kind": "gate",
+      "name": "manager_approval",
+      "type": "manager",
+      "waiting_status": "manager_approval"
+    },
+    {
+      "kind": "step",
+      "name": "provision",
+      "tool": "create_uc_object",
+      "approvals": ["manager"],
+      "success_fact": "provisioning_completed",
+      "args": {
+        "object_type": "tag",
+        "name": {"$var": {"path": "tag_key", "default": {"$var": {"path": "name", "default": ""}}}},
+        "parameters": {"$ctx": true}
+      }
+    }
+  ]
+}

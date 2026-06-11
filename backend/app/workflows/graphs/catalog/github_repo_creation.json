@@ -1,0 +1,19 @@
+{
+  "key": "github_repo_creation",
+  "name": "github_repo_creation",
+  "complete_fact": "repo_created",
+  "stages": [
+    {
+      "kind": "step",
+      "name": "provision",
+      "tool": "github_create_repo",
+      "success_fact": "repo_created",
+      "args": {
+        "repo_name": {"$var": {"path": "repo_name", "default": ""}},
+        "template": {"$var": "template"},
+        "description": {"$var": "description"},
+        "visibility": {"$var": {"path": "visibility", "default": "private"}}
+      }
+    }
+  ]
+}

@@ -7,5 +7,5 @@ V2 engine and API:
 
 The V1 state-machine engine (base/factory/persistence/decorators + per-workflow
 state machines) was removed in the V2 LangGraph cutover. Workflows now live as
-durable graphs under ``app.v2``.
+durable graphs under ``app.workflows``.
 """

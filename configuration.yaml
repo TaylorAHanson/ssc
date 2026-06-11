@@ -20,6 +20,15 @@
 
 branding:
   name: "Enterprise Data Hub"
+  # Short, identifier-friendly form of the name used where the brand appears as a
+  # slug rather than display text (e.g. provisioned GitHub repo-name prefixes and
+  # the git commit author for bot PRs). Defaults to `name` when omitted; set this
+  # to keep generated identifiers concise (e.g. "edh").
+  # short_name: "edh"
+  # Optional explicit git commit author for bot-authored PRs/commits. Defaults are
+  # derived from the brand (e.g. "Enterprise Data Hub Bot") when omitted.
+  # git_username: ""
+  # git_email: ""
   # Your organization's wordmark/logo URL. Leave blank to render the name only.
   logo_url: ""
   # Accent blue aligned with the companion Command Center app's design tokens

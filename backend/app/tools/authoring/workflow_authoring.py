@@ -69,7 +69,7 @@ def _db():
     friendly_label="Loading workflow building blocks...",
 )
 async def list_workflow_building_blocks() -> Dict[str, Any]:
-    from app.v2.tool_registry import available_tools
+    from app.workflows.tool_registry import available_tools
 
     return {
         "step_tools": available_tools(),
@@ -156,7 +156,7 @@ class ValidateSpecInput(BaseModel):
     friendly_label="Validating workflow...",
 )
 async def validate_workflow_spec(graph_spec: Dict[str, Any]) -> Dict[str, Any]:
-    from app.v2.spec_loader import SpecError, lint_step_tool_args, validate_spec_dict
+    from app.workflows.spec_loader import SpecError, lint_step_tool_args, validate_spec_dict
 
     try:
         validate_spec_dict(graph_spec)
@@ -191,8 +191,8 @@ class PreviewSpecInput(BaseModel):
 async def preview_workflow_spec(
     graph_spec: Dict[str, Any], sample_context: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    from app.v2.dry_run import project_run
-    from app.v2.spec_loader import lint_step_tool_args
+    from app.workflows.dry_run import project_run
+    from app.workflows.spec_loader import lint_step_tool_args
 
     try:
         projection = project_run(graph_spec, sample_context or {})
@@ -248,8 +248,8 @@ async def save_workflow_draft(
     **kwargs: Any,
 ) -> Dict[str, Any]:
     from app.services.workflow_service import WorkflowService
-    from app.v2.instructions import render_instructions_markdown
-    from app.v2.spec_loader import SpecError, lint_step_tool_args, validate_spec_dict
+    from app.workflows.instructions import render_instructions_markdown
+    from app.workflows.spec_loader import SpecError, lint_step_tool_args, validate_spec_dict
 
     if _authoring_locked():
         return {"ok": False, "locked": True, "error": _LOCKED_MSG}
@@ -328,8 +328,8 @@ class PublishWorkflowInput(BaseModel):
 )
 async def publish_workflow(key: str, **kwargs: Any) -> Dict[str, Any]:
     from app.services.workflow_service import WorkflowService
-    from app.v2.dry_run import project_run
-    from app.v2.spec_loader import validate_spec_dict
+    from app.workflows.dry_run import project_run
+    from app.workflows.spec_loader import validate_spec_dict
 
     if _authoring_locked():
         return {"ok": False, "locked": True, "error": _LOCKED_MSG}

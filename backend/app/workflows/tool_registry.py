@@ -3,7 +3,7 @@ Registry of V2 graph tools, keyed by name.
 
 Data-defined specs reference a step's tool by **name** (a string) instead of an
 imported Python object, so the registry resolves that name back to the concrete
-:class:`~app.tools.mcp.McpTool`. It is built by introspecting ``app.v2.tools``
+:class:`~app.tools.mcp.McpTool`. It is built by introspecting ``app.workflows.tools``
 for decorated tools, which keeps it automatically in sync as tools are added.
 
 ``available_tools()`` powers the authoring UI's tool picker (name + side-effect
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 @lru_cache(maxsize=1)
 def _registry() -> Dict[str, Any]:
-    import app.v2.tools as T
+    import app.workflows.tools as T
     from app.tools.mcp import McpTool
 
     reg: Dict[str, Any] = {}

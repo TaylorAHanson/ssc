@@ -10,6 +10,7 @@ Note: Uses Databricks SDK Files API since UC Volumes are not FUSE-mounted in Dat
 """
 from typing import Dict, Any, Optional
 from app.providers.base import BaseProvider
+from app.core.config import settings
 from app.core.exceptions import RetryableError, PermanentError
 from app.core.retry import retry_on_retryable
 import copy
@@ -63,8 +64,8 @@ class VolumeGitOpsProvider(BaseProvider):
         super().__init__(config)
         self.volume_path = volume_path.rstrip('/')
         self.environment = self.config.get("environment", "dev")
-        self.username = self.config.get("git_username", "ATLAS Bot")
-        self.email = self.config.get("git_email", "atlas-bot@databricks.com")
+        self.username = self.config.get("git_username", settings.GIT_USERNAME)
+        self.email = self.config.get("git_email", settings.GIT_EMAIL)
         self._client = None
 
         logger.info(f"VolumeGitOpsProvider initialized: volume={self.volume_path}, env={self.environment}")

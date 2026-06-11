@@ -1,9 +1,9 @@
-"""Tests for the workflow dry-run projection (app/v2/dry_run.py)."""
+"""Tests for the workflow dry-run projection (app/workflows/dry_run.py)."""
 import pytest
 
-from app.v2.dry_run import project_run
-from app.v2.graphs.specs import SPECS
-from app.v2.spec_loader import SpecError
+from app.workflows.dry_run import project_run
+from app.workflows.graphs.specs import SPECS
+from app.workflows.spec_loader import SpecError
 
 
 def test_projects_workspace_access_auto_approve():

@@ -6,15 +6,15 @@ before they can be published or run.
 """
 import pytest
 
-from app.v2.graphs.specs import SPECS, stage_specs
-from app.v2.spec import Gate, Step, build_spec_graph
-from app.v2.spec_loader import (
+from app.workflows.graphs.specs import SPECS, stage_specs
+from app.workflows.spec import Gate, Step, build_spec_graph
+from app.workflows.spec_loader import (
     SpecError,
     spec_from_dict,
     stage_specs_from_dict,
     validate_spec_dict,
 )
-from app.v2.tool_registry import available_tools, get_tool, has_tool
+from app.workflows.tool_registry import available_tools, get_tool, has_tool
 
 
 # --- tool registry --------------------------------------------------------

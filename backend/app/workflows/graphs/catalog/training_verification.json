@@ -1,0 +1,13 @@
+{
+  "key": "training_verification",
+  "name": "training_verification",
+  "complete_fact": "verification_completed",
+  "stages": [
+    {
+      "kind": "gate",
+      "name": "verifying",
+      "type": "training",
+      "waiting_status": "training_pending"
+    }
+  ]
+}

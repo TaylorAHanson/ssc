@@ -1,0 +1,35 @@
+{
+  "key": "campaign",
+  "name": "campaign",
+  "complete_fact": "campaign_finished",
+  "stages": [
+    {
+      "kind": "gate",
+      "name": "training_pending",
+      "type": "training",
+      "waiting_status": "training_pending",
+      "auto_approve": {"$not": {"$var": "requires_training"}}
+    },
+    {
+      "kind": "step",
+      "name": "spawn",
+      "tool": "spawn_child_request",
+      "for_each": {"$coalesce": [{"$var": "recipients"}, {"$list": [null]}]},
+      "item_args": {
+        "child_type": "simple_email",
+        "parameters": {
+          "$obj": {
+            "to_email": {"$item": true},
+            "subject": {"$var": {"path": "subject", "default": ""}}
+          }
+        }
+      }
+    },
+    {
+      "kind": "gate",
+      "name": "await_children",
+      "type": "children",
+      "waiting_status": "provisioning"
+    }
+  ]
+}

@@ -43,10 +43,10 @@ gate interrupts for HITL and resumes to `completed`, and asserts every mutation
 routed through the shared `ToolExecutor`. Run it directly:
 
 ```bash
-python -m app.v2.harness
+python -m app.workflows.harness
 ```
 
-`tests/unit/v2/test_graph_harness.py` runs this as a subprocess so the suite fails
+`tests/unit/workflows/test_graph_harness.py` runs this as a subprocess so the suite fails
 if any graph regresses.
 
 ### Providers

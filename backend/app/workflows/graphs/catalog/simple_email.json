@@ -1,0 +1,16 @@
+{
+  "key": "simple_email",
+  "name": "simple_email",
+  "stages": [
+    {
+      "kind": "step",
+      "name": "send",
+      "tool": "send_notification",
+      "args": {
+        "subject": {"$var": {"path": "subject", "default": ""}},
+        "body": {"$var": {"path": "body", "default": ""}},
+        "to_email": {"$var": "to_email"}
+      }
+    }
+  ]
+}

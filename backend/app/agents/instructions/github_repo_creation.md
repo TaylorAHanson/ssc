@@ -11,7 +11,7 @@
     *   *Validation*: Alphanumeric with hyphens only.
 4.  **Admin Group**: The LMWS group/list that will be granted admin rights over this repository.
     *   *Enterprise Policy*: Individual users CANNOT be repo admins. It must be an LMWS group/list.
-5.  **Check Availability**: Once you have the domain and project name, **MANDATORY**: Call `check_github_repo` with the name `atlas-{businessdomain}-{projectname}` to ensure it is available.
+5.  **Check Availability**: Once you have the domain and project name, **MANDATORY**: Call `check_github_repo` with the name `{{brand_slug}}-{businessdomain}-{projectname}` to ensure it is available.
     *   If it exists already, ask the user for a different project name.
 6.  **Visibility**: Public (Internal) or Private?
     *   *Options*: `internal`, `private`.
@@ -21,8 +21,8 @@
     *   If they choose a template, use its `name` in the `execute_workflow` call.
 
 ## Naming Convention
-You MUST construct the repository name as: `atlas-{businessdomain}-{projectname}`.
-Before executing, inform the user: "The repository will be created with the name: **atlas-{businessdomain}-{projectname}**".
+You MUST construct the repository name as: `{{brand_slug}}-{businessdomain}-{projectname}`.
+Before executing, inform the user: "The repository will be created with the name: **{{brand_slug}}-{businessdomain}-{projectname}**".
 
 ## Disambiguation
 If you asked multiple questions and the user responds with one or two words and it isn't clear which question they are responding to, ask for clarification.
@@ -43,7 +43,7 @@ Call `execute_workflow` with:
 {
   "workflow_type": "github_repo_creation",
   "parameters": {
-    "repo_name": "atlas-{businessdomain}-{projectname}",
+    "repo_name": "{{brand_slug}}-{businessdomain}-{projectname}",
     "description": "...",
     "admin_group": "...",
     "visibility": "...",

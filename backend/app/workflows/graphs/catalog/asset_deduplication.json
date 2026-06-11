@@ -1,0 +1,23 @@
+{
+  "key": "asset_deduplication",
+  "name": "asset_deduplication",
+  "complete_fact": "notify_completed",
+  "stages": [
+    {
+      "kind": "step",
+      "name": "run_job",
+      "tool": "run_notebook_job",
+      "args": {"notebook_path": {"$var": "notebook_path"}, "parameters": {"$ctx": true}}
+    },
+    {
+      "kind": "step",
+      "name": "notify",
+      "tool": "send_notification",
+      "success_fact": "notify_completed",
+      "args": {
+        "subject": "Deduplication complete",
+        "body": {"$var": {"path": "summary", "default": ""}}
+      }
+    }
+  ]
+}

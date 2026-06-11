@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 import os
 import re
 from app.tools.mcp import tool
+from app.core.config import settings
 from app.core.exceptions import RetryableError
 
 class GetWorkflowInstructionsInput(BaseModel):
@@ -37,7 +38,7 @@ async def get_workflow_instructions(workflow_name: str) -> Dict[str, Any]:
             if workflow and workflow.instructions_markdown:
                 return {
                     "workflow": workflow.key,
-                    "instructions": workflow.instructions_markdown,
+                    "instructions": settings.apply_brand_tokens(workflow.instructions_markdown),
                     "found": True,
                     "source": "workflow",
                 }
@@ -45,7 +46,7 @@ async def get_workflow_instructions(workflow_name: str) -> Dict[str, Any]:
             # graph_spec but no hand-written instructions. Derive a baseline
             # from the spec so the agent isn't handed a blank.
             if workflow and workflow.graph_spec:
-                from app.v2.instructions import render_instructions_markdown
+                from app.workflows.instructions import render_instructions_markdown
 
                 generated = render_instructions_markdown(
                     workflow.graph_spec,
@@ -54,7 +55,7 @@ async def get_workflow_instructions(workflow_name: str) -> Dict[str, Any]:
                 )
                 return {
                     "workflow": workflow.key,
-                    "instructions": generated,
+                    "instructions": settings.apply_brand_tokens(generated),
                     "found": True,
                     "source": "workflow_generated",
                 }
@@ -91,7 +92,7 @@ async def get_workflow_instructions(workflow_name: str) -> Dict[str, Any]:
             
         return {
             "workflow": clean_name,
-            "instructions": content,
+            "instructions": settings.apply_brand_tokens(content),
             "found": True
         }
         

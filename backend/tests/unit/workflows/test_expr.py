@@ -1,7 +1,7 @@
-"""Unit tests for the safe structured-expression evaluator (app/v2/expr.py)."""
+"""Unit tests for the safe structured-expression evaluator (app/workflows/expr.py)."""
 import pytest
 
-from app.v2.expr import ExprError, evaluate, is_operation, validate
+from app.workflows.expr import ExprError, evaluate, is_operation, validate
 
 
 def ev(node, ctx=None, item=None):

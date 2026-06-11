@@ -7,7 +7,7 @@ without needing a database (facts + published-spec lookup are monkeypatched).
 import pytest
 
 from app.models.request import RequestType
-from app.v2 import render
+from app.workflows import render
 
 
 class _Fact:
@@ -27,7 +27,7 @@ class _Req:
 
 def _patch(monkeypatch, facts):
     monkeypatch.setattr("app.state_machines.facts.get_facts", lambda db, rid: facts)
-    monkeypatch.setattr("app.v2.graphs.published_graph_spec", lambda db, rt: None)
+    monkeypatch.setattr("app.workflows.graphs.published_graph_spec", lambda db, rt: None)
 
 
 def test_fresh_request_waits_on_first_gate(monkeypatch):
@@ -97,7 +97,7 @@ class _CondReq:
 def test_conditional_step_skipped_does_not_block(monkeypatch):
     # tier=low -> run_if false -> the notify step is skipped, flow advances.
     monkeypatch.setattr("app.state_machines.facts.get_facts", lambda db, rid: [])
-    monkeypatch.setattr("app.v2.graphs.published_graph_spec", lambda db, rt: _CONDITIONAL_SPEC)
+    monkeypatch.setattr("app.workflows.graphs.published_graph_spec", lambda db, rt: _CONDITIONAL_SPEC)
     out = render.live_graph(_CondReq("provisioning", "low"), db=None)
     ns = out["node_states"]
     assert ns["notify_security"] == "skipped"
@@ -107,7 +107,7 @@ def test_conditional_step_skipped_does_not_block(monkeypatch):
 
 def test_conditional_step_runs_when_predicate_true(monkeypatch):
     monkeypatch.setattr("app.state_machines.facts.get_facts", lambda db, rid: [])
-    monkeypatch.setattr("app.v2.graphs.published_graph_spec", lambda db, rt: _CONDITIONAL_SPEC)
+    monkeypatch.setattr("app.workflows.graphs.published_graph_spec", lambda db, rt: _CONDITIONAL_SPEC)
     out = render.live_graph(_CondReq("provisioning", "high"), db=None)
     ns = out["node_states"]
     # Not skipped; it's the active step (no success_fact recorded for it, but it

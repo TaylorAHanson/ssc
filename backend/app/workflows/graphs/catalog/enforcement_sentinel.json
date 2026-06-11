@@ -1,0 +1,29 @@
+{
+  "key": "enforcement_sentinel",
+  "name": "enforcement_sentinel",
+  "complete_fact": "notify_completed",
+  "stages": [
+    {
+      "kind": "step",
+      "name": "discover",
+      "tool": "sentinel_discover",
+      "args": {"scope": {"$var": "scope"}}
+    },
+    {
+      "kind": "step",
+      "name": "enforce",
+      "tool": "sentinel_enforce",
+      "args": {"enforcement_mode": {"$var": {"path": "enforcement_mode", "default": "audit_only"}}}
+    },
+    {
+      "kind": "step",
+      "name": "notify",
+      "tool": "send_notification",
+      "success_fact": "notify_completed",
+      "args": {
+        "subject": "Enforcement run complete",
+        "body": {"$var": {"path": "summary", "default": ""}}
+      }
+    }
+  ]
+}

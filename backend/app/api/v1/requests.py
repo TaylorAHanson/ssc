@@ -11,7 +11,7 @@ from app.services.request_service import RequestService
 from app.db.session import get_db
 from app.db import ApprovalModel, RequestModel
 from app.state_machines.facts import add_fact
-from app.v2.render import render_state
+from app.workflows.render import render_state
 from datetime import datetime, timezone
 import json
 import logging
@@ -248,7 +248,7 @@ async def get_request_graph(
     if not current_user.has_role("platform_admin") and request.requester_email != current_user.email:
         raise HTTPException(status_code=403, detail="Not authorized to view this request")
 
-    from app.v2.render import live_graph
+    from app.workflows.render import live_graph
     return live_graph(request, db)
 
 
@@ -537,8 +537,8 @@ async def edit_parameters(
     Requires: platform_admin role.
     Only valid when current_state is in the SM's get_editable_states() list.
     """
-    from app.v2.graphs import editable_states as v2_editable_states
-    from app.v2.render import render_state
+    from app.workflows.graphs import editable_states as v2_editable_states
+    from app.workflows.render import render_state
 
     if not current_user.has_role("platform_admin"):
         raise HTTPException(status_code=403, detail="Only platform admins can edit workflow parameters")

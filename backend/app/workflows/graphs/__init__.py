@@ -10,7 +10,7 @@ import logging
 from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
-from app.v2.graphs.specs import (
+from app.workflows.graphs.specs import (
     SPEC_FACTORIES,
     editable_states,
     stage_specs,
@@ -73,8 +73,8 @@ def build_graph_for(request_type, db=None) -> Any:
         spec = published_graph_spec(db, request_type)
         if spec:
             try:
-                from app.v2.spec import build_spec_graph
-                from app.v2.spec_loader import spec_from_dict
+                from app.workflows.spec import build_spec_graph
+                from app.workflows.spec_loader import spec_from_dict
 
                 return build_spec_graph(spec_from_dict(spec))
             except Exception as e:  # noqa: BLE001

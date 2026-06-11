@@ -21,9 +21,9 @@ Golden transcripts:
   * ``--capture`` (re)writes ``golden_transcripts.json`` from the current run.
   * default compares against it and fails on drift.
 
-    python -m app.v2.harness            # hermetic + golden compare (the CI gate)
-    python -m app.v2.harness --capture  # refresh goldens after an intended change
-    python -m app.v2.harness --sandbox  # run against a real sandbox workspace
+    python -m app.workflows.harness            # hermetic + golden compare (the CI gate)
+    python -m app.workflows.harness --capture  # refresh goldens after an intended change
+    python -m app.workflows.harness --sandbox  # run against a real sandbox workspace
 """
 import argparse
 import asyncio
@@ -58,8 +58,8 @@ class _FakeProvider:
 
 def _install_fakes():
     import app.state_machines.facts as facts
-    import app.v2.graphs as graphs
-    import app.v2.tools as T
+    import app.workflows.graphs as graphs
+    import app.workflows.tools as T
 
     facts.add_fact = lambda *a, **k: None
     facts.get_latest_fact = lambda *a, **k: None
@@ -186,8 +186,8 @@ async def main(*, capture: bool = False, sandbox: bool = False) -> int:
 
     te.executor.run = spy_run
 
-    from app.v2.executor import DurableWorkflowExecutor
-    from app.v2.graphs import registered_types
+    from app.workflows.executor import DurableWorkflowExecutor
+    from app.workflows.graphs import registered_types
 
     ex = DurableWorkflowExecutor()
     results: List[Tuple[str, bool, str, int]] = []

@@ -231,7 +231,7 @@ async def setup_github_templates():
                 
                 # 2. Add boilerplate files
                 files = {
-                    "README.md": f"# {template_name} Template\nCreated for ATLAS testing on {datetime.now().isoformat()}",
+                    "README.md": f"# {template_name} Template\nCreated for {settings.BRAND_NAME} testing on {datetime.now().isoformat()}",
                     "databricks.yml": "bundle:\n  name: my-bundle\n\nartifacts:\n  default:\n    type: wheel\n    build: python setup.py bdist_wheel",
                     ".gitignore": "__pycache__/\n*.pyc\n.databricks/\n"
                 }
@@ -271,13 +271,14 @@ async def trigger_github_test():
         from app.db.session import get_session_local
         from app.db.request import RequestModel
         from app.models.request import RequestType, RequestStatus
+        from app.core.config import settings
         from datetime import datetime, timezone
         import uuid
         
         db = get_session_local()()
         try:
             timestamp = datetime.now().strftime("%Y%m%d-%H%M")
-            repo_name = f"atlas-test-project-{timestamp}"
+            repo_name = f"{settings.brand_slug}-test-project-{timestamp}"
             
             request_id = f"req-{uuid.uuid4()}"
             request = RequestModel(

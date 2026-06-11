@@ -694,7 +694,7 @@ async def _process_request_state_machine(db, request: RequestModel):
     we only sync ``request.status`` for the UI.
     """
     from app.models.request import RequestStatus
-    from app.v2.executor import executor as v2_executor, to_request_status
+    from app.workflows.executor import executor as v2_executor, to_request_status
 
     logger.debug(f"[{request.id}] V2 advance - status: {request.status}")
 

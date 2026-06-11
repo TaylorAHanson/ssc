@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.v2.tools import resolve_data_owners
+from app.workflows.tools import resolve_data_owners
 
 
 def _provider_returning(tags_by_asset, owners_by_asset=None):
@@ -29,7 +29,7 @@ def _provider_returning(tags_by_asset, owners_by_asset=None):
 @pytest.mark.asyncio
 async def test_passthrough_when_owners_already_known():
     """Pre-supplied owners short-circuit the lookup (no provider call)."""
-    with patch("app.v2.tools._get_databricks_provider") as get_provider:
+    with patch("app.workflows.tools._get_databricks_provider") as get_provider:
         res = await resolve_data_owners.execute(
             assets=[{"asset_name": "main.s.t", "asset_type": "table"}],
             data_owners=["grp-x"],
@@ -42,7 +42,7 @@ async def test_passthrough_when_owners_already_known():
 async def test_resolves_owners_from_approver_group_tag():
     provider = _provider_returning(
         {"main.sales.orders": {"approver_group": "sales-owners"}})
-    with patch("app.v2.tools._get_databricks_provider", return_value=provider), \
+    with patch("app.workflows.tools._get_databricks_provider", return_value=provider), \
          patch("app.core.config.settings.APPROVER_GROUP_TAG_KEY", "approver_group"):
         res = await resolve_data_owners.execute(
             assets=[{"asset_name": "main.sales.orders", "asset_type": "table"}])
@@ -54,7 +54,7 @@ async def test_falls_back_to_asset_owner_without_tag():
     provider = _provider_returning(
         tags_by_asset={"main.sales.orders": {}},
         owners_by_asset={"main.sales.orders": "alice@corp.com"})
-    with patch("app.v2.tools._get_databricks_provider", return_value=provider), \
+    with patch("app.workflows.tools._get_databricks_provider", return_value=provider), \
          patch("app.core.config.settings.APPROVER_GROUP_TAG_KEY", "approver_group"):
         res = await resolve_data_owners.execute(
             assets=[{"asset_name": "main.sales.orders", "asset_type": "table"}])
@@ -64,7 +64,7 @@ async def test_falls_back_to_asset_owner_without_tag():
 @pytest.mark.asyncio
 async def test_degrades_gracefully_when_provider_unavailable():
     """A provider error must not break the gate — return what we have."""
-    with patch("app.v2.tools._get_databricks_provider",
+    with patch("app.workflows.tools._get_databricks_provider",
                side_effect=RuntimeError("no creds")):
         res = await resolve_data_owners.execute(
             assets=[{"asset_name": "main.s.t", "asset_type": "table"}])
@@ -78,7 +78,7 @@ async def test_deduplicates_and_sorts_multiple_owners():
         "main.a.u": {"approver_group": "team-a"},
         "main.a.v": {"approver_group": "team-b"},  # duplicate
     })
-    with patch("app.v2.tools._get_databricks_provider", return_value=provider), \
+    with patch("app.workflows.tools._get_databricks_provider", return_value=provider), \
          patch("app.core.config.settings.APPROVER_GROUP_TAG_KEY", "approver_group"):
         res = await resolve_data_owners.execute(assets=[
             {"asset_name": "main.a.t", "asset_type": "table"},

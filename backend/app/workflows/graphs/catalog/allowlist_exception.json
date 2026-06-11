@@ -1,0 +1,24 @@
+{
+  "key": "allowlist_exception",
+  "name": "allowlist_exception",
+  "complete_fact": "allowlist_updated",
+  "stages": [
+    {
+      "kind": "gate",
+      "name": "platform_admin_approval",
+      "type": "platform_admin",
+      "waiting_status": "manager_approval"
+    },
+    {
+      "kind": "step",
+      "name": "update",
+      "tool": "update_allowlist",
+      "approvals": ["platform_admin"],
+      "success_fact": "allowlist_updated",
+      "args": {
+        "resource_id": {"$var": "resource_id"},
+        "justification": {"$var": "justification"}
+      }
+    }
+  ]
+}

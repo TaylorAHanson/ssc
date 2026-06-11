@@ -9,7 +9,7 @@ touching the database**. The result is a stage-by-stage projection an admin can
 read to confirm "with this input, who approves and what each step receives".
 
 This is deliberately side-effect free: it only resolves tools by name and runs
-the safe expression evaluator (:mod:`app.v2.expr`), so it is safe to call on an
+the safe expression evaluator (:mod:`app.workflows.expr`), so it is safe to call on an
 unsaved draft from the editor.
 """
 from __future__ import annotations
@@ -17,8 +17,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from app.v2.spec import Gate, Step
-from app.v2.spec_loader import spec_from_dict, validate_spec_dict
+from app.workflows.spec import Gate, Step
+from app.workflows.spec_loader import spec_from_dict, validate_spec_dict
 
 logger = logging.getLogger(__name__)
 

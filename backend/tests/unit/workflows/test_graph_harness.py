@@ -17,7 +17,7 @@ _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_
 
 def test_all_v2_graphs_green():
     proc = subprocess.run(
-        [sys.executable, "-m", "app.v2.harness"],
+        [sys.executable, "-m", "app.workflows.harness"],
         cwd=_BACKEND_DIR,
         capture_output=True,
         text=True,
@@ -37,14 +37,14 @@ def test_all_v2_graphs_green():
     assert calls >= mutating
     # The authored graphs must still match their committed golden transcripts.
     assert "transcripts match golden" in output, (
-        f"transcript drift vs golden (run `python -m app.v2.harness --capture` "
+        f"transcript drift vs golden (run `python -m app.workflows.harness --capture` "
         f"if intended):\n{output}"
     )
 
 
 def test_transcript_diff_detects_drift():
     """The golden diff flags status/tool/gate changes and add/remove of graphs."""
-    from app.v2.harness import _diff_transcripts
+    from app.workflows.harness import _diff_transcripts
 
     golden = {
         "wf_a": {"tools": ["t1"], "mutating": 1, "gates": 1, "status": "completed"},

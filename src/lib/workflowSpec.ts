@@ -1,6 +1,6 @@
 /**
  * Helpers for the visual workflow editor: convert between the backend's safe
- * JSON expression language (app/v2/expr.py) and friendly UI models, and lay a
+ * JSON expression language (app/workflows/expr.py) and friendly UI models, and lay a
  * spec out as a graph for preview.
  *
  * The editor exposes common patterns (a field reference, a literal, the whole

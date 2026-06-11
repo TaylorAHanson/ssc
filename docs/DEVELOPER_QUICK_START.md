@@ -84,7 +84,7 @@ source venv/bin/activate
 # Run all tests
 pytest
 # Run a specific area
-pytest tests/unit/v2/            # V2 engine: graphs, renderer, spec loader, harness
+pytest tests/unit/workflows/            # V2 engine: graphs, renderer, spec loader, harness
 pytest tests/unit/tools/         # governed ToolExecutor + workflow-authoring tools
 ```
 
@@ -97,9 +97,9 @@ Databricks) and is part of the pytest suite, but you can run it directly:
 
 ```bash
 cd backend
-python -m app.v2.harness            # hermetic run + golden compare (the CI gate)
-python -m app.v2.harness --capture  # refresh golden_transcripts.json after an intended change
-python -m app.v2.harness --sandbox  # run against REAL providers in a throwaway workspace (not for CI)
+python -m app.workflows.harness            # hermetic run + golden compare (the CI gate)
+python -m app.workflows.harness --capture  # refresh golden_transcripts.json after an intended change
+python -m app.workflows.harness --sandbox  # run against REAL providers in a throwaway workspace (not for CI)
 ```
 
 ### Authoring & testing workflows (no-code)

@@ -21,8 +21,8 @@ from typing import Any, Dict, Optional
 
 from langgraph.types import Command
 
-from app.v2.checkpointer import build_checkpointer
-from app.v2.graphs import build_graph_for, has_graph
+from app.workflows.checkpointer import build_checkpointer
+from app.workflows.graphs import build_graph_for, has_graph
 
 logger = logging.getLogger(__name__)
 
