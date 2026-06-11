@@ -433,6 +433,45 @@ async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
                 f"Critical error processing request {request_id}: {e}",
                 exc_info=True
             )
+            # Last-resort guard: if even the error handlers blew up, don't let a
+            # poisoned request loop forever. Force it to FAILED on a clean
+            # session so the poller stops re-selecting it.
+            try:
+                db.rollback()
+                req = (
+                    db.query(RequestModel)
+                    .filter(RequestModel.id == request_id)
+                    .first()
+                )
+                if req is not None and req.status not in (
+                    RequestStatus.COMPLETED.value,
+                    RequestStatus.REJECTED.value,
+                    RequestStatus.FAILED.value,
+                ):
+                    req.status = RequestStatus.FAILED.value
+                    req.retry_count = max(req.retry_count or 0, req.max_retries or 0)
+                    req.last_failure = datetime.now(timezone.utc)
+                    req.last_error = {
+                        "error": str(e),
+                        "traceback": traceback.format_exc(),
+                        "permanent": True,
+                        "worker_id": _worker_id,
+                        "note": "force-failed by poller critical-error guard",
+                    }
+                    db.commit()
+                    logger.error(
+                        f"Force-failed request {request_id} after critical error "
+                        "to prevent a retry loop"
+                    )
+            except Exception as guard_err:
+                logger.error(
+                    f"Critical-error guard could not fail request {request_id}: {guard_err}",
+                    exc_info=True,
+                )
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
         finally:
             db.close()
             current_request_id.reset(req_id_token)
@@ -693,7 +732,6 @@ async def _process_request_state_machine(db, request: RequestModel):
     approval/event fact is present. State is owned by the durable checkpointer;
     we only sync ``request.status`` for the UI.
     """
-    from app.models.request import RequestStatus
     from app.workflows.executor import executor as v2_executor, to_request_status
 
     logger.debug(f"[{request.id}] V2 advance - status: {request.status}")
@@ -718,13 +756,89 @@ async def _process_request_state_machine(db, request: RequestModel):
         db.commit()
 
 
+def _mark_request_failed(
+    db: Session,
+    request: RequestModel,
+    error: Exception,
+    worker_id: str,
+    failure_type: str,
+    permanent: bool,
+) -> None:
+    """Durably mark a request FAILED and record a best-effort audit row.
+
+    This is the terminal failure path for both permanent errors and retryable
+    errors that have exhausted their budget. It is deliberately robust against
+    partial DB failures: the FAILED status (and an exhausted retry budget) is
+    persisted even if writing the ``FailureModel`` audit row fails, so a dead
+    request can never be re-selected and looped by the poller.
+    """
+    # Exhaust the retry budget so both the poller's selection query and the
+    # up-front max-retries guard skip this request from now on. Capture the
+    # target into a local so the recovery path below only ever *writes*
+    # attributes (no lazy reload, which can fail after a rollback).
+    target_retry = max(request.retry_count or 0, request.max_retries or 0)
+    last_error = {
+        "error": str(error),
+        "traceback": traceback.format_exc(),
+        "permanent": permanent,
+        "retry_count": target_retry,
+        "worker_id": worker_id,
+    }
+    request.status = RequestStatus.FAILED.value
+    request.retry_count = target_retry
+    request.last_failure = datetime.now(timezone.utc)
+    request.last_error = last_error
+    # Leave current_state untouched so the request stays loadable for the UI.
+
+    try:
+        db.add(
+            FailureModel(
+                id=f"fail-{uuid.uuid4()}",
+                request_id=request.id,
+                task_id=worker_id,
+                failure_type=failure_type,
+                error_message=str(error),
+                error_details=last_error,
+                retry_count=target_retry,
+                occurred_at=datetime.now(timezone.utc),
+                resolved=False,
+            )
+        )
+        db.commit()
+    except Exception as audit_err:
+        # The audit row is best-effort; the FAILED status is not. Roll back the
+        # poisoned transaction and re-commit only the status so we never loop.
+        logger.error(
+            f"Failed to write failure audit row for {request.id}: {audit_err}",
+            exc_info=True,
+        )
+        db.rollback()
+        try:
+            request.status = RequestStatus.FAILED.value
+            request.retry_count = target_retry
+            request.last_failure = datetime.now(timezone.utc)
+            request.last_error = last_error
+            db.commit()
+        except Exception as commit_err:
+            logger.error(
+                f"Could not persist FAILED status for {request.id}: {commit_err}",
+                exc_info=True,
+            )
+            db.rollback()
+
+
 async def _handle_retryable_error(
     db: Session, 
     request: RequestModel, 
     error: RetryableError, 
     worker_id: str
 ):
-    """Handle a retryable error by incrementing retry count and logging."""
+    """Increment the retry count; permanently fail once the budget is exhausted.
+
+    A retryable error that keeps failing must not retry forever: once
+    ``retry_count`` reaches ``max_retries`` we escalate it to a permanent
+    failure via :func:`_mark_request_failed`.
+    """
     request.retry_count += 1
     request.last_failure = datetime.now(timezone.utc)
     request.last_error = {
@@ -733,36 +847,57 @@ async def _handle_retryable_error(
         "retry_count": request.retry_count,
         "worker_id": worker_id
     }
-    
-    # Check if max retries exceeded
+
+    # Budget exhausted -> escalate to a robust permanent failure.
     if request.retry_count >= request.max_retries:
         logger.warning(
-            f"Request {request.id} exceeded max retries ({request.max_retries}), "
-            "marking as failed"
+            f"Request {request.id} exceeded max retries ({request.max_retries}) "
+            f"after repeated retryable errors; failing permanently: {error}"
         )
-        request.status = RequestStatus.FAILED.value
-        # Don't change current_state - keep the last valid state so state machine can still be loaded
-    
-    # Log failure to failures table
-    failure = FailureModel(
-        id=f"fail-{datetime.now(timezone.utc).timestamp()}",
-        request_id=request.id,
-        task_id=worker_id,
-        failure_type="retryable_error",
-        error_message=str(error),
-        error_details=request.last_error,
-        retry_count=request.retry_count,
-        occurred_at=datetime.now(timezone.utc)
+        _mark_request_failed(
+            db, request, error, worker_id,
+            failure_type="retryable_error_exhausted",
+            permanent=False,
+        )
+        await _send_failure_notification(
+            request,
+            f"Exceeded max retries ({request.max_retries}) after error: {error}",
+        )
+        return
+
+    # Still within budget: record the attempt and let the next poll retry.
+    try:
+        db.add(
+            FailureModel(
+                id=f"fail-{uuid.uuid4()}",
+                request_id=request.id,
+                task_id=worker_id,
+                failure_type="retryable_error",
+                error_message=str(error),
+                error_details=request.last_error,
+                retry_count=request.retry_count,
+                occurred_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+    except Exception as audit_err:
+        # Best-effort audit; still persist the incremented retry count so we
+        # make forward progress toward the cap rather than retrying at 0.
+        logger.error(
+            f"Failed to record retryable failure for {request.id}: {audit_err}",
+            exc_info=True,
+        )
+        db.rollback()
+        try:
+            request.retry_count = (request.retry_count or 0) + 1
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    logger.warning(
+        f"Retryable error for request {request.id} "
+        f"(attempt {request.retry_count}/{request.max_retries}): {error}"
     )
-    db.add(failure)
-    db.commit()
-    
-    if request.status == RequestStatus.FAILED.value:
-        await _send_failure_notification(request, f"Exceeded max retries ({request.max_retries}) after error: {error}")
-    else:
-        logger.warning(
-            f"Retryable error for request {request.id} (attempt {request.retry_count}/{request.max_retries}): {error}"
-        )
 
 
 async def _handle_permanent_error(
@@ -771,43 +906,13 @@ async def _handle_permanent_error(
     error: PermanentError, 
     worker_id: str
 ):
-    """Handle a permanent error by marking request as failed."""
-    request.status = RequestStatus.FAILED.value
-    request.retry_count = request.max_retries  # Exhaust retries so poller stops picking it up
-    # Don't change current_state - keep the last valid state so state machine can still be loaded
-    # The status="failed" indicates failure, not the state
-    request.last_error = {
-        "error": str(error),
-        "traceback": traceback.format_exc(),
-        "permanent": True,
-        "worker_id": worker_id
-    }
-    
-    # Log permanent failure
-    failure = FailureModel(
-        id=f"fail-{datetime.now(timezone.utc).timestamp()}",
-        request_id=request.id,
-        task_id=worker_id,
+    """Mark a request FAILED immediately - permanent errors are never retried."""
+    _mark_request_failed(
+        db, request, error, worker_id,
         failure_type="permanent_error",
-        error_message=str(error),
-        error_details=request.last_error,
-        retry_count=request.retry_count,
-        occurred_at=datetime.now(timezone.utc),
-        resolved=False
+        permanent=True,
     )
-    db.add(failure)
-
-    # V2: mark the request failed directly (no state machine to persist).
-    try:
-        from app.models.request import RequestStatus
-        request.status = RequestStatus.FAILED.value
-    except Exception as e:
-        logger.error(f"Failed to mark request {request.id} failed: {e}")
-
-    db.commit()
-    
     logger.error(
         f"Permanent error for request {request.id}, marked as failed: {error}"
     )
-    
     await _send_failure_notification(request, str(error))

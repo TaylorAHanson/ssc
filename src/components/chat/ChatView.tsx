@@ -721,7 +721,14 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             }
             case 'message': {
                 if (!event.content) break;
-                const incomingSig = normalizeForDedup(event.content);
+                // Collapse intra-message self-duplication first. At temperature
+                // 0.0 the model occasionally emits the same block twice *inside a
+                // single message* (most visible for the long, structured replies
+                // the authoring assistant produces). The cross-bubble guards
+                // below only compare whole bubbles, so they can't catch a repeat
+                // that lives within one MessageEvent — this does.
+                const content = collapseSelfDuplication(event.content);
+                const incomingSig = normalizeForDedup(content);
                 const apply = () =>
                     setMessages((prev) => {
                         // Defensive dedup: if the runner re-emits an
@@ -757,7 +764,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                             );
                         if (
                             lastConversational?.kind === 'agent' &&
-                            isLikelyDuplicateAgentMessage(lastConversational.content, event.content)
+                            isLikelyDuplicateAgentMessage(lastConversational.content, content)
                         ) {
                             return prev;
                         }
@@ -767,7 +774,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                             {
                                 kind: 'agent',
                                 id: `${Date.now()}-m`,
-                                content: event.content,
+                                content,
                                 timestamp: new Date().toISOString(),
                             },
                         ];
@@ -1533,6 +1540,78 @@ function isLikelyDuplicateAgentMessage(prevContent: string, incoming: string): b
     const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
     if (shorter.length >= 40 && longer.includes(shorter)) return true;
     return false;
+}
+
+// Collapse an agent message that repeats its own content. We've observed the
+// model (running at temperature 0.0) re-emit the same block twice within a
+// single reply — usually the long, multi-paragraph answers the authoring
+// assistant produces. Returns the de-duplicated text, or the original string
+// untouched when no clean self-duplication is found. Conservative by design:
+// it only collapses when a substantial span repeats *exactly* (whitespace
+// aside), so it can't eat legitimately-repeated short phrases.
+function collapseSelfDuplication(raw: string): string {
+    const text = raw.trim();
+    if (text.length < 120) return raw;
+
+    // Paragraph-aware path: split on blank lines (markdown block boundaries)
+    // and detect either whole-message doubling (first half of blocks repeats
+    // as the second half) or a trailing run of blocks that repeats the run
+    // immediately before it. This preserves the original formatting of the
+    // copy we keep.
+    const blocks = text.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
+    if (blocks.length >= 2) {
+        const sig = blocks.map(normalizeForDedup);
+        const total = sig.join(' ').length;
+        if (blocks.length % 2 === 0 && total >= 60) {
+            const half = blocks.length / 2;
+            let mirror = true;
+            for (let i = 0; i < half; i++) {
+                if (sig[i] !== sig[i + half]) {
+                    mirror = false;
+                    break;
+                }
+            }
+            if (mirror) return blocks.slice(0, half).join('\n\n');
+        }
+        // Trailing repeated run: the last k blocks exactly repeat the k blocks
+        // before them. Take the largest such k.
+        for (let k = Math.floor(blocks.length / 2); k >= 1; k--) {
+            const tail = sig.slice(blocks.length - k);
+            const prev = sig.slice(blocks.length - 2 * k, blocks.length - k);
+            if (
+                tail.length === k &&
+                prev.length === k &&
+                tail.join(' ').length >= 60 &&
+                tail.every((s, i) => s === prev[i])
+            ) {
+                return blocks.slice(0, blocks.length - k).join('\n\n');
+            }
+        }
+    }
+
+    // Single-block fallback: the whole normalized string is "A A" (with the
+    // joining whitespace normalized to at most one space).
+    const n = normalizeForDedup(text);
+    const L = n.length;
+    for (const s of [0, 1]) {
+        if ((L - s) % 2 !== 0) continue;
+        const half = (L - s) / 2;
+        if (half < 60) continue;
+        const prefix = n.slice(0, half);
+        const sep = n.slice(half, half + s);
+        const rest = n.slice(half + s);
+        if (prefix === rest && (s === 0 || sep === ' ')) {
+            // Map the normalized boundary back to the raw string: keep the
+            // shortest raw prefix whose normalized form equals the first copy.
+            for (let i = 1; i < text.length; i++) {
+                if (normalizeForDedup(text.slice(0, i)) === prefix) {
+                    return text.slice(0, i).trim();
+                }
+            }
+        }
+    }
+
+    return raw;
 }
 
 function stringifyResult(result: Record<string, unknown> | null): string {
