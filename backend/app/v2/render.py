@@ -139,10 +139,23 @@ def live_graph(request, db) -> Dict[str, Any]:
     facts = get_facts(db, request.id)
     have = {f.event_type for f in facts}
     status = request.status
+    ctx = getattr(request, "state_context", None) or {}
+
+    def is_skipped(stage: Dict[str, Any]) -> bool:
+        """A conditional step whose run_if is false for this request."""
+        if stage.get("kind") != "step" or stage.get("run_if") is None:
+            return False
+        try:
+            from app.v2 import expr
+            return not bool(expr.evaluate(stage["run_if"], {"ctx": ctx, "item": None}))
+        except Exception:  # noqa: BLE001 - never let a bad expr break the view
+            return False
 
     def satisfied(stage: Dict[str, Any]) -> bool:
         if stage.get("kind") == "gate":
             return _gate_satisfied(stage.get("type"), have, facts)
+        if is_skipped(stage):
+            return True  # skipped steps don't block progression
         sf = stage.get("success_fact")
         return (sf in have) if sf else True
 
@@ -151,7 +164,7 @@ def live_graph(request, db) -> Dict[str, Any]:
 
     if status == "completed":
         for s in stages:
-            node_states[s["name"]] = "done"
+            node_states[s["name"]] = "skipped" if is_skipped(s) else "done"
         node_states["complete"] = "done"
         current = "complete"
     elif status in _TERMINAL:  # rejected / failed
@@ -159,6 +172,8 @@ def live_graph(request, db) -> Dict[str, Any]:
         for s in stages:
             if stopped:
                 node_states[s["name"]] = "pending"
+            elif is_skipped(s):
+                node_states[s["name"]] = "skipped"
             elif satisfied(s):
                 node_states[s["name"]] = "done"
             else:
@@ -172,6 +187,8 @@ def live_graph(request, db) -> Dict[str, Any]:
         for s in stages:
             if found:
                 node_states[s["name"]] = "pending"
+            elif is_skipped(s):
+                node_states[s["name"]] = "skipped"
             elif satisfied(s):
                 node_states[s["name"]] = "done"
             else:

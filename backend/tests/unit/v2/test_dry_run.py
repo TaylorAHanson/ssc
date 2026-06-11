@@ -49,3 +49,32 @@ def test_reports_mutating_step_count():
 def test_invalid_spec_raises():
     with pytest.raises(SpecError):
         project_run({"name": "", "stages": []}, {})
+
+
+def _conditional_spec():
+    return {
+        "name": "conditional_demo",
+        "stages": [
+            {"kind": "step", "name": "notify_security", "tool": "send_notification",
+             "run_if": {"$eq": [{"$var": "tier"}, "high"]},
+             "args": {"to_email": {"$var": "requested_by_email"},
+                      "subject": "hi", "body": "x"}},
+        ],
+    }
+
+
+def test_dry_run_marks_conditional_step_skip_and_run():
+    spec = _conditional_spec()
+
+    skip = project_run(spec, {"tier": "low"})
+    step = skip["stages"][0]
+    assert step["conditional"] is True
+    assert step["will_run"] is False
+    assert step["decision"] == "skip"
+    assert step["calls"] == [] and step["fan_out"] == 0
+
+    run = project_run(spec, {"tier": "high", "requested_by_email": "a@b.com"})
+    step = run["stages"][0]
+    assert step["will_run"] is True
+    assert step["decision"] == "run"
+    assert step["calls"][0]["to_email"] == "a@b.com"

@@ -80,6 +80,9 @@ def _validate_step(stage: Dict[str, Any], where: str) -> None:
     if not isinstance(approvals, list) or not all(isinstance(a, str) for a in approvals):
         raise SpecError(f"{where}.approvals must be a list of strings")
 
+    if "run_if" in stage and stage["run_if"] is not None:
+        _validate_expr(stage["run_if"], f"{where}.run_if", allow_item=False)
+
     args = stage.get("args", {})
     if not isinstance(args, dict):
         raise SpecError(f"{where}.args must be an object")
@@ -157,6 +160,8 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
             if stage.get("for_each") is not None:
                 step.for_each = _for_each_fn(stage["for_each"])
                 step.item_args = _item_args_fn(stage.get("item_args", {}))
+            if stage.get("run_if") is not None:
+                step.run_if = _auto_approve_fn(stage["run_if"])  # bool predicate over ctx
             stages.append(step)
 
     return WorkflowSpec(

@@ -84,13 +84,17 @@ async def list_workflow_building_blocks() -> Dict[str, Any]:
             "step": {"kind": "step", "name": "str", "tool": "a step_tools name",
                      "args": "object of name -> expression", "approvals": "list of prior gate types",
                      "success_fact": "optional", "for_each": "optional expression -> list",
-                     "item_args": "object (per-item), uses $item"},
+                     "item_args": "object (per-item), uses $item",
+                     "run_if": "optional expression -> bool; when false the step is SKIPPED "
+                               "(conditional branching). Omit it to always run."},
         },
         "note": (
             "Reserved stage names: complete, rejected, pending, completed. A step that "
             "runs after a gate should list that gate's type in 'approvals' so policy "
-            "enforcement sees the approval. Consult the Context Catalog guide "
-            "('workflow authoring') for finicky-tool guidance before publishing."
+            "enforcement sees the approval. Use a step's 'run_if' for conditional "
+            "branching (e.g. only notify security when tier == 'high'). Consult the "
+            "Context Catalog guide ('workflow authoring') for finicky-tool guidance "
+            "before publishing."
         ),
     }
 

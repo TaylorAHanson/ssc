@@ -206,6 +206,10 @@ Hard rules:
 - Do not ask the end-user "intake" questions (cost center, justification, target
   workspace, etc.). Those belong to runtime execution, not authoring. Instead,
   ask design questions: what stages/gates, which step tools, what approvals.
+- Runtime instructions (what the self-service agent gathers + how it calls
+  `execute_workflow`) are AUTO-GENERATED from the spec on save, so they are never
+  blank. If the admin wants to tailor the wording, naming conventions, or add
+  required existence checks, pass `instructions_markdown` to `save_workflow_draft`.
 """
 
 

@@ -92,6 +92,29 @@ def test_spec_from_dict_builds_runtime_spec_and_closures():
         "group": "g", "members": ["u@corp.com"]}
 
 
+def test_run_if_validates_and_compiles_predicate():
+    spec = _good_spec()
+    spec["stages"][1]["run_if"] = {"$eq": [{"$var": "tier"}, "high"]}
+    validate_spec_dict(spec)  # no raise
+    compiled = spec_from_dict(spec)
+    step = compiled.stages[1]
+    assert step.run_if is not None
+    assert step.run_if({"tier": "high"}) is True
+    assert step.run_if({"tier": "low"}) is False
+
+
+def test_run_if_rejects_bad_expression():
+    spec = _good_spec()
+    spec["stages"][1]["run_if"] = {"$nope": [1]}
+    with pytest.raises(SpecError, match="run_if"):
+        validate_spec_dict(spec)
+
+
+def test_run_if_absent_means_always_runs():
+    compiled = spec_from_dict(_good_spec())
+    assert compiled.stages[1].run_if is None
+
+
 def test_for_each_and_item_args_closures():
     spec = spec_from_dict({
         "name": "fan_out",

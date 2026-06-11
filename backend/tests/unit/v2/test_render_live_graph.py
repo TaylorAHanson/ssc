@@ -71,3 +71,45 @@ def test_rejected_marks_gate_rejected(monkeypatch):
     assert ns["manager_approval"] == "rejected"
     assert ns["provision"] == "pending"
     assert ns["rejected"] == "rejected"
+
+
+_CONDITIONAL_SPEC = {
+    "name": "conditional",
+    "stages": [
+        {"kind": "step", "name": "notify_security", "tool": "send_notification",
+         "run_if": {"$eq": [{"$var": "tier"}, "high"]},
+         "args": {"subject": "x", "body": "y"}},
+        {"kind": "step", "name": "provision", "tool": "add_group_membership",
+         "success_fact": "access_granted", "args": {}},
+    ],
+}
+
+
+class _CondReq:
+    def __init__(self, status, tier):
+        self.id = "req-c"
+        self.status = status
+        self.type = "conditional"
+        self.created_at = None
+        self.state_context = {"tier": tier}
+
+
+def test_conditional_step_skipped_does_not_block(monkeypatch):
+    # tier=low -> run_if false -> the notify step is skipped, flow advances.
+    monkeypatch.setattr("app.state_machines.facts.get_facts", lambda db, rid: [])
+    monkeypatch.setattr("app.v2.graphs.published_graph_spec", lambda db, rt: _CONDITIONAL_SPEC)
+    out = render.live_graph(_CondReq("provisioning", "low"), db=None)
+    ns = out["node_states"]
+    assert ns["notify_security"] == "skipped"
+    assert ns["provision"] == "current"
+    assert out["current"] == "provision"
+
+
+def test_conditional_step_runs_when_predicate_true(monkeypatch):
+    monkeypatch.setattr("app.state_machines.facts.get_facts", lambda db, rid: [])
+    monkeypatch.setattr("app.v2.graphs.published_graph_spec", lambda db, rt: _CONDITIONAL_SPEC)
+    out = render.live_graph(_CondReq("provisioning", "high"), db=None)
+    ns = out["node_states"]
+    # Not skipped; it's the active step (no success_fact recorded for it, but it
+    # has no success_fact so it's transient — the next unsatisfied stage is current).
+    assert ns["notify_security"] != "skipped"

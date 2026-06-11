@@ -25,7 +25,7 @@ _DOC_TITLE = "Authoring Workflows (Workflows) — Guide"
 
 # Bump when the canonical guide content changes and you want existing installs to
 # pick it up. The seed only rewrites the doc when its stored revision is older.
-GUIDE_REVISION = 1
+GUIDE_REVISION = 2
 _REVISION_TAG_PREFIX = "guide-rev:"
 
 GUIDE_MARKDOWN = """\
@@ -102,6 +102,24 @@ operation; anything else is a literal.
  "for_each": {"$var": "assets"},
  "item_args": {"asset": {"$item": "asset_name"}, "level": {"$var": "access_level"}}}
 ```
+
+## Conditional branching (`run_if`)
+
+A step can be made **conditional**: give it a `run_if` expression that returns a
+boolean. When it evaluates false for a request, the step is **skipped** — its
+tool never runs, no `success_fact` is written, and the workflow continues to the
+next stage. Omit `run_if` to always run.
+
+```json
+{"kind": "step", "name": "notify_security", "tool": "send_notification",
+ "run_if": {"$eq": [{"$var": "tier"}, "high"]},
+ "args": {"subject": "High-tier request", "body": {"$var": "justification"}}}
+```
+
+`preview_workflow_spec` shows each conditional step's `decision` (`run` or
+`skip`) for your sample context, and skipped steps render as a dashed/greyed node
+in the live graph. For divergent multi-step paths, pair `run_if` with
+`spawn_child_request` to route into a dedicated child workflow.
 
 ## Steps wire to real tools
 

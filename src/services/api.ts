@@ -1635,6 +1635,9 @@ export interface WorkflowStepStage {
   args?: Record<string, SpecExpr>;
   for_each?: SpecExpr | null;
   item_args?: Record<string, SpecExpr>;
+  /** Conditional branching: when set, the step runs only if this predicate is
+   *  truthy for the request; otherwise it's skipped. Null/absent = always runs. */
+  run_if?: SpecExpr | null;
 }
 
 export type WorkflowStage = WorkflowGateStage | WorkflowStepStage;
@@ -1661,7 +1664,7 @@ export interface DryRunStage {
   type?: string;
   waiting_status?: string;
   can_auto_approve?: boolean;
-  decision?: 'auto_approve' | 'requires_approval';
+  decision?: 'auto_approve' | 'requires_approval' | 'run' | 'skip';
   // step
   tool?: string;
   is_mutating?: boolean;
@@ -1671,6 +1674,10 @@ export interface DryRunStage {
   fan_out?: number;
   calls?: Record<string, unknown>[];
   truncated?: boolean;
+  /** Step has a run_if predicate (conditional branching). */
+  conditional?: boolean;
+  /** Whether the conditional step will run for the previewed sample input. */
+  will_run?: boolean;
   // shared
   error?: string;
 }

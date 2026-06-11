@@ -447,15 +447,17 @@ function GateForm({
 function ConditionList({
   conditions,
   onChange,
+  heading = 'Auto-approve if ANY of these are true:',
 }: {
   conditions: Condition[];
   onChange: (c: Condition[]) => void;
+  heading?: string;
 }) {
   const update = (i: number, patch: Partial<Condition>) =>
     onChange(conditions.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
   return (
     <div className="space-y-2 pl-2 border-l-2 border-amber-200">
-      <div className="text-[11px] text-gray-500">Auto-approve if ANY of these are true:</div>
+      <div className="text-[11px] text-gray-500">{heading}</div>
       {conditions.map((c, i) => (
         <div key={i} className="flex items-center gap-2">
           <span className="text-[11px] text-gray-400 shrink-0">field</span>
@@ -492,6 +494,90 @@ function ConditionList({
         onClick={() => onChange([...conditions, { field: '', op: 'truthy' }])}>
         <Plus className="w-3.5 h-3.5 mr-1" /> Add condition
       </Button>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Conditional "run this step only when…" editor (reuses the predicate model).
+// run_if === null means the step always runs.
+// --------------------------------------------------------------------------
+const ADVANCED_RUN_IF_SEED = JSON.stringify({ $eq: [{ $var: 'tier' }, 'high'] }, null, 2);
+
+function RunIfEditor({
+  value,
+  onChange,
+}: {
+  value: SpecExpr | null | undefined;
+  onChange: (runIf: SpecExpr | null) => void;
+}) {
+  const model = autoApproveToModel(value);
+  const [advDraft, setAdvDraft] = useState<string | null>(null);
+  const [advError, setAdvError] = useState<string | null>(null);
+
+  const setModel = (m: AutoApproveModel) => {
+    try {
+      onChange(modelToAutoApprove(m));
+    } catch {
+      onChange(value ?? null);
+    }
+  };
+
+  const onAdvancedChange = (text: string) => {
+    setAdvDraft(text);
+    try {
+      onChange(JSON.parse(text));
+      setAdvError(null);
+    } catch {
+      setAdvError('Invalid JSON');
+    }
+  };
+
+  return (
+    <div>
+      <LabelWithHelp className={labelClass} help="Conditional branching: run this step only when a rule about the request holds (e.g. tier equals 'high'). 'Always' runs it every time; 'Only when a condition is met' builds a simple rule; 'Advanced' is a raw expression. Skipped steps don't run their tool and don't block the workflow.">
+        Run this step…
+      </LabelWithHelp>
+      <select
+        className={inputClass}
+        value={model.mode}
+        onChange={(e) => {
+          const mode = e.target.value as AutoApproveModel['mode'];
+          setAdvDraft(null);
+          setAdvError(null);
+          if (mode === 'always') setModel({ mode, conditions: [] });
+          else if (mode === 'conditions')
+            setModel({ mode, conditions: model.conditions.length ? model.conditions : [{ field: '', op: 'truthy' }] });
+          else {
+            const seed = model.raw || ADVANCED_RUN_IF_SEED;
+            setAdvDraft(seed);
+            setModel({ mode, conditions: [], raw: seed });
+          }
+        }}
+      >
+        <option value="always">Always — run every time</option>
+        <option value="conditions">Only when a condition is met</option>
+        <option value="advanced">Advanced (raw expression)</option>
+      </select>
+
+      {model.mode === 'conditions' && (
+        <ConditionList
+          heading="Run this step if ANY of these are true:"
+          conditions={model.conditions}
+          onChange={(conditions) => setModel({ mode: 'conditions', conditions })}
+        />
+      )}
+      {model.mode === 'advanced' && (
+        <div className="mt-2">
+          <textarea
+            className="w-full border border-gray-300 rounded-md p-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+            rows={5}
+            value={advDraft ?? model.raw ?? ''}
+            onChange={(e) => onAdvancedChange(e.target.value)}
+          />
+          {advError && <div className="text-[11px] text-red-500 mt-1">{advError}</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -587,6 +673,11 @@ function StepForm({
           </div>
         </div>
       )}
+
+      <RunIfEditor
+        value={step.run_if}
+        onChange={(runIf) => onChange({ run_if: runIf })}
+      />
 
       <div>
         <LabelWithHelp className={labelClass} help="The values passed to the tool. Each argument can be pulled 'From request field', set as 'Fixed text', the 'Entire request', a 'List of fields', or an 'Advanced' raw expression. Field values are filled in from the actual request at run time.">

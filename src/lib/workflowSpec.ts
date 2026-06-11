@@ -254,11 +254,17 @@ export function specToFlow(spec: WorkflowGraphSpec): { nodes: FlowNode[]; edges:
       edges.push({ id: `${prev}->${id}`, source: prev, target: id });
       edges.push({ id: `${id}->rejected`, source: id, target: 'rejected', label: 'reject', tone: 'reject' });
     } else {
-      const step = s as WorkflowStage & { tool?: string };
+      const step = s as WorkflowStage & { tool?: string; run_if?: unknown };
+      const conditional = step.run_if !== undefined && step.run_if !== null;
       nodes.push({
-        id, label: s.name, sublabel: (step as { tool?: string }).tool, kind: 'step', x: COL_X, y: row * ROW,
+        id,
+        label: s.name,
+        sublabel: conditional ? `${step.tool ?? ''} (conditional)` : step.tool,
+        kind: 'step',
+        x: COL_X,
+        y: row * ROW,
       });
-      edges.push({ id: `${prev}->${id}`, source: prev, target: id });
+      edges.push({ id: `${prev}->${id}`, source: prev, target: id, label: conditional ? 'if' : undefined });
     }
     prev = id;
   });
@@ -310,10 +316,11 @@ export function collectVarPaths(spec: WorkflowGraphSpec): string[] {
     if (s.kind === 'gate') {
       collectFromNode(s.auto_approve, out);
     } else {
-      const step = s as { args?: Record<string, unknown>; for_each?: unknown; item_args?: Record<string, unknown> };
+      const step = s as { args?: Record<string, unknown>; for_each?: unknown; item_args?: Record<string, unknown>; run_if?: unknown };
       if (step.args) Object.values(step.args).forEach((v) => collectFromNode(v, out));
       collectFromNode(step.for_each, out);
       if (step.item_args) Object.values(step.item_args).forEach((v) => collectFromNode(v, out));
+      collectFromNode(step.run_if, out);
     }
   }
   out.delete('');

@@ -17,7 +17,7 @@ import { CheckCircle2, GitBranch, Play, Wrench, XCircle } from 'lucide-react';
 import type { WorkflowGraphSpec } from '../../services/api';
 import { specToFlow, type FlowNode } from '../../lib/workflowSpec';
 
-export type RunState = 'done' | 'current' | 'pending' | 'rejected';
+export type RunState = 'done' | 'current' | 'pending' | 'rejected' | 'skipped';
 
 interface PreviewNodeData {
   label: string;
@@ -35,12 +35,14 @@ const RUN_RING: Record<RunState, string> = {
   current: 'ring-2 ring-accent animate-pulse',
   pending: 'opacity-50',
   rejected: 'ring-2 ring-red-400',
+  skipped: 'ring-1 ring-gray-300 opacity-60 [border-style:dashed]',
 };
 const RUN_DOT: Record<RunState, string> = {
   done: 'bg-green-500',
   current: 'bg-accent',
   pending: 'bg-gray-300',
   rejected: 'bg-red-500',
+  skipped: 'bg-gray-400',
 };
 
 const KIND_STYLES: Record<FlowNode['kind'], { border: string; bg: string; icon: ReactNode }> = {

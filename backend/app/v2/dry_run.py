@@ -78,7 +78,24 @@ def project_run(
                 "side_effect_class": getattr(step.tool, "side_effect_class", "read"),
                 "approvals": list(step.approvals),
                 "success_fact": step.success_fact,
+                "conditional": step.run_if is not None,
             }
+            # Conditional branching projection: will this step run for this input?
+            will_run = True
+            if step.run_if is not None:
+                try:
+                    will_run = bool(step.run_if(ctx))
+                except Exception as e:  # noqa: BLE001 - surface eval errors to the author
+                    will_run = True
+                    entry["error"] = str(e)
+            entry["will_run"] = will_run
+            entry["decision"] = "run" if will_run else "skip"
+            if not will_run:
+                # Skipped: no tool call, no fan-out — make that explicit.
+                entry["fan_out"] = 0
+                entry["calls"] = []
+                stages_out.append(entry)
+                continue
             try:
                 if step.for_each is not None:
                     items = step.for_each(ctx) or []

@@ -61,6 +61,11 @@ class Step:
     item_args: Optional[Callable[[Dict[str, Any], Any], Dict[str, Any]]] = None
     # Optional fact to write on success (UI parity, e.g. "access_granted").
     success_fact: Optional[str] = None
+    # Optional predicate of context: when present and false, the step is SKIPPED
+    # (its tool never runs and no success_fact is written). Enables conditional
+    # branching — e.g. only run an extra approval/notification step for certain
+    # request shapes. When None, the step always runs.
+    run_if: Optional[Callable[[Dict[str, Any]], bool]] = None
 
 
 Stage = Union[Gate, Step]
@@ -121,6 +126,14 @@ def _step_node(step: Step):
         principal = ctx.get("requested_by_email")
         results = dict(state.get("results", {}))
         step_results: List[Any] = []
+
+        # Conditional branching: skip the step entirely when its run_if predicate
+        # is false. The graph edge to the next node is unconditional, so flow
+        # continues; we record a skip marker (no tool run, no success_fact).
+        if step.run_if is not None and not step.run_if(ctx):
+            logger.info("[%s] step '%s' skipped (run_if=false)", request_id, step.name)
+            results[step.name] = {"skipped": True}
+            return {"results": results, "status": step.running_status}
 
         items = step.for_each(ctx) if step.for_each else [None]
         db = next(get_db())

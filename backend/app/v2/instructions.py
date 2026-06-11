@@ -110,7 +110,8 @@ def render_instructions_markdown(
                 lines.append(f"- **Gate** — {desc}{auto}")
             else:
                 tool = s.get("tool") or "(provision)"
-                lines.append(f"- **Step** — `{tool}` ({_humanize(s.get('name', ''))})")
+                cond = " — _conditional; runs only when its rule matches_" if s.get("run_if") else ""
+                lines.append(f"- **Step** — `{tool}` ({_humanize(s.get('name', ''))}){cond}")
         lines.append("")
 
     # Execution template.
