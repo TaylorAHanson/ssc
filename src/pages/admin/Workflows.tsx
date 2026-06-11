@@ -25,6 +25,7 @@ import {
   History,
   Download,
   Upload,
+  ArrowLeft,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import type { Workflow, WorkflowInput, WorkflowGraphSpec, WorkflowTool } from '../../services/api';
@@ -103,6 +104,11 @@ export function Workflows() {
   const workflowParam = searchParams.get('workflow');
   const tab: 'details' | 'workflow' =
     searchParams.get('tab') === 'workflow' ? 'workflow' : 'details';
+  // Master/detail: with no workflow open we show the full-width list; opening
+  // (or creating) one swaps to a full-page editor — both the Details and Graph
+  // tabs get the whole canvas. A pending `new=1` flag keeps "New workflow" (and
+  // agent-drafted, not-yet-saved specs) in the editor before they have an id.
+  const editing = !!workflowParam || searchParams.get('new') === '1';
   const loadedIdRef = useRef<string | null>(null);
   const keyInputRef = useRef<HTMLInputElement | null>(null);
   // Bumped by "New workflow" to focus + scroll the editor into view, so the button
@@ -203,7 +209,17 @@ export function Workflows() {
           graph_spec: spec,
         };
       });
-      setTab('workflow');
+      // Show the editor full-page so the admin watches the design take shape.
+      // Before a save there's no id, so flag `new=1` to keep us in edit view.
+      setSearchParams(
+        (prev) => {
+          const params = new URLSearchParams(prev);
+          params.set('tab', 'workflow');
+          if (!params.get('workflow')) params.set('new', '1');
+          return params;
+        },
+        { replace: true },
+      );
     }
 
     // 2) On a successful persist, reload and open the canonical record.
@@ -254,11 +270,33 @@ export function Workflows() {
     setSearchParams(
       (prev) => {
         const params = new URLSearchParams(prev);
-        if (id) params.set('workflow', id);
-        else params.delete('workflow');
+        if (id) {
+          params.set('workflow', id);
+          params.delete('new');
+        } else {
+          params.delete('workflow');
+        }
         return params;
       },
       opts,
+    );
+  };
+
+  // Leave the full-page editor and return to the list. Resets the form first so
+  // the URL effect (which also guards unsaved edits) doesn't double-prompt.
+  const backToList = () => {
+    if (!confirmDiscard()) return;
+    loadedIdRef.current = null;
+    setFormBaselined(emptyForm);
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev);
+        params.delete('workflow');
+        params.delete('new');
+        params.delete('tab');
+        return params;
+      },
+      { replace: true },
     );
   };
 
@@ -358,6 +396,7 @@ export function Workflows() {
     setSearchParams((prev) => {
       const params = new URLSearchParams(prev);
       params.delete('workflow');
+      params.set('new', '1');
       params.set('tab', 'details');
       return params;
     });
@@ -430,6 +469,7 @@ export function Workflows() {
       setSearchParams((prev) => {
         const params = new URLSearchParams(prev);
         params.set('workflow', created.id);
+        params.delete('new');
         params.set('tab', 'details');
         return params;
       });
@@ -534,9 +574,9 @@ export function Workflows() {
         </div>
       )}
 
-      <div className={`grid grid-cols-1 gap-6 ${tab === 'workflow' ? '' : 'lg:grid-cols-3'}`}>
-        {/* List */}
-        <Card className={tab === 'workflow' ? 'hidden' : 'lg:col-span-1'}>
+      <div className="grid grid-cols-1 gap-6">
+        {/* List — the full-width "master" view shown when no workflow is open. */}
+        <Card className={editing ? 'hidden' : ''}>
           <CardHeader>
             <CardTitle className="text-base">All workflows</CardTitle>
             <CardDescription>{workflows.length} total</CardDescription>
@@ -602,11 +642,22 @@ export function Workflows() {
           </CardContent>
         </Card>
 
-        {/* Editor */}
-        <Card className={tab === 'workflow' ? '' : 'lg:col-span-2'}>
+        {/* Editor — the full-page "detail" view. Both inner tabs (Details and
+            Graph) get the whole width. */}
+        <Card className={editing ? '' : 'hidden'}>
           <CardHeader>
             <div className="flex items-start justify-between gap-3">
-              <div>
+              <div className="flex items-start gap-2 min-w-0">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={backToList}
+                  title="Back to all workflows"
+                  className="shrink-0 -ml-2 text-gray-500"
+                >
+                  <ArrowLeft className="w-4 h-4 mr-1" /> Workflows
+                </Button>
+                <div className="min-w-0">
                 <CardTitle className="text-base">
                   {form.id ? `Edit: ${form.key}` : 'New workflow'}
                 </CardTitle>
@@ -634,6 +685,7 @@ export function Workflows() {
                     'Define a new agent capability.'
                   )}
                 </CardDescription>
+                </div>
               </div>
               {form.id && (
                 <div className="flex items-center gap-1 shrink-0">
