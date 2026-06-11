@@ -93,3 +93,53 @@ def test_seed_from_filesystem_is_idempotent(db_session):
     # Second run must be a no-op (never clobbers admin edits).
     second = WorkflowService.seed_from_filesystem(db_session)
     assert second == 0
+
+
+# --- data-driven request-type registry -----------------------------------
+
+def test_known_request_types_includes_catalog_and_published(db_session):
+    """Known types come from the bundled catalog + published DB workflows +
+    system constants — no enum gate."""
+    from app.workflows.graphs.specs import SPECS
+
+    known = WorkflowService.known_request_types(db_session)
+    # Bundled defaults are valid even before any seeding runs.
+    assert SPECS.keys() <= known
+    # System constants are always known.
+    assert {"enforcement_sentinel", "report_execution", "tag_change"} <= known
+
+    # Publishing a brand-new type makes it known with no code change.
+    WorkflowService.create(db_session, key="brand_new_flow", name="New",
+                           request_type="brand_new_flow", status="published")
+    refreshed = WorkflowService.known_request_types(db_session)
+    assert "brand_new_flow" in refreshed
+
+
+def test_is_known_request_type(db_session):
+    assert WorkflowService.is_known_request_type(db_session, "workspace_access") is True
+    assert WorkflowService.is_known_request_type(db_session, "totally_made_up") is False
+    assert WorkflowService.is_known_request_type(db_session, "") is False
+    assert WorkflowService.is_known_request_type(db_session, None) is False
+
+
+def test_spec_requires_training_derived_from_training_gate(db_session):
+    # workspace_provision has a training gate in the bundled catalog.
+    assert WorkflowService.spec_requires_training(db_session, "workspace_provision") is True
+    # workspace_access has no training gate.
+    assert WorkflowService.spec_requires_training(db_session, "workspace_access") is False
+    # Unknown / instruction-only types have no executable spec -> no training.
+    assert WorkflowService.spec_requires_training(db_session, "totally_made_up") is False
+
+
+def test_effective_spec_prefers_published_db_graph(db_session):
+    """A published DB graph_spec overrides the bundled code catalog."""
+    override = {"name": "workspace_access", "stages": [
+        {"kind": "gate", "name": "training_pending", "type": "training"},
+    ]}
+    WorkflowService.create(db_session, key="workspace_access", name="WS",
+                           request_type="workspace_access", graph_spec=override,
+                           status="published")
+    spec = WorkflowService.effective_spec(db_session, "workspace_access")
+    assert spec == override
+    # ...and the training derivation now follows the published override.
+    assert WorkflowService.spec_requires_training(db_session, "workspace_access") is True

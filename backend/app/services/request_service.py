@@ -4,8 +4,9 @@ Request business logic service.
 from typing import Optional
 from sqlalchemy.orm import Session
 from app.db.request import RequestModel
-from app.models.request import RequestType, RequestCreate, Request
+from app.models.request import RequestCreate
 from app.models.request import RequestStatus
+from app.services.workflow_service import WorkflowService
 from datetime import datetime, timezone
 import uuid
 
@@ -18,26 +19,29 @@ class RequestService:
         """
         Create a new request and initialize state machine.
         """
-        # Double check enum validation (Pydantic does this, but being explicit)
-        if not isinstance(request_data.type, RequestType):
-            try:
-                # Try to cast/validate if it's a string
-                request_data.type = RequestType(request_data.type)
-            except ValueError:
-                raise ValueError(f"Invalid request type: {request_data.type}")
+        # Request types are data-driven: validate against the published-workflow
+        # registry + bundled catalog instead of a fixed enum.
+        req_type = request_data.type
+        if not WorkflowService.is_known_request_type(db, req_type):
+            raise ValueError(
+                f"Unknown request type '{req_type}'. Author and publish a workflow "
+                f"with this type before submitting requests for it."
+            )
 
         request_id = f"req-{uuid.uuid4()}"
         
         # Create minimal database model first (needed for SM init)
         request = RequestModel(
             id=request_id,
-            type=request_data.type.value,
+            type=req_type,
             title=request_data.title,
             status="pending",
             current_state="pending",
             state_context=request_data.metadata or {},
             requester_email=request_data.requester_email,
-            requires_training=request_data.type == RequestType.WORKSPACE_PROVISION,
+            # Derived from the workflow's own definition (has a training gate?),
+            # not a hardcoded per-type check.
+            requires_training=WorkflowService.spec_requires_training(db, req_type),
             environment=request_data.environment.value if request_data.environment else None,
             conversation=request_data.conversation,
             created_at=datetime.now(timezone.utc),

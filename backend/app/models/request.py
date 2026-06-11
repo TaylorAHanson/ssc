@@ -24,33 +24,18 @@ class RequestStatus(str, Enum):
 
 
 class RequestType(str, Enum):
-    """Request type enumeration."""
-    WORKSPACE_ACCESS = "workspace_access"
-    CATALOG_SCHEMA_TABLE = "catalog_schema_table"
-    CATALOG_SCHEMA_TABLE_ACCESS = "catalog_schema_table_access"
-    WORKSPACE_PROVISION = "workspace_provision"
-    SERVICE_PRINCIPAL = "service_principal"
-    DATA_CERTIFICATION = "data_certification" # Legacy, keep for enum compatibility
-    REST_API_ACCESS = "rest_api_access"
-    BATCH_DATA_ACCESS = "batch_data_access"
-    GITHUB_REPO_CREATION = "github_repo_creation"
-    PROJECT_ONBOARDING = "project_onboarding"
-    DATA_ACCESS_REQUEST = "data_access_request"
-    SIMPLE_EMAIL = "simple_email"
-    CAMPAIGN = "campaign"
-    REPORT_EXECUTION = "report_execution"
+    """System-triggered request types referenced by name in code.
+
+    Request types are **data-driven**: a request's ``type`` is a free string
+    validated at creation against the published-workflow registry (DB) + the
+    bundled JSON spec catalog — adding a workflow needs no entry here. This enum
+    is intentionally slim, holding only the few workflows the platform itself
+    triggers internally (cron/poller/system) so that code can reference them by
+    a named constant instead of a magic string.
+    """
     ENFORCEMENT_SENTINEL = "enforcement_sentinel"
-    ASSET_DEDUPLICATION = "asset_deduplication"
-    ALLOWLIST_EXCEPTION = "allowlist_exception"
-    TAG_CREATION = "tag_creation"
+    REPORT_EXECUTION = "report_execution"
     TAG_CHANGE = "tag_change"
-    CREDENTIAL_CREATION = "credential_creation"
-    VOLUME_CREATION = "volume_creation"
-    WORKSPACE_FOLDER_CREATION = "workspace_folder_creation"
-    GITHUB_REPO_ACCESS = "github_repo_access"
-    REUSABLE_ASSETS = "reusable_assets"
-    TRAINING_LINKS = "training_links"
-    TRAINING_VERIFICATION = "training_verification"
 
 
 class Environment(str, Enum):
@@ -108,7 +93,7 @@ class Approval(BaseModel):
     id: str
     requestId: str
     requestTitle: str
-    requestType: RequestType
+    requestType: str  # data-driven workflow type (validated against the registry)
     approvalType: str
     requestedBy: str
     requestedByEmail: str
@@ -134,7 +119,7 @@ class Approval(BaseModel):
 class Request(BaseModel):
     """Request model."""
     id: str
-    type: RequestType
+    type: str  # data-driven workflow type (validated against the registry)
     title: str
     status: RequestStatus
     createdAt: datetime
@@ -152,7 +137,7 @@ class Request(BaseModel):
 
 class RequestCreate(BaseModel):
     """Request creation model."""
-    type: RequestType
+    type: str  # data-driven workflow type (validated against the registry)
     title: str
     requester_email: Optional[str] = None
     environment: Optional[Environment] = None

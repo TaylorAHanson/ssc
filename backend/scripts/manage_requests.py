@@ -17,7 +17,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sqlalchemy.orm import Session
 from app.db.session import get_lakebase_session
 from app.db import RequestModel, ApprovalModel, EventModel, FailureModel
-from app.models.request import RequestType, RequestCreate, Environment
+from app.models.request import RequestCreate, Environment
 from app.services.request_service import RequestService
 
 logging.basicConfig(level=logging.INFO)
@@ -41,17 +41,18 @@ def clear_data(db: Session):
 async def seed_data(db: Session):
     """Generate 10 mock requests."""
     print("Seeding 10 mock requests...")
+    # Request types are data-driven strings (validated against the registry).
     types = [
-        (RequestType.WORKSPACE_PROVISION, "New Data Lab: Project Phoenix", Environment.DEV),
-        (RequestType.DATA_ACCESS_REQUEST, "Access to Sales Leads 2024", Environment.PROD),
-        (RequestType.GITHUB_REPO_CREATION, "Repository for ML-Pipeline-V2", Environment.TEST),
-        (RequestType.SERVICE_PRINCIPAL, "Service Principal for ADF Integration", Environment.STAGE),
-        (RequestType.PROJECT_ONBOARDING, "Team Onboarding: Finance Analytics", Environment.DEV),
-        (RequestType.WORKSPACE_ACCESS, "Access to Enterprise-Dev Workspace", Environment.DEV),
-        (RequestType.CATALOG_SCHEMA_TABLE, "Create Gold Catalog for Marketing", Environment.PROD),
-        (RequestType.WORKSPACE_PROVISION, "Sandbox for Spark Experiments", Environment.TEST),
-        (RequestType.DATA_ACCESS_REQUEST, "PII Data Access for Audit", Environment.PROD),
-        (RequestType.GITHUB_REPO_CREATION, "New Repo for Infra-as-Code", Environment.STAGE)
+        ("workspace_provision", "New Data Lab: Project Phoenix", Environment.DEV),
+        ("data_access_request", "Access to Sales Leads 2024", Environment.PROD),
+        ("github_repo_creation", "Repository for ML-Pipeline-V2", Environment.TEST),
+        ("service_principal", "Service Principal for ADF Integration", Environment.STAGE),
+        ("project_onboarding", "Team Onboarding: Finance Analytics", Environment.DEV),
+        ("workspace_access", "Access to Enterprise-Dev Workspace", Environment.DEV),
+        ("catalog_schema_table", "Create Gold Catalog for Marketing", Environment.PROD),
+        ("workspace_provision", "Sandbox for Spark Experiments", Environment.TEST),
+        ("data_access_request", "PII Data Access for Audit", Environment.PROD),
+        ("github_repo_creation", "New Repo for Infra-as-Code", Environment.STAGE),
     ]
     
     users = ["alice.smith@example.com", "bob.jones@example.com", "carol.white@example.com"]
@@ -73,7 +74,7 @@ async def seed_data(db: Session):
                     "team": random.choice(["Enterprise Data", "Finance", "Sales", "Supply Chain"])
                 },
                 conversation=[
-                    {"role": "user", "content": f"I need to create a {req_type.value} for my team."},
+                    {"role": "user", "content": f"I need to create a {req_type} for my team."},
                     {"role": "assistant", "content": f"I can help with that. I'll need some details like the title and environment."},
                     {"role": "user", "content": f"The title is '{title}' and it's for {env.value}."}
                 ]

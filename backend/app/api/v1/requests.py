@@ -6,7 +6,7 @@ import fastapi
 from fastapi.responses import JSONResponse
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from app.models.request import Request, RequestCreate, RequestUpdate, StateMachineState, RequestStatus, RequestType
+from app.models.request import Request, RequestCreate, RequestUpdate, StateMachineState, RequestStatus
 from app.services.request_service import RequestService
 from app.db.session import get_db
 from app.db import ApprovalModel, RequestModel
@@ -25,22 +25,16 @@ router = APIRouter()
 
 
 def _format_request(req: RequestModel, db: Session) -> Optional[Request]:
-    """Format a RequestModel into a Request Pydantic model."""
-    try:
-        r_type = RequestType(req.type)
-    except ValueError:
-        logger.error(f"Skipping request {req.id} with invalid type: {req.type}")
-        return None
+    """Format a RequestModel into a Request Pydantic model.
+
+    The request ``type`` is a free, data-driven string (it names a workflow in
+    the registry), so we never coerce it through an enum — unknown/custom types
+    are rendered like any other instead of being silently dropped.
+    """
+    r_type = req.type
 
     try:
-        if r_type == RequestType.DATA_CERTIFICATION:
-            sm_state = StateMachineState(
-                currentState=req.current_state or "completed",
-                states=[],
-                currentProgress=None
-            )
-        else:
-            sm_state = render_state(req, db)
+        sm_state = render_state(req, db)
     except Exception as e:
         logger.error(f"ERROR rendering V2 state for {req.id}: {e}", exc_info=True)
         sm_state = StateMachineState(

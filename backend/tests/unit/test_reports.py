@@ -2,7 +2,6 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from app.db.report_subscription import ReportSubscription
 from app.db.request import RequestModel
-from app.models.request import RequestType
 from app.workers.poller import process_scheduled_reports
 from unittest.mock import patch, MagicMock
 
@@ -41,7 +40,7 @@ async def test_scheduled_report_execution(db_session, mock_db_session):
     # 3. Verification: Check Request Creation
     req = db_session.query(RequestModel).filter(
         RequestModel.title == "Report: UNIT_TEST_REPORT",
-        RequestModel.type == RequestType.REPORT_EXECUTION.value
+        RequestModel.type == "report_execution"
     ).first()
 
     assert req is not None, "Request should be created"

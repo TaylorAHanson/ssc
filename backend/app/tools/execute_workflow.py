@@ -30,6 +30,18 @@ async def execute_workflow(workflow_type: str, parameters: Dict[str, Any], conve
     
     db = next(get_db())
     try:
+        # Request types are data-driven: reject types that aren't a published
+        # workflow (or bundled default) so the agent must author + publish first.
+        from app.services.workflow_service import WorkflowService
+        if not WorkflowService.is_known_request_type(db, workflow_type):
+            return {
+                "success": False,
+                "error": (
+                    f"Unknown workflow_type '{workflow_type}'. No published workflow "
+                    f"governs this type yet — author and publish one first."
+                ),
+            }
+
         # Generate Request ID
         request_id = f"req-{str(uuid.uuid4())}"
         

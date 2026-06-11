@@ -6,7 +6,6 @@ without needing a database (facts + published-spec lookup are monkeypatched).
 """
 import pytest
 
-from app.models.request import RequestType
 from app.workflows import render
 
 
@@ -20,7 +19,7 @@ class _Req:
     def __init__(self, status):
         self.id = "req-1"
         self.status = status
-        self.type = RequestType.WORKSPACE_ACCESS.value  # gate(manager) -> step(provision)
+        self.type = "workspace_access"  # gate(manager) -> step(provision)
         self.requester_email = "u@corp.com"
         self.created_at = None
 

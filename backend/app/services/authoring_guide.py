@@ -25,7 +25,7 @@ _DOC_TITLE = "Authoring Workflows (Workflows) — Guide"
 
 # Bump when the canonical guide content changes and you want existing installs to
 # pick it up. The seed only rewrites the doc when its stored revision is older.
-GUIDE_REVISION = 4
+GUIDE_REVISION = 5
 _REVISION_TAG_PREFIX = "guide-rev:"
 
 GUIDE_MARKDOWN = """\
@@ -152,8 +152,13 @@ in the live graph. For divergent multi-step paths, pair `run_if` with
 Call `list_workflow_building_blocks` to see every available step tool with its
 `side_effect_class`, whether it mutates, and — importantly — its real argument
 names (`args`) and which are `required_args`. `validate_workflow_spec` rejects a
-step whose `tool` isn't a real tool. To run, a published workflow's
-**`request_type`** must match a known request type.
+step whose `tool` isn't a real tool.
+
+Request types are **data-driven**: set a workflow's **`request_type`** (any string)
+and publish it — that act registers the type, so requests of that type are accepted
+with no enum entry, no `specs.py` edit, and no redeploy. Two workflows should not
+share a `request_type`. If a workflow has a `training` gate, requests of its type
+are automatically flagged as requiring training.
 
 ### Use the exact arg names
 

@@ -1,11 +1,16 @@
 from app.db.request import RequestModel
-from app.models.request import RequestType
 from datetime import datetime, timezone
 import uuid
 import random
 from faker import Faker
 
 fake = Faker()
+
+# Request types are data-driven strings; a representative sample for test fixtures.
+_SAMPLE_TYPES = [
+    "workspace_access", "workspace_provision", "service_principal",
+    "data_access_request", "github_repo_creation", "report_execution",
+]
 
 class RequestFactory:
     @staticmethod
@@ -14,7 +19,7 @@ class RequestFactory:
         params = kwargs.pop("state_context", {})
         
         # Dynamic defaults
-        default_type = random.choice(list(RequestType))
+        default_type = random.choice(_SAMPLE_TYPES)
         default_title = fake.sentence(nb_words=3).rstrip(".")
         
         request = RequestModel(

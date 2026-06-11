@@ -56,6 +56,79 @@ class WorkflowService:
             q = q.filter(WorkflowModel.status == "published")
         return q.first()
 
+    # ------------------------------------------------- type registry / lookup
+    @staticmethod
+    def known_request_types(db: Session) -> set:
+        """Every request-type string the system will accept for a new request.
+
+        The data-driven replacement for the old ``RequestType`` enum gate: union
+        of published workflows' ``request_type`` + ``key`` values, the bundled
+        JSON spec catalog keys, and the slim system constants. Authoring and
+        publishing a workflow (UI or agent) is all it takes to make a new type
+        valid — no code change, no enum entry.
+        """
+        known: set = set()
+        try:
+            for wf in WorkflowService.list_published(db):
+                if wf.request_type:
+                    known.add(wf.request_type)
+                if wf.key:
+                    known.add(wf.key)
+        except Exception as e:  # noqa: BLE001 - validation must not hard-fail on a read
+            logger.debug("known_request_types: DB lookup failed: %s", e)
+        try:
+            from app.workflows.graphs.specs import SPECS
+            known.update(SPECS.keys())
+        except Exception as e:  # noqa: BLE001
+            logger.debug("known_request_types: catalog load failed: %s", e)
+        from app.models.request import RequestType
+        known.update(rt.value for rt in RequestType)
+        return known
+
+    @staticmethod
+    def is_known_request_type(db: Session, request_type: Optional[str]) -> bool:
+        return bool(request_type) and request_type in WorkflowService.known_request_types(db)
+
+    @staticmethod
+    def effective_spec(db: Session, request_type: str) -> Optional[Dict[str, Any]]:
+        """The ``graph_spec`` that will actually run for ``request_type``.
+
+        Prefers a published DB ``graph_spec`` (the no-code override) and falls
+        back to the bundled code catalog. Returns ``None`` for instruction-only
+        or unknown types (which have no executable graph).
+        """
+        try:
+            wf = (
+                db.query(WorkflowModel)
+                .filter(
+                    WorkflowModel.request_type == request_type,
+                    WorkflowModel.status == "published",
+                    WorkflowModel.graph_spec.isnot(None),
+                )
+                .first()
+            )
+            if wf and wf.graph_spec:
+                return wf.graph_spec
+        except Exception as e:  # noqa: BLE001
+            logger.debug("effective_spec: DB lookup failed for %s: %s", request_type, e)
+        from app.workflows.graphs.specs import SPECS
+        return SPECS.get(request_type)
+
+    @staticmethod
+    def spec_requires_training(db: Session, request_type: str) -> bool:
+        """True if the effective spec has a ``training`` gate.
+
+        Drives a request's ``requires_training`` flag from the workflow's own
+        definition instead of a hardcoded per-type check.
+        """
+        spec = WorkflowService.effective_spec(db, request_type)
+        if not spec:
+            return False
+        return any(
+            isinstance(s, dict) and s.get("kind") == "gate" and s.get("type") == "training"
+            for s in (spec.get("stages") or [])
+        )
+
     # ----------------------------------------------------------------- writes
     @staticmethod
     def create(db: Session, *, created_by: Optional[str] = None, **fields) -> WorkflowModel:

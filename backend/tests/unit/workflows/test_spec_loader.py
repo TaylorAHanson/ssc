@@ -158,9 +158,7 @@ def test_data_access_is_data_defined_with_resolve_gate_grant():
     """The former dedicated data_access graph is now a graph_spec: a
     resolve_owners step lifts data_owners into context, the data_owner gate reads
     them via approvers_from, and grants fan out per asset."""
-    from app.models.request import RequestType
-
-    data = SPECS[RequestType.DATA_ACCESS_REQUEST.value]
+    data = SPECS["data_access_request"]
     spec = spec_from_dict(data)            # validates + compiles
     build_spec_graph(spec)                 # builds a StateGraph
     resolve, gate, grant = spec.stages
@@ -227,3 +225,56 @@ def test_every_catalog_spec_validates_compiles_and_resolves_tools():
 def test_catalog_stage_specs_match_renderer_view():
     for rt, data in SPECS.items():
         assert stage_specs_from_dict(data) == stage_specs(rt)
+
+
+# --- catalog loader -------------------------------------------------------
+
+def test_load_catalog_keys_by_json_key(tmp_path):
+    """The loader maps each file's ``key`` field to its spec (filename-agnostic)."""
+    from app.workflows.graphs.specs import _load_catalog
+
+    (tmp_path / "anything.json").write_text(
+        '{"key": "my_workflow", "name": "my_workflow", '
+        '"stages": [{"kind": "gate", "name": "g", "type": "manager"}]}'
+    )
+    specs = _load_catalog(str(tmp_path))
+    assert set(specs) == {"my_workflow"}
+    assert "key" not in specs["my_workflow"]  # key is consumed, not part of the spec
+
+
+def test_load_catalog_rejects_missing_key(tmp_path):
+    from app.workflows.graphs.specs import _load_catalog
+
+    (tmp_path / "no_key.json").write_text('{"name": "x", "stages": []}')
+    with pytest.raises(SpecError, match="missing a non-empty string 'key'"):
+        _load_catalog(str(tmp_path))
+
+
+def test_load_catalog_rejects_invalid_json(tmp_path):
+    from app.workflows.graphs.specs import _load_catalog
+
+    (tmp_path / "broken.json").write_text("{not valid json")
+    with pytest.raises(SpecError, match="not valid JSON"):
+        _load_catalog(str(tmp_path))
+
+
+def test_load_catalog_rejects_malformed_spec(tmp_path):
+    """A structurally invalid spec (bad gate type) fails fast at load."""
+    from app.workflows.graphs.specs import _load_catalog
+
+    (tmp_path / "bad.json").write_text(
+        '{"key": "bad", "name": "bad", '
+        '"stages": [{"kind": "gate", "name": "g", "type": "not_a_gate_type"}]}'
+    )
+    with pytest.raises(SpecError, match="is invalid"):
+        _load_catalog(str(tmp_path))
+
+
+def test_load_catalog_rejects_duplicate_keys(tmp_path):
+    from app.workflows.graphs.specs import _load_catalog
+
+    body = '{{"key": "dup", "name": "dup", "stages": []}}'
+    (tmp_path / "a.json").write_text(body.format())
+    (tmp_path / "b.json").write_text(body.format())
+    with pytest.raises(SpecError, match="duplicate catalog key 'dup'"):
+        _load_catalog(str(tmp_path))

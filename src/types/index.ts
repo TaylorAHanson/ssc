@@ -7,16 +7,11 @@ export type RequestStatus =
   | 'rejected'
   | 'failed';
 
-export type RequestType =
-  | 'workspace_access'
-  | 'catalog_schema_table'
-  | 'catalog_schema_table_access'
-  | 'workspace_provision'
-  | 'service_principal'
-  | 'rest_api_access'
-  | 'batch_data_access'
-  | 'github_repo_creation'
-  | 'enforcement_sentinel';
+// Request types are data-driven: a workflow's type is whatever string key an
+// admin authors + publishes (UI/agent), so this is an open string alias rather
+// than a fixed union. Effort estimates and labels fall back to a default for
+// types the frontend hasn't seen before.
+export type RequestType = string;
 
 export interface RoleMapping {
   id: number;

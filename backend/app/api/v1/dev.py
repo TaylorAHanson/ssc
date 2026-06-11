@@ -123,7 +123,7 @@ def seed_db():
     try:
         from app.db.session import get_session_local
         from app.db import RequestModel
-        from app.models.request import RequestType, RequestStatus
+        from app.models.request import RequestStatus
         from datetime import datetime, timezone, timedelta
         import uuid
         
@@ -270,7 +270,7 @@ async def trigger_github_test():
     try:
         from app.db.session import get_session_local
         from app.db.request import RequestModel
-        from app.models.request import RequestType, RequestStatus
+        from app.models.request import RequestStatus
         from app.core.config import settings
         from datetime import datetime, timezone
         import uuid
@@ -283,7 +283,7 @@ async def trigger_github_test():
             request_id = f"req-{uuid.uuid4()}"
             request = RequestModel(
                 id=request_id,
-                type=RequestType.GITHUB_REPO_CREATION.value,
+                type="github_repo_creation",
                 title=f"Test GitHub Repo: {repo_name}",
                 status=RequestStatus.PENDING.value,
                 current_state="pending",

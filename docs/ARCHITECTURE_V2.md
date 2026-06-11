@@ -543,7 +543,9 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
 - **M4 — Workflow coverage (DONE, verified).**
   - Declarative `WorkflowSpec` (gates + steps) -> generic `build_spec_graph` (`app/workflows/spec.py`):
     the "workflows as data" thesis. **All 25 registered request types** are data-defined
-    `graph_spec`s (`app/workflows/graphs/specs.py`) — there is no dedicated code-graph path. Data
+    `graph_spec`s, bundled as one JSON file per workflow under `app/workflows/graphs/catalog/*.json`
+    and loaded by `specs.py::_load_catalog()` — there is no dedicated code-graph path and no Python
+    spec dict to edit. Data
     access (multi-owner) is expressed with a `resolve_data_owners` step that lifts the
     resolved owners into context (`writes_context`) for a `data_owner` gate's
     `approvers_from` expression, plus a `for_each` grant fan-out.
@@ -621,13 +623,24 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
   `eval`/`exec`) replaces the Python lambdas for `args`/`auto_approve`/`for_each`/`item_args`; a
   **tool registry** (`app/workflows/tool_registry.py`) resolves a step's tool by name; and
   `spec_from_dict` + `validate_spec_dict` (`app/workflows/spec_loader.py`) compile a serializable spec
-  into the same runtime `WorkflowSpec` the graph builder consumes. `graphs/specs.py` is now a
-  **`SPECS` dict catalog** (all 22 workflows as data) — the harness still reports 25/25 green with
-  identical ToolExecutor counts (31/24), proving parity with the old lambda specs. Workflows gained a
+  into the same runtime `WorkflowSpec` the graph builder consumes. `graphs/specs.py` builds the
+  **`SPECS` catalog** by globbing + validating `graphs/catalog/*.json` (one file per workflow, keyed by
+  its `key`) — no Python spec dict and no enum entry to add a workflow. The harness still reports 25/25
+  green with identical ToolExecutor counts (31/24), proving parity with the old lambda specs. Workflows gained a
   `graph_spec` JSON column; the executor resolves a request's graph via `build_graph_for`, which
   prefers a **published workflow's `graph_spec` (DB)** over the code catalog and falls back safely on
   any error. The catalog is seeded onto workflows at boot (`seed_specs_from_catalog`) so the
-  workflows are immediately editable data. Workflows API exposes `graph_spec` plus
+  workflows are immediately editable data.
+- **Data-driven request types (DONE).** A request's `type` is a free string, not a fixed enum.
+  It is validated at creation (`RequestService.create_request`) and at agent submission
+  (`execute_workflow`) against `WorkflowService.known_request_types()` — the union of published DB
+  workflows' `request_type`/`key`, the bundled JSON catalog keys, and a slim set of system constants.
+  `RequestType` (`app/models/request.py`) now holds only the few workflows the platform triggers
+  internally (`enforcement_sentinel`, `report_execution`, `tag_change`); `Request.type`,
+  `RequestCreate.type`, and `Approval.requestType` are plain `str`. A new workflow therefore requires
+  **no enum entry, no `specs.py` edit, and no redeploy** — authoring + publishing a `graph_spec` is
+  enough. `requires_training` is likewise derived from whether the effective spec has a `training`
+  gate (`WorkflowService.spec_requires_training`) rather than a hardcoded per-type check. Workflows API exposes `graph_spec` plus
   `POST /workflows/validate-spec` and `GET /workflows/meta/tools` for the (still-to-build) visual editor.
 - **Visual workflow editor (DONE).** A reactflow **studio** in the Workflows admin (`src/pages/admin/Workflows.tsx`,
   `src/components/admin/Workflow*.tsx`) authors `graph_spec` with no code: a full-width 3-pane layout
