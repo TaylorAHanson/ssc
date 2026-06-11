@@ -191,7 +191,9 @@ SPECS = {
         "stages": [
             {"kind": "step", "name": "provision", "tool": "github_create_repo",
              "success_fact": "repo_created",
-             "args": {"repo_name": _var("repo_name", ""), "template": {"$var": "template"}}},
+             "args": {"repo_name": _var("repo_name", ""), "template": {"$var": "template"},
+                      "description": {"$var": "description"},
+                      "visibility": _var("visibility", "private")}},
         ],
     },
     RequestType.GITHUB_REPO_ACCESS.value: {

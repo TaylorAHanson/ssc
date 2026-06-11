@@ -44,8 +44,13 @@ def _get_databricks_provider():
 
 
 def _get_github_provider():
+    from app.core.config import settings
     from app.providers.github.client import GitHubProvider
-    return GitHubProvider()
+
+    return GitHubProvider(
+        token=settings.GITHUB_TOKEN or settings.get_git_token(),
+        org=settings.GITHUB_ORG,
+    )
 
 
 def _get_gitops_provider():
@@ -189,16 +194,28 @@ async def create_service_principal(display_name: str, **kwargs) -> Dict[str, Any
 class GithubRepoInput(BaseModel):
     repo_name: str = Field(..., description="Repository name to create")
     template: Optional[str] = Field(default=None, description="Optional template repo")
+    description: Optional[str] = Field(default=None, description="Repository description")
+    visibility: Optional[str] = Field(default=None, description="public | private | internal")
 
 
 @tool(name="github_create_repo", args_schema=GithubRepoInput, side_effect_class="infra",
       description="Create a GitHub repository (optionally from a template).")
-async def github_create_repo(repo_name: str, template: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+async def github_create_repo(repo_name: str, template: Optional[str] = None,
+                             description: Optional[str] = None,
+                             visibility: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     provider = _get_github_provider()
+    # The provider merges this config into the GitHub create payload. Use the
+    # `private` boolean (universally accepted, incl. the template-generate API)
+    # derived from the requested visibility.
+    config: Dict[str, Any] = {}
+    if description:
+        config["description"] = description
+    if visibility:
+        config["private"] = visibility.lower() != "public"
     if template:
-        result = await provider.create_from_template(template, repo_name)
+        result = await provider.create_from_template(template, repo_name, config)
     else:
-        result = await provider.create_repo(repo_name)
+        result = await provider.create_repo(repo_name, config)
     return {"repo": repo_name, "result": result}
 
 

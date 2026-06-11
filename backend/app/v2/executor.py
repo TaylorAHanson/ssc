@@ -80,10 +80,32 @@ class DurableWorkflowExecutor:
                 await compiled.ainvoke(self._initial_state(request), config)
             elif resume_value is not None:
                 await compiled.ainvoke(Command(resume=resume_value), config)
+            elif self._is_stalled(snapshot):
+                # State exists with pending next-nodes but the graph is NOT paused
+                # on a HITL interrupt — it stalled mid-run (a node raised, or the
+                # process crashed during a superstep). Resume from the checkpoint so
+                # the pending node re-runs. Mutating tools are idempotency-keyed, so
+                # re-running never double-applies a side effect.
+                logger.info("[%s] resuming stalled graph at %s",
+                            request.id, tuple(snapshot.next or ()))
+                await compiled.ainvoke(None, config)
             else:
-                logger.debug("[%s] advance() with no resume; awaiting input", request.id)
+                logger.debug("[%s] advance() with no resume; awaiting interrupt", request.id)
 
             return await self._interpret(compiled, config)
+
+    @staticmethod
+    def _is_stalled(snapshot) -> bool:
+        """True if the graph has pending work but isn't waiting on an interrupt.
+
+        Distinguishes a mid-run stall (node error / crash, which we should resume)
+        from a HITL gate pause (which must wait for an approval decision).
+        """
+        pending = bool(snapshot.next)
+        waiting_on_interrupt = any(
+            getattr(task, "interrupts", ()) for task in (snapshot.tasks or ())
+        )
+        return pending and not waiting_on_interrupt
 
     async def resume(self, request, resume_value: Any) -> AdvanceResult:
         return await self.advance(request, resume_value=resume_value)
