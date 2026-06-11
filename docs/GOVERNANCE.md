@@ -25,15 +25,26 @@ The AI Agent serves as the mandatory first point of contact and primary governan
 *   **Asset Discovery**: Before allowing a user to request new data or pipelines, the Agent proactively searches existing catalogs and marketplaces, suggesting reusable assets to prevent duplication.
 
 ** Important Note **
-This is a non-deterministic layer of governance. The agent can make mistakes. It is not a replacement for the deterministic governance of the State Machine Conditions. It is a helpful assistant that can help users make better decisions and shift best practices to the left.
+This is a non-deterministic layer of governance. The agent can make mistakes. It is not a replacement for the deterministic governance of the workflow graphs and the governed `ToolExecutor` (capability scope + OPA + audit). It is a helpful assistant that can help users make better decisions and shift best practices to the left.
 
-### Layer 2: State Machine Conditions (Proactive Enforcement)
-Once the Agent gathers the required parameters and intent, the request is handed off to isolated, workflow-specific State Machines. This layer enforces deterministic business rules and approval structures.
+### Layer 2: Durable Workflow Graphs (Proactive Enforcement)
+Once the Agent gathers the required parameters and intent, the request is handed off to a **durable workflow graph** (a published *Workflow*, compiled to a LangGraph graph and checkpointed to the database). This layer enforces deterministic business rules and approval structures. These graphs replace the legacy custom state-machine engine but keep the same governance guarantees.
 
-*   **Deterministic Guardrails**: State Machines enforce deterministic business rules and approval structures.
-*   **Risk-Based Routing**: State Machines categorize requests by risk level. Low-risk operations (e.g., standard dev workspace access) are fully automated. High-risk operations (e.g., cross-environment access or PROD provisioning) automatically pause (`wait_for_event` pattern) and route to Data Owners or Platform Admins for explicit human-in-the-loop sign-off.
-*   **Immutable Fact-Tracking**: Every step, parameter, and approval is recorded as an immutable fact. State Machines use this history to determine the next valid action, ensuring no compliance step can be bypassed.
-*   **Standardized Tagging**: The State Machine enforces mandatory FinOps tagging (`CostCenter`, `Project`, `Owner`) on all newly provisioned resources.
+*   **Deterministic Guardrails**: A workflow is an ordered list of *gates* (human/event approvals) and *steps* (governed tool calls). The ordering is the rule — e.g. `plan → platform_admin approval → apply`.
+*   **Risk-Based Routing**: Gates categorize requests by risk. Low-risk operations (e.g. standard dev workspace access) can **auto-approve** via a declarative condition; high-risk operations (cross-environment access, PROD provisioning) pause at a native LangGraph `interrupt()` and route to managers, Data Owners, or Platform Admins for explicit human-in-the-loop sign-off.
+*   **Durable & Resumable**: Graph state is checkpointed per request, so a paused approval survives restarts and crash-resume continues from the exact checkpoint — a granted action is never duplicated.
+*   **Immutable Fact-Tracking**: Every step, parameter, and approval is recorded as an immutable fact. The request's UI timeline and the **live graph view** (request detail → *Workflow* tab) are reconstructed from these facts, so the picture stays honest.
+*   **Standardized Tagging**: Provisioning steps enforce mandatory FinOps tagging (`CostCenter`, `Project`, `Owner`) on all newly provisioned resources.
+
+### Cross-Cutting: The Governed Tool Executor (Enforcement Chokepoint)
+Every tool call — whether the chat agent invokes it or a workflow graph step runs it — routes through a single `ToolExecutor`, so governance is applied uniformly instead of scattered across call sites. For each call it:
+
+*   **Scopes capability**: a mutating tool outside the active workflow's `allowed_tools` is refused structurally, before any policy check.
+*   **Runs OPA pre-flight** for mutating tools against the `data.agent.tools` policy (`backend/policies/agent_tools.rego`): deny / require-approval decisions keyed on the tool's side-effect class. This runs in **shadow** mode locally (logged, never blocks) and **enforce** mode in deployed environments (`AGENT_TOOL_OPA_ENFORCE=true`); the workflow entry tool (`execute_workflow`) is carved out so approvals fire in-graph rather than deadlocking initiation.
+*   **Enforces idempotency**: a prior success for the same scope+key returns the cached result instead of re-executing.
+*   **Audits everything**: each call appends an audit fact (tool, side-effect class, policy decision, result/error).
+
+*   **Observability**: when `MLFLOW_TRACING_ENABLED`, each agent turn emits one MLflow trace with child spans for every LLM call and tool execution; human feedback can be attached to a turn's `trace_id`.
 
 ### Layer 3: Reactive Enforcers (Continuous Audit, Reporting, & Clean-up)
 The final layer exists to catch drift, uncover unauthorized changes, and continuously prune the platform of unused or redundant assets.
@@ -104,10 +115,12 @@ flowchart TD
 This opinionated policy set assumes 100+ workspaces and broad self‑service. Controls are designed as guardrails: they constrain how users build on Databricks, not whether they can build at all. They build on Databricks Security Best Practices, well‑architected guidance, and Unity Catalog governance patterns.
 
 ## Governance Architecture
-As detailed above, our platform enforces policies across three layers:
+As detailed above, our platform enforces policies across three layers, with a governed `ToolExecutor` as the uniform enforcement chokepoint for every action:
 1. **The AI Agent (Proactive Guidance & Chokepoint):** Intercepts intent, downgrades risk, and performs dry-runs against OPA to guide users before infrastructure changes.
-2. **State Machine Conditions (Proactive Enforcement):** Evaluates deterministic guardrails, triggers human-in-the-loop approvals for high-risk operations, and enforces strict tagging.
+2. **Durable Workflow Graphs (Proactive Enforcement):** Deterministic gates + governed steps; high-risk operations pause at native human-in-the-loop interrupts; mandatory tagging enforced. Graph state is checkpointed and resumable.
 3. **Reactive Enforcers (Continuous Audit):** Background Sentinels continuously evaluate resources against Open Policy Agent (OPA) `.rego` policies to flag, pause, or kill unauthorized assets.
+
+> Note: In the policy table below, the **State Machine** enforcement point denotes this durable workflow-graph layer.
 
 ## Severity Scale
 - **Critical** – Must be enforced via platform configuration / automation; exceptions require senior security approval and time‑bound exception records.
@@ -203,7 +216,11 @@ Adding or editing a policy is straightforward because we use Open Policy Agent (
    ```
 3. **Commit:** The Enforcement Sentinel and Agent Policy Tools will dynamically pick up any changes or new `.rego` files automatically. The `common.rego` library handles all the boilerplate for formatting the output and processing allowlist exceptions.
 
+## Workflow Authoring (No-Code)
+
+The workflows in Layer 2 are **data, not code** — DB-backed Workflows with a JSON `graph_spec`. Platform/Governance Admins author and govern them without a deploy, either in the visual editor (*Admin → Workflows*) or directly in chat with the agent. The full operational playbook — authoring loop, validation/dry-run, publish gate, versioning/rollback, and environment promotion — is in the **[Platform Administration Guide](./PLATFORM_ADMINISTRATION.md)**.
+
 ## Future Enhancements
-- **Policy Editing UI:** Build a frontend interface to allow administrators to write, test, and deploy Rego policies directly from the Self-Service Center without modifying the source code.
-- **External OPA Hosting:** Currently, policies are evaluated using a local OPA binary. In the future, this should be moved to a centralized, external OPA Server (e.g. a dedicated container or Databricks Model Serving endpoint) so that other systems and Databricks workspaces can query the exact same central policy definitions.
+- **Policy Editing UI:** Build a frontend interface to allow administrators to write, test, and deploy Rego policies directly from the Self-Service Center without modifying the source code. (Note: no-code authoring of *workflows* already exists; this item is specifically about editing the OPA `.rego` governance policies.)
+- **External OPA Hosting:** Currently, policies are evaluated using a local/embedded OPA binary. In the future, this should be moved to a centralized, external OPA Server (e.g. a dedicated container or Databricks Model Serving endpoint) so that other systems and Databricks workspaces can query the exact same central policy definitions.
 

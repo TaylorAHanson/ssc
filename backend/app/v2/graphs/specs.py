@@ -5,7 +5,7 @@ Every workflow is described as a **JSON-able dict** (see :mod:`app.v2.spec_loade
 for the schema and :mod:`app.v2.expr` for the expression mini-language). The
 dicts are the single source of truth: they compile to runtime ``WorkflowSpec``s
 (and durable LangGraph graphs) via :func:`spec_from_dict`, *and* they are what the
-seed writes into a Skill's ``graph_spec`` so an admin can edit a workflow's gates
+seed writes into a Workflow's ``graph_spec`` so an admin can edit a workflow's gates
 and provisioning steps in the UI instead of changing this file and redeploying.
 
 Only ``data_access`` keeps a dedicated hand-authored graph (multi-owner

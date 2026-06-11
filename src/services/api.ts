@@ -513,6 +513,7 @@ export async function getBranding(): Promise<{
   ui?: { 
     tabs?: Record<string, boolean>;
   };
+  workflow_authoring_locked?: boolean;
 }> {
   const response = await fetch(`${API_BASE_URL}/branding`, {
     headers: getHeaders()
@@ -1603,7 +1604,7 @@ export async function deleteFeedback(feedbackId: string): Promise<void> {
   }
 }
 
-// --- Skills (no-code authoring) ---
+// --- Workflows (no-code authoring) ---
 
 /** A JSON expression in the safe spec mini-language (see backend app/v2/expr.py). */
 export type SpecExpr = unknown;
@@ -1683,10 +1684,10 @@ export interface DryRunResult {
   mutating_steps: number;
 }
 
-export interface SkillVersion {
+export interface WorkflowVersion {
   id: string;
-  skill_id: string;
-  skill_key: string;
+  workflow_id: string;
+  workflow_key: string;
   version: number;
   name: string | null;
   goal: string | null;
@@ -1697,10 +1698,10 @@ export interface SkillVersion {
   stage_count: number;
 }
 
-export interface SkillBundle {
+export interface WorkflowBundle {
   format: string;
   exported_at?: string;
-  skills: Record<string, unknown>[];
+  workflows: Record<string, unknown>[];
 }
 
 export interface ImportReport {
@@ -1710,7 +1711,7 @@ export interface ImportReport {
   errors: { key: string | null; error: string }[];
 }
 
-export interface Skill {
+export interface Workflow {
   id: string;
   key: string;
   name: string;
@@ -1729,7 +1730,7 @@ export interface Skill {
   updated_at: string | null;
 }
 
-export interface SkillInput {
+export interface WorkflowInput {
   key?: string;
   name?: string;
   goal?: string | null;
@@ -1742,89 +1743,89 @@ export interface SkillInput {
   status?: string;
 }
 
-export async function listSkills(includeDrafts = true): Promise<Skill[]> {
-  const response = await fetch(`${API_BASE_URL}/skills?include_drafts=${includeDrafts}`, { headers: getHeaders() });
+export async function listWorkflows(includeDrafts = true): Promise<Workflow[]> {
+  const response = await fetch(`${API_BASE_URL}/workflows?include_drafts=${includeDrafts}`, { headers: getHeaders() });
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`Failed to list skills: ${response.status} ${errorText}`);
+    throw new Error(`Failed to list workflows: ${response.status} ${errorText}`);
   }
   return response.json();
 }
 
-export async function getSkill(skillId: string): Promise<Skill> {
-  const response = await fetch(`${API_BASE_URL}/skills/${skillId}`, { headers: getHeaders() });
+export async function getWorkflow(workflowId: string): Promise<Workflow> {
+  const response = await fetch(`${API_BASE_URL}/workflows/${workflowId}`, { headers: getHeaders() });
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`Failed to get skill: ${response.status} ${errorText}`);
+    throw new Error(`Failed to get workflow: ${response.status} ${errorText}`);
   }
   return response.json();
 }
 
-export async function createSkill(data: SkillInput): Promise<Skill> {
-  const response = await fetch(`${API_BASE_URL}/skills`, {
+export async function createWorkflow(data: WorkflowInput): Promise<Workflow> {
+  const response = await fetch(`${API_BASE_URL}/workflows`, {
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify(data),
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail || `Failed to create skill: ${response.statusText}`);
+    throw new Error(error.detail || `Failed to create workflow: ${response.statusText}`);
   }
   return response.json();
 }
 
-export async function updateSkill(skillId: string, data: SkillInput): Promise<Skill> {
-  const response = await fetch(`${API_BASE_URL}/skills/${skillId}`, {
+export async function updateWorkflow(workflowId: string, data: WorkflowInput): Promise<Workflow> {
+  const response = await fetch(`${API_BASE_URL}/workflows/${workflowId}`, {
     method: 'PUT',
     headers: getHeaders(),
     body: JSON.stringify(data),
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail || `Failed to update skill: ${response.statusText}`);
+    throw new Error(error.detail || `Failed to update workflow: ${response.statusText}`);
   }
   return response.json();
 }
 
-export async function publishSkill(skillId: string): Promise<Skill> {
-  const response = await fetch(`${API_BASE_URL}/skills/${skillId}/publish`, {
+export async function publishWorkflow(workflowId: string): Promise<Workflow> {
+  const response = await fetch(`${API_BASE_URL}/workflows/${workflowId}/publish`, {
     method: 'POST',
     headers: getHeaders(),
   });
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`Failed to publish skill: ${response.status} ${errorText}`);
+    throw new Error(`Failed to publish workflow: ${response.status} ${errorText}`);
   }
   return response.json();
 }
 
-export async function unpublishSkill(skillId: string): Promise<Skill> {
-  const response = await fetch(`${API_BASE_URL}/skills/${skillId}/unpublish`, {
+export async function unpublishWorkflow(workflowId: string): Promise<Workflow> {
+  const response = await fetch(`${API_BASE_URL}/workflows/${workflowId}/unpublish`, {
     method: 'POST',
     headers: getHeaders(),
   });
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`Failed to unpublish skill: ${response.status} ${errorText}`);
+    throw new Error(`Failed to unpublish workflow: ${response.status} ${errorText}`);
   }
   return response.json();
 }
 
-export async function deleteSkill(skillId: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/skills/${skillId}`, {
+export async function deleteWorkflow(workflowId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/workflows/${workflowId}`, {
     method: 'DELETE',
     headers: getHeaders(),
   });
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(`Failed to delete skill: ${response.status} ${errorText}`);
+    throw new Error(`Failed to delete workflow: ${response.status} ${errorText}`);
   }
 }
 
 /** Author-time validation of a workflow graph_spec. Resolves on valid, throws the
  *  backend's detail message (e.g. "stages[1].tool '...' is not a known V2 tool") otherwise. */
 export async function validateSpec(graphSpec: WorkflowGraphSpec): Promise<{ valid: boolean }> {
-  const response = await fetch(`${API_BASE_URL}/skills/validate-spec`, {
+  const response = await fetch(`${API_BASE_URL}/workflows/validate-spec`, {
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify({ graph_spec: graphSpec }),
@@ -1838,7 +1839,7 @@ export async function validateSpec(graphSpec: WorkflowGraphSpec): Promise<{ vali
 
 /** The wireable V2 tools (name + side-effect class) for the workflow editor's tool picker. */
 export async function listWorkflowTools(): Promise<WorkflowTool[]> {
-  const response = await fetch(`${API_BASE_URL}/skills/meta/tools`, { headers: getHeaders() });
+  const response = await fetch(`${API_BASE_URL}/workflows/meta/tools`, { headers: getHeaders() });
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`Failed to list workflow tools: ${response.status} ${errorText}`);
@@ -1852,7 +1853,7 @@ export async function testSpec(
   graphSpec: WorkflowGraphSpec,
   sampleContext: Record<string, unknown>,
 ): Promise<DryRunResult> {
-  const response = await fetch(`${API_BASE_URL}/skills/test-spec`, {
+  const response = await fetch(`${API_BASE_URL}/workflows/test-spec`, {
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify({ graph_spec: graphSpec, sample_context: sampleContext }),
@@ -1864,9 +1865,9 @@ export async function testSpec(
   return response.json();
 }
 
-/** Published-version history for a skill (newest first). */
-export async function listSkillVersions(skillId: string): Promise<SkillVersion[]> {
-  const response = await fetch(`${API_BASE_URL}/skills/${skillId}/versions`, { headers: getHeaders() });
+/** Published-version history for a workflow (newest first). */
+export async function listWorkflowVersions(workflowId: string): Promise<WorkflowVersion[]> {
+  const response = await fetch(`${API_BASE_URL}/workflows/${workflowId}/versions`, { headers: getHeaders() });
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`Failed to load history: ${response.status} ${errorText}`);
@@ -1874,9 +1875,9 @@ export async function listSkillVersions(skillId: string): Promise<SkillVersion[]
   return response.json();
 }
 
-/** Restore a prior published version's body into the skill as a fresh draft. */
-export async function rollbackSkill(skillId: string, version: number): Promise<Skill> {
-  const response = await fetch(`${API_BASE_URL}/skills/${skillId}/rollback`, {
+/** Restore a prior published version's body into the workflow as a fresh draft. */
+export async function rollbackWorkflow(workflowId: string, version: number): Promise<Workflow> {
+  const response = await fetch(`${API_BASE_URL}/workflows/${workflowId}/rollback`, {
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify({ version }),
@@ -1888,15 +1889,15 @@ export async function rollbackSkill(skillId: string, version: number): Promise<S
   return response.json();
 }
 
-/** Export skills as a portable bundle for promotion to another environment. */
-export async function exportSkillsBundle(
+/** Export workflows as a portable bundle for promotion to another environment. */
+export async function exportWorkflowsBundle(
   opts: { ids?: string[]; publishedOnly?: boolean } = {},
-): Promise<SkillBundle> {
+): Promise<WorkflowBundle> {
   const params = new URLSearchParams();
   if (opts.ids?.length) params.set('ids', opts.ids.join(','));
   if (opts.publishedOnly) params.set('published_only', 'true');
   const qs = params.toString();
-  const response = await fetch(`${API_BASE_URL}/skills/export/bundle${qs ? `?${qs}` : ''}`, {
+  const response = await fetch(`${API_BASE_URL}/workflows/export/bundle${qs ? `?${qs}` : ''}`, {
     headers: getHeaders(),
   });
   if (!response.ok) {
@@ -1907,11 +1908,11 @@ export async function exportSkillsBundle(
 }
 
 /** Import a bundle into this environment (upsert by key). Defaults to drafts. */
-export async function importSkillsBundle(
-  bundle: SkillBundle,
+export async function importWorkflowsBundle(
+  bundle: WorkflowBundle,
   opts: { asStatus?: 'draft' | 'published'; overwrite?: boolean } = {},
 ): Promise<ImportReport> {
-  const response = await fetch(`${API_BASE_URL}/skills/import/bundle`, {
+  const response = await fetch(`${API_BASE_URL}/workflows/import/bundle`, {
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify({
@@ -1927,11 +1928,11 @@ export async function importSkillsBundle(
   return response.json();
 }
 
-/** Duplicate a skill into a fresh draft. Implemented client-side via create so it works
+/** Duplicate a workflow into a fresh draft. Implemented client-side via create so it works
  *  without a dedicated endpoint; request_type is cleared so the copy is a safe template. */
-export async function cloneSkill(skillId: string): Promise<Skill> {
-  const full = await getSkill(skillId);
-  return createSkill({
+export async function cloneWorkflow(workflowId: string): Promise<Workflow> {
+  const full = await getWorkflow(workflowId);
+  return createWorkflow({
     key: `${full.key}_copy`,
     name: full.name ? `${full.name} (copy)` : `${full.key}_copy`,
     goal: full.goal,
@@ -2011,19 +2012,19 @@ export const api = {
   getFeedback,
   updateFeedback,
   deleteFeedback,
-  listSkills,
-  getSkill,
-  createSkill,
-  updateSkill,
-  publishSkill,
-  unpublishSkill,
-  deleteSkill,
+  listWorkflows,
+  getWorkflow,
+  createWorkflow,
+  updateWorkflow,
+  publishWorkflow,
+  unpublishWorkflow,
+  deleteWorkflow,
   validateSpec,
   listWorkflowTools,
   testSpec,
-  cloneSkill,
-  listSkillVersions,
-  rollbackSkill,
-  exportSkillsBundle,
-  importSkillsBundle
+  cloneWorkflow,
+  listWorkflowVersions,
+  rollbackWorkflow,
+  exportWorkflowsBundle,
+  importWorkflowsBundle
 };

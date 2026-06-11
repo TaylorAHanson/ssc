@@ -60,7 +60,7 @@ class ToolContext:
     approvals: List[str] = field(default_factory=list)
     # Capability scope: when set (not None), a *mutating* tool whose name is not
     # in this list is structurally refused before any policy/execution — the
-    # active skill's ``allowed_tools`` bound. ``None`` means "unscoped" (the
+    # active workflow's ``allowed_tools`` bound. ``None`` means "unscoped" (the
     # legacy/global chat agent), an empty list means "no mutating tools allowed".
     allowed_tools: Optional[List[str]] = None
     # Extra kwargs the caller wants injected into the tool call (e.g.
@@ -196,13 +196,13 @@ class ToolExecutor:
         #    shadow mode: log and continue so we don't regress current behavior).
         self._validate_args(tool, model_args)
 
-        # 2b. Capability scope (structural bound, runs before policy). A skill
+        # 2b. Capability scope (structural bound, runs before policy). A workflow
         #     declares which tools it may use; a mutating tool outside that set
         #     is refused regardless of OPA — bounding blast radius first.
         if tool.is_mutating and ctx.allowed_tools is not None and tool.name not in ctx.allowed_tools:
             refusal = {
                 "error": (
-                    f"Tool '{tool.name}' is not in the active skill's capability scope "
+                    f"Tool '{tool.name}' is not in the active workflow's capability scope "
                     f"(allowed_tools). Refusing out-of-scope mutating call."
                 ),
                 "out_of_scope": True,

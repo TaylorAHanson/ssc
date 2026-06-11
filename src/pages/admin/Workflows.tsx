@@ -113,9 +113,64 @@ export function Workflows() {
   const [publishTarget, setPublishTarget] = useState<Workflow | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  // In-page authoring assistant: docks the agent beside the editor so admins
-  // can ask questions / co-author without leaving the page.
+  // In-page authoring assistant: a resizable shelf that overlays the editor so
+  // admins can ask questions / co-author without leaving the page.
   const [showAssistant, setShowAssistant] = useState(false);
+  const [assistantWidth, setAssistantWidth] = useState<number>(() => {
+    if (typeof window === 'undefined') return 440;
+    const saved = Number(window.localStorage.getItem('authoring_assistant_width'));
+    return saved >= 360 ? saved : 440;
+  });
+  const resizingRef = useRef(false);
+  // Mirror the latest width so the drag-end handler persists the current value
+  // (its closure would otherwise capture a stale width from mousedown time).
+  const assistantWidthRef = useRef(assistantWidth);
+  assistantWidthRef.current = assistantWidth;
+
+  // Drag the panel's left edge to resize. It's an overlay shelf, so widening it
+  // simply covers more of the editor (no content reflow).
+  const startAssistantResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    resizingRef.current = true;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'ew-resize';
+    const onMove = (ev: MouseEvent) => {
+      if (!resizingRef.current) return;
+      const max = Math.min(960, window.innerWidth - 80);
+      const next = Math.min(Math.max(window.innerWidth - ev.clientX, 360), max);
+      setAssistantWidth(next);
+    };
+    const onUp = () => {
+      resizingRef.current = false;
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      try {
+        window.localStorage.setItem('authoring_assistant_width', String(assistantWidthRef.current));
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  // After the agent saves/publishes a workflow via its tools, reload the list
+  // and open that workflow in the editor so the draft shows up in the fields.
+  const handleAuthoringToolResult = async (toolName: string, result: unknown) => {
+    if (toolName !== 'save_workflow_draft' && toolName !== 'publish_workflow') return;
+    const r = result as { ok?: boolean; key?: string } | null;
+    if (!r || !r.ok || !r.key) return;
+    try {
+      const fresh = await api.listWorkflows(true);
+      setWorkflows(fresh);
+      const match = fresh.find((w) => w.key === r.key);
+      if (match) setWorkflowParam(match.id);
+    } catch {
+      /* non-fatal: the manual reload button is still available */
+    }
+  };
   // When true (e.g. prod), this environment locks in-place authoring: workflows
   // change only via an all-or-nothing bundle import. We hide edit/publish/delete
   // and keep inspection, dry-run, export, and import available.
@@ -365,7 +420,7 @@ export function Workflows() {
   };
 
   return (
-    <div className={`p-6 space-y-6 ${showAssistant ? 'lg:pr-[440px]' : ''}`}>
+    <div className="p-6 space-y-6">
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-heading flex items-center gap-2">
@@ -390,13 +445,6 @@ export function Workflows() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            onClick={() => setShowAssistant((v) => !v)}
-            variant={showAssistant ? 'default' : 'outline'}
-            title="Open the authoring assistant alongside the editor"
-          >
-            <Sparkles className="w-4 h-4 mr-1" /> Assistant
-          </Button>
           <Button onClick={() => exportBundle()} variant="outline" title="Export all workflows as a portable bundle">
             <Download className="w-4 h-4 mr-1" /> Export
           </Button>
@@ -881,7 +929,18 @@ export function Workflows() {
       )}
 
       {showAssistant && (
-        <aside className="fixed top-0 right-0 bottom-0 z-40 w-full sm:w-[420px] bg-white border-l border-gray-200 shadow-2xl flex flex-col">
+        <aside
+          className="fixed top-0 right-0 bottom-0 z-40 w-full bg-white border-l border-gray-200 shadow-2xl flex flex-col"
+          style={{ width: assistantWidth, maxWidth: '95vw' }}
+        >
+          {/* Drag handle on the left edge to resize the shelf. */}
+          <div
+            onMouseDown={startAssistantResize}
+            title="Drag to resize"
+            className="absolute left-0 top-0 bottom-0 w-1.5 -ml-0.5 cursor-ew-resize group z-10"
+          >
+            <div className="h-full w-px mx-auto bg-transparent group-hover:bg-accent/60 transition-colors" />
+          </div>
           <header className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
             <div className="flex items-center gap-2 text-sm font-semibold text-heading">
               <Sparkles className="w-4 h-4 text-accent" />
@@ -907,12 +966,14 @@ export function Workflows() {
             </div>
           </header>
           <div className="px-4 py-2 border-b border-gray-100 text-[11px] text-gray-500 shrink-0">
-            Ask me to explain a field, or to draft / edit this workflow. After I save changes,
-            use the reload button above to refresh the list.
+            Ask me to explain a field, or to draft / edit this workflow. When I save a draft,
+            it opens automatically in the editor on the left.
           </div>
           <div className="flex-1 min-h-0 p-3">
             <ChatView
+              mode="authoring"
               storageKey="chatview_messages_authoring"
+              onToolResult={handleAuthoringToolResult}
               placeholder="Ask about authoring workflows..."
               welcomeNode={
                 <div className="text-center px-2 pt-2">
@@ -932,6 +993,20 @@ export function Workflows() {
             />
           </div>
         </aside>
+      )}
+
+      {/* Floating launcher — dark navy to match the sidebar. Hidden while the
+          shelf is open (the panel has its own close control). */}
+      {!showAssistant && (
+        <button
+          type="button"
+          onClick={() => setShowAssistant(true)}
+          title="Open the authoring assistant"
+          className="fixed bottom-6 right-6 z-30 flex items-center gap-2 rounded-full bg-nav-bg text-nav-text pl-4 pr-5 py-3 shadow-lg hover:bg-nav-hover transition-colors"
+        >
+          <Sparkles className="w-5 h-5" />
+          <span className="text-sm font-semibold">Assistant</span>
+        </button>
       )}
     </div>
   );

@@ -22,8 +22,8 @@ package agent.tools
 #   }
 #
 # NOTE (V2 staging): this package currently enforces *approval gates* keyed on
-# side_effect_class. Hard capability scoping (the skill's allowed_tools) lands
-# with the Skill object (M3); until then `allow` stays true. The ToolExecutor
+# side_effect_class. Hard capability scoping (the workflow's allowed_tools) lands
+# with the Workflow object (M3); until then `allow` stays true. The ToolExecutor
 # runs this in SHADOW mode by default (logs, never blocks) until
 # AGENT_TOOL_OPA_ENFORCE is flipped on.
 
@@ -77,7 +77,7 @@ approval_satisfied if {
 }
 
 # Hard allow/deny. Default allow; explicit deny rules can be added here later
-# (e.g. capability scope from the active skill, destructive-without-entitlement).
+# (e.g. capability scope from the active workflow, destructive-without-entitlement).
 default allow := true
 
 decision := {

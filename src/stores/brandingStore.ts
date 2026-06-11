@@ -18,6 +18,7 @@ interface BrandingState {
     tools: Record<string, boolean>;
     workflows: Record<string, boolean>;
     uiTabs: Record<string, boolean>;
+    workflowAuthoringLocked: boolean;
     isLoading: boolean;
     hasLoaded: boolean;
     error: string | null;
@@ -40,6 +41,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     tools: {},
     workflows: {},
     uiTabs: {},
+    workflowAuthoringLocked: false,
     isLoading: false,
     hasLoaded: false,
     error: null,
@@ -63,6 +65,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 tools: branding.tools || {},
                 workflows: branding.workflows || {},
                 uiTabs: branding.ui?.tabs || {},
+                workflowAuthoringLocked: branding.workflow_authoring_locked ?? false,
                 isLoading: false,
                 hasLoaded: true,
             });

@@ -13,7 +13,13 @@ cp .env.example .env
 Edit `.env` and configure the following key sections:
 - **Database**: Defaults to local SQLite (`atlas_hub`) if `DATABASE_URL` is empty.
 - **Databricks**: Required for real infrastructure operations.
-- **Mock User**: Set `MOCK_USER_EMAIL` to your email to simulate logged-in user behavior locally.
+- **Mock User**: Set `MOCK_USER_EMAIL` to your email to simulate logged-in user behavior locally. Set `MOCK_USER_ROLES` (e.g. `Platform Admin`) to exercise admin-only features like workflow authoring.
+- **Governance & Observability (optional)**: all default to a safe local posture, so you don't need to set them to run locally.
+  - `AGENT_TOOL_OPA_ENFORCE` (default `false`) — when `false`, the agent-tool OPA policy runs in **shadow** mode (decisions logged, never block). Deployed environments set this `true`. An embedded OPA server starts automatically unless `OPA_URL` is set.
+  - `AI_GATEWAY_ENDPOINT` (default empty) — when set, agent LLM calls route through that AI Gateway endpoint instead of `MODEL_SERVING_AGENT_LLM_ENDPOINT` directly.
+  - `MLFLOW_TRACING_ENABLED` (default `false`) — enables one MLflow trace per agent turn.
+
+On startup the backend logs the active governance posture, LLM routing (gateway vs. direct), and tracing state, so a quick look at `backend.log` confirms how it's running.
 
 ### Run the app
 - `./dev.sh` will start both the backend and frontend servers.
@@ -77,9 +83,29 @@ cd backend
 source venv/bin/activate
 # Run all tests
 pytest
-# Run specific test file
-pytest tests/unit/state_machines/test_project_onboarding.py
+# Run a specific area
+pytest tests/unit/v2/            # V2 engine: graphs, renderer, spec loader, harness
+pytest tests/unit/tools/         # governed ToolExecutor + workflow-authoring tools
 ```
+
+### Workflow Eval Harness (V2 graphs)
+The harness compiles **every** registered workflow graph, proves each gate pauses for
+human-in-the-loop and resumes to `completed`, asserts all mutations route through the
+governed `ToolExecutor`, and compares each run against a committed **golden transcript**
+(ordered tool calls + gates + status). It runs hermetically (fake providers, no live
+Databricks) and is part of the pytest suite, but you can run it directly:
+
+```bash
+cd backend
+python -m app.v2.harness            # hermetic run + golden compare (the CI gate)
+python -m app.v2.harness --capture  # refresh golden_transcripts.json after an intended change
+python -m app.v2.harness --sandbox  # run against REAL providers in a throwaway workspace (not for CI)
+```
+
+### Authoring & testing workflows (no-code)
+Workflows are **data** (DB-backed Workflows with a JSON `graph_spec`), not code. Two ways to author/test:
+- **Visual editor**: *Admin → Workflows* — drag/drop gates and steps, **dry-run** against a sample context, version history/rollback, and export/import bundles for env promotion.
+- **In chat (admins)**: the agent itself can author workflows (`list_workflow_building_blocks`, `validate_workflow_spec`, `preview_workflow_spec`, `save_workflow_draft`, `publish_workflow`). See the **Platform Administration Guide**.
 
 ## 4. Debugging
 

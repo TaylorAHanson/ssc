@@ -184,6 +184,31 @@ a precise question). Never fabricate internal policy.
 """
 
 
+# Authoring-studio instructions. Used ONLY when mode == "authoring" (the in-page
+# assistant on the Workflows page). This intentionally REPLACES the runtime
+# workflow-execution guidance so the agent designs workflows and never runs them.
+AUTHORING_MODE_INSTRUCTIONS = """
+## WORKFLOW AUTHORING STUDIO — design, never run
+You are assisting a Platform/Governance Admin inside the **workflow authoring
+studio**. Your job is to help them DESIGN, EDIT, validate, and (on explicit
+confirmation) publish no-code workflow definitions. You are NOT fulfilling a
+self-service request here.
+
+Hard rules:
+- NEVER run, execute, or provision anything. You do not have runtime tools, and
+  you must not try to "fulfill" the request.
+- Do NOT call `get_workflow_instructions` to satisfy a request — that tool is for
+  end users running a live workflow. To learn an existing workflow's design, use
+  `get_workflow` (returns its editable `graph_spec`) instead.
+- "Create a workflow that does X" means AUTHOR A NEW workflow definition — never
+  find and run an existing similar one. If a similar workflow exists, you may
+  inspect it with `get_workflow` to reuse patterns, then build the new one.
+- Do not ask the end-user "intake" questions (cost center, justification, target
+  workspace, etc.). Those belong to runtime execution, not authoring. Instead,
+  ask design questions: what stages/gates, which step tools, what approvals.
+"""
+
+
 # Workflow Execution Guidelines (Shared across all modes)
 WORKFLOW_EXECUTION_GUIDELINES = """
 ### 5. Workflow Execution Flow
@@ -282,24 +307,24 @@ def _get_cached_content_section() -> str:
     return _CACHED_CONTENT_SECTION
 
 def _capabilities_from_db() -> Optional[List[str]]:
-    """Capabilities list from published Skills (the "skills as data" source).
+    """Capabilities list from published Workflows (the "workflows as data" source).
 
     Returns ``None`` (not ``[]``) when the DB is unavailable so the caller can
     fall back to the filesystem; an empty published set returns ``[]``.
     """
     try:
         from app.db.session import get_session_local
-        from app.services.skill_service import SkillService
+        from app.services.workflow_service import WorkflowService
 
         db = get_session_local()()
         try:
-            skills = SkillService.list_published(db)
-            return [f"- {s.key}: {s.goal}" for s in skills if s.goal]
+            workflows = WorkflowService.list_published(db)
+            return [f"- {s.key}: {s.goal}" for s in workflows if s.goal]
         finally:
             db.close()
     except Exception as e:  # noqa: BLE001
         import logging
-        logging.getLogger(__name__).warning(f"Skill DB capabilities unavailable: {e}")
+        logging.getLogger(__name__).warning(f"Workflow DB capabilities unavailable: {e}")
         return None
 
 
@@ -327,14 +352,14 @@ def _capabilities_from_filesystem() -> List[str]:
 
 
 def _get_cached_capabilities_section() -> str:
-    """Build the capabilities section live from published Skills (DB), falling
+    """Build the capabilities section live from published Workflows (DB), falling
     back to the legacy filesystem instructions if the DB has none/unavailable.
 
-    Read live (not cached) so admin edits in the Skill authoring UI take effect
+    Read live (not cached) so admin edits in the Workflow authoring UI take effect
     on the next turn without a restart -- mirrors the Context Catalog section.
     """
     capabilities_list = _capabilities_from_db()
-    if not capabilities_list:  # None (DB down) or [] (no published skills)
+    if not capabilities_list:  # None (DB down) or [] (no published workflows)
         capabilities_list = _capabilities_from_filesystem()
 
     if not capabilities_list:
@@ -478,8 +503,9 @@ def _get_feedback_section() -> str:
 def get_agent_prompt(tools_override: Optional[List[Any]] = None, mode: str = "self_service") -> str:
     """Get the complete agent prompt combining system prompt and instructions.
 
-    There is a single unified agent (no modes). The ``mode`` argument is kept
-    for backwards compatibility with existing callers but is ignored.
+    There is a single unified runtime agent. The ``mode`` argument is normally
+    ignored — EXCEPT ``mode == "authoring"``, which builds a focused prompt for
+    the workflow-authoring studio (design workflows, never run them).
     """
 
     tools_section = ""
@@ -489,6 +515,19 @@ def get_agent_prompt(tools_override: Optional[List[Any]] = None, mode: str = "se
 ## Available Tools
 You have access to the following tools:
 {_format_tools_list(effective_tools)}
+"""
+
+    # Workflow-authoring studio: a scoped prompt that never runs workflows.
+    if mode == "authoring":
+        authoring_section = _get_authoring_section(effective_tools)
+        context_domains_section = _get_context_domains_section()
+        return f"""{SYSTEM_PROMPT}
+
+{CORE_INSTRUCTIONS}
+{AUTHORING_MODE_INSTRUCTIONS}
+{tools_section}
+{authoring_section}
+{context_domains_section}
 """
 
     # Load dynamic content (cached)
@@ -506,17 +545,60 @@ You have access to the following tools:
     # Feedback routing guidance (only when feedback is enabled)
     feedback_section = _get_feedback_section()
 
+    # Workflow-authoring guidance (only when the admin authoring tools are present)
+    authoring_section = _get_authoring_section(effective_tools)
+
     return f"""{SYSTEM_PROMPT}
 
 {CORE_INSTRUCTIONS}
 {UNIFIED_INSTRUCTIONS}
 {WORKFLOW_EXECUTION_GUIDELINES}
 {tools_section}
+{authoring_section}
 {capabilities_section}
 {context_domains_section}
 {web_search_section}
 {feedback_section}
 {content_section}
+"""
+
+
+def _get_authoring_section(tools: Optional[List[Any]]) -> str:
+    """Authoring guidance, included only when the user has the authoring tools.
+
+    Tools are role-filtered upstream, so this section appears for Platform/
+    Governance Admins and stays out of every other user's prompt.
+    """
+    names = {getattr(t, "name", "") for t in (tools or [])}
+    if "save_workflow_draft" not in names and "publish_workflow" not in names:
+        return ""
+    from app.core.config import settings
+
+    if settings.WORKFLOW_AUTHORING_LOCKED:
+        return """
+## Authoring Workflows (Admins) — LOCKED ENVIRONMENT
+This environment LOCKS in-place workflow authoring. You can still help the admin
+inspect and design: `list_workflow_building_blocks`, `get_workflow`,
+`validate_workflow_spec`, and `preview_workflow_spec` all work. But
+`save_workflow_draft` and `publish_workflow` will be REFUSED here. Tell the admin
+to build and publish in a lower environment, then promote the change as an
+all-or-nothing bundle import (Workflows → Import). Do not attempt to save or publish.
+"""
+    return """
+## Authoring Workflows (Admins)
+You can help this admin design and edit no-code workflows (Workflows) — gates +
+steps compiled into a governed graph. When they ask to create, edit, or fix a
+workflow:
+1. FIRST read the house guide: `search_context_catalog` for "workflow authoring"
+   (or `get_context_document`), and call `list_workflow_building_blocks` to see
+   the real step tools, gate types, and expression operators.
+2. Build/edit the `graph_spec`; inspect a similar one with `get_workflow` to copy patterns.
+3. ALWAYS `validate_workflow_spec`, then `preview_workflow_spec` with a realistic
+   sample context, and show the projection so the admin can confirm behavior.
+4. `save_workflow_draft` to persist a draft (does not affect live requests).
+5. `publish_workflow` ONLY after the admin explicitly confirms — it makes the
+   workflow live for its request_type. Summarize the blast radius first.
+Never publish without validating + previewing + explicit confirmation.
 """
 
 

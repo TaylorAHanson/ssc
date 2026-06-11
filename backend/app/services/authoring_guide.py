@@ -1,0 +1,204 @@
+"""Seed an editable 'Authoring Workflows (Workflows)' guide into the Context Catalog.
+
+The guide lives in the Context Catalog (not in code) on purpose: admins can edit
+it in the Context Catalog UI to add house rules, finicky-tool notes, and naming
+conventions, and the agent reads it via ``search_context_catalog`` /
+``get_context_document`` when helping author a workflow. Seeding is idempotent —
+the domain is matched by name and the document by title, so re-running (every
+boot) never duplicates and never clobbers admin edits.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
+
+_DOMAIN_NAME = "Platform Administration"
+_DOMAIN_DESCRIPTION = (
+    "How to operate and customize this platform: authoring no-code workflows "
+    "(Workflows), governance settings, and admin runbooks."
+)
+_DOC_TITLE = "Authoring Workflows (Workflows) — Guide"
+
+# Bump when the canonical guide content changes and you want existing installs to
+# pick it up. The seed only rewrites the doc when its stored revision is older.
+GUIDE_REVISION = 1
+_REVISION_TAG_PREFIX = "guide-rev:"
+
+GUIDE_MARKDOWN = """\
+# Authoring Workflows (Workflows)
+
+A **workflow** (a *Workflow*) is **data, not code**: an ordered list of *stages*
+compiled into a durable graph. There are two stage kinds:
+
+- **gate** — a human/event approval the request pauses on.
+- **step** — runs one governed *tool* (optionally once per item).
+
+You (and the agent, if you're a Platform/Governance Admin) author these in chat
+or in the visual editor. The agent tools are: `list_workflow_building_blocks`,
+`get_workflow`, `validate_workflow_spec`, `preview_workflow_spec`,
+`save_workflow_draft`, and `publish_workflow`.
+
+## The graph_spec shape
+
+```json
+{
+  "name": "workspace_access",
+  "complete_fact": "access_granted",
+  "stages": [
+    {"kind": "gate", "name": "manager_approval", "type": "manager",
+     "auto_approve": {"$eq": [{"$var": "scope"}, "enterprise"]}},
+    {"kind": "step", "name": "provision", "tool": "add_group_membership",
+     "approvals": ["manager"], "success_fact": "access_granted",
+     "args": {"group": {"$var": "access_group"},
+              "members": {"$list": [{"$var": "requested_by_email"}]}}}
+  ]
+}
+```
+
+Rules:
+- `name` is required. Stages run **in order**.
+- Stage names must be unique and **cannot** be `pending`, `complete`,
+  `completed`, or `rejected` (reserved).
+- A `step` after a gate should list that gate's type in **`approvals`** so policy
+  enforcement sees the approval (e.g. `"approvals": ["manager"]`).
+- `success_fact` (optional) is written when a step succeeds — it drives the
+  request timeline / live graph view, so set it on the meaningful provisioning step.
+- `complete_fact` (optional) is written when the whole workflow completes.
+
+## Gate types
+
+- `manager` — requester's manager approves.
+- `platform_admin` — a platform admin approves (use for plan→review→apply flows).
+- `data_owner` — the resolved owner of the data approves.
+- `training` — proceeds once training completion is recorded.
+- `pr_merge` — proceeds once the linked PR is merged.
+- `children` — proceeds once all spawned child requests complete.
+
+Gates can **auto-approve**: set `auto_approve` to an expression that returns true
+to skip the pause (e.g. low-risk scopes).
+
+## Expression mini-language
+
+Dynamic values (`args`, `auto_approve`, `for_each`, `item_args`) use a small JSON
+expression language (no code). A one-key object whose key starts with `$` is an
+operation; anything else is a literal.
+
+- `{"$var": "scope"}` — context field (dotted paths ok); `{"$var": {"path": "a.b", "default": "x"}}` for a default.
+- `{"$item": "child_type"}` — the current `for_each` item (only inside `for_each`/`item_args`).
+- `{"$ctx": true}` — the whole context. `{"$literal": <any>}` — value as-is.
+- `{"$eq": [a, b]}`, `{"$ne": [a, b]}`, `{"$in": [a, b]}`
+- `{"$and": [..]}`, `{"$or": [..]}`, `{"$not": a}`, `{"$bool": a}`
+- `{"$coalesce": [a, b]}` — first truthy (like `a or b`).
+- `{"$obj": {"k": expr}}`, `{"$list": [expr, ..]}`
+
+## Fan-out (one step per item)
+
+```json
+{"kind": "step", "name": "grant_each", "tool": "grant_uc_access",
+ "for_each": {"$var": "assets"},
+ "item_args": {"asset": {"$item": "asset_name"}, "level": {"$var": "access_level"}}}
+```
+
+## Steps wire to real tools
+
+Call `list_workflow_building_blocks` to see every available step tool with its
+`side_effect_class` and whether it mutates. `validate_workflow_spec` rejects a
+step whose `tool` isn't a real tool. To run, a published workflow's
+**`request_type`** must match a known request type.
+
+## The safe authoring loop
+
+1. `list_workflow_building_blocks` — learn the tools/gates/operators.
+2. Draft the `graph_spec` (start from `get_workflow` on a similar one).
+3. `validate_workflow_spec` — fix any structural/expression errors.
+4. `preview_workflow_spec` with a realistic `sample_context` — confirm which
+   gates fire and the exact args each step receives. **No tools run.**
+5. `save_workflow_draft` — saves as a draft; it does **not** affect live requests.
+6. Only after the admin explicitly confirms: `publish_workflow` — runs the full
+   pre-publish gate and makes it live (a version snapshot is kept for rollback).
+
+## Finicky tools & house rules (edit me)
+
+This section is for admins to extend with environment-specific guidance. Examples:
+
+- **Terraform**: put `terraform_plan` *before* the `platform_admin` gate and
+  `create_*`/apply *after*, so a human reviews the plan.
+- **Notifications**: a trailing `send_notification` step gives requesters closure;
+  use `success_fact` only on the real provisioning step, not the notification.
+- **Identity groups**: group/owner names come from configured UC tag keys — prefer
+  `{"$var": "access_group"}` over hard-coded names.
+
+> Add your own tool-specific gotchas, naming conventions, and required gates here.
+"""
+
+
+def _find_domain(db: Session, name: str):
+    from app.services.context_catalog_service import ContextCatalogService
+
+    for d in ContextCatalogService.list_domains(db):
+        if d.name == name:
+            return d
+    return None
+
+
+def seed_authoring_guide(db: Session) -> Optional[str]:
+    """Ensure the authoring guide domain + document exist (idempotent).
+
+    Returns the document id (created or existing), or ``None`` on failure.
+    Never raises — seeding must not break startup.
+    """
+    from app.services.context_catalog_service import ContextCatalogService
+
+    try:
+        domain = _find_domain(db, _DOMAIN_NAME)
+        if domain is None:
+            domain = ContextCatalogService.create_domain(
+                db,
+                name=_DOMAIN_NAME,
+                description=_DOMAIN_DESCRIPTION,
+                domain_type="system",
+                categories=["administration", "workflow-authoring"],
+                created_by="system",
+            )
+            logger.info("Seeded Context Catalog domain '%s'", _DOMAIN_NAME)
+
+        rev_tag = f"{_REVISION_TAG_PREFIX}{GUIDE_REVISION}"
+        existing = next(
+            (d for d in ContextCatalogService.list_documents(db, domain.id)
+             if d.title == _DOC_TITLE),
+            None,
+        )
+        if existing is None:
+            doc = ContextCatalogService.create_document(
+                db,
+                domain_id=domain.id,
+                title=_DOC_TITLE,
+                body_markdown=GUIDE_MARKDOWN,
+                status="published",
+                tags=["workflow-authoring", "workflows", "admin", rev_tag],
+                created_by="system",
+            )
+            logger.info("Seeded Context Catalog document '%s'", _DOC_TITLE)
+            return doc.id
+
+        # Refresh only if our canonical revision is newer than what's stored, so
+        # we never clobber admin edits made on the current revision.
+        stored_revs = [t for t in (existing.tags or []) if t.startswith(_REVISION_TAG_PREFIX)]
+        stored_rev = max(
+            (int(t[len(_REVISION_TAG_PREFIX):]) for t in stored_revs if t[len(_REVISION_TAG_PREFIX):].isdigit()),
+            default=0,
+        )
+        if stored_rev < GUIDE_REVISION:
+            other_tags = [t for t in (existing.tags or []) if not t.startswith(_REVISION_TAG_PREFIX)]
+            ContextCatalogService.update_document(
+                db, existing.id, body_markdown=GUIDE_MARKDOWN, tags=other_tags + [rev_tag],
+            )
+            logger.info("Updated Context Catalog guide '%s' to revision %d", _DOC_TITLE, GUIDE_REVISION)
+        return existing.id
+    except Exception as e:  # noqa: BLE001 - seeding must never break startup
+        logger.warning("Authoring guide seeding skipped: %s", e)
+        return None

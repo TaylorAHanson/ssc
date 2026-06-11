@@ -182,10 +182,10 @@ const navItems: NavItem[] = [
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
   {
-    id: 'skills',
-    title: 'Skills',
+    id: 'workflows',
+    title: 'Workflows',
     icon: <Sparkles className="w-5 h-5" />,
-    path: '/build/skills',
+    path: '/build/workflows',
     group: 'Build & Customize',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },

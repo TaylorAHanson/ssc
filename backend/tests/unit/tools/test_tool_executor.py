@@ -87,7 +87,7 @@ async def test_enforce_mode_blocks_unapproved_mutation(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_capability_scope_refuses_out_of_scope_mutating_tool(monkeypatch):
-    """A mutating tool outside the active skill's allowed_tools is refused
+    """A mutating tool outside the active workflow's allowed_tools is refused
     structurally, before policy/execution. Reads and in-scope tools pass."""
     from app.core.config import settings
     monkeypatch.setattr(settings, "AGENT_TOOL_OPA_ENFORCE", False, raising=False)

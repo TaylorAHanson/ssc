@@ -25,7 +25,7 @@ import { DataCertification } from './pages/admin/DataCertification';
 import { ODPS } from './pages/admin/ODPS';
 import { TagManagement } from './pages/admin/TagManagement';
 import { ContextCatalog } from './pages/admin/ContextCatalog';
-import { Skills } from './pages/admin/Skills';
+import { Workflows } from './pages/admin/Workflows';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -136,12 +136,12 @@ function App() {
               }
             />
           )}
-          {uiTabs?.skills !== false && (
+          {uiTabs?.workflows !== false && (
             <Route
-              path="/build/skills"
+              path="/build/workflows"
               element={
                 <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
-                  <Skills />
+                  <Workflows />
                 </ProtectedRoute>
               }
             />

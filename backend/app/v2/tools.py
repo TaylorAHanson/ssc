@@ -8,7 +8,7 @@ pre-flight, idempotency, and audit for free.
 They intentionally live OUTSIDE ``app.tools/`` so auto-discovery (``load_tools``)
 does NOT register them as chat-agent tools: a raw ``grant_uc_access`` /
 ``terraform_apply`` must not be directly callable by the conversational agent
-until per-skill capability scoping (M3) exists. Graphs import them explicitly.
+until per-workflow capability scoping (M3) exists. Graphs import them explicitly.
 
 Provider access goes through small ``_get_*_provider`` getters so the eval
 harness can monkeypatch them with fakes (no live Databricks/GitHub needed).

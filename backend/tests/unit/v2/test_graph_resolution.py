@@ -1,9 +1,9 @@
 """Tests for DB-backed graph resolution (the no-code execution override).
 
-A published skill's ``graph_spec`` must win over the code catalog; a missing or
+A published workflow's ``graph_spec`` must win over the code catalog; a missing or
 malformed DB spec must fall back to code so execution never breaks.
 """
-from app.services.skill_service import SkillService
+from app.services.workflow_service import WorkflowService
 from app.v2.graphs import build_graph_for, published_graph_spec
 
 _MINIMAL_SPEC = {
@@ -20,7 +20,7 @@ _MINIMAL_SPEC = {
 
 
 def test_published_graph_spec_returns_db_spec(db_session):
-    SkillService.create(
+    WorkflowService.create(
         db_session, key="workspace_access", name="WS Access",
         request_type="workspace_access", graph_spec=_MINIMAL_SPEC, status="published",
     )
@@ -29,7 +29,7 @@ def test_published_graph_spec_returns_db_spec(db_session):
 
 
 def test_published_graph_spec_ignores_drafts(db_session):
-    SkillService.create(
+    WorkflowService.create(
         db_session, key="workspace_access", name="WS",
         request_type="workspace_access", graph_spec=_MINIMAL_SPEC, status="draft",
     )
@@ -41,7 +41,7 @@ def test_build_graph_for_prefers_db_then_falls_back(db_session):
     assert build_graph_for("workspace_access", None) is not None
 
     # Published DB spec -> builds from it.
-    SkillService.create(
+    WorkflowService.create(
         db_session, key="workspace_access", name="WS",
         request_type="workspace_access", graph_spec=_MINIMAL_SPEC, status="published",
     )
@@ -49,7 +49,7 @@ def test_build_graph_for_prefers_db_then_falls_back(db_session):
 
 
 def test_build_graph_for_falls_back_on_invalid_db_spec(db_session):
-    SkillService.create(
+    WorkflowService.create(
         db_session, key="workspace_access", name="WS",
         request_type="workspace_access",
         graph_spec={"name": "x", "stages": [{"kind": "step", "name": "s", "tool": "ghost"}]},

@@ -33,6 +33,25 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Tools the agent may use while in the workflow-authoring studio. Deliberately
+# excludes every runtime / provisioning tool (e.g. ``execute_workflow``,
+# ``get_workflow_instructions``, ``get_target_workspaces``): the authoring panel
+# is for DESIGNING workflows, never running them. "Create a workflow that does X"
+# must mean author a new definition, not execute an existing similar one.
+_AUTHORING_TOOL_NAMES = frozenset({
+    # Authoring tools (admin-only, role-gated upstream)
+    "list_workflow_building_blocks",
+    "get_workflow",
+    "validate_workflow_spec",
+    "preview_workflow_spec",
+    "save_workflow_draft",
+    "publish_workflow",
+    # Read-only knowledge-base tools so the agent can read the house guide.
+    "list_context_domains",
+    "search_context_catalog",
+    "get_context_document",
+})
+
 def _extract_json_instructions(message: str) -> Optional[Dict[str, Any]]:
     """Extract JSON instructions from agent message if present."""
     # Look for JSON code blocks in the message - handle nested braces
@@ -166,11 +185,15 @@ def _build_runner_and_history(
     logger.info(f"Current User: {current_user.email}")
     logger.info(f"Current User Roles: {current_user.roles}")
 
-    # Single unified agent (no modes). Tools are gated purely by the user's
-    # role via ``required_role``; whatever the user is permitted to use, the
-    # one agent can use. ``agent_mode`` is retained only for the return
-    # signature / logging compatibility.
-    agent_mode = "unified"
+    # Single unified agent (no runtime modes). Tools are gated purely by the
+    # user's role via ``required_role``; whatever the user is permitted to use,
+    # the one agent can use. The ONE exception is the workflow-authoring studio:
+    # when the caller marks the conversation ``mode: "authoring"`` (the in-page
+    # assistant on the Workflows page), we scope the toolset to authoring tools
+    # only so the agent designs workflows instead of running them.
+    requested_mode = ((request.context or {}).get("mode") or "").strip().lower()
+    is_authoring = requested_mode == "authoring"
+    agent_mode = "authoring" if is_authoring else "unified"
 
     visible_tools = []
     for tool in AGENT_TOOLS:
@@ -178,6 +201,8 @@ def _build_runner_and_history(
         if hasattr(tool, "required_role") and tool.required_role:
             if not current_user.has_role(tool.required_role):
                 allowed = False
+        if is_authoring and getattr(tool, "name", "") not in _AUTHORING_TOOL_NAMES:
+            allowed = False
 
         if allowed:
             visible_tools.append(tool)

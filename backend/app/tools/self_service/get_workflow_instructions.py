@@ -20,26 +20,43 @@ async def get_workflow_instructions(workflow_name: str) -> Dict[str, Any]:
     """
     Fetch the markdown instructions for a specific workflow.
 
-    Reads the published Skill from the DB first ("skills as data"); falls back
+    Reads the published Workflow from the DB first ("workflows as data"); falls back
     to the legacy filesystem instruction markdown if the DB has no matching
-    published skill or is unavailable.
+    published workflow or is unavailable.
     """
     clean_name = re.sub(r'[^a-zA-Z0-9_]', '', workflow_name.replace('.md', ''))
 
-    # DB-backed Skills take precedence.
+    # DB-backed Workflows take precedence.
     try:
         from app.db.session import get_session_local
-        from app.services.skill_service import SkillService
+        from app.services.workflow_service import WorkflowService
 
         db = get_session_local()()
         try:
-            skill = SkillService.get_by_key(db, clean_name, published_only=True)
-            if skill and skill.instructions_markdown:
+            workflow = WorkflowService.get_by_key(db, clean_name, published_only=True)
+            if workflow and workflow.instructions_markdown:
                 return {
-                    "workflow": skill.key,
-                    "instructions": skill.instructions_markdown,
+                    "workflow": workflow.key,
+                    "instructions": workflow.instructions_markdown,
                     "found": True,
-                    "source": "skill",
+                    "source": "workflow",
+                }
+            # No-code workflow authored from the visual editor: it has a
+            # graph_spec but no hand-written instructions. Derive a baseline
+            # from the spec so the agent isn't handed a blank.
+            if workflow and workflow.graph_spec:
+                from app.v2.instructions import render_instructions_markdown
+
+                generated = render_instructions_markdown(
+                    workflow.graph_spec,
+                    request_type=workflow.request_type,
+                    goal=workflow.goal,
+                )
+                return {
+                    "workflow": workflow.key,
+                    "instructions": generated,
+                    "found": True,
+                    "source": "workflow_generated",
                 }
         finally:
             db.close()

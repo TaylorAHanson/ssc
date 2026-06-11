@@ -11,20 +11,20 @@ import {
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { api } from '../../services/api';
-import type { Skill, WorkflowGraphSpec, WorkflowTool } from '../../services/api';
+import type { Workflow, WorkflowGraphSpec, WorkflowTool } from '../../services/api';
 
 interface Props {
-  skill: Skill;
+  workflow: Workflow;
   graphSpec: WorkflowGraphSpec | null;
   tools: WorkflowTool[];
   onConfirm: () => Promise<void>;
   onClose: () => void;
 }
 
-/** Confirmation shown before a draft skill goes live. Validates the graph (if any)
+/** Confirmation shown before a draft workflow goes live. Validates the graph (if any)
  *  and summarizes the "blast radius" so a platform admin sees exactly what they're
  *  turning on: gates, steps, mutating actions, and the request-type binding. */
-export function PublishConfirmModal({ skill, graphSpec, tools, onConfirm, onClose }: Props) {
+export function PublishConfirmModal({ workflow, graphSpec, tools, onConfirm, onClose }: Props) {
   const [validating, setValidating] = useState(!!graphSpec);
   const [valid, setValid] = useState(!graphSpec);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -78,7 +78,7 @@ export function PublishConfirmModal({ skill, graphSpec, tools, onConfirm, onClos
   };
 
   const hasGraph = !!graphSpec && (graphSpec.stages?.length ?? 0) > 0;
-  const noRequestType = hasGraph && !skill.request_type;
+  const noRequestType = hasGraph && !workflow.request_type;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -86,7 +86,7 @@ export function PublishConfirmModal({ skill, graphSpec, tools, onConfirm, onClos
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
           <div className="flex items-center gap-2">
             <Send className="w-4 h-4 text-accent" />
-            <h2 className="text-sm font-semibold">Publish “{skill.key}”?</h2>
+            <h2 className="text-sm font-semibold">Publish “{workflow.key}”?</h2>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
             <X className="w-5 h-5" />
@@ -96,10 +96,10 @@ export function PublishConfirmModal({ skill, graphSpec, tools, onConfirm, onClos
         <div className="p-5 space-y-4">
           <p className="text-sm text-gray-600">
             Publishing makes this the <span className="font-medium">live</span> version
-            {skill.request_type ? (
-              <> for request type <code className="text-xs">{skill.request_type}</code></>
+            {workflow.request_type ? (
+              <> for request type <code className="text-xs">{workflow.request_type}</code></>
             ) : null}
-            . It becomes v{skill.version + 1} and the agent and durable executor will use it immediately.
+            . It becomes v{workflow.version + 1} and the agent and durable executor will use it immediately.
           </p>
 
           {hasGraph ? (
@@ -145,7 +145,7 @@ export function PublishConfirmModal({ skill, graphSpec, tools, onConfirm, onClos
             </div>
           ) : (
             <div className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
-              This skill has no workflow graph — publishing only changes its instructions/metadata
+              This workflow has no workflow graph — publishing only changes its instructions/metadata
               that the agent reads.
             </div>
           )}

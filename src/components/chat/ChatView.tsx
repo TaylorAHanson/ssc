@@ -166,6 +166,13 @@ export interface ChatViewProps {
      * instead of the input being pinned to the bottom of the surface.
      */
     emptyStateExtras?: React.ReactNode;
+    /**
+     * Fired when a tool call resolves, with the tool name, its raw result
+     * payload, and whether it succeeded. Lets a host surface react to agent
+     * side effects — e.g. the workflow authoring panel reloads + opens the
+     * draft the agent just saved. Fires once per tool result.
+     */
+    onToolResult?: (toolName: string, result: unknown, ok: boolean) => void;
 }
 
 /**
@@ -195,6 +202,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         onRoute,
         formCtaLabelFor,
         emptyStateExtras,
+        onToolResult,
     },
     ref,
 ) {
@@ -233,6 +241,18 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     // synchronously during render to avoid any stale-effect race.
     const pendingPollRef = useRef<PendingPollEvent | null>(null);
     pendingPollRef.current = pendingPoll;
+
+    // Map tool_call id -> tool name so we can report the resolving tool's name
+    // to `onToolResult` (the tool_result event carries only the id).
+    const toolNamesRef = useRef<Record<string, string>>({});
+
+    // Whitespace-normalized signature of the most recently *applied* agent
+    // message. Backs a hard guard against rendering the same bubble twice:
+    // the `message` apply runs inside a deferred `setTimeout` (the tool-pill
+    // gate), and at temperature 0.0 the model can re-emit byte-for-byte (or
+    // whitespace-different) identical text on a follow-up iteration. The
+    // in-`prev` compare can miss those, so we also short-circuit here.
+    const lastAgentSigRef = useRef<string>('');
 
     // Persist messages so users don't lose context on refresh. Skip
     // any in-flight pills (they re-render as cancelled instead of
@@ -466,6 +486,11 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         // bookkeeping from a prior stream shouldn't delay the first
         // event of this one.
         eventGateRef.current = 0;
+        // Scope the same-message guard to this turn only. A later,
+        // unrelated turn that legitimately produces the same short reply
+        // (e.g. "Done.") should still render; we only want to swallow a
+        // duplicate emitted *within* a single turn.
+        lastAgentSigRef.current = '';
         // Stale form-route CTAs from a prior turn shouldn't survive a
         // new question — the agent may pick a different form, or no
         // form at all. The continuation path skips this clear so the
@@ -564,6 +589,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             }
             case 'tool_call': {
                 setStatusLabel(event.friendly_label);
+                toolNamesRef.current[event.id] = event.name;
                 setMessages((prev) => [
                     ...prev,
                     {
@@ -581,6 +607,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 break;
             }
             case 'tool_result': {
+                // Notify the host of the resolved tool + payload immediately
+                // (independent of the pill's delayed visual settle below) so
+                // it can react to agent side effects without waiting.
+                onToolResult?.(toolNamesRef.current[event.id] || '', event.result, event.ok);
                 // Hold the "running" pill on screen for a short
                 // minimum so synchronous tools (e.g. execute_workflow,
                 // metadata listings) don't flash from "Running …" to
@@ -675,23 +705,33 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             }
             case 'message': {
                 if (!event.content) break;
+                const incomingSig = normalizeForDedup(event.content);
                 const apply = () =>
                     setMessages((prev) => {
                         // Defensive dedup: if the runner re-emits an
                         // identical message back-to-back (we've seen this
                         // happen in the wild on certain model serving
                         // endpoints when the LLM produces the same text
-                        // across two iterations), don't push another
-                        // bubble. Compare against the most recent agent
-                        // message only — non-trivial repetition across
-                        // unrelated turns is fine and represents a real
-                        // user observation.
+                        // across two iterations — it runs at temperature
+                        // 0.0, so repeats are byte-for-byte), don't push
+                        // another bubble. We compare whitespace-normalized
+                        // signatures so a stray trailing space / CRLF /
+                        // blank-line difference can't sneak a visual dupe
+                        // past us. Two guards:
+                        //   1. ref signature of the last applied agent
+                        //      message — covers the deferred `apply` path
+                        //      where the in-`prev` compare can race.
+                        //   2. the most recent agent bubble in `prev`.
+                        if (incomingSig && incomingSig === lastAgentSigRef.current) {
+                            return prev;
+                        }
                         const lastAgent = [...prev]
                             .reverse()
                             .find((m): m is Extract<DisplayMessage, { kind: 'agent' }> => m.kind === 'agent');
-                        if (lastAgent && lastAgent.content.trim() === event.content.trim()) {
+                        if (lastAgent && normalizeForDedup(lastAgent.content) === incomingSig) {
                             return prev;
                         }
+                        lastAgentSigRef.current = incomingSig;
                         return [
                             ...prev,
                             {
@@ -1431,6 +1471,14 @@ function escapeHtml(s: string): string {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+// Whitespace-insensitive signature for dedup comparisons. Collapses all
+// runs of whitespace (including the blank lines markdown introduces) to a
+// single space so two visually identical agent replies that differ only by
+// trailing spaces / CRLFs / blank-line count are treated as the same.
+function normalizeForDedup(s: string): string {
+    return s.replace(/\s+/g, ' ').trim();
 }
 
 function stringifyResult(result: Record<string, unknown> | null): string {

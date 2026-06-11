@@ -59,8 +59,15 @@ ATLAS is highly customizable. You can control its features, UI tabs, and brandin
 ### Step 3.2: Update databricks.yml
 Open `databricks.yml` in the root of your repository and update the `variables` block to match your environment:
 - `lakebase_host` (The hostname of your Databricks Lakebase database)
-- `model_serving_endpoint` (e.g., `databricks-gemini-2-5-flash`)
+- `model_serving_endpoint` (the agent's LLM endpoint, e.g. `databricks-gpt-5-4-mini`)
 - `gitops_volume_path` (The Unity Catalog volume path you created in Step 2.1)
+
+**Governance & observability variables** (sensible defaults provided):
+- `agent_tool_opa_enforce` (default `true`) — enforce the agent-tool OPA policy in this environment (deny + approval gates actually halt mutating tools). The app starts an embedded OPA server automatically. Leave `true` for any deployed env; it is `false`/shadow only for local dev.
+- `workflow_authoring_locked` (default `false`; **`true` in the `prod` target**) — when `true`, in-place workflow (Workflow) authoring is disabled: no create/edit/publish/delete via the UI, API, or the agent. The only way to change workflows is an all-or-nothing **bundle import** (promotion). Build and prove workflows in lower envs, then promote the vetted bundle into prod. Reads, export, validate, and dry-run stay available.
+- `ai_gateway_endpoint` (default empty) — if set, the agent's LLM calls route through this AI Gateway endpoint (model routing/A-B, rate + cost limits, and input guardrails are configured **on the gateway**, not in app code). Leave empty to call `model_serving_endpoint` directly.
+- `mlflow_tracing_enabled` (default `false`) / `mlflow_experiment` — enable one MLflow trace per agent turn into the given experiment.
+- `identity_provider` (default `noop`) — pluggable identity-group backend: `noop`, `rest` (SCIM/Entra/Okta), or `lmws`.
 
 ---
 
@@ -130,3 +137,33 @@ After your first deployment completes successfully:
 
 ### Step 5.3: Restart the App
 Go back to **Compute → Apps**, select your app, and click **Stop**, followed by **Start** to apply the new permissions.
+
+### Step 5.4: Verify Governance Posture
+On startup the backend logs its governance posture. Confirm the logs show **ENFORCE** mode (not SHADOW) in production:
+```
+GOVERNANCE: agent-tool OPA is in ENFORCE mode (mutating policy gates active).
+LLM routing: via AI Gateway endpoint '...'   # or "direct to Model Serving" if no gateway
+Observability: MLflow tracing ENABLED/disabled
+```
+If you see `SHADOW mode`, set `agent_tool_opa_enforce: "true"` for the environment and redeploy.
+
+---
+
+## 6. (Optional) Register the Agent to Model Serving
+
+ATLAS exposes its agent as a native MLflow `ResponsesAgent` (`AtlasResponsesAgent`). The in-app chat uses it directly; registering it to **Model Serving** additionally makes it available to the Databricks Playground, batch eval, and external consumers (e.g. via AI Gateway).
+
+This is a **workspace-run** operation and needs the deploy-time dependencies `mlflow` (full, not -skinny) and `databricks-agents`, which are not part of the app's runtime requirements. Run it from an authenticated workspace shell or notebook:
+
+```bash
+pip install "mlflow>=3.1" databricks-agents
+python -m scripts.register_responses_agent \
+    --uc-model-name <catalog>.<schema>.atlas_self_service_agent \
+    --llm-endpoint databricks-gpt-5-4-mini \
+    --experiment /Shared/atlas-agent \
+    --deploy
+```
+
+The script logs the agent (models-from-code), registers it to Unity Catalog, attaches the LLM/gateway serving endpoints as resources for auth passthrough, and (with `--deploy`) provisions the serving endpoint.
+
+> **AI Gateway note:** The new Unity AI Gateway serving objects aren't yet declarable in a Databricks Asset Bundle, which is why this step is a script rather than part of `databricks.yml`. To route the *running app* through a gateway you only need to set the `ai_gateway_endpoint` variable — no code change.

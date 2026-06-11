@@ -1,7 +1,7 @@
 """
 Declarative workflow specs -> LangGraph graphs.
 
-The V2 "skills as data" thesis: most workflows are a linear sequence of
+The V2 "workflows as data" thesis: most workflows are a linear sequence of
 *stages* — human approval gates and provision steps — so we describe them as
 data (:class:`WorkflowSpec`) and compile them to a durable LangGraph graph with
 one generic builder. Specialized pipelines (enforcement, reporting, job runs,

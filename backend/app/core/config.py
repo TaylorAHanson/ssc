@@ -242,6 +242,15 @@ class Settings(BaseSettings):
     # `data.agent.tools` policy is tuned against real traffic.
     AGENT_TOOL_OPA_ENFORCE: bool = False
 
+    # No-code workflow (Workflow) authoring lock. When True, all in-place authoring
+    # of workflows is disabled — create/update/publish/unpublish/delete/rollback
+    # via the API, and the agent's `save_workflow_draft`/`publish_workflow` tools.
+    # The ONLY way to change workflows in a locked environment is an all-or-nothing
+    # bundle IMPORT (the env-promotion path); reads, export, validate, and dry-run
+    # stay available. Set True in production so workflows are built+proven in lower
+    # envs and promoted as a vetted bundle, never hand-edited live.
+    WORKFLOW_AUTHORING_LOCKED: bool = False
+
     # Open Policy Agent (governance / Rego)
     # Empty OPA_URL → app starts an embedded `opa run --server` child process
     # (see `app.providers.opa.server_manager`) and routes evaluations there.

@@ -47,21 +47,29 @@ async def lifespan(app: FastAPI):
         # Create Tables (ensure models are loaded via init_db import or explicit import)
         # init_db imports models, so metadata should be populated
         engine = get_engine()
+        # Apply in-place schema renames BEFORE create_all so renamed tables keep
+        # their data instead of being recreated empty alongside the old ones.
+        from app.db.migrate import run_startup_migrations
+        run_startup_migrations(engine)
         Base.metadata.create_all(bind=engine)
         
         db = get_session_local()()
         try:
             init_db(db)
-            # Seed DB-backed Skills from the legacy filesystem instructions once
-            # (idempotent) so "skills as data" has content on first boot.
+            # Seed DB-backed Workflows from the legacy filesystem instructions once
+            # (idempotent) so "workflows as data" has content on first boot.
             try:
-                from app.services.skill_service import SkillService
-                SkillService.seed_from_filesystem(db)
+                from app.services.workflow_service import WorkflowService
+                WorkflowService.seed_from_filesystem(db)
                 # Attach the workflow graph catalog as editable graph_spec data so
                 # the no-code executor can run DB-authored graphs.
-                SkillService.seed_specs_from_catalog(db)
+                WorkflowService.seed_specs_from_catalog(db)
+                # Seed the editable "how to author workflows" guide into the
+                # Context Catalog so admins can customize it and the agent can read it.
+                from app.services.authoring_guide import seed_authoring_guide
+                seed_authoring_guide(db)
             except Exception as e:
-                logger.warning(f"Skill seeding skipped: {e}")
+                logger.warning(f"Workflow seeding skipped: {e}")
         finally:
             db.close()
     except Exception as e:

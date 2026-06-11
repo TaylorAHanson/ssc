@@ -1,41 +1,43 @@
 import { useEffect, useState } from 'react';
-import { History, Loader2, RotateCcw, Workflow, X } from 'lucide-react';
+import { History, Loader2, RotateCcw, Workflow as WorkflowIcon, X } from 'lucide-react';
 import { Button } from '../ui/button';
 import { api } from '../../services/api';
-import type { Skill, SkillVersion } from '../../services/api';
+import type { Workflow, WorkflowVersion } from '../../services/api';
 
 interface Props {
-  skillId: string;
+  workflowId: string;
   currentVersion: number;
-  onRestored: (skill: Skill) => void;
+  onRestored: (workflow: Workflow) => void;
   onClose: () => void;
+  /** When true, authoring is locked in this env: show history read-only (no Restore). */
+  locked?: boolean;
 }
 
 /** Published-version history with one-click rollback. Restoring loads the chosen
  *  version's body back as a draft so it can be reviewed/tested before re-publishing. */
-export function VersionHistoryModal({ skillId, currentVersion, onRestored, onClose }: Props) {
-  const [versions, setVersions] = useState<SkillVersion[] | null>(null);
+export function VersionHistoryModal({ workflowId, currentVersion, onRestored, onClose, locked }: Props) {
+  const [versions, setVersions] = useState<WorkflowVersion[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     api
-      .listSkillVersions(skillId)
+      .listWorkflowVersions(workflowId)
       .then((v) => !cancelled && setVersions(v))
       .catch((e) => !cancelled && setError(e instanceof Error ? e.message : 'Failed to load history'));
     return () => {
       cancelled = true;
     };
-  }, [skillId]);
+  }, [workflowId]);
 
   const restore = async (version: number) => {
     if (!confirm(`Restore version ${version} as a new draft? Current unpublished edits will be replaced.`)) return;
     setRestoring(version);
     setError(null);
     try {
-      const skill = await api.rollbackSkill(skillId, version);
-      onRestored(skill);
+      const workflow = await api.rollbackWorkflow(workflowId, version);
+      onRestored(workflow);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to restore');
     } finally {
@@ -68,7 +70,7 @@ export function VersionHistoryModal({ skillId, currentVersion, onRestored, onClo
             </div>
           ) : versions.length === 0 ? (
             <div className="text-sm text-gray-400 text-center py-10">
-              No published versions yet. Publishing a skill snapshots it here.
+              No published versions yet. Publishing a workflow snapshots it here.
             </div>
           ) : (
             <div className="space-y-2">
@@ -87,7 +89,7 @@ export function VersionHistoryModal({ skillId, currentVersion, onRestored, onClo
                       )}
                       {v.has_graph && (
                         <span className="text-[10px] text-gray-500 inline-flex items-center gap-1">
-                          <Workflow className="w-3 h-3" /> {v.stage_count} stage{v.stage_count === 1 ? '' : 's'}
+                          <WorkflowIcon className="w-3 h-3" /> {v.stage_count} stage{v.stage_count === 1 ? '' : 's'}
                         </span>
                       )}
                     </div>
@@ -96,19 +98,21 @@ export function VersionHistoryModal({ skillId, currentVersion, onRestored, onClo
                       {v.published_by ? ` · ${v.published_by}` : ''}
                     </div>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={restoring !== null}
-                    onClick={() => restore(v.version)}
-                  >
-                    {restoring === v.version ? (
-                      <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
-                    ) : (
-                      <RotateCcw className="w-3.5 h-3.5 mr-1" />
-                    )}
-                    Restore
-                  </Button>
+                  {!locked && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={restoring !== null}
+                      onClick={() => restore(v.version)}
+                    >
+                      {restoring === v.version ? (
+                        <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                      ) : (
+                        <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                      )}
+                      Restore
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>

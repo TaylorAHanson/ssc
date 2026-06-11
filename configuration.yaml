@@ -60,10 +60,10 @@ features:
   # the agent retrieves from. Gates the admin UI, the API, and the retrieval
   # tools below.
   context_catalog: true
-  # Skill authoring: DB-backed, admin-editable workflow definitions ("skills as
+  # Workflow authoring: DB-backed, admin-editable workflow definitions ("workflows as
   # data") that replace the filesystem instruction markdown. Gates the admin UI
-  # and the /skills API; the agent always reads published skills.
-  skill_authoring: true
+  # and the /workflows API; the agent always reads published workflows.
+  workflow_authoring: true
   # Onboarding suggestions: on login, the home page asks the agent for a few
   # personalized, clickable starting prompts (role + recent-activity hints).
   # One cached LLM call per session with a deterministic role-based fallback.
@@ -99,7 +99,7 @@ ui:
     sentinel: true
     tag_management: true
     context_catalog: true
-    skills: true
+    workflows: true
     feedback: true
 
 tools:
@@ -169,6 +169,15 @@ tools:
   ask_your_data:
     enabled: true
     default_genie_space_id: ""
+  # No-code workflow (Workflow) authoring tools. Admin-only (gated by
+  # required_role) so the agent can help Platform/Governance Admins design,
+  # validate, preview, and publish workflows in chat.
+  list_workflow_building_blocks: true
+  get_workflow: true
+  validate_workflow_spec: true
+  preview_workflow_spec: true
+  save_workflow_draft: true
+  publish_workflow: true
 
 workflows:
   RequestType.ALLOWLIST_EXCEPTION: true

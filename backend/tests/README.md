@@ -14,7 +14,7 @@ backend/tests/
 └── unit/                   # Fast, mocked tests (default)
     ├── agents/             # AgentRunner stream protocol + MLflow tracing no-op
     ├── providers/          # Provider contracts incl. pluggable IdentityGroupProvider
-    ├── services/           # SkillService (DB-backed "workflows as data")
+    ├── services/           # WorkflowService (DB-backed "workflows as data")
     ├── tools/              # Tool contracts + the governed ToolExecutor choke point
     └── v2/                 # Drives the V2 graph harness (all graphs green)
 ```

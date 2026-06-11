@@ -17,7 +17,7 @@ V2 turns the framework into a **no-code solution** by remapping three concepts:
 
 | V1 (framework, code) | V2 (solution, configured) |
 |---|---|
-| **Workflows** = hand-coded state machine classes (~5,800 lines across 26 classes) | **Skills** = admin-authored, DB-backed records (prompt + allowed tools + policy + approval rules) |
+| **Workflows** = hand-coded state machine classes (~5,800 lines across 26 classes) | **Workflows** = admin-authored, DB-backed records (prompt + allowed tools + policy + approval rules) |
 | **Providers** = internal Python abstractions, called only by state machines | **Tools** = the agent orchestrates provider-backed tools directly, under a guardrail stack |
 | **State machine engine** = custom `tick()`/fact-reconciliation loop (`python-statemachine`) | **Durable agentic execution** = LangGraph graph + Lakebase (Postgres) checkpointer |
 
@@ -46,7 +46,7 @@ The hard requirements from V1 are unchanged; only the *mechanism* changes.
 | **Long-running tolerance** | `execute_tasks()` async hooks + poller | Async tool handles (pending-poll pattern) inside graph nodes + poller |
 | **Human-in-the-loop** | `wait_for_event` + poller detects approval fact | LangGraph `interrupt()`; approval fact resumes the graph |
 | **Governance / audit** | Per-workflow hooks scattered across classes | One `ToolExecutor` chokepoint → one audit fact per mutating call |
-| **Bounded blast radius** | Deterministic SM never improvises | Capability scoping per skill + OPA approval gates (see below) |
+| **Bounded blast radius** | Deterministic SM never improvises | Capability scoping per workflow + OPA approval gates (see below) |
 | Determinism of **path** | Guaranteed | **Intentionally traded away** |
 
 ## 3. The Guardrail Stack
@@ -59,13 +59,13 @@ a deterministic *path*.
 ```mermaid
 flowchart TD
     User["User (chat)"] --> Agent["Agent loop (ReAct); durable workflows execute via LangGraph + Lakebase checkpointer"]
-    Agent --> Skill["Active Skill = allowed-tool set + policy ref + approval rules"]
-    Skill --> Call["Tool call"]
+    Agent --> Workflow["Active Workflow = allowed-tool set + policy ref + approval rules"]
+    Workflow --> Call["Tool call"]
     Call --> Exec["ToolExecutor (shared by agent runner + /mcp server)"]
     Exec --> Validate["Pydantic validate args"]
     Validate --> Class{"is_mutating?"}
     Class -->|no| RunRead["execute as OBO user"]
-    Class -->|yes| Scope{"tool in skill capability scope?"}
+    Class -->|yes| Scope{"tool in workflow capability scope?"}
     Scope -->|no| Block["refuse: out of scope"]
     Scope -->|yes| Policy{"OPA data.agent.tools decision"}
     Policy -->|deny| Refuse["refuse + reason -> agent adapts/explains"]
@@ -80,13 +80,13 @@ flowchart TD
 
 Guardrail layers, ranked by **worst-case** bounding power (not average-case):
 
-1. **Capability scoping per skill** — a skill declares its `allowed_tools`; the agent in that skill's context structurally cannot call anything else. Bounds blast radius before policy runs.
+1. **Capability scoping per workflow** — a workflow declares its `allowed_tools`; the agent in that workflow's context structurally cannot call anything else. Bounds blast radius before policy runs.
 2. **OPA approval gate** on `infra` / `membership` / `destructive` classes — irreversible/high-impact actions require human sign-off, decided in version-controlled Rego.
 3. **Plan → confirm → apply** — mutating tools return a diff; the user confirms before apply (generalizes Terraform's plan/apply).
 4. **OBO + Unity Catalog floor** — read tools and (where applicable) data grants run as the caller, who can never exceed their own UC permissions.
 5. **Idempotency + durable checkpointing** — re-entry after a crash returns the prior result instead of re-acting.
 6. **Least-privilege scoped credentials** — SP-privileged tools use narrowly scoped creds.
-7. **Eval / sandbox before publish** — a skill is tested against a sandbox workspace before it can go live.
+7. **Eval / sandbox before publish** — a workflow is tested against a sandbox workspace before it can go live.
 
 ## 4. Blast-Radius Model (Identity & Bounds)
 
@@ -119,10 +119,10 @@ OBO+UC remains the bound for `read` tools.
 
 ```mermaid
 graph TD
-    UI["UI Layer (Web) + No-Code Skill Authoring"]
+    UI["UI Layer (Web) + No-Code Workflow Authoring"]
     API["API Layer (REST + SSE)"]
     Agent["Agent Layer (LLM, ReAct)"]
-    Skills[("Skill Store (Lakebase)")]
+    Workflows[("Workflow Store (Lakebase)")]
     Exec["ToolExecutor (guardrail chokepoint)"]
     OPA["OPA (data.agent.tools)"]
     Tools["Tools (read + mutating, provider-backed)"]
@@ -132,7 +132,7 @@ graph TD
     DB[("Lakebase: requests / events / approvals")]
 
     UI --> API --> Agent
-    Agent -->|reads published skills| Skills
+    Agent -->|reads published workflows| Workflows
     Agent -->|tool calls| Exec
     Exec -->|pre-flight| OPA
     Exec --> Tools --> Providers
@@ -145,7 +145,7 @@ graph TD
 ```
 
 - **Agent Layer** — single unified ReAct agent. Its tool set per conversation is the active
-  skill's `allowed_tools`. It both *gathers/validates* and, within rails, *orchestrates execution*.
+  workflow's `allowed_tools`. It both *gathers/validates* and, within rails, *orchestrates execution*.
 - **ToolExecutor** — the new chokepoint every tool call flows through (agent path and `/mcp` path).
 - **Durable Executor** — the only execution engine. A LangGraph graph per workflow type,
   checkpointed to Lakebase, resumed by the poller.
@@ -164,7 +164,7 @@ class ToolContext:
     obo_token: str | None    # caller's On-Behalf-Of token
     user_identity: dict      # email, roles, entitlements
     db: Session
-    skill: Skill | None      # active skill -> capability scope
+    workflow: Workflow | None      # active workflow -> capability scope
 
 class ToolExecutor:
     async def run(self, tool: McpTool, ctx: ToolContext, **args) -> dict:
@@ -172,8 +172,8 @@ class ToolExecutor:
         if not tool.is_mutating:
             return await tool.execute(_obo_token=ctx.obo_token, **args)
 
-        if ctx.skill and tool.name not in ctx.skill.allowed_tools:
-            return refuse("tool not in skill capability scope")
+        if ctx.workflow and tool.name not in ctx.workflow.allowed_tools:
+            return refuse("tool not in workflow capability scope")
 
         decision = await opa.evaluate(
             tool.policy_ref, "data.agent.tools.decision",
@@ -254,15 +254,15 @@ decision := d {
 }
 ```
 
-## 8. Component: The Skill Object (No-Code Authoring)
+## 8. Component: The Workflow Object (No-Code Authoring)
 
-Skills replace `backend/app/agents/instructions/*.md` (filesystem, dev-deployed, cached at
+Workflows replace `backend/app/agents/instructions/*.md` (filesystem, dev-deployed, cached at
 process start). They are DB-backed and admin-authored, modeled on the existing Context Catalog
 (domains/documents with draft→publish), which is the proven precedent for admin-authored
 content the agent consumes at runtime.
 
 ```python
-class SkillModel(Base):
+class WorkflowModel(Base):
     id: str
     name: str
     trigger_phrases: list[str]        # feeds the capabilities index
@@ -278,12 +278,12 @@ class SkillModel(Base):
 ```
 
 - **Authoring UI**: clone the Context Catalog admin page — tree/list + markdown editor + a
-  tool picker (from the live tool registry, so renames don't silently break a skill) + a
+  tool picker (from the live tool registry, so renames don't silently break a workflow) + a
   parameter-schema builder + an approval-rules form.
-- **Publication**: published skills feed the capabilities index **live** (no redeploy); the
-  agent loads a skill's full instructions on demand and is bounded to its `allowed_tools` for
+- **Publication**: published workflows feed the capabilities index **live** (no redeploy); the
+  agent loads a workflow's full instructions on demand and is bounded to its `allowed_tools` for
   that conversation.
-- **AI-assisted authoring**: the agent helps draft a skill (instructions, suggested tools,
+- **AI-assisted authoring**: the agent helps draft a workflow (instructions, suggested tools,
   parameter schema) from a natural-language description.
 
 ## 9. Component: Durable Execution (LangGraph)
@@ -298,7 +298,7 @@ Lakebase, keyed on `request.id` as the thread id. There is no other engine.
 - **Status mapping**: `RequestStatus` is a fixed 8-value enum the UI timeline depends on. Each
   graph declares a `node → RequestStatus` mapping so `to_state_machine_state()` keeps rendering.
 
-### End-to-end: a data-access skill
+### End-to-end: a data-access workflow
 
 ```mermaid
 sequenceDiagram
@@ -310,7 +310,7 @@ sequenceDiagram
     participant DB as Lakebase
 
     U->>A: "Grant me read on sales.orders"
-    A->>A: load skill -> bounded to allowed_tools
+    A->>A: load workflow -> bounded to allowed_tools
     A->>X: get_table_list / search_user_entitlements (read, OBO)
     A->>X: execute_workflow(data_access_request, params)
     X->>DB: create request + add_fact(request_submitted)
@@ -347,10 +347,10 @@ compound `parent_id` / `root_id` linkage.
 
 ### Cutover prerequisites
 
-Before flipping, **all 26 current workflow types must be re-expressed as V2 graphs/skills** and
+Before flipping, **all 26 current workflow types must be re-expressed as V2 graphs/workflows** and
 pass the [eval & sandbox harness](#12-eval--sandbox-harness). Cutover gating:
 
-- All workflow types have a published V2 skill + graph and green evals.
+- All workflow types have a published V2 workflow + graph and green evals.
 - All ~45 tools are classified (`is_mutating` / `side_effect_class`) and the `data.agent.tools`
   OPA policy is authored and enforced (not shadow mode).
 - A **drain or migrate** plan for in-flight V1 requests: either drain to terminal state before
@@ -368,8 +368,8 @@ incremental production releases of mixed engines:
 2. **Engine + first graph**: stand up the LangGraph executor with the Lakebase checkpointer and
    prove one representative graph end-to-end (`data_access_request`): `interrupt()` approval,
    idempotency keys, crash-resume.
-3. **Authoring**: DB-backed Skill object + admin UI (Context Catalog clone) + eval/sandbox
-   harness; port every instruction file to a published skill + graph.
+3. **Authoring**: DB-backed Workflow object + admin UI (Context Catalog clone) + eval/sandbox
+   harness; port every instruction file to a published workflow + graph.
 4. **Coverage**: re-express the remaining workflow types (by `side_effect_class`: read/notify →
    data_grant → infra/membership/destructive), each green in the harness.
 5. **Cutover**: drain/migrate in-flight requests, switch the poller to the V2 path, delete the
@@ -378,8 +378,8 @@ incremental production releases of mixed engines:
 ## 11. What V2 Keeps / Replaces / Retires
 
 - **Keep**: providers (the muscle behind tools), OPA, facts/audit, OBO, Lakebase, the chat/SSE
-  UI, the poller shell + locking, the approval API, Context Catalog (template for Skill authoring).
-- **Replace**: 26 hand-coded state machines → authored Skills executed by a LangGraph executor;
+  UI, the poller shell + locking, the approval API, Context Catalog (template for Workflow authoring).
+- **Replace**: 26 hand-coded state machines → authored Workflows executed by a LangGraph executor;
   `wait_for_event` + poller-detects-fact → `interrupt()` + checkpointer; scattered per-workflow
   idempotency hooks → one `ToolExecutor`.
 - **Retire / shrink**: most of the ~1,700 lines of SM framework glue and ~5,800 lines of
@@ -387,9 +387,9 @@ incremental production releases of mixed engines:
 
 ## 12. Eval & Sandbox Harness
 
-Before a skill can be published it must pass an automated **pre-publish** harness that:
-- runs the skill against a **sandbox workspace**;
-- asserts the agent **cannot call tools outside the skill's `allowed_tools`**;
+Before a workflow can be published it must pass an automated **pre-publish** harness that:
+- runs the workflow against a **sandbox workspace**;
+- asserts the agent **cannot call tools outside the workflow's `allowed_tools`**;
 - asserts OPA **approval gates fire** for the declared `side_effect_class`;
 - runs **regression checks** on agent behavior (golden transcripts) to catch prompt drift.
 
@@ -402,7 +402,7 @@ continuously after publish, not just once before it.
 V2 adopts the full **"North Star"** best-practice set proven out in the reference template
 (`supply-chain-agent`), organized as four pillars. The goal is a copy-pasteable, governed,
 observable agent where security, observability, and governance are built in from day one — and
-where reusing the pattern requires changing little more than the prompt and the tools/skills
+where reusing the pattern requires changing little more than the prompt and the tools/workflows
 granted in Unity Catalog. Each pillar below is reconciled against the existing V2 design: where
 it **reinforces** us, and the few places it forces a **decision**.
 
@@ -443,10 +443,10 @@ it **reinforces** us, and the few places it forces a **decision**.
   Because discovery runs under the caller's OBO identity, the agent only ever sees the tools the
   *caller* has `GRANT EXECUTE` on — **platform-native capability scoping**, no code changes when
   tools are added (`registry.get_langchain_tools`).
-- **Skills via UC Volumes.** Shared skills are `.md` files in a UC Volume named `skills`,
+- **Workflows via UC Volumes.** Shared workflows are `.md` files in a UC Volume named `workflows`,
   discovered via `system.information_schema.volumes` and governed by **READ** grants; read on
-  demand by the `read_skill` tool. Each user also gets **personal skills** in their own workspace
-  folder (OBO), always available to them (`registry.discover_skills`, `user_skills.py`).
+  demand by the `read_workflow` tool. Each user also gets **personal workflows** in their own workspace
+  folder (OBO), always available to them (`registry.discover_workflows`, `user_workflows.py`).
 - OBO execution end-to-end; fine-grained SQL `GRANT`; HITL write approvals on mutating functions.
 - *Reconciliation / decisions:*
   - **Tool home (DECISION — keep tools local + self-hosted; expose via a custom MCP provider).**
@@ -457,13 +457,13 @@ it **reinforces** us, and the few places it forces a **decision**.
     switch** (default `False`) controls exposure: only `external=True` tools are published over
     the MCP server; everything else stays app-internal. This keeps one execution + governance
     path (`ToolExecutor`/OPA) while still letting the platform reuse tools.
-  - **Capability scoping:** with tools local, the per-skill `allowed_tools` set + OPA remain the
+  - **Capability scoping:** with tools local, the per-workflow `allowed_tools` set + OPA remain the
     capability scope (not UC `GRANT EXECUTE`). OBO + UC still bound the *data* a tool can read.
-  - **Skill storage (open):** UC-Volume markdown (platform-governed, OBO-discovered, zero infra)
-    vs. the DB-backed **Skill object** we specified for no-code authoring + structured action
+  - **Workflow storage (open):** UC-Volume markdown (platform-governed, OBO-discovered, zero infra)
+    vs. the DB-backed **Workflow object** we specified for no-code authoring + structured action
     metadata (`allowed_tools`, `parameter_schema`, `approval policy`). Recommended **hybrid**:
     keep the structured action metadata in Lakebase for authoring + capability scoping, while
-    skill *instruction content* is discoverable/governable the UC-Volume way.
+    workflow *instruction content* is discoverable/governable the UC-Volume way.
 
 ### Pillar 4 — Observability & Evaluation (MLflow & Delta)
 
@@ -498,8 +498,8 @@ self-contained UI artifact (no backend calls) to communicate the V2 architecture
 - **Off-the-shelf MCP servers** for standard Databricks/UC ops vs. thin in-house tools over
   existing providers — where is the cut line? Org-specific systems (LMWS, GitOps tag management,
   Terraform conventions) will not have off-the-shelf equivalents.
-- **Unified Skill object** (knowledge + action) vs. keeping Context Catalog (knowledge) separate
-  from action skills.
+- **Unified Workflow object** (knowledge + action) vs. keeping Context Catalog (knowledge) separate
+  from action workflows.
 - **Token-level streaming** and richer progress UI for long-running graph nodes.
 - **Streaming vs. output guardrails** (§13 Pillar 2): RESOLVED → **no output guardrails**; keep
   always-on SSE token streaming. Model-side safety via input guardrails + rate/cost limits only.
@@ -509,7 +509,7 @@ self-contained UI artifact (no backend calls) to communicate the V2 architecture
 - **Tool home** (§13 Pillar 3): RESOLVED → **keep tools local + self-hosted** behind
   `ToolExecutor`/OPA, exposed selectively as a **custom MCP provider in AI Gateway** via a
   **per-tool `external` switch** (default off). Tools are *not* moved to UC functions.
-- **Skill storage** (§13 Pillar 3): still open — UC Volume vs. Lakebase Skill object vs. hybrid.
+- **Workflow storage** (§13 Pillar 3): still open — UC Volume vs. Lakebase Workflow object vs. hybrid.
 
 ## 15. Implementation Status (living)
 
@@ -542,7 +542,7 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
     is the only engine; the poller advances these graphs unconditionally.)
 - **M4 — Workflow coverage (DONE, verified).**
   - Declarative `WorkflowSpec` (gates + steps) -> generic `build_spec_graph` (`app/v2/spec.py`):
-    the "skills as data" thesis. All 25 registered request types expressed as graphs
+    the "workflows as data" thesis. All 25 registered request types expressed as graphs
     (`app/v2/graphs/specs.py`); `data_access` keeps a dedicated graph.
   - Provider operations wrapped as mutating V2 tools (`app/v2/tools.py`): `grant_uc_access`,
     `terraform_plan/apply`, `create_uc_object`, `create_service_principal`, `github_*`,
@@ -582,12 +582,12 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
     (`app/jobs/llm_judge.py` + `databricks.yml`) scores recent traces with an LLM judge and
     writes `LLM_JUDGE` assessments for judge-vs-human agreement. Inference tables configured on
     the gateway/serving endpoint (deploy). New deps: `mlflow-skinny`, `numpy`, `pandas`.
-- **M3 — Skill authoring (DONE, verified).** "Workflows as data": `SkillModel`
-  (`app/db/skill.py`) holds key/name/goal/instructions + guardrail metadata (allowed_tools,
-  policy_ref, params_schema, request_type) + draft/publish + version. `SkillService` does CRUD +
+- **M3 — Workflow authoring (DONE, verified).** "Workflows as data": `WorkflowModel`
+  (`app/db/workflow.py`) holds key/name/goal/instructions + guardrail metadata (allowed_tools,
+  policy_ref, params_schema, request_type) + draft/publish + version. `WorkflowService` does CRUD +
   publish + idempotent **seed-from-filesystem** (the 21 legacy `instructions/*.md` import as
-  published skills on first boot). `/api/v1/skills` (admin-gated) + React **Skills** authoring
-  page (`src/pages/admin/Skills.tsx`, Build & Customize). The agent now reads **published skills
+  published workflows on first boot). `/api/v1/workflows` (admin-gated) + React **Workflows** authoring
+  page (`src/pages/admin/Workflows.tsx`, Build & Customize). The agent now reads **published workflows
   from the DB** live: `prompts._get_cached_capabilities_section()` and
   `get_workflow_instructions` query the DB (filesystem fallback). Verified: 21 seeded,
   create/publish lifecycle, capabilities list reflects DB edits.
@@ -611,7 +611,7 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
   `is_mutating`/`side_effect_class` classification the `ToolExecutor` reads, and the LMWS test
   asserted a hardcoded `clone_source` that de-Qualcomm intentionally made config-driven. New
   pytest coverage was added for the V2 surface: the graph harness (run as a subprocess),
-  `SkillService` CRUD/publish/seed, the pluggable `IdentityGroupProvider`, the `ToolExecutor`
+  `WorkflowService` CRUD/publish/seed, the pluggable `IdentityGroupProvider`, the `ToolExecutor`
   (shadow vs. enforce posture), and the MLflow tracing no-op path. **Full suite: 155 passed.**
 - **No-code workflow core (DONE).** The execution graph itself is now data, not just the
   instruction/prompt layer. A safe JSON **expression mini-language** (`app/v2/expr.py`, no
@@ -620,28 +620,28 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
   `spec_from_dict` + `validate_spec_dict` (`app/v2/spec_loader.py`) compile a serializable spec
   into the same runtime `WorkflowSpec` the graph builder consumes. `graphs/specs.py` is now a
   **`SPECS` dict catalog** (all 22 workflows as data) — the harness still reports 25/25 green with
-  identical ToolExecutor counts (31/24), proving parity with the old lambda specs. Skills gained a
+  identical ToolExecutor counts (31/24), proving parity with the old lambda specs. Workflows gained a
   `graph_spec` JSON column; the executor resolves a request's graph via `build_graph_for`, which
-  prefers a **published skill's `graph_spec` (DB)** over the code catalog and falls back safely on
-  any error. The catalog is seeded onto skills at boot (`seed_specs_from_catalog`) so the
-  workflows are immediately editable data. Skills API exposes `graph_spec` plus
-  `POST /skills/validate-spec` and `GET /skills/meta/tools` for the (still-to-build) visual editor.
-- **Visual workflow editor (DONE).** A reactflow **studio** in the Skills admin (`src/pages/admin/Skills.tsx`,
+  prefers a **published workflow's `graph_spec` (DB)** over the code catalog and falls back safely on
+  any error. The catalog is seeded onto workflows at boot (`seed_specs_from_catalog`) so the
+  workflows are immediately editable data. Workflows API exposes `graph_spec` plus
+  `POST /workflows/validate-spec` and `GET /workflows/meta/tools` for the (still-to-build) visual editor.
+- **Visual workflow editor (DONE).** A reactflow **studio** in the Workflows admin (`src/pages/admin/Workflows.tsx`,
   `src/components/admin/Workflow*.tsx`) authors `graph_spec` with no code: a full-width 3-pane layout
   (drag-to-reorder stage list │ live canvas │ stage inspector), friendly forms for gates (approver +
   auto-approve condition builder) and steps (tool picker from `meta/tools`, approvals, expression-aware
   args editor with a raw-JSON escape hatch), and an unsaved-changes guard. `src/lib/workflowSpec.ts`
   translates the `$`-expression language to/from the friendly models.
-- **Author lifecycle: test → ship safely (DONE).** A **dry-run** (`POST /skills/test-spec` → `app/v2/dry_run.py`)
+- **Author lifecycle: test → ship safely (DONE).** A **dry-run** (`POST /workflows/test-spec` → `app/v2/dry_run.py`)
   compiles a *draft* spec and walks it against a sample request — evaluating the same expressions the
   executor would, **running no tools and writing nothing** — to project which gates auto-approve and the
   exact args each step receives (sample input is auto-scaffolded from the fields the workflow reads).
   Publishing goes through a **blast-radius confirmation** (gates/steps/mutating-actions, external-MCP
-  steps, missing-request-type warning) that validates before it lets the skill go live.
-- **Versioning + env promotion (DONE).** Each publish writes an immutable snapshot to `skill_versions`
-  (`SkillVersionModel`); `GET /skills/{id}/versions` + `POST /skills/{id}/rollback` give history and
+  steps, missing-request-type warning) that validates before it lets the workflow go live.
+- **Versioning + env promotion (DONE).** Each publish writes an immutable snapshot to `workflow_versions`
+  (`WorkflowVersionModel`); `GET /workflows/{id}/versions` + `POST /workflows/{id}/rollback` give history and
   one-click restore (restores as a *draft* for review before re-publishing). Portable
-  **export/import** (`GET /skills/export/bundle`, `POST /skills/import/bundle`, format `atlas.skills/v1`,
+  **export/import** (`GET /workflows/export/bundle`, `POST /workflows/import/bundle`, format `atlas.workflows/v1`,
   keyed by `key` with no ids/status/version) supports the **dev → staging → prod** flow: export published
   workflows from one env, import into the next as **drafts** (default), dry-run them, then publish.
 - **Guardrail hardening (DONE).** Capability scope is now a structural bound in the `ToolExecutor`:
@@ -663,7 +663,7 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
   run compares against it and fails on drift (`--capture` to refresh after intended changes). A
   `--sandbox` mode skips the fakes to run against real providers in a throwaway workspace (not for CI).
   Publish gained a **side-effect-free behavioral gate** (`_behavioral_publish_gate` → dry-run projection)
-  that compiles the spec and resolves every tool by name before a skill goes live (the full hermetic
+  that compiles the spec and resolves every tool by name before a workflow goes live (the full hermetic
   harness can't run in-process — it monkeypatches module globals).
 - **ResponsesAgent deployment (DONE, workspace-run).** `app/agents/agent_entry.py` is the MLflow
   models-from-code entry; `scripts/register_responses_agent.py` logs + registers it to Unity Catalog and
@@ -671,6 +671,24 @@ Built additively pre-cutover; the legacy engine still runs the product until M5.
   serving endpoints as resources. Decoupled from `databricks.yml` because the new Unity AI Gateway serving
   objects aren't yet bundle-declarable; the running app adopts a gateway purely via `AI_GATEWAY_ENDPOINT`.
   Startup now logs the active governance posture, LLM routing (gateway vs. direct), and tracing state.
+- **Agent-driven workflow authoring (DONE).** The *same* unified agent can now co-author no-code
+  workflows for admins. Six tools (`app/tools/authoring/workflow_authoring.py`), gated with
+  `required_role="Governance Admin"` (Platform Admins pass all role checks; Governance Admins match by
+  name; everyone else is filtered out by the chat endpoint's `required_role` pass), wrap the same
+  `WorkflowService` / `spec_loader` / `dry_run` / publish gate the visual editor uses:
+  `list_workflow_building_blocks` (read), `get_workflow` (read), `validate_workflow_spec` (read),
+  `preview_workflow_spec` (dry-run, read), `save_workflow_draft` (`app_write`), and `publish_workflow`
+  (`app_write`, runs the full pre-publish gate + version snapshot). They're auto-discovered and listed in
+  `configuration.yaml` (`tools:`). A conditional **prompt section** (`_get_authoring_section`) appears only
+  when the user holds the authoring tools, instructing the agent to consult the guide, then
+  validate → preview → save draft → publish only on explicit confirmation. The mutating tools route
+  through the governed `ToolExecutor` (audited).
+- **Editable authoring guide in the Context Catalog (DONE).** A "Platform Administration" domain + an
+  "Authoring Workflows (Workflows) — Guide" document (the graph_spec schema, gate types, expression
+  mini-language, fan-out, the safe authoring loop, and an admin-editable "finicky tools & house rules"
+  section) is seeded idempotently at startup (`app/services/authoring_guide.py`, revision-tagged so admin
+  edits aren't clobbered). It's editable in the Context Catalog admin UI and read by the agent via the
+  existing `search_context_catalog` / `get_context_document` tools.
 - **Remaining:** pooled Postgres checkpointer; wire the SSE `trace_id` into the chat-UI feedback control;
   end-to-end validation of the ResponsesAgent registration + `--sandbox` harness against a live workspace
   (both require workspace credentials).

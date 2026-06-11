@@ -1,7 +1,7 @@
 """V2 graph registry: request type -> compiled-graph builder.
 
 The durable executor looks a request's type up here to get its graph. In V2
-these graphs are the published *Skills* (M3); most are generated from
+these graphs are the published *Workflows* (M3); most are generated from
 declarative specs (``specs.py``), with ``data_access`` keeping a dedicated graph
 for multi-owner resolution.
 """
@@ -48,7 +48,7 @@ def registered_types() -> list:
 
 
 def published_graph_spec(db, request_type) -> Optional[dict]:
-    """Return a published skill's ``graph_spec`` for this type, or ``None``.
+    """Return a published workflow's ``graph_spec`` for this type, or ``None``.
 
     This is the no-code override point: an admin-authored, published workflow
     graph wins over the code catalog. Any lookup error degrades to ``None`` so
@@ -56,19 +56,19 @@ def published_graph_spec(db, request_type) -> Optional[dict]:
     """
     key = getattr(request_type, "value", request_type)
     try:
-        from app.db.skill import SkillModel
+        from app.db.workflow import WorkflowModel
 
-        skill = (
-            db.query(SkillModel)
+        workflow = (
+            db.query(WorkflowModel)
             .filter(
-                SkillModel.request_type == key,
-                SkillModel.status == "published",
-                SkillModel.graph_spec.isnot(None),
+                WorkflowModel.request_type == key,
+                WorkflowModel.status == "published",
+                WorkflowModel.graph_spec.isnot(None),
             )
             .first()
         )
-        if skill and skill.graph_spec:
-            return skill.graph_spec
+        if workflow and workflow.graph_spec:
+            return workflow.graph_spec
     except Exception as e:  # noqa: BLE001 - resolution must never break execution
         logger.debug("published_graph_spec lookup failed for %s: %s", key, e)
     return None

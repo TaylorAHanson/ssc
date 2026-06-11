@@ -77,6 +77,11 @@ resources:
           # is shadow so local/test runs without a policy server don't fail closed.
           - name: AGENT_TOOL_OPA_ENFORCE
             value: "${var.agent_tool_opa_enforce}"
+          # Governance: lock no-code workflow authoring in this environment. When
+          # true, workflows can only change via an all-or-nothing bundle import
+          # (promotion); no in-place create/edit/publish/delete. Prod sets true.
+          - name: WORKFLOW_AUTHORING_LOCKED
+            value: "${var.workflow_authoring_locked}"
           # Pluggable identity-group provider (noop|rest|lmws).
           - name: IDENTITY_PROVIDER
             value: "${var.identity_provider}"
@@ -286,6 +291,9 @@ variables:
   agent_tool_opa_enforce:
     description: "Enforce the agent-tool OPA policy (true) vs. shadow/log-only (false). Deployed envs should enforce; requires a reachable OPA (embedded by default)."
     default: "true"
+  workflow_authoring_locked:
+    description: "Lock no-code workflow authoring (true) so workflows only change via all-or-nothing bundle import. Lower envs author freely (false); prod is locked (true)."
+    default: "false"
   identity_provider:
     description: "Identity-group provider backend: noop | rest | lmws"
     default: "noop"
@@ -418,3 +426,5 @@ targets:
       event_sync_cron: "0 * * * *"
       data_asset_sync_cron: "0 * * * *"
       enforcement_sentinel_cron: "*/30 * * * *"
+      # Lock authoring in prod: workflows are promoted in as a vetted bundle, not hand-edited live.
+      workflow_authoring_locked: "true"

@@ -101,7 +101,7 @@ def render_state(request, db) -> StateMachineState:
 def _resolve_spec_dict(request, db) -> Dict[str, Any]:
     """The serializable graph_spec actually governing this request.
 
-    Prefers a published skill's authored ``graph_spec`` (the no-code override),
+    Prefers a published workflow's authored ``graph_spec`` (the no-code override),
     then the code catalog, then a synthesized shape for dedicated graphs
     (e.g. data_access) so the UI always has something to draw.
     """

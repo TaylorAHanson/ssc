@@ -37,6 +37,7 @@ import {
 } from '../../lib/workflowSpec';
 import WorkflowGraphPreview from './WorkflowGraphPreview';
 import WorkflowTestModal from './WorkflowTestModal';
+import { HelpTip, LabelWithHelp, AskAgentHint } from '../ui/help-tip';
 
 // `inputBase` has no width so it can be combined with flex/explicit widths
 // without the `w-full` conflict that otherwise collapses flex children.
@@ -49,9 +50,11 @@ interface Props {
   spec: WorkflowGraphSpec;
   tools: WorkflowTool[];
   onChange: (spec: WorkflowGraphSpec) => void;
+  /** Opens the in-page authoring assistant panel (instead of a new chat tab). */
+  onAskAgent?: () => void;
 }
 
-export function WorkflowEditor({ spec, tools, onChange }: Props) {
+export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
   const [selectedIdx, setSelectedIdx] = useState<number | null>(
     spec.stages.length ? 0 : null,
   );
@@ -155,6 +158,8 @@ export function WorkflowEditor({ spec, tools, onChange }: Props) {
           <Button type="button" variant="outline" size="sm" onClick={addStep}>
             <Wrench className="w-3.5 h-3.5 mr-1" /> Add step
           </Button>
+          <HelpTip text="A workflow runs its stages top to bottom. Add a gate for a human/event approval the request pauses on, or a step to run one governed tool. Drag to reorder." />
+          <AskAgentHint className="ml-1" onClick={onAskAgent} label="Ask the agent" />
         </div>
         <div className="flex items-center gap-3">
           {validation && (
@@ -182,6 +187,7 @@ export function WorkflowEditor({ spec, tools, onChange }: Props) {
           <Button type="button" size="sm" onClick={() => setShowTest(true)} disabled={stages.length === 0}>
             <Play className="w-3.5 h-3.5 mr-1" /> Test
           </Button>
+          <HelpTip text="Validate checks the structure (gate types, real tools, well-formed expressions). Test dry-runs the workflow against a sample request — projecting which gates auto-approve and the exact args each step gets — without running anything." />
         </div>
       </div>
 
@@ -286,7 +292,9 @@ export function WorkflowEditor({ spec, tools, onChange }: Props) {
 
             <div className="p-4 space-y-4 max-w-3xl">
               <div>
-                <label className={labelClass}>Stage name (internal id)</label>
+                <LabelWithHelp className={labelClass} help="Unique internal id for this stage. Used by the timeline and live graph. Can't be one of the reserved names: pending, complete, completed, rejected.">
+                  Stage name (internal id)
+                </LabelWithHelp>
                 <input
                   className={inputClass}
                   value={selected.name}
@@ -362,7 +370,9 @@ function GateForm({
     <>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className={labelClass}>Approver</label>
+          <LabelWithHelp className={labelClass} help="Who must approve before the workflow continues: manager (requester's manager), platform_admin, data_owner, training (completed), pr_merge (PR merged), or children (all spawned child requests done).">
+            Approver
+          </LabelWithHelp>
           <select
             className={inputClass}
             value={gate.type}
@@ -374,7 +384,9 @@ function GateForm({
           </select>
         </div>
         <div>
-          <label className={labelClass}>Status while waiting</label>
+          <LabelWithHelp className={labelClass} help="Optional status label shown on the request while it's paused at this gate (e.g. 'manager_approval'). Purely for display in the request list/timeline.">
+            Status while waiting
+          </LabelWithHelp>
           <input
             className={inputClass}
             value={gate.waiting_status || ''}
@@ -385,7 +397,9 @@ function GateForm({
       </div>
 
       <div>
-        <label className={labelClass}>Auto-approve (skip this gate when…)</label>
+        <LabelWithHelp className={labelClass} help="Optionally skip the human approval when a condition holds (e.g. low-risk scope). 'Never' always requires approval; 'When a condition is met' builds a simple rule; 'Advanced' is a raw expression for complex logic.">
+          Auto-approve (skip this gate when…)
+        </LabelWithHelp>
         <select
           className={inputClass}
           value={model.mode}
@@ -516,7 +530,9 @@ function StepForm({
     <>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className={labelClass}>Tool</label>
+          <LabelWithHelp className={labelClass} help="The governed action this step performs. 'mutating' tools change real infrastructure/data and run through approval + audit; non-mutating tools only read.">
+            Tool
+          </LabelWithHelp>
           <select
             className={inputClass}
             value={step.tool}
@@ -531,7 +547,9 @@ function StepForm({
           </select>
         </div>
         <div>
-          <label className={labelClass}>Success fact (optional)</label>
+          <LabelWithHelp className={labelClass} help="Optional fact recorded when this step succeeds (e.g. access_granted). It drives the request timeline and the live graph view, so set it on the meaningful provisioning step.">
+            Success fact (optional)
+          </LabelWithHelp>
           <input
             className={inputClass}
             value={step.success_fact || ''}
@@ -552,7 +570,9 @@ function StepForm({
 
       {approvalOptions.length > 0 && (
         <div>
-          <label className={labelClass}>Requires prior approval (gate)</label>
+          <LabelWithHelp className={labelClass} help="Tie this step to gate approvals that come before it. Checking a gate tells policy enforcement the approval is satisfied — important for steps that run after an approval (e.g. apply after a platform_admin review).">
+            Requires prior approval (gate)
+          </LabelWithHelp>
           <div className="flex flex-wrap gap-2">
             {approvalOptions.map((g) => (
               <label key={g} className="inline-flex items-center gap-1.5 text-xs border border-gray-200 rounded-md px-2 py-1 cursor-pointer">
@@ -569,7 +589,9 @@ function StepForm({
       )}
 
       <div>
-        <label className={labelClass}>Tool arguments</label>
+        <LabelWithHelp className={labelClass} help="The values passed to the tool. Each argument can be pulled 'From request field', set as 'Fixed text', the 'Entire request', a 'List of fields', or an 'Advanced' raw expression. Field values are filled in from the actual request at run time.">
+          Tool arguments
+        </LabelWithHelp>
         <div className="space-y-2">
           {argEntries.map(([key, val], i) => (
             <ArgRow
