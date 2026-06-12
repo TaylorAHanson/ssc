@@ -12,8 +12,16 @@ the runtime agent would have nothing to follow. This module derives a sensible
 baseline from the spec itself so instructions are never empty. Admins (or the
 authoring agent) can refine the result; it is plain markdown.
 
+Separation of concerns: the *prose* (goal, what to gather, naming conventions)
+is human-authorable, but the **``execute_workflow`` call contract** — the
+``workflow_type`` and parameter keys — is always derived from the graph, never
+hand-typed. ``execution_contract`` / ``render_execution_block`` produce it, and
+``with_canonical_execution`` splices the canonical block into any (even
+hand-written) instructions so the runtime call can never drift from the spec.
+
 Pure + side-effect free so it is trivially testable and safe to call on save.
 """
+import re
 from typing import Any, Dict, List, Set
 
 # Context variables the platform injects automatically — they are NOT things
@@ -58,6 +66,85 @@ _GATE_DESCRIPTIONS = {
 }
 
 
+def _user_inputs(spec: Dict[str, Any]) -> List[str]:
+    """The user-supplied ``$var`` inputs a spec's steps reference, in first-seen order."""
+    all_vars: List[str] = []
+    _collect_vars((spec or {}).get("stages", []) or [], all_vars)
+    return [v for v in all_vars if v not in _PLATFORM_VARS]
+
+
+def execution_contract(
+    spec: Dict[str, Any], *, request_type: str | None = None
+) -> Dict[str, Any]:
+    """The deterministic ``execute_workflow`` call contract derived from the graph.
+
+    This is the single source of truth for *how to call the workflow*: the
+    ``workflow_type`` and the parameter keys. It is computed from the spec (the
+    ``$var`` inputs its steps consume), never hand-authored, so the runtime call
+    can't drift from the graph.
+    """
+    spec = spec or {}
+    return {
+        "workflow_type": request_type or spec.get("name") or "workflow",
+        "parameters": _user_inputs(spec),
+    }
+
+
+def render_execution_block(
+    spec: Dict[str, Any], *, request_type: str | None = None
+) -> str:
+    """Render the ``## Execution`` markdown block deterministically from the graph."""
+    contract = execution_contract(spec, request_type=request_type)
+    user_inputs = contract["parameters"]
+    lines: List[str] = ["## Execution", "Call `execute_workflow` with:", "```json", "{"]
+    lines.append(f'  "workflow_type": "{contract["workflow_type"]}",')
+    if user_inputs:
+        lines.append('  "parameters": {')
+        for i, var in enumerate(user_inputs):
+            comma = "," if i < len(user_inputs) - 1 else ""
+            lines.append(f'    "{var}": "..."{comma}')
+        lines.append("  }")
+    else:
+        lines.append('  "parameters": {}')
+    lines.append("}")
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def _strip_execution_section(md: str) -> str:
+    """Remove a ``## Execution`` section (its heading through the next H2 / EOF).
+
+    Lets us replace any hand-authored execute_workflow example with the canonical
+    generated one, so the served call is always derived from the graph.
+    """
+    out: List[str] = []
+    skipping = False
+    for line in (md or "").splitlines():
+        if re.match(r"^\s*##\s+Execution\b", line):
+            skipping = True
+            continue
+        if skipping and re.match(r"^\s*##\s+", line):
+            skipping = False
+        if not skipping:
+            out.append(line)
+    return "\n".join(out).rstrip()
+
+
+def with_canonical_execution(
+    instructions_md: str, spec: Dict[str, Any], *, request_type: str | None = None
+) -> str:
+    """Return ``instructions_md`` with its Execution block replaced by the canonical,
+    graph-derived one. The human-authored prose (goal, what to gather, naming
+    conventions) is preserved; only the ``execute_workflow`` call is regenerated.
+    """
+    spec = spec or {}
+    if not spec.get("stages"):
+        return instructions_md or ""
+    body = _strip_execution_section(instructions_md or "")
+    block = render_execution_block(spec, request_type=request_type)
+    return f"{body}\n\n{block}\n" if body else f"{block}\n"
+
+
 def render_instructions_markdown(
     spec: Dict[str, Any],
     *,
@@ -70,9 +157,7 @@ def render_instructions_markdown(
     title = _humanize(name)
     stages: List[Dict[str, Any]] = spec.get("stages", []) or []
 
-    all_vars: List[str] = []
-    _collect_vars(stages, all_vars)
-    user_inputs = [v for v in all_vars if v not in _PLATFORM_VARS]
+    user_inputs = _user_inputs(spec)
 
     lines: List[str] = []
     lines.append(f"# {title} Instructions")
@@ -114,22 +199,8 @@ def render_instructions_markdown(
                 lines.append(f"- **Step** — `{tool}` ({_humanize(s.get('name', ''))}){cond}")
         lines.append("")
 
-    # Execution template.
-    lines.append("## Execution")
-    lines.append(f"Call `execute_workflow` with:")
-    lines.append("```json")
-    lines.append("{")
-    lines.append(f'  "workflow_type": "{name}",')
-    if user_inputs:
-        lines.append('  "parameters": {')
-        for i, var in enumerate(user_inputs):
-            comma = "," if i < len(user_inputs) - 1 else ""
-            lines.append(f'    "{var}": "..."{comma}')
-        lines.append("  }")
-    else:
-        lines.append('  "parameters": {}')
-    lines.append("}")
-    lines.append("```")
+    # Execution template — generated deterministically from the graph.
+    lines.append(render_execution_block(spec, request_type=request_type))
     lines.append("")
 
     return "\n".join(lines)

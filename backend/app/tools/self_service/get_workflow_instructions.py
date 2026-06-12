@@ -35,29 +35,48 @@ async def get_workflow_instructions(workflow_name: str) -> Dict[str, Any]:
         db = get_session_local()()
         try:
             workflow = WorkflowService.get_by_key(db, clean_name, published_only=True)
-            if workflow and workflow.instructions_markdown:
-                return {
-                    "workflow": workflow.key,
-                    "instructions": settings.apply_brand_tokens(workflow.instructions_markdown),
-                    "found": True,
-                    "source": "workflow",
-                }
-            # No-code workflow authored from the visual editor: it has a
-            # graph_spec but no hand-written instructions. Derive a baseline
-            # from the spec so the agent isn't handed a blank.
-            if workflow and workflow.graph_spec:
-                from app.workflows.instructions import render_instructions_markdown
-
-                generated = render_instructions_markdown(
-                    workflow.graph_spec,
-                    request_type=workflow.request_type,
-                    goal=workflow.goal,
+            if workflow and (workflow.instructions_markdown or workflow.graph_spec):
+                from app.workflows.instructions import (
+                    execution_contract,
+                    render_instructions_markdown,
+                    with_canonical_execution,
                 )
+
+                if workflow.instructions_markdown and workflow.instructions_markdown.strip():
+                    base = workflow.instructions_markdown
+                    source = "workflow"
+                else:
+                    # No-code workflow authored from the visual editor: it has a
+                    # graph_spec but no hand-written instructions. Derive a
+                    # baseline from the spec so the agent isn't handed a blank.
+                    base = render_instructions_markdown(
+                        workflow.graph_spec or {},
+                        request_type=workflow.request_type,
+                        goal=workflow.goal,
+                    )
+                    source = "workflow_generated"
+
+                # The ``execute_workflow`` call is ALWAYS (re)derived from the graph
+                # so it can't drift from the spec — even if the human prose included
+                # a stale/incorrect example, we replace its Execution block with the
+                # canonical one. The prose (goal, what to gather) is preserved.
+                if workflow.graph_spec:
+                    instructions = with_canonical_execution(
+                        base, workflow.graph_spec, request_type=workflow.request_type
+                    )
+                    execution = execution_contract(
+                        workflow.graph_spec, request_type=workflow.request_type
+                    )
+                else:
+                    instructions = base
+                    execution = None
+
                 return {
                     "workflow": workflow.key,
-                    "instructions": settings.apply_brand_tokens(generated),
+                    "instructions": settings.apply_brand_tokens(instructions),
+                    "execution": execution,
                     "found": True,
-                    "source": "workflow_generated",
+                    "source": source,
                 }
         finally:
             db.close()

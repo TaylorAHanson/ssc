@@ -708,6 +708,11 @@ function StepForm({
 }) {
   const tool = tools.find((t) => t.name === step.tool);
   const argEntries = Object.entries(step.args || {});
+  // Approvals are auto-derived from preceding gates at runtime; the explicit
+  // list here is only an override. Default the override UI open when one is set.
+  const [showApprovalsOverride, setShowApprovalsOverride] = useState(
+    (step.approvals || []).length > 0,
+  );
 
   const setArgs = (entries: [string, SpecExpr][]) => {
     const obj: Record<string, SpecExpr> = {};
@@ -743,7 +748,7 @@ function StepForm({
           </select>
         </div>
         <div>
-          <LabelWithHelp className={labelClass} help="Optional fact recorded when this step succeeds (e.g. access_granted). It drives the request timeline and the live graph view, so set it on the meaningful provisioning step.">
+          <LabelWithHelp className={labelClass} help="Optional timeline/live-graph marker recorded when this step succeeds (e.g. access_granted). Set it only on a meaningful provisioning milestone — omit it on notification/closing steps, and don't set it equal to the workflow's complete_fact (that's written automatically on completion).">
             Success fact (optional)
           </LabelWithHelp>
           <input
@@ -766,21 +771,41 @@ function StepForm({
 
       {approvalOptions.length > 0 && (
         <div>
-          <LabelWithHelp className={labelClass} help="Tie this step to gate approvals that come before it. Checking a gate tells policy enforcement the approval is satisfied — important for steps that run after an approval (e.g. apply after a platform_admin review).">
-            Requires prior approval (gate)
+          <LabelWithHelp className={labelClass} help="By default a step inherits the approvals of every gate before it — the graph guarantees those gates passed before this step runs, and that derived set is what policy enforcement sees. You rarely need to touch this; use the override only to change the set a step attests (e.g. apply after a specific platform_admin review).">
+            Prior approvals
           </LabelWithHelp>
-          <div className="flex flex-wrap gap-2">
+          <div className="text-[11px] text-gray-500 flex flex-wrap items-center gap-1">
+            <span>Auto-applied from earlier gates:</span>
             {approvalOptions.map((g) => (
-              <label key={g} className="inline-flex items-center gap-1.5 text-xs border border-gray-200 rounded-md px-2 py-1 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={(step.approvals || []).includes(g)}
-                  onChange={() => toggleApproval(g)}
-                />
-                {g}
-              </label>
+              <code key={g} className="px-1 py-0.5 rounded bg-gray-100 text-gray-600">{g}</code>
             ))}
+            <button
+              type="button"
+              className="ml-1 text-accent hover:underline"
+              onClick={() => setShowApprovalsOverride((v) => !v)}
+            >
+              {showApprovalsOverride ? 'Hide override' : 'Override'}
+            </button>
           </div>
+          {showApprovalsOverride && (
+            <div className="mt-1.5">
+              <div className="flex flex-wrap gap-2">
+                {approvalOptions.map((g) => (
+                  <label key={g} className="inline-flex items-center gap-1.5 text-xs border border-gray-200 rounded-md px-2 py-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={(step.approvals || []).includes(g)}
+                      onChange={() => toggleApproval(g)}
+                    />
+                    {g}
+                  </label>
+                ))}
+              </div>
+              <div className="text-[11px] text-gray-400 mt-1">
+                Leave all unchecked to use the auto-derived set.
+              </div>
+            </div>
+          )}
         </div>
       )}
 

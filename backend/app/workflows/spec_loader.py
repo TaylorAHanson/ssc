@@ -203,6 +203,13 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
     """Compile a validated JSON spec into a runtime :class:`WorkflowSpec`."""
     validate_spec_dict(data)
     stages: List[Any] = []
+    # Gate types seen so far, in first-seen order. A step that doesn't declare
+    # its own ``approvals`` inherits every gate that precedes it: the graph
+    # guarantees those gates were satisfied before the step runs (a rejected gate
+    # routes to "rejected" and the step never executes), so attesting them to the
+    # policy layer is truthful — and it means authors don't have to hand-wire the
+    # link (the #1 "forgot to check the box -> denied under enforcement" footgun).
+    preceding_gate_types: List[str] = []
     for stage in data.get("stages", []):
         if stage["kind"] == "gate":
             gate = Gate(
@@ -225,13 +232,19 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
                     gate.approver_assets_from = _value_fn(assets_spec)
                     gate.approver_fallback_to_owner = approver.get("fallback_to_owner", True)
             stages.append(gate)
+            if stage["type"] not in preceding_gate_types:
+                preceding_gate_types.append(stage["type"])
         else:
+            # Explicit ``approvals`` (an advanced override) win; otherwise inherit
+            # every gate that precedes this step.
+            explicit = stage.get("approvals")
+            approvals = list(explicit) if explicit else list(preceding_gate_types)
             step = Step(
                 name=stage["name"],
                 tool=get_tool(stage["tool"]),
                 args=_args_fn(stage.get("args", {})),
                 running_status=stage.get("running_status", "provisioning"),
-                approvals=list(stage.get("approvals", [])),
+                approvals=approvals,
                 success_fact=stage.get("success_fact"),
             )
             if stage.get("for_each") is not None:

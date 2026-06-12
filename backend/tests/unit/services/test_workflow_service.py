@@ -59,6 +59,93 @@ def test_delete(db_session):
     assert WorkflowService.get(db_session, workflow.id) is None
 
 
+def _spec_with_input():
+    return {
+        "name": "training_session_request",
+        "stages": [
+            {"kind": "gate", "name": "approval", "type": "manager"},
+            {"kind": "step", "name": "notify", "tool": "send_notification",
+             "approvals": ["manager"], "args": {
+                 "to_email": {"$literal": "s@corp.com"},
+                 "subject": {"$literal": "Request"},
+                 "body": {"$concat": ["Topics: ", {"$var": "topics"}]},
+             }},
+        ],
+    }
+
+
+def test_create_persists_canonical_execution_block(db_session):
+    """Authoring prose is stored WITH the graph-derived execute_workflow block."""
+    wf = WorkflowService.create(
+        db_session, key="training_session_request", name="Training",
+        request_type="training_session_request", graph_spec=_spec_with_input(),
+        instructions_markdown="# Training\n\n**Goal**: schedule team training.",
+        status="draft",
+    )
+    assert wf.instructions_markdown.startswith("# Training")
+    assert wf.instructions_markdown.count("## Execution") == 1
+    assert '"workflow_type": "training_session_request"' in wf.instructions_markdown
+    assert '"topics"' in wf.instructions_markdown
+
+
+def test_update_resyncs_execution_block_when_graph_changes(db_session):
+    """Editing the graph refreshes the persisted execute_workflow block (no drift)."""
+    wf = WorkflowService.create(
+        db_session, key="resync", name="R", request_type="resync",
+        graph_spec={"name": "resync", "stages": [
+            {"kind": "step", "name": "n", "tool": "send_notification",
+             "args": {"to_email": {"$literal": "a@b"}, "body": {"$var": "topics"}}}]},
+        instructions_markdown="# R\n\n**Goal**: x.",
+        status="draft",
+    )
+    assert '"topics"' in wf.instructions_markdown
+
+    # Change the graph to reference a different input; the stored block follows.
+    updated = WorkflowService.update(db_session, wf.id, graph_spec={
+        "name": "resync", "stages": [
+            {"kind": "step", "name": "n", "tool": "send_notification",
+             "args": {"to_email": {"$literal": "a@b"}, "body": {"$var": "headcount"}}}]})
+    assert updated.instructions_markdown.count("## Execution") == 1
+    assert '"headcount"' in updated.instructions_markdown
+    assert '"topics"' not in updated.instructions_markdown
+
+
+def test_create_without_graph_leaves_instructions_untouched(db_session):
+    """Legacy/code workflows with no graph keep their hand-written instructions as-is."""
+    wf = WorkflowService.create(
+        db_session, key="legacy", name="L",
+        instructions_markdown="# Legacy\n\nDo the thing.",
+        status="draft",
+    )
+    assert wf.instructions_markdown == "# Legacy\n\nDo the thing."
+
+
+def test_create_with_graph_but_blank_instructions_generates_baseline(db_session):
+    """Manual-Save path (blank prose + a graph) gets the 'never empty' baseline too."""
+    wf = WorkflowService.create(
+        db_session, key="manual_blank", name="M",
+        request_type="manual_blank", graph_spec=_spec_with_input(),
+        instructions_markdown="",  # editor textarea was empty
+        status="draft",
+    )
+    assert wf.instructions_markdown and wf.instructions_markdown.strip()
+    assert "Information to Gather" in wf.instructions_markdown
+    assert wf.instructions_markdown.count("## Execution") == 1
+    assert '"topics"' in wf.instructions_markdown
+
+
+def test_update_to_blank_instructions_regenerates_baseline(db_session):
+    """Clearing instructions on a graph-backed workflow falls back to the baseline."""
+    wf = WorkflowService.create(
+        db_session, key="clearable", name="C", request_type="clearable",
+        graph_spec=_spec_with_input(), instructions_markdown="# Mine\n\nstuff",
+        status="draft",
+    )
+    updated = WorkflowService.update(db_session, wf.id, instructions_markdown="")
+    assert updated.instructions_markdown and updated.instructions_markdown.strip()
+    assert "Information to Gather" in updated.instructions_markdown
+
+
 def test_seed_specs_from_catalog_backfills_and_is_idempotent(db_session):
     """The code workflow catalog is attached to workflows as editable graph_spec."""
     n = WorkflowService.seed_specs_from_catalog(db_session)

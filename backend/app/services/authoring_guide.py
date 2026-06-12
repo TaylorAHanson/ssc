@@ -25,7 +25,7 @@ _DOC_TITLE = "Authoring Workflows (Workflows) — Guide"
 
 # Bump when the canonical guide content changes and you want existing installs to
 # pick it up. The seed only rewrites the doc when its stored revision is older.
-GUIDE_REVISION = 7
+GUIDE_REVISION = 12
 _REVISION_TAG_PREFIX = "guide-rev:"
 
 GUIDE_MARKDOWN = """\
@@ -52,7 +52,7 @@ or in the visual editor. The agent tools are: `list_workflow_building_blocks`,
     {"kind": "gate", "name": "manager_approval", "type": "manager",
      "auto_approve": {"$eq": [{"$var": "scope"}, "enterprise"]}},
     {"kind": "step", "name": "provision", "tool": "add_group_membership",
-     "approvals": ["manager"], "success_fact": "access_granted",
+     "success_fact": "access_granted",
      "args": {"group": {"$var": "access_group"},
               "members": {"$list": [{"$var": "requested_by_email"}]}}}
   ]
@@ -63,11 +63,17 @@ Rules:
 - `name` is required. Stages run **in order**.
 - Stage names must be unique and **cannot** be `pending`, `complete`,
   `completed`, or `rejected` (reserved).
-- A `step` after a gate should list that gate's type in **`approvals`** so policy
-  enforcement sees the approval (e.g. `"approvals": ["manager"]`).
-- `success_fact` (optional) is written when a step succeeds — it drives the
-  request timeline / live graph view, so set it on the meaningful provisioning step.
-- `complete_fact` (optional) is written when the whole workflow completes.
+- **`approvals` is auto-derived — don't set it.** A step automatically inherits
+  the approvals of every gate that precedes it (the graph guarantees those gates
+  passed before the step runs), and that derived set is what the policy layer
+  sees. `approvals` is an *advanced override* only; leaving it off is correct for
+  almost every workflow. The flow itself (gate → step ordering) is already
+  enforced by the graph, not by this field.
+- `success_fact` (optional) is written when a step succeeds — a timeline / live
+  graph marker only. Set it on a *meaningful provisioning* milestone; **omit it**
+  on notification / closing steps, and never set it equal to `complete_fact`.
+- `complete_fact` (optional) is written when the whole workflow completes (so it
+  already marks "done" — a closing step doesn't need its own `success_fact`).
 
 ## Gate types
 
@@ -221,10 +227,64 @@ as errors: fix every one (check `list_workflow_building_blocks` → the tool's
 2. Draft the `graph_spec` (start from `get_workflow` on a similar one).
 3. `validate_workflow_spec` — fix any structural/expression errors.
 4. `preview_workflow_spec` with a realistic `sample_context` — confirm which
-   gates fire and the exact args each step receives. **No tools run.**
+   gates fire and the exact args each step receives. **No tools run.** This also
+   renders the design in the visual editor, so present it to the admin in PLAIN
+   LANGUAGE (stages, approvers, fields gathered) — do NOT paste the raw
+   `graph_spec` JSON into the chat; keep JSON in the tool arguments.
 5. `save_workflow_draft` — saves as a draft; it does **not** affect live requests.
+   Always pass, alongside the `graph_spec`: a `request_type` (any string — it's
+   required before the workflow can run), a one-line `goal`, and a friendly
+   `name`. Either write real `instructions_markdown` (see below) or **omit it**
+   — never pass an empty string, which would leave the Details page blank.
 6. Only after the admin explicitly confirms: `publish_workflow` — runs the full
    pre-publish gate and makes it live (a version snapshot is kept for rollback).
+
+## Capturing what the user asks you to collect
+
+When the admin says "ask the user for X, Y, Z" (e.g. topics, headcount, domain),
+those become request **parameters** the self-service agent gathers at runtime.
+Make sure the workflow actually *uses* them, or they won't be captured:
+
+- **Reference each input as a `$var` in a step's `args`** so it flows into the
+  tool. For a notification, build the `body`/`subject` from the inputs with
+  `$concat`, e.g.
+  `{"$concat": ["Training request — topics: ", {"$var": "topics"}, ", headcount: ", {"$var": "headcount"}]}`.
+  A `send_notification` whose `body` is a hard-coded string captures **nothing**
+  the user typed — avoid that when the admin asked you to collect fields.
+- The auto-generated `instructions_markdown` lists exactly the `$var` inputs your
+  steps reference under "Information to Gather". So if an input isn't referenced
+  by any step, write explicit `instructions_markdown` that tells the runtime
+  agent to gather it — otherwise it will never be asked for.
+
+### Write a thorough runtime playbook (not a one-liner)
+
+`instructions_markdown` is the playbook the self-service agent follows to collect
+information at runtime, so make it specific and complete — never a single terse
+sentence. Use this structure:
+
+- `# <Name>` + a `**Goal**:` line (what the request accomplishes, for whom).
+- `## Information to Gather` — a numbered list, **one entry per field**, each with:
+  a bold label + the `field_name` in backticks, a one-sentence description,
+  required/optional, expected format/constraints/examples, and a short prompt the
+  agent can ask. e.g.
+  `1. **Headcount** (\`headcount\`) — Number of attendees. Required. Whole number
+  1–100. Ask: "How many people will attend?"`
+- `## Validation & Guidance` — naming conventions, cross-field rules, defaults.
+- `## Approvals & Flow` — plain-language summary of the gates/steps.
+
+`render_instructions_markdown` (the baseline) derives "Information to Gather"
+from the `$var`s in your stages — another reason to wire inputs into step args.
+
+### The `execute_workflow` call is generated — don't hand-write it
+
+You do **not** author the `## Execution` block (the `execute_workflow` JSON with
+`workflow_type` + `parameters`). It is generated **deterministically from the
+graph** and spliced into the served instructions at runtime — so it always
+matches the spec's `request_type` and `$var` inputs, and any hand-typed example
+would simply be overwritten. Your `instructions_markdown` is prose only (goal,
+what to gather, naming/validation hints). To change how the workflow is called,
+change the spec (its `request_type` or the `$var`s its steps reference), not the
+prose.
 
 ## Finicky tools & house rules (edit me)
 

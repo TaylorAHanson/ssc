@@ -104,6 +104,55 @@ async def test_save_draft_creates_then_updates_and_does_not_publish(patched_db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("blank", [None, "", "   ", "\n\t "])
+async def test_save_draft_autogenerates_instructions_when_blank(patched_db, blank):
+    """A blank/omitted instructions_markdown must fall back to the generated baseline.
+
+    Agents frequently pass "" for optional fields; that must not defeat the
+    "instructions are never empty" safety net (the bug behind a blank Details page).
+    """
+    res = await wa.save_workflow_draft.execute(
+        key="blank_instr", graph_spec=_valid_spec(), instructions_markdown=blank
+    )
+    assert res["ok"] is True
+    workflow = WorkflowService.get_by_key(patched_db, "blank_instr")
+    assert workflow.instructions_markdown
+    assert workflow.instructions_markdown.strip()
+    assert "Instructions" in workflow.instructions_markdown
+
+
+@pytest.mark.asyncio
+async def test_save_draft_keeps_explicit_instructions_and_appends_execution(patched_db):
+    """The author's prose is preserved; the canonical Execution block is spliced in."""
+    res = await wa.save_workflow_draft.execute(
+        key="explicit_instr", graph_spec=_valid_spec(),
+        instructions_markdown="# My custom guidance\nGather X then Y.",
+    )
+    assert res["ok"] is True
+    workflow = WorkflowService.get_by_key(patched_db, "explicit_instr")
+    assert workflow.instructions_markdown.startswith("# My custom guidance\nGather X then Y.")
+    # The execute_workflow call is persisted (not just added at serve time).
+    assert workflow.instructions_markdown.count("## Execution") == 1
+    assert "execute_workflow" in workflow.instructions_markdown
+
+
+@pytest.mark.asyncio
+async def test_save_draft_blank_does_not_clobber_existing_instructions(patched_db):
+    """Re-saving with blank instructions preserves previously-set prose."""
+    await wa.save_workflow_draft.execute(
+        key="keep_instr", graph_spec=_valid_spec(),
+        instructions_markdown="# Keep me",
+    )
+    await wa.save_workflow_draft.execute(
+        key="keep_instr", graph_spec=_valid_spec(), instructions_markdown="",
+    )
+    workflow = WorkflowService.get_by_key(patched_db, "keep_instr")
+    assert workflow.instructions_markdown.startswith("# Keep me")
+    # Still exactly one Execution block after a blank re-save (idempotent splice).
+    assert workflow.instructions_markdown.count("## Execution") == 1
+
+
+@pytest.mark.asyncio
 async def test_save_draft_rejects_invalid_spec(patched_db):
     bad = {"name": "x", "stages": [{"kind": "step", "name": "s", "tool": "nope", "args": {}}]}
     res = await wa.save_workflow_draft.execute(key="bad_flow", graph_spec=bad)
@@ -128,10 +177,15 @@ async def test_publish_requires_request_type_then_publishes(patched_db):
 
 
 @pytest.mark.asyncio
-async def test_get_workflow_returns_spec_or_not_found(patched_db):
+async def test_get_workflow_returns_spec_and_instructions_for_editing(patched_db):
     await wa.save_workflow_draft.execute(key="g_flow", graph_spec=_valid_spec())
     got = await wa.get_workflow.execute(key="g_flow")
     assert got["found"] is True and got["graph_spec"]["name"] == "demo_flow"
+    # Editing must build on the existing instructions, so they're returned (and
+    # carry the auto-generated baseline, never blank).
+    assert "instructions_markdown" in got
+    assert got["instructions_markdown"] and got["instructions_markdown"].strip()
+    assert "allowed_tools" in got and "policy_ref" in got
 
     missing = await wa.get_workflow.execute(key="does_not_exist")
     assert missing["found"] is False and "available_keys" in missing

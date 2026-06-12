@@ -112,3 +112,52 @@ def test_conditional_step_runs_when_predicate_true(monkeypatch):
     # Not skipped; it's the active step (no success_fact recorded for it, but it
     # has no success_fact so it's transient — the next unsatisfied stage is current).
     assert ns["notify_security"] != "skipped"
+
+
+# A dynamically-authored workflow that lives only in the DB (not in the bundled
+# code catalog) — gate + a notification step with no success_fact.
+_DB_ONLY_SPEC = {
+    "name": "custom_training_request",
+    "stages": [
+        {"kind": "gate", "name": "training_admin_approval", "type": "manager"},
+        {"kind": "step", "name": "notify_schedulers", "tool": "send_notification", "args": {}},
+    ],
+}
+
+
+class _DbOnlyReq:
+    def __init__(self, status):
+        self.id = "req-db"
+        self.status = status
+        self.type = "custom_training_request"  # NOT in the catalog
+        self.requester_email = "u@corp.com"
+        self.created_at = None
+
+
+def test_timeline_shows_all_stages_for_db_only_workflow(monkeypatch):
+    """Regression: the timeline must resolve the published DB graph_spec, not just
+    the bundled catalog — otherwise a DB-only workflow collapsed to Created ->
+    Completed (the approval gate and notify step went missing)."""
+    monkeypatch.setattr("app.state_machines.facts.get_facts", lambda db, rid: [])
+    monkeypatch.setattr("app.workflows.graphs.published_graph_spec", lambda db, rt: _DB_ONLY_SPEC)
+    sm = render.render_state(_DbOnlyReq("manager_approval"), db=None)
+    ids = [s.id for s in sm.states]
+    assert ids == ["pending", "training_admin_approval", "notify_schedulers", "completed"]
+    # Fresh request with no approval fact waits on the gate.
+    assert sm.currentState == "training_admin_approval"
+    gate = next(s for s in sm.states if s.id == "training_admin_approval")
+    assert gate.isActive and not gate.isCompleted
+
+
+def test_timeline_advances_past_gate_after_approval(monkeypatch):
+    monkeypatch.setattr(
+        "app.state_machines.facts.get_facts",
+        lambda db, rid: [_Fact("approval_received", {"approval_type": "manager"})],
+    )
+    monkeypatch.setattr("app.workflows.graphs.published_graph_spec", lambda db, rt: _DB_ONLY_SPEC)
+    sm = render.render_state(_DbOnlyReq("provisioning"), db=None)
+    gate = next(s for s in sm.states if s.id == "training_admin_approval")
+    assert gate.isCompleted
+    # The notify step has no success_fact (transient), so the flow has nothing left
+    # to wait on and the current position is the terminal completed node.
+    assert sm.currentState == "completed"

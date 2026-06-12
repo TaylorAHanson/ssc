@@ -75,6 +75,16 @@ const splitList = (value: string): string[] =>
     .map((v) => v.trim())
     .filter(Boolean);
 
+// Tolerantly parse a JSON string (the model occasionally serializes tool
+// arguments/results as strings). Returns null on anything non-parseable.
+function safeParseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
 function toForm(workflow: Workflow): WorkflowFormState {
   return {
     id: workflow.id,
@@ -128,6 +138,7 @@ export function Workflows() {
     return saved >= 360 ? saved : 440;
   });
   const resizingRef = useRef(false);
+  const assistantRef = useRef<HTMLElement | null>(null);
   // Mirror the latest width so the drag-end handler persists the current value
   // (its closure would otherwise capture a stale width from mousedown time).
   const assistantWidthRef = useRef(assistantWidth);
@@ -193,7 +204,12 @@ export function Workflows() {
     // unconditionally there blanked the graph the admin was just looking at —
     // the reported "I answered the follow-up and the graph went away". Keeping
     // the last good graph makes the live preview sticky across turns.
-    const spec = (args?.graph_spec ?? null) as WorkflowGraphSpec | null;
+    const rawSpec = args?.graph_spec ?? null;
+    // The model occasionally emits ``graph_spec`` as a JSON string instead of an
+    // object; parse it so the live preview (and the open-on-save below) still work.
+    const spec = (typeof rawSpec === 'string'
+      ? safeParseJson(rawSpec)
+      : rawSpec) as WorkflowGraphSpec | null;
     const specHasStages =
       !!spec &&
       typeof spec === 'object' &&
@@ -217,7 +233,9 @@ export function Workflows() {
           ...base,
           key: base.key || targetKey,
           name: base.name || argName || targetKey,
-          request_type: base.request_type || argRt,
+          // Default request_type to the explicit arg, else the spec name, so a
+          // manual Save during the design phase doesn't persist a blank type.
+          request_type: base.request_type || argRt || specName,
           goal: base.goal || argGoal,
           graph_spec: spec,
         };
@@ -235,24 +253,66 @@ export function Workflows() {
       );
     }
 
-    // 2) On a successful persist, reload and open the canonical record.
-    const r = result as { ok?: boolean; key?: string } | null;
+    // 2) On a successful persist, open the editor for the saved workflow and
+    //    reload the canonical record. The result payload is normally an object
+    //    but parse a stringified one defensively so the open never silently skips.
+    const r = (typeof result === 'string'
+      ? safeParseJson(result)
+      : result) as { ok?: boolean; key?: string } | null;
     const persisted = toolName === 'save_workflow_draft' || toolName === 'publish_workflow';
     if (persisted && ok && r?.ok && r.key) {
+      const savedKey = r.key;
+      // Switch to the editor view immediately — before the (heavier) reload — so
+      // a refetch hiccup or a key→id lookup miss can't strand the admin on the
+      // list. "Save a draft" should always land you on that draft's page.
+      setTab('workflow');
+      // Keep the editor open on the just-hydrated draft as a floor; the canonical
+      // id (set below) replaces `new=1` once we resolve it.
+      const keepEditorOpen = () =>
+        setSearchParams(
+          (prev) => {
+            const params = new URLSearchParams(prev);
+            if (!params.get('workflow')) params.set('new', '1');
+            return params;
+          },
+          { replace: true },
+        );
       try {
         const fresh = await api.listWorkflows(true);
         setWorkflows(fresh);
-        const match = fresh.find((w) => w.key === r.key);
+        const match = fresh.find((w) => w.key === savedKey);
         if (match) {
+          // The list endpoint omits the heavy `graph_spec` (summaries only), so
+          // fetch the full record before baselining — otherwise reopening the
+          // canonical workflow blanks the live graph the admin was watching.
+          let full: typeof match = match;
+          try {
+            full = await api.getWorkflow(match.id);
+          } catch {
+            /* fall back to the summary; preserve the in-memory graph below */
+          }
           // Set loadedIdRef === param so the URL effect doesn't re-prompt the
           // unsaved-changes guard (we just loaded the canonical version).
           loadedIdRef.current = match.id;
-          setFormBaselined(toForm(match));
+          setForm((prev) => {
+            const nextForm = toForm(full);
+            // Keep the just-hydrated graph if the reloaded record somehow lacks
+            // one (e.g. summary fallback), so a save never clears the preview.
+            if (!nextForm.graph_spec && prev.graph_spec) {
+              nextForm.graph_spec = prev.graph_spec;
+            }
+            setBaseline(JSON.stringify(nextForm));
+            return nextForm;
+          });
           setWorkflowParam(match.id);
-          setTab('workflow');
+        } else {
+          // Couldn't resolve the id (refetch race/miss): stay in the editor on the
+          // hydrated draft rather than dropping back to the list.
+          keepEditorOpen();
         }
       } catch {
-        /* non-fatal: the manual reload button is still available */
+        // Reload failed: still keep the editor open with what we already have.
+        keepEditorOpen();
       }
     }
   };
@@ -364,6 +424,20 @@ export function Workflows() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflowParam]);
 
+  // Collapse the authoring assistant when the user clicks outside it (but not
+  // while dragging its resize handle). The shelf is an overlay, so a click on the
+  // editor underneath means "I'm done with the assistant".
+  useEffect(() => {
+    if (!showAssistant) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (resizingRef.current) return;
+      const el = assistantRef.current;
+      if (el && !el.contains(e.target as Node)) setShowAssistant(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [showAssistant]);
+
   // After "New workflow", focus the Key field and bring the editor into view.
   useEffect(() => {
     if (focusNewTick === 0) return;
@@ -393,7 +467,11 @@ export function Workflows() {
     !dirty || confirm('You have unsaved changes. Discard them?');
 
   const selectWorkflow = (workflow: Workflow) => {
-    if (workflow.id === form.id) return;
+    // Skip only if this row is already the *open* workflow (URL-driven). Comparing
+    // against `form.id` was buggy: right after an agent save the form holds the new
+    // draft's id while the list is still showing, so clicking that row early-returned
+    // and appeared "dead" until a refresh cleared the form.
+    if (workflow.id === workflowParam) return;
     // Push a history entry so Back returns to the list, then let the URL effect
     // load it (and prompt about unsaved edits in one place).
     setWorkflowParam(workflow.id);
@@ -1051,6 +1129,7 @@ export function Workflows() {
 
       {showAssistant && (
         <aside
+          ref={assistantRef}
           className="fixed top-0 right-0 bottom-0 z-40 w-full bg-white border-l border-gray-200 shadow-2xl flex flex-col"
           style={{ width: assistantWidth, maxWidth: '95vw' }}
         >

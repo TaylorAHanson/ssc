@@ -142,7 +142,12 @@ class WorkflowService:
             key=key,
             name=fields.get("name") or key,
             goal=fields.get("goal"),
-            instructions_markdown=fields.get("instructions_markdown"),
+            instructions_markdown=WorkflowService._synced_instructions(
+                fields.get("instructions_markdown"),
+                fields.get("graph_spec"),
+                fields.get("request_type"),
+                goal=fields.get("goal"),
+            ),
             allowed_tools=fields.get("allowed_tools"),
             policy_ref=fields.get("policy_ref"),
             params_schema=fields.get("params_schema"),
@@ -166,9 +171,48 @@ class WorkflowService:
                     "policy_ref", "params_schema", "graph_spec", "request_type", "status"):
             if col in fields and fields[col] is not None:
                 setattr(workflow, col, fields[col])
+        # Keep the stored execute_workflow block in sync with the graph: whether
+        # the prose or the graph changed, re-derive the canonical Execution block
+        # so the editor always shows the call and it can't drift from the spec.
+        workflow.instructions_markdown = WorkflowService._synced_instructions(
+            workflow.instructions_markdown, workflow.graph_spec, workflow.request_type,
+            goal=workflow.goal,
+        )
         db.commit()
         db.refresh(workflow)
         return workflow
+
+    @staticmethod
+    def _synced_instructions(
+        instructions_markdown: Optional[str],
+        graph_spec: Optional[dict],
+        request_type: Optional[str],
+        *,
+        goal: Optional[str] = None,
+    ) -> Optional[str]:
+        """Normalize a workflow's instructions on every save so they're never blank
+        and always carry the canonical, graph-derived ``execute_workflow`` block.
+
+        - No graph to derive from (legacy/code workflow): leave instructions as-is.
+        - Graph present + prose given: splice the canonical Execution block in
+          (persisted, so the editor shows the call and it can't drift from the spec).
+        - Graph present + blank prose: generate a baseline from the spec, so EVERY
+          save path (agent tool, the editor's manual Save button, import) gets the
+          "instructions are never empty" guarantee — not just the agent tool.
+        """
+        spec = graph_spec or {}
+        if not spec.get("stages"):
+            return instructions_markdown
+        from app.workflows.instructions import (
+            render_instructions_markdown,
+            with_canonical_execution,
+        )
+
+        if not (instructions_markdown and instructions_markdown.strip()):
+            return render_instructions_markdown(spec, request_type=request_type, goal=goal)
+        return with_canonical_execution(
+            instructions_markdown, spec, request_type=request_type
+        )
 
     @staticmethod
     def publish(db: Session, workflow_id: str, *, published_by: Optional[str] = None) -> WorkflowModel:

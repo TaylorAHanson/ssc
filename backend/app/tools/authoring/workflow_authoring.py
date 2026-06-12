@@ -88,8 +88,10 @@ async def list_workflow_building_blocks() -> Dict[str, Any]:
                                  "assets_from:<expr=assets>, fallback_to_owner:true} to read the UC "
                                  "approver_group tag off the request's assets"},
             "step": {"kind": "step", "name": "str", "tool": "a step_tools name",
-                     "args": "object of name -> expression", "approvals": "list of prior gate types",
-                     "success_fact": "optional", "for_each": "optional expression -> list",
+                     "args": "object of name -> expression",
+                     "approvals": "OPTIONAL advanced override; omit to auto-inherit all preceding gates",
+                     "success_fact": "optional timeline marker; omit on notify/closing steps, never == complete_fact",
+                     "for_each": "optional expression -> list",
                      "item_args": "object (per-item), uses $item",
                      "run_if": "optional expression -> bool; when false the step is SKIPPED "
                                "(conditional branching). Omit it to always run."},
@@ -101,9 +103,13 @@ async def list_workflow_building_blocks() -> Dict[str, Any]:
             "approver={'source':'group','group':'edh_training_admin'}; do NOT put the "
             "group name in 'type' (it fails validation). Use gate type 'training' only "
             "for training-completion gates, not to mean 'a training admin approves'. "
-            "Reserved stage names: complete, rejected, pending, completed. A step that "
-            "runs after a gate should list that gate's type in 'approvals' so policy "
-            "enforcement sees the approval. Use a step's 'run_if' for conditional "
+            "Reserved stage names: complete, rejected, pending, completed. A step "
+            "automatically inherits the approvals of every gate before it (the graph "
+            "guarantees those gates passed), so you do NOT need to set 'approvals' — "
+            "leave it off unless you want to override the derived set. Similarly, "
+            "'success_fact' is optional (a timeline marker) — skip it on notification/"
+            "closing steps, and never set it to the same value as the spec's "
+            "'complete_fact'. Use a step's 'run_if' for conditional "
             "branching (e.g. only notify security when tier == 'high'). Consult the "
             "Context Catalog guide ('workflow authoring') for finicky-tool guidance "
             "before publishing."
@@ -119,8 +125,10 @@ class GetWorkflowInput(BaseModel):
     name="get_workflow",
     description=(
         "Fetch an existing workflow (Workflow) by key, including its current graph_spec, "
-        "status (draft/published), request_type, and metadata. Use this to inspect a "
-        "workflow before editing it."
+        "instructions_markdown, status (draft/published), request_type, and metadata. Use "
+        "this to inspect a workflow before editing it: build on the returned graph_spec and "
+        "REFINE the existing instructions_markdown — do not start from scratch or you'll "
+        "discard prior admin edits."
     ),
     required_role=_AUTHOR_ROLE,
     args_schema=GetWorkflowInput,
@@ -146,6 +154,13 @@ async def get_workflow(key: str) -> Dict[str, Any]:
             "request_type": workflow.request_type,
             "goal": workflow.goal,
             "graph_spec": workflow.graph_spec,
+            # Include the current instructions + scoping so an edit REFINES what's
+            # there instead of regenerating from scratch (which would drop admin
+            # wording). Note: the ``## Execution`` block in instructions_markdown is
+            # auto-derived from the graph — edit the spec, not that block, to change it.
+            "instructions_markdown": workflow.instructions_markdown,
+            "allowed_tools": workflow.allowed_tools,
+            "policy_ref": workflow.policy_ref,
         }
     finally:
         db.close()
@@ -229,8 +244,9 @@ class SaveDraftInput(BaseModel):
         default=None,
         description=(
             "Optional markdown the self-service agent follows at runtime (the goal, what to "
-            "gather from the user, and how to format the execute_workflow call). If omitted, a "
-            "baseline is auto-generated from the graph_spec so instructions are never blank."
+            "gather from the user, and how to format the execute_workflow call). If omitted OR "
+            "left blank, a baseline is auto-generated from the graph_spec so instructions are "
+            "never empty — so prefer passing real instructions over an empty string."
         ),
     )
 
@@ -286,8 +302,12 @@ async def save_workflow_draft(
             fields["goal"] = goal
         # Runtime instructions: honor an explicit value, otherwise auto-derive a
         # baseline from the spec so the self-service agent never gets a blank
-        # (the #1 cause of "the workflow does nothing when I run it").
-        if instructions_markdown is not None:
+        # (the #1 cause of "the workflow does nothing when I run it"). Treat an
+        # empty/whitespace-only string the same as omitted: agents frequently
+        # pass "" for optional fields, which would otherwise defeat the safety
+        # net and persist blank instructions (and a blank Details page).
+        has_explicit_instructions = bool(instructions_markdown and instructions_markdown.strip())
+        if has_explicit_instructions:
             fields["instructions_markdown"] = instructions_markdown
         elif not (existing and existing.instructions_markdown):
             fields["instructions_markdown"] = render_instructions_markdown(

@@ -17,6 +17,7 @@ from typing import Any, Dict, List
 
 from app.models.request import StateInfo, StateMachineState
 from app.workflows.graphs import stage_specs
+from app.workflows.spec_loader import stage_specs_from_dict
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,12 @@ def render_state(request, db) -> StateMachineState:
     from app.state_machines.facts import get_facts
 
     status = request.status
-    specs = stage_specs(request.type)
+    # Resolve stages the same DB-first way as the live graph view (published
+    # DB graph_spec -> code catalog -> synthesized) so a dynamically-authored
+    # workflow that lives only in the DB shows all its stages here too. Going
+    # catalog-only (``stage_specs``) collapsed such requests to just
+    # Created -> Completed because the type isn't in the bundled catalog.
+    specs = stage_specs_from_dict(_resolve_spec_dict(request, db))
     facts = get_facts(db, request.id)
     have = {f.event_type for f in facts}
 

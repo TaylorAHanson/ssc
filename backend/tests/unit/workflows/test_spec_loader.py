@@ -100,6 +100,65 @@ def test_spec_from_dict_builds_runtime_spec_and_closures():
         "group": "g", "members": ["u@corp.com"]}
 
 
+def test_step_inherits_preceding_gate_approvals_when_unset():
+    """A step with no `approvals` auto-inherits every gate before it."""
+    spec = {
+        "name": "wf", "complete_fact": "done",
+        "stages": [
+            {"kind": "gate", "name": "g", "type": "manager"},
+            {"kind": "step", "name": "notify", "tool": "send_notification",
+             "args": {"to_email": {"$literal": "x@y"}, "subject": {"$literal": "s"},
+                      "body": {"$literal": "b"}}},
+        ],
+    }
+    step = spec_from_dict(spec).stages[1]
+    assert step.approvals == ["manager"]
+
+
+def test_step_inherits_multiple_gates_in_order_deduped():
+    spec = {
+        "name": "wf", "complete_fact": "done",
+        "stages": [
+            {"kind": "gate", "name": "g1", "type": "manager"},
+            {"kind": "gate", "name": "g2", "type": "platform_admin"},
+            {"kind": "gate", "name": "g3", "type": "manager"},  # dup type
+            {"kind": "step", "name": "apply", "tool": "send_notification",
+             "args": {"to_email": {"$literal": "x@y"}, "subject": {"$literal": "s"},
+                      "body": {"$literal": "b"}}},
+        ],
+    }
+    step = spec_from_dict(spec).stages[3]
+    assert step.approvals == ["manager", "platform_admin"]
+
+
+def test_explicit_approvals_override_derivation():
+    spec = {
+        "name": "wf", "complete_fact": "done",
+        "stages": [
+            {"kind": "gate", "name": "g1", "type": "manager"},
+            {"kind": "gate", "name": "g2", "type": "platform_admin"},
+            {"kind": "step", "name": "apply", "tool": "send_notification",
+             "approvals": ["platform_admin"],  # explicit override wins
+             "args": {"to_email": {"$literal": "x@y"}, "subject": {"$literal": "s"},
+                      "body": {"$literal": "b"}}},
+        ],
+    }
+    step = spec_from_dict(spec).stages[2]
+    assert step.approvals == ["platform_admin"]
+
+
+def test_step_before_any_gate_has_no_approvals():
+    spec = {
+        "name": "wf", "complete_fact": "done",
+        "stages": [
+            {"kind": "step", "name": "prep", "tool": "send_notification",
+             "args": {"to_email": {"$literal": "x@y"}, "subject": {"$literal": "s"},
+                      "body": {"$literal": "b"}}},
+        ],
+    }
+    assert spec_from_dict(spec).stages[0].approvals == []
+
+
 def test_run_if_validates_and_compiles_predicate():
     spec = _good_spec()
     spec["stages"][1]["run_if"] = {"$eq": [{"$var": "tier"}, "high"]}
