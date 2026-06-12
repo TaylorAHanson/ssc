@@ -1,6 +1,6 @@
 # Backend
 
-📖 **For architecture details, see [ARCHITECTURE.md](./ARCHITECTURE.md)**
+📖 **For architecture details, see [ARCHITECTURE.md](../docs/ARCHITECTURE.md)**
 
 ## Quick Start
 
@@ -65,7 +65,7 @@ backend/
 └── requirements.txt  # Python dependencies
 ```
 
-For detailed architecture and layer descriptions, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+For detailed architecture and layer descriptions, see [ARCHITECTURE.md](../docs/ARCHITECTURE.md).
 
 ## Common Development Tasks
 
@@ -142,6 +142,6 @@ See `app/core/config.py` for all available settings.
 
 ## Additional Resources
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - Detailed architecture documentation
+- [ARCHITECTURE.md](../docs/ARCHITECTURE.md) - Detailed architecture documentation
 - API Documentation - Available at `/docs` when server is running
 - State Machine Patterns - See `app/state_machines/base.py` for base implementation

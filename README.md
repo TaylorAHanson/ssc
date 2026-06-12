@@ -61,7 +61,7 @@ Pick the guide that matches what you're trying to do:
 * 📗 **[Platform Administration Guide](./docs/PLATFORM_ADMINISTRATION.md)** — for the people who own and operate ATLAS day to day: creating and changing the no-code self-service workflows, testing them, and promoting them across environments.
 * 📙 **[Governance & Policies](./docs/GOVERNANCE.md)** — how the guardrails, approvals, and automated compliance checks work, and how to tune them.
 * 📕 **[Developer Quick Start](./docs/DEVELOPER_QUICK_START.md)** — for developers who want to run ATLAS locally and contribute.
-* 📐 **[Architecture Deep Dive](./docs/ARCHITECTURE_V2.md)** — a technical overview of how the system is built.
+* 📐 **[Architecture Deep Dive](./docs/ARCHITECTURE.md)** — a technical overview of how the system is built.
 
 ---
 

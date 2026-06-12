@@ -2,7 +2,7 @@
 
 This guide is for **Platform Admins** and **Governance Admins** who own and operate the platform day to day. It focuses on the thing you'll do most: **authoring, testing, shipping, and governing no-code workflows** — plus the operational tooling around them (versioning, environment promotion, live monitoring, and governance posture).
 
-For deployment see the [Platform Setup Guide](./PLATFORM_SETUP.md); for the policy/governance model see [Governance](./GOVERNANCE.md); for the system internals see [Architecture (V2)](./ARCHITECTURE_V2.md).
+For deployment see the [Platform Setup Guide](./PLATFORM_SETUP.md); for the policy/governance model see [Governance](./GOVERNANCE.md); for the system internals see [Architecture](./ARCHITECTURE.md).
 
 ---
 
