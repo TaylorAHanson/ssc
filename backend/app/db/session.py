@@ -280,6 +280,10 @@ def get_engine():
                 pool_size=10,
                 max_overflow=20,
                 pool_pre_ping=True,  # checks connection is alive before using it
+                # Recycle connections well before Lakebase's short-lived OAuth
+                # token expires (and to drop long-idle connections), so we never
+                # hand out a connection whose server-side auth has lapsed.
+                pool_recycle=settings.DB_POOL_RECYCLE_SECONDS,
                 echo=False,
                 connect_args={"options": "-csearch_path=atlas,public"},
             )

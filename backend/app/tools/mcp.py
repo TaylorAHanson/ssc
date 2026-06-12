@@ -1,6 +1,7 @@
 """
 Fast MCP implementation for defining agent tools.
 """
+import asyncio
 import inspect
 import functools
 from typing import Any, Callable, Dict, Optional, Type, get_type_hints, Union
@@ -201,8 +202,12 @@ class McpTool:
         # Check if the function is a coroutine
         if inspect.iscoroutinefunction(self._func):
             return await self._func(**bound_args)
-        else:
-            return self._func(**bound_args)
+        # Synchronous tool bodies almost always make blocking calls (Databricks
+        # SDK, requests, sync SQLAlchemy). Running them inline would block the
+        # asyncio event loop and stall every other in-flight request, so we hand
+        # them to the default thread pool. Async tools that themselves wrap
+        # blocking SDK calls offload those calls internally via asyncio.to_thread.
+        return await asyncio.to_thread(lambda: self._func(**bound_args))
 
 def tool(
     name: Optional[str] = None,

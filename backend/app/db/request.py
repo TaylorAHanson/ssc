@@ -14,13 +14,13 @@ class RequestModel(Base):
     id = Column(String, primary_key=True)
     type = Column(String)  # RequestType enum
     title = Column(String)
-    status = Column(String)  # Current state (State Machine reads/writes this)
-    requester_email = Column(String, nullable=True)  # Who created the request
+    status = Column(String, index=True)  # Current state (State Machine reads/writes this)
+    requester_email = Column(String, nullable=True, index=True)  # Who created the request
     state_context = Column(JSON)  # Stores variables (workspace_name, config, etc.)
     
     # State locking for idempotency
     locked_by = Column(String, nullable=True)  # Worker ID (e.g., 'poll-worker-hostname-12345')
-    locked_until = Column(DateTime, nullable=True)  # Lock expiration timestamp
+    locked_until = Column(DateTime, nullable=True, index=True)  # Lock expiration timestamp
     
     # Timestamps
     created_at = Column(DateTime, server_default=func.now())

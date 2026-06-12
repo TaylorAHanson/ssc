@@ -58,6 +58,28 @@ def _add_column(engine: Engine, table: str, column: str, ddl_type: str) -> None:
     logger.info("Migration: added column %s.%s", table, column)
 
 
+def _add_index(engine: Engine, index_name: str, table: str, columns: list[str]) -> None:
+    """Create ``index_name`` on ``table(columns)`` if missing (idempotent).
+
+    ``create_all`` builds model-declared indexes only when it creates the table,
+    so an index added to an existing model needs an explicit ``CREATE INDEX IF
+    NOT EXISTS`` here. The name must match SQLAlchemy's generated name
+    (``ix_<table>_<column>`` for single-column ``index=True``) so the two paths
+    don't create duplicate indexes. ``IF NOT EXISTS`` is valid on SQLite and
+    Postgres alike.
+    """
+    insp = inspect(engine)
+    if table not in set(insp.get_table_names()):
+        return  # fresh DB: create_all will build the index from the model
+    existing = {ix.get("name") for ix in insp.get_indexes(table)}
+    if index_name in existing:
+        return
+    cols = ", ".join(columns)
+    with engine.begin() as conn:
+        conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({cols})"))
+    logger.info("Migration: created index %s on %s(%s)", index_name, table, cols)
+
+
 def run_startup_migrations(engine: Engine) -> None:
     """Apply in-place schema renames. Safe to call on every startup."""
     try:
@@ -74,5 +96,15 @@ def run_startup_migrations(engine: Engine) -> None:
         _rename_column(engine, "tool_registry", "enabled_for_workflow", "enabled_for_workflow_agent")
         _add_column(engine, "tool_registry", "enabled_for_workflow_execution", "INTEGER DEFAULT 0")
         _add_column(engine, "tool_registry", "exposed_via_mcp", "INTEGER DEFAULT 0")
+        # Performance: hot-path indexes for existing DBs (fresh DBs get these from
+        # the models via create_all). Names mirror SQLAlchemy's generated names.
+        _add_index(engine, "ix_events_request_id_type", "events", ["request_id", "event_type"])
+        _add_index(engine, "ix_requests_status", "requests", ["status"])
+        _add_index(engine, "ix_requests_requester_email", "requests", ["requester_email"])
+        _add_index(engine, "ix_requests_locked_until", "requests", ["locked_until"])
+        _add_index(engine, "ix_approvals_request_id", "approvals", ["request_id"])
+        _add_index(engine, "ix_approvals_assigned_to_email", "approvals", ["assigned_to_email"])
+        _add_index(engine, "ix_approvals_assigned_to_role", "approvals", ["assigned_to_role"])
+        _add_index(engine, "ix_approvals_status", "approvals", ["status"])
     except Exception as e:  # noqa: BLE001 - never block startup on a migration
         logger.warning("Startup migration step failed (continuing): %s", e)

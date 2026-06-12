@@ -19,7 +19,7 @@ class SearchApprovalsInput(BaseModel):
     description="Search for pending approvals by type (manager, data_owner, platform_admin) or status. Use this to find requests that are awaiting action from specific roles.",
     args_schema=SearchApprovalsInput
 )
-async def search_approvals(
+def search_approvals(
     approval_type: Optional[str] = None, 
     status: str = "pending", 
     request_id: Optional[str] = None, 

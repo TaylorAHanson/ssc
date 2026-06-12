@@ -9,9 +9,10 @@ from sqlalchemy.orm import Session
 from app.models.request import Request, RequestCreate, RequestUpdate, StateMachineState, RequestStatus
 from app.services.request_service import RequestService
 from app.db.session import get_db
-from app.db import ApprovalModel, RequestModel
+from app.db import ApprovalModel, RequestModel, EventModel
 from app.state_machines.facts import add_fact
-from app.workflows.render import render_state
+from app.workflows.render import render_state, _resolve_spec_dict
+from sqlalchemy.orm import selectinload
 from datetime import datetime, timezone
 import json
 import logging
@@ -24,17 +25,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _format_request(req: RequestModel, db: Session) -> Optional[Request]:
+def _format_request(req: RequestModel, db: Session, facts=None, spec_dict=None) -> Optional[Request]:
     """Format a RequestModel into a Request Pydantic model.
 
     The request ``type`` is a free, data-driven string (it names a workflow in
     the registry), so we never coerce it through an enum — unknown/custom types
     are rendered like any other instead of being silently dropped.
+
+    ``facts``/``spec_dict`` are optional pre-fetched inputs supplied by the
+    list endpoints (see :func:`_format_requests_bulk`) to avoid per-request
+    fact + spec queries.
     """
     r_type = req.type
 
     try:
-        sm_state = render_state(req, db)
+        sm_state = render_state(req, db, facts=facts, spec_dict=spec_dict)
     except Exception as e:
         logger.error(f"ERROR rendering V2 state for {req.id}: {e}", exc_info=True)
         sm_state = StateMachineState(
@@ -93,6 +98,44 @@ def _format_request(req: RequestModel, db: Session) -> Optional[Request]:
         approvals=approvals
     )
 
+def _format_requests_bulk(requests: List[RequestModel], db: Session) -> List[Request]:
+    """Format a page of requests with O(1) fact + spec queries (no N+1).
+
+    A naive loop over ``_format_request`` issues, per request, a fact query, a
+    published-graph-spec query, and a lazy approvals load — i.e. ~3N+1 queries
+    for a page of N. Here we instead:
+      * batch every page request's facts in a single ``IN (...)`` query,
+      * resolve the graph spec once per distinct request *type* (it's keyed only
+        on type), and
+      * rely on the caller eager-loading ``approvals`` via ``selectinload``.
+    """
+    if not requests:
+        return []
+
+    req_ids = [r.id for r in requests]
+    facts_by_req: dict = {}
+    all_facts = (
+        db.query(EventModel)
+        .filter(EventModel.request_id.in_(req_ids))
+        .order_by(EventModel.created_at.asc())
+        .all()
+    )
+    for f in all_facts:
+        facts_by_req.setdefault(f.request_id, []).append(f)
+
+    spec_cache: dict = {}
+    out: List[Request] = []
+    for req in requests:
+        if req.type not in spec_cache:
+            spec_cache[req.type] = _resolve_spec_dict(req, db)
+        formatted = _format_request(
+            req, db, facts=facts_by_req.get(req.id, []), spec_dict=spec_cache[req.type]
+        )
+        if formatted:
+            out.append(formatted)
+    return out
+
+
 @router.get("", response_model=List[Request])
 async def get_requests(
     skip: int = 0,
@@ -101,21 +144,15 @@ async def get_requests(
     db: Session = Depends(get_db)
 ):
     """Get all requests."""
-    # Build query
-    query = db.query(RequestModel)
+    # Build query; eager-load approvals to avoid a per-request lazy load.
+    query = db.query(RequestModel).options(selectinload(RequestModel.approvals))
     
     # Non-admins can only see their own requests
     if not current_user.has_role("platform_admin"):
         query = query.filter(RequestModel.requester_email == current_user.email)
     
     requests = query.offset(skip).limit(limit).all()
-    response_list = []
-    
-    for req in requests:
-        formatted = _format_request(req, db)
-        if formatted:
-            response_list.append(formatted)
-    return response_list
+    return _format_requests_bulk(requests, db)
 
 
 from pydantic import BaseModel as _PydanticBase
@@ -136,7 +173,7 @@ async def get_paginated_requests(
     """Get paginated requests with optional filtering and search."""
     from sqlalchemy import or_
     
-    query = db.query(RequestModel)
+    query = db.query(RequestModel).options(selectinload(RequestModel.approvals))
     
     if not current_user.has_role("platform_admin"):
         query = query.filter(RequestModel.requester_email == current_user.email)
@@ -165,13 +202,7 @@ async def get_paginated_requests(
     
     # Order by newest first
     requests = query.order_by(RequestModel.created_at.desc()).offset(skip).limit(limit).all()
-    response_list = []
-    
-    for req in requests:
-        formatted = _format_request(req, db)
-        if formatted:
-            response_list.append(formatted)
-        
+    response_list = _format_requests_bulk(requests, db)
     return PaginatedRequestsResponse(items=response_list, total=total)
 
 

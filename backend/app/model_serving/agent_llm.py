@@ -11,7 +11,7 @@ RESPONSIBILITY:
 from typing import Dict, Any, List, Optional
 import logging
 import json
-from app.model_serving.client import ModelServingClient
+from app.model_serving.client import ModelServingClient, get_model_serving_client
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,10 @@ class AgentLLMClient:
     """Client for agent LLM model serving endpoint."""
     
     def __init__(self):
-        self.client = ModelServingClient()
+        # Share the process-wide transport client (warm connection pool + cached,
+        # auto-refreshing auth) instead of building a new one — with a blocking
+        # OAuth round-trip — on every AgentRunner / chat request.
+        self.client = get_model_serving_client()
         # Best practice: prefer the AI Gateway endpoint when configured so model
         # routing / A-B split, rate + cost limits, and input guardrails live in
         # the gateway (config, not code). Falls back to the direct serving

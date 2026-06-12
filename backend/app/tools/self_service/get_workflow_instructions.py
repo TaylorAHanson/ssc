@@ -17,7 +17,7 @@ class GetWorkflowInstructionsInput(BaseModel):
     description="Retrieves the detailed, step-by-step instructions for executing a specific workflow. You MUST use this tool to learn how to gather information and format the execution request whenever a user asks to perform a workflow listed in your Capabilities.",
     args_schema=GetWorkflowInstructionsInput
 )
-async def get_workflow_instructions(workflow_name: str) -> Dict[str, Any]:
+def get_workflow_instructions(workflow_name: str) -> Dict[str, Any]:
     """
     Fetch the markdown instructions for a specific workflow.
 

@@ -9,7 +9,7 @@
   },
   "asset_deduplication": {
     "gates": 0,
-    "mutating": 1,
+    "mutating": 2,
     "status": "completed",
     "tools": [
       "run_notebook_job",

@@ -20,7 +20,7 @@ class GetVolumeListInput(BaseModel):
     description="Lists all volumes within a specified catalog and schema in Unity Catalog for a specific workspace. You can optionally filter by a specific name or pattern to check if a volume exists.",
     args_schema=GetVolumeListInput
 )
-async def get_volume_list(target_host: str, catalog_name: str, schema_name: str, name_pattern: Optional[str] = None) -> Dict[str, Any]:
+def get_volume_list(target_host: str, catalog_name: str, schema_name: str, name_pattern: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetch the list of volumes for a schema along with their descriptions.
     """

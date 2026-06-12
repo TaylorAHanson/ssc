@@ -19,7 +19,7 @@ class GetSchemaListInput(BaseModel):
     description="Lists all schemas within a specified catalog in Unity Catalog for a specific workspace. You can optionally filter by a specific name or pattern to check if a schema exists. NEXT STEP: Use 'get_table_list' to find datasets within a schema.",
     args_schema=GetSchemaListInput
 )
-async def get_schema_list(target_host: str, catalog_name: str, name_pattern: Optional[str] = None) -> Dict[str, Any]:
+def get_schema_list(target_host: str, catalog_name: str, name_pattern: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetch the list of schemas for a catalog along with their descriptions.
     """

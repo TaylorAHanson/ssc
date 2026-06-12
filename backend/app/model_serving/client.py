@@ -13,14 +13,49 @@ Supports two authentication modes:
 2. OAuth (automatic): Uses Databricks SDK for OAuth in Databricks Apps
 """
 from typing import Dict, Any, Optional
+import asyncio
 import httpx
 import logging
 import json
+import time
 from app.core.config import settings
 from app.core.exceptions import RetryableError
 from app.core.retry import retry_on_retryable
 
 logger = logging.getLogger(__name__)
+
+# Refresh OAuth-derived tokens at most this often on the shared client. Well
+# under Databricks token lifetime; explicit static tokens are re-read too
+# (harmless no-op).
+_TOKEN_TTL_SECONDS = 1800
+
+# Shared client(s), keyed by event loop. Building a ModelServingClient performs
+# a blocking OAuth SDK round-trip and spins up a fresh httpx connection pool, so
+# doing it per chat request both stalls the event loop and throws away warm
+# connections. Agent code shares one instance instead (auth is refreshed
+# in-place). We key by event loop because an httpx.AsyncClient's connection pool
+# is bound to the loop it runs on, and this app uses two loops (the API request
+# loop and the poller thread's loop) — sharing one client across both would
+# raise "future attached to a different loop".
+_shared_clients: Dict[int, "ModelServingClient"] = {}
+
+
+def get_model_serving_client() -> "ModelServingClient":
+    """Return the shared :class:`ModelServingClient` for the current event loop.
+
+    Reuses one httpx connection pool + cached auth token across requests on that
+    loop rather than reconstructing them per call. The token is refreshed
+    in-place on a TTL (see :meth:`ModelServingClient.invoke_endpoint`).
+    """
+    try:
+        key = id(asyncio.get_running_loop())
+    except RuntimeError:
+        key = 0  # constructed outside a running loop; use a default bucket
+    client = _shared_clients.get(key)
+    if client is None:
+        client = ModelServingClient()
+        _shared_clients[key] = client
+    return client
 
 
 def _get_oauth_token() -> Optional[str]:
@@ -70,60 +105,76 @@ class ModelServingClient:
             self.base_url = f"https://{self.base_url}"
             logger.info(f"Added https:// protocol to base_url: {self.base_url}")
         
-        # Try explicit token first, then fall back to OAuth
-        self.api_key = settings.MODEL_SERVING_API_KEY or settings.DATABRICKS_TOKEN
-        
-        if not self.api_key:
-            logger.info("No explicit token provided, attempting OAuth via Databricks SDK...")
-            
-            # Temporary fix to quickly fetch a token using the raw DATABRICKS_CLIENT_ID since WorkspaceClient token caching in auth headers is brittle
-            if settings.DATABRICKS_CLIENT_ID and settings.DATABRICKS_CLIENT_SECRET:
-                try:
-                    import os
-                    from databricks.sdk import WorkspaceClient
-                    from databricks.sdk.core import Config
-                    
-                    # Create a manual auth configuration exactly as DatabricksProvider does it implicitly
-                    cfg = Config(
-                        host=self.base_url,
-                        client_id=settings.DATABRICKS_CLIENT_ID,
-                        client_secret=settings.DATABRICKS_CLIENT_SECRET,
-                        auth_type="oauth-m2m"
-                    )
-                    
-                    # Let the config object generate the token headers
-                    auth_headers = cfg.authenticate()
-                    if "Authorization" in auth_headers:
-                        auth_val = auth_headers["Authorization"]
-                        if auth_val.startswith("Bearer "):
-                            self.api_key = auth_val[7:]
-                            logger.info("Successfully fetched fresh OAuth token via Config.authenticate()")
-                            
-                except Exception as e:
-                    logger.error(f"Failed to fetch SP token for Model Serving: {e}")
-            
-            # If that failed, fall back to default OAuth method.
-            # In Databricks Apps, this uses the auto-injected environment token.
-            if not self.api_key:
-                self.api_key = _get_oauth_token()
-        
+        # Ensure base_url doesn't end with a slash
+        self.base_url = self.base_url.rstrip("/")
+
+        self.api_key: Optional[str] = None
+        self._token_acquired_at: float = 0.0
+
+        self.client = httpx.AsyncClient(
+            base_url=self.base_url,
+            headers={"Content-Type": "application/json"},
+            timeout=120.0  # 2 minutes to accommodate long-running LLM generation
+        )
+
+        # Acquire the initial token (and bake it into the client's headers).
+        self._refresh_token(force=True)
         if not self.api_key:
             raise ValueError(
                 "Authentication required: Set MODEL_SERVING_API_KEY, DATABRICKS_TOKEN, "
                 "or ensure OAuth is configured (automatic in Databricks Apps)"
             )
-        
-        # Ensure base_url doesn't end with a slash
-        self.base_url = self.base_url.rstrip("/")
-        
-        self.client = httpx.AsyncClient(
-            base_url=self.base_url,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            },
-            timeout=120.0  # 2 minutes to accommodate long-running LLM generation
-        )
+
+    def _acquire_token(self) -> Optional[str]:
+        """Resolve an auth token: explicit env token, then SP M2M, then OAuth.
+
+        Blocking (SDK / network); callers off the request path should run it via
+        ``asyncio.to_thread``.
+        """
+        # Try explicit token first.
+        token = settings.MODEL_SERVING_API_KEY or settings.DATABRICKS_TOKEN
+        if token:
+            return token
+
+        logger.info("No explicit token provided, attempting OAuth via Databricks SDK...")
+        # Prefer raw SP client-credentials (WorkspaceClient header caching is brittle).
+        if settings.DATABRICKS_CLIENT_ID and settings.DATABRICKS_CLIENT_SECRET:
+            try:
+                from databricks.sdk.core import Config
+
+                cfg = Config(
+                    host=self.base_url,
+                    client_id=settings.DATABRICKS_CLIENT_ID,
+                    client_secret=settings.DATABRICKS_CLIENT_SECRET,
+                    auth_type="oauth-m2m",
+                )
+                auth_headers = cfg.authenticate()
+                auth_val = (auth_headers or {}).get("Authorization", "")
+                if auth_val.startswith("Bearer "):
+                    logger.info("Fetched fresh OAuth token via Config.authenticate()")
+                    return auth_val[7:]
+            except Exception as e:
+                logger.error(f"Failed to fetch SP token for Model Serving: {e}")
+
+        # Fall back to default OAuth (auto-injected env token in Databricks Apps).
+        return _get_oauth_token()
+
+    def _token_is_stale(self) -> bool:
+        return (time.monotonic() - self._token_acquired_at) > _TOKEN_TTL_SECONDS
+
+    def _refresh_token(self, force: bool = False) -> None:
+        """Re-acquire the token and update the client's Authorization header.
+
+        Kept in-place so the process-wide shared client stays authenticated as
+        OAuth tokens rotate, without rebuilding the httpx connection pool.
+        """
+        if not force and not self._token_is_stale():
+            return
+        token = self._acquire_token()
+        if token:
+            self.api_key = token
+            self._token_acquired_at = time.monotonic()
+            self.client.headers["Authorization"] = f"Bearer {token}"
     
     @retry_on_retryable(max_attempts=5, min_wait=2.0, max_wait=30.0)
     async def invoke_endpoint(
@@ -150,6 +201,11 @@ class ModelServingClient:
         Returns:
             Model prediction/response
         """
+        # Refresh the OAuth token if it has aged past the TTL (offloaded so the
+        # blocking SDK auth call never stalls the event loop).
+        if self._token_is_stale():
+            await asyncio.to_thread(self._refresh_token)
+
         try:
             # Construct the endpoint URL
             if endpoint_url:

@@ -17,7 +17,7 @@ class CheckWorkspacePathInput(BaseModel):
     description="Checks if a specific path exists in the Databricks Workspace file system for a specific workspace.",
     args_schema=CheckWorkspacePathInput
 )
-async def check_workspace_path(target_host: str, path: str) -> Dict[str, Any]:
+def check_workspace_path(target_host: str, path: str) -> Dict[str, Any]:
     """
     Check if a workspace path exists.
     """

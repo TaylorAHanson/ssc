@@ -17,7 +17,7 @@ class DoesServicePrincipalExistInput(BaseModel):
     description="Checks if a service principal exists in the specified Databricks account/workspace by its display name. Useful for avoiding duplicate creation requests.",
     args_schema=DoesServicePrincipalExistInput
 )
-async def does_service_principal_exist(target_host: str, name: str) -> Dict[str, Any]:
+def does_service_principal_exist(target_host: str, name: str) -> Dict[str, Any]:
     """
     Check if a service principal exists.
     """

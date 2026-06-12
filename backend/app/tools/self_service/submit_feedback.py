@@ -56,7 +56,7 @@ class SubmitFeedbackInput(BaseModel):
     feature_flag="core",
     friendly_label="Submitting feedback...",
 )
-async def submit_feedback(
+def submit_feedback(
     feedback_type: str,
     title: str,
     description: Optional[str] = None,

@@ -15,7 +15,7 @@ class SearchEventsInput(BaseModel):
     description="Search for upcoming workshops, webinars, office hours, and community events. Use this to help users find training and support sessions.",
     args_schema=SearchEventsInput
 )
-async def search_events(query: Optional[str] = None, event_type: Optional[str] = None, 
+def search_events(query: Optional[str] = None, event_type: Optional[str] = None, 
             start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, Any]:
     """
     Execute the event search.

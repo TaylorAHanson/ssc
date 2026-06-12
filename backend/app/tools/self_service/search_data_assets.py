@@ -96,7 +96,7 @@ class SearchDataAssetsInput(BaseModel):
     feature_flag="data_discovery",
     friendly_label="Scanning the data catalog...",
 )
-async def search_data_assets(
+def search_data_assets(
     query: str,
     asset_type: Optional[str] = None,
     domain: Optional[str] = None,

@@ -11,8 +11,17 @@ Backend selection mirrors the app DB:
   * Lakebase (Postgres) -> AsyncPostgresSaver (same connection string)
 
 The checkpointer is opened per advance() call. For SQLite this is cheap and the
-state is durably on disk; for Postgres a longer-lived pooled saver is the
-production optimization (tracked for the cutover).
+state is durably on disk.
+
+Why per-call (not a long-lived pool) for Postgres: ``get_database_url()`` mints a
+*fresh short-lived Lakebase OAuth token* on every call and embeds it in the DSN.
+Opening the saver per call is what keeps that token current — a naive cached
+pool would pin the first token and start failing auth once it expires (the
+SQLAlchemy engine solves the same problem with a do_connect token-refresh hook +
+pool_recycle, which a raw psycopg pool here would not get). What we *can* safely
+avoid is re-running the idempotent ``setup()`` DDL on every advance: the
+checkpoint tables only need to be created once per process, so we gate it behind
+a module flag below.
 """
 import logging
 import os
@@ -21,6 +30,11 @@ from contextlib import asynccontextmanager
 from app.db.session import get_database_url
 
 logger = logging.getLogger(__name__)
+
+# setup() creates the checkpoint tables (CREATE TABLE IF NOT EXISTS ...). It's
+# idempotent but issues several DDL round-trips, so we only run it once per
+# process instead of on every advance()/peek().
+_pg_setup_done = False
 
 
 def _sqlite_checkpoint_path(url: str) -> str:
@@ -46,10 +60,13 @@ async def build_checkpointer():
     else:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
+        global _pg_setup_done
         # get_database_url returns a libpq-style postgresql:// URL already.
         async with AsyncPostgresSaver.from_conn_string(url) as cp:
-            try:
-                await cp.setup()  # idempotent; creates checkpoint tables once
-            except Exception as e:
-                logger.warning("V2 checkpointer setup() note: %s", e)
+            if not _pg_setup_done:
+                try:
+                    await cp.setup()  # idempotent; creates checkpoint tables once
+                    _pg_setup_done = True
+                except Exception as e:
+                    logger.warning("V2 checkpointer setup() note: %s", e)
             yield cp

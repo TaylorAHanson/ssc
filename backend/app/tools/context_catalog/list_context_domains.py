@@ -24,7 +24,7 @@ class ListContextDomainsInput(BaseModel):
     feature_flag="context_catalog",
     friendly_label="Browsing the context catalog...",
 )
-async def list_context_domains() -> Dict[str, Any]:
+def list_context_domains() -> Dict[str, Any]:
     """Return the catalog domains with their descriptions and document counts."""
     db = next(get_db())
     try:

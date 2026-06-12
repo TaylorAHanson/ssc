@@ -246,6 +246,16 @@ class Settings(BaseSettings):
     POLLER_LOCK_TIMEOUT_MINUTES: int = 5  # Lock timeout for normal operations
     POLLER_LOCK_TIMEOUT_LONG_RUNNING_MINUTES: int = 30  # Lock timeout for provisioning
     POLLER_HEARTBEAT_INTERVAL_SECONDS: int = 300  # How often to heartbeat locks (5 minutes)
+    # When True, elect a single poller leader cluster-wide via a Postgres
+    # advisory lock so only one replica processes work (no thundering herd /
+    # double cron spawns). No-op on SQLite (single process). Set False to force
+    # every replica to poll (legacy behavior; correctness still held by locks).
+    POLLER_LEADER_ELECTION: bool = True
+
+    # Recycle pooled DB connections after this many seconds. Default 30 min,
+    # comfortably under Lakebase's OAuth token lifetime so connections are
+    # refreshed (with a new token) before the server-side auth lapses.
+    DB_POOL_RECYCLE_SECONDS: int = 1800
     
     # Agent Settings
     AGENT_ENABLED: bool = True
@@ -285,6 +295,11 @@ class Settings(BaseSettings):
     OPA_BINARY_PATH: str = ""
     OPA_EMBEDDED_ENABLED: bool = True
     OPA_POLICIES_DIR: str = "policies"
+    # Require a reachable OPA server (embedded or remote) — refuse to fall back
+    # to per-call CLI evaluation. Leave False for local dev; set True in any
+    # non-dev environment so a missing/failed OPA server fails loudly instead of
+    # silently degrading to a slow, event-loop-blocking per-call CLI.
+    OPA_REQUIRE_SERVER: bool = False
     
     # Calendar Settings
     EVENT_CALENDAR_URL: str = ""
@@ -648,6 +663,7 @@ class Settings(BaseSettings):
             "opa_binary": (self.OPA_BINARY_PATH or "").strip() or None,
             "use_local_binary": not bool(url),
             "policies_dir": (self.OPA_POLICIES_DIR or "policies").strip(),
+            "require_server": bool(self.OPA_REQUIRE_SERVER),
         }
 
     @property

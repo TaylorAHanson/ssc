@@ -65,10 +65,17 @@ def _map_approval(approval_model: ApprovalModel, request_model: RequestModel) ->
 @router.get("", response_model=List[Approval])
 async def get_approvals(
     status: Optional[str] = None,
+    skip: int = 0,
+    limit: Optional[int] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get approvals, filtered by user involvement if not an admin."""
+    """Get approvals, filtered by user involvement if not an admin.
+
+    ``skip``/``limit`` are optional; when ``limit`` is omitted the full filtered
+    set is returned (legacy behavior). Pass them to page through large inboxes
+    instead of materializing every approval at once.
+    """
     query = db.query(ApprovalModel, RequestModel).join(RequestModel, ApprovalModel.request_id == RequestModel.id)
     
     # Build list of role-based approval types the user can see
@@ -93,7 +100,14 @@ async def get_approvals(
     
     if status:
         query = query.filter(ApprovalModel.status == status)
-        
+
+    # Newest first for stable pagination ordering.
+    query = query.order_by(ApprovalModel.created_at.desc())
+    if skip:
+        query = query.offset(skip)
+    if limit is not None:
+        query = query.limit(limit)
+
     results = query.all()
     return [_map_approval(am, rm) for am, rm in results]
 

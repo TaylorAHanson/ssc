@@ -18,7 +18,7 @@ class SearchRequestsInput(BaseModel):
     description="Search for existing requests by title, ID, or status. Use this to check the status of a user's request or find specific requests.",
     args_schema=SearchRequestsInput
 )
-async def search_requests(
+def search_requests(
     query: Optional[str] = None, 
     status: Optional[str] = None, 
     limit: int = 5,

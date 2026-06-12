@@ -34,7 +34,7 @@ class SearchContextCatalogInput(BaseModel):
     feature_flag="context_catalog",
     friendly_label="Searching the context catalog...",
 )
-async def search_context_catalog(query: str, domain_slug: Optional[str] = None) -> Dict[str, Any]:
+def search_context_catalog(query: str, domain_slug: Optional[str] = None) -> Dict[str, Any]:
     """Return ranked passages matching the query."""
     db = next(get_db())
     try:

@@ -21,7 +21,7 @@ class ExecuteWorkflowInput(BaseModel):
     # broadest bound. The workflow's own HITL approvals still apply.
     side_effect_class="infra",
 )
-async def execute_workflow(workflow_type: str, parameters: Dict[str, Any], conversation_history: Optional[list] = None, **kwargs) -> Dict[str, Any]:
+def execute_workflow(workflow_type: str, parameters: Dict[str, Any], conversation_history: Optional[list] = None, **kwargs) -> Dict[str, Any]:
     """
     Create a request and trigger the workflow state machine.
     """

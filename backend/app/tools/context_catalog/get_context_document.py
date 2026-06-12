@@ -27,7 +27,7 @@ class GetContextDocumentInput(BaseModel):
     feature_flag="context_catalog",
     friendly_label="Opening context document...",
 )
-async def get_context_document(document_id: str) -> Dict[str, Any]:
+def get_context_document(document_id: str) -> Dict[str, Any]:
     """Return the full document, or an error if not found / not published."""
     db = next(get_db())
     try:

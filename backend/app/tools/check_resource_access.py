@@ -19,7 +19,7 @@ class CheckResourceAccessInput(BaseModel):
     description="Check existing access grants on a Unity Catalog resource (schema or catalog) in a specific workspace. Use this BEFORE granting or revoking access to verify current state.",
     args_schema=CheckResourceAccessInput
 )
-async def check_resource_access(target_host: str, resource_name: str, principal: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+def check_resource_access(target_host: str, resource_name: str, principal: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     """
     Check what access grants exist on a resource.
     

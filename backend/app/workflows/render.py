@@ -45,8 +45,15 @@ def _gate_satisfied(gtype: str, have: set, facts: list) -> bool:
     return False
 
 
-def render_state(request, db) -> StateMachineState:
-    """Build the StateMachineState view for a request from stages + facts."""
+def render_state(request, db, facts=None, spec_dict=None) -> StateMachineState:
+    """Build the StateMachineState view for a request from stages + facts.
+
+    ``facts`` and ``spec_dict`` may be passed in by list endpoints that have
+    already batch-loaded them (one query for the whole page, plus one spec
+    lookup per distinct request type) to avoid an N+1 of per-request fact and
+    published-graph-spec queries. When omitted they're resolved here for the
+    single-request call sites.
+    """
     from app.state_machines.facts import get_facts
 
     status = request.status
@@ -55,8 +62,11 @@ def render_state(request, db) -> StateMachineState:
     # workflow that lives only in the DB shows all its stages here too. Going
     # catalog-only (``stage_specs``) collapsed such requests to just
     # Created -> Completed because the type isn't in the bundled catalog.
-    specs = stage_specs_from_dict(_resolve_spec_dict(request, db))
-    facts = get_facts(db, request.id)
+    if spec_dict is None:
+        spec_dict = _resolve_spec_dict(request, db)
+    specs = stage_specs_from_dict(spec_dict)
+    if facts is None:
+        facts = get_facts(db, request.id)
     have = {f.event_type for f in facts}
 
     def gate_satisfied(gtype: str) -> bool:

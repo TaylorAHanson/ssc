@@ -19,7 +19,8 @@ def add_fact(
     request_id: str,
     fact_type: str,
     fact_data: Dict[str, Any],
-    actor: Optional[str] = None
+    actor: Optional[str] = None,
+    commit: bool = True,
 ) -> EventModel:
     """
     Add a fact (immutable event) to the request's fact history.
@@ -32,6 +33,10 @@ def add_fact(
         fact_type: Type of fact (e.g., 'approval_received', 'workspace_created', 'training_completed')
         fact_data: Fact-specific data
         actor: Who/what caused this fact (e.g., 'manager_123', 'terraform', 'system')
+        commit: When True (default) commit immediately. Pass ``False`` to batch
+            several facts into one commit on a hot path — the caller is then
+            responsible for committing (the fact is flushed so it's visible to
+            subsequent queries in the same transaction).
         
     Returns:
         Created EventModel instance
@@ -51,8 +56,13 @@ def add_fact(
     )
     
     db.add(fact)
-    db.commit()
-    db.refresh(fact)
+    if commit:
+        db.commit()
+    else:
+        # Make the row visible to subsequent reads in this transaction without
+        # paying for a commit per fact. No db.refresh(): id/event_data/created_at
+        # are all set explicitly above, so there's nothing to reload.
+        db.flush()
     
     logger.info(f"Added fact {fact_type} for request {request_id}")
     return fact

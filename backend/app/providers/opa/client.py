@@ -63,6 +63,18 @@ class OpaProvider(BaseProvider):
         self.use_local_binary = self.config.get("use_local_binary", True)
         self.policies_dir = self.config.get("policies_dir", "policies")
         self.opa_binary = self.config.get("opa_binary")
+        # When True, refuse to silently fall back to per-call CLI evaluation: a
+        # server (embedded or remote) must be reachable. The per-call CLI spawns
+        # the OPA binary and reloads every .rego file on each evaluation (~20ms+
+        # of pure overhead each), which is fine for local dev but not a posture
+        # we want to discover in production. Set OPA_REQUIRE_SERVER=true there.
+        self.require_server = bool(self.config.get("require_server", False))
+        if self.require_server and not self.opa_url:
+            raise PermanentError(
+                "OPA_REQUIRE_SERVER is set but no OPA server URL is available "
+                "(embedded server not running and OPA_URL unset). Refusing to "
+                "fall back to per-call CLI evaluation. " + OPA_SETUP_HINT
+            )
 
     def _resolve_opa_executable(self) -> Optional[str]:
         """Return path to the OPA CLI, or None if not found."""
@@ -275,7 +287,11 @@ class OpaProvider(BaseProvider):
             ]
 
             try:
-                process = subprocess.run(cmd, capture_output=True, text=True)
+                # subprocess.run blocks; offload so a CLI evaluation never
+                # stalls the event loop (and every other in-flight request).
+                process = await asyncio.to_thread(
+                    subprocess.run, cmd, capture_output=True, text=True
+                )
             except FileNotFoundError as e:
                 raise PermanentError(OPA_SETUP_HINT) from e
 

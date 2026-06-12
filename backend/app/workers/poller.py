@@ -122,10 +122,28 @@ async def start_poller():
     
     # Use a semaphore to limit concurrent asset sync tasks if they run long
     sync_semaphore = asyncio.Semaphore(1)
-    
+
+    # Elect a single active poller cluster-wide (no-op on SQLite). Replicas that
+    # aren't the leader idle here so we don't run N copies of the poll cycle.
+    elector = None
+    if getattr(settings, "POLLER_LEADER_ELECTION", True):
+        from app.workers.leader import PollerLeaderElector
+        elector = PollerLeaderElector()
+    _was_leader = True
+
     while True:
         poll_count += 1
         try:
+            if elector is not None and not elector.is_leader():
+                if _was_leader:
+                    logger.info("Poller is a follower (another replica holds leadership); idling.")
+                    _was_leader = False
+                await asyncio.sleep(poll_interval)
+                continue
+            if elector is not None and not _was_leader:
+                logger.info("Poller became the leader; processing requests.")
+                _was_leader = True
+
             logger.debug(f"Poller cycle #{poll_count} - checking for requests...")
             
             # Start sync tasks in background so they don't block request processing
@@ -209,7 +227,7 @@ async def process_open_requests():
             ),
             # Only if we haven't exhausted retry attempts
             RequestModel.retry_count < RequestModel.max_retries
-        ).limit(settings.POLLER_BATCH_SIZE).all()
+        ).order_by(RequestModel.created_at.asc()).limit(settings.POLLER_BATCH_SIZE).all()
         
         if not requests:
             logger.debug("No requests found to process")

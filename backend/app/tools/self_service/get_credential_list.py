@@ -18,7 +18,7 @@ class GetCredentialListInput(BaseModel):
     description="Lists all storage credentials in Unity Catalog for a specific workspace. You can optionally filter by a specific name or pattern to check if a credential exists.",
     args_schema=GetCredentialListInput
 )
-async def get_credential_list(target_host: str, name_pattern: Optional[str] = None) -> Dict[str, Any]:
+def get_credential_list(target_host: str, name_pattern: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetch the list of storage credentials.
     """

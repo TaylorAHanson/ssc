@@ -320,7 +320,7 @@ async def sentinel_enforce(**kwargs) -> Dict[str, Any]:
 # --------------------------------------------------------------------------
 # Job-run + orchestration tools
 # --------------------------------------------------------------------------
-@tool(name="run_notebook_job", side_effect_class="read",
+@tool(name="run_notebook_job", side_effect_class="infra",
       description="Run a Databricks notebook job and return its output.")
 async def run_notebook_job(**kwargs) -> Dict[str, Any]:
     provider = _get_databricks_provider()

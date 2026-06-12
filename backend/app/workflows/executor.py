@@ -140,19 +140,29 @@ class DurableWorkflowExecutor:
 
 
 def to_request_status(status_str: str):
-    """Best-effort map a graph status to the existing RequestStatus enum for UI parity."""
+    """Map a graph status to the existing RequestStatus enum for UI parity.
+
+    Graph statuses mirror the enum *values* (``provisioning``,
+    ``manager_approval``, ``data_owner_approval``, ``training_pending``,
+    ``completed``/``rejected``/``failed``, ``pending``), so we resolve by value.
+    The previous hand-maintained name-based dict mapped ``provisioning`` (and the
+    unlisted ``manager_approval`` / ``training_pending``) to a non-existent
+    ``IN_PROGRESS`` member and silently fell back to ``PENDING``. That broke the
+    poller's ``is_long_running = status == "provisioning"`` check, so genuinely
+    long provisioning runs never got the long lock timeout + heartbeat and their
+    lock could expire mid-flight (allowing a second worker to claim them).
+
+    An unrecognized, non-empty status means the graph is still doing work, so we
+    map it to PROVISIONING (active) rather than the old silent PENDING.
+    """
     from app.models.request import RequestStatus
 
-    mapping = {
-        "pending": "PENDING",
-        "data_owner_approval": "DATA_OWNER_APPROVAL",
-        "provisioning": "IN_PROGRESS",
-        "completed": "COMPLETED",
-        "rejected": "REJECTED",
-        "failed": "FAILED",
-    }
-    name = mapping.get(status_str, "IN_PROGRESS")
-    return getattr(RequestStatus, name, getattr(RequestStatus, "PENDING", None))
+    if not status_str:
+        return RequestStatus.PENDING
+    try:
+        return RequestStatus(status_str)
+    except ValueError:
+        return RequestStatus.PROVISIONING
 
 
 # Module-level singleton (mirrors app.tools.tool_executor.executor).

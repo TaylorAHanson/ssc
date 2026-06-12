@@ -2,6 +2,7 @@
 Tool to list tables.
 """
 from typing import Dict, Any, Optional
+import asyncio
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.providers.databricks import DatabricksProvider
@@ -38,7 +39,11 @@ async def get_table_list(target_host: str, catalog_name: str, schema_name: str, 
             config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID}
         )
         
-        tables = provider.client.tables.list(catalog_name=catalog_name, schema_name=schema_name)
+        # tables.list() returns a lazy pager; materialize it in a worker thread so
+        # the paging API calls don't block the event loop.
+        tables = await asyncio.to_thread(
+            lambda: list(provider.client.tables.list(catalog_name=catalog_name, schema_name=schema_name))
+        )
         
         # Fetch tags for all tables in this schema in one query
         tags_by_table = {}

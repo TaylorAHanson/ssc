@@ -14,7 +14,7 @@ class GetTargetWorkspacesInput(BaseModel):
     description="Lists the authoritative target Databricks workspaces available for operations (like creating catalogs, schemas, volumes, etc.). Use this to find the correct 'target_host' URL when a workflow requires it.",
     args_schema=GetTargetWorkspacesInput
 )
-async def get_target_workspaces() -> Dict[str, Any]:
+def get_target_workspaces() -> Dict[str, Any]:
     """
     Fetch the list of configured target workspaces.
     """

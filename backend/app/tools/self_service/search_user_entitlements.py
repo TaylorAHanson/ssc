@@ -73,8 +73,12 @@ def _get_effective_permission(client: WorkspaceClient, object_type: str, object_
     except Exception:
         return "Read/Write (Implicit)"
 
-async def _search_data_entitlements(client: WorkspaceClient, filter_string: Optional[str], using_obo: bool, current_user: Any = None, user_groups: List[str] = []) -> List[Dict[str, Any]]:
-    """Search for data (Unity Catalog) entitlements."""
+def _search_data_entitlements(client: WorkspaceClient, filter_string: Optional[str], using_obo: bool, current_user: Any = None, user_groups: List[str] = []) -> List[Dict[str, Any]]:
+    """Search for data (Unity Catalog) entitlements.
+
+    Synchronous on purpose: the body is a blocking Databricks SDK loop. The
+    caller dispatches it via ``asyncio.to_thread`` so it never blocks the loop.
+    """
     results = []
     try:
         catalogs = client.catalogs.list()
@@ -95,8 +99,8 @@ async def _search_data_entitlements(client: WorkspaceClient, filter_string: Opti
         
     return results
 
-async def _search_workspace_entitlements(client: WorkspaceClient, filter_string: Optional[str], using_obo: bool, current_user: Any = None, user_groups: List[str] = []) -> List[Dict[str, Any]]:
-    """Search for workspace entitlements with recursion."""
+def _search_workspace_entitlements(client: WorkspaceClient, filter_string: Optional[str], using_obo: bool, current_user: Any = None, user_groups: List[str] = []) -> List[Dict[str, Any]]:
+    """Search for workspace entitlements with recursion (blocking; run in a thread)."""
     results = []
     try:
         # BFS Queue: (path, depth)
@@ -155,8 +159,8 @@ async def _search_workspace_entitlements(client: WorkspaceClient, filter_string:
             pass 
     return results
 
-async def _search_compute_entitlements(client: WorkspaceClient, filter_string: Optional[str], using_obo: bool, current_user: Any = None, user_groups: List[str] = []) -> List[Dict[str, Any]]:
-    """Search for compute entitlements."""
+def _search_compute_entitlements(client: WorkspaceClient, filter_string: Optional[str], using_obo: bool, current_user: Any = None, user_groups: List[str] = []) -> List[Dict[str, Any]]:
+    """Search for compute entitlements (blocking; run in a thread)."""
     results = []
     try:
         clusters = client.clusters.list()
@@ -187,6 +191,33 @@ async def _search_compute_entitlements(client: WorkspaceClient, filter_string: O
         pass
     return results
 
+def _prepare_client(use_obo: bool, obo_token: Optional[str]) -> tuple:
+    """Build the (possibly OBO) client and resolve identity. Blocking SDK work."""
+    provider = _get_provider()
+    client = provider.client
+    using_obo = False
+
+    if use_obo and obo_token:
+        print(f"DEBUG: Using OBO token for search (len={len(obo_token)})")
+        client = provider.get_workspace_client(token=obo_token)
+        print(f"DEBUG: Initialized OBO client for host {client.config.host}")
+        using_obo = True
+    elif use_obo:
+        print("DEBUG: OBO requested but no token found in kwargs. Falling back to Service Principal.")
+
+    current_user = None
+    user_groups: List[str] = []
+    try:
+        current_user = client.current_user.me()
+        print(f"DEBUG: Search executing as user: {current_user.user_name} (ID: {current_user.id})")
+        if hasattr(current_user, 'groups') and current_user.groups:
+            user_groups = [g.display_name for g in current_user.groups]
+    except Exception as e:
+        print(f"DEBUG: Could not determine current user identity: {e}")
+
+    return client, using_obo, current_user, user_groups
+
+
 @tool(
     name="search_user_entitlements",
     description="Searches for user entitlements across Data (Unity Catalog), Workspace (Notebooks, Folders), and Compute resources. Features: 1) Recursively searches workspace folders up to 5 levels deep. 2) Analyzes EFFECTIVE permissions, resolving both direct access and group inheritance (e.g., 'MANAGE' via 'Admin Group'). Use this to answer 'what do I have access to?' or 'can I access X?'.",
@@ -195,48 +226,10 @@ async def _search_compute_entitlements(client: WorkspaceClient, filter_string: O
 async def search_user_entitlements(entitlement_types: List[str], filter_string: Optional[str] = None, use_obo: bool = True, **kwargs) -> Dict[str, Any]:
     """Execute the entitlement search."""
     try:
-        provider = _get_provider()
-        
-        # Determine which client to use
-        client = provider.client
-        using_obo = False
-        
-        if use_obo:
-            obo_token = kwargs.get("_obo_token")
-            if obo_token:
-                print(f"DEBUG: Using OBO token for search (len={len(obo_token)})")
-                # Use provider to get OBO client - cleaner and more testable
-                client = provider.get_workspace_client(token=obo_token)
-                print(f"DEBUG: Initialized OBO client for host {client.config.host}")
-                using_obo = True
-            else:
-                print("DEBUG: OBO requested but no token found in kwargs. Falling back to Service Principal.")
-                # Fallback to default client (Service Principal)
-                pass
-        
-        # Identify who we are
-        try:
-            me = client.current_user.me()
-            print(f"DEBUG: Search executing as user: {me.user_name} (ID: {me.id})")
-        except Exception as e:
-            print(f"DEBUG: Could not determine current user identity: {e}")
-        
-        # Get current user info for permission cross-referencing
-        current_user = None
-        user_groups = []
-        if using_obo or True:
-            try:
-                current_user = client.current_user.me()
-                # Try to fetch groups for the user if possible
-                # This is tricky without a direct 'get_user_groups' method.
-                # We can try seeing if 'groups' is in current_user.
-                if hasattr(current_user, 'groups'):
-                    user_groups = [g.display_name for g in current_user.groups]
-                # Alternatively, if we really need groups, we might need to query them.
-                # But listing all groups is expensive. 
-                # Let's trust 'me' has what we need or minimal group check.
-            except Exception:
-                pass
+        # Client setup + identity resolution are blocking SDK calls; offload them.
+        client, using_obo, current_user, user_groups = await asyncio.to_thread(
+            _prepare_client, use_obo, kwargs.get("_obo_token")
+        )
 
         # Normalize entitlement types
         if "all" in entitlement_types:
@@ -247,15 +240,15 @@ async def search_user_entitlements(entitlement_types: List[str], filter_string: 
         tasks = []
         
         if "data" in types_to_search:
-            tasks.append(_search_data_entitlements(client, filter_string, using_obo, current_user, user_groups))
+            tasks.append(asyncio.to_thread(_search_data_entitlements, client, filter_string, using_obo, current_user, user_groups))
         
         if "workspace" in types_to_search:
-            tasks.append(_search_workspace_entitlements(client, filter_string, using_obo, current_user, user_groups))
+            tasks.append(asyncio.to_thread(_search_workspace_entitlements, client, filter_string, using_obo, current_user, user_groups))
             
         if "compute" in types_to_search:
-            tasks.append(_search_compute_entitlements(client, filter_string, using_obo, current_user, user_groups))
+            tasks.append(asyncio.to_thread(_search_compute_entitlements, client, filter_string, using_obo, current_user, user_groups))
             
-        # Run searches in parallel
+        # Run searches in parallel (each in its own worker thread).
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # Aggregate results
