@@ -21,6 +21,7 @@ from typing import Any, Dict, Optional
 
 from langgraph.types import Command
 
+from app.core.exceptions import PermanentError
 from app.workflows.checkpointer import build_checkpointer
 from app.workflows.graphs import build_graph_for, has_graph
 
@@ -63,6 +64,16 @@ class DurableWorkflowExecutor:
             db = None
         try:
             return build_graph_for(request.type, db)
+        except KeyError as e:
+            # No published workflow and no code spec for this type. Retrying can
+            # never resolve this (the workflow was deleted/unpublished, or the
+            # type was never registered), so surface it as permanent instead of
+            # letting the poller burn retries on identical tracebacks.
+            req_type = getattr(request.type, "value", request.type)
+            raise PermanentError(
+                f"No workflow graph registered for request type '{req_type}'. "
+                "Its workflow may have been deleted or unpublished."
+            ) from e
         finally:
             if db is not None:
                 db.close()
