@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from app.workflows.spec import Gate, Step
+from app.workflows.spec import Gate, Step, SubWorkflow
 from app.workflows.spec_loader import spec_from_dict, validate_spec_dict
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,37 @@ def project_run(
                 entry["decision"] = "requires_approval"
                 entry["error"] = str(e)
             if entry["decision"] == "requires_approval":
+                requires_approval = True
+            stages_out.append(entry)
+        elif isinstance(stage, SubWorkflow):
+            # A nested workflow runs inline (its own gates/steps execute under
+            # this request). We can't fully project the child without resolving
+            # it, so report the composition and the mapped inputs.
+            entry = {
+                "kind": "subworkflow",
+                "name": stage.name,
+                "ref": stage.ref,
+                "running_status": stage.running_status,
+                "conditional": stage.run_if is not None,
+            }
+            # Conditional composition: will this nested workflow run for this input?
+            will_run = True
+            if stage.run_if is not None:
+                try:
+                    will_run = bool(stage.run_if(ctx))
+                except Exception as e:  # noqa: BLE001 - surface eval errors to the author
+                    will_run = True
+                    entry["error"] = str(e)
+            entry["will_run"] = will_run
+            entry["decision"] = "run" if will_run else "skip"
+            try:
+                entry["input"] = stage.input(ctx) if stage.input else {}
+            except Exception as e:  # noqa: BLE001 - surface eval errors to the author
+                entry["input"] = {}
+                entry["error"] = str(e)
+            # A nested workflow typically contains its own approval gate(s) — but
+            # only counts toward "requires approval" when it actually runs.
+            if will_run:
                 requires_approval = True
             stages_out.append(entry)
         else:

@@ -33,6 +33,40 @@ async def get_my_training(
         "completed_codes": completed_codes
     }
 
+@router.get("/courses", response_model=List[Dict[str, str]])
+async def list_courses(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Flat, de-duplicated list of {code, name} courses across all training tracks.
+
+    Powers the training-gate course picker in the workflow editor: a gate can pin
+    a specific course by its code, which is then matched against learner
+    completions for auto-satisfaction.
+    """
+    provider = TrainingProvider(db)
+    tracks = provider.get_all_tracks() or []
+
+    seen: Dict[str, str] = {}
+    # Each persona/track is a dict whose values are lists of course dicts
+    # ({id, name, ...}) under arbitrary level keys (fundamentals/associate/...).
+    for track in tracks:
+        if not isinstance(track, dict):
+            continue
+        for value in track.values():
+            if not isinstance(value, list):
+                continue
+            for course in value:
+                if not isinstance(course, dict):
+                    continue
+                code = course.get("id")
+                name = course.get("name")
+                if code and code not in seen:
+                    seen[code] = name or code
+
+    return [{"code": code, "name": name} for code, name in sorted(seen.items(), key=lambda kv: kv[1].lower())]
+
+
 @router.post("/upload", response_model=Dict[str, Any])
 async def upload_training_data(
     file: UploadFile = File(...),

@@ -26,6 +26,7 @@ import {
   Download,
   Upload,
   ArrowLeft,
+  Layers,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import type { Workflow, WorkflowInput, WorkflowGraphSpec, WorkflowTool } from '../../services/api';
@@ -68,6 +69,14 @@ const emptyForm: WorkflowFormState = {
   status: 'draft',
   graph_spec: null,
 };
+
+// "Compound" = the spec composes another workflow via a subworkflow ("Call
+// workflow") stage; otherwise it's "atomic". Mirrors the backend derivation so
+// the editor can badge an unsaved spec before the server round-trip.
+function specComposition(spec: WorkflowGraphSpec | null | undefined): 'atomic' | 'compound' {
+  const stages = spec?.stages ?? [];
+  return stages.some((s) => s.kind === 'subworkflow') ? 'compound' : 'atomic';
+}
 
 const splitList = (value: string): string[] =>
   value
@@ -700,6 +709,18 @@ export function Workflows() {
                     <div className="text-xs text-gray-500 truncate">{s.goal || '—'}</div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
+                    {s.composition === 'compound' && (
+                      <span
+                        className="inline-flex items-center gap-1 text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-1.5 py-0.5"
+                        title={
+                          s.subworkflow_refs?.length
+                            ? `Compound workflow — composes: ${s.subworkflow_refs.join(', ')}`
+                            : 'Compound workflow (composes nested workflows)'
+                        }
+                      >
+                        <Layers className="w-3 h-3" /> compound
+                      </span>
+                    )}
                     {s.status === 'published' ? (
                       <span className="inline-flex items-center gap-1 text-[11px] text-green-700">
                         <CheckCircle2 className="w-3 h-3" /> live
@@ -764,6 +785,31 @@ export function Workflows() {
                       >
                         {form.status === 'published' ? 'live' : 'draft'}
                       </span>
+                      <span
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] ${
+                          specComposition(form.graph_spec) === 'compound'
+                            ? 'bg-indigo-50 text-indigo-700'
+                            : 'bg-gray-100 text-gray-500'
+                        }`}
+                        title={
+                          specComposition(form.graph_spec) === 'compound'
+                            ? 'Compound — composes nested workflows via a Call workflow stage'
+                            : 'Atomic — only gates and steps (no nested workflows)'
+                        }
+                      >
+                        <Layers className="w-3 h-3" /> {specComposition(form.graph_spec)}
+                      </span>
+                      {selectedWorkflow &&
+                        selectedWorkflow.status === 'published' &&
+                        selectedWorkflow.composition &&
+                        selectedWorkflow.composition !== specComposition(form.graph_spec) && (
+                          <span
+                            className="text-[11px] text-amber-600"
+                            title={`The live workflow is ${selectedWorkflow.composition}, but your unsaved edits make it ${specComposition(form.graph_spec)}. Publish to apply.`}
+                          >
+                            · differs from live ({selectedWorkflow.composition})
+                          </span>
+                        )}
                       {selectedWorkflow && <span>v{selectedWorkflow.version}</span>}
                       {selectedWorkflow?.updated_at && (
                         <span className="text-gray-400">

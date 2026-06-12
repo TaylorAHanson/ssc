@@ -1,35 +1,17 @@
 {
   "key": "project_onboarding",
   "name": "project_onboarding",
-  "complete_fact": "all_children_completed",
+  "complete_fact": "provisioning_completed",
   "stages": [
     {
-      "kind": "gate",
-      "name": "manager_approval",
-      "type": "manager",
-      "waiting_status": "manager_approval"
+      "kind": "subworkflow",
+      "name": "provision_workspace",
+      "ref": "workspace_provision"
     },
     {
-      "kind": "step",
-      "name": "spawn",
-      "tool": "spawn_child_request",
-      "approvals": ["manager"],
-      "for_each": {
-        "$coalesce": [
-          {"$var": "children"},
-          [{"child_type": "workspace_provision", "parameters": {}}]
-        ]
-      },
-      "item_args": {
-        "child_type": {"$item": "child_type"},
-        "parameters": {"$item": {"path": "parameters", "default": {}}}
-      }
-    },
-    {
-      "kind": "gate",
-      "name": "await_children",
-      "type": "children",
-      "waiting_status": "provisioning"
+      "kind": "subworkflow",
+      "name": "create_project_folder",
+      "ref": "workspace_folder_creation"
     }
   ]
 }

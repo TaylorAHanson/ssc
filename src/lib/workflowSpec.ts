@@ -220,13 +220,15 @@ export interface FlowEdge {
   tone?: 'normal' | 'reject';
 }
 
+// Gate types offered when authoring. `children` is intentionally omitted: the
+// sibling-spawn model is deprecated in favor of compound workflows (a
+// `subworkflow` stage). The backend still validates `children` for older specs.
 export const GATE_TYPES: GateType[] = [
   'manager',
   'platform_admin',
   'data_owner',
   'training',
   'pr_merge',
-  'children',
 ];
 
 /** Lay a spec out top-to-bottom: pending -> stages -> complete, gates branch to rejected. */
@@ -259,6 +261,20 @@ export function specToFlow(spec: WorkflowGraphSpec): { nodes: FlowNode[]; edges:
         id, label: s.name, sublabel, kind: 'gate', x: COL_X, y: row * ROW,
       });
       edges.push({ id: `${prev}->${id}`, source: prev, target: id });
+      edges.push({ id: `${id}->rejected`, source: id, target: 'rejected', label: 'reject', tone: 'reject' });
+    } else if (s.kind === 'subworkflow') {
+      // A nested workflow can reject (the child routes to its rejected node),
+      // which rejects the parent — show that branch like a gate's.
+      anyGate = true;
+      const subw = s as { ref?: string; run_if?: unknown };
+      const ref = subw.ref;
+      const conditional = subw.run_if !== undefined && subw.run_if !== null;
+      const base = ref ? `↳ ${ref}` : 'call workflow';
+      nodes.push({
+        id, label: s.name, sublabel: conditional ? `${base} (conditional)` : base,
+        kind: 'step', x: COL_X, y: row * ROW,
+      });
+      edges.push({ id: `${prev}->${id}`, source: prev, target: id, label: conditional ? 'if' : undefined });
       edges.push({ id: `${id}->rejected`, source: id, target: 'rejected', label: 'reject', tone: 'reject' });
     } else {
       const step = s as WorkflowStage & { tool?: string; run_if?: unknown };
@@ -322,6 +338,9 @@ export function collectVarPaths(spec: WorkflowGraphSpec): string[] {
   for (const s of spec.stages || []) {
     if (s.kind === 'gate') {
       collectFromNode(s.auto_approve, out);
+    } else if (s.kind === 'subworkflow') {
+      const sub = s as { input?: Record<string, unknown> };
+      if (sub.input) Object.values(sub.input).forEach((v) => collectFromNode(v, out));
     } else {
       const step = s as { args?: Record<string, unknown>; for_each?: unknown; item_args?: Record<string, unknown>; run_if?: unknown };
       if (step.args) Object.values(step.args).forEach((v) => collectFromNode(v, out));
@@ -342,4 +361,8 @@ export function newGate(index: number): WorkflowStage {
 
 export function newStep(index: number, defaultTool: string): WorkflowStage {
   return { kind: 'step', name: `step_${index}`, tool: defaultTool, approvals: [], args: {} };
+}
+
+export function newSubWorkflow(index: number, defaultRef = ''): WorkflowStage {
+  return { kind: 'subworkflow', name: `call_${index}`, ref: defaultRef, input: {} };
 }

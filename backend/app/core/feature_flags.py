@@ -45,28 +45,3 @@ def is_tool_enabled(tool_name: str) -> bool:
         
     enabled_list = [t.strip() for t in enabled_tools.split(",") if t.strip()]
     return tool_name in enabled_list
-
-def is_workflow_enabled(workflow_type: str) -> bool:
-    """
-    Check if a specific workflow is enabled.
-    workflow_type is expected to be a string like 'RequestType.ASSET_DEDUPLICATION' or 'asset_deduplication'
-    """
-    workflows = _yaml_config.get("workflows")
-    if workflows is not None:
-        # Check both the raw string value and the RequestType.XXX format
-        if workflow_type in workflows:
-            return bool(workflows[workflow_type])
-        req_type_format = f"RequestType.{workflow_type.upper()}"
-        if req_type_format in workflows:
-            return bool(workflows[req_type_format])
-        return False
-        
-    # Fallback to env var
-    enabled_workflows = os.getenv("ENABLED_WORKFLOWS")
-    if enabled_workflows is None:
-        return True # Default to True for backward compatibility if the env var isn't set
-        
-    enabled_list = [w.strip() for w in enabled_workflows.split(",") if w.strip()]
-    
-    # Check both the raw string value and the RequestType.XXX format
-    return workflow_type in enabled_list or f"RequestType.{workflow_type.upper()}" in enabled_list

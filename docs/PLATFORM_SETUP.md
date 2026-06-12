@@ -52,7 +52,9 @@ ATLAS is highly customizable. You can control its features, UI tabs, and brandin
 ### Step 3.1: Customize the Application
 1. Open the `configuration.yaml` file located in the root of your repository.
 2. Modify the `branding` section to include your company's name, logo URL, and corporate hex colors.
-3. Enable or disable specific `features`, `tools`, or `workflows` as needed.
+3. Enable or disable specific `features` and `tools` as needed.
+
+*Note: Request types/workflows are no longer toggled in `configuration.yaml`. They are data-driven — the source of truth is published workflows (database) plus the seed catalog under `backend/app/workflows/graphs/catalog`. To disable a workflow, unpublish it in the admin **Workflows** UI, or set `tools.execute_workflow: false` as a global kill switch.*
 
 *Note: If you are using GitHub Actions, you can push these changes to a dedicated configuration branch (e.g., the `lite` version) or modify them directly in your main branch.*
 

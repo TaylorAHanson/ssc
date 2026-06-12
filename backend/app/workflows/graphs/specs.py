@@ -75,10 +75,22 @@ def _load_catalog(catalog_dir: str = _CATALOG_DIR) -> Dict[str, dict]:
 SPECS: Dict[str, dict] = _load_catalog()
 
 
+def catalog_child_resolver(key):
+    """Resolve a subworkflow ``ref`` to a catalog :class:`WorkflowSpec`.
+
+    Used when compiling bundled catalog graphs (no DB context). A published DB
+    workflow can override a catalog child at run time via the DB-aware resolver
+    in :mod:`app.workflows.graphs` (``build_graph_for``).
+    """
+    k = getattr(key, "value", key)
+    raw = SPECS.get(k)
+    return spec_from_dict(raw) if raw is not None else None
+
+
 def make_spec_builder(spec_dict):
     """Wrap a spec dict into a no-arg graph builder for the registry."""
     def builder():
-        return build_spec_graph(spec_from_dict(spec_dict))
+        return build_spec_graph(spec_from_dict(spec_dict), catalog_child_resolver)
     return builder
 
 

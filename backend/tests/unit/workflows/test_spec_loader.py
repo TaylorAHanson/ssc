@@ -6,7 +6,7 @@ before they can be published or run.
 """
 import pytest
 
-from app.workflows.graphs.specs import SPECS, stage_specs
+from app.workflows.graphs.specs import SPECS, catalog_child_resolver, stage_specs
 from app.workflows.spec import Gate, Step, build_spec_graph
 from app.workflows.spec_loader import (
     SpecError,
@@ -330,7 +330,9 @@ def test_every_catalog_spec_validates_compiles_and_resolves_tools():
     for rt, data in SPECS.items():
         validate_spec_dict(data)                 # structurally valid
         spec = spec_from_dict(data)              # compiles closures + tools
-        build_spec_graph(spec)                   # builds a StateGraph
+        # Pass the catalog resolver so compound specs (a `subworkflow` stage)
+        # can resolve their nested workflows from the catalog.
+        build_spec_graph(spec, catalog_child_resolver)   # builds a StateGraph
         for stage in data.get("stages", []):
             if stage["kind"] == "step":
                 assert has_tool(stage["tool"]), f"{rt}:{stage['name']} -> {stage['tool']}"
@@ -339,6 +341,80 @@ def test_every_catalog_spec_validates_compiles_and_resolves_tools():
 def test_catalog_stage_specs_match_renderer_view():
     for rt, data in SPECS.items():
         assert stage_specs_from_dict(data) == stage_specs(rt)
+
+
+# --- compound workflows (nested subgraphs) --------------------------------
+
+def test_compound_classification_and_refs():
+    from app.workflows.spec_loader import is_compound_spec, subworkflow_refs
+
+    atomic = {"name": "a", "stages": [{"kind": "gate", "name": "g", "type": "manager"}]}
+    compound = {
+        "name": "c",
+        "stages": [
+            {"kind": "subworkflow", "name": "s1", "ref": "simple_email"},
+            {"kind": "gate", "name": "g", "type": "manager"},
+            {"kind": "subworkflow", "name": "s2", "ref": "workspace_provision"},
+        ],
+    }
+    assert is_compound_spec(atomic) is False
+    assert is_compound_spec(compound) is True
+    assert subworkflow_refs(atomic) == []
+    assert subworkflow_refs(compound) == ["simple_email", "workspace_provision"]
+
+
+def test_subworkflow_validation_shape():
+    # ref is required.
+    with pytest.raises(SpecError):
+        validate_spec_dict({"name": "x", "stages": [{"kind": "subworkflow", "name": "s"}]})
+    # input must be an object of expressions.
+    with pytest.raises(SpecError):
+        validate_spec_dict({
+            "name": "x",
+            "stages": [{"kind": "subworkflow", "name": "s", "ref": "r", "input": []}],
+        })
+    # A well-formed subworkflow stage validates (existence/cycles checked at compile).
+    validate_spec_dict({
+        "name": "x",
+        "stages": [{"kind": "subworkflow", "name": "s", "ref": "r",
+                    "input": {"to_email": {"$var": "to_email"}}}],
+    })
+
+
+def test_subworkflow_compiles_with_resolver_and_errors_without():
+    data = {
+        "name": "parent",
+        "stages": [{"kind": "subworkflow", "name": "child", "ref": "simple_email"}],
+    }
+    spec = spec_from_dict(data)
+    # No resolver -> SpecError (the module stays IO-free; the registry supplies one).
+    with pytest.raises(SpecError):
+        build_spec_graph(spec)
+    # With the catalog resolver it compiles into a graph.
+    build_spec_graph(spec, catalog_child_resolver).compile()
+
+
+def test_subworkflow_unknown_ref_and_cycle_rejected():
+    unknown = spec_from_dict({
+        "name": "p",
+        "stages": [{"kind": "subworkflow", "name": "c", "ref": "does_not_exist"}],
+    })
+    with pytest.raises(SpecError):
+        build_spec_graph(unknown, catalog_child_resolver)
+
+    # A resolver that returns a spec referencing itself must be caught as a cycle.
+    def self_ref_resolver(key):
+        return spec_from_dict({
+            "name": "loop",
+            "stages": [{"kind": "subworkflow", "name": "again", "ref": "loop"}],
+        })
+
+    looping = spec_from_dict({
+        "name": "loop",
+        "stages": [{"kind": "subworkflow", "name": "again", "ref": "loop"}],
+    })
+    with pytest.raises(SpecError):
+        build_spec_graph(looping, self_ref_resolver)
 
 
 # --- catalog loader -------------------------------------------------------

@@ -1,8 +1,9 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
   GitBranch,
   GripVertical,
+  Layers,
   Loader2,
   Play,
   Plus,
@@ -21,7 +22,10 @@ import type {
   WorkflowGraphSpec,
   WorkflowStage,
   WorkflowStepStage,
+  WorkflowSubWorkflowStage,
   WorkflowTool,
+  TrainingCourse,
+  Workflow,
 } from '../../services/api';
 import {
   GATE_TYPES,
@@ -31,6 +35,7 @@ import {
   modelToAutoApprove,
   newGate,
   newStep,
+  newSubWorkflow,
   type ArgKind,
   type ArgValue,
   type AutoApproveModel,
@@ -105,6 +110,12 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
     setSelectedIdx(next.length - 1);
   };
 
+  const addCall = () => {
+    const next = [...stages, newSubWorkflow(stages.length + 1)];
+    setStages(next);
+    setSelectedIdx(next.length - 1);
+  };
+
   // Stable identity so the graph preview's memo/effects don't churn (which can
   // blank the canvas). Resolve the name against the latest stages at call time.
   const selectByName = useCallback(
@@ -167,7 +178,10 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
           <Button type="button" variant="outline" size="sm" onClick={addStep}>
             <Wrench className="w-3.5 h-3.5 mr-1" /> Add step
           </Button>
-          <HelpTip text="A workflow runs its stages top to bottom. Add a gate for a human/event approval the request pauses on, or a step to run one governed tool. Drag to reorder." />
+          <Button type="button" variant="outline" size="sm" onClick={addCall}>
+            <Layers className="w-3.5 h-3.5 mr-1" /> Call workflow
+          </Button>
+          <HelpTip text="A workflow runs its stages top to bottom. Add a gate for a human/event approval the request pauses on, a step to run one governed tool, or 'Call workflow' to nest another published workflow inline (compound). A rejection inside the nested workflow rejects this one. Drag to reorder." />
           <AskAgentHint className="ml-1" onClick={onAskAgent} label="Ask the agent" />
         </div>
         <div className="flex items-center gap-3">
@@ -245,12 +259,18 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
               <span className="text-[10px] text-gray-400 w-4">{idx + 1}</span>
               {s.kind === 'gate' ? (
                 <GitBranch className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+              ) : s.kind === 'subworkflow' ? (
+                <Layers className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
               ) : (
                 <Wrench className="w-3.5 h-3.5 text-blue-600 shrink-0" />
               )}
               <span className="text-sm truncate flex-1">{s.name || '(unnamed)'}</span>
               <span className="text-[10px] text-gray-400 truncate max-w-[64px]">
-                {s.kind === 'gate' ? s.type : (s as WorkflowStepStage).tool}
+                {s.kind === 'gate'
+                  ? s.type
+                  : s.kind === 'subworkflow'
+                    ? (s as WorkflowSubWorkflowStage).ref || 'workflow'
+                    : (s as WorkflowStepStage).tool}
               </span>
             </div>
           ))}
@@ -279,10 +299,16 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
               <div className="flex items-center gap-2 text-sm font-semibold text-gray-700">
                 {selected.kind === 'gate' ? (
                   <GitBranch className="w-4 h-4 text-amber-600" />
+                ) : selected.kind === 'subworkflow' ? (
+                  <Layers className="w-4 h-4 text-indigo-600" />
                 ) : (
                   <Wrench className="w-4 h-4 text-blue-600" />
                 )}
-                {selected.kind === 'gate' ? 'Gate' : 'Provision step'}
+                {selected.kind === 'gate'
+                  ? 'Gate'
+                  : selected.kind === 'subworkflow'
+                    ? 'Call workflow'
+                    : 'Provision step'}
                 <span className="text-xs font-normal text-gray-400">
                   · stage {selectedIdx! + 1} of {stages.length}
                 </span>
@@ -314,6 +340,12 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
               {selected.kind === 'gate' ? (
                 <GateForm
                   gate={selected}
+                  onChange={(patch) => updateStage(selectedIdx!, patch)}
+                />
+              ) : selected.kind === 'subworkflow' ? (
+                <SubWorkflowForm
+                  sub={selected}
+                  currentName={spec.name}
                   onChange={(patch) => updateStage(selectedIdx!, patch)}
                 />
               ) : (
@@ -355,6 +387,17 @@ function GateForm({
   // discarded; we only commit to the spec when it parses.
   const [advDraft, setAdvDraft] = useState<string | null>(null);
   const [advError, setAdvError] = useState<string | null>(null);
+
+  // Course list for training gates (loaded lazily when a training gate is shown).
+  const [courses, setCourses] = useState<TrainingCourse[]>([]);
+  useEffect(() => {
+    if (gate.type !== 'training') return;
+    let cancelled = false;
+    api.listTrainingCourses()
+      .then((c) => { if (!cancelled) setCourses(c); })
+      .catch(() => { if (!cancelled) setCourses([]); });
+    return () => { cancelled = true; };
+  }, [gate.type]);
 
   const setModel = (m: AutoApproveModel) => {
     try {
@@ -404,6 +447,28 @@ function GateForm({
           />
         </div>
       </div>
+
+      {gate.type === 'training' && (
+        <div>
+          <LabelWithHelp className={labelClass} help="Optionally require a specific LMS course. When set, the gate is satisfied automatically once the requester completes that course (verified against training completions). Leave as 'Any training' to accept a manual 'mark complete'.">
+            Required course
+          </LabelWithHelp>
+          <select
+            className={inputClass}
+            value={gate.course_code || ''}
+            onChange={(e) => {
+              const code = e.target.value || null;
+              const name = code ? (courses.find((c) => c.code === code)?.name ?? null) : null;
+              onChange({ course_code: code, course_name: name });
+            }}
+          >
+            <option value="">Any training (manual completion)</option>
+            {courses.map((c) => (
+              <option key={c.code} value={c.code}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <GateApproverField gate={gate} onChange={onChange} />
 
@@ -617,9 +682,13 @@ const ADVANCED_RUN_IF_SEED = JSON.stringify({ $eq: [{ $var: 'tier' }, 'high'] },
 function RunIfEditor({
   value,
   onChange,
+  label = 'Run this step…',
+  help = "Conditional branching: run this step only when a rule about the request holds (e.g. tier equals 'high'). 'Always' runs it every time; 'Only when a condition is met' builds a simple rule; 'Advanced' is a raw expression. Skipped steps don't run their tool and don't block the workflow.",
 }: {
   value: SpecExpr | null | undefined;
   onChange: (runIf: SpecExpr | null) => void;
+  label?: string;
+  help?: string;
 }) {
   const model = autoApproveToModel(value);
   const [advDraft, setAdvDraft] = useState<string | null>(null);
@@ -645,8 +714,8 @@ function RunIfEditor({
 
   return (
     <div>
-      <LabelWithHelp className={labelClass} help="Conditional branching: run this step only when a rule about the request holds (e.g. tier equals 'high'). 'Always' runs it every time; 'Only when a condition is met' builds a simple rule; 'Advanced' is a raw expression. Skipped steps don't run their tool and don't block the workflow.">
-        Run this step…
+      <LabelWithHelp className={labelClass} help={help}>
+        {label}
       </LabelWithHelp>
       <select
         className={inputClass}
@@ -689,6 +758,113 @@ function RunIfEditor({
         </div>
       )}
     </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Call-workflow (subworkflow) form — the compound-workflow building block.
+// --------------------------------------------------------------------------
+function SubWorkflowForm({
+  sub,
+  currentName,
+  onChange,
+}: {
+  sub: WorkflowSubWorkflowStage;
+  currentName: string;
+  onChange: (patch: Partial<WorkflowSubWorkflowStage>) => void;
+}) {
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    api.listWorkflows(true)
+      .then((w) => { if (!cancelled) setWorkflows(w); })
+      .catch(() => { if (!cancelled) setWorkflows([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Only published workflows can be composed (the runtime resolver looks them
+  // up by key); exclude self to make accidental direct recursion impossible.
+  const options = useMemo(
+    () =>
+      workflows
+        .filter((w) => w.status === 'published' && w.key !== currentName)
+        .sort((a, b) => a.key.localeCompare(b.key)),
+    [workflows, currentName],
+  );
+  const known = options.some((w) => w.key === sub.ref);
+
+  const inputEntries = Object.entries(sub.input || {});
+  const setInput = (entries: [string, SpecExpr][]) => {
+    const obj: Record<string, SpecExpr> = {};
+    entries.forEach(([k, v]) => { obj[k] = v; });
+    onChange({ input: obj });
+  };
+
+  return (
+    <>
+      <div>
+        <LabelWithHelp className={labelClass} help="The published workflow to run inline here. Its gates pause and resume like this workflow's own, and a rejection inside it rejects this workflow. Composing a workflow makes this one 'compound'.">
+          Workflow to call
+        </LabelWithHelp>
+        <select
+          className={inputClass}
+          value={sub.ref || ''}
+          onChange={(e) => onChange({ ref: e.target.value })}
+        >
+          <option value="">{loading ? 'Loading…' : 'Select a published workflow…'}</option>
+          {sub.ref && !known && (
+            <option value={sub.ref}>{sub.ref} (not found / unpublished)</option>
+          )}
+          {options.map((w) => (
+            <option key={w.id} value={w.key}>
+              {w.key}{w.composition === 'compound' ? ' · compound' : ''}
+            </option>
+          ))}
+        </select>
+        {sub.ref && !known && !loading && (
+          <div className="text-[11px] text-amber-600 mt-1">
+            "{sub.ref}" isn't a published workflow. Publish it (or pick another) before publishing this one.
+          </div>
+        )}
+      </div>
+
+      <div>
+        <LabelWithHelp className={labelClass} help="Optionally map values into the nested workflow's context before it runs (parent field → child field). The nested workflow otherwise shares this request's context, so you only need this to rename or supply specific inputs.">
+          Inputs to the nested workflow (optional)
+        </LabelWithHelp>
+        <div className="space-y-2">
+          {inputEntries.map(([key, val], i) => (
+            <ArgRow
+              key={i}
+              name={key}
+              value={val}
+              onRename={(newName) => {
+                const next = inputEntries.map((e, idx): [string, SpecExpr] => (idx === i ? [newName, e[1]] : e));
+                setInput(next);
+              }}
+              onChangeValue={(expr) => {
+                const next = inputEntries.map((e, idx): [string, SpecExpr] => (idx === i ? [e[0], expr] : e));
+                setInput(next);
+              }}
+              onRemove={() => setInput(inputEntries.filter((_, idx) => idx !== i))}
+            />
+          ))}
+          <Button type="button" variant="ghost" size="sm"
+            onClick={() => setInput([...inputEntries, [`input_${inputEntries.length + 1}`, { $var: '' }]])}>
+            <Plus className="w-3.5 h-3.5 mr-1" /> Add input mapping
+          </Button>
+        </div>
+      </div>
+
+      <RunIfEditor
+        value={sub.run_if}
+        onChange={(runIf) => onChange({ run_if: runIf })}
+        label="Run this subworkflow only when…"
+        help="Optionally run the nested workflow only when a condition holds (e.g. repo_needed == yes). When the condition is false the whole subworkflow is skipped. Leave off to always run it."
+      />
+    </>
   );
 }
 

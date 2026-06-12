@@ -28,6 +28,7 @@ class RemoteMcpTool:
         side_effect_class: str = "read",
         identity_mode: str = "obo",
         policy_ref: Optional[str] = None,
+        success_predicate: Optional[Any] = None,
     ):
         self._name = name
         self._server_url = server_url
@@ -37,6 +38,7 @@ class RemoteMcpTool:
         self._side_effect_class = side_effect_class
         self._identity_mode = identity_mode
         self._policy_ref = policy_ref
+        self._success_predicate = success_predicate
         # No pydantic schema to validate against; ToolExecutor skips validation
         # when this is None (the remote server enforces its own arg contract).
         self._args_schema = None
@@ -64,6 +66,17 @@ class RemoteMcpTool:
     @property
     def policy_ref(self) -> Optional[str]:
         return self._policy_ref
+
+    @property
+    def success_predicate(self) -> Optional[Any]:
+        """Author-declared ``$``-expression for success (see app/workflows/expr.py).
+
+        This is the primary lever for the external/MCP "false success" case: a
+        remote server can return HTTP 200 with a body that actually means failure,
+        and a predicate like ``{"$eq": [{"$var": "result.state"}, "submitted"]}``
+        catches it.
+        """
+        return self._success_predicate
 
     @property
     def required_role(self) -> Optional[str]:

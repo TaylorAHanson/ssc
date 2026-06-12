@@ -334,9 +334,16 @@ class SpawnChildInput(BaseModel):
 
 
 @tool(name="spawn_child_request", args_schema=SpawnChildInput, side_effect_class="app_write",
-      description="Create a child request workflow (orchestrator pattern).")
+      description="[DEPRECATED] Create a child request workflow (orchestrator pattern). "
+                  "Use a compound workflow (a 'subworkflow' stage) instead.")
 async def spawn_child_request(child_type: str, parameters: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
-    logger.info("spawn_child_request: %s params=%s", child_type, parameters)
+    # DEPRECATED: the sibling-spawn model never wired child completion back to the
+    # parent (the ``children`` gate's ``all_children_completed`` fact was never
+    # written). Compound workflows now compose children as nested subgraphs under
+    # one request (see app/workflows/spec.py SubWorkflow + build_spec_graph). This
+    # stays a no-op stub so any legacy published spec still validates/loads.
+    logger.warning("spawn_child_request is deprecated; use a compound workflow "
+                   "(subworkflow stage). type=%s", child_type)
     return {"spawned": child_type, "parameters": parameters or {}}
 
 

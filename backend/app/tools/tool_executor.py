@@ -42,6 +42,54 @@ _DEFAULT_ALLOW_DECISION = {
     "reason": "No policy decision (default allow).",
 }
 
+# Status strings that, when a tool returns an envelope dict, indicate failure.
+_FAILURE_STATUS = {"error", "failed", "failure"}
+
+
+def is_tool_failure(result: Any, predicate: Any = None) -> Optional[str]:
+    """Return a human-readable reason if ``result`` is a *false success*, else ``None``.
+
+    A tool can return HTTP 200 / a dict that semantically means failure — the
+    classic case is a ServiceNow (or any external) MCP call that "succeeds" at the
+    transport level but whose body reports the operation didn't happen. Without
+    this check a workflow would write its ``success_fact`` and advance anyway.
+
+    Detection, in priority order:
+      1. An author-declared ``success_predicate`` (a ``$``-expression evaluated
+         against ``{"result": <output>}`` via app/workflows/expr.py). When present
+         it is authoritative: falsy => failure, truthy => success.
+      2. Result-envelope conventions on a dict result: ``ok``/``success`` is
+         ``False``, a non-empty ``error``/``errors``, or ``status`` in
+         {error, failed, failure}.
+
+    A broken/unevaluable predicate never blocks (logged + treated as success) so a
+    misconfigured predicate can't wedge every call.
+    """
+    # 1. Author-declared predicate is authoritative when present.
+    if predicate is not None:
+        try:
+            from app.workflows.expr import evaluate
+            ok = bool(evaluate(predicate, {"ctx": {"result": result}}))
+        except Exception as e:  # noqa: BLE001 - never let a bad predicate wedge calls
+            logger.warning(
+                "is_tool_failure: success_predicate eval failed (treating as success): %s", e
+            )
+            return None
+        return None if ok else "tool result did not satisfy its success_predicate"
+
+    # 2. Envelope conventions (only meaningful for dict results).
+    if not isinstance(result, dict):
+        return None
+    if result.get("ok") is False or result.get("success") is False:
+        return str(result.get("error") or result.get("message") or "tool reported ok=false")
+    err = result.get("error") or result.get("errors")
+    if err:
+        return str(err)
+    status = result.get("status")
+    if isinstance(status, str) and status.strip().lower() in _FAILURE_STATUS:
+        return f"tool reported status='{status}'"
+    return None
+
 
 @dataclass
 class ToolContext:
@@ -237,6 +285,24 @@ class ToolExecutor:
         except Exception as e:
             self._audit(tool, ctx, ok=False, decision=decision, error=str(e))
             raise
+
+        # 6b. False-success detection. A 200/dict result can still mean the
+        #     operation failed (e.g. an external MCP call). Surface it as an
+        #     error-shaped result: the agent loop adapts as it does for any failed
+        #     tool, and the workflow step node (which re-checks) halts instead of
+        #     writing a success_fact and advancing.
+        failure_reason = is_tool_failure(result, getattr(tool, "success_predicate", None))
+        if failure_reason:
+            self._audit(tool, ctx, ok=False, decision=decision, error=failure_reason)
+            logger.warning(
+                "ToolExecutor: tool '%s' returned a false-success result: %s",
+                tool.name, failure_reason,
+            )
+            return {
+                "error": f"Tool '{tool.name}' did not succeed: {failure_reason}",
+                "tool_failed": True,
+                "result": _audit_safe(result),
+            }
 
         # 7. Audit success.
         self._audit(tool, ctx, ok=True, decision=decision, result=_audit_safe(result))

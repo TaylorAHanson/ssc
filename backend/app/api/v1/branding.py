@@ -45,7 +45,6 @@ async def get_branding():
         ),
         "features": _yaml_config.get("features", {}),
         "tools": _yaml_config.get("tools", {}),
-        "workflows": _yaml_config.get("workflows", {}),
         "ui": _yaml_config.get("ui", {}),
         # When true, this environment locks in-place workflow (Workflow) authoring;
         # the frontend hides edit/publish/delete and steers admins to bundle import.

@@ -96,6 +96,8 @@ def run_startup_migrations(engine: Engine) -> None:
         _rename_column(engine, "tool_registry", "enabled_for_workflow", "enabled_for_workflow_agent")
         _add_column(engine, "tool_registry", "enabled_for_workflow_execution", "INTEGER DEFAULT 0")
         _add_column(engine, "tool_registry", "exposed_via_mcp", "INTEGER DEFAULT 0")
+        # Tool false-success detection: an author-declared success condition.
+        _add_column(engine, "tool_registry", "success_predicate", "TEXT")
         # Performance: hot-path indexes for existing DBs (fresh DBs get these from
         # the models via create_all). Names mirror SQLAlchemy's generated names.
         _add_index(engine, "ix_events_request_id_type", "events", ["request_id", "event_type"])

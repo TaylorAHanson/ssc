@@ -202,33 +202,12 @@ tools:
   save_workflow_draft: true
   publish_workflow: true
 
-workflows:
-  RequestType.ALLOWLIST_EXCEPTION: true
-  RequestType.ASSET_DEDUPLICATION: true
-  RequestType.BATCH_DATA_ACCESS: true
-  RequestType.CAMPAIGN: true
-  RequestType.CATALOG_SCHEMA_TABLE: true
-  RequestType.CATALOG_SCHEMA_TABLE_ACCESS: true
-  RequestType.DATA_ACCESS_REQUEST: true
-  RequestType.ENFORCEMENT_SENTINEL: true
-  RequestType.GITHUB_REPO_CREATION: true
-  RequestType.DATA_CERTIFICATION: true
-  RequestType.PROJECT_ONBOARDING: true
-  RequestType.REPORT_EXECUTION: true
-  RequestType.REST_API_ACCESS: true
-  RequestType.SERVICE_PRINCIPAL: true
-  RequestType.SIMPLE_EMAIL: true
-  RequestType.WORKSPACE_ACCESS: true
-  RequestType.WORKSPACE_PROVISION: true
-  RequestType.TAG_CREATION: true
-  RequestType.TAG_CHANGE: true
-  RequestType.CREDENTIAL_CREATION: true
-  RequestType.VOLUME_CREATION: true
-  RequestType.WORKSPACE_FOLDER_CREATION: true
-  RequestType.GITHUB_REPO_ACCESS: true
-  RequestType.REUSABLE_ASSETS: true
-  RequestType.TRAINING_LINKS: true
-  RequestType.TRAINING_VERIFICATION: true
+# NOTE: The legacy per-type `workflows:` enable/disable map has been removed.
+# Request types are now data-driven: the source of truth is published workflows
+# in the database plus the seed catalog (backend/app/workflows/graphs/catalog),
+# validated via WorkflowService.known_request_types(). To disable a workflow,
+# unpublish it in the admin Workflows UI, or set `tools.execute_workflow: false`
+# as a global kill switch.
 
 notifications:
   governance_email_group: "data-governance@example.com"

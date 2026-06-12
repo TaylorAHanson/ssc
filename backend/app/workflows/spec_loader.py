@@ -15,10 +15,14 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.workflows import expr
-from app.workflows.spec import Gate, Step, WorkflowSpec
+from app.workflows.spec import Gate, Step, SubWorkflow, WorkflowSpec
 from app.workflows.tool_registry import get_tool, has_tool
 
 # Gate kinds the renderer + executor understand (see render.gate_satisfied).
+# NOTE: ``children`` is DEPRECATED — the sibling-spawn model is superseded by
+# compound workflows (a ``subworkflow`` stage composes children as nested
+# subgraphs). It stays here so older published specs still validate; new
+# authoring no longer offers it.
 GATE_TYPES = {"manager", "platform_admin", "data_owner", "training", "pr_merge", "children"}
 
 # Tokens that strongly suggest a value is a group/role name rather than a gate kind.
@@ -45,6 +49,47 @@ class SpecError(ValueError):
     """Raised when a data spec is structurally invalid (author-time)."""
 
 
+# Allowed keys per stage kind. Anything else is almost always an authoring typo
+# (e.g. `when` instead of `run_if`) that — because the loader only reads keys it
+# knows — would be SILENTLY DROPPED and quietly change behavior. We reject them so
+# the mistake surfaces immediately instead of shipping a no-op condition.
+_GATE_KEYS = {
+    "kind", "name", "type", "waiting_status", "auto_approve", "approvers_from",
+    "approver", "course_code", "course_name",
+}
+_STEP_KEYS = {
+    "kind", "name", "tool", "approvals", "running_status", "success_fact",
+    "args", "for_each", "item_args", "run_if", "writes_context",
+}
+_SUBWORKFLOW_KEYS = {"kind", "name", "ref", "input", "writes_context", "running_status", "run_if"}
+
+# Common wrong key -> the right one, to make the error actionable.
+_KEY_HINTS = {
+    "when": "run_if",
+    "if": "run_if",
+    "condition": "run_if",
+    "cond": "run_if",
+    "workflow": "ref",
+    "workflow_key": "ref",
+    "child": "ref",
+}
+
+
+def _reject_unknown_keys(stage: Dict[str, Any], allowed: set, where: str) -> None:
+    unknown = [k for k in stage if k not in allowed]
+    if not unknown:
+        return
+    parts = []
+    for k in sorted(unknown):
+        hint = _KEY_HINTS.get(k)
+        parts.append(f"'{k}' (did you mean '{hint}'?)" if hint else f"'{k}'")
+    raise SpecError(
+        f"{where} has unknown field(s): {', '.join(parts)}. "
+        f"Allowed: {sorted(allowed)}. Unknown fields are ignored at runtime, so "
+        "they'd silently no-op — fix or remove them."
+    )
+
+
 # --------------------------------------------------------------------------
 # Validation
 # --------------------------------------------------------------------------
@@ -65,8 +110,8 @@ def validate_spec_dict(data: Any) -> None:
             raise SpecError(f"{where} must be an object")
         kind = stage.get("kind")
         name = stage.get("name")
-        if kind not in ("gate", "step"):
-            raise SpecError(f"{where}.kind must be 'gate' or 'step'")
+        if kind not in ("gate", "step", "subworkflow"):
+            raise SpecError(f"{where}.kind must be 'gate', 'step', or 'subworkflow'")
         if not isinstance(name, str) or not name.strip():
             raise SpecError(f"{where}.name is required")
         if name in seen:
@@ -77,11 +122,14 @@ def validate_spec_dict(data: Any) -> None:
 
         if kind == "gate":
             _validate_gate(stage, where)
+        elif kind == "subworkflow":
+            _validate_subworkflow(stage, where)
         else:
             _validate_step(stage, where)
 
 
 def _validate_gate(stage: Dict[str, Any], where: str) -> None:
+    _reject_unknown_keys(stage, _GATE_KEYS, where)
     gtype = stage.get("type")
     if gtype not in GATE_TYPES:
         msg = f"{where}.type must be one of {sorted(GATE_TYPES)}"
@@ -102,6 +150,17 @@ def _validate_gate(stage: Dict[str, Any], where: str) -> None:
         _validate_expr(stage["approvers_from"], f"{where}.approvers_from", allow_item=False)
     if "approver" in stage and stage["approver"] is not None:
         _validate_gate_approver(stage["approver"], f"{where}.approver")
+    # Training gates may pin a specific LMS course. ``course_code`` is the
+    # machine identifier matched against the requester's completions;
+    # ``course_name`` is optional display copy.
+    if "course_code" in stage and stage["course_code"] is not None:
+        if gtype != "training":
+            raise SpecError(f"{where}.course_code is only valid on a 'training' gate")
+        if not isinstance(stage["course_code"], str) or not stage["course_code"].strip():
+            raise SpecError(f"{where}.course_code must be a non-empty string")
+    if "course_name" in stage and stage["course_name"] is not None:
+        if not isinstance(stage["course_name"], str):
+            raise SpecError(f"{where}.course_name must be a string")
 
 
 def _validate_gate_approver(approver: Any, where: str) -> None:
@@ -123,6 +182,7 @@ def _validate_gate_approver(approver: Any, where: str) -> None:
 
 
 def _validate_step(stage: Dict[str, Any], where: str) -> None:
+    _reject_unknown_keys(stage, _STEP_KEYS, where)
     tool_name = stage.get("tool")
     if not isinstance(tool_name, str) or not tool_name.strip():
         raise SpecError(f"{where}.tool is required")
@@ -153,6 +213,33 @@ def _validate_step(stage: Dict[str, Any], where: str) -> None:
             raise SpecError(f"{where}.item_args must be an object")
         for k, v in item_args.items():
             _validate_expr(v, f"{where}.item_args.{k}", allow_item=True)
+
+
+def _validate_subworkflow(stage: Dict[str, Any], where: str) -> None:
+    """Shape-only validation for a nested-workflow (compound) stage.
+
+    The referenced workflow's existence, cycles, and nesting depth are checked at
+    compile time in :func:`app.workflows.spec.build_spec_graph` (it has the
+    resolver); here we only enforce the authored shape.
+    """
+    _reject_unknown_keys(stage, _SUBWORKFLOW_KEYS, where)
+    ref = stage.get("ref")
+    if not isinstance(ref, str) or not ref.strip():
+        raise SpecError(f"{where}.ref is required (the referenced workflow key)")
+    if "input" in stage and stage["input"] is not None:
+        inp = stage["input"]
+        if not isinstance(inp, dict):
+            raise SpecError(f"{where}.input must be an object of context mappings")
+        for k, v in inp.items():
+            if not isinstance(k, str) or not k:
+                raise SpecError(f"{where}.input keys must be non-empty strings")
+            _validate_expr(v, f"{where}.input.{k}", allow_item=False)
+    if "writes_context" in stage and stage["writes_context"] is not None:
+        wc = stage["writes_context"]
+        if not isinstance(wc, list) or not all(isinstance(k, str) and k for k in wc):
+            raise SpecError(f"{where}.writes_context must be a list of non-empty strings")
+    if "run_if" in stage and stage["run_if"] is not None:
+        _validate_expr(stage["run_if"], f"{where}.run_if", allow_item=False)
 
 
 def _validate_expr(node: Any, where: str, *, allow_item: bool) -> None:
@@ -220,6 +307,8 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
                 if stage.get("auto_approve") is not None else None,
                 approvers_from=_value_fn(stage["approvers_from"])
                 if stage.get("approvers_from") is not None else None,
+                course_code=stage.get("course_code"),
+                course_name=stage.get("course_name"),
             )
             approver = stage.get("approver")
             if approver:
@@ -234,6 +323,19 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
             stages.append(gate)
             if stage["type"] not in preceding_gate_types:
                 preceding_gate_types.append(stage["type"])
+        elif stage["kind"] == "subworkflow":
+            sub = SubWorkflow(
+                name=stage["name"],
+                ref=stage["ref"],
+                input=_args_fn(stage["input"])
+                if stage.get("input") else None,
+                writes_context=list(stage["writes_context"])
+                if stage.get("writes_context") else None,
+                running_status=stage.get("running_status", "provisioning"),
+                run_if=_auto_approve_fn(stage["run_if"])
+                if stage.get("run_if") is not None else None,
+            )
+            stages.append(sub)
         else:
             # Explicit ``approvals`` (an advanced override) win; otherwise inherit
             # every gate that precedes this step.
@@ -309,6 +411,60 @@ def lint_step_tool_args(data: Dict[str, Any]) -> List[str]:
     return warnings
 
 
+def lint_subworkflow_refs(data: Dict[str, Any], known_keys) -> List[str]:
+    """Non-blocking lint: flag subworkflow ``ref``s that don't name a known workflow.
+
+    ``known_keys`` is the set/collection of workflow keys that can be composed
+    (published workflows + the seed catalog). An unknown ref (e.g. a hallucinated
+    ``git_repo_provision`` when the real one is ``github_repo_creation``) compiles
+    to a hard error at publish, so we surface it early — with the closest known
+    keys as a hint — during validate/preview/save.
+    """
+    import difflib
+
+    known = set(known_keys or [])
+    warnings: List[str] = []
+    for i, stage in enumerate(data.get("stages", []) or []):
+        if not isinstance(stage, dict) or stage.get("kind") != "subworkflow":
+            continue
+        ref = stage.get("ref")
+        if not isinstance(ref, str) or not ref.strip() or ref in known:
+            continue
+        where = f"stage '{stage.get('name', f'#{i}')}'"
+        suggestions = difflib.get_close_matches(ref, known, n=3, cutoff=0.4)
+        hint = f" Did you mean: {', '.join(suggestions)}?" if suggestions else ""
+        warnings.append(
+            f"{where}: subworkflow ref '{ref}' is not a known workflow."
+            f"{hint} It must be the key of an existing (ideally published) workflow."
+        )
+    return warnings
+
+
+def is_compound_spec(data: Any) -> bool:
+    """True if a workflow spec composes another workflow (a ``subworkflow`` stage).
+
+    "Compound" = nested-subgraph composition; "atomic" = only gates/steps. Used
+    to drive the atomic/compound badge in the UI and the editor's lint.
+    """
+    if not isinstance(data, dict):
+        return False
+    return any(
+        isinstance(s, dict) and s.get("kind") == "subworkflow"
+        for s in data.get("stages", [])
+    )
+
+
+def subworkflow_refs(data: Any) -> List[str]:
+    """The workflow keys this spec composes (in order), for UI/lint display."""
+    if not isinstance(data, dict):
+        return []
+    return [
+        s["ref"]
+        for s in data.get("stages", [])
+        if isinstance(s, dict) and s.get("kind") == "subworkflow" and s.get("ref")
+    ]
+
+
 def stage_specs_from_dict(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """UI-renderer stage introspection straight from the data spec (no compile)."""
     out: List[Dict[str, Any]] = []
@@ -316,6 +472,10 @@ def stage_specs_from_dict(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         if stage.get("kind") == "gate":
             out.append({"name": stage["name"], "kind": "gate",
                         "gate_type": stage.get("type"), "success_fact": None})
+        elif stage.get("kind") == "subworkflow":
+            out.append({"name": stage["name"], "kind": "subworkflow",
+                        "gate_type": None, "success_fact": None,
+                        "ref": stage.get("ref")})
         else:
             out.append({"name": stage["name"], "kind": "step",
                         "gate_type": None, "success_fact": stage.get("success_fact")})

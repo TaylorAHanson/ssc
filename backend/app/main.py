@@ -64,10 +64,12 @@ async def lifespan(app: FastAPI):
                 # Attach the workflow graph catalog as editable graph_spec data so
                 # the no-code executor can run DB-authored graphs.
                 WorkflowService.seed_specs_from_catalog(db)
-                # Seed the editable "how to author workflows" guide into the
-                # Context Catalog so admins can customize it and the agent can read it.
-                from app.services.authoring_guide import seed_authoring_guide
-                seed_authoring_guide(db)
+                # Remove the legacy workflow-authoring guide from the Context
+                # Catalog (idempotent cleanup): the authoring agent now relies on
+                # list_workflow_building_blocks as its single source of truth, and
+                # the shared catalog search must not surface admin authoring docs.
+                from app.services.authoring_guide import remove_authoring_guide
+                remove_authoring_guide(db)
                 # Seed the dynamic Tool Registry from the locally-defined tools so
                 # the agent has its data-driven gating populated on first boot, and
                 # newly-added code tools get registry rows (idempotent; never

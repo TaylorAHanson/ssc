@@ -486,6 +486,14 @@ class WorkflowService:
             "created_at": workflow.created_at.isoformat() if workflow.created_at else None,
             "updated_at": workflow.updated_at.isoformat() if workflow.updated_at else None,
         }
+        # Composition is derived from the spec so the UI can badge atomic vs
+        # compound (nested-subgraph) workflows in the list without the full body.
+        from app.workflows.spec_loader import is_compound_spec, subworkflow_refs
+
+        spec = workflow.graph_spec
+        compound = is_compound_spec(spec)
+        d["composition"] = "compound" if compound else "atomic"
+        d["subworkflow_refs"] = subworkflow_refs(spec)
         if include_body:
             d["instructions_markdown"] = workflow.instructions_markdown
             d["graph_spec"] = workflow.graph_spec

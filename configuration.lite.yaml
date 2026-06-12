@@ -92,29 +92,7 @@ tools:
   find_owner: true
   check_training_status: false
 
-workflows:
-  RequestType.ALLOWLIST_EXCEPTION: false
-  RequestType.ASSET_DEDUPLICATION: false
-  RequestType.BATCH_DATA_ACCESS: false
-  RequestType.CAMPAIGN: false
-  RequestType.CATALOG_SCHEMA_TABLE: true
-  RequestType.CATALOG_SCHEMA_TABLE_ACCESS: true
-  RequestType.DATA_ACCESS_REQUEST: true
-  RequestType.ENFORCEMENT_SENTINEL: false
-  RequestType.GITHUB_REPO_CREATION: true
-  RequestType.PROJECT_ONBOARDING: true
-  RequestType.REPORT_EXECUTION: true
-  RequestType.REST_API_ACCESS: false
-  RequestType.SERVICE_PRINCIPAL: true
-  RequestType.SIMPLE_EMAIL: false
-  RequestType.WORKSPACE_ACCESS: true
-  RequestType.WORKSPACE_PROVISION: true
-  RequestType.TAG_CREATION: true
-  RequestType.TAG_CHANGE: false
-  RequestType.CREDENTIAL_CREATION: true
-  RequestType.VOLUME_CREATION: true
-  RequestType.WORKSPACE_FOLDER_CREATION: true
-  RequestType.GITHUB_REPO_ACCESS: true
-  RequestType.REUSABLE_ASSETS: true
-  RequestType.TRAINING_LINKS: true
-  RequestType.TRAINING_VERIFICATION: true
+# NOTE: The legacy per-type `workflows:` enable/disable map has been removed.
+# Request types are now data-driven (published workflows in the DB + seed
+# catalog, validated via WorkflowService.known_request_types()). Disable a
+# workflow by unpublishing it, or set `tools.execute_workflow: false`.

@@ -98,7 +98,7 @@ function buildGroups(opts: {
     },
     {
       id: 'self-service',
-      title: 'Access & Provision',
+      title: 'Requests & Approvals',
       description:
         'Request new data, access, or workspaces — and track everything you have in flight.',
       icon: <HomeIcon className="w-5 h-5" />,

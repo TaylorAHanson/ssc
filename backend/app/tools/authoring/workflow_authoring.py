@@ -39,7 +39,9 @@ def _authoring_locked() -> bool:
 # Gate kinds + expression operators the spec language supports, surfaced to the
 # agent so it can author specs without guessing (mirrors spec_loader.GATE_TYPES
 # and expr's operator set).
-_GATE_TYPES = ["manager", "platform_admin", "data_owner", "training", "pr_merge", "children"]
+# Note: the legacy "children" gate is deprecated (superseded by subworkflow
+# stages) and intentionally omitted so the agent never authors a new one.
+_GATE_TYPES = ["manager", "platform_admin", "data_owner", "training", "pr_merge"]
 _EXPR_OPS = [
     "$var (ctx field, dotted paths, optional default)",
     "$item (for_each item, only in item_args/for_each)",
@@ -54,6 +56,37 @@ _EXPR_OPS = [
 def _db():
     from app.db.session import get_db
     return next(get_db())
+
+
+def _composable_workflows(db) -> List[Dict[str, Any]]:
+    """Workflows usable as a ``subworkflow`` ref: every authored workflow plus any
+    seed-catalog key, de-duplicated. ``composable`` marks the ones a runtime
+    resolver can actually load now (published, or catalog) vs. draft-only.
+    """
+    from app.services.workflow_service import WorkflowService
+    from app.workflows.graphs.specs import SPECS
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for wf in WorkflowService.list_workflows(db):
+        out[wf.key] = {
+            "key": wf.key,
+            "name": wf.name,
+            "goal": wf.goal,
+            "status": wf.status,
+            "composable": wf.status == "published",
+        }
+    for key in SPECS:
+        if key in out:
+            out[key]["composable"] = True  # catalog seed is always resolvable
+        else:
+            out[key] = {"key": key, "name": key, "goal": None,
+                        "status": "catalog", "composable": True}
+    return sorted(out.values(), key=lambda w: w["key"])
+
+
+def _composable_keys(db) -> set:
+    """Set of keys a subworkflow ref can resolve to at runtime (published + catalog)."""
+    return {w["key"] for w in _composable_workflows(db) if w["composable"]}
 
 
 # --------------------------------------------------------------------------
@@ -76,16 +109,30 @@ async def list_workflow_building_blocks() -> Dict[str, Any]:
     db = _db()
     try:
         step_tools = available_tools(db)
+        available_workflows = _composable_workflows(db)
     finally:
         db.close()
     return {
         "step_tools": step_tools,
         "gate_types": _GATE_TYPES,
         "expression_operators": _EXPR_OPS,
+        # The ONLY valid values for a subworkflow `ref`. Never invent a ref — pick
+        # a key from here. `composable: true` means it resolves at runtime now
+        # (published/catalog); a draft must be published before this can publish.
+        "available_workflows": available_workflows,
         "spec_shape": {
             "name": "str (required)",
             "complete_fact": "optional fact written on completion",
-            "stages": "ordered list of gate/step objects",
+            "stages": "ordered list of gate/step/subworkflow objects",
+            "subworkflow": {"kind": "subworkflow", "name": "str",
+                            "ref": "key of an existing workflow to run inline (compound) — MUST "
+                                   "be one of available_workflows keys; do not invent it",
+                            "run_if": "optional expression -> bool; when false the whole "
+                                      "subworkflow is SKIPPED. The conditional key is 'run_if' "
+                                      "(NOT 'when'/'if'/'condition'). Omit it to always run.",
+                            "input": "optional object of name -> expression mapping parent "
+                                     "context into the nested workflow",
+                            "writes_context": "optional list of context keys this stage contributes"},
             "gate": {"kind": "gate", "name": "str", "type": "one of gate_types",
                      "waiting_status": "optional", "auto_approve": "optional expression -> bool",
                      "approver": "optional approver source: {source:'group', group:'<name>'} for a "
@@ -115,11 +162,87 @@ async def list_workflow_building_blocks() -> Dict[str, Any]:
             "'success_fact' is optional (a timeline marker) — skip it on notification/"
             "closing steps, and never set it to the same value as the spec's "
             "'complete_fact'. Use a step's 'run_if' for conditional "
-            "branching (e.g. only notify security when tier == 'high'). Consult the "
-            "Context Catalog guide ('workflow authoring') for finicky-tool guidance "
-            "before publishing."
+            "branching (e.g. only notify security when tier == 'high'). To COMPOSE "
+            "an existing capability, add a 'subworkflow' stage whose 'ref' is a key "
+            "from 'available_workflows' (this makes the workflow 'compound'); it runs "
+            "inline as a nested graph — its gates pause/resume like native ones and "
+            "a rejection inside it rejects the parent. To run a subworkflow "
+            "conditionally, set its 'run_if' (NOT 'when') to an expression -> bool. "
+            "Never invent a subworkflow 'ref' — it must match an available_workflows "
+            "key, or validation/publish will fail. Prefer composing over duplicating "
+            "stages. The deprecated 'children' gate / 'spawn_child_request' tool are "
+            "superseded by subworkflow stages — don't use them. This tool is the single "
+            "source of truth for building blocks; do not rely on the Context Catalog for "
+            "authoring mechanics."
         ),
     }
+
+
+class SearchSimilarWorkflowsInput(BaseModel):
+    description: str = Field(
+        ...,
+        description="A natural-language description of the workflow the admin wants to build (its goal/what it does).",
+    )
+
+
+@tool(
+    name="search_similar_workflows",
+    description=(
+        "Search EXISTING workflows (Workflows) for ones similar to what the admin wants to "
+        "build, by keyword-matching the description against each workflow's key, name, and "
+        "goal. Call this BEFORE drafting a new workflow: if a close match exists, suggest "
+        "reusing/cloning/editing it instead of authoring a duplicate. Returns ranked "
+        "candidates with key, name, goal, status, and request_type."
+    ),
+    required_role=_AUTHOR_ROLE,
+    args_schema=SearchSimilarWorkflowsInput,
+    friendly_label="Searching for similar workflows...",
+)
+async def search_similar_workflows(description: str) -> Dict[str, Any]:
+    from app.services.workflow_service import WorkflowService
+
+    # Tokenize the description into lowercased word stems; score each workflow by
+    # how many tokens appear in its key/name/goal. Cheap, dependency-free, and
+    # good enough to surface obvious reuse candidates.
+    import re
+
+    tokens = {t for t in re.split(r"[^a-z0-9]+", (description or "").lower()) if len(t) > 2}
+
+    db = _db()
+    try:
+        workflows = WorkflowService.list_workflows(db)
+        scored: List[Dict[str, Any]] = []
+        for wf in workflows:
+            haystack = " ".join(
+                str(x or "").lower()
+                for x in (wf.key, wf.name, wf.goal, wf.request_type)
+            )
+            score = sum(1 for t in tokens if t in haystack)
+            if score <= 0:
+                continue
+            scored.append({
+                "key": wf.key,
+                "name": wf.name,
+                "goal": wf.goal,
+                "status": wf.status,
+                "request_type": wf.request_type,
+                "match_score": score,
+            })
+        scored.sort(key=lambda c: c["match_score"], reverse=True)
+        top = scored[:8]
+        return {
+            "query": description,
+            "matches": top,
+            "count": len(top),
+            "note": (
+                "If a candidate is close, prefer reusing it: clone or edit it with "
+                "get_workflow rather than authoring a new duplicate workflow."
+                if top
+                else "No similar existing workflows found — authoring a new one is appropriate."
+            ),
+        }
+    finally:
+        db.close()
 
 
 class GetWorkflowInput(BaseModel):
@@ -188,15 +311,27 @@ class ValidateSpecInput(BaseModel):
     friendly_label="Validating workflow...",
 )
 async def validate_workflow_spec(graph_spec: Dict[str, Any]) -> Dict[str, Any]:
-    from app.workflows.spec_loader import SpecError, lint_step_tool_args, validate_spec_dict
+    from app.workflows.spec_loader import (
+        SpecError,
+        lint_step_tool_args,
+        lint_subworkflow_refs,
+        validate_spec_dict,
+    )
 
     try:
         validate_spec_dict(graph_spec)
     except SpecError as e:
         return {"valid": False, "error": str(e)}
-    # Structurally valid — surface non-blocking arg-name lint so the author
-    # catches wrong/missing tool args (which **kwargs would otherwise swallow).
-    warnings = lint_step_tool_args(graph_spec)
+    # Structurally valid — surface non-blocking lints so the author catches wrong/
+    # missing tool args (which **kwargs would otherwise swallow) and subworkflow
+    # refs that don't name a real workflow (which would hard-fail at publish).
+    db = _db()
+    try:
+        warnings = lint_step_tool_args(graph_spec) + lint_subworkflow_refs(
+            graph_spec, _composable_keys(db)
+        )
+    finally:
+        db.close()
     return {"valid": True, "warnings": warnings}
 
 
@@ -224,13 +359,20 @@ async def preview_workflow_spec(
     graph_spec: Dict[str, Any], sample_context: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     from app.workflows.dry_run import project_run
-    from app.workflows.spec_loader import lint_step_tool_args
+    from app.workflows.spec_loader import lint_step_tool_args, lint_subworkflow_refs
 
     try:
         projection = project_run(graph_spec, sample_context or {})
     except Exception as e:  # noqa: BLE001 - surface to the agent so it can fix the spec
         return {"ok": False, "error": str(e)}
-    return {"ok": True, "projection": projection, "warnings": lint_step_tool_args(graph_spec)}
+    db = _db()
+    try:
+        warnings = lint_step_tool_args(graph_spec) + lint_subworkflow_refs(
+            graph_spec, _composable_keys(db)
+        )
+    finally:
+        db.close()
+    return {"ok": True, "projection": projection, "warnings": warnings}
 
 
 # --------------------------------------------------------------------------
@@ -282,7 +424,12 @@ async def save_workflow_draft(
 ) -> Dict[str, Any]:
     from app.services.workflow_service import WorkflowService
     from app.workflows.instructions import render_instructions_markdown
-    from app.workflows.spec_loader import SpecError, lint_step_tool_args, validate_spec_dict
+    from app.workflows.spec_loader import (
+        SpecError,
+        lint_step_tool_args,
+        lint_subworkflow_refs,
+        validate_spec_dict,
+    )
 
     if _authoring_locked():
         return {"ok": False, "locked": True, "error": _LOCKED_MSG}
@@ -292,10 +439,11 @@ async def save_workflow_draft(
     except SpecError as e:
         return {"ok": False, "error": f"Invalid graph_spec, not saved: {e}"}
 
-    arg_warnings = lint_step_tool_args(graph_spec)
-
     actor = kwargs.get("_user_email")
     db = _db()
+    arg_warnings = lint_step_tool_args(graph_spec) + lint_subworkflow_refs(
+        graph_spec, _composable_keys(db)
+    )
     try:
         existing = WorkflowService.get_by_key(db, key)
         fields: Dict[str, Any] = {"graph_spec": graph_spec, "status": "draft"}

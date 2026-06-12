@@ -26,12 +26,11 @@
     ]
   },
   "campaign": {
-    "gates": 2,
-    "mutating": 2,
+    "gates": 1,
+    "mutating": 1,
     "status": "completed",
     "tools": [
-      "spawn_child_request",
-      "spawn_child_request"
+      "send_notification"
     ]
   },
   "catalog_schema_table": {
@@ -96,11 +95,13 @@
     ]
   },
   "project_onboarding": {
-    "gates": 2,
-    "mutating": 1,
+    "gates": 4,
+    "mutating": 2,
     "status": "completed",
     "tools": [
-      "spawn_child_request"
+      "terraform_plan",
+      "terraform_apply",
+      "create_uc_object"
     ]
   },
   "report_execution": {

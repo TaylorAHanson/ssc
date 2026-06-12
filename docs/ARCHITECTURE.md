@@ -578,15 +578,16 @@ tools/workflows granted in Unity Catalog.
   `validate_workflow_spec`, `preview_workflow_spec` (dry-run), `save_workflow_draft` (`app_write`),
   and `publish_workflow` (`app_write`, runs the full pre-publish gate + version snapshot). A
   conditional **prompt section** (`_get_authoring_section`) appears only when the user holds the
-  authoring tools, instructing the agent to consult the guide, then validate → preview → save
-  draft → publish only on explicit confirmation. The mutating tools route through the governed
-  `ToolExecutor` (audited).
-- **Editable authoring guide in the Context Catalog.** A "Platform Administration" domain + an
-  "Authoring Workflows — Guide" document (the `graph_spec` schema, gate types, expression
-  mini-language, fan-out, the safe authoring loop, and an admin-editable "finicky tools & house
-  rules" section) is seeded idempotently at startup (`app/services/authoring_guide.py`,
-  revision-tagged so admin edits aren't clobbered). It's editable in the Context Catalog admin UI
-  and read by the agent via `search_context_catalog` / `get_context_document`.
+  authoring tools, instructing the agent to start from `list_workflow_building_blocks`, then
+  validate → preview → save draft → publish only on explicit confirmation. The mutating tools
+  route through the governed `ToolExecutor` (audited).
+- **Authoring source of truth is `list_workflow_building_blocks`.** The agent learns the real step
+  tools (with exact arg names), gate types, stage kinds (including `subworkflow` for compound
+  workflows), spec shape, and expression operators from that live tool — always in sync with the
+  code. The legacy seeded "Authoring Workflows — Guide" Context Catalog document was removed (it
+  drifted from the spec model and the shared `search_context_catalog` tool could surface this
+  admin-only doc to the main self-service agent); `app/services/authoring_guide.py` now only
+  cleans up that doc on startup (idempotent).
 - **Remaining:** pooled Postgres checkpointer; wire the SSE `trace_id` into the chat-UI feedback
   control; end-to-end validation of the ResponsesAgent registration + `--sandbox` harness against
   a live workspace (both require workspace credentials).

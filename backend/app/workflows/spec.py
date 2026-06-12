@@ -66,6 +66,12 @@ class Gate:
     approver_group: Optional[str] = None
     approver_assets_from: Optional[Callable[[Dict[str, Any]], Any]] = None
     approver_fallback_to_owner: bool = True
+    # For ``type == "training"`` gates: the specific LMS course this gate requires.
+    # When set, the gate is auto-satisfied once the requester has a completion for
+    # ``course_code`` (looked up via the training provider), instead of requiring a
+    # manual "mark complete". ``course_name`` is display-only copy for the UI.
+    course_code: Optional[str] = None
+    course_name: Optional[str] = None
 
 
 @dataclass
@@ -91,7 +97,34 @@ class Step:
     writes_context: Optional[List[str]] = None
 
 
-Stage = Union[Gate, Step]
+@dataclass
+class SubWorkflow:
+    """A nested workflow composed into this one as a subgraph (compound workflows).
+
+    The referenced workflow (``ref`` = a known workflow key) is compiled and added
+    as a LangGraph subgraph node that shares this graph's :class:`WorkflowState`.
+    Its gates interrupt and resume through the same poller path as native gates
+    (they're sequential), and a rejection inside the child rejects the parent.
+
+    ``input`` optionally maps parent context -> additional child context (merged,
+    additively, into the shared ``context`` before the subgraph runs). Because the
+    context is shared, results the child writes via its steps' ``writes_context``
+    are already visible to later parent stages; ``writes_context`` here is an
+    explicit, forward-compatible declaration of which of those keys this stage
+    contributes.
+    """
+    name: str
+    ref: str
+    input: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
+    writes_context: Optional[List[str]] = None
+    running_status: str = "provisioning"
+    # Conditional composition: when set and false for a request, the whole nested
+    # workflow is SKIPPED (its gates/steps never run) and flow continues to the
+    # next stage — the building block for "do they need a git repo? if yes …".
+    run_if: Optional[Callable[[Dict[str, Any]], bool]] = None
+
+
+Stage = Union[Gate, Step, SubWorkflow]
 
 
 @dataclass
@@ -118,6 +151,13 @@ def _gate_node(gate: Gate):
             "gate": gate.name,
             "request_id": state["request_id"],
         }
+        # Training gates may pin a specific LMS course so the poller can
+        # auto-satisfy the gate from the requester's completions and the UI can
+        # tell them exactly what to finish.
+        if gate.type == "training" and gate.course_code:
+            payload["course_code"] = gate.course_code
+            if gate.course_name:
+                payload["course_name"] = gate.course_name
         approvers = await _resolve_gate_approvers(gate, ctx)
         if approvers:
             # Surface under both keys: ``data_owners`` keeps parity with the old
@@ -178,7 +218,7 @@ def _step_node(step: Step):
     async def node(state: WorkflowState) -> WorkflowState:
         from app.db.session import get_db
         from app.state_machines.facts import add_fact
-        from app.tools.tool_executor import ToolContext, executor
+        from app.tools.tool_executor import ToolContext, executor, is_tool_failure
 
         ctx = state.get("context", {})
         request_id = state["request_id"]
@@ -211,6 +251,17 @@ def _step_node(step: Step):
                     approvals=list(step.approvals),
                 )
                 res = await executor.run(step.tool, tool_ctx, **kwargs)
+                # Halt the graph on a (real or false) tool failure so we never
+                # write the success_fact or advance to the next stage. The
+                # executor already converts false-successes into an error-shaped
+                # dict, so a plain envelope re-check (no predicate) catches both
+                # that and any policy refusal / out-of-scope dict it returned.
+                failure_reason = is_tool_failure(res)
+                if failure_reason:
+                    tool_name = getattr(step.tool, "name", "?")
+                    raise RuntimeError(
+                        f"step '{step.name}' tool '{tool_name}' failed: {failure_reason}"
+                    )
                 step_results.append(res)
             results[step.name] = step_results
             if step.success_fact:
@@ -260,39 +311,140 @@ async def _rejected_node(state: WorkflowState) -> WorkflowState:
     return {"status": "rejected"}
 
 
-# --------------------------------------------------------------------------
-# Builder
-# --------------------------------------------------------------------------
-def build_spec_graph(spec: WorkflowSpec) -> StateGraph:
-    """Compile a :class:`WorkflowSpec` into an (uncompiled) StateGraph."""
-    g = StateGraph(WorkflowState)
-    node_ids: List[str] = []
+def _subworkflow_input_node(sub: "SubWorkflow"):
+    """Pre-node that merges a subworkflow's mapped ``input`` into shared context."""
+    async def node(state: WorkflowState) -> WorkflowState:
+        ctx = dict(state.get("context", {}))
+        mapped = sub.input(ctx) if sub.input else {}
+        if isinstance(mapped, dict) and mapped:
+            ctx.update(mapped)
+        return {"context": ctx, "status": sub.running_status}
 
-    for stage in spec.stages:
-        if isinstance(stage, Gate):
-            g.add_node(stage.name, _gate_node(stage))
-        else:
-            g.add_node(stage.name, _step_node(stage))
-        node_ids.append(stage.name)
+    return node
+
+
+async def _subworkflow_guard_node(state: WorkflowState) -> WorkflowState:
+    """No-op gate node for a conditional subworkflow; the run/skip decision is on
+    its outgoing edge so the nested graph is entered only when ``run_if`` holds."""
+    return {}
+
+
+def _subworkflow_skip_router(sub: "SubWorkflow", run_target: str, skip_target: str):
+    """Route a conditional subworkflow to its body or past it based on ``run_if``."""
+    def router(state: WorkflowState) -> str:
+        ctx = state.get("context", {})
+        return run_target if bool(sub.run_if(ctx)) else skip_target
+
+    return router
+
+
+# Limits guarding against pathological / malicious nesting from authored specs.
+_MAX_SUBWORKFLOW_DEPTH = 5
+
+
+def _subworkflow_entry_id(stage: "SubWorkflow") -> str:
+    """The first node id of a subworkflow stage's sequence (guard → input → body)."""
+    if stage.run_if is not None:
+        return f"{stage.name}__guard"
+    if stage.input is not None:
+        return f"{stage.name}__input"
+    return stage.name
+
+
+def build_spec_graph(
+    spec: WorkflowSpec,
+    child_resolver: Optional[Callable[[str], "WorkflowSpec"]] = None,
+    *,
+    _depth: int = 0,
+    _seen: Optional[frozenset] = None,
+) -> StateGraph:
+    """Compile a :class:`WorkflowSpec` into an (uncompiled) StateGraph.
+
+    ``child_resolver`` resolves a workflow key referenced by a :class:`SubWorkflow`
+    stage to its :class:`WorkflowSpec`. It is threaded from the graph registry so
+    this module stays IO-free (no DB/catalog imports). When a spec has no
+    subworkflow stages, ``child_resolver`` is unused.
+    """
+    from app.workflows.spec_loader import SpecError
+
+    _seen = _seen or frozenset()
+    g = StateGraph(WorkflowState)
+
+    # The id that begins each stage's node sequence — needed up front so a stage's
+    # outgoing edge can target the *entry* of the next stage (a subworkflow may
+    # front its body with a guard/input node).
+    def entry_of(stage) -> str:
+        return _subworkflow_entry_id(stage) if isinstance(stage, SubWorkflow) else stage.name
+
+    entries = [entry_of(s) for s in spec.stages]
+
+    def next_entry(i: int) -> str:
+        return entries[i + 1] if i + 1 < len(entries) else "complete"
 
     g.add_node("complete", _complete_node(spec))
     g.add_node("rejected", _rejected_node)
 
-    # Sequential wiring. Gates branch to "rejected" when not approved.
-    entry = node_ids[0] if node_ids else "complete"
-    g.add_edge(START, entry)
-
     for i, stage in enumerate(spec.stages):
-        nxt = node_ids[i + 1] if i + 1 < len(node_ids) else "complete"
+        nxt = next_entry(i)
         if isinstance(stage, Gate):
+            g.add_node(stage.name, _gate_node(stage))
             g.add_conditional_edges(
                 stage.name,
                 _gate_router(stage.name, nxt),
                 {"next": nxt, "rejected": "rejected"},
             )
-        else:
+        elif isinstance(stage, SubWorkflow):
+            if _depth + 1 > _MAX_SUBWORKFLOW_DEPTH:
+                raise SpecError(
+                    f"subworkflow nesting exceeds max depth {_MAX_SUBWORKFLOW_DEPTH} "
+                    f"(at stage '{stage.name}' -> '{stage.ref}')"
+                )
+            if child_resolver is None:
+                raise SpecError(
+                    f"stage '{stage.name}' references workflow '{stage.ref}' but no "
+                    "child_resolver was provided to compile it"
+                )
+            if stage.ref in _seen:
+                raise SpecError(
+                    f"subworkflow cycle detected: '{stage.ref}' is already on the "
+                    "composition path"
+                )
+            child_spec = child_resolver(stage.ref)
+            if child_spec is None:
+                raise SpecError(
+                    f"stage '{stage.name}' references unknown workflow '{stage.ref}'"
+                )
+            child_graph = build_spec_graph(
+                child_spec, child_resolver,
+                _depth=_depth + 1, _seen=_seen | {stage.ref},
+            )
+            # A compiled subgraph shares the parent's WorkflowState + checkpointer
+            # (LangGraph namespaces the child's internal nodes under this node id,
+            # so nested gate/step names can't collide with the parent's).
+            g.add_node(stage.name, child_graph.compile())
+            # Body chain: [guard?] -> [input?] -> subgraph. The subgraph's exit
+            # branches to rejected (child rejected) or the next stage.
+            body_target = f"{stage.name}__input" if stage.input is not None else stage.name
+            if stage.input is not None:
+                g.add_node(f"{stage.name}__input", _subworkflow_input_node(stage))
+                g.add_edge(f"{stage.name}__input", stage.name)
+            if stage.run_if is not None:
+                g.add_node(f"{stage.name}__guard", _subworkflow_guard_node)
+                g.add_conditional_edges(
+                    f"{stage.name}__guard",
+                    _subworkflow_skip_router(stage, body_target, nxt),
+                    {body_target: body_target, nxt: nxt},
+                )
+            g.add_conditional_edges(
+                stage.name,
+                _subworkflow_router,
+                {"next": nxt, "rejected": "rejected"},
+            )
+        else:  # Step
+            g.add_node(stage.name, _step_node(stage))
             g.add_edge(stage.name, nxt)
 
+    g.add_edge(START, entries[0] if entries else "complete")
     g.add_edge("complete", END)
     g.add_edge("rejected", END)
     return g
@@ -303,3 +455,8 @@ def _gate_router(gate_name: str, next_node: str):
         return "next" if state.get("gates", {}).get(gate_name) else "rejected"
 
     return router
+
+
+def _subworkflow_router(state: WorkflowState) -> str:
+    """Route to 'rejected' when the nested workflow rejected, else continue."""
+    return "rejected" if state.get("rejected") else "next"

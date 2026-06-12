@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 # fully controls each tool's surfaces, so this list only shapes the initial state.
 DEFAULT_AUTHORING_TOOL_NAMES = frozenset({
     "list_workflow_building_blocks",
+    "search_similar_workflows",
     "get_workflow",
     "validate_workflow_spec",
     "preview_workflow_spec",
@@ -55,6 +56,7 @@ DEFAULT_AUTHORING_TOOL_NAMES = frozenset({
 # here) end up available to BOTH surfaces.
 WORKFLOW_ONLY_TOOL_NAMES = frozenset({
     "list_workflow_building_blocks",
+    "search_similar_workflows",
     "get_workflow",
     "validate_workflow_spec",
     "preview_workflow_spec",
@@ -207,9 +209,26 @@ class ToolRegistryService:
             "identity_mode",
             "is_mutating",
             "side_effect_class",
+            "success_predicate",
         }
         for key, value in fields.items():
-            if key not in allowed or value is None:
+            if key not in allowed:
+                continue
+            # success_predicate is the one field where `None`/empty is meaningful
+            # (it clears the predicate), so it's handled before the generic
+            # None-skip and is validated as a $-expression when non-empty.
+            if key == "success_predicate":
+                if value in (None, "", {}):
+                    row.success_predicate = None
+                else:
+                    from app.workflows.expr import ExprError, validate as _validate_expr
+                    try:
+                        _validate_expr(value)
+                    except ExprError as e:
+                        raise ValueError(f"invalid success_predicate: {e}")
+                    row.success_predicate = value
+                continue
+            if value is None:
                 continue
             if key == "identity_mode" and value not in (IDENTITY_SP, IDENTITY_OBO):
                 raise ValueError(f"identity_mode must be '{IDENTITY_SP}' or '{IDENTITY_OBO}'")
@@ -424,6 +443,7 @@ class ToolRegistryService:
                     is_mutating=row.is_mutating,
                     side_effect_class=row.side_effect_class,
                     identity_mode=row.identity_mode,
+                    success_predicate=getattr(row, "success_predicate", None),
                 )
             )
         return resolved
@@ -446,6 +466,7 @@ class ToolRegistryService:
             "exposed_via_mcp": row.exposed_via_mcp,
             "allowed_roles": row.allowed_roles or [],
             "identity_mode": row.identity_mode,
+            "success_predicate": getattr(row, "success_predicate", None),
             "discovered_at": row.discovered_at.isoformat() if row.discovered_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }

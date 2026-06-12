@@ -4,8 +4,6 @@ ATLAS turns the everyday work of "I need access," "I need a workspace," "is this
 
 It runs as an application inside your Databricks workspace and gives your people an intelligent assistant that understands what they're trying to do, gathers the right information, routes anything risky to the right approver, and then carries out the work automatically. Requests that used to take days of back-and-forth tickets become minutes of guided self-service.
 
-> **Databricks Labs project.** ATLAS is provided as-is, as an open, customizable starting point for organizations that want to stand up governed self-service on Databricks. It is not a formally supported Databricks product; help is best-effort through the project's GitHub issues. You are encouraged to adapt its branding, workflows, and policies to your environment.
-
 ---
 
 ## The problem it solves
@@ -67,4 +65,4 @@ Pick the guide that matches what you're trying to do:
 
 ## Support
 
-ATLAS is a Databricks Labs project and is provided as-is, without formal Databricks support. Please use the project's GitHub issues for questions, bug reports, and contributions. Because the platform is designed to be customized, your branding, workflows, and policies can all be adapted to fit your organization.
+Please use the project's GitHub issues for questions, bug reports, and contributions. Because the platform is designed to be customized, your branding, workflows, and policies can all be adapted to fit your organization.

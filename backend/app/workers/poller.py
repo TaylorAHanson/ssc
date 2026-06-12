@@ -709,6 +709,27 @@ async def _check_gitops_volume_status(db: Session, request: RequestModel):
         logger.warning(f"[{request.id}] Failed to check volume status: {e}")
 
 
+def _training_course_completed(db, request: RequestModel, course_code: str) -> bool:
+    """True if the requester has an LMS completion for ``course_code``.
+
+    Looks the requester's completions up via the training provider (the same
+    data the Training page + admin CSV upload populate). Best-effort: any lookup
+    failure returns False so the gate simply stays parked (manual completion
+    remains a fallback) rather than erroring the poll tick.
+    """
+    try:
+        from app.providers.training.client import TrainingProvider
+
+        email = getattr(request, "requester_email", None)
+        if not email:
+            return False
+        completed = TrainingProvider(db).get_user_training_status(email)
+        return course_code in (completed or [])
+    except Exception as e:  # noqa: BLE001 - never fail a poll tick on LMS lookup
+        logger.warning("[%s] training course lookup failed: %s", request.id, e)
+        return False
+
+
 def _v2_resume_value(db, request, result):
     """Map approval/event facts to a gate resume value, or None if still waiting.
 
@@ -734,7 +755,22 @@ def _v2_resume_value(db, request, result):
         )
         return {"approved": True} if approved else None
     if gtype == "training":
-        return {"approved": True} if has_fact(db, request.id, "training_completed") else None
+        # Manual "mark complete" (a written fact) always satisfies the gate.
+        if has_fact(db, request.id, "training_completed"):
+            return {"approved": True}
+        # When the gate pins a specific course, auto-satisfy it from the
+        # requester's LMS completions — connecting real training data to the
+        # gate instead of requiring a manual override.
+        course_code = (result.interrupt_payload or {}).get("course_code")
+        if course_code and _training_course_completed(db, request, course_code):
+            from app.state_machines.facts import add_fact
+            add_fact(db, request.id, "training_completed", {
+                "course_code": course_code,
+                "source": "lms_verification",
+            })
+            db.commit()
+            return {"approved": True}
+        return None
     if gtype == "pr_merge":
         return {"approved": True} if has_fact(db, request.id, "pr_merged") else None
     if gtype == "children":

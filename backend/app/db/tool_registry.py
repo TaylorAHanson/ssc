@@ -119,6 +119,15 @@ class ToolRegistryModel(Base):
         String, nullable=False, default="read",
         comment="One of SIDE_EFFECT_CLASSES — OPA bounding hint",
     )
+    success_predicate: Mapped[Optional[dict]] = Column(
+        JSON, nullable=True,
+        comment=(
+            "Optional $-expression (see app/workflows/expr.py) evaluated against "
+            "{result: <tool output>} to decide success. Lets an HTTP-200 tool that "
+            "actually failed (e.g. a ServiceNow MCP call) be detected as a failure "
+            "instead of silently advancing. NULL = use the default envelope heuristics."
+        ),
+    )
     enabled: Mapped[bool] = Column(
         Boolean, nullable=False, default=True,
         comment="Master switch; when false the tool is never offered to any surface",

@@ -3,6 +3,7 @@ import {
   AlertCircle,
   CheckCircle2,
   GitBranch,
+  Layers,
   Loader2,
   Play,
   Wrench,
@@ -120,6 +121,8 @@ export function WorkflowTestModal({ spec, onClose }: Props) {
                     <div className="flex items-center gap-2">
                       {s.kind === 'gate' ? (
                         <GitBranch className="w-4 h-4 text-amber-600" />
+                      ) : s.kind === 'subworkflow' ? (
+                        <Layers className="w-4 h-4 text-indigo-600" />
                       ) : (
                         <Wrench className="w-4 h-4 text-blue-600" />
                       )}
@@ -134,6 +137,12 @@ export function WorkflowTestModal({ spec, onClose }: Props) {
                             needs {s.type} approval
                           </span>
                         )
+                      ) : s.kind === 'subworkflow' ? (
+                        <span className="ml-auto inline-flex items-center gap-1.5">
+                          <span className="text-[10px] text-indigo-700 bg-indigo-50 rounded px-1.5 py-0.5">
+                            calls {s.ref || '—'}
+                          </span>
+                        </span>
                       ) : (
                         <span className="ml-auto inline-flex items-center gap-1.5">
                           <code className="text-[11px] text-gray-600">{s.tool}</code>
@@ -149,6 +158,18 @@ export function WorkflowTestModal({ spec, onClose }: Props) {
                     {s.error && (
                       <div className="text-[11px] text-red-600 mt-1.5 flex items-start gap-1">
                         <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" /> {s.error}
+                      </div>
+                    )}
+                    {s.kind === 'subworkflow' && s.input && Object.keys(s.input).length > 0 && !s.error && (
+                      <div className="mt-2 space-y-1">
+                        {Object.entries(s.input).map(([k, v]) => (
+                          <div key={k} className="flex items-start gap-2 text-[11px]">
+                            <span className="text-gray-500 font-mono min-w-[120px]">{k}</span>
+                            <span className="text-gray-800 font-mono break-all">
+                              {typeof v === 'string' ? v : JSON.stringify(v)}
+                            </span>
+                          </div>
+                        ))}
                       </div>
                     )}
                     {s.kind === 'step' && s.calls && s.calls.length > 0 && !s.error && (

@@ -14,7 +14,6 @@ import {
   MessageSquare,
   BarChart,
   Bell,
-  Upload,
   Search,
   Sparkles,
   WandSparkles,
@@ -46,26 +45,28 @@ import type { UserPersona } from '../../types';
 const GROUP_ORDER = [
   'Discover & Analyze',
   'Build & Customize',
-  'Access & Provision',
+  'Requests & Approvals',
   'Learn & Share',
-  'Governance',
-  'Admin',
+  'Watch Tower',
+  'Control Tower',
 ] as const;
 
 // Per-group collapse state is persisted to localStorage so the sidebar
 // remembers each section's expanded/collapsed state across page reloads.
 // The map shape is `{ [groupId: string]: true /* collapsed */ }`.
 //
-// First-load defaults below give "less essential" groups a collapsed
-// initial state so the rail isn't visually overwhelming on a fresh
-// visit. Once the user toggles a group, that choice is written to
-// localStorage and overrides the default on subsequent loads.
+// First-load defaults below collapse every group EXCEPT the primary
+// "Discover & Analyze" section, so a brand-new visitor sees a focused,
+// uncluttered rail. Once the user toggles a group, that choice is written
+// to localStorage and overrides the default on subsequent loads.
 const GROUP_COLLAPSE_STORAGE_KEY = 'sidebar-collapsed-groups';
 
 const DEFAULT_COLLAPSED_GROUPS: Record<string, boolean> = {
+  'Build & Customize': true,
+  'Requests & Approvals': true,
   'Learn & Share': true,
-  Governance: true,
-  Admin: true,
+  'Watch Tower': true,
+  'Control Tower': true,
 };
 
 function loadCollapsedGroups(): Record<string, boolean> {
@@ -107,16 +108,6 @@ interface NavItem {
   href?: string;
 }
 
-// Derive a short label from the configured brand name (e.g. "Enterprise
-// Data Hub" -> "EDH") so the agent entry reflects branding without
-// hardcoding the app name. Single-word brands fall back to the word itself.
-function brandAcronym(name: string): string {
-  const words = (name || '').trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return '';
-  if (words.length === 1) return words[0];
-  return words.map((w) => w[0]!.toUpperCase()).join('');
-}
-
 const navItems: NavItem[] = [
   // Discover & Analyze — the unified chat agent leads this section. Its title
   // is overridden at render time with a brand-derived label (see allNavItems).
@@ -124,9 +115,9 @@ const navItems: NavItem[] = [
   { id: 'data_discovery', title: 'View & Search Catalog', icon: <Search className="w-5 h-5" />, path: '/discovery', group: 'Discover & Analyze' },
 
   // Self Service
-  { id: 'my_requests', title: 'My Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Access & Provision' },
-  { id: 'pending_approvals', title: 'Pending Approvals', icon: <CheckCircle2 className="w-5 h-5" />, path: '/approvals', group: 'Access & Provision' },
-  { id: 'reports', title: 'Reports', icon: <BarChart className="w-5 h-5" />, path: '/reports', group: 'Access & Provision' },
+  { id: 'my_requests', title: 'My Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Requests & Approvals' },
+  { id: 'pending_approvals', title: 'Pending Approvals', icon: <CheckCircle2 className="w-5 h-5" />, path: '/approvals', group: 'Requests & Approvals' },
+  { id: 'reports', title: 'Reports', icon: <BarChart className="w-5 h-5" />, path: '/reports', group: 'Discover & Analyze' },
 
   // Community - Available to everyone
   { id: 'training', title: 'Training', icon: <GraduationCap className="w-5 h-5" />, path: '/community/training', group: 'Learn & Share' },
@@ -140,7 +131,7 @@ const navItems: NavItem[] = [
     title: 'Data Certification (ODCS)',
     icon: <CheckCircle2 className="w-5 h-5" />,
     path: '/governance/certification',
-    group: 'Governance',
+    group: 'Watch Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
   {
@@ -148,7 +139,7 @@ const navItems: NavItem[] = [
     title: 'Data Products (ODPS)',
     icon: <FileText className="w-5 h-5" />,
     path: '/governance/odps',
-    group: 'Governance',
+    group: 'Watch Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
   {
@@ -156,7 +147,7 @@ const navItems: NavItem[] = [
     title: 'Allowlist',
     icon: <ShieldCheck className="w-5 h-5" />,
     path: '/governance/allowlist',
-    group: 'Governance',
+    group: 'Watch Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
   {
@@ -164,7 +155,7 @@ const navItems: NavItem[] = [
     title: 'Sentinel',
     icon: <ShieldAlert className="w-5 h-5" />,
     path: '/governance/sentinel',
-    group: 'Governance',
+    group: 'Watch Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
   {
@@ -172,7 +163,7 @@ const navItems: NavItem[] = [
     title: 'Tag Management',
     icon: <Tags className="w-5 h-5" />,
     path: '/governance/tags',
-    group: 'Governance',
+    group: 'Watch Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
   {
@@ -180,7 +171,7 @@ const navItems: NavItem[] = [
     title: 'Context Catalog',
     icon: <Library className="w-5 h-5" />,
     path: '/governance/context-catalog',
-    group: 'Governance',
+    group: 'Watch Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
   // Admin - Restricted
@@ -189,7 +180,7 @@ const navItems: NavItem[] = [
     title: 'Admin',
     icon: <Settings className="w-5 h-5" />,
     path: '/admin/dashboard',
-    group: 'Admin',
+    group: 'Control Tower',
     allowedPersonas: ['Platform Admin']
   },
   {
@@ -197,7 +188,7 @@ const navItems: NavItem[] = [
     title: 'Workflows',
     icon: <Sparkles className="w-5 h-5" />,
     path: '/build/workflows',
-    group: 'Admin',
+    group: 'Control Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
   {
@@ -205,17 +196,8 @@ const navItems: NavItem[] = [
     title: 'Tool Registry',
     icon: <Wrench className="w-5 h-5" />,
     path: '/governance/tool-registry',
-    group: 'Admin',
+    group: 'Control Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
-  },
-
-  {
-    id: 'training_upload',
-    title: 'Training Upload',
-    icon: <Upload className="w-5 h-5" />,
-    path: '/admin/training',
-    group: 'Admin',
-    allowedPersonas: ['Platform Admin']
   },
 ];
 
@@ -388,14 +370,14 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   const allNavItems = React.useMemo(
     () => {
-      const acronym = brandAcronym(brandName);
-      const agentLabel = acronym ? `${acronym} Agent` : 'Agent';
+      // The unified chat agent is presented as "Ask Anything" — a fixed,
+      // intent-led label rather than a brand-derived "<Brand> Agent".
       const items = navItems.map((item) =>
-        item.id === 'home' ? { ...item, title: agentLabel } : item
+        item.id === 'home' ? { ...item, title: 'Ask Anything' } : item
       );
       return [...items, ...externalNavItems];
     },
-    [externalNavItems, brandName]
+    [externalNavItems]
   );
 
   // Filter items based on current persona
@@ -546,7 +528,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 const isActive = isExternal
                   ? false
                   : item.path === '/admin/dashboard'
-                    ? location.pathname.startsWith('/admin') && location.pathname !== '/admin/training'
+                    ? location.pathname.startsWith('/admin')
                     : item.id === 'home'
                       // The agent landing renders at both '/' and '/request'.
                       ? location.pathname === '/' || location.pathname === '/request'

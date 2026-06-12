@@ -7,18 +7,8 @@ import { formatInTimeZone } from 'date-fns-tz';
 import { Eye, X, Trash2, CheckCircle2, Circle, Loader2, AlertCircle, Clock, WandSparkles, ArrowRight } from 'lucide-react';
 import type { Request } from '../types';
 import { renderMarkdownSafe } from '../lib/markdown';
-import { useBrandingStore } from '../stores/brandingStore';
 
 import { formatDistanceToNow, differenceInHours } from 'date-fns';
-
-// Derive a short label for the unified chat agent from the configured brand
-// name (e.g. "Enterprise Data Hub" -> "EDH Agent"), matching the sidebar.
-function brandAcronym(name: string): string {
-  const words = (name || '').trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return '';
-  if (words.length === 1) return words[0];
-  return words.map((w) => w[0]!.toUpperCase()).join('');
-}
 
 const NEW_REQUEST_BANNER_DISMISSED_KEY = 'requests.newRequestBanner.dismissed';
 
@@ -30,8 +20,7 @@ const NEW_REQUEST_BANNER_DISMISSED_KEY = 'requests.newRequestBanner.dismissed';
  */
 function NewRequestBanner() {
   const navigate = useNavigate();
-  const brandName = useBrandingStore((s) => s.brandName);
-  const agentLabel = `${brandAcronym(brandName) || 'EDH'} Agent`;
+  const agentLabel = 'Ask Anything';
 
   const [dismissed, setDismissed] = useState(
     () => localStorage.getItem(NEW_REQUEST_BANNER_DISMISSED_KEY) === '1'

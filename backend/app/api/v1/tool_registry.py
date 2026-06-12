@@ -44,6 +44,13 @@ class ToolUpdate(BaseModel):
     identity_mode: Optional[str] = Field(default=None, description="'sp' or 'obo'")
     is_mutating: Optional[bool] = None
     side_effect_class: Optional[str] = None
+    success_predicate: Optional[Any] = Field(
+        default=None,
+        description=(
+            "$-expression evaluated against {result} to decide tool success. "
+            "Send null/empty to clear. e.g. {\"$eq\": [{\"$var\": \"result.state\"}, \"submitted\"]}"
+        ),
+    )
 
 
 class SourceCreate(BaseModel):

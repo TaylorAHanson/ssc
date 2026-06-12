@@ -63,6 +63,32 @@ def published_graph_spec(db, request_type) -> Optional[dict]:
     return None
 
 
+def make_child_resolver(db=None) -> Callable[[Any], Any]:
+    """Build a subworkflow resolver: a workflow key -> its ``WorkflowSpec``.
+
+    Threaded into :func:`app.workflows.spec.build_spec_graph` so compound
+    workflows can compose nested graphs without that module importing the DB or
+    catalog. A published DB workflow wins over the bundled catalog (same override
+    semantics as :func:`build_graph_for`).
+    """
+    from app.workflows.graphs.specs import SPECS
+    from app.workflows.spec_loader import spec_from_dict
+
+    def resolver(key):
+        k = getattr(key, "value", key)
+        if db is not None:
+            spec = published_graph_spec(db, k)
+            if spec:
+                try:
+                    return spec_from_dict(spec)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("child workflow %s DB spec invalid: %s", k, e)
+        raw = SPECS.get(k)
+        return spec_from_dict(raw) if raw is not None else None
+
+    return resolver
+
+
 def build_graph_for(request_type, db=None) -> Any:
     """Build the (uncompiled) graph for a request type.
 
@@ -76,7 +102,7 @@ def build_graph_for(request_type, db=None) -> Any:
                 from app.workflows.spec import build_spec_graph
                 from app.workflows.spec_loader import spec_from_dict
 
-                return build_spec_graph(spec_from_dict(spec))
+                return build_spec_graph(spec_from_dict(spec), make_child_resolver(db))
             except Exception as e:  # noqa: BLE001
                 logger.warning(
                     "DB graph_spec for %s invalid; using code catalog: %s",

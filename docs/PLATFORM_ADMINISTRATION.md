@@ -15,7 +15,7 @@ A **workflow** is a *Workflow* — a DB-backed record with a JSON `graph_spec`, 
 
 Because workflows are data, you author and change them **without a deploy or a code review** — in the visual editor or directly in chat with the agent. Every mutating step still runs through the governed `ToolExecutor` (capability scope + OPA + idempotency + audit), so "no-code" never means "no governance."
 
-> The authoritative, **editable** reference for the spec format, gate types, the expression mini-language, and finicky-tool house rules lives in the **Context Catalog**: *Admin → Context Catalog → Platform Administration → "Authoring Workflows (Workflows) — Guide"*. Edit it to encode your org's conventions; the agent reads it when helping you author.
+> The authoritative reference for the spec format, gate types, stage kinds (including `subworkflow` for compound workflows), and the expression mini-language is the live **`list_workflow_building_blocks`** tool — it's always in sync with the code. The agent consults it when helping you author. To encode org-specific conventions or finicky-tool house rules, add them to a Context Catalog domain of your choosing (they back the agent's general `search_context_catalog` answers).
 
 ---
 
@@ -102,10 +102,9 @@ The Workflows studio shows a lock banner and renders read-only in a locked envir
 
 ## 6. Editing the Context Library (House Rules)
 
-The Context Catalog is a curated, editable knowledge base the agent retrieves from. As an admin you'll use it two ways:
+The Context Catalog is a curated, editable knowledge base the agent retrieves from for the **self-service** experience — internal processes, standards, and product knowledge that back the agent's `search_context_catalog` answers.
 
-- **The authoring guide** (*Platform Administration → "Authoring Workflows (Workflows) — Guide"*) is seeded automatically and is **yours to edit**. Add tool-specific gotchas, naming conventions, and required-gate rules in its *"Finicky tools & house rules"* section. The agent reads this when authoring, so your guidance shapes what it builds. (Seeding is idempotent and revision-aware, so re-deploys won't clobber your edits.)
-- **Domain docs** for the self-service experience (internal processes, standards, product knowledge) live in other domains and back the agent's `search_context_catalog` answers.
+> Note: there is no longer a seeded "Authoring Workflows" guide here. The workflow-authoring agent now learns the spec format, tools, gate types, and stage kinds from the live `list_workflow_building_blocks` tool (always current), and that admin-only content is no longer mixed into the self-service catalog the main agent searches. If you want to encode org-specific authoring conventions, put them in a domain of your choosing.
 
 > Tip: when a tool is finicky (ordering matters, specific args required, must be gated), document it once in the guide. Both human authors and the agent will then get it right consistently.
 
@@ -158,7 +157,7 @@ Role scoping is enforced at the chat endpoint: tools tagged for admins are filte
 | Thing | Where |
 | :--- | :--- |
 | Visual workflow editor | App → **Admin → Workflows** |
-| Authoring guide (editable) | App → **Admin → Context Catalog → Platform Administration** |
+| Authoring building blocks (tools, gates, stage kinds) | `list_workflow_building_blocks` (in-chat, authoring studio) |
 | Live graph for a request | App → request detail → **Workflow** tab |
 | Workflow definitions (code catalog seed) | `backend/app/workflows/graphs/specs.py` |
 | Spec schema / expression language | `backend/app/workflows/spec_loader.py`, `backend/app/workflows/expr.py` |

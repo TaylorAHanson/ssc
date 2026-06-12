@@ -191,14 +191,18 @@ def update_workflow(
 def validate_spec(
     *,
     body: SpecValidateRequest,
+    db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Author-time check of a workflow graph_spec (used by the editor)."""
     _validate_graph_spec(body.graph_spec)
-    from app.workflows.spec_loader import lint_step_tool_args
+    from app.tools.authoring.workflow_authoring import _composable_keys
+    from app.workflows.spec_loader import lint_step_tool_args, lint_subworkflow_refs
 
-    return {"valid": True, "warnings": lint_step_tool_args(body.graph_spec or {})}
+    spec = body.graph_spec or {}
+    warnings = lint_step_tool_args(spec) + lint_subworkflow_refs(spec, _composable_keys(db))
+    return {"valid": True, "warnings": warnings}
 
 
 @router.get("/meta/tools")
@@ -217,6 +221,7 @@ def list_workflow_tools(
 def test_spec(
     *,
     body: SpecTestRequest,
+    db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     _: None = Depends(_require_feature),
 ) -> Any:
@@ -226,14 +231,18 @@ def test_spec(
     human, and the exact arguments each step's tool would receive.
     """
     _validate_graph_spec(body.graph_spec)
+    from app.tools.authoring.workflow_authoring import _composable_keys
     from app.workflows.dry_run import project_run
-    from app.workflows.spec_loader import lint_step_tool_args
+    from app.workflows.spec_loader import lint_step_tool_args, lint_subworkflow_refs
 
     try:
         projection = project_run(body.graph_spec, body.sample_context or {})
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Dry-run failed: {e}")
-    projection["warnings"] = lint_step_tool_args(body.graph_spec or {})
+    spec = body.graph_spec or {}
+    projection["warnings"] = lint_step_tool_args(spec) + lint_subworkflow_refs(
+        spec, _composable_keys(db)
+    )
     return projection
 
 

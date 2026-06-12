@@ -8,12 +8,19 @@ interface TrainingBlockerProps {
   requestId: string;
   requiresTraining: boolean;
   trainingCompleted: boolean;
+  /** Optional specific course this gate requires (from the training gate spec).
+   *  When present it's shown to the user and auto-satisfies once the LMS records
+   *  a completion for it. */
+  requiredCourseName?: string | null;
+  requiredCourseCode?: string | null;
 }
 
 export function TrainingBlocker({
   requestId,
   requiresTraining,
   trainingCompleted,
+  requiredCourseName,
+  requiredCourseCode,
 }: TrainingBlockerProps) {
   const completeTraining = useRequestStore((state) => state.completeTraining);
   const fetchRequests = useRequestStore((state) => state.fetchRequests);
@@ -67,12 +74,19 @@ export function TrainingBlocker({
           <BookOpen className="w-5 h-5 text-yellow-700 mt-0.5" />
           <div className="flex-1">
             <p className="text-sm font-medium text-yellow-900 mb-1">
-              Interactive Workshop Required
+              {requiredCourseName || 'Interactive Workshop Required'}
             </p>
             <p className="text-sm text-yellow-700">
-              Before your workspace can be provisioned, you must complete the required
-              training workshop. This ensures compliance and proper usage of Databricks resources.
+              Before your request can proceed, you must complete the required
+              training{requiredCourseName ? ` — ${requiredCourseName}` : ' workshop'}.
+              This ensures compliance and proper usage of Databricks resources.
             </p>
+            {requiredCourseCode && (
+              <p className="text-xs text-yellow-600 mt-1">
+                Course code: <span className="font-mono">{requiredCourseCode}</span>.
+                This unblocks automatically once your completion is recorded.
+              </p>
+            )}
           </div>
         </div>
         <div className="pt-2 border-t border-yellow-200">

@@ -110,6 +110,38 @@ export function ToolRegistry() {
     patchTool(tool, { allowed_roles: Array.from(current) });
   };
 
+  // Edit the per-tool success check. The predicate is a JSON $-expression
+  // (see backend app/workflows/expr.py); a tiny prompt keeps this lightweight
+  // for the relatively rare case of an external tool that 200s on failure.
+  const editSuccessPredicate = (tool: RegistryTool) => {
+    const current = tool.success_predicate
+      ? JSON.stringify(tool.success_predicate, null, 2)
+      : '';
+    const example = '{"$eq": [{"$var": "result.state"}, "submitted"]}';
+    const input = window.prompt(
+      `Success check for "${tool.tool_name}".\n\n` +
+        'Enter a JSON $-expression evaluated against {result}. The tool is treated ' +
+        'as failed if it evaluates falsy (catches HTTP-200 results that actually failed). ' +
+        'Leave blank to clear.\n\n' +
+        `Example: ${example}`,
+      current
+    );
+    if (input === null) return; // cancelled
+    const trimmed = input.trim();
+    if (trimmed === '') {
+      patchTool(tool, { success_predicate: null });
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      flash('error', 'Success check must be valid JSON.');
+      return;
+    }
+    patchTool(tool, { success_predicate: parsed });
+  };
+
   const handleSyncLocal = async () => {
     try {
       const res = await syncLocalTools();
@@ -361,6 +393,7 @@ export function ToolRegistry() {
                   <th className="p-3 cursor-help" title="Restrict the tool to users with at least one of the selected roles. No roles selected = available to everyone.">Roles</th>
                   <th className="p-3 cursor-help" title="Execution identity: OBO runs as the calling user (On-Behalf-Of); SP runs as the app's Service Principal.">Identity</th>
                   <th className="p-3 text-center cursor-help" title="Marks the tool as having side effects (writes/changes state). Mutating tools are subject to policy enforcement and idempotency handling.">Mutating</th>
+                  <th className="p-3 text-center cursor-help" title="Optional success check: a JSON $-expression evaluated against the tool's result. Catches tools that return HTTP 200 but actually failed (e.g. an external/MCP call). When the check evaluates falsy the call is treated as a failure and a workflow will not advance.">Success check</th>
                   <th className="p-3 text-center cursor-help" title="Master switch. When off, the tool is unavailable to every agent surface regardless of the Main Agent/Workflow settings.">Enabled</th>
                 </tr>
               </thead>
@@ -426,6 +459,16 @@ export function ToolRegistry() {
                     </td>
                     <td className="p-3 text-center">
                       <input type="checkbox" checked={t.is_mutating} onChange={(e) => patchTool(t, { is_mutating: e.target.checked })} className="w-4 h-4" title={`side effect: ${t.side_effect_class}`} />
+                    </td>
+                    <td className="p-3 text-center">
+                      <button
+                        type="button"
+                        onClick={() => editSuccessPredicate(t)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${t.success_predicate ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'}`}
+                        title={t.success_predicate ? `Custom success check:\n${JSON.stringify(t.success_predicate)}` : 'No custom success check (default heuristics). Click to add.'}
+                      >
+                        {t.success_predicate ? 'Custom' : 'Default'}
+                      </button>
                     </td>
                     <td className="p-3 text-center">
                       <input type="checkbox" checked={t.enabled} onChange={(e) => patchTool(t, { enabled: e.target.checked })} className="w-4 h-4" />

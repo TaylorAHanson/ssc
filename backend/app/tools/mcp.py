@@ -43,6 +43,7 @@ class McpTool:
         side_effect_class: str = "read",
         is_mutating: Optional[bool] = None,
         policy_ref: Optional[str] = None,
+        success_predicate: Optional[Any] = None,
     ):
         self._func = func
         self._args_schema = args_schema
@@ -67,6 +68,7 @@ class McpTool:
             else side_effect_class in MUTATING_SIDE_EFFECT_CLASSES
         )
         self._policy_ref = policy_ref
+        self._success_predicate = success_predicate
         
     @property
     def name(self) -> str:
@@ -113,6 +115,16 @@ class McpTool:
         ``None`` => the policy keys off ``side_effect_class`` alone.
         """
         return self._policy_ref
+
+    @property
+    def success_predicate(self) -> Optional[Any]:
+        """Optional ``$``-expression deciding tool success (see app/workflows/expr.py).
+
+        Evaluated against ``{"result": <tool output>}``. When set and it evaluates
+        falsy, the call is treated as a failure even on an HTTP-200/dict result.
+        ``None`` => fall back to the default envelope heuristics.
+        """
+        return self._success_predicate
 
     @property
     def friendly_label(self) -> str:

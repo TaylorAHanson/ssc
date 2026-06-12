@@ -16,7 +16,6 @@ interface BrandingState {
     genieFullExperienceUrl: string;
     features: Record<string, boolean>;
     tools: Record<string, boolean>;
-    workflows: Record<string, boolean>;
     uiTabs: Record<string, boolean>;
     workflowAuthoringLocked: boolean;
     isLoading: boolean;
@@ -39,7 +38,6 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     genieFullExperienceUrl: '',
     features: {},
     tools: {},
-    workflows: {},
     uiTabs: {},
     workflowAuthoringLocked: false,
     isLoading: false,
@@ -63,7 +61,6 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 genieFullExperienceUrl: (branding as { genie_full_experience_url?: string }).genie_full_experience_url || '',
                 features: branding.features || {},
                 tools: branding.tools || {},
-                workflows: branding.workflows || {},
                 uiTabs: branding.ui?.tabs || {},
                 workflowAuthoringLocked: branding.workflow_authoring_locked ?? false,
                 isLoading: false,

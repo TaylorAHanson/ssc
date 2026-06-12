@@ -466,7 +466,6 @@ export async function getBranding(): Promise<{
   genie_full_experience_url?: string;
   features?: Record<string, boolean>;
   tools?: Record<string, boolean>;
-  workflows?: Record<string, boolean>;
   ui?: { 
     tabs?: Record<string, boolean>;
   };
@@ -613,6 +612,21 @@ export async function getTrainingStatus(): Promise<{ tracks: any, completed_code
   return response.json();
 }
 
+export interface TrainingCourse {
+  code: string;
+  name: string;
+}
+
+export async function listTrainingCourses(): Promise<TrainingCourse[]> {
+  const response = await fetch(`${API_BASE_URL}/training/courses`, {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to list training courses: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export async function uploadTrainingData(file: File): Promise<{ message: string, stats: any }> {
   const formData = new FormData();
   formData.append('file', file);
@@ -755,6 +769,9 @@ export interface RegistryTool {
   exposed_via_mcp: boolean;
   allowed_roles: string[];
   identity_mode: 'sp' | 'obo';
+  /** Optional $-expression (see backend app/workflows/expr.py) evaluated against
+   *  {result} to decide tool success. null = use the default envelope heuristics. */
+  success_predicate: unknown | null;
   discovered_at: string | null;
   updated_at: string | null;
 }
@@ -789,6 +806,8 @@ export interface RegistryToolUpdate {
   identity_mode?: 'sp' | 'obo';
   is_mutating?: boolean;
   side_effect_class?: string;
+  /** Send a $-expression object to set, or null to clear, the success check. */
+  success_predicate?: unknown | null;
 }
 
 export interface McpSourceCreate {
@@ -1721,6 +1740,9 @@ export type GateType =
   | 'data_owner'
   | 'training'
   | 'pr_merge'
+  /** @deprecated The sibling-spawn ("children") model is superseded by compound
+   *  workflows (a `subworkflow` stage). Retained only so older specs validate;
+   *  not offered when authoring new workflows. */
   | 'children';
 
 /** Declarative approver routing for a human gate. When omitted, the gate uses
@@ -1743,6 +1765,11 @@ export interface WorkflowGateStage {
    *  group from the data's `approver_group` tag. Only meaningful for human
    *  gate types (manager / platform_admin / data_owner). */
   approver?: GateApprover | null;
+  /** For `training` gates: the specific LMS course code this gate requires. When
+   *  set, the gate auto-satisfies once the requester completes that course.
+   *  `course_name` is optional display copy. */
+  course_code?: string | null;
+  course_name?: string | null;
 }
 
 export interface WorkflowStepStage {
@@ -1760,7 +1787,29 @@ export interface WorkflowStepStage {
   run_if?: SpecExpr | null;
 }
 
-export type WorkflowStage = WorkflowGateStage | WorkflowStepStage;
+/** A nested-workflow ("Call workflow") stage — the building block of a compound
+ *  workflow. The referenced workflow runs inline as a subgraph: its gates pause
+ *  and resume like native ones, and a rejection inside it rejects the parent. */
+export interface WorkflowSubWorkflowStage {
+  kind: 'subworkflow';
+  name: string;
+  /** The key of a published workflow to compose. */
+  ref: string;
+  /** Optional parent-context -> child-context mapping merged before the child runs. */
+  input?: Record<string, SpecExpr>;
+  /** Optional context keys this stage declares it contributes. */
+  writes_context?: string[];
+  running_status?: string;
+  /** Conditional composition: when set, the nested workflow runs only if this
+   *  predicate is truthy for the request; otherwise the whole subworkflow is
+   *  skipped. Null/absent = always runs. The field is `run_if` (not `when`). */
+  run_if?: SpecExpr | null;
+}
+
+export type WorkflowStage =
+  | WorkflowGateStage
+  | WorkflowStepStage
+  | WorkflowSubWorkflowStage;
 
 export interface WorkflowGraphSpec {
   name: string;
@@ -1780,13 +1829,17 @@ export interface WorkflowTool {
 }
 
 export interface DryRunStage {
-  kind: 'gate' | 'step';
+  kind: 'gate' | 'step' | 'subworkflow';
   name: string;
   // gate
   type?: string;
   waiting_status?: string;
   can_auto_approve?: boolean;
   decision?: 'auto_approve' | 'requires_approval' | 'run' | 'skip';
+  // subworkflow (compound)
+  ref?: string;
+  running_status?: string;
+  input?: Record<string, unknown>;
   // step
   tool?: string;
   is_mutating?: boolean;
@@ -1858,6 +1911,11 @@ export interface Workflow {
   created_by: string | null;
   created_at: string | null;
   updated_at: string | null;
+  /** Derived: 'compound' if the spec composes another workflow (a subworkflow
+   *  stage), else 'atomic'. */
+  composition?: 'atomic' | 'compound';
+  /** Derived: the workflow keys this one composes, in order. */
+  subworkflow_refs?: string[];
 }
 
 export interface WorkflowInput {
@@ -2156,5 +2214,6 @@ export const api = {
   listWorkflowVersions,
   rollbackWorkflow,
   exportWorkflowsBundle,
-  importWorkflowsBundle
+  importWorkflowsBundle,
+  listTrainingCourses,
 };

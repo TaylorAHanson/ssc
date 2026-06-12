@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
 import {
-  Save, Loader2, Clock, RotateCcw, FileText, Activity, MessageSquarePlus
+  Save, Loader2, Clock, RotateCcw, FileText, Activity, MessageSquarePlus, GraduationCap
 } from 'lucide-react';
 import { format } from 'date-fns';
 import {
@@ -16,6 +16,7 @@ import { TestRunner } from '../components/admin/TestRunner';
 import { Users } from './admin/Users';
 import { AdminDashboard } from './admin/AdminDashboard';
 import { FeedbackAdmin } from './admin/FeedbackAdmin';
+import { TrainingUpload } from '../components/admin/TrainingUpload';
 import { useBrandingStore } from '../stores/brandingStore';
 
 export function Admin() {
@@ -32,8 +33,8 @@ export function Admin() {
   const uiTabs = useBrandingStore((s) => s.uiTabs);
   const feedbackEnabled = uiTabs?.feedback !== false;
 
-  const validTabs = ['dashboard', 'users', 'content-manager', 'test-runner', ...(feedbackEnabled ? ['feedback'] : [])];
-  const activeTab = tab && validTabs.includes(tab) ? tab as 'dashboard' | 'users' | 'content-manager' | 'test-runner' | 'feedback' : 'dashboard';
+  const validTabs = ['dashboard', 'users', 'content-manager', 'test-runner', 'training', ...(feedbackEnabled ? ['feedback'] : [])];
+  const activeTab = tab && validTabs.includes(tab) ? tab as 'dashboard' | 'users' | 'content-manager' | 'test-runner' | 'training' | 'feedback' : 'dashboard';
 
   const handleTabChange = (newTab: string) => {
     navigate(`/admin/${newTab}`);
@@ -259,6 +260,16 @@ export function Admin() {
           <Activity className="w-4 h-4 inline mr-2" />
           Test Runner
         </button>
+        <button
+          onClick={() => handleTabChange('training')}
+          className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'training'
+            ? 'border-b-2 border-primary text-primary'
+            : 'text-gray-600 hover:text-gray-900'
+            }`}
+        >
+          <GraduationCap className="w-4 h-4 inline mr-2" />
+          Training Upload
+        </button>
         {feedbackEnabled && (
           <button
             onClick={() => handleTabChange('feedback')}
@@ -276,6 +287,7 @@ export function Admin() {
       {activeTab === 'test-runner' && <TestRunner />}
       {activeTab === 'dashboard' && <AdminDashboard />}
       {activeTab === 'users' && <Users />}
+      {activeTab === 'training' && <TrainingUpload />}
       {activeTab === 'feedback' && <FeedbackAdmin />}
 
       {activeTab === 'content-manager' && (
