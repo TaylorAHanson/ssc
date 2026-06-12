@@ -43,10 +43,41 @@ def has_tool(name: str) -> bool:
     return name in _registry()
 
 
-def available_tools() -> List[Dict[str, Any]]:
-    """Metadata for every wireable tool (for the authoring UI / validation)."""
+def all_tool_objects() -> Dict[str, Any]:
+    """All workflow/provider tools as ``{name: McpTool}`` (for the unified catalog)."""
+    return dict(_registry())
+
+
+def available_tools(db: Any = None) -> List[Dict[str, Any]]:
+    """Metadata for every wireable tool (for the authoring UI / validation).
+
+    When ``db`` is provided, the list is filtered to tools the Tool Registry has
+    enabled for workflow execution (``enabled_for_workflow_execution``) so an admin
+    can globally retire a building block. ``get_tool``/``has_tool`` are intentionally
+    NOT filtered, so already-published specs keep resolving even if a building block
+    is later disabled. With no ``db`` the full code catalog is returned (safe default).
+    """
+    allowed_names = None
+    if db is not None:
+        try:
+            from app.db.tool_registry import ToolRegistryModel
+
+            rows = (
+                db.query(ToolRegistryModel.tool_name)
+                .filter(
+                    ToolRegistryModel.enabled.is_(True),
+                    ToolRegistryModel.enabled_for_workflow_execution.is_(True),
+                )
+                .all()
+            )
+            allowed_names = {r[0] for r in rows}
+        except Exception:  # noqa: BLE001 - never break the picker on a registry hiccup
+            allowed_names = None
+
     out = []
     for name, t in sorted(_registry().items()):
+        if allowed_names is not None and name not in allowed_names:
+            continue
         accepted = getattr(t, "accepted_args", None)
         # Expose the tool's real arg names so authors (UI + agent) wire correct
         # args instead of guessing (e.g. `to_email`, not `to`). Tools that only

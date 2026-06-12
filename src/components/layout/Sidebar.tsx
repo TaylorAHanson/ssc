@@ -27,6 +27,7 @@ import {
   Library,
   MessageSquarePlus,
   Eraser,
+  Wrench,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { FeedbackModal } from '../feedback/FeedbackModal';
@@ -196,6 +197,14 @@ const navItems: NavItem[] = [
     title: 'Workflows',
     icon: <Sparkles className="w-5 h-5" />,
     path: '/build/workflows',
+    group: 'Admin',
+    allowedPersonas: ['Platform Admin', 'Governance Admin']
+  },
+  {
+    id: 'tool_registry',
+    title: 'Tool Registry',
+    icon: <Wrench className="w-5 h-5" />,
+    path: '/governance/tool-registry',
     group: 'Admin',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },

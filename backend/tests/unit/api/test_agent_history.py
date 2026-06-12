@@ -43,8 +43,9 @@ def _build(history: list[ChatMessage]):
     user = _fake_user()
     # ``_build_runner_and_history`` requires ``settings.AGENT_ENABLED``;
     # we trust the project default (``True``) to avoid monkeypatching
-    # configuration at import time.
-    _runner, wire_history, _mode = _build_runner_and_history(request, user)
+    # configuration at import time. ``db=None`` makes tool resolution fall back
+    # to the static gating (this test only cares about history translation).
+    _runner, wire_history, _mode = _build_runner_and_history(request, user, None)
     return wire_history
 
 

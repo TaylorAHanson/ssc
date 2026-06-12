@@ -69,5 +69,10 @@ def run_startup_migrations(engine: Engine) -> None:
         # Context Catalog retrieval-usage signal columns.
         _add_column(engine, "context_documents", "retrieval_count", "INTEGER DEFAULT 0")
         _add_column(engine, "context_documents", "last_retrieved_at", "TIMESTAMP")
+        # Tool Registry: unified catalog rename to the three usage contexts.
+        _rename_column(engine, "tool_registry", "enabled_for_edh", "enabled_for_main_agent")
+        _rename_column(engine, "tool_registry", "enabled_for_workflow", "enabled_for_workflow_agent")
+        _add_column(engine, "tool_registry", "enabled_for_workflow_execution", "INTEGER DEFAULT 0")
+        _add_column(engine, "tool_registry", "exposed_via_mcp", "INTEGER DEFAULT 0")
     except Exception as e:  # noqa: BLE001 - never block startup on a migration
         logger.warning("Startup migration step failed (continuing): %s", e)

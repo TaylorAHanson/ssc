@@ -26,6 +26,7 @@ import { ODPS } from './pages/admin/ODPS';
 import { TagManagement } from './pages/admin/TagManagement';
 import { ContextCatalog } from './pages/admin/ContextCatalog';
 import { Workflows } from './pages/admin/Workflows';
+import { ToolRegistry } from './pages/admin/ToolRegistry';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -142,6 +143,16 @@ function App() {
               element={
                 <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
                   <Workflows />
+                </ProtectedRoute>
+              }
+            />
+          )}
+          {uiTabs?.tool_registry !== false && (
+            <Route
+              path="/governance/tool-registry"
+              element={
+                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                  <ToolRegistry />
                 </ProtectedRoute>
               }
             />

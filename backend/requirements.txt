@@ -20,6 +20,10 @@ cryptography==46.0.6
 requests==2.33.0
 icalendar==7.0.0
 mcp==1.20.0
+# Databricks Managed/external MCP client: discover + invoke tools on Unity AI
+# Gateway MCP servers (used by the dynamic Tool Registry). Imported lazily so the
+# app still runs where it isn't installed.
+databricks-mcp==0.9.0
 # V2 durable agentic execution engine (replaces the custom state machine engine).
 langgraph==1.2.4
 langgraph-checkpoint-sqlite==3.1.0

@@ -736,6 +736,149 @@ export async function deleteAllowlistEntry(id: string): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Tool Registry (dynamic agent tool governance)
+// ---------------------------------------------------------------------------
+
+export interface RegistryTool {
+  id: string;
+  tool_name: string;
+  origin: 'local' | 'workflow' | 'mcp';
+  source_id: string | null;
+  description: string | null;
+  is_mutating: boolean;
+  side_effect_class: string;
+  enabled: boolean;
+  enabled_for_main_agent: boolean;
+  enabled_for_workflow_agent: boolean;
+  enabled_for_workflow_execution: boolean;
+  exposed_via_mcp: boolean;
+  allowed_roles: string[];
+  identity_mode: 'sp' | 'obo';
+  discovered_at: string | null;
+  updated_at: string | null;
+}
+
+export interface McpSource {
+  id: string;
+  name: string;
+  server_url: string;
+  kind: string;
+  enabled: boolean;
+  default_identity_mode: 'sp' | 'obo';
+  created_by: string | null;
+  last_synced_at: string | null;
+  last_sync_status: string | null;
+  last_sync_error: string | null;
+  last_tool_count: number | null;
+}
+
+export interface ToolRegistryData {
+  tools: RegistryTool[];
+  sources: McpSource[];
+  source_kinds: string[];
+}
+
+export interface RegistryToolUpdate {
+  enabled?: boolean;
+  enabled_for_main_agent?: boolean;
+  enabled_for_workflow_agent?: boolean;
+  enabled_for_workflow_execution?: boolean;
+  exposed_via_mcp?: boolean;
+  allowed_roles?: string[];
+  identity_mode?: 'sp' | 'obo';
+  is_mutating?: boolean;
+  side_effect_class?: string;
+}
+
+export interface McpSourceCreate {
+  name: string;
+  server_url: string;
+  kind?: string;
+  default_identity_mode?: 'sp' | 'obo';
+}
+
+export async function getToolRegistry(): Promise<ToolRegistryData> {
+  const response = await fetch(`${API_BASE_URL}/tool-registry`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to load tool registry: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function updateRegistryTool(id: string, data: RegistryToolUpdate): Promise<RegistryTool> {
+  const response = await fetch(`${API_BASE_URL}/tool-registry/${id}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to update tool: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function syncLocalTools(): Promise<{ ok: boolean; inserted: number }> {
+  const response = await fetch(`${API_BASE_URL}/tool-registry/sync-local`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to sync local tools: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function createMcpSource(data: McpSourceCreate): Promise<McpSource> {
+  const response = await fetch(`${API_BASE_URL}/tool-registry/sources`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to create source: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function updateMcpSource(id: string, data: Partial<McpSourceCreate> & { enabled?: boolean }): Promise<McpSource> {
+  const response = await fetch(`${API_BASE_URL}/tool-registry/sources/${id}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to update source: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function deleteMcpSource(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/tool-registry/sources/${id}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to delete source: ${response.statusText}`);
+  }
+}
+
+export async function syncMcpSource(id: string): Promise<{ ok: boolean; count: number; error: string | null }> {
+  const response = await fetch(`${API_BASE_URL}/tool-registry/sources/${id}/sync`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to sync source: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export interface DataAsset {
   id: string;
   catalog: string;

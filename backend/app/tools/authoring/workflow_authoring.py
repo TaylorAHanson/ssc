@@ -73,8 +73,13 @@ def _db():
 async def list_workflow_building_blocks() -> Dict[str, Any]:
     from app.workflows.tool_registry import available_tools
 
+    db = _db()
+    try:
+        step_tools = available_tools(db)
+    finally:
+        db.close()
     return {
-        "step_tools": available_tools(),
+        "step_tools": step_tools,
         "gate_types": _GATE_TYPES,
         "expression_operators": _EXPR_OPS,
         "spec_shape": {

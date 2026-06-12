@@ -212,6 +212,54 @@ async def grant_data_access(...): ...
 Every tool is classified; `is_mutating` (not a heuristic exclusion list) drives whether the
 governance pipeline runs.
 
+### Unified Tool Catalog (one registry, three usage contexts)
+
+Tool *availability* is data-driven, not hardcoded. A single DB-backed catalog
+(`tool_registry` + `mcp_sources`, owned by `ToolRegistryService`) is the source of truth for
+*every* tool origin, governing where each tool may be used for a given user:
+
+- **One catalog, three origins.** `app/tools/catalog.py` unifies the two code definition sites
+  into one name -> `McpTool` resolver: `origin="local"` (chat tools auto-discovered by
+  `load_tools()`) and `origin="workflow"` (provider-backed workflow building blocks defined in
+  `app/workflows/tools.py`, e.g. `grant_uc_access`, `terraform_apply`). `origin="mcp"` rows are
+  tools discovered from a registered Databricks MCP server, wrapped by a `RemoteMcpTool` adapter
+  (`app/tools/external/`). All three expose the same `McpTool` surface and flow through the same
+  `ToolExecutor` (OPA pre-flight, audit, idempotency).
+- **Three usage contexts (the columns).** Each row toggles independently:
+  `enabled_for_main_agent` (unified self-service chat), `enabled_for_workflow_agent`
+  (workflow-authoring chat), and `enabled_for_workflow_execution` (usable as a workflow graph
+  step / building block). So e.g. `ask_your_data` never appears while authoring,
+  `preview_workflow_spec` never appears in the main chat, and provider tools like
+  `terraform_apply` are workflow-execution-only and never chat-callable. This replaced the old
+  static `required_role` filter + `_AUTHORING_TOOL_NAMES` whitelist in `api/v1/agent.py`.
+- **Seed defaults preserve the safety invariant.** `local` chat tools seed onto the chat
+  contexts (authoring set -> workflow agent; everything-but-build-tools -> main agent);
+  `workflow` provider tools seed `workflow_execution`-only and OFF for both chat surfaces. The
+  per-workflow `allowed_tools` capability scope (enforced in `ToolExecutor`) still narrows which
+  execution tools a given workflow may call; the column is the global "may be used in workflows
+  at all" gate. The authoring tool picker (`available_tools(db)`) reflects this column, while
+  `get_tool`/`has_tool` resolve from the code catalog so already-published specs never break.
+- **Per-tool gating.** Each row also carries `allowed_roles` (empty = all roles; Platform Admin
+  always passes), `identity_mode` (`sp` | `obo`), `exposed_via_mcp` (publish over the in-app
+  `/mcp` MCP server for external agents/apps; `get_external_tools()` reads this, seeded from the
+  code-declared `external=True` attribute), and `enabled` (master switch).
+- **MCP discovery.** Admins register MCP server endpoints (`McpSourceModel`): managed servers
+  (`/api/2.0/mcp/functions/{catalog}/{schema}`, `/api/2.0/mcp/sql`, `/api/2.0/mcp/genie`,
+  `/api/2.0/mcp/ai-search/...`), external connections (`/api/2.0/mcp/external/{connection}`), or
+  custom app servers. On sync, the **Service Principal** `WorkspaceClient` +
+  `DatabricksMCPClient(server_url).list_tools()` enumerates what the SP can see. Newly
+  discovered tools default disabled and unassigned (opt-in only).
+- **Identity at call time.** `identity_mode="obo"` runs the tool with the forwarded user token
+  (UC enforces the user's grants); `"sp"` runs as the app Service Principal. The
+  `RemoteMcpTool` adapter honors this per tool.
+- **Surfaces:** admin UI at `/governance/tool-registry` (under the Admin nav group), API at
+  `/api/v1/tool-registry` (per-tool gating writes require Platform/Governance Admin; MCP source
+  management + discovery require Platform Admin), gated by the `tool_registry` feature flag.
+
+> Note: the MLflow `AtlasResponsesAgent` (Model Serving) path is not yet registry-aware — it
+> still uses the full `AGENT_TOOLS` set. Wiring serving-time scoping through the registry is a
+> follow-up.
+
 ### OPA package `data.agent.tools`
 
 The executor consumes a decision returned by this package:

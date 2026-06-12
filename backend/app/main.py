@@ -68,6 +68,12 @@ async def lifespan(app: FastAPI):
                 # Context Catalog so admins can customize it and the agent can read it.
                 from app.services.authoring_guide import seed_authoring_guide
                 seed_authoring_guide(db)
+                # Seed the dynamic Tool Registry from the locally-defined tools so
+                # the agent has its data-driven gating populated on first boot, and
+                # newly-added code tools get registry rows (idempotent; never
+                # overrides admin toggles).
+                from app.services.tool_registry_service import ToolRegistryService
+                ToolRegistryService.sync_local_tools(db)
             except Exception as e:
                 logger.warning(f"Workflow seeding skipped: {e}")
         finally:

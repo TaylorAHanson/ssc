@@ -13,3 +13,4 @@ from app.db.data_contract import DataContractModel
 from app.db.context_catalog import ContextDomainModel, ContextDocumentModel, ContextChunkModel
 from app.db.feedback import FeedbackModel
 from app.db.workflow import WorkflowModel, WorkflowVersionModel
+from app.db.tool_registry import McpSourceModel, ToolRegistryModel

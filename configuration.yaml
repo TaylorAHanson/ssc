@@ -95,6 +95,11 @@ features:
   # client-side console + network-error snapshot. Admins triage submissions in
   # the Admin panel. Gates the API, the admin tab, and the submit_feedback tool.
   feedback: true
+  # Tool Registry: data-driven agent tool governance. Admins toggle each tool
+  # (local or discovered from a Databricks MCP server) per agent surface
+  # (EDH chat vs workflow-authoring chat), set allowed roles, and pick SP/OBO
+  # identity. Gates the /tool-registry API and the admin UI.
+  tool_registry: true
 
 ui:
   tabs:
@@ -117,6 +122,7 @@ ui:
     tag_management: true
     context_catalog: true
     workflows: true
+    tool_registry: true
     feedback: true
 
 tools:

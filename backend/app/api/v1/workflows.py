@@ -203,13 +203,14 @@ def validate_spec(
 
 @router.get("/meta/tools")
 def list_workflow_tools(
+    db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Wireable V2 tools (name + side-effect class) for the workflow editor."""
     from app.workflows.tool_registry import available_tools
 
-    return available_tools()
+    return available_tools(db)
 
 
 @router.post("/test-spec")

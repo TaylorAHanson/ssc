@@ -23,8 +23,15 @@ from app.agents.runner import AgentRunner
 from app.core.config import settings
 from app.core.feature_flags import is_feature_enabled
 from app.model_serving.agent_llm import AgentLLMClient
+from app.api import deps
 from app.api.deps import get_current_user
 from app.models.user import User
+from app.services.tool_registry_service import (
+    DEFAULT_AUTHORING_TOOL_NAMES,
+    WORKFLOW_ONLY_TOOL_NAMES,
+    ToolRegistryService,
+)
+from sqlalchemy.orm import Session
 import logging
 import json
 import re
@@ -33,24 +40,45 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Tools the agent may use while in the workflow-authoring studio. Deliberately
-# excludes every runtime / provisioning tool (e.g. ``execute_workflow``,
-# ``get_workflow_instructions``, ``get_target_workspaces``): the authoring panel
-# is for DESIGNING workflows, never running them. "Create a workflow that does X"
-# must mean author a new definition, not execute an existing similar one.
-_AUTHORING_TOOL_NAMES = frozenset({
-    # Authoring tools (admin-only, role-gated upstream)
-    "list_workflow_building_blocks",
-    "get_workflow",
-    "validate_workflow_spec",
-    "preview_workflow_spec",
-    "save_workflow_draft",
-    "publish_workflow",
-    # Read-only knowledge-base tools so the agent can read the house guide.
-    "list_context_domains",
-    "search_context_catalog",
-    "get_context_document",
-})
+
+def _legacy_visible_tools(current_user: User, surface: str) -> List[Any]:
+    """Static fallback used only if the dynamic registry can't be consulted.
+
+    Mirrors the pre-registry behavior: filter ``AGENT_TOOLS`` by ``required_role``
+    and, in the workflow-authoring surface, the authoring whitelist. The registry
+    is the source of truth; this exists purely so a transient DB error never leaves
+    the agent with no tools.
+    """
+    is_authoring = surface == "workflow"
+    out: List[Any] = []
+    for tool in AGENT_TOOLS:
+        role = getattr(tool, "required_role", None)
+        if role and not current_user.has_role(role):
+            continue
+        name = getattr(tool, "name", "")
+        if is_authoring:
+            if name not in DEFAULT_AUTHORING_TOOL_NAMES:
+                continue
+        elif name in WORKFLOW_ONLY_TOOL_NAMES:
+            # Keep workflow build/preview/publish tools out of the EDH surface.
+            continue
+        out.append(tool)
+    return out
+
+
+def _resolve_visible_tools(db: Session, current_user: User, surface: str) -> List[Any]:
+    """Tools the given agent surface should expose for ``current_user``.
+
+    Consults the dynamic Tool Registry (data-driven per-surface + per-role gating,
+    including MCP-discovered tools). Falls back to the static gating only on error.
+    """
+    try:
+        return ToolRegistryService.resolve_tools_for_surface(db, surface, current_user)
+    except Exception as e:  # noqa: BLE001 - never break the agent on a registry hiccup
+        logger.warning(
+            "Tool registry resolution failed (%s); falling back to static gating", e
+        )
+        return _legacy_visible_tools(current_user, surface)
 
 def _extract_json_instructions(message: str) -> Optional[Dict[str, Any]]:
     """Extract JSON instructions from agent message if present."""
@@ -140,21 +168,20 @@ class AgentResponse(BaseModel):
     requires_more_info: bool = True
 
 @router.get("/tools")
-async def get_agent_tools(current_user: User = Depends(get_current_user)):
-    """Get list of available agent tools, filtered by user permissions."""
-    visible_tools = []
-    for tool in AGENT_TOOLS:
-        allowed = True
-        if hasattr(tool, "required_role") and tool.required_role:
-            if not current_user.has_role(tool.required_role):
-                allowed = False
-        
-        if allowed:
-            visible_tools.append({
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": tool.input_schema
-            })
+async def get_agent_tools(
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get list of agent tools for the unified (EDH) chat, gated by the registry."""
+    tools = _resolve_visible_tools(db, current_user, "edh")
+    visible_tools = [
+        {
+            "name": t.name,
+            "description": t.description,
+            "input_schema": t.input_schema,
+        }
+        for t in tools
+    ]
     return {"tools": visible_tools, "count": len(visible_tools)}
 
 @router.get("/prompt")
@@ -171,6 +198,7 @@ async def get_agent_prompt_endpoint(current_user: User = Depends(get_current_use
 def _build_runner_and_history(
     request: ConversationRequest,
     current_user: User,
+    db: Session,
 ) -> tuple[AgentRunner, List[Dict[str, Any]], str]:
     """Shared setup for both the streaming and non-streaming endpoints.
 
@@ -184,27 +212,17 @@ def _build_runner_and_history(
     logger.info(f"Current User: {current_user.email}")
     logger.info(f"Current User Roles: {current_user.roles}")
 
-    # Single unified agent (no runtime modes). Tools are gated purely by the
-    # user's role via ``required_role``; whatever the user is permitted to use,
-    # the one agent can use. The ONE exception is the workflow-authoring studio:
-    # when the caller marks the conversation ``mode: "authoring"`` (the in-page
-    # assistant on the Workflows page), we scope the toolset to authoring tools
-    # only so the agent designs workflows instead of running them.
+    # Two chat surfaces, gated dynamically by the Tool Registry. The unified
+    # self-service ("EDH") chat and the workflow-authoring studio each expose a
+    # distinct, admin-controlled toolset so e.g. ``ask_your_data`` never appears
+    # while authoring and ``preview_workflow_spec`` never appears in EDH. Authoring
+    # mode is requested by the in-page assistant via ``context.mode: "authoring"``.
     requested_mode = ((request.context or {}).get("mode") or "").strip().lower()
     is_authoring = requested_mode == "authoring"
     agent_mode = "authoring" if is_authoring else "unified"
+    surface = "workflow" if is_authoring else "edh"
 
-    visible_tools = []
-    for tool in AGENT_TOOLS:
-        allowed = True
-        if hasattr(tool, "required_role") and tool.required_role:
-            if not current_user.has_role(tool.required_role):
-                allowed = False
-        if is_authoring and getattr(tool, "name", "") not in _AUTHORING_TOOL_NAMES:
-            allowed = False
-
-        if allowed:
-            visible_tools.append(tool)
+    visible_tools = _resolve_visible_tools(db, current_user, surface)
 
     user_identity = {
         "email": current_user.email,
@@ -271,11 +289,12 @@ def _extract_obo_token(req: Request) -> Optional[str]:
 async def handle_conversation(
     request: ConversationRequest, 
     req: Request,
+    db: Session = Depends(deps.get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Handle a conversation turn with the agent."""
     try:
-        runner, history, _agent_mode = _build_runner_and_history(request, current_user)
+        runner, history, _agent_mode = _build_runner_and_history(request, current_user, db)
         obo_token = _extract_obo_token(req)
 
         # Run agent
@@ -328,6 +347,7 @@ async def handle_conversation(
 async def stream_conversation(
     request: ConversationRequest,
     req: Request,
+    db: Session = Depends(deps.get_db),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
     """Stream a conversation turn as Server-Sent Events.
@@ -343,7 +363,7 @@ async def stream_conversation(
     them in-line without dropping the response.
     """
     try:
-        runner, history, _agent_mode = _build_runner_and_history(request, current_user)
+        runner, history, _agent_mode = _build_runner_and_history(request, current_user, db)
     except HTTPException:
         raise
     except Exception as e:
