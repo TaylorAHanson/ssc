@@ -20,13 +20,15 @@ resources:
         # "User needs MANAGE permission on the resource".
         - level: CAN_MANAGE
           user_name: "${workspace.current_user.userName}"
-        # The app's auto-created service principal needs CONNECT+CREATE on the
-        # database. The attach grants this out-of-band, but because this ACL is
-        # authoritative, the next deploy would wipe it (and break the running
-        # app's DB access) unless the SP is listed here explicitly. No dependency
-        # cycle: the inline permissions compile to a separate databricks_permissions
-        # resource applied after both the instance and the app exist.
-        - level: CAN_CONNECT_AND_CREATE
+        # The app's auto-created service principal needs access to the instance.
+        # The database_instance ACL only supports CAN_MANAGE / CAN_USE — the
+        # Postgres-level CONNECT+CREATE role grant is a separate plane handled by
+        # the app's `postgres:` resource (permission: CAN_CONNECT_AND_CREATE
+        # below). Listing the SP here as CAN_USE keeps its instance access from
+        # being stripped on the next apply (this ACL is authoritative). No
+        # dependency cycle: the inline permissions compile to a separate
+        # databricks_permissions resource applied after the instance and app exist.
+        - level: CAN_USE
           service_principal_name: ${resources.apps.edh-ssc.service_principal_client_id}
         - level: CAN_USE
           group_name: "users"
