@@ -36,7 +36,11 @@ import { useBrandingStore } from '../../stores/brandingStore';
 import { ToolCallPill, type ToolCallStatus } from './ToolCallPill';
 import { GenieDetailsPanel } from './GenieDetailsPanel';
 import { ToolRawOutputPanel } from './ToolRawOutputPanel';
+import { ChartPanel } from './ChartPanel';
+import { VegaLiteChart } from './VegaLiteChart';
+import { datasetFromGenieResult, findLastDataset, parseToolChart } from './toolChart';
 import { renderMarkdownSafe } from '../../lib/markdown';
+import type { ChartEncoding, Dataset } from '../../lib/charting';
 
 // Each chat surface holds its own UI-side message log. Tool
 // invocations and pending polls live as first-class entries here so
@@ -92,6 +96,15 @@ type DisplayMessage =
          * resolution; absent until `pollResolution === 'complete'`.
          */
         genieResult?: Record<string, unknown>;
+        /**
+         * Resolved chart payload for tools that produce a chart (the
+         * ``render_chart`` agent tool, or any tool returning tabular data /
+         * a Vega-Lite spec). Bound at event-handle time: when the tool asks
+         * to re-graph the last answer, the dataset is filled in from the
+         * conversation's most recent Genie result so the chart is
+         * self-contained for rendering.
+         */
+        chart?: { dataset?: Dataset; spec?: Record<string, unknown>; encoding?: Partial<ChartEncoding> };
         /** When set, this tool call was a pending-poll handoff. */
         poll?: PendingPollEvent;
         pollResolution?: 'complete' | 'failed' | 'cancelled' | 'timeout';
@@ -243,6 +256,9 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     const genieSummarizeAnswer = useBrandingStore(
         (s) => s.features?.genie_summarize_answer === true,
     );
+    // How long to keep polling Genie before surfacing a timeout. Configurable
+    // via tools.ask_your_data.poll_timeout_seconds (not a Databricks limit).
+    const geniePollTimeoutSeconds = useBrandingStore((s) => s.geniePollTimeoutSeconds);
     const messagesEndRef = useRef<HTMLDivElement | null>(null);
     const abortRef = useRef<AbortController | null>(null);
     const modeDropdownRef = useRef<HTMLDivElement | null>(null);
@@ -324,6 +340,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
 
     // Drive Genie polling whenever an active pending_poll exists.
     const pollState = usePendingPoll(pendingPoll, {
+        timeoutMs: geniePollTimeoutSeconds * 1000,
         onSettled: (final, settledEvent) => {
             // Identify which pill this resolution belongs to using the
             // *originating* pollEvent — `pendingPoll` from closure may
@@ -496,11 +513,19 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                         },
                     ],
                 });
-                // Replay the resolved Genie answer as a tool message.
+                // Replay the resolved Genie answer as a tool message. When the
+                // result carried tabular data, append a compact column summary
+                // so the agent knows what it can chart on a later turn (the
+                // default Genie path never feeds the rows through the LLM).
+                const ds = m.genieResult ? datasetFromGenieResult(m.genieResult) : undefined;
+                const schemaNote = ds
+                    ? ` [Result columns: ${ds.columns.join(', ')} (${ds.rows.length} rows).` +
+                      ' To visualize, call render_chart with these exact column names.]'
+                    : '';
                 out.push({
                     id: m.id,
                     type: 'tool',
-                    content: m.detail ?? `Genie answered "${m.label}"`,
+                    content: (m.detail ?? `Genie answered "${m.label}"`) + schemaNote,
                     timestamp: completedAt,
                     tool_call_id: m.toolCallId,
                     name: m.toolName,
@@ -703,6 +728,25 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     event.ok,
                     toolArgsRef.current[event.id],
                 );
+                // Detect chart-renderable output (the render_chart tool, or any
+                // tool returning tabular data / a spec). When the tool asks to
+                // re-graph the last answer, bind the conversation's most recent
+                // dataset so the chart is self-contained.
+                const parsedChart = event.ok ? parseToolChart(event.result, event.name) : undefined;
+                const resolveChart = (
+                    prev: DisplayMessage[],
+                ): { dataset?: Dataset; spec?: Record<string, unknown>; encoding?: Partial<ChartEncoding> } | undefined => {
+                    if (!parsedChart) return undefined;
+                    let dataset = parsedChart.dataset;
+                    if (!dataset && parsedChart.bindLast) {
+                        const toolMsgs = prev.filter(
+                            (m): m is Extract<DisplayMessage, { kind: 'tool' }> => m.kind === 'tool',
+                        );
+                        dataset = findLastDataset(toolMsgs);
+                    }
+                    if (!dataset && !parsedChart.spec) return undefined;
+                    return { dataset, spec: parsedChart.spec, encoding: parsedChart.encoding };
+                };
                 // Hold the "running" pill on screen for a short
                 // minimum so synchronous tools (e.g. execute_workflow,
                 // metadata listings) don't flash from "Running …" to
@@ -724,6 +768,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                 errorMessage: event.error ?? undefined,
                                 label: event.summary || m.label,
                                 toolResult: event.result,
+                                chart: resolveChart(prev),
                             };
                         }),
                     );
@@ -755,6 +800,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                 errorMessage: event.error ?? undefined,
                                 label: event.summary || m.label,
                                 toolResult: event.result,
+                                chart: resolveChart(prev),
                             };
                         });
                     }
@@ -1423,8 +1469,11 @@ function MessageRow({
         // and a chart and the raw payload would be redundant. Skip
         // when there's nothing to show (errors that didn't return a
         // body, in-flight pills, etc.).
+        const chart = msg.chart;
+        const hasChart = !!chart && (!!chart.dataset || !!chart.spec);
         const showRawOutput =
             !isGenie &&
+            !hasChart &&
             (msg.status === 'success' || msg.status === 'error') &&
             msg.toolResult !== undefined &&
             msg.toolResult !== null;
@@ -1443,6 +1492,24 @@ function MessageRow({
                     // column width.
                     <div className="w-full">
                         <GenieDetailsPanel result={msg.genieResult} />
+                    </div>
+                )}
+                {hasChart && chart && (
+                    <div className="w-full mt-2">
+                        {chart.dataset ? (
+                            <ChartPanel
+                                dataset={chart.dataset}
+                                initialEncoding={chart.encoding}
+                                initialSpec={chart.spec}
+                                defaultControlsOpen
+                            />
+                        ) : (
+                            chart.spec && (
+                                <div className="bg-white border border-gray-200 rounded-md p-2">
+                                    <VegaLiteChart spec={chart.spec} />
+                                </div>
+                            )
+                        )}
                     </div>
                 )}
                 {showRawOutput && (

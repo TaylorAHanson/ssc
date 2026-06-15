@@ -18,9 +18,11 @@
 import { useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Copy, ExternalLink } from 'lucide-react';
 
+import { ChartPanel } from './ChartPanel';
 import { VegaLiteChart } from './VegaLiteChart';
 import { parseGenieResult, type ParsedGenieResult } from './parseGenieResult';
 import { renderMarkdownSafe } from '../../lib/markdown';
+import { isChartable, type Dataset } from '../../lib/charting';
 
 export interface GenieDetailsPanelProps {
     /** Raw payload from the Genie poll endpoint's ``result`` field. */
@@ -41,19 +43,32 @@ export function GenieDetailsPanel({ result }: GenieDetailsPanelProps) {
         !!result && typeof (result as Record<string, unknown>).final_answer === 'string';
     const showNarrative = !!parsed.narrative && !hasFinalAnswer;
 
+    // Build a chartable dataset from the result rows (full series, not the
+    // 10-row table preview). A chart shows whenever we have data to plot or
+    // Genie handed us an explicit spec.
+    const chartDataset: Dataset | undefined = useMemo(() => {
+        if (!parsed.preview) return undefined;
+        const rows = parsed.preview.allRows ?? parsed.preview.rows;
+        const ds: Dataset = { columns: parsed.preview.columns, rows };
+        return isChartable(ds) ? ds : undefined;
+    }, [parsed.preview]);
+    const showChart = !!chartDataset || !!parsed.chartSpec;
+
     // What we have to show drives both the open default and the
     // header chip summary.
-    const hasStructured = !!(parsed.sql || parsed.preview || parsed.chartSpec || showNarrative);
+    const hasStructured = !!(parsed.sql || parsed.preview || showChart || showNarrative);
     const hasRawPayload = !!result && Object.keys(result).length > 0;
     const hasAnything = hasStructured || hasRawPayload || parsed.deepLink;
-    if (!hasAnything) return null;
 
     // Default to expanded when there's content worth seeing. The user
     // can collapse for a compact view but a collapsed-empty-looking
     // panel was confusing ("the box is empty") so we lead with content.
+    // NB: all hooks must run before the early return below (rules-of-hooks).
     const [open, setOpen] = useState(hasStructured);
     const [showRaw, setShowRaw] = useState(false);
     const [copied, setCopied] = useState(false);
+
+    if (!hasAnything) return null;
 
     const handleCopySql = async () => {
         if (!parsed.sql) return;
@@ -72,7 +87,7 @@ export function GenieDetailsPanel({ result }: GenieDetailsPanelProps) {
     const summaryBits = [
         parsed.sql ? 'SQL' : null,
         parsed.preview ? `${parsed.preview.rows.length} rows` : null,
-        parsed.chartSpec ? 'chart' : null,
+        showChart ? 'chart' : null,
         !hasStructured && hasRawPayload ? 'raw response' : null,
     ].filter(Boolean);
 
@@ -230,32 +245,26 @@ export function GenieDetailsPanel({ result }: GenieDetailsPanelProps) {
                         </section>
                     )}
 
-                    {parsed.chartSpec && (
+                    {chartDataset ? (
                         <section>
-                            <h5 className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1">
-                                Chart
-                            </h5>
-                            <div className="bg-white border border-gray-200 rounded-md p-2">
-                                <VegaLiteChart
-                                    spec={parsed.chartSpec}
-                                    data={
-                                        // If the chart spec didn't bake in
-                                        // its own data, hand it the preview
-                                        // rows reshaped as records so it has
-                                        // something to render.
-                                        parsed.preview && !parsed.chartSpec.data
-                                            ? parsed.preview.rows.map((row) => {
-                                                const rec: Record<string, unknown> = {};
-                                                parsed.preview!.columns.forEach((c, i) => {
-                                                    rec[c] = row[i];
-                                                });
-                                                return rec;
-                                            })
-                                            : undefined
-                                    }
-                                />
-                            </div>
+                            <ChartPanel
+                                dataset={chartDataset}
+                                initialSpec={parsed.chartSpec}
+                            />
                         </section>
+                    ) : (
+                        parsed.chartSpec && (
+                            // Genie returned a spec with its own inline data and
+                            // no separate result table — render it as-is.
+                            <section>
+                                <h5 className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1">
+                                    Chart
+                                </h5>
+                                <div className="bg-white border border-gray-200 rounded-md p-2">
+                                    <VegaLiteChart spec={parsed.chartSpec} />
+                                </div>
+                            </section>
+                        )
                     )}
 
                     {!hasStructured && hasRawPayload && (

@@ -14,6 +14,8 @@ interface BrandingState {
     databricksWorkspaceUrl: string;
     commandCenterUrl: string;
     genieFullExperienceUrl: string;
+    /** Client-side Genie poll window (seconds) before a timeout is surfaced. */
+    geniePollTimeoutSeconds: number;
     features: Record<string, boolean>;
     tools: Record<string, boolean>;
     uiTabs: Record<string, boolean>;
@@ -36,6 +38,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     databricksWorkspaceUrl: '',
     commandCenterUrl: '',
     genieFullExperienceUrl: '',
+    geniePollTimeoutSeconds: 300,
     features: {},
     tools: {},
     uiTabs: {},
@@ -59,6 +62,8 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 databricksWorkspaceUrl: branding.databricks_workspace_url || '',
                 commandCenterUrl: branding.command_center_url || '',
                 genieFullExperienceUrl: (branding as { genie_full_experience_url?: string }).genie_full_experience_url || '',
+                geniePollTimeoutSeconds:
+                    (branding as { genie_poll_timeout_seconds?: number }).genie_poll_timeout_seconds || 300,
                 features: branding.features || {},
                 tools: branding.tools || {},
                 uiTabs: branding.ui?.tabs || {},

@@ -65,6 +65,12 @@ features:
   # Backed by Databricks Genie (Managed MCP). Disable this in environments
   # where Genie isn't available or OBO auth isn't configured.
   ask_your_data: true
+  # SQL-native data answers: lets the agent run READ-ONLY SQL it composes itself
+  # (SELECT/WITH/SHOW/DESCRIBE/EXPLAIN) on Databricks SQL via the run_sql tool.
+  # Runs On-Behalf-Of the user, so their Unity Catalog permissions apply. Feeds
+  # the same in-chat charting pipeline as Genie. Requires a configured SQL
+  # warehouse (warehouse_id). Disable where OBO auth or a warehouse isn't set up.
+  run_sql: true
   # Genie answer presentation. By default (false) the agent surfaces Genie's
   # own ``final_answer`` markdown verbatim — Genie already returns a polished,
   # grounded answer, so the extra LLM "summarization" turn only adds latency,
@@ -192,6 +198,20 @@ tools:
   ask_your_data:
     enabled: true
     default_genie_space_id: ""
+    # How long the chat client keeps polling for a Genie answer before giving
+    # up with "Genie did not respond within Ns". This is purely a client-side
+    # poll window (each poll is a short request), NOT a Databricks limit — raise
+    # it for slow Genie spaces / heavy queries. Default 300s (5 min).
+    poll_timeout_seconds: 300
+  # Turns a data answer into a chart on demand ("graph that as a line by month").
+  # Emits a compact chart directive the chat UI renders client-side (Vega-Lite),
+  # bound to the rows already returned — no re-query. Gated by the same
+  # `ask_your_data` feature flag since it complements Genie data answers.
+  render_chart: true
+  # Read-only SQL execution (OBO) that feeds the charting pipeline. Gated by the
+  # `run_sql` feature flag above; statements are validated read-only before they
+  # run and capped with an automatic LIMIT.
+  run_sql: true
   # No-code workflow (Workflow) authoring tools. Admin-only (gated by
   # required_role) so the agent can help Platform/Governance Admins design,
   # validate, preview, and publish workflows in chat.

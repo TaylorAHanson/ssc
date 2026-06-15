@@ -19,6 +19,12 @@ export interface GenieDataPreview {
     columns: string[];
     /** Rows of cells, parallel to ``columns``. May be a partial preview. */
     rows: Array<Array<unknown>>;
+    /**
+     * Full (or large-capped) row set retained for charting. ``rows`` stays a
+     * small table preview; charts want the whole series, so we keep up to a
+     * generous cap here. Falls back to ``rows`` when not populated.
+     */
+    allRows?: Array<Array<unknown>>;
     /** Total row count if the upstream included one (often > rows.length). */
     totalRows?: number;
     /** True when the rows we're showing are a truncated preview. */
@@ -275,11 +281,15 @@ function _buildPreview(
     rows: Array<Array<unknown>>,
     total: number | undefined,
     cap: number = 10,
+    chartCap: number = 5000,
 ): GenieDataPreview {
     const truncated = rows.length > cap || (total !== undefined && total > rows.length);
     return {
         columns,
         rows: rows.slice(0, cap),
+        // Retain the full series (capped) for charting; the table preview
+        // stays small for compact display.
+        allRows: rows.slice(0, chartCap),
         totalRows: total,
         truncated,
     };

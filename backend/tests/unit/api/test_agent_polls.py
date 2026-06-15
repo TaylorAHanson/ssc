@@ -277,6 +277,72 @@ def test_parse_genie_response_trusts_genie_supplied_urls(monkeypatch):
     )
 
 
+def test_query_has_rows_detects_shapes():
+    from app.api.v1.agent_polls import _query_has_rows
+
+    assert _query_has_rows({"statement_response": {"result": {"data_array": [[1]]}}})
+    assert _query_has_rows({"result": {"data_typed_array": [[{"str": "x"}]]}})
+    assert _query_has_rows({"rows": [[1, 2]]})
+    assert not _query_has_rows({"query": "SELECT 1"})
+    assert not _query_has_rows({"result": {"data_array": []}})
+
+
+@pytest.mark.asyncio
+async def test_maybe_fetch_attachment_rows_splices_in_result(monkeypatch):
+    """A query attachment with no inline rows gets enriched via the SDK."""
+    from app.api.v1 import agent_polls
+
+    monkeypatch.setattr(
+        agent_polls.settings, "DATABRICKS_HOST", "https://x.databricks.com", raising=False
+    )
+    monkeypatch.setattr(
+        "app.providers.databricks_mcp.client.resolve_genie_bearer_token",
+        lambda obo: ("tok", "obo"),
+    )
+
+    fetched = {"statement_response": {"result": {"data_array": [[1, 2]]},
+                                      "manifest": {"schema": {"columns": [{"name": "a"}, {"name": "b"}]}}}}
+
+    class _FakeGenie:
+        def get_message_attachment_query_result(self, space, conv, msg, att):
+            return SimpleNamespace(as_dict=lambda: fetched)
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            self.genie = _FakeGenie()
+
+    monkeypatch.setattr("databricks.sdk.WorkspaceClient", _FakeClient, raising=False)
+
+    result = {
+        "status": "COMPLETED",
+        "attachments": [
+            {"attachment_id": "att-1", "query": {"query": "SELECT a, b FROM t"}},
+        ],
+    }
+    body = GeniePollRequest(space_id="space-1", conversation_id="c", message_id="m")
+    await agent_polls._maybe_fetch_attachment_rows(result, body, "obo-token")
+
+    spliced = result["attachments"][0]["query"]["statement_response"]
+    assert spliced["result"]["data_array"] == [[1, 2]]
+
+
+@pytest.mark.asyncio
+async def test_maybe_fetch_attachment_rows_noop_without_space(monkeypatch):
+    """No space id ⇒ the SDK Genie result API can't be used; leave as-is."""
+    from app.api.v1 import agent_polls
+
+    called = {"n": 0}
+    monkeypatch.setattr(
+        "app.providers.databricks_mcp.client.resolve_genie_bearer_token",
+        lambda obo: (called.__setitem__("n", called["n"] + 1), ("tok", "obo"))[1],
+    )
+    result = {"attachments": [{"attachment_id": "a", "query": {"query": "SELECT 1"}}]}
+    body = GeniePollRequest(space_id=None, conversation_id="c", message_id="m")
+    await agent_polls._maybe_fetch_attachment_rows(result, body, "obo-token")
+    assert "statement_response" not in result["attachments"][0]["query"]
+    assert called["n"] == 0
+
+
 def test_parse_genie_response_finds_url_inside_attachments():
     """Some Genie payload shapes nest the share URL on an attachment."""
     body = GeniePollRequest(conversation_id="conv-y", message_id="m")

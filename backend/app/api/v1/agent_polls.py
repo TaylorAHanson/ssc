@@ -15,6 +15,7 @@ matter of writing one more handler with the same wire shape.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -146,6 +147,16 @@ async def poll_genie(
         )
 
     parsed = _parse_genie_response(response, body)
+    # On terminal completion, make sure we actually have the result rows. Genie's
+    # MCP payload sometimes carries a query attachment (SQL + an attachment id)
+    # without the inline data — which leaves charts/tables with nothing to draw.
+    # When we can (space-scoped conversation), fetch the full query result via the
+    # SDK and splice it in. Best-effort: never fail the poll over this.
+    if parsed.status == "complete" and parsed.result is not None:
+        try:
+            await _maybe_fetch_attachment_rows(parsed.result, body, obo_token)
+        except Exception as e:  # noqa: BLE001 - enrichment is best-effort
+            logger.warning("Genie attachment-result enrichment skipped: %s", e)
     return parsed
 
 
@@ -471,6 +482,116 @@ def _enrich_result(
     if body.space_id:
         result.setdefault("_space_id", body.space_id)
     return result
+
+
+async def _maybe_fetch_attachment_rows(
+    result: Dict[str, Any],
+    body: GeniePollRequest,
+    obo_token: Optional[str],
+) -> None:
+    """Fill in missing query-result rows on a completed Genie payload.
+
+    Genie's MCP response can include a ``query`` attachment (the SQL + an
+    ``attachment_id``) without the inline rows. The charting/table UI needs the
+    rows, so when the conversation is space-scoped we fetch the full result via
+    the Databricks SDK (``genie.get_message_attachment_query_result``) and splice
+    it into the attachment under ``statement_response`` — exactly the shape the
+    frontend parser already understands. Mutates ``result`` in place.
+
+    No-ops (so callers don't have to special-case) when:
+    - the conversation isn't space-scoped (the SDK Genie API requires a space id),
+    - every query attachment already has rows,
+    - no usable bearer token / host is available, or
+    - the SDK isn't importable.
+    """
+    space_id = body.space_id
+    if not space_id:
+        return  # SDK Genie result API is space-scoped; nothing we can do generally.
+
+    attachments = result.get("attachments")
+    if not isinstance(attachments, list) or not attachments:
+        return
+
+    # Collect attachments that have a query but no inline rows yet.
+    targets: List[Dict[str, Any]] = []
+    for att in attachments:
+        if not isinstance(att, dict):
+            continue
+        query = att.get("query")
+        if not isinstance(query, dict):
+            continue
+        if _query_has_rows(query):
+            continue
+        attachment_id = att.get("attachment_id") or att.get("id") or query.get("id")
+        if isinstance(attachment_id, str) and attachment_id:
+            targets.append({"att": att, "query": query, "attachment_id": attachment_id})
+    if not targets:
+        return
+
+    from app.providers.databricks_mcp.client import resolve_genie_bearer_token
+
+    token, _source = resolve_genie_bearer_token(obo_token)
+    host = settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL
+    if not token or not host:
+        return
+
+    def _fetch_all() -> Dict[str, Dict[str, Any]]:
+        from databricks.sdk import WorkspaceClient
+
+        client = WorkspaceClient(host=host, token=token)
+        out: Dict[str, Dict[str, Any]] = {}
+        # Bound the number of SDK round-trips per poll.
+        for target in targets[:4]:
+            attachment_id = target["attachment_id"]
+            resp = client.genie.get_message_attachment_query_result(
+                space_id,
+                body.conversation_id,
+                body.message_id,
+                attachment_id,
+            )
+            as_dict = resp.as_dict() if hasattr(resp, "as_dict") else None
+            if isinstance(as_dict, dict):
+                out[attachment_id] = as_dict
+        return out
+
+    fetched = await asyncio.to_thread(_fetch_all)
+
+    for target in targets:
+        payload = fetched.get(target["attachment_id"])
+        if not isinstance(payload, dict):
+            continue
+        # The SDK returns ``{"statement_response": {...}}``; the frontend parser
+        # reads ``query.statement_response.result``. Mirror that shape.
+        stmt = payload.get("statement_response", payload)
+        if isinstance(stmt, dict):
+            target["query"]["statement_response"] = stmt
+            logger.info(
+                "Genie: enriched attachment %s with fetched query result rows.",
+                target["attachment_id"],
+            )
+
+
+def _query_has_rows(query: Dict[str, Any]) -> bool:
+    """True when a Genie query attachment already carries result rows.
+
+    Mirrors the shapes the frontend ``parseGenieResult`` recognizes so we only
+    pay for an SDK fetch when the rows are genuinely absent.
+    """
+    def _result_has_rows(obj: Any) -> bool:
+        if not isinstance(obj, dict):
+            return False
+        for k in ("data_array", "data_typed_array", "rows"):
+            v = obj.get(k)
+            if isinstance(v, list) and v:
+                return True
+        return False
+
+    stmt = query.get("statement_response")
+    if isinstance(stmt, dict) and _result_has_rows(stmt.get("result")):
+        return True
+    if _result_has_rows(query.get("result")):
+        return True
+    return _result_has_rows(query)
 
 
 def _log_terminal_poll(

@@ -19,6 +19,24 @@ def _normalize_workspace_url(raw: str) -> str:
     return url
 
 
+def _genie_poll_timeout_seconds(default: int = 300) -> int:
+    """Resolve the Genie poll window (seconds) from configuration.
+
+    Reads ``tools.ask_your_data.poll_timeout_seconds`` and coerces it to a
+    sane positive int, falling back to ``default`` on a missing/garbage value.
+    """
+    tools_cfg = _yaml_config.get("tools") or {}
+    entry = tools_cfg.get("ask_your_data")
+    if isinstance(entry, dict):
+        try:
+            val = int(entry.get("poll_timeout_seconds", default))
+            if val > 0:
+                return val
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
 @router.get("")
 @router.get("/")
 async def get_branding():
@@ -43,6 +61,11 @@ async def get_branding():
         "genie_full_experience_url": _yaml_config.get("links", {}).get(
             "genie_full_experience_url", ""
         ),
+        # Client-side Genie poll window (seconds). Sourced from
+        # tools.ask_your_data.poll_timeout_seconds; the chat keeps polling for
+        # an answer up to this long before surfacing a timeout. Not a Databricks
+        # limit — each poll is a short request.
+        "genie_poll_timeout_seconds": _genie_poll_timeout_seconds(),
         "features": _yaml_config.get("features", {}),
         "tools": _yaml_config.get("tools", {}),
         "ui": _yaml_config.get("ui", {}),
