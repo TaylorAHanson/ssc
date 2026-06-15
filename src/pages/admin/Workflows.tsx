@@ -588,7 +588,7 @@ export function Workflows() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `atlas-workflows-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `workflows-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {

@@ -111,13 +111,13 @@ flowchart TD
     C --> D["CI (Runs again on PR)"]
     D --> E["PR approved & merged"]
     E --> F["Deploy to Dev (Automatic on merge)"]
-    F --> G["atlas-dev deployed"]
+    F --> G["dev app deployed"]
     
     G -->|after testing in dev| H["Developer creates PR: develop → main"]
     H --> I["CI"]
     I --> J["PR approved & merged"]
     J --> K["Deploy to Prod (May require approval)"]
-    K --> L["atlas deployed (production)"]
+    K --> L["production app deployed"]
 ```
 
 ## First-Time Setup Checklist
@@ -143,7 +143,7 @@ flowchart TD
 > This "App SP" needs additional permissions that can only be configured AFTER deployment.
 
 - [ ] Find the App's auto-created Service Principal (Apps → Your App → Permissions)
-- [ ] Grant App SP `READ` access to `atlas-hub` secret scope
+- [ ] Grant App SP `READ` access to `app-secrets` secret scope
 - [ ] Grant App SP `Can Use` access to Lakebase instance
 - [ ] Grant App SP `Can Query` access to Model Serving endpoint
 - [ ] Restart the app to pick up new permissions
@@ -162,12 +162,12 @@ w = WorkspaceClient()
 APP_SP_ID = "your-app-sp-application-id"  # REPLACE!
 
 # Grant READ access to the app's service principal
-w.secrets.put_acl(scope="atlas-hub", principal=APP_SP_ID, permission=AclPermission.READ)
+w.secrets.put_acl(scope="app-secrets", principal=APP_SP_ID, permission=AclPermission.READ)
 print(f"Granted READ access to {APP_SP_ID}")
 
 # Verify ACLs
-print("\nACLs for atlas-hub:")
-for acl in w.secrets.list_acls(scope="atlas-hub"):
+print("\nACLs for app-secrets:")
+for acl in w.secrets.list_acls(scope="app-secrets"):
     print(f"  {acl.principal}: {acl.permission}")
 ```
 
@@ -175,7 +175,7 @@ for acl in w.secrets.list_acls(scope="atlas-hub"):
 
 1. Go to **GitHub** → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
 2. Click **Generate new token (classic)**
-3. Name: `atlas-infra-bot` (or similar)
+3. Name: `selfservice-infra-bot` (or similar)
 4. Expiration: Set as appropriate (90 days recommended, set a reminder)
 5. Scopes: Select **`repo`** (Full control of private repositories)
 6. Click **Generate token**

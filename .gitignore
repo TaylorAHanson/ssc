@@ -41,7 +41,7 @@ __pycache__/
 
 # Test files
 *.db
-backend/atlas_hub.db
+backend/app_hub.db
 test.db
 
 # Terraform

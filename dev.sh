@@ -42,7 +42,7 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║  ATLAS Development Environment         ║${NC}"
+echo -e "${BLUE}║  Self-Service Dev Environment          ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════╝${NC}\n"
 
 # Clean up old log files

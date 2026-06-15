@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  AppWindow,
   ArrowRight,
   BarChart,
   Bell,
@@ -12,7 +13,6 @@ import {
   FileText,
   GraduationCap,
   Home as HomeIcon,
-  LayoutDashboard,
   List,
   MapPin,
   MessageSquare,
@@ -23,8 +23,10 @@ import {
   Wrench,
 } from 'lucide-react';
 import { useBrandingStore } from '../stores/brandingStore';
+import type { EmbeddedApp } from '../stores/brandingStore';
 import { useUserStore } from '../stores/userStore';
 import { genieHomeUrl, workspaceHomeUrl } from '../lib/databricksLinks';
+import { renderNavIcon } from '../lib/navIcons';
 import type { UserPersona } from '../types';
 
 // --------------------------------------------------------------------------
@@ -63,12 +65,13 @@ const ICON_CLASS = 'w-4 h-4';
 
 function buildGroups(opts: {
   workspaceUrl: string;
-  commandCenterUrl: string;
+  embeddedApps: EmbeddedApp[];
+  currentPersona: UserPersona;
 }): WelcomeGroup[] {
   const genieUrl = genieHomeUrl(opts.workspaceUrl);
   const lakehouseUrl = workspaceHomeUrl(opts.workspaceUrl);
 
-  return [
+  const groups: WelcomeGroup[] = [
     {
       id: 'discover',
       title: 'Discover & Analyze',
@@ -147,15 +150,6 @@ function buildGroups(opts: {
       accentClass: 'bg-indigo-50 text-indigo-600',
       items: [
         {
-          id: 'command_center',
-          title: 'Command Center',
-          description:
-            'Open the embedded Command Center app for operations dashboards.',
-          icon: <LayoutDashboard className={ICON_CLASS} />,
-          to: '/command-center',
-          requireUrl: opts.commandCenterUrl,
-        },
-        {
           id: 'databricks_lakehouse',
           title: 'Lakehouse',
           description:
@@ -209,6 +203,42 @@ function buildGroups(opts: {
       ],
     },
   ];
+
+  // Merge config-driven embedded apps into the welcome grid. Each app lands
+  // in the group named by its `group` field (default "Build & Customize"),
+  // creating that group on the fly if the welcome page doesn't already define
+  // it. Persona-gated apps are hidden from users who lack the role.
+  for (const app of opts.embeddedApps) {
+    if (
+      app.allowedPersonas &&
+      !app.allowedPersonas.includes(opts.currentPersona)
+    ) {
+      continue;
+    }
+    const item: WelcomeItem = {
+      id: app.id,
+      title: app.title,
+      description: app.description || `Open the embedded ${app.title} app.`,
+      icon: renderNavIcon(app.icon, ICON_CLASS),
+      to: `/embedded/${app.id}`,
+      allowedPersonas: app.allowedPersonas,
+    };
+    const target = groups.find((g) => g.title === app.group);
+    if (target) {
+      target.items.push(item);
+    } else {
+      groups.push({
+        id: `embedded-${app.group.replace(/\s+/g, '-').toLowerCase()}`,
+        title: app.group,
+        description: 'Companion apps embedded into this portal.',
+        icon: <AppWindow className="w-5 h-5" />,
+        accentClass: 'bg-indigo-50 text-indigo-600',
+        items: [item],
+      });
+    }
+  }
+
+  return groups;
 }
 
 // Build the flat list of internal targets the user can pick as their
@@ -231,7 +261,8 @@ function buildLandingChoices(groups: WelcomeGroup[]) {
 export function Welcome() {
   const brandName = useBrandingStore((s) => s.brandName);
   const workspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
-  const commandCenterUrl = useBrandingStore((s) => s.commandCenterUrl);
+  const embeddedApps = useBrandingStore((s) => s.embeddedApps);
+  const currentPersona = useUserStore((s) => s.currentPersona);
 
   const defaultHomePage = useUserStore((s) => s.defaultHomePage);
   const setDefaultHomePage = useUserStore((s) => s.setDefaultHomePage);
@@ -240,7 +271,8 @@ export function Welcome() {
     () =>
       buildGroups({
         workspaceUrl,
-        commandCenterUrl,
+        embeddedApps,
+        currentPersona,
       }).map((group) => ({
         ...group,
         items: group.items.filter((item) => {
@@ -249,7 +281,7 @@ export function Welcome() {
           return true;
         }),
       })),
-    [workspaceUrl, commandCenterUrl]
+    [workspaceUrl, embeddedApps, currentPersona]
   );
 
   // Drop entire groups that ended up empty after filtering.

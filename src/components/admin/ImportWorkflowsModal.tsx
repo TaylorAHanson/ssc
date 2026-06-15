@@ -92,7 +92,7 @@ export function ImportWorkflowsModal({ onImported, onClose, locked }: Props) {
 
           <textarea
             className="w-full h-40 border border-gray-300 rounded-md p-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-accent"
-            placeholder='{ "format": "atlas.workflows/v1", "workflows": [ ... ] }'
+            placeholder='{ "format": "selfservice.workflows/v1", "workflows": [ ... ] }'
             value={text}
             onChange={(e) => setText(e.target.value)}
           />

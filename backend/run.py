@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Entrypoint for running ATLAS on Databricks Apps.
+Entrypoint for running the application on Databricks Apps.
 Handles path setup and starts the uvicorn server.
 """
 import os
@@ -14,7 +14,7 @@ def main():
     # Get the directory where this script lives
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
-    print(f"Starting ATLAS...")
+    print(f"Starting application...")
     print(f"Script directory: {script_dir}")
     print(f"Current working directory: {os.getcwd()}")
     print(f"Directory contents: {os.listdir(script_dir)}")

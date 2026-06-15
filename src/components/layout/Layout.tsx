@@ -14,7 +14,12 @@ interface LayoutProps {
 // so the child can occupy the entire pane edge-to-edge. We also auto-
 // collapse the sidebar on entry to give the embedded view as much room
 // as possible — the user can still manually re-expand it.
-const FULL_BLEED_ROUTES = new Set<string>(['/command-center']);
+//
+// `/embedded/*` covers all config-driven embedded apps; `/command-center`
+// is kept for the legacy redirect target.
+function isFullBleedRoute(pathname: string): boolean {
+  return pathname.startsWith('/embedded/') || pathname === '/command-center';
+}
 
 type BannerType = 'alert' | 'warning' | 'success' | 'info';
 
@@ -36,7 +41,7 @@ function getBannerColors(type?: string) {
 export function Layout({ children }: LayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const location = useLocation();
-  const isFullBleed = FULL_BLEED_ROUTES.has(location.pathname);
+  const isFullBleed = isFullBleedRoute(location.pathname);
 
   const bannerData = useRequestStore((state) => state.bannerData);
   const [bannerDismissed, setBannerDismissed] = useState(false);
@@ -49,7 +54,7 @@ export function Layout({ children }: LayoutProps) {
   const bannerColors = getBannerColors(bannerData?.type);
 
   useEffect(() => {
-    if (FULL_BLEED_ROUTES.has(location.pathname)) {
+    if (isFullBleedRoute(location.pathname)) {
       setSidebarCollapsed(true);
     }
     // Intentionally only depends on pathname: we collapse on *navigation into*

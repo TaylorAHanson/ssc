@@ -6,8 +6,6 @@ from app.providers.base import BaseProvider
 from app.core.exceptions import RetryableError
 from app.core.retry import retry_on_retryable
 import httpx
-import os
-import base64
 import logging
 
 logger = logging.getLogger(__name__)
@@ -83,23 +81,9 @@ class NotificationProvider(BaseProvider):
         brand_name = settings.BRAND_NAME
         brand_logo = settings.BRAND_LOGO_URL
         brand_color = settings.BRAND_COLOR_PRIMARY
-        
-        # Fallback to local SVG if no logo URL is provided
-        if not brand_logo:
-            try:
-                # Resolve path relative to project root
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                project_root = os.path.abspath(os.path.join(current_dir, "../../../../"))
-                logo_path = os.path.join(project_root, "src", "assets", "icon.svg")
-                
-                if os.path.exists(logo_path):
-                    with open(logo_path, "rb") as f:
-                        svg_data = f.read()
-                        encoded = base64.b64encode(svg_data).decode("utf-8")
-                        brand_logo = f"data:image/svg+xml;base64,{encoded}"
-            except Exception as e:
-                logger.error(f"Failed to load local logo fallback: {e}")
-        
+
+        # No bundled default logo: when BRAND_LOGO_URL isn't configured we render
+        # no logo at all rather than embedding a stock image.
         logo_html = f'<img src="{brand_logo}" alt="{brand_name}" style="max-height: 24px; vertical-align: middle; margin-right: 10px;">' if brand_logo else ""
         
         details_html = ""

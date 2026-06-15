@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _GOAL_RE = re.compile(r"\*\*Goal\*\*:\s*(.*?)(?:\n|$)")
 
 # Portable bundle format tag (bumped if the export shape changes).
-BUNDLE_FORMAT = "atlas.workflows/v1"
+BUNDLE_FORMAT = "selfservice.workflows/v1"
 
 # Body fields that travel with a workflow across envs / snapshots (no ids/status/version).
 _BODY_FIELDS = (

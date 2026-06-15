@@ -1,7 +1,7 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # ATLAS - Prerequisites Installer
-# MAGIC This notebook provisions the necessary prerequisites for ATLAS without needing Terraform or complex CI/CD setups.
+# MAGIC # Self-Service Hub - Prerequisites Installer
+# MAGIC This notebook provisions the necessary prerequisites for the app without needing Terraform or complex CI/CD setups.
 # MAGIC 
 # MAGIC ### Instructions:
 # MAGIC 1. Attach this notebook to any cluster.
@@ -12,9 +12,9 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("secret_scope", "atlas-hub", "1. Secret Scope Name")
-dbutils.widgets.text("catalog_name", "atlas_catalog", "2. UC Catalog Name")
-dbutils.widgets.text("schema_name", "atlas", "3. UC Schema Name")
+dbutils.widgets.text("secret_scope", "app-secrets", "1. Secret Scope Name")
+dbutils.widgets.text("catalog_name", "main", "2. UC Catalog Name")
+dbutils.widgets.text("schema_name", "default", "3. UC Schema Name")
 dbutils.widgets.text("volume_name", "gitops_requests", "4. UC Volume Name (for GitOps)")
 dbutils.widgets.text("github_pat", "", "5. (Optional) GitHub PAT")
 
@@ -87,7 +87,7 @@ print("✅ Unity Catalog infrastructure ready!")
 # MAGIC %md
 # MAGIC ## 🚀 Next Steps
 # MAGIC 
-# MAGIC You can now deploy ATLAS using GitHub Actions or the Databricks CLI!
+# MAGIC You can now deploy the app using GitHub Actions or the Databricks CLI!
 # MAGIC 
 # MAGIC Ensure 'gitops_volume_path' in your `databricks.yml` or GitHub Action variables is set correctly.
 

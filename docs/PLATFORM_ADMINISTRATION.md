@@ -80,7 +80,7 @@ Every publish writes an **immutable snapshot** of the workflow body. From the Wo
 
 ## 5. Promoting Workflows Across Environments (dev → staging → prod)
 
-Workflows are portable. Use **export/import bundles** (format `atlas.workflows/v1`, keyed by `key`, with no ids/status/version) to promote them:
+Workflows are portable. Use **export/import bundles** (format `selfservice.workflows/v1`, keyed by `key`, with no ids/status/version) to promote them:
 
 1. In the source env, **export** the published workflows you want to promote (Workflows → Export).
 2. In the target env, **import** the bundle (Workflows → Import). Imported workflows land as **drafts** by default.

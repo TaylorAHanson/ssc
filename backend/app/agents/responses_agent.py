@@ -1,5 +1,5 @@
 """
-Native Databricks/MLflow ``ResponsesAgent`` wrapper for the Atlas agent.
+Native Databricks/MLflow ``ResponsesAgent`` wrapper for the self-service agent.
 
 This is the *standard, deployable* contract (the same one Databricks Agent
 Framework, Playground, and Model Serving understand). It wraps the in-app
@@ -68,7 +68,7 @@ def _input_to_history(request: ResponsesAgentRequest) -> tuple[str, List[Dict[st
     return query, history
 
 
-class AtlasResponsesAgent(ResponsesAgent):
+class SelfServiceResponsesAgent(ResponsesAgent):
     """ResponsesAgent over the governed in-app agent loop."""
 
     def __init__(self, tools: Optional[List[Any]] = None,

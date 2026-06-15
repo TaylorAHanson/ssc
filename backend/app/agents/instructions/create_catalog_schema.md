@@ -71,7 +71,7 @@ Do NOT create a request if access already exists.
     "action": "grant",
     "type": "Schema",
     "name": "analytics",
-    "catalog": "atlas_dev_catalog",
+    "catalog": "dev_catalog",
     "principal": "data-engineers@company.com",
     "privileges": ["USE_SCHEMA", "SELECT", "CREATE_TABLE"]
   }
@@ -107,7 +107,7 @@ Do NOT create a request if there's nothing to revoke.
     "action": "revoke",
     "type": "Schema",
     "name": "analytics",
-    "catalog": "atlas_dev_catalog",
+    "catalog": "dev_catalog",
     "principal": "former-contractor@company.com",
     "privileges": ["SELECT"]
   }

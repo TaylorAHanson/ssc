@@ -1,6 +1,17 @@
 import { create } from 'zustand';
 import { getBranding } from '../services/api';
-import defaultLogo from '../assets/icon.svg';
+import type { UserPersona } from '../types';
+
+/** A config-driven, iframe-embedded app surfaced in the sidebar. */
+export interface EmbeddedApp {
+    id: string;
+    title: string;
+    url: string;
+    icon: string;
+    group: string;
+    description: string;
+    allowedPersonas?: UserPersona[];
+}
 
 interface BrandingState {
     brandName: string;
@@ -12,7 +23,7 @@ interface BrandingState {
     brandColorWarning: string;
     brandColorSuccess: string;
     databricksWorkspaceUrl: string;
-    commandCenterUrl: string;
+    embeddedApps: EmbeddedApp[];
     genieFullExperienceUrl: string;
     /** Client-side Genie poll window (seconds) before a timeout is surfaced. */
     geniePollTimeoutSeconds: number;
@@ -28,7 +39,7 @@ interface BrandingState {
 
 export const useBrandingStore = create<BrandingState>((set) => ({
     brandName: 'Self Service Hub',
-    brandLogoUrl: defaultLogo,
+    brandLogoUrl: '',
     brandColorPrimary: '#FF3621',
     brandColorSecondary: '#1B5162',
     brandColorInfo: '#1B5162',
@@ -36,7 +47,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     brandColorWarning: '#FFAB00',
     brandColorSuccess: '#00A972',
     databricksWorkspaceUrl: '',
-    commandCenterUrl: '',
+    embeddedApps: [],
     genieFullExperienceUrl: '',
     geniePollTimeoutSeconds: 300,
     features: {},
@@ -52,7 +63,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
             const branding = await getBranding();
             set({
                 brandName: branding.brand_name,
-                brandLogoUrl: branding.brand_logo_url || defaultLogo,
+                brandLogoUrl: branding.brand_logo_url || '',
                 brandColorPrimary: branding.brand_color_primary,
                 brandColorSecondary: branding.brand_color_secondary,
                 brandColorInfo: branding.brand_color_info,
@@ -60,7 +71,19 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 brandColorWarning: branding.brand_color_warning,
                 brandColorSuccess: branding.brand_color_success,
                 databricksWorkspaceUrl: branding.databricks_workspace_url || '',
-                commandCenterUrl: branding.command_center_url || '',
+                embeddedApps: (branding.embedded_apps || [])
+                    .filter((a) => a && a.id && a.url)
+                    .map((a) => ({
+                        id: a.id,
+                        title: a.title || a.id,
+                        url: a.url,
+                        icon: a.icon || 'LayoutDashboard',
+                        group: a.group || 'Build & Customize',
+                        description: a.description || '',
+                        allowedPersonas: Array.isArray(a.allowed_personas) && a.allowed_personas.length
+                            ? (a.allowed_personas as UserPersona[])
+                            : undefined,
+                    })),
                 genieFullExperienceUrl: (branding as { genie_full_experience_url?: string }).genie_full_experience_url || '',
                 geniePollTimeoutSeconds: (() => {
                     const v = (branding as { genie_poll_timeout_seconds?: number }).genie_poll_timeout_seconds;
@@ -82,12 +105,13 @@ export const useBrandingStore = create<BrandingState>((set) => ({
             document.documentElement.style.setProperty('--brand-warning', branding.brand_color_warning);
             document.documentElement.style.setProperty('--brand-success', branding.brand_color_success);
 
-            // Update title and favicon
+            // Update title and favicon. Only set the favicon when a brand logo
+            // is actually configured — with none provided we show nothing
+            // rather than falling back to a bundled default logo.
             document.title = branding.brand_name;
-            const logoUrl = branding.brand_logo_url || defaultLogo;
             const favicon = document.querySelector('link[rel="icon"]');
-            if (favicon) {
-                favicon.setAttribute('href', logoUrl);
+            if (favicon && branding.brand_logo_url) {
+                favicon.setAttribute('href', branding.brand_logo_url);
             }
         } catch (error) {
             set({

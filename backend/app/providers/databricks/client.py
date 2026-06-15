@@ -1001,10 +1001,10 @@ class DatabricksProvider(BaseProvider):
         """Upload an inline Python script to the workspace and return its path.
 
         ``remote_path`` defaults to a unique scratch location under
-        ``/tmp/atlas_jobs/``. Returns the path *with* the ``Workspace`` prefix
+        ``/tmp/agent_jobs/``. Returns the path *with* the ``Workspace`` prefix
         required by ``SparkPythonTask.python_file``.
         """
-        target_path = remote_path or f"/tmp/atlas_jobs/job_{uuid.uuid4().hex}.py"
+        target_path = remote_path or f"/tmp/agent_jobs/job_{uuid.uuid4().hex}.py"
         remote_dir = os.path.dirname(target_path)
         if remote_dir and remote_dir != "/":
             await asyncio.to_thread(self.client.workspace.mkdirs, remote_dir)

@@ -1,6 +1,6 @@
-# ATLAS: Agentic Control Tower for Lakehouse Automation & Self-Service Experience
+# Self-Service Hub: Agentic Control Tower for Lakehouse Automation & Self-Service Experience
 
-ATLAS turns the everyday work of "I need access," "I need a workspace," "is this data safe to use," and "please set this up for me" into a fast, self-serve conversation — while keeping every action inside your organization's rules.
+Self-Service Hub turns the everyday work of "I need access," "I need a workspace," "is this data safe to use," and "please set this up for me" into a fast, self-serve conversation — while keeping every action inside your organization's rules.
 
 It runs as an application inside your Databricks workspace and gives your people an intelligent assistant that understands what they're trying to do, gathers the right information, routes anything risky to the right approver, and then carries out the work automatically. Requests that used to take days of back-and-forth tickets become minutes of guided self-service.
 
@@ -15,7 +15,7 @@ As Databricks adoption grows, platform and governance teams get squeezed from bo
 - **Governance drifts.** When the official path is slow, people find workarounds. Standards for least-privilege access, tagging, cost controls, and data quality erode quietly over time.
 - **Knowledge is trapped.** The rules for "how we do things here" live in people's heads and scattered wikis, so outcomes depend on who happens to handle the request.
 
-ATLAS fills the gap between *"give everyone self-service"* (fast but risky) and *"make everyone file a ticket"* (safe but slow). It delivers self-service that is **guided, governed, and auditable by default.**
+Self-Service Hub fills the gap between *"give everyone self-service"* (fast but risky) and *"make everyone file a ticket"* (safe but slow). It delivers self-service that is **guided, governed, and auditable by default.**
 
 ---
 
@@ -55,10 +55,10 @@ Behind the scenes, continuous checks keep the environment tidy and compliant —
 
 Pick the guide that matches what you're trying to do:
 
-* 📘 **[Platform Setup Guide](./docs/PLATFORM_SETUP.md)** — for administrators deploying ATLAS into a Databricks workspace.
-* 📗 **[Platform Administration Guide](./docs/PLATFORM_ADMINISTRATION.md)** — for the people who own and operate ATLAS day to day: creating and changing the no-code self-service workflows, testing them, and promoting them across environments.
+* 📘 **[Platform Setup Guide](./docs/PLATFORM_SETUP.md)** — for administrators deploying Self-Service Hub into a Databricks workspace.
+* 📗 **[Platform Administration Guide](./docs/PLATFORM_ADMINISTRATION.md)** — for the people who own and operate Self-Service Hub day to day: creating and changing the no-code self-service workflows, testing them, and promoting them across environments.
 * 📙 **[Governance & Policies](./docs/GOVERNANCE.md)** — how the guardrails, approvals, and automated compliance checks work, and how to tune them.
-* 📕 **[Developer Quick Start](./docs/DEVELOPER_QUICK_START.md)** — for developers who want to run ATLAS locally and contribute.
+* 📕 **[Developer Quick Start](./docs/DEVELOPER_QUICK_START.md)** — for developers who want to run Self-Service Hub locally and contribute.
 * 📐 **[Architecture Deep Dive](./docs/ARCHITECTURE.md)** — a technical overview of how the system is built.
 
 ---

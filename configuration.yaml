@@ -4,7 +4,7 @@
 # use Databricks Apps environment variable mapping in your app.yaml:
 #   env:
 #     - name: PROD_WS_CLIENT_ID
-#       valueFrom: databricks-secret:atlas_sp_credentials:prod_client_id
+#       valueFrom: databricks-secret:app_sp_credentials:prod_client_id
 #
 # target_workspaces:
 #   - name: "enterprise-prod"
@@ -40,9 +40,44 @@ branding:
   alert_color: "#D32F2F"
   warning_color: "#FFC107"
   success_color: "#388E3C"
-  # External URL for the companion Command Center app. When set, a
-  # "Command Center" link appears in the "Build & Customize" sidebar group.
-  command_center_url: ""
+# Embedded apps: external web apps surfaced *inside* this app via an iframe.
+# Each entry adds a sidebar link that opens the app in-page at
+# `/embedded/<id>` — no tab switch, normal back/forward history. Add as many
+# as you like. Entries render in the order listed here (within their group);
+# reorder by moving entries up/down. Empty-URL entries are ignored.
+#
+# NOTE: Many Databricks-hosted targets (and other apps) send
+# `X-Frame-Options: SAMEORIGIN` or a strict `Content-Security-Policy:
+# frame-ancestors`, which browsers honor by rendering the iframe blank. The
+# embedded view surfaces a hint + "open in a new tab" fallback in that case.
+#
+# Fields per entry:
+#   id:               unique slug (required). Used in the route + nav id, and
+#                     as the `ui.tabs.<id>` key so admins can hide it.
+#   title:            sidebar label (required).
+#   url:              iframe src, https (required). Empty = entry skipped.
+#   icon:             optional lucide icon name (default: LayoutDashboard).
+#                     e.g. LayoutDashboard, BarChart, Database, Gauge, Globe,
+#                     Activity, Workflow, ShieldCheck, FileText, Boxes.
+#   group:            optional sidebar group (default: "Build & Customize").
+#                     One of the existing groups or a new one.
+#   description:      optional one-line blurb shown on the Welcome page.
+#   allowed_personas: optional role gate (omit = visible to everyone), e.g.
+#                     ["Platform Admin", "Governance Admin"].
+# Set to [] to disable all embedded apps.
+embedded_apps:
+  - id: command_center
+    title: "Command Center"
+    url: "https://google.com"
+    icon: "LayoutDashboard"
+    group: "Build & Customize"
+    description: "Operations dashboards for the platform."
+#   - id: grafana
+#     title: "Grafana"
+#     url: "https://grafana.internal.example.com/d/abc"
+#     icon: "Activity"
+#     group: "Watch Tower"
+#     allowed_personas: ["Platform Admin"]
 
 links:
   # External "Open in Databricks" deep link surfaced inside the
@@ -119,7 +154,7 @@ ui:
     templates_assets: true
     community_links: true
     admin: true
-    reports: true
+    reports: false
     training_upload: true
     certification: true
     odps: true

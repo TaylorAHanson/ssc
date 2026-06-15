@@ -256,7 +256,7 @@ Tool *availability* is data-driven, not hardcoded. A single DB-backed catalog
   `/api/v1/tool-registry` (per-tool gating writes require Platform/Governance Admin; MCP source
   management + discovery require Platform Admin), gated by the `tool_registry` feature flag.
 
-> Note: the MLflow `AtlasResponsesAgent` (Model Serving) path is not yet registry-aware — it
+> Note: the MLflow `SelfServiceResponsesAgent` (Model Serving) path is not yet registry-aware — it
 > still uses the full `AGENT_TOOLS` set. Wiring serving-time scoping through the registry is a
 > follow-up.
 
@@ -530,7 +530,7 @@ tools/workflows granted in Unity Catalog.
 - **Versioning + env promotion.** Each publish writes an immutable snapshot to `workflow_versions`
   (`WorkflowVersionModel`); `GET /workflows/{id}/versions` + `POST /workflows/{id}/rollback` give
   history and one-click restore (as a *draft* for review). Portable **export/import**
-  (`GET /workflows/export/bundle`, `POST /workflows/import/bundle`, format `atlas.workflows/v1`,
+  (`GET /workflows/export/bundle`, `POST /workflows/import/bundle`, format `selfservice.workflows/v1`,
   keyed by `key`) supports the **dev → staging → prod** flow: export from one env, import into the
   next as **drafts**, dry-run, then publish.
 - **Live graph run visualization.** `GET /api/v1/requests/{id}/graph`
@@ -550,7 +550,7 @@ tools/workflows granted in Unity Catalog.
     direct serving endpoint, so model routing / A-B split, rate + cost limits, and INPUT
     guardrails live in the gateway (config, not code). Output guardrails intentionally omitted to
     keep SSE token streaming always-on (`databricks.yml` var `ai_gateway_endpoint`).
-  - **Native MLflow `ResponsesAgent`** (`app/agents/responses_agent.py`): `AtlasResponsesAgent`
+  - **Native MLflow `ResponsesAgent`** (`app/agents/responses_agent.py`): `SelfServiceResponsesAgent`
     wraps the governed `AgentRunner` and implements `predict` / `predict_stream` over the OpenAI
     Responses contract (text deltas + `function_call`/`function_call_output`/reasoning items,
     `trace_id` in `custom_outputs`). The in-app SSE protocol is retained as the richer transport;

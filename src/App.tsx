@@ -11,7 +11,7 @@ import { Events } from './pages/Events';
 import { ReusableAssets } from './pages/ReusableAssets';
 import { CommunityLinks } from './pages/CommunityLinks';
 import { AdminReports } from './pages/AdminReports';
-import { CommandCenter } from './pages/CommandCenter';
+import { EmbeddedApp } from './pages/EmbeddedApp';
 import { Welcome } from './pages/Welcome';
 import { useBrandingStore } from './stores/brandingStore';
 import { useRequestStore } from './stores/requestStore';
@@ -157,7 +157,15 @@ function App() {
               }
             />
           )}
-          <Route path="/command-center" element={<CommandCenter />} />
+          {/* Generic config-driven iframe apps (embedded_apps in
+              configuration.yaml). */}
+          <Route path="/embedded/:appId" element={<EmbeddedApp />} />
+          {/* Back-compat: the Command Center used to live at its own route;
+              it's now just an embedded app with id `command_center`. */}
+          <Route
+            path="/command-center"
+            element={<Navigate to="/embedded/command_center" replace />}
+          />
           {/* Ask Your Data folded into the unified chat. */}
           <Route path="/ask-your-data" element={<Navigate to="/" replace />} />
           <Route path="/community/training" element={<Training />} />

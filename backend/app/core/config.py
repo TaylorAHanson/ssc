@@ -47,7 +47,7 @@ def _slugify_brand(value: str) -> str:
 
 # Resolved once at import: the configurable brand the whole app renders. Falls
 # back to env then a neutral default so an unbranded deploy still works.
-_brand_name = _branding.get("name", os.getenv("BRAND_NAME", "ATLAS"))
+_brand_name = _branding.get("name", os.getenv("BRAND_NAME", "Self Service Hub"))
 # Short form for identifier-y contexts (repo prefixes, git bot). Defaults to the
 # full name when not separately configured.
 _brand_short_name = _branding.get("short_name", os.getenv("BRAND_SHORT_NAME", _brand_name))
@@ -182,8 +182,14 @@ class Settings(BaseSettings):
     DATABASE_INSTANCE_NAME: str = "" # From databricks.yml
     DATABASE_PORT: int = 5432
     DATABASE_NAME: str = "databricks_postgres"
-    DATABASE_USER: str = "atlas_app"
+    DATABASE_USER: str = "app_user"  # Native Postgres role (override via env/binding)
     DATABASE_PASSWORD: str = ""  # SECRET: Set in .env
+    # Postgres schema the app's tables live in (search_path + auto-created on
+    # connect). Defaults to a dedicated app-owned schema rather than "public"
+    # because PG 15+ revokes CREATE on "public" for non-owner roles (Lakebase
+    # roles hit this), so the app creates/owns its own schema. Override per
+    # deployment (e.g. DB_SCHEMA=edh_ssc). Must be a bare SQL identifier.
+    DB_SCHEMA: str = "selfservice"
     
     # Databricks Settings
     # SECRET: Set in .env file
@@ -235,7 +241,7 @@ class Settings(BaseSettings):
     # MLflow tracing / observability (best practice).
     MLFLOW_TRACING_ENABLED: bool = False
     MLFLOW_TRACKING_URI: str = "databricks"  # "databricks" in-workspace; "" disables remote
-    MLFLOW_EXPERIMENT: str = ""  # e.g. /Shared/atlas-agent; blank => default
+    MLFLOW_EXPERIMENT: str = ""  # e.g. /Shared/selfservice-agent; blank => default
     # Delta table (catalog.schema.table) for agent feedback keyed by trace_id.
     MLFLOW_FEEDBACK_TABLE: str = ""
     
@@ -340,13 +346,13 @@ class Settings(BaseSettings):
     GITOPS_MODE: str = "volume"  # "volume" (recommended) or "direct" (requires Git access)
     # Use a UC path (e.g. /Volumes/catalog/schema/gitops_requests) when running ON Databricks.
     # For local dev or non-Databricks runs, use a local directory (e.g. ./gitops_volume or /tmp/gitops_volume).
-    GITOPS_VOLUME_PATH: str = "/Volumes/atlas_dev_catalog/atlas/gitops_requests"  # UC or local path
+    GITOPS_VOLUME_PATH: str = "/Volumes/main/default/gitops_requests"  # UC or local path
     
     # GitHub App Authentication (blocked by org IP allowlist, kept for future)
     GITHUB_APP_ID: str = "" # GitHub App ID
     GITHUB_APP_PRIVATE_KEY: str = "" # PEM-encoded private key (store in secrets)
     GITHUB_APP_INSTALLATION_ID: str = "" # Optional: specific installation ID
-    GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE: str = "atlas-hub"  # Databricks secret scope
+    GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE: str = "app-secrets"  # Databricks secret scope
     GITHUB_APP_PRIVATE_KEY_SECRET_KEY: str = "github-app-private-key"  # Secret key name
     
     # IDP (Identity Provider) Settings

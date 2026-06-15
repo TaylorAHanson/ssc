@@ -1,4 +1,4 @@
-"""Register (and optionally deploy) the Atlas ResponsesAgent to Model Serving.
+"""Register (and optionally deploy) the self-service ResponsesAgent to Model Serving.
 
 This is a **workspace-run** operation: it logs the agent as an MLflow model
 (models-from-code via ``app/agents/agent_entry.py``), registers it to Unity
@@ -12,9 +12,9 @@ authenticated shell:
 
     pip install "mlflow>=3.1" databricks-agents
     python -m scripts.register_responses_agent \
-        --uc-model-name main.atlas.self_service_agent \
+        --uc-model-name main.default.self_service_agent \
         --llm-endpoint databricks-gpt-5-4-mini \
-        --experiment /Shared/atlas-agent \
+        --experiment /Shared/selfservice-agent \
         --deploy
 
 Why this is decoupled from the app: per current DABs limitations the new Unity
@@ -95,7 +95,7 @@ def register(args) -> str:
         )
 
     logger.info("Logging agent (models-from-code) from %s ...", _ENTRY)
-    with mlflow.start_run(run_name="atlas-responses-agent"):
+    with mlflow.start_run(run_name="self-service-responses-agent"):
         logged = mlflow.pyfunc.log_model(
             name="agent",
             python_model=_ENTRY,

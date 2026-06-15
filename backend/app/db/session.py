@@ -1,6 +1,7 @@
 """
 Database session management for Lakebase (PostgreSQL) and SQLite (Dev).
 """
+import re
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import NullPool, StaticPool
@@ -11,6 +12,30 @@ import os
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Bare SQL identifier (letters/digits/underscore, not starting with a digit).
+_SCHEMA_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+_DEFAULT_DB_SCHEMA = "selfservice"
+
+
+def get_db_schema() -> str:
+    """Resolve the configured Postgres schema, guarding against injection.
+
+    The value is interpolated into ``search_path`` / ``CREATE SCHEMA`` (which
+    can't be parameterized), so anything that isn't a bare identifier falls
+    back to the default app schema rather than risking a malformed/unsafe
+    statement. We deliberately do NOT fall back to ``public`` (PG 15+ revokes
+    CREATE on it for non-owner roles, which the app needs).
+    """
+    schema = (getattr(settings, "DB_SCHEMA", "") or _DEFAULT_DB_SCHEMA).strip()
+    if not _SCHEMA_IDENT_RE.match(schema):
+        logger.warning(
+            "Invalid DB_SCHEMA %r; falling back to '%s'.", schema, _DEFAULT_DB_SCHEMA
+        )
+        return _DEFAULT_DB_SCHEMA
+    return schema
 
 # Lazy initialization - only create engine when needed
 _engine = None
@@ -107,7 +132,7 @@ def get_database_url() -> str:
     pg_port = os.environ.get("PGPORT", "5432")
     
     host = pg_host or settings.DATABASE_HOST
-    user = pg_user or settings.DATABASE_USER or "atlas_app"  # Native Postgres role
+    user = pg_user or settings.DATABASE_USER or "app_user"  # Native Postgres role
     name = pg_name or settings.DATABASE_NAME
     port = pg_port or settings.DATABASE_PORT
     password = settings.DATABASE_PASSWORD
@@ -151,7 +176,7 @@ def get_database_url() -> str:
                     sdk = WorkspaceClient()
                     
                     # The user is the Databricks Service Principal / User running the app
-                    # This overrides the default 'atlas_app' native role
+                    # This overrides the default 'app_user' native role
                     user = sdk.current_user.me().user_name
                     logger.info(f"Using Databricks Workspace user for Lakebase: {user}")
                     
@@ -232,24 +257,24 @@ def get_database_url() -> str:
     
     # If running in Databricks, try to use a persistent path
     if os.environ.get("DATABRICKS_RUNTIME_VERSION") or os.environ.get("DATABRICKS_HOST"):
-        persistent_dir = "/tmp/atlas_hub_data"  # Default fallback
+        persistent_dir = "/tmp/app_hub_data"  # Default fallback
         
                 # Try to find the user's workspace path
         for env_var in ["USER", "DATABRICKS_USER", "OWNER"]:
             db_user = os.environ.get(env_var)
             if db_user:
-                persistent_dir = f"/Workspace/Users/{db_user}/atlas_hub_data"
+                persistent_dir = f"/Workspace/Users/{db_user}/app_hub_data"
                 break
         
         try:
             os.makedirs(persistent_dir, exist_ok=True)
-            db_path = os.path.join(persistent_dir, "atlas_hub.db")
+            db_path = os.path.join(persistent_dir, "app_hub.db")
             logger.info(f"Using persistent SQLite database at: {db_path}")
             return f"sqlite:///{db_path}"
         except Exception as e:
             logger.warning(f"Could not create persistent directory {persistent_dir}: {e}. Falling back to local.")
             
-    db_path = os.path.join(base_dir, "atlas_hub.db")
+    db_path = os.path.join(base_dir, "app_hub.db")
     return f"sqlite:///{db_path}"
 
 
@@ -275,6 +300,7 @@ def get_engine():
             # SQLAlchemy's pool-return rollback would un-set it — leaving
             # subsequent queries to default to `public` and fail with
             # `relation "..." does not exist`.
+            _schema = get_db_schema()
             _engine = create_engine(
                 database_url,
                 pool_size=10,
@@ -285,19 +311,19 @@ def get_engine():
                 # hand out a connection whose server-side auth has lapsed.
                 pool_recycle=settings.DB_POOL_RECYCLE_SECONDS,
                 echo=False,
-                connect_args={"options": "-csearch_path=atlas,public"},
+                connect_args={"options": f"-csearch_path={_schema},public"},
             )
 
             @event.listens_for(_engine, "connect")
             def on_connect(dbapi_connection, connection_record):
-                """Ensure the atlas schema exists. search_path itself is set
+                """Ensure the app schema exists. search_path itself is set
                 via connect_args above (persistent across rollbacks)."""
                 cursor = dbapi_connection.cursor()
                 try:
-                    cursor.execute('CREATE SCHEMA IF NOT EXISTS "atlas";')
+                    cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{_schema}";')
                     dbapi_connection.commit()
                 except Exception as e:
-                    logger.warning(f"Failed to ensure atlas schema exists: {e}")
+                    logger.warning(f"Failed to ensure '{_schema}' schema exists: {e}")
                 finally:
                     cursor.close()
                     

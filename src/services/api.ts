@@ -450,6 +450,20 @@ export async function deleteDelegation(delegationId: string): Promise<void> {
 }
 
 /**
+ * One iframe-embedded app, as served by GET /branding. Driven from the
+ * `embedded_apps:` list in configuration.yaml, in list order.
+ */
+export interface EmbeddedAppConfig {
+  id: string;
+  title: string;
+  url: string;
+  icon?: string;
+  group?: string;
+  description?: string;
+  allowed_personas?: string[];
+}
+
+/**
  * Get branding settings.
  */
 export async function getBranding(): Promise<{
@@ -462,7 +476,7 @@ export async function getBranding(): Promise<{
   brand_color_warning: string;
   brand_color_success: string;
   databricks_workspace_url?: string;
-  command_center_url?: string;
+  embedded_apps?: EmbeddedAppConfig[];
   genie_full_experience_url?: string;
   features?: Record<string, boolean>;
   tools?: Record<string, boolean>;

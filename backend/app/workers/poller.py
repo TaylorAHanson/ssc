@@ -565,7 +565,7 @@ async def _check_gitops_volume_status(db: Session, request: RequestModel):
         
         # Initialize the volume provider
         provider = VolumeGitOpsProvider(
-            volume_path=getattr(settings, 'GITOPS_VOLUME_PATH', '/Volumes/atlas_dev_catalog/atlas/gitops_requests'),
+            volume_path=getattr(settings, 'GITOPS_VOLUME_PATH', '/Volumes/main/default/gitops_requests'),
             config={"environment": getattr(settings, 'DEFAULT_ENVIRONMENT', 'dev')}
         )
         

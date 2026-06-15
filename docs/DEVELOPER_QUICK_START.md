@@ -11,7 +11,7 @@ cd backend
 cp .env.example .env
 ```
 Edit `.env` and configure the following key sections:
-- **Database**: Defaults to local SQLite (`atlas_hub`) if `DATABASE_URL` is empty.
+- **Database**: Defaults to local SQLite (`app_hub`) if `DATABASE_URL` is empty.
 - **Databricks**: Required for real infrastructure operations.
 - **Mock User**: Set `MOCK_USER_EMAIL` to your email to simulate logged-in user behavior locally. Set `MOCK_USER_ROLES` (e.g. `Platform Admin`) to exercise admin-only features like workflow authoring.
 - **Governance & Observability (optional)**: all default to a safe local posture, so you don't need to set them to run locally.

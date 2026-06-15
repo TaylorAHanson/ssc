@@ -1,12 +1,12 @@
-# ATLAS - Platform Setup Guide
+# Self-Service Hub - Platform Setup Guide
 
-Welcome to the ATLAS Platform Setup Guide! This document is intended for **Platform Administrators** or **IT Professionals** who are deploying ATLAS into their organization's Databricks environment.
+Welcome to the Self-Service Hub Platform Setup Guide! This document is intended for **Platform Administrators** or **IT Professionals** who are deploying Self-Service Hub into their organization's Databricks environment.
 
 ## Overview
 
-ATLAS (Agentic Control Tower for Lakehouse Automation & Self-Service Experience) is a full-stack web application that runs directly inside your Databricks workspace using **Databricks Apps**. 
+Self-Service Hub (Agentic Control Tower for Lakehouse Automation & Self-Service Experience) is a full-stack web application that runs directly inside your Databricks workspace using **Databricks Apps**. 
 
-To successfully deploy ATLAS, you will need to complete three distinct phases:
+To successfully deploy Self-Service Hub, you will need to complete three distinct phases:
 1. **Infrastructure Preparation:** Running an automated Databricks Notebook to create the required Unity Catalog volumes and secret scopes.
 2. **Configuration:** Customizing the application's appearance and enabling specific features via a configuration file.
 3. **CI/CD Deployment:** Configuring GitHub Actions to automatically securely deploy the application into your workspace.
@@ -18,17 +18,17 @@ Once deployed, the Databricks App will automatically provision its own Service P
 ## 1. Prerequisites
 
 Before beginning the installation, ensure you have:
-- [ ] A **GitHub repository** containing the ATLAS source code.
+- [ ] A **GitHub repository** containing the Self-Service Hub source code.
 - [ ] A **Databricks workspace** with Unity Catalog enabled.
 - [ ] **Account-level admin access** (or workspace admin access) to create a Service Principal for GitHub Actions.
-- [ ] A **Databricks Serverless SQL Warehouse** (used by ATLAS to execute backend queries).
+- [ ] A **Databricks Serverless SQL Warehouse** (used by Self-Service Hub to execute backend queries).
 - [ ] A **Model Serving Endpoint** running a Foundation Model (e.g., `databricks-gemini-2-5-flash`).
 
 ---
 
 ## 2. Infrastructure Preparation
 
-ATLAS requires a secret scope and a Unity Catalog Volume to store its configuration and GitOps data. We have provided a Databricks Notebook to automate this process.
+Self-Service Hub requires a secret scope and a Unity Catalog Volume to store its configuration and GitOps data. We have provided a Databricks Notebook to automate this process.
 
 ### Step 2.1: Run the Installer Notebook
 1. Locate the `installer_notebook.py` file in the root directory of your repository or zip file.
@@ -36,7 +36,7 @@ ATLAS requires a secret scope and a Unity Catalog Volume to store its configurat
 3. Import the `installer_notebook.py` file.
 4. Attach the notebook to a cluster.
 5. Fill out the widget parameters at the top of the notebook:
-   - **Secret Scope Name** (default: `atlas-hub`)
+   - **Secret Scope Name** (default: `app-secrets`)
    - **Catalog, Schema, and Volume Names** (where configuration will be stored)
    - **GitHub PAT** (Optional: requires `repo` scope if using direct GitOps integrations). For the exact API-call-to-permission mapping, fine-grained alternatives, and a request message for your GitHub org admin, see [GITHUB_TOKEN_PERMISSIONS.md](./GITHUB_TOKEN_PERMISSIONS.md).
 6. Click **Run All**.
@@ -47,7 +47,7 @@ The notebook will automatically create the infrastructure, securely store your s
 
 ## 3. Configuration & Branding
 
-ATLAS is highly customizable. You can control its features, UI tabs, and branding without modifying the core code.
+Self-Service Hub is highly customizable. You can control its features, UI tabs, and branding without modifying the core code.
 
 ### Step 3.1: Customize the Application
 1. Open the `configuration.yaml` file located in the root of your repository.
@@ -75,20 +75,20 @@ Open `databricks.yml` in the root of your repository and update the `variables` 
 
 ## 4. CI/CD Deployment
 
-ATLAS uses GitHub Actions to automate deployments to both Development (`develop` branch) and Production (`main` branch) environments.
+Self-Service Hub uses GitHub Actions to automate deployments to both Development (`develop` branch) and Production (`main` branch) environments.
 
 ### Step 4.1: Create CI/CD Service Principal
 1. Go to the Databricks Account Console → **User Management** → **Service Principals**.
-2. Create a new Service Principal (e.g., `atlas-cicd`).
+2. Create a new Service Principal (e.g., `selfservice-cicd`).
 3. Generate an OAuth secret and securely note the **Client ID** and **Secret**.
 4. Grant this Service Principal access to your workspace.
 
 ### Step 4.2: Grant CI/CD Permissions
 In the Databricks SQL Editor, grant the CI/CD Service Principal the necessary permissions to deploy the app:
 ```sql
-GRANT USE CATALOG ON CATALOG * TO `atlas-cicd`;
-GRANT USE SCHEMA ON SCHEMA *.* TO `atlas-cicd`;
-GRANT SELECT ON TABLE *.*.* TO `atlas-cicd`;
+GRANT USE CATALOG ON CATALOG * TO `selfservice-cicd`;
+GRANT USE SCHEMA ON SCHEMA *.* TO `selfservice-cicd`;
+GRANT SELECT ON TABLE *.*.* TO `selfservice-cicd`;
 ```
 *(You will also need to ensure the Service Principal has "Can Query" access on your Model Serving endpoint, and "Can Use" access on your SQL Warehouse).*
 
@@ -104,8 +104,8 @@ GRANT SELECT ON TABLE *.*.* TO `atlas-cicd`;
 ### Step 4.4: Deploy
 Push your code to trigger the GitHub Actions:
 ```bash
-git push origin develop  # → Deploys the 'atlas-dev' app
-git push origin main     # → Deploys the 'atlas' production app
+git push origin develop  # → Deploys the dev app
+git push origin main     # → Deploys the production app
 ```
 
 ---
@@ -118,18 +118,18 @@ After your first deployment completes successfully:
 
 ### Step 5.1: Find the App's Service Principal
 1. Go to **Databricks Workspace → Compute → Apps**.
-2. Click on your deployed app (e.g., `atlas-dev`).
+2. Click on your deployed app (e.g., `<app-name>-dev`).
 3. Go to the **Permissions** tab and copy the name of the auto-created service principal (e.g., `app-xxxx-xxxx-xxxx`).
 
 ### Step 5.2: Grant Secret & Model Access
-1. **Secrets:** Grant READ access to the `atlas-hub` secret scope.
+1. **Secrets:** Grant READ access to the `app-secrets` secret scope.
    ```python
    from databricks.sdk import WorkspaceClient
    from databricks.sdk.service.workspace import AclPermission
    
    w = WorkspaceClient()
    w.secrets.put_acl(
-       scope="atlas-hub",
+       scope="app-secrets",
        principal="<APP_SP_APPLICATION_ID>",
        permission=AclPermission.READ
    )
@@ -153,16 +153,16 @@ If you see `SHADOW mode`, set `agent_tool_opa_enforce: "true"` for the environme
 
 ## 6. (Optional) Register the Agent to Model Serving
 
-ATLAS exposes its agent as a native MLflow `ResponsesAgent` (`AtlasResponsesAgent`). The in-app chat uses it directly; registering it to **Model Serving** additionally makes it available to the Databricks Playground, batch eval, and external consumers (e.g. via AI Gateway).
+Self-Service Hub exposes its agent as a native MLflow `ResponsesAgent` (`SelfServiceResponsesAgent`). The in-app chat uses it directly; registering it to **Model Serving** additionally makes it available to the Databricks Playground, batch eval, and external consumers (e.g. via AI Gateway).
 
 This is a **workspace-run** operation and needs the deploy-time dependencies `mlflow` (full, not -skinny) and `databricks-agents`, which are not part of the app's runtime requirements. Run it from an authenticated workspace shell or notebook:
 
 ```bash
 pip install "mlflow>=3.1" databricks-agents
 python -m scripts.register_responses_agent \
-    --uc-model-name <catalog>.<schema>.atlas_self_service_agent \
+    --uc-model-name <catalog>.<schema>.self_service_agent \
     --llm-endpoint databricks-gpt-5-4-mini \
-    --experiment /Shared/atlas-agent \
+    --experiment /Shared/selfservice-agent \
     --deploy
 ```
 

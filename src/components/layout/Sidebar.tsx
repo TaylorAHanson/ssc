@@ -18,7 +18,6 @@ import {
   Sparkles,
   WandSparkles,
   Database,
-  LayoutDashboard,
   ExternalLink,
   ShieldCheck,
   ShieldAlert,
@@ -29,6 +28,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { renderNavIcon } from '../../lib/navIcons';
 import { FeedbackModal } from '../feedback/FeedbackModal';
 
 import { useBrandingStore } from '../../stores/brandingStore';
@@ -166,15 +166,15 @@ const navItems: NavItem[] = [
     group: 'Watch Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
+  // Admin - Restricted
   {
     id: 'context_catalog',
     title: 'Context Catalog',
     icon: <Library className="w-5 h-5" />,
     path: '/governance/context-catalog',
-    group: 'Watch Tower',
+    group: 'Control Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
-  // Admin - Restricted
   {
     id: 'admin',
     title: 'Admin',
@@ -235,7 +235,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const brandName = useBrandingStore((s) => s.brandName);
   const brandLogoUrl = useBrandingStore((s) => s.brandLogoUrl);
   const databricksWorkspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
-  const commandCenterUrl = useBrandingStore((s) => s.commandCenterUrl);
+  const embeddedApps = useBrandingStore((s) => s.embeddedApps);
   const features = useBrandingStore((s) => s.features);
 
   // User menu (account dropdown) is click-to-toggle for accessibility.
@@ -343,16 +343,18 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         });
       }
     }
-    if (commandCenterUrl) {
-      // Internal route — Command Center is rendered inside an iframe at
-      // /command-center so the icon participates in normal active-state
-      // styling and back/forward history.
+    // Config-driven embedded apps (embedded_apps in configuration.yaml),
+    // rendered in list order. Each renders in-app at /embedded/<id> so the
+    // icon participates in normal active-state styling and back/forward
+    // history.
+    for (const app of embeddedApps) {
       items.push({
-        id: 'command_center',
-        title: 'Command Center',
-        icon: <LayoutDashboard className="w-5 h-5" />,
-        path: '/command-center',
-        group: 'Build & Customize',
+        id: app.id,
+        title: app.title,
+        icon: renderNavIcon(app.icon),
+        path: `/embedded/${app.id}`,
+        group: app.group || 'Build & Customize',
+        ...(app.allowedPersonas ? { allowedPersonas: app.allowedPersonas } : {}),
       });
     }
     const lakehouseUrl = workspaceHomeUrl(databricksWorkspaceUrl);
@@ -366,7 +368,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       });
     }
     return items;
-  }, [databricksWorkspaceUrl, commandCenterUrl, uiTabs?.ask_your_data, features?.ask_your_data]);
+  }, [databricksWorkspaceUrl, embeddedApps, uiTabs?.ask_your_data, features?.ask_your_data]);
 
   const allNavItems = React.useMemo(
     () => {
@@ -442,9 +444,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               onClick={onToggle}
               aria-label="Expand navigation"
               aria-expanded={false}
-              className="p-1.5 rounded text-nav-text-muted hover:text-white hover:bg-nav-hover transition-colors"
+              className="p-1.5 rounded text-white/80 hover:text-white hover:bg-nav-hover transition-colors"
             >
-              <ChevronsRight className="w-4 h-4" />
+              <ChevronsRight className="w-5 h-5" />
             </button>
           </div>
         ) : (
@@ -475,9 +477,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               onClick={onToggle}
               aria-label="Collapse navigation"
               aria-expanded={true}
-              className="p-1.5 mt-0.5 rounded text-nav-text-muted hover:text-white hover:bg-nav-hover transition-colors shrink-0"
+              className="p-1.5 mt-0.5 rounded text-white/80 hover:text-white hover:bg-nav-hover transition-colors shrink-0"
             >
-              <ChevronsLeft className="w-4 h-4" />
+              <ChevronsLeft className="w-5 h-5" />
             </button>
           </div>
         )}
@@ -512,7 +514,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 </h3>
                 <ChevronDown
                   className={cn(
-                    "w-3.5 h-3.5 transition-transform duration-200 opacity-60 group-hover:opacity-100",
+                    "w-5 h-5 transition-transform duration-200 text-white/80 group-hover:text-white",
                     isGroupCollapsed && "-rotate-90"
                   )}
                   aria-hidden="true"
