@@ -14,6 +14,12 @@ resources:
       lifecycle:
         prevent_destroy: true
       permissions:
+        # Authoritative ACL: must re-grant the deploying user CAN_MANAGE,
+        # otherwise applying this block strips the creator's manage rights and
+        # the app's `postgres` resource attach later fails with
+        # "User needs MANAGE permission on the resource".
+        - level: CAN_MANAGE
+          user_name: "${workspace.current_user.userName}"
         - level: CAN_USE
           group_name: "users"
 
@@ -24,10 +30,22 @@ resources:
       description: "edh-ssc - Self-service platform for ${var.environment}"
       source_code_path: "${var.source_code_path}"
       resources:
+        # Attach the Lakebase database as an AUTOSCALING resource (`postgres:`),
+        # not the Provisioned `database:` type. Since Mar 12 2026 every instance
+        # created via `database_instances` is an Autoscaling *project*; attaching
+        # it with the Provisioned `database:` block makes the platform validate
+        # MANAGE against a provisioned-instance securable that doesn't match the
+        # project ACL you actually hold -> "User needs MANAGE permission on the
+        # resource", even when you have Can Manage on the project.
+        #
+        # For projects created via the Database-instance API, the project and
+        # branch names equal the instance name, and the default database is
+        # `databricks_postgres`. If a deploy rejects these paths, confirm the
+        # exact ids with `databricks postgres ...` (see notes) and adjust.
         - name: postgres
-          database:
-            database_name: databricks_postgres
-            instance_name: ${resources.database_instances.edh_ssc_db.name}
+          postgres:
+            branch: projects/${resources.database_instances.edh_ssc_db.name}/branches/${resources.database_instances.edh_ssc_db.name}
+            database: projects/${resources.database_instances.edh_ssc_db.name}/branches/${resources.database_instances.edh_ssc_db.name}/databases/databricks_postgres
             permission: CAN_CONNECT_AND_CREATE
       config:
         command:
