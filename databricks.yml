@@ -38,14 +38,15 @@ resources:
         # project ACL you actually hold -> "User needs MANAGE permission on the
         # resource", even when you have Can Manage on the project.
         #
-        # For projects created via the Database-instance API, the project and
-        # branch names equal the instance name, and the default database is
-        # `databricks_postgres`. If a deploy rejects these paths, confirm the
-        # exact ids with `databricks postgres ...` (see notes) and adjust.
+        # Autoscaling path facts (from `databricks postgres list-branches/-databases`):
+        #   - project name  == the database instance name (edh-ssc-<env>-v5)
+        #   - default branch == "production" (auto-created, not the instance name)
+        #   - database id    == "databricks-postgres" (hyphen; the logical PG db
+        #                        is "databricks_postgres" with an underscore)
         - name: postgres
           postgres:
-            branch: projects/${resources.database_instances.edh_ssc_db.name}/branches/${resources.database_instances.edh_ssc_db.name}
-            database: projects/${resources.database_instances.edh_ssc_db.name}/branches/${resources.database_instances.edh_ssc_db.name}/databases/databricks_postgres
+            branch: projects/${resources.database_instances.edh_ssc_db.name}/branches/production
+            database: projects/${resources.database_instances.edh_ssc_db.name}/branches/production/databases/databricks-postgres
             permission: CAN_CONNECT_AND_CREATE
       config:
         command:
