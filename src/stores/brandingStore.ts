@@ -62,8 +62,10 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 databricksWorkspaceUrl: branding.databricks_workspace_url || '',
                 commandCenterUrl: branding.command_center_url || '',
                 genieFullExperienceUrl: (branding as { genie_full_experience_url?: string }).genie_full_experience_url || '',
-                geniePollTimeoutSeconds:
-                    (branding as { genie_poll_timeout_seconds?: number }).genie_poll_timeout_seconds || 300,
+                geniePollTimeoutSeconds: (() => {
+                    const v = (branding as { genie_poll_timeout_seconds?: number }).genie_poll_timeout_seconds;
+                    return typeof v === 'number' && v > 0 ? v : 300;
+                })(),
                 features: branding.features || {},
                 tools: branding.tools || {},
                 uiTabs: branding.ui?.tabs || {},

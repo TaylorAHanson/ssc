@@ -302,6 +302,11 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages, statusLabel]);
 
+    // Abort any in-flight agent stream when the chat unmounts, so we don't keep
+    // the SSE connection open (and don't setState on an unmounted component) when
+    // the user navigates away mid-response.
+    useEffect(() => () => abortRef.current?.abort(), []);
+
     // Per-second tick to drive the elapsed-time label inside running
     // tool pills. The label is computed at render time as
     // ``Date.now() - msg.startedAt``, so without a periodic re-render

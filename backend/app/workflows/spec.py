@@ -284,7 +284,15 @@ def _step_node(step: Step):
     return node
 
 
-def _complete_node(spec: WorkflowSpec):
+# Non-terminal status a *nested* (subworkflow) graph emits when it finishes,
+# instead of leaking its terminal "completed" into the shared parent state. If a
+# child set ``status="completed"`` and the parent then paused on a gate (whose
+# interrupt runs before any status write), the executor would persist the parent
+# request as COMPLETED and the poller would never resume it (stranded approval).
+_NESTED_COMPLETE_STATUS = "provisioning"
+
+
+def _complete_node(spec: WorkflowSpec, *, nested: bool = False):
     async def node(state: WorkflowState) -> WorkflowState:
         if spec.complete_fact:
             from app.db.session import get_db
@@ -294,6 +302,12 @@ def _complete_node(spec: WorkflowSpec):
                 add_fact(db, state["request_id"], spec.complete_fact, {}, actor="system")
             finally:
                 db.close()
+        # Only the TOP-LEVEL graph may declare the request terminally complete.
+        # A nested child returns a neutral running status so the parent's
+        # remaining stages (which may pause on a gate) are reached with the
+        # request still in-progress, not falsely COMPLETED.
+        if nested:
+            return {"status": _NESTED_COMPLETE_STATUS}
         return {"status": spec.completed_status}
 
     return node
@@ -381,7 +395,7 @@ def build_spec_graph(
     def next_entry(i: int) -> str:
         return entries[i + 1] if i + 1 < len(entries) else "complete"
 
-    g.add_node("complete", _complete_node(spec))
+    g.add_node("complete", _complete_node(spec, nested=_depth > 0))
     g.add_node("rejected", _rejected_node)
 
     for i, stage in enumerate(spec.stages):

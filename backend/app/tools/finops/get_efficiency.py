@@ -52,7 +52,7 @@ async def get_resource_efficiency_metrics(metric: str, threshold_hours: int = 24
                 LIMIT 100
             """
             
-            result = await provider.execute_sql(query, obo_token=obo_token)
+            result = await provider.execute_sql(query, obo_token=obo_token, require_obo=True)
             return {
                 "inefficient_resources": result.get("rows", []),
                 "metric": metric,

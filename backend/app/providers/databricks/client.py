@@ -89,7 +89,7 @@ class DatabricksProvider(BaseProvider):
 
     
     @retry_on_retryable(max_attempts=3)
-    async def execute_sql(self, query: str, warehouse: Optional[str] = None, timeout_seconds: int = 120, obo_token: Optional[str] = None) -> Dict[str, Any]:
+    async def execute_sql(self, query: str, warehouse: Optional[str] = None, timeout_seconds: int = 120, obo_token: Optional[str] = None, require_obo: bool = False) -> Dict[str, Any]:
         """
         Execute SQL query using Databricks SDK with async polling.
         
@@ -107,6 +107,27 @@ class DatabricksProvider(BaseProvider):
             Dictionary with 'rows' and 'schema'
         """
         try:
+            # Guard against a *silent* OBO -> SP downgrade. When a caller declares
+            # the statement must run as the user (require_obo) but no token was
+            # forwarded, refuse on any deployed target rather than quietly running
+            # as the app service principal (which would return rows under the wrong
+            # identity / the SP's grants). Only true local dev may fall back.
+            if require_obo and not obo_token:
+                from app.providers.databricks_mcp import sp_fallback_allowed
+
+                if not sp_fallback_allowed():
+                    raise PermissionError(
+                        "This query must run On-Behalf-Of the user, but no OBO token "
+                        "was forwarded. Refusing to fall back to the app service "
+                        "principal (it would expose data under the wrong identity). "
+                        "Ensure the request forwards X-Forwarded-Access-Token and the "
+                        "bundle's user_api_scopes cover the needed SQL/warehouse access."
+                    )
+                logger.warning(
+                    "execute_sql: require_obo set but no OBO token; using SP fallback "
+                    "(allowed only in local dev)."
+                )
+
             # Run as the user (OBO) when a token is supplied, else the default
             # service-principal client.
             client = self.get_workspace_client(token=obo_token) if obo_token else self.client

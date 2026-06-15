@@ -4,6 +4,7 @@ Tool to check object permissions.
 from typing import Dict, Any, Literal
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
+from app.tools.sql_safety import SqlSafetyError, require_identifier
 from app.providers.databricks import DatabricksProvider
 from app.core.config import settings
 from app.core.exceptions import RetryableError
@@ -19,6 +20,13 @@ class CheckObjectPermissionsInput(BaseModel):
     args_schema=CheckObjectPermissionsInput
 )
 async def check_object_permissions(object_type: str, object_name: str, **kwargs) -> Dict[str, Any]:
+    # ``object_name`` is interpolated unquoted as an identifier in SHOW GRANTS;
+    # ``object_type`` is Literal-constrained (enforced by the schema). Validate the
+    # name so it can't carry extra SQL.
+    try:
+        require_identifier(object_name, "object_name")
+    except SqlSafetyError as e:
+        return {"error": str(e)}
     try:
         # Run read-only governance queries as the calling user (OBO) when a
         # token is present; falls back to the service principal otherwise
@@ -42,7 +50,7 @@ async def check_object_permissions(object_type: str, object_name: str, **kwargs)
         
         query = f"SHOW GRANTS ON {object_type} {object_name}"
         
-        result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token)
+        result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token, require_obo=True)
         
         # Also get owner
         # DESCRIBE [TYPE] [NAME] usually shows owner? Or use system.information_schema

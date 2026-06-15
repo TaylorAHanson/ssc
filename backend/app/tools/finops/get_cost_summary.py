@@ -4,6 +4,7 @@ Tool to retrieve cost summary.
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
+from app.tools.sql_safety import SqlSafetyError, reject_dangerous_snippet, require_date
 from app.providers.databricks import DatabricksProvider
 from app.core.config import settings
 from app.core.exceptions import RetryableError
@@ -23,7 +24,18 @@ class GetCostSummaryInput(BaseModel):
 )
 async def get_cost_summary(start_date: str, end_date: str, granularity: str = "total", group_by: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     logger = logging.getLogger(__name__)
-    
+
+    # Validate interpolated values (dates + the free-form group_by dimension).
+    try:
+        require_date(start_date, "start_date")
+        require_date(end_date, "end_date")
+        if group_by:
+            reject_dangerous_snippet(group_by, "group_by")
+            if any(ch in group_by for ch in (",", "(", ")")):
+                raise SqlSafetyError("group_by must be a single column/tag dimension")
+    except SqlSafetyError as e:
+        return {"error": str(e)}
+
     try:
         # Read-only billing query runs as the calling user (OBO) when available;
         # falls back to the service principal otherwise.
@@ -79,7 +91,7 @@ async def get_cost_summary(start_date: str, end_date: str, granularity: str = "t
         logger.info(f"Executing Cost SQL: {query}")
         
         # Developer decision: Set timeout to 300s (5 mins) for heavy cost queries
-        result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token)
+        result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token, require_obo=True)
         rows = result.get("rows", [])
         logger.info(f"Cost SQL Result: {len(rows)} rows returned")
         

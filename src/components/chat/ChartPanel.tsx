@@ -25,6 +25,7 @@ import {
     encodingFromSpec,
     inferChart,
     inferFieldTypes,
+    withUniqueColumns,
     type ChartAggregate,
     type ChartEncoding,
     type ChartMark,
@@ -46,12 +47,15 @@ const selectClass =
     'text-xs border border-gray-300 rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-accent';
 
 export function ChartPanel({
-    dataset,
+    dataset: rawDataset,
     initialSpec,
     initialEncoding,
     height = 300,
     defaultControlsOpen = false,
 }: ChartPanelProps) {
+    // Normalize duplicate column names up front so the field dropdowns, the
+    // Vega records, and the encoding all reference the same unique field set.
+    const dataset = useMemo(() => withUniqueColumns(rawDataset), [rawDataset]);
     const types = useMemo(() => inferFieldTypes(dataset), [dataset]);
     const records = useMemo(() => datasetToRecords(dataset), [dataset]);
 

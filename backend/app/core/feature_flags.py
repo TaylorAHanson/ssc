@@ -33,11 +33,23 @@ def is_feature_enabled(feature_flag: str) -> bool:
 def is_tool_enabled(tool_name: str) -> bool:
     """
     Check if a specific tool is enabled.
+
+    A tool entry in ``configuration.yaml`` may be either a bare bool
+    (``run_sql: true``) or a nested config dict (``ask_your_data: {enabled: true,
+    ...}``). For dict entries we honor an explicit ``enabled:`` key and otherwise
+    treat the presence of config as "enabled" — using bare ``bool(dict)`` would
+    silently ignore ``enabled: false`` (a non-empty dict is always truthy) and
+    disable a tool whose config happens to be an empty dict.
     """
     tools = _yaml_config.get("tools")
     if tools is not None:
-        return bool(tools.get(tool_name, False))
-        
+        if tool_name not in tools:
+            return False
+        val = tools[tool_name]
+        if isinstance(val, dict):
+            return bool(val.get("enabled", True))
+        return bool(val)
+
     # Fallback to env var
     enabled_tools = os.getenv("ENABLED_TOOLS")
     if enabled_tools is None:

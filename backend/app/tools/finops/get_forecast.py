@@ -4,6 +4,7 @@ Tool to forecast spend.
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
+from app.tools.sql_safety import SqlSafetyError, require_date
 from app.providers.databricks import DatabricksProvider
 from app.core.config import settings
 from app.core.exceptions import RetryableError
@@ -45,6 +46,13 @@ async def get_forecasted_spend(start_date: Optional[str] = None, end_date: Optio
             start_date = (now - timedelta(days=30)).strftime('%Y-%m-%d')
         if not end_date:
             end_date = now.strftime('%Y-%m-%d')
+
+        # Validate the (possibly LLM-supplied) dates before interpolation.
+        try:
+            require_date(start_date, "start_date")
+            require_date(end_date, "end_date")
+        except SqlSafetyError as e:
+            return {"error": str(e)}
         
         query = f"""
             SELECT SUM(u.usage_quantity * lp.pricing.default) as total_cost 
@@ -56,7 +64,7 @@ async def get_forecasted_spend(start_date: Optional[str] = None, end_date: Optio
             WHERE u.usage_date BETWEEN '{start_date}' AND '{end_date}'
         """
         
-        result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token)
+        result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token, require_obo=True)
         rows = result.get("rows", [])
         total_30d_cost = 0.0
         if rows and rows[0].get("total_cost") is not None:
@@ -74,7 +82,7 @@ async def get_forecasted_spend(start_date: Optional[str] = None, end_date: Optio
             WHERE u.usage_date BETWEEN '{month_start}' AND '{end_date}'
         """
         
-        result_mtd = await provider.execute_sql(query_mtd, timeout_seconds=300, obo_token=obo_token)
+        result_mtd = await provider.execute_sql(query_mtd, timeout_seconds=300, obo_token=obo_token, require_obo=True)
         rows_mtd = result_mtd.get("rows", [])
         mtd_cost = 0.0
         if rows_mtd and rows_mtd[0].get("total_cost") is not None:

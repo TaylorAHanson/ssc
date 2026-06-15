@@ -4,6 +4,7 @@ Tool to audit user access.
 from typing import Dict, Any
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
+from app.tools.sql_safety import SqlSafetyError, quote_literal, require_identifier
 from app.providers.databricks import DatabricksProvider
 from app.core.config import settings
 from app.core.exceptions import RetryableError
@@ -19,6 +20,14 @@ class AuditUserAccessInput(BaseModel):
     args_schema=AuditUserAccessInput
 )
 async def audit_user_access(user_email: str, catalog: str, **kwargs) -> Dict[str, Any]:
+    # ``catalog`` is a UC identifier; ``user_email`` is a string literal. Validate
+    # the identifier and escape the literal before interpolation.
+    try:
+        require_identifier(catalog, "catalog")
+    except SqlSafetyError as e:
+        return {"error": str(e)}
+    user_lit = quote_literal(user_email)
+    catalog_lit = quote_literal(catalog)
     try:
         # Read-only access audit runs as the calling user (OBO) when available;
         # falls back to the service principal otherwise.
@@ -36,15 +45,15 @@ async def audit_user_access(user_email: str, catalog: str, **kwargs) -> Dict[str
         # Filtering by grantee = user_email AND the specific catalog.
         
         queries = {
-            "catalog": f"SELECT * FROM system.information_schema.catalog_privileges WHERE grantee = '{user_email}' AND catalog_name = '{catalog}'",
-            "schemas": f"SELECT * FROM system.information_schema.schema_privileges WHERE grantee = '{user_email}' AND catalog_name = '{catalog}'",
-            "tables": f"SELECT * FROM system.information_schema.table_privileges WHERE grantee = '{user_email}' AND table_catalog = '{catalog}'"
+            "catalog": f"SELECT * FROM system.information_schema.catalog_privileges WHERE grantee = {user_lit} AND catalog_name = {catalog_lit}",
+            "schemas": f"SELECT * FROM system.information_schema.schema_privileges WHERE grantee = {user_lit} AND catalog_name = {catalog_lit}",
+            "tables": f"SELECT * FROM system.information_schema.table_privileges WHERE grantee = {user_lit} AND table_catalog = {catalog_lit}"
         }
         
         final_results = {}
         for key, q in queries.items():
             try:
-                res = await provider.execute_sql(q, timeout_seconds=120, obo_token=obo_token)
+                res = await provider.execute_sql(q, timeout_seconds=120, obo_token=obo_token, require_obo=True)
                 final_results[key] = res.get("rows", [])
             except Exception as e:
                 final_results[key] = f"Error: {str(e)}"

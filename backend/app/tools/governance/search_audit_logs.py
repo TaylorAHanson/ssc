@@ -4,6 +4,13 @@ Tool to search audit logs.
 from typing import Dict, Any, Optional, List, Literal
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
+from app.tools.sql_safety import (
+    SqlSafetyError,
+    quote_literal,
+    reject_dangerous_snippet,
+    require_date,
+    require_identifiers,
+)
 from app.providers.databricks import DatabricksProvider
 from app.core.config import settings
 from app.core.exceptions import RetryableError
@@ -54,6 +61,17 @@ async def search_audit_logs(
     additional_where: Optional[str] = None,
     **kwargs,
 ) -> Dict[str, Any]:
+    # Validate/escape every interpolated value up front (these are read-only OBO
+    # queries, but the values are LLM-supplied and flow into raw SQL).
+    try:
+        require_date(start_date, "start_date")
+        require_date(end_date, "end_date")
+        safe_group_by = require_identifiers(group_by_columns or [], "group_by_columns")
+        if additional_where:
+            reject_dangerous_snippet(additional_where, "additional_where")
+    except SqlSafetyError as e:
+        return {"error": str(e)}
+
     try:
         # Read audit logs as the calling user (OBO) when available; falls back
         # to the service principal otherwise.
@@ -71,10 +89,10 @@ async def search_audit_logs(
         ]
         
         if action_name:
-            where_clauses.append(f"lower(action_name) LIKE '%{action_name.lower()}%'")
+            where_clauses.append(f"lower(action_name) LIKE {quote_literal('%' + action_name.lower() + '%')}")
         
         if email:
-            where_clauses.append(f"user_identity.email = '{email}'")
+            where_clauses.append(f"user_identity.email = {quote_literal(email)}")
         
         if additional_where:
             where_clauses.append(additional_where)
@@ -82,8 +100,8 @@ async def search_audit_logs(
         where_str = " AND ".join(where_clauses)
         
         if aggregation_type == "count":
-            if group_by_columns:
-                group_str = ", ".join(group_by_columns)
+            if safe_group_by:
+                group_str = ", ".join(safe_group_by)
                 query = f"""
                     SELECT {group_str}, COUNT(*) as event_count
                     FROM system.access.audit
@@ -110,7 +128,7 @@ async def search_audit_logs(
                 LIMIT 100
             """
         
-        result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token)
+        result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token, require_obo=True)
         
         return {
             "results": result.get("rows", []),

@@ -48,7 +48,7 @@ async def check_asset_quality(check_type: str, scope: str = "TABLE", **kwargs) -
                 LIMIT 100
             """
             
-            result = await provider.execute_sql(query, obo_token=obo_token)
+            result = await provider.execute_sql(query, obo_token=obo_token, require_obo=True)
             return {
                 "issues": result.get("rows", []),
                 "check": "missing_description",

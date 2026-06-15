@@ -45,7 +45,7 @@ async def list_workspaces(status: Optional[str] = None, **kwargs) -> Dict[str, A
         # Run as the user (OBO) so their own access to system.access.* applies —
         # the app's service principal typically can't read system tables.
         obo_token = kwargs.get("_obo_token")
-        result = await provider.execute_sql(query, timeout_seconds=120, obo_token=obo_token)
+        result = await provider.execute_sql(query, timeout_seconds=120, obo_token=obo_token, require_obo=True)
         
         return {
             "workspaces": result.get("rows", []),

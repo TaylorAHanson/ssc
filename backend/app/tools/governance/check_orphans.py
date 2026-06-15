@@ -63,7 +63,7 @@ async def check_orphaned_assets(asset_type: str = "CATALOG", **kwargs) -> Dict[s
         if not full_query:
              full_query = "SELECT 'CATALOG' as type, catalog_name as name, catalog_owner as owner FROM system.information_schema.catalogs"
 
-        result = await provider.execute_sql(full_query, obo_token=obo_token)
+        result = await provider.execute_sql(full_query, obo_token=obo_token, require_obo=True)
         rows = result.get("rows", [])
         
         # In memory processing (mocking logic of 'inactive')

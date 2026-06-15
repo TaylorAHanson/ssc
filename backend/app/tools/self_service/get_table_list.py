@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional
 import asyncio
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
+from app.tools.sql_safety import quote_literal
 from app.providers.databricks import DatabricksProvider
 from app.core.config import settings
 from app.core.exceptions import RetryableError
@@ -51,8 +52,8 @@ async def get_table_list(target_host: str, catalog_name: str, schema_name: str, 
             query = f"""
             SELECT table_name, tag_name, tag_value 
             FROM system.information_schema.table_tags 
-            WHERE catalog_name = '{catalog_name}' 
-              AND schema_name = '{schema_name}'
+            WHERE catalog_name = {quote_literal(catalog_name)} 
+              AND schema_name = {quote_literal(schema_name)}
             """
             tag_results = await provider.execute_sql(query)
             for row in tag_results.get("rows", []):

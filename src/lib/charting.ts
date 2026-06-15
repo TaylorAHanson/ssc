@@ -108,6 +108,31 @@ export function inferFieldTypes(dataset: Dataset): Record<string, FieldType> {
     return out;
 }
 
+/**
+ * Make column names unique (``cost``, ``cost`` → ``cost``, ``cost_2``).
+ *
+ * Records are keyed by column name, and Vega encodings reference fields by
+ * name, so duplicate columns (common after a SQL JOIN) would otherwise
+ * silently overwrite each other — dropping a whole series of data. Empty
+ * names are normalized to ``column``.
+ */
+export function dedupeColumns(columns: string[]): string[] {
+    const seen = new Map<string, number>();
+    return columns.map((c) => {
+        const base = c && c.length ? c : 'column';
+        const count = seen.get(base) ?? 0;
+        seen.set(base, count + 1);
+        return count === 0 ? base : `${base}_${count + 1}`;
+    });
+}
+
+/** Return ``dataset`` with guaranteed-unique column names (same ref if already unique). */
+export function withUniqueColumns(dataset: Dataset): Dataset {
+    const unique = dedupeColumns(dataset.columns);
+    const changed = unique.some((name, i) => name !== dataset.columns[i]);
+    return changed ? { columns: unique, rows: dataset.rows } : dataset;
+}
+
 /** Convert a column/rows dataset into an array of plain records for Vega. */
 export function datasetToRecords(dataset: Dataset): Array<Record<string, unknown>> {
     return dataset.rows.map((row) => {

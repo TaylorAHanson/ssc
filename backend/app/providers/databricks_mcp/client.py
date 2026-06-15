@@ -93,6 +93,23 @@ def build_genie_mcp_url(space_id: Optional[str] = None, host: Optional[str] = No
     return f"{base}/api/2.0/mcp/genie"
 
 
+def build_dbsql_mcp_url(host: Optional[str] = None) -> str:
+    """Build the Managed-MCP URL for the Databricks SQL (DBSQL) server.
+
+    Databricks exposes a managed SQL MCP server at ``/api/2.0/mcp/sql`` whose
+    ``execute_sql_read_only`` tool runs read-only queries (the read-only
+    guarantee is enforced server-side by Databricks, not by us). Requires the
+    ``sql`` OAuth scope in the bundle's ``user_api_scopes``.
+    """
+    base = _normalize_host(host or settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL)
+    if not base:
+        raise ValueError(
+            "Databricks host is not configured. Set DATABRICKS_HOST or "
+            "DATABRICKS_WORKSPACE_URL before invoking the DBSQL MCP tool."
+        )
+    return f"{base}/api/2.0/mcp/sql"
+
+
 # Environments where we allow the SP fallback. Used as a *secondary*
 # signal — the primary signal is the presence of Databricks-Apps
 # runtime env vars (see ``_running_in_databricks_apps``). Anything
@@ -138,6 +155,18 @@ def _is_local_environment() -> bool:
         return False
     env = (settings.ENVIRONMENT or "").strip().lower()
     return env in _LOCAL_ENVIRONMENTS
+
+
+def sp_fallback_allowed() -> bool:
+    """Whether falling back to the app service principal (no user OBO) is allowed.
+
+    True only in true local dev (``./dev.sh`` off-platform with a local-flavored
+    ``ENVIRONMENT``). On any deployed Databricks Apps target this is False, so
+    callers can refuse to silently run a user-scoped query as the SP — which would
+    return data under the wrong identity. Shared by the Genie/DBSQL MCP paths and
+    the SDK ``execute_sql`` OBO guard so the policy lives in exactly one place.
+    """
+    return _is_local_environment()
 
 
 def resolve_genie_bearer_token(obo_token: Optional[str]) -> Tuple[Optional[str], str]:
@@ -377,10 +406,85 @@ async def call_genie_tool(
     }
 
 
+async def call_dbsql_tool(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    obo_token: Optional[str] = None,
+    host: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Invoke a single tool on the Databricks SQL (DBSQL) Managed MCP server.
+
+    Mirrors :func:`call_genie_tool` but targets ``/api/2.0/mcp/sql`` and tailors
+    the no-auth error to the ``sql`` OAuth scope. ``obo_token`` is preferred so
+    the query runs under the user's Unity Catalog permissions; the SP fallback is
+    only permitted in true local dev (same policy as Genie, via
+    :func:`resolve_genie_bearer_token`).
+
+    Returns a normalized dict with ``content`` (joined text), ``structured`` (the
+    structured payload if present), ``is_error``, and ``auth_source``.
+    """
+    bearer_token, source = resolve_genie_bearer_token(obo_token)
+    if not bearer_token:
+        if _running_in_databricks_apps():
+            raise GenieAuthUnavailableError(
+                "No OBO token was forwarded for the Databricks SQL (DBSQL) MCP "
+                "call. The Databricks Apps platform should inject "
+                "X-Forwarded-Access-Token automatically — if it's missing, the "
+                "bundle's user_api_scopes likely doesn't include the 'sql' scope, "
+                "or the user hasn't re-authorized the app since it was added. (SP "
+                "fallback is intentionally disabled inside Databricks Apps so SQL "
+                "always runs under the user's identity.)"
+            )
+        raise GenieAuthUnavailableError(
+            "No authentication available for the Databricks SQL MCP server. In "
+            "local dev, set DATABRICKS_CLIENT_ID / DATABRICKS_CLIENT_SECRET (the "
+            "SP must have the 'sql' scope and warehouse access) or paste a user "
+            "token into MOCK_USER_TOKEN; otherwise run inside Databricks Apps so "
+            "the X-Forwarded-Access-Token header is forwarded."
+        )
+
+    url = build_dbsql_mcp_url(host=host)
+    logger.info(
+        "Calling DBSQL MCP tool %s on %s (auth=%s, args keys=%s)",
+        tool_name,
+        url,
+        source,
+        list(arguments.keys()),
+    )
+    async with open_mcp_session(url=url, bearer_token=bearer_token) as session:
+        result = await session.call_tool(tool_name, arguments=arguments)
+
+    text_parts: list[str] = []
+    for part in getattr(result, "content", []) or []:
+        text = getattr(part, "text", None)
+        if isinstance(text, str):
+            text_parts.append(text)
+    structured_attr = getattr(result, "structuredContent", None)
+    structured = structured_attr if isinstance(structured_attr, dict) else None
+    content = "\n".join(t for t in text_parts if t).strip()
+
+    logger.info(
+        "DBSQL MCP %s returned: is_error=%s content_len=%d structured_keys=%s",
+        tool_name,
+        bool(getattr(result, "isError", False)),
+        len(content),
+        sorted(structured.keys()) if isinstance(structured, dict) else "none",
+    )
+
+    return {
+        "content": content,
+        "structured": structured,
+        "is_error": bool(getattr(result, "isError", False)),
+        "auth_source": source,
+    }
+
+
 __all__ = [
     "build_genie_mcp_url",
+    "build_dbsql_mcp_url",
     "open_mcp_session",
     "call_genie_tool",
+    "call_dbsql_tool",
     "resolve_genie_bearer_token",
     "GenieAuthUnavailableError",
     "ProgressCallback",

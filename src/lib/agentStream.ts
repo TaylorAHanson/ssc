@@ -207,6 +207,10 @@ export async function* streamAgentConversation(
             const { value, done } = await reader.read();
             if (done) break;
             buffer += decoder.decode(value, { stream: true });
+            // Normalize CRLF so frame splitting works behind proxies/servers
+            // that emit "\r\n\r\n" (our backend uses "\n\n", but be defensive —
+            // "\r\n\r\n" has no "\n\n" adjacency and would never split).
+            buffer = buffer.replace(/\r\n/g, '\n');
 
             let separatorIdx = buffer.indexOf('\n\n');
             while (separatorIdx !== -1) {

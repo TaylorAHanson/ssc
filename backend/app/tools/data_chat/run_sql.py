@@ -8,62 +8,51 @@ the rows back *directly and deterministically* — which is exactly what the
 charting pipeline needs (Genie sometimes answers in prose with no rows attached).
 
 Identity / governance:
-  * The statement runs **On-Behalf-Of the user** (their OBO token) so Unity
-    Catalog permissions apply — the agent can never read data the user can't.
-  * It is **read-only by construction**: the single statement must begin with one
-    of SELECT / WITH / SHOW / DESCRIBE / EXPLAIN / TABLE / VALUES. Anything that
-    mutates (INSERT/UPDATE/DELETE/MERGE/DDL/GRANT/…) is rejected before execution.
-  * Multiple statements are rejected; an automatic ``LIMIT`` caps result sets.
+  * The query runs through the **Databricks-managed DBSQL MCP server**
+    (``/api/2.0/mcp/sql``) using the ``execute_sql_read_only`` tool, so the
+    **read-only guarantee is enforced server-side by Databricks** — there is no
+    hand-rolled SQL parsing to bypass.
+  * It runs **On-Behalf-Of the user** (their OBO token), so Unity Catalog
+    permissions apply — the agent can never read data the user can't. The SP
+    fallback is only allowed in true local dev (same policy as Genie).
 
-Output shape is what ``parseToolChart`` (src/components/chat/toolChart.ts) already
-understands — ``columns`` + ``rows`` (arrays) — so the chat renders an auto-chart
-with interactive re-graph controls below the pill, and ``render_chart`` can later
-re-graph the same rows.
+The server is asynchronous for long queries: ``execute_sql_read_only`` starts the
+statement and returns a ``statement_id`` if it doesn't finish immediately; we then
+poll ``poll_sql_result`` until it reaches a terminal state. Output is shaped as
+``columns`` + ``rows`` so the chat auto-renders a chart with interactive re-graph
+controls, and ``render_chart`` can later re-graph the same rows.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
-import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from app.core.config import settings
-from app.providers.databricks import DatabricksProvider
+from app.providers.databricks_mcp import GenieAuthUnavailableError, call_dbsql_tool
 from app.tools.mcp import tool
 
 logger = logging.getLogger(__name__)
 
-# Hard ceiling on rows shipped back (and the auto-LIMIT we inject). Keeps the SSE
-# frame and the LLM-facing tool message bounded while still giving charts plenty
-# of points. Mirrors the Genie preview cap for parity.
+# Row ceiling shipped back (and surfaced to the chart UI). Keeps the SSE frame and
+# the LLM-facing tool message bounded; mirrors the Genie preview cap for parity.
 _MAX_ROWS = 5000
-# Rows surfaced as readable dict records for the model to reason over. The full
+# Rows surfaced as readable dict records for the model to reason over; the full
 # (capped) row set still rides along under ``rows`` for the chart UI.
 _SAMPLE_ROWS = 15
-_TIMEOUT_SECONDS = 120
+# Total wall-clock budget for polling a long-running statement before giving up.
+_POLL_TIMEOUT_SECONDS = 110
+_POLL_INTERVAL_SECONDS = 2.0
 
-# A read-only statement must start with one of these. This leading-keyword
-# whitelist + the single-statement rule is the actual safety guarantee: you
-# cannot run DML/DDL if the one allowed statement has to begin with a read verb.
-_READ_LEADERS = {
-    "select",
-    "with",
-    "show",
-    "describe",
-    "desc",
-    "explain",
-    "table",
-    "values",
-}
-# Statements that produce a normal result set and accept a trailing LIMIT.
-_LIMITABLE_LEADERS = {"select", "with", "table", "values"}
-
+_STATE_SUCCEEDED = "SUCCEEDED"
+_TERMINAL_BAD = {"FAILED", "CANCELED", "CANCELLED", "CLOSED"}
 
 _DESCRIPTION = """\
-Run a READ-ONLY SQL query on Databricks SQL and get the rows back. Runs as the \
-current user (their Unity Catalog permissions apply), so it can only read data the \
-user can already access.
+Run a READ-ONLY SQL query on Databricks SQL and get the rows back. The query runs \
+through Databricks' managed SQL server as the current user (their Unity Catalog \
+permissions apply) and is read-only — the server rejects anything that writes.
 
 Use this when you already know the table(s) and want precise, fast, chartable data \
 - e.g. after discovering a table with search_data_assets / get_table_list. The rows \
@@ -74,13 +63,11 @@ Prefer ask_your_data (Genie) instead when the question is vague, spans unknown \
 tables, or you'd be guessing at the schema - Genie grounds natural language in the \
 metastore. Prefer this tool when you can write the SQL yourself.
 
-Rules (enforced):
-- One statement only, and it must be read-only: SELECT / WITH / SHOW / DESCRIBE / \
-EXPLAIN / TABLE / VALUES. Anything that writes (INSERT, UPDATE, DELETE, MERGE, \
-CREATE, DROP, ALTER, GRANT, ...) is rejected.
-- Use fully-qualified names (catalog.schema.table).
-- A LIMIT is added automatically if you omit one (max %d rows).\
-""" % _MAX_ROWS
+Tips:
+- Use fully-qualified names (catalog.schema.table), including system.* tables \
+(system.billing.usage, system.lakeflow.jobs, ...) for cost/usage/job questions.
+- Add your own LIMIT for large tables; only one statement per call.\
+"""
 
 
 class RunSqlInput(BaseModel):
@@ -91,95 +78,9 @@ class RunSqlInput(BaseModel):
         min_length=6,
         description=(
             "A single read-only SQL statement to execute (SELECT / WITH / SHOW / "
-            "DESCRIBE / EXPLAIN / TABLE / VALUES). Use fully-qualified table names. "
-            "Do not include a trailing semicolon or multiple statements."
+            "DESCRIBE / EXPLAIN). Use fully-qualified table names. The server "
+            "rejects any statement that modifies data or objects."
         ),
-    )
-    warehouse_id: Optional[str] = Field(
-        default=None,
-        description=(
-            "Optional SQL warehouse ID to run on. Leave empty to use the app's "
-            "configured default warehouse."
-        ),
-    )
-
-
-def _strip_sql_comments(sql: str) -> str:
-    """Remove ``--`` line comments and ``/* */`` block comments for safe parsing.
-
-    We only use the stripped form to *classify* the statement (leading keyword,
-    statement count, LIMIT presence); the original SQL is what we actually run.
-    """
-    no_block = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
-    no_line = re.sub(r"--[^\n]*", " ", no_block)
-    return no_line
-
-
-def _classify(sql: str) -> Dict[str, Any]:
-    """Validate a single read-only statement and report whether it's limitable.
-
-    Returns ``{"ok": True, "leader": str, "limitable": bool}`` or
-    ``{"ok": False, "error": str}``. The check is intentionally conservative:
-    leading-keyword whitelist + single-statement enforcement.
-    """
-    cleaned = _strip_sql_comments(sql).strip()
-    if not cleaned:
-        return {"ok": False, "error": "Empty SQL after removing comments."}
-
-    # Reject multiple statements. A single trailing ';' is fine.
-    inner = cleaned[:-1] if cleaned.endswith(";") else cleaned
-    if ";" in inner:
-        return {
-            "ok": False,
-            "error": (
-                "Only a single SQL statement is allowed. Remove extra ';'-separated "
-                "statements and run them one at a time."
-            ),
-        }
-
-    # Allow a leading '(' for parenthesized set operations: (SELECT ...) UNION ...
-    probe = inner.lstrip()
-    while probe.startswith("("):
-        probe = probe[1:].lstrip()
-
-    m = re.match(r"([a-zA-Z]+)", probe)
-    leader = m.group(1).lower() if m else ""
-    if leader not in _READ_LEADERS:
-        return {
-            "ok": False,
-            "error": (
-                f"Only read-only queries are allowed. The statement starts with "
-                f"'{leader or '?'}', but it must begin with one of: "
-                f"SELECT, WITH, SHOW, DESCRIBE, EXPLAIN, TABLE, VALUES. "
-                "This tool will not run statements that modify data or objects."
-            ),
-        }
-    return {"ok": True, "leader": leader, "limitable": leader in _LIMITABLE_LEADERS}
-
-
-def _has_limit(sql: str) -> bool:
-    """Heuristic: does the (comment-stripped) query already cap rows with LIMIT?"""
-    cleaned = _strip_sql_comments(sql)
-    return re.search(r"\blimit\b\s+\d+", cleaned, flags=re.IGNORECASE) is not None
-
-
-def _apply_limit(sql: str, limitable: bool) -> str:
-    """Append ``LIMIT _MAX_ROWS`` to limitable queries that don't already cap rows."""
-    if not limitable or _has_limit(sql):
-        return sql
-    trimmed = sql.rstrip()
-    if trimmed.endswith(";"):
-        trimmed = trimmed[:-1].rstrip()
-    return f"{trimmed}\nLIMIT {_MAX_ROWS}"
-
-
-def _get_provider() -> DatabricksProvider:
-    return DatabricksProvider(
-        host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-        token=settings.DATABRICKS_TOKEN,
-        client_id=settings.DATABRICKS_CLIENT_ID,
-        client_secret=settings.DATABRICKS_CLIENT_SECRET,
-        config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID},
     )
 
 
@@ -192,55 +93,75 @@ def _get_provider() -> DatabricksProvider:
     friendly_label="Running SQL...",
     friendly_completion_label="Query complete",
 )
-async def run_sql(
-    sql: str,
-    warehouse_id: Optional[str] = None,
-    **kwargs: Any,
-) -> Dict[str, Any]:
-    """Execute a validated read-only query under the user's identity and return rows.
+async def run_sql(sql: str, **kwargs: Any) -> Dict[str, Any]:
+    """Execute a read-only query via the managed DBSQL MCP server and return rows.
 
-    Returns ``{ok, columns, rows, row_count, sample, sql, truncated}`` on success
-    (the ``columns``/``rows`` shape feeds the chart UI), or ``{"error": ...}`` on a
-    validation or execution failure (surfaced as a failed pill, no false success).
+    Returns ``{ok, columns, rows, row_count, sample, truncated}`` on success (the
+    ``columns``/``rows`` shape feeds the chart UI), or ``{"error": ...}`` on an
+    auth/validation/execution failure (surfaced as a failed pill — no false
+    success).
     """
-    verdict = _classify(sql)
-    if not verdict.get("ok"):
-        return {"error": verdict["error"]}
-
-    effective_sql = _apply_limit(sql, bool(verdict.get("limitable")))
     obo_token: Optional[str] = kwargs.get("_obo_token")
 
     try:
-        provider = _get_provider()
-        result = await provider.execute_sql(
-            query=effective_sql,
-            warehouse=warehouse_id,
-            timeout_seconds=_TIMEOUT_SECONDS,
-            obo_token=obo_token,
+        resp = await call_dbsql_tool(
+            "execute_sql_read_only", {"query": sql}, obo_token=obo_token
         )
-    except Exception as e:  # RetryableError or config/auth failures
-        logger.warning("run_sql failed: %s", e)
+    except GenieAuthUnavailableError as e:
+        return {"error": str(e)}
+    except Exception as e:  # network / MCP protocol / config errors
+        logger.warning("run_sql execute_sql_read_only failed: %s", e)
         return {"error": f"SQL execution failed: {e}"}
 
-    raw_rows: List[Any] = result.get("rows") or []
-    columns: List[str] = result.get("schema") or []
-    if not columns and raw_rows and isinstance(raw_rows[0], dict):
-        columns = list(raw_rows[0].keys())
+    if resp.get("is_error"):
+        # Server-side rejection (incl. a write attempt blocked by the read-only
+        # tool, or a SQL/permission error) — surface it verbatim as a failure.
+        return {"error": resp.get("content") or "The Databricks SQL server reported an error."}
 
-    # Normalize to row-arrays aligned to ``columns`` (what the chart parser wants),
-    # capped to the row ceiling. Dict rows are common from the SDK path.
-    rows: List[List[Any]] = []
-    for row in raw_rows[:_MAX_ROWS]:
-        if isinstance(row, dict):
-            rows.append([row.get(c) for c in columns])
-        elif isinstance(row, (list, tuple)):
-            rows.append(list(row))
-        else:
-            rows.append([row])
+    payload = _statement_payload(resp)
+    if payload is None:
+        return {"error": "Could not parse the SQL response from Databricks."}
 
-    truncated = len(raw_rows) > _MAX_ROWS
-    # A small readable sample for the model to reason over without it having to
-    # parse the full ``rows`` arrays (which the prompt budget may truncate).
+    # Poll until the statement reaches a terminal state (or we time out).
+    statement_id = payload.get("statement_id")
+    state = _state(payload)
+    waited = 0.0
+    while state != _STATE_SUCCEEDED and state not in _TERMINAL_BAD:
+        if not statement_id:
+            return {
+                "error": (
+                    f"SQL is still '{state or 'pending'}' but Databricks returned "
+                    "no statement_id to poll."
+                )
+            }
+        if waited >= _POLL_TIMEOUT_SECONDS:
+            return {
+                "error": (
+                    f"SQL query did not finish within {int(_POLL_TIMEOUT_SECONDS)}s "
+                    f"(statement {statement_id}). Try a more selective query or a LIMIT."
+                )
+            }
+        await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+        waited += _POLL_INTERVAL_SECONDS
+        try:
+            presp = await call_dbsql_tool(
+                "poll_sql_result", {"statement_id": statement_id}, obo_token=obo_token
+            )
+        except Exception as e:
+            logger.warning("run_sql poll_sql_result failed: %s", e)
+            return {"error": f"SQL poll failed: {e}"}
+        if presp.get("is_error"):
+            return {"error": presp.get("content") or "SQL poll reported an error."}
+        payload = _statement_payload(presp) or payload
+        state = _state(payload)
+
+    if state in _TERMINAL_BAD:
+        return {"error": _failure_message(payload, state)}
+
+    columns = _columns(payload)
+    rows = _rows(payload, columns)
+    total_rows = _total_row_count(payload, len(rows))
+    truncated = total_rows > len(rows) or _manifest_truncated(payload) or len(rows) >= _MAX_ROWS
     sample = [dict(zip(columns, r)) for r in rows[:_SAMPLE_ROWS]]
 
     logger.info(
@@ -253,13 +174,144 @@ async def run_sql(
 
     return {
         "ok": True,
-        "sql": effective_sql,
         "row_count": len(rows),
         "columns": columns,
         "truncated": truncated,
         "sample": sample,
         "rows": rows,
     }
+
+
+# ---------------------------------------------------------------------------
+# Response parsing (defensive: the managed server returns a StatementResponse-
+# shaped object, either as structuredContent or a JSON text frame).
+# ---------------------------------------------------------------------------
+def _statement_payload(resp: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Extract the StatementResponse dict from a normalized MCP tool response."""
+    structured = resp.get("structured")
+    if isinstance(structured, dict) and _looks_like_statement(structured):
+        return structured
+    # Some MCP servers wrap the real payload one level down.
+    if isinstance(structured, dict):
+        for v in structured.values():
+            if isinstance(v, dict) and _looks_like_statement(v):
+                return v
+    content = resp.get("content")
+    if isinstance(content, str) and content.strip():
+        try:
+            decoded = json.loads(content)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(decoded, dict):
+            if _looks_like_statement(decoded):
+                return decoded
+            for v in decoded.values():
+                if isinstance(v, dict) and _looks_like_statement(v):
+                    return v
+    return None
+
+
+def _looks_like_statement(obj: Dict[str, Any]) -> bool:
+    return any(k in obj for k in ("status", "statement_id", "manifest", "result"))
+
+
+def _state(payload: Dict[str, Any]) -> str:
+    """Normalize the statement state to an upper-case string ('' if unknown)."""
+    status = payload.get("status")
+    if isinstance(status, dict):
+        return str(status.get("state") or "").upper()
+    if isinstance(status, str):
+        return status.upper()
+    return ""
+
+
+def _failure_message(payload: Dict[str, Any], state: str) -> str:
+    status = payload.get("status")
+    if isinstance(status, dict):
+        err = status.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return f"SQL {state.lower()}: {err['message']}"
+        if isinstance(err, str) and err:
+            return f"SQL {state.lower()}: {err}"
+    return f"SQL execution {state.lower()}."
+
+
+def _columns(payload: Dict[str, Any]) -> List[str]:
+    manifest = payload.get("manifest")
+    if isinstance(manifest, dict):
+        schema = manifest.get("schema")
+        if isinstance(schema, dict):
+            cols = schema.get("columns")
+            if isinstance(cols, list) and cols:
+                ordered = sorted(
+                    (c for c in cols if isinstance(c, dict)),
+                    key=lambda c: c.get("position", 0),
+                )
+                return [str(c.get("name", f"col_{i}")) for i, c in enumerate(ordered)]
+    # Fallback: infer from the first result row if it's a record dict.
+    result = payload.get("result")
+    if isinstance(result, dict):
+        data = result.get("data_array")
+        if isinstance(data, list) and data and isinstance(data[0], dict) and "values" not in data[0]:
+            return [str(k) for k in data[0].keys()]
+    return []
+
+
+def _rows(payload: Dict[str, Any], columns: List[str]) -> List[List[Any]]:
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return []
+    data = result.get("data_array")
+    if not isinstance(data, list):
+        return []
+    rows: List[List[Any]] = []
+    for raw in data[:_MAX_ROWS]:
+        if isinstance(raw, dict) and isinstance(raw.get("values"), list):
+            # Typed proto-JSON form: {"values": [{"string_value": "x"}, ...]}
+            rows.append([_cell_scalar(v) for v in raw["values"]])
+        elif isinstance(raw, dict):
+            # Record form keyed by column name.
+            rows.append([raw.get(c) for c in columns])
+        elif isinstance(raw, (list, tuple)):
+            rows.append(list(raw))
+        else:
+            rows.append([raw])
+    return rows
+
+
+def _cell_scalar(cell: Any) -> Any:
+    """Pull the scalar out of a typed value cell ({"string_value": "x"} → "x")."""
+    if isinstance(cell, dict):
+        for k, v in cell.items():
+            if k in ("null", "null_value", "is_null") and v:
+                return None
+        for k, v in cell.items():
+            if k.endswith("_value") or k == "value":
+                return v
+        for v in cell.values():  # last-resort: first value present
+            return v
+        return None
+    return cell
+
+
+def _total_row_count(payload: Dict[str, Any], fallback: int) -> int:
+    manifest = payload.get("manifest")
+    if isinstance(manifest, dict):
+        total = manifest.get("total_row_count")
+        if isinstance(total, int):
+            return total
+    return fallback
+
+
+def _manifest_truncated(payload: Dict[str, Any]) -> bool:
+    manifest = payload.get("manifest")
+    if isinstance(manifest, dict):
+        if manifest.get("truncated") is True:
+            return True
+        chunks = manifest.get("total_chunk_count")
+        if isinstance(chunks, int) and chunks > 1:
+            return True
+    return False
 
 
 __all__ = ["run_sql"]

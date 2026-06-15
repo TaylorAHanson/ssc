@@ -4,6 +4,7 @@ Tool to check tagging compliance.
 from typing import Dict, Any, List
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
+from app.tools.sql_safety import quote_literal
 from app.providers.databricks import DatabricksProvider
 from app.core.config import settings
 from app.core.exceptions import RetryableError
@@ -40,7 +41,7 @@ async def check_tagging_compliance(required_tags: List[str], **kwargs) -> Dict[s
         tag_checks = []
         for tag in required_tags:
             # Based on user documentation, 'tags' is the map column.
-            tag_checks.append(f"NOT map_contains_key(tags, '{tag}')")
+            tag_checks.append(f"NOT map_contains_key(tags, {quote_literal(tag)})")
         
         # If ANY tag is missing, select it
         where_clause = " OR ".join(tag_checks)
@@ -61,7 +62,7 @@ async def check_tagging_compliance(required_tags: List[str], **kwargs) -> Dict[s
         # Note: Warehouses table might be different (system.compute.warehouses?) 
         # Sticking to clusters for now as primary target.
         
-        result = await provider.execute_sql(query, obo_token=obo_token)
+        result = await provider.execute_sql(query, obo_token=obo_token, require_obo=True)
         
         return {
             "non_compliant_resources": result.get("rows", []),

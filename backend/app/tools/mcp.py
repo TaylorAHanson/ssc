@@ -198,13 +198,48 @@ class McpTool:
         return schema
         
     async def execute(self, **kwargs) -> Dict[str, Any]:
-        """Executes the wrapped function with the provided arguments."""
+        """Executes the wrapped function with the provided arguments.
+
+        LLM-supplied arguments are validated/coerced against ``args_schema``
+        before the call so that schema constraints (``Literal`` choices, numeric
+        bounds, ``min_length``, types) are actually *enforced* — not merely
+        advertised. This is a security boundary: several tools interpolate args
+        into SQL, so an unconstrained ``Literal`` field would otherwise be an
+        injection vector. Executor-injected context (underscore-prefixed keys
+        like ``_obo_token`` / ``_user_email``) bypasses validation and is passed
+        through untouched.
+        """
+        from pydantic import ValidationError
+
+        # Split LLM args (declared in the schema) from injected context.
+        schema_fields = set(getattr(self._args_schema, "model_fields", {}).keys())
+        provided = {
+            k: v
+            for k, v in kwargs.items()
+            if k in schema_fields and not k.startswith("_") and k != "kwargs"
+        }
+        context = {k: v for k, v in kwargs.items() if k not in provided}
+
+        try:
+            # exclude_unset keeps the function's own defaults authoritative for
+            # args the caller didn't pass, while still validating/coercing the
+            # ones it did.
+            validated = self._args_schema(**provided).model_dump(exclude_unset=True)
+        except ValidationError as e:
+            return {
+                "error": (
+                    f"Invalid arguments for tool '{self._name}': {e.errors(include_url=False)}"
+                )
+            }
+
+        merged = {**validated, **context}
+
         # Validate arguments against function signature to prevent type errors
         # when extra context (like _user_email) is injected by the runner.
         sig = inspect.signature(self._func)
         bound_args = {}
-        
-        for k, v in kwargs.items():
+
+        for k, v in merged.items():
             if k in sig.parameters:
                 bound_args[k] = v
             elif any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
@@ -272,7 +307,19 @@ def tool(
             for param_name, param in inspect.signature(func).parameters.items():
                 if param_name == 'return':
                     continue
-                
+                # Skip the ``**kwargs`` / ``*args`` catch-alls and executor-injected
+                # context (``_obo_token`` etc.) — they are NOT LLM-facing args, and
+                # turning them into required schema fields would both pollute the
+                # advertised JSON schema and (now that execute() validates) reject
+                # every call to a ``def tool(**kwargs)`` body.
+                if param.kind in (
+                    inspect.Parameter.VAR_KEYWORD,
+                    inspect.Parameter.VAR_POSITIONAL,
+                ):
+                    continue
+                if param_name.startswith('_'):
+                    continue
+
                 annotation = type_hints.get(param_name, Any)
                 default = param.default
                 

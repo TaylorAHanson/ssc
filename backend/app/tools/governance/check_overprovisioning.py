@@ -144,7 +144,7 @@ async def check_overprovisioned_users(check_type: str = "risk_score", **kwargs) 
             ORDER BY over_provisioning_score DESC, privilege_grants DESC
             LIMIT 100
             """
-            result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token)
+            result = await provider.execute_sql(query, timeout_seconds=300, obo_token=obo_token, require_obo=True)
             return {
                 "risk_assessment": result.get("rows", []),
                 "methodology": "Combines privilege counts with 90-day activity logs (ACL changes, last login, workspaces touched).",
@@ -200,7 +200,7 @@ async def check_overprovisioned_users(check_type: str = "risk_score", **kwargs) 
             ORDER BY number_of_grants DESC
             LIMIT 100
             """
-            result = await provider.execute_sql(query, timeout_seconds=600, obo_token=obo_token)
+            result = await provider.execute_sql(query, timeout_seconds=600, obo_token=obo_token, require_obo=True)
             return {
                 "grants_by_user": result.get("rows", []),
                 "check_type": "grants_summary"
@@ -214,7 +214,7 @@ async def check_overprovisioned_users(check_type: str = "risk_score", **kwargs) 
                 WHERE g.display_name = 'admins'
                 LIMIT 100
             """
-            result = await provider.execute_sql(query, timeout_seconds=600, obo_token=obo_token)
+            result = await provider.execute_sql(query, timeout_seconds=600, obo_token=obo_token, require_obo=True)
             return {
                 "workspace_admins": result.get("rows", []),
                 "check_type": "workspace_admins"

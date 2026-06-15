@@ -208,14 +208,22 @@ tools:
   # bound to the rows already returned — no re-query. Gated by the same
   # `ask_your_data` feature flag since it complements Genie data answers.
   render_chart: true
-  # Read-only SQL execution (OBO) that feeds the charting pipeline. Gated by the
-  # `run_sql` feature flag above; statements are validated read-only before they
-  # run and capped with an automatic LIMIT.
+  # Read-only SQL execution that feeds the charting pipeline. Runs through the
+  # Databricks-managed DBSQL MCP server's `execute_sql_read_only` tool, so the
+  # read-only guarantee is enforced server-side (not by us) and the query runs
+  # On-Behalf-Of the user. Gated by the `run_sql` feature flag above.
   run_sql: true
+  # Draft an Open Data Contract (ODCS) / Open Data Product (ODPS) document from a
+  # described dataset. Read-only authoring helpers gated by the governance flag.
+  draft_odcs_contract: true
+  draft_odps_document: true
   # No-code workflow (Workflow) authoring tools. Admin-only (gated by
   # required_role) so the agent can help Platform/Governance Admins design,
   # validate, preview, and publish workflows in chat.
   list_workflow_building_blocks: true
+  # Finds existing published workflows similar to one the user describes, so the
+  # authoring agent can suggest reuse before creating a duplicate.
+  search_similar_workflows: true
   get_workflow: true
   validate_workflow_spec: true
   preview_workflow_spec: true

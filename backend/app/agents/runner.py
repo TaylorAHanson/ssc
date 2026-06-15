@@ -497,11 +497,23 @@ class AgentRunner:
                         )
                         executed_any = True
 
-                # Pending poll handed off control to the UI. Emit the
-                # event and exit. Note: no tool message gets appended to
-                # ``messages`` for this call - the continuation turn
-                # adds it once the poll resolves.
+                # Pending poll handed off control to the UI. Emit the event and
+                # exit. The *polled* tool gets its tool message later (the poll
+                # continuation adds it once it resolves), but any OTHER tool calls
+                # in this same assistant turn already ran — we MUST persist their
+                # outputs now. Otherwise the assistant turn carries tool_calls with
+                # no matching tool messages (orphan tool_calls), which providers
+                # reject on resume, and those results would be silently lost.
                 if pending_poll_event is not None:
+                    for output in tool_outputs:
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": output["tool_call_id"],
+                                "name": output["name"],
+                                "content": output["content"],
+                            }
+                        )
                     yield pending_poll_event
                     final_content = agent_message
                     tracing.end_root_span(turn_span, outputs={"pending_poll": True})
