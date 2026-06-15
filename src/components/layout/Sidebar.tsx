@@ -468,7 +468,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   className="h-8 w-auto max-w-[180px] object-contain"
                 />
               )}
-              <span className="text-sm font-semibold text-white truncate leading-tight">
+              <span className={cn(
+                "font-semibold text-white truncate leading-tight",
+                // With no logo the name is the only branding, so give it more
+                // presence; when a logo sits above it, keep the name compact.
+                brandLogoUrl ? "text-sm" : "text-xl"
+              )}>
                 {brandName}
               </span>
             </Link>
