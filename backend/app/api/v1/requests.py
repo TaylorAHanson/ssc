@@ -6,7 +6,7 @@ import fastapi
 from fastapi.responses import JSONResponse
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from app.models.request import Request, RequestCreate, RequestUpdate, StateMachineState, RequestStatus
+from app.models.request import Request, RequestCreate, RequestUpdate, StateMachineState, RequestStatus, RequestType
 from app.services.request_service import RequestService
 from app.db.session import get_db
 from app.db import ApprovalModel, RequestModel, EventModel
@@ -284,6 +284,14 @@ async def create_request(
     db: Session = Depends(get_db)
 ):
     """Create a new request."""
+    # Admin-only workflow types must be gated server-side, not just by hiding
+    # the UI. The enforcement sentinel scans/remediates governed assets, so a
+    # crafted API call shouldn't be able to start one without the right role.
+    if request_data.type == RequestType.ENFORCEMENT_SENTINEL.value and not (
+        current_user.has_role("Platform Admin") or current_user.has_role("Governance Admin")
+    ):
+        raise HTTPException(status_code=403, detail="Not authorized to start enforcement sentinel runs")
+
     # Set the requester email from authenticated user
     request_data.requester_email = current_user.email
     
@@ -660,7 +668,7 @@ async def execute_enforcement_action(
     db: Session = Depends(get_db)
 ):
     """Execute a specific enforcement action manually (e.g. from audit mode)."""
-    if not current_user.has_role("platform_admin") and not current_user.has_role("governance_admin"):
+    if not current_user.has_role("Platform Admin") and not current_user.has_role("Governance Admin"):
         raise HTTPException(status_code=403, detail="Not authorized to execute enforcement actions")
 
     from app.core.config import settings

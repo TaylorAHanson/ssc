@@ -549,6 +549,10 @@ def _refresh_data_asset_quality(db, discovered_resources: List[Dict[str, Any]]) 
         dq["failed_rules"] = aggregated_failed_rules
         asset.data_quality = dq
         flag_modified(asset, "data_quality")
+        # The certification UI surfaces this as "Last Policy Run"; a sentinel
+        # scan IS a policy evaluation, so bump it here (not just on data sync)
+        # so one-off runs reflect a fresh evaluation timestamp.
+        asset.last_synced_at = datetime.utcnow()
         db.add(asset)
 
 
@@ -575,6 +579,7 @@ def _record_certification_violations(db, resource: Dict[str, Any], result: Dict[
         db.flush()
     asset.certification_violations = result.get("violation_reasons", [])
     flag_modified(asset, "certification_violations")
+    asset.last_synced_at = datetime.utcnow()
     db.add(asset)
 
 
