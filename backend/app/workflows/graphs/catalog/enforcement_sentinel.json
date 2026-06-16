@@ -17,6 +17,7 @@
       "tool": "sentinel_enforce",
       "success_fact": "enforce_completed",
       "writes_context": ["summary"],
+      "approvals": ["admin"],
       "args": {}
     },
     {

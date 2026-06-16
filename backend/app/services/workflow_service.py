@@ -167,6 +167,15 @@ class WorkflowService:
         workflow = WorkflowService.get(db, workflow_id)
         if not workflow:
             raise ValueError("Workflow not found")
+        # Editing the definition of a catalog-seeded workflow forks it to
+        # user-owned, so the startup catalog re-sync (seed_specs_from_catalog)
+        # never overwrites the admin's changes.
+        _definition_cols = ("goal", "instructions_markdown", "allowed_tools",
+                             "policy_ref", "params_schema", "graph_spec")
+        if workflow.source == "seed" and any(
+            col in fields and fields[col] is not None for col in _definition_cols
+        ):
+            workflow.source = "user"
         for col in ("name", "goal", "instructions_markdown", "allowed_tools",
                     "policy_ref", "params_schema", "graph_spec", "request_type", "status"):
             if col in fields and fields[col] is not None:
@@ -446,6 +455,16 @@ class WorkflowService:
             existing = WorkflowService.get_by_key(db, rt)
             if existing:
                 if not existing.graph_spec:
+                    # Backfill a missing spec regardless of source.
+                    existing.graph_spec = spec
+                    existing.request_type = existing.request_type or rt
+                    updated += 1
+                elif existing.source == "seed" and existing.graph_spec != spec:
+                    # Re-sync catalog-managed workflows so bundled spec changes
+                    # actually deploy (the DB row persists across deploys, so a
+                    # one-time backfill is not enough). Admin edits fork the
+                    # workflow to source="user" (see update()), which we never
+                    # touch here — so this only refreshes untouched seeds.
                     existing.graph_spec = spec
                     existing.request_type = existing.request_type or rt
                     updated += 1
