@@ -28,6 +28,12 @@ databricks-mcp==0.9.0
 langgraph==1.2.4
 langgraph-checkpoint-sqlite==3.1.0
 langgraph-checkpoint-postgres==3.1.0
+# langgraph-checkpoint-postgres uses psycopg v3 (NOT psycopg2). The plain
+# `psycopg` package ships no libpq wrapper, so on Lakebase/Postgres the
+# AsyncPostgresSaver fails with "no pq wrapper available". The [binary] extra
+# installs the self-contained psycopg-binary wheel (bundles libpq). Local dev
+# uses the SQLite saver so this only matters once deployed to Postgres.
+psycopg[binary]==3.3.4
 # Databricks best practices: native ResponsesAgent contract + MLflow tracing /
 # LLM-as-judge observability. mlflow-skinny pulls numpy/pandas via pyfunc.
 # NOTE: databricks-mcp requires full mlflow>=3.1, and mlflow 3.13 caps
