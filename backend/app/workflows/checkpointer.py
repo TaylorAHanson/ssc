@@ -26,8 +26,9 @@ a module flag below.
 import logging
 import os
 from contextlib import asynccontextmanager
+from urllib.parse import quote
 
-from app.db.session import get_database_url
+from app.db.session import get_database_url, get_db_schema
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,22 @@ logger = logging.getLogger(__name__)
 # idempotent but issues several DDL round-trips, so we only run it once per
 # process instead of on every advance()/peek().
 _pg_setup_done = False
+
+
+def _pg_conn_string_with_schema(url: str, schema: str) -> str:
+    """Pin ``search_path`` on the raw psycopg connection the saver uses.
+
+    The checkpointer connects with bare psycopg (NOT the SQLAlchemy engine, which
+    sets ``search_path`` via ``connect_args``). Without this the connection
+    defaults to ``public`` — where PG 15+/Lakebase revokes CREATE for non-owner
+    roles — so ``cp.setup()`` can't create the checkpoint tables and every
+    read fails with ``relation "checkpoints" does not exist``. libpq's
+    ``options`` keyword applies the schema at connect time (survives the pool's
+    rollback-on-return, same rationale as the engine's connect_args).
+    """
+    opts = quote(f"-c search_path={schema},public")
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}options={opts}"
 
 
 def _sqlite_checkpoint_path(url: str) -> str:
@@ -61,8 +78,11 @@ async def build_checkpointer():
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
         global _pg_setup_done
-        # get_database_url returns a libpq-style postgresql:// URL already.
-        async with AsyncPostgresSaver.from_conn_string(url) as cp:
+        # get_database_url returns a libpq-style postgresql:// URL already, but
+        # WITHOUT the app's search_path — pin it so the checkpoint tables land in
+        # (and are read from) the app schema, not the locked-down `public`.
+        conn_string = _pg_conn_string_with_schema(url, get_db_schema())
+        async with AsyncPostgresSaver.from_conn_string(conn_string) as cp:
             if not _pg_setup_done:
                 try:
                     await cp.setup()  # idempotent; creates checkpoint tables once
