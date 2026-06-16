@@ -316,6 +316,11 @@ class Settings(BaseSettings):
     
     # Sentinel Settings
     ENFORCEMENT_SENTINEL_CRON: str = "*/30 * * * *"  # Cron schedule to automatically run sentinel (empty = disabled)
+    # Max concurrent units of work during a sentinel scan (resource handler
+    # discovery + per-resource OPA evaluation). Bounds fan-out so we don't spawn
+    # an unbounded number of OPA subprocesses / SDK calls at once. Set to 1 to
+    # fully serialize (the pre-parallelization behavior).
+    SENTINEL_SCAN_CONCURRENCY: int = int(os.getenv("SENTINEL_SCAN_CONCURRENCY", "5"))
     
     # Retry Settings
     DEFAULT_MAX_RETRIES: int = 3

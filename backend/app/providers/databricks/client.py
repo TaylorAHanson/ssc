@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional
 import os
 import uuid
 from app.providers.base import BaseProvider
-from app.core.exceptions import RetryableError, PermanentError
+from app.core.exceptions import RetryableError, PermanentError, AuthenticationError
 from app.core.retry import retry_on_retryable
 from app.providers.databricks.compute import ComputeSpec
 from databricks.sdk import WorkspaceClient
@@ -213,11 +213,25 @@ class DatabricksProvider(BaseProvider):
             }
             return result
 
+        except PermanentError:
+            # Already classified non-retryable upstream (e.g. the OBO guard). Don't
+            # let the catch-all below re-wrap it as a RetryableError.
+            raise
         except Exception as e:
+            msg = str(e)
+            # Non-retryable: workspace IP access-list blocks, auth/permission
+            # denials won't succeed on retry. Fail fast so we don't burn 3 backoff
+            # attempts (and emit a stack trace) on every scheduled run.
+            if (
+                "is blocked by Databricks IP" in msg
+                or "IP ACL" in msg
+                or type(e).__name__ in ("PermissionDenied", "Unauthenticated")
+            ):
+                raise AuthenticationError(f"SQL execution denied (not retryable): {msg}")
             # Classify errors
-            if "TEMPORARILY_UNAVAILABLE" in str(e):
-                raise RetryableError(f"SQL execution temporarily unavailable: {str(e)}")
-            raise RetryableError(f"SQL execution failed: {str(e)}")
+            if "TEMPORARILY_UNAVAILABLE" in msg:
+                raise RetryableError(f"SQL execution temporarily unavailable: {msg}")
+            raise RetryableError(f"SQL execution failed: {msg}")
 
     @retry_on_retryable(max_attempts=3)
     async def grant_access(

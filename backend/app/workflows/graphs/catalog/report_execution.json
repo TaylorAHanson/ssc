@@ -7,6 +7,8 @@
       "kind": "step",
       "name": "execute",
       "tool": "execute_report",
+      "success_fact": "prompts_executed",
+      "writes_context": ["subject", "body"],
       "args": {"prompts": {"$var": {"path": "prompts", "default": []}}}
     },
     {
@@ -16,7 +18,8 @@
       "success_fact": "distribution_completed",
       "args": {
         "subject": {"$var": {"path": "subject", "default": "Report"}},
-        "body": {"$var": {"path": "body", "default": ""}}
+        "body": {"$var": {"path": "body", "default": ""}},
+        "to_email": {"$var": {"path": "subscribers", "default": ""}}
       }
     }
   ]

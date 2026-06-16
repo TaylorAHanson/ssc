@@ -7,13 +7,17 @@
       "kind": "step",
       "name": "discover",
       "tool": "sentinel_discover",
-      "args": {"scope": {"$var": "scope"}}
+      "success_fact": "discover_completed",
+      "writes_context": ["violations", "checks", "summary"],
+      "args": {}
     },
     {
       "kind": "step",
       "name": "enforce",
       "tool": "sentinel_enforce",
-      "args": {"enforcement_mode": {"$var": {"path": "enforcement_mode", "default": "audit_only"}}}
+      "success_fact": "enforce_completed",
+      "writes_context": ["summary"],
+      "args": {}
     },
     {
       "kind": "step",
@@ -21,8 +25,8 @@
       "tool": "send_notification",
       "success_fact": "notify_completed",
       "args": {
-        "subject": "Enforcement run complete",
-        "body": {"$var": {"path": "summary", "default": ""}}
+        "subject": "Enforcement Sentinel run complete",
+        "body": {"$var": {"path": "summary", "default": "Enforcement Sentinel run complete."}}
       }
     }
   ]

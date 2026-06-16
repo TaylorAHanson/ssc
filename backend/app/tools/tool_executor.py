@@ -32,8 +32,8 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 # Keys the runner/executor inject into tool kwargs; never forwarded to OPA input
-# or persisted in audit facts (they carry tokens / PII).
-_INJECTED_KEYS = ("_obo_token", "_user_email", "_user_roles", "_user_entitlements")
+# or persisted in audit facts (they carry tokens / PII / non-model context).
+_INJECTED_KEYS = ("_obo_token", "_user_email", "_user_roles", "_user_entitlements", "_request_id")
 
 _DEFAULT_ALLOW_DECISION = {
     "allow": True,
@@ -235,6 +235,12 @@ class ToolExecutor:
             call_args["_user_email"] = ctx.user_identity.get("email")
             call_args["_user_roles"] = ctx.user_identity.get("roles")
             call_args["_user_entitlements"] = ctx.user_identity.get("entitlements")
+        # Workflow steps carry the request id as the executor scope. Inject it so
+        # tools that need to persist to / read from the originating request (e.g.
+        # the enforcement sentinel writing violations back to state_context) can
+        # find it without every graph spec having to thread it through args.
+        if ctx.scope_id:
+            call_args["_request_id"] = ctx.scope_id
 
         # Args the model actually supplied (for validation + policy + audit),
         # excluding injected identity/context keys.

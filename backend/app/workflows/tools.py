@@ -60,7 +60,7 @@ def _get_gitops_provider():
 
 
 def _get_notification_provider():
-    from app.providers.notification.client import NotificationProvider
+    from app.providers.notifications.client import NotificationProvider
     return NotificationProvider()
 
 
@@ -295,26 +295,85 @@ class NotifyInput(BaseModel):
 @tool(name="send_notification", args_schema=NotifyInput, side_effect_class="notify",
       description="Send an email/Teams notification.")
 async def send_notification(subject: str, body: str, to_email: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    from app.core.config import settings
     provider = _get_notification_provider()
-    result = await provider.send(subject=subject, body=body, to_email=to_email)
-    return {"sent": True, "result": result}
+    # Fall back to the governance group when a workflow step doesn't specify a
+    # recipient (e.g. the enforcement_sentinel notify step), matching the
+    # poller's failure-notification behaviour.
+    recipient = to_email or settings.GOVERNANCE_EMAIL_GROUP
+    # Recipients may be a comma-separated list (e.g. report subscribers); send
+    # to each individually so a single bad address can't drop the whole batch.
+    recipients = [e.strip() for e in str(recipient or "").split(",") if e.strip()]
+    results = [await provider.send_email(to=r, subject=subject, body=body, is_html=True)
+               for r in recipients]
+    return {"sent": any(results), "to": recipients, "result": results}
 
 
 # --------------------------------------------------------------------------
 # Enforcement sentinel tools (automated pipeline)
 # --------------------------------------------------------------------------
+def _load_request(request_id: Optional[str]):
+    """Load the originating request row for a workflow step (or ``(None, None)``).
+
+    Returns an open ``(db, request)`` pair; callers are responsible for closing
+    ``db``. Used by tools that must persist back to / read from the request that
+    spawned the workflow step (sentinel scan results, allowlist exceptions,
+    report bodies). The request id is injected by the ToolExecutor as
+    ``_request_id`` (the step's executor scope).
+    """
+    if not request_id:
+        return None, None
+    from app.db import RequestModel
+    from app.db.session import get_db
+
+    db = next(get_db())
+    request = db.query(RequestModel).filter(RequestModel.id == request_id).first()
+    if request is None:
+        db.close()
+        return None, None
+    return db, request
+
+
 @tool(name="sentinel_discover", side_effect_class="read",
       description="Discover policy violations across governed assets (OPA evaluation).")
 async def sentinel_discover(**kwargs) -> Dict[str, Any]:
-    logger.info("sentinel_discover: %s", kwargs.get("scope"))
-    return {"violations": kwargs.get("_violations", [])}
+    # Test/eval hook: callers (golden transcripts) may inject canned violations.
+    if "_violations" in kwargs:
+        violations = kwargs.get("_violations") or []
+        return {"violations": violations, "checks": [], "summary": f"{len(violations)} injected violation(s)."}
+
+    request_id = kwargs.get("_request_id")
+    db, request = _load_request(request_id)
+    if request is None:
+        logger.warning("sentinel_discover: no request found for id=%s; nothing to scan", request_id)
+        return {"violations": [], "checks": [], "summary": "No request context; scan skipped."}
+
+    logger.info("sentinel_discover: request=%s workspace=%s", request_id,
+                (request.state_context or {}).get("workspace"))
+    try:
+        from app.workflows.sentinel import run_discovery
+        return await run_discovery(db, request)
+    finally:
+        db.close()
 
 
 @tool(name="sentinel_enforce", side_effect_class="destructive",
       description="Remediate discovered violations (warn/kill/uncertify). Irreversible.")
 async def sentinel_enforce(**kwargs) -> Dict[str, Any]:
-    logger.info("sentinel_enforce: mode=%s", kwargs.get("enforcement_mode"))
-    return {"enforced": True, "mode": kwargs.get("enforcement_mode", "audit_only")}
+    request_id = kwargs.get("_request_id")
+    db, request = _load_request(request_id)
+    if request is None:
+        logger.warning("sentinel_enforce: no request found for id=%s", request_id)
+        return {"enforced": True, "mode": kwargs.get("enforcement_mode", "audit_only"),
+                "actions": [], "summary": "No request context; nothing to enforce."}
+
+    logger.info("sentinel_enforce: request=%s mode=%s", request_id,
+                (request.state_context or {}).get("enforcement_mode"))
+    try:
+        from app.workflows.sentinel import run_enforcement
+        return await run_enforcement(db, request)
+    finally:
+        db.close()
 
 
 # --------------------------------------------------------------------------
@@ -350,12 +409,155 @@ async def spawn_child_request(child_type: str, parameters: Optional[Dict[str, An
 @tool(name="update_allowlist", side_effect_class="data_grant",
       description="Record an approved governance allowlist exception (policy reprieve).")
 async def update_allowlist(**kwargs) -> Dict[str, Any]:
-    logger.info("update_allowlist: resource=%s status=approved", kwargs.get("resource_id"))
-    return {"allowlist_updated": True, "resource_id": kwargs.get("resource_id")}
+    """Persist an approved allowlist exception so the Sentinel grants a reprieve.
+
+    The ``allowlist_exception`` workflow gates on platform-admin approval *before*
+    this step runs, so by the time we get here the exception is approved. Upsert
+    a single ``AllowlistModel`` row per originating request to ``approved``.
+    Fields not threaded through the graph args (resource_type / workspace /
+    expires_at) are read from the request's ``state_context``.
+    """
+    import uuid
+    from datetime import datetime
+
+    request_id = kwargs.get("_request_id")
+    db, request = _load_request(request_id)
+    if request is None:
+        logger.warning("update_allowlist: no request found for id=%s; nothing recorded", request_id)
+        return {"allowlist_updated": False, "resource_id": kwargs.get("resource_id")}
+
+    try:
+        from app.db.allowlist import AllowlistModel
+
+        ctx = request.state_context or {}
+        resource_id = kwargs.get("resource_id") or ctx.get("resource_id")
+        if not resource_id:
+            logger.warning("update_allowlist: missing resource_id (request=%s); nothing recorded", request_id)
+            return {"allowlist_updated": False, "resource_id": None}
+
+        justification = kwargs.get("justification") or ctx.get("justification") or ""
+        resource_type = kwargs.get("resource_type") or ctx.get("resource_type") or "unknown"
+        workspace = kwargs.get("workspace") or ctx.get("workspace") or ""
+        approved_by = ctx.get("approved_by") or kwargs.get("_user_email")
+
+        expires_at = None
+        raw_expiry = kwargs.get("expires_at") or ctx.get("expires_at")
+        if raw_expiry:
+            try:
+                expires_at = datetime.fromisoformat(str(raw_expiry).replace("Z", "+00:00"))
+            except ValueError:
+                logger.warning("update_allowlist: bad expires_at %r; ignoring", raw_expiry)
+
+        entry = (
+            db.query(AllowlistModel)
+            .filter(AllowlistModel.request_id == request_id)
+            .first()
+        )
+        if entry is None:
+            entry = AllowlistModel(
+                id=str(uuid.uuid4()),
+                resource_id=resource_id,
+                resource_type=resource_type,
+                workspace=workspace,
+                justification=justification,
+                request_id=request_id,
+            )
+            db.add(entry)
+        entry.status = "approved"
+        entry.approved_by = approved_by
+        if expires_at is not None:
+            entry.expires_at = expires_at
+        if justification:
+            entry.justification = justification
+        db.commit()
+
+        logger.info("update_allowlist: approved exception resource=%s workspace=%s request=%s",
+                    resource_id, workspace, request_id)
+        return {"allowlist_updated": True, "allowlist_id": entry.id, "resource_id": resource_id}
+    finally:
+        db.close()
 
 
 @tool(name="execute_report", side_effect_class="read",
       description="Run report prompts via the agent and assemble the report body.")
 async def execute_report(**kwargs) -> Dict[str, Any]:
-    logger.info("execute_report: %s prompts", len(kwargs.get("prompts", []) or []))
-    return {"report": kwargs.get("_report", "")}
+    """Run each configured report prompt through the agent and assemble HTML.
+
+    Mirrors the V1 reporting state machine: a read-only ``AgentRunner`` answers
+    each prompt with real tool-backed data, the results are stitched into an
+    HTML fragment, and ``subject``/``body`` are written to graph context (via
+    ``writes_context``) for the downstream ``send_notification`` distribute step.
+    Also persisted to ``state_context`` for the UI / audit trail.
+    """
+    # Test/eval hook: callers (golden transcripts) may inject a canned body.
+    if "_report" in kwargs:
+        report = kwargs.get("_report", "")
+        return {"report": report, "body": report, "subject": "Report"}
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    request_id = kwargs.get("_request_id")
+    db, request = _load_request(request_id)
+    ctx = (request.state_context or {}) if request is not None else {}
+    prompts = kwargs.get("prompts") or ctx.get("prompts") or []
+    report_name = ctx.get("name", "Report")
+    tz = ZoneInfo("America/Los_Angeles")
+
+    try:
+        if not prompts:
+            logger.warning("execute_report: no prompts configured (request=%s)", request_id)
+            body = "<p>No report prompts were configured.</p>"
+            return {"report": body, "body": body, "subject": f"Report: {report_name}"}
+
+        from app.agents.runner import AgentRunner
+        from app.tools import get_read_only_tools
+
+        system_prompt = (
+            "You are a specialized read-only reporting assistant. "
+            "Your goal is to fetch real data using your tools and present it clearly. "
+            "Always return the final result as a clean HTML snippet (e.g. <table>, <ul>, <p>). "
+            "Do not include <html> or <body> tags. "
+            "If you cannot find data, state that clearly instead of making it up. "
+            f"The current time is {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S %Z')}."
+        )
+        runner = AgentRunner(system_prompt=system_prompt, tools=get_read_only_tools())
+
+        results: List[Dict[str, str]] = []
+        for p in prompts:
+            label = p.get("label", "Untitled")
+            prompt_text = p.get("prompt", "")
+            logger.info("execute_report: running prompt '%s' (request=%s)", label, request_id)
+            response = await runner.run(query=prompt_text)
+            content = (response.get("content", "") or "").replace("```html", "").replace("```", "").strip()
+            results.append({"label": label, "html": content})
+
+        generated_at = datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S %Z')
+        sections = "".join(
+            f'<div class="report-section" style="margin-bottom: 2rem;">'
+            f'<h3 style="color: #444; margin-bottom: 0.5rem;">{r["label"]}</h3>'
+            f'<div class="section-content">{r["html"]}</div></div>'
+            for r in results
+        )
+        body = (
+            f'<div class="report-header"><h2 style="margin-top: 0;">{report_name}</h2>'
+            f'<p style="color: #666; font-size: 0.9rem;">Generated at: {generated_at}</p></div>'
+            f'<hr style="border: 0; border-top: 1px solid #eee; margin: 1.5rem 0;" />{sections}'
+        )
+        subject = f"Report: {report_name}"
+
+        if request is not None:
+            from sqlalchemy.orm.attributes import flag_modified
+            updated = dict(request.state_context or {})
+            updated.update({"report_results": results, "final_report_html": body,
+                            "body": body, "subject": subject})
+            request.state_context = updated
+            flag_modified(request, "state_context")
+            db.add(request)
+            db.commit()
+
+        logger.info("execute_report: assembled %d section(s) (request=%s)", len(results), request_id)
+        return {"report": body, "body": body, "subject": subject, "report_results": results}
+    finally:
+        if db is not None:
+            db.close()

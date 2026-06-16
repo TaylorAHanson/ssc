@@ -6,6 +6,7 @@ from app.providers.databricks.client import DatabricksProvider
 from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
 from app.core.config import settings
+from app.core.exceptions import AuthenticationError
 
 logger = logging.getLogger(__name__)
 
@@ -159,5 +160,10 @@ async def sync_data_assets_task(force: bool = False):
             logger.warning("No data assets fetched from Databricks")
             _last_sync_time = now
             
+    except AuthenticationError as e:
+        # Expected environmental condition (e.g. the workspace IP access list is
+        # blocking this host's egress IP, or the SP lost a grant). Retrying won't
+        # help, so log a concise warning instead of a full stack trace every run.
+        logger.warning(f"Data asset sync skipped — Databricks access denied: {e}")
     except Exception as e:
         logger.error(f"Error during data asset sync task: {e}", exc_info=True)
