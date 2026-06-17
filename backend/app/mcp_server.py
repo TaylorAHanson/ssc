@@ -27,7 +27,13 @@ logger = logging.getLogger(__name__)
 # Initialize FastMCP Server. Stateless so any replica can serve any request
 # (Databricks Apps may run >1 instance); the Streamable HTTP app is created in
 # app.main via mcp.streamable_http_app() and its session manager is run there.
-mcp = FastMCP(settings.PROJECT_NAME, stateless_http=True)
+#
+# `streamable_http_path="/"` is critical: FastMCP's streamable_http_app() serves
+# the protocol on this path *within* its own ASGI app. Since app.main mounts it
+# at "/mcp", leaving the default ("/mcp") would expose the endpoint at the doubled
+# path "/mcp/mcp" (and "/mcp" would fall through to the SPA 404 handler). Setting
+# it to "/" makes the mounted endpoint resolve to exactly "/mcp".
+mcp = FastMCP(settings.PROJECT_NAME, stateless_http=True, streamable_http_path="/")
 
 
 def _extract_obo_identity():
