@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/ca
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Loader2, Plus, Wrench, Trash2, RefreshCw, Server, Cpu, Search, X, Database } from 'lucide-react';
+import { InfoTip } from '../../components/ui/InfoTip';
 import {
   getToolRegistry,
   updateRegistryTool,
@@ -533,17 +534,61 @@ export function ToolRegistry() {
             <table className="w-full text-sm text-left">
               <thead className="bg-gray-50 text-gray-900 font-medium">
                 <tr>
-                  <th className="p-3 cursor-help" title="The tool's name and description as exposed to the agents.">Tool</th>
-                  <th className="p-3 cursor-help" title="Where the tool comes from: 'Local' (chat tool defined in this app), 'Provider' (a workflow building block backed by a provider integration), or an MCP source (discovered from a Databricks Unity AI Gateway server).">Source</th>
-                  <th className="p-3 text-center cursor-help" title="Available to the main unified chat agent (EDH) when checked.">Main Agent</th>
-                  <th className="p-3 text-center cursor-help" title="Available to the workflow-authoring chat assistant when checked.">Workflow Agent</th>
-                  <th className="p-3 text-center cursor-help" title="Usable as a workflow building block (a graph step tool) when checked. This is how provider/mutating tools are exposed to workflow execution.">Used in Workflows</th>
-                  <th className="p-3 text-center cursor-help" title="Publish this tool over the in-app MCP server (/mcp) so external agents/apps (e.g. via Databricks AI Gateway) can call it.">MCP</th>
-                  <th className="p-3 cursor-help" title="Restrict the tool to users with at least one of the selected roles. No roles selected = available to everyone.">Roles</th>
-                  <th className="p-3 cursor-help" title="Execution identity: OBO runs as the calling user (On-Behalf-Of); SP runs as the app's Service Principal.">Identity</th>
-                  <th className="p-3 text-center cursor-help" title="Marks the tool as having side effects (writes/changes state). Mutating tools are subject to policy enforcement and idempotency handling.">Mutating</th>
-                  <th className="p-3 text-center cursor-help" title="Optional success check: a JSON $-expression evaluated against the tool's result. Catches tools that return HTTP 200 but actually failed (e.g. an external/MCP call). When the check evaluates falsy the call is treated as a failure and a workflow will not advance.">Success check</th>
-                  <th className="p-3 text-center cursor-help" title="Master switch. When off, the tool is unavailable to every agent surface regardless of the Main Agent/Workflow settings.">Enabled</th>
+                  <th className="p-3">
+                    <span className="inline-flex items-center gap-1">Tool
+                      <InfoTip align="left" text="The tool's name and description as exposed to the agents." />
+                    </span>
+                  </th>
+                  <th className="p-3">
+                    <span className="inline-flex items-center gap-1">Source
+                      <InfoTip align="left" text="Where the tool comes from: 'Local' (chat tool defined in this app), 'Provider' (a workflow building block backed by a provider integration), or an MCP source (discovered from a Databricks Unity AI Gateway server)." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">Main Agent
+                      <InfoTip text="Available to the main unified chat agent (EDH) when checked." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">Workflow Agent
+                      <InfoTip text="Available to the workflow-authoring chat assistant when checked." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">Used in Workflows
+                      <InfoTip text="Usable as a workflow building block (a graph step tool) when checked. This is how provider/mutating tools are exposed to workflow execution." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">MCP
+                      <InfoTip text="Publish this tool over the in-app MCP server (/mcp) so external agents/apps (e.g. via Databricks AI Gateway) can call it. Takes effect after the server restarts." />
+                    </span>
+                  </th>
+                  <th className="p-3">
+                    <span className="inline-flex items-center gap-1">Roles
+                      <InfoTip text="Restrict the tool to users with at least one of the selected roles. No roles selected = available to everyone." />
+                    </span>
+                  </th>
+                  <th className="p-3">
+                    <span className="inline-flex items-center gap-1">Identity
+                      <InfoTip text="Execution identity: OBO runs as the calling user (On-Behalf-Of); SP runs as the app's Service Principal." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">Mutating
+                      <InfoTip text="Marks the tool as having side effects (writes/changes state). Mutating tools are subject to policy enforcement and idempotency handling." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">Success check
+                      <InfoTip align="right" text="Optional success check: a JSON $-expression evaluated against the tool's result. Catches tools that return HTTP 200 but actually failed (e.g. an external/MCP call). When the check evaluates falsy the call is treated as a failure and a workflow will not advance." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">Enabled
+                      <InfoTip align="right" text="Master switch. When off, the tool is unavailable to every agent surface regardless of the Main Agent/Workflow settings." />
+                    </span>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
