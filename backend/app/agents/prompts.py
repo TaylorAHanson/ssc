@@ -387,7 +387,19 @@ def _capabilities_from_db() -> Optional[List[str]]:
         db = get_session_local()()
         try:
             workflows = WorkflowService.list_published(db)
-            return [f"- {s.key}: {s.goal}" for s in workflows if s.goal]
+            lines: List[str] = []
+            for s in workflows:
+                desc = (s.goal or "").strip()
+                # Fall back to the instructions' "**Goal**:" line so a workflow
+                # with a playbook but no stored goal still appears in the menu
+                # (otherwise the agent can't route to it and picks a sound-alike).
+                if not desc and s.instructions_markdown:
+                    match = re.search(r"\*\*Goal\*\*:\s*(.*?)(?:\n|$)", s.instructions_markdown)
+                    if match:
+                        desc = match.group(1).strip()
+                if desc:
+                    lines.append(f"- {s.key}: {desc}")
+            return lines
         finally:
             db.close()
     except Exception as e:  # noqa: BLE001

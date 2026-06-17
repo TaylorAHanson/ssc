@@ -559,11 +559,34 @@ class WorkflowService:
             if legacy.instructions_markdown and not (target.instructions_markdown or "").strip():
                 target.instructions_markdown = legacy.instructions_markdown
                 db.add(target)
+            # Carry the goal too — it's what surfaces the workflow in the agent's
+            # capabilities menu. Without it the catalog twin is invisible and the
+            # agent routes to a sound-alike (e.g. data_access -> batch_data_access).
+            if legacy.goal and not (target.goal or "").strip():
+                target.goal = legacy.goal
+                db.add(target)
             db.query(WorkflowVersionModel).filter(
                 WorkflowVersionModel.workflow_id == legacy.id
             ).delete(synchronize_session=False)
             db.delete(legacy)
             changed += 1
+
+        # Backfill goals for any published workflow that has instructions with a
+        # "**Goal**:" line but no stored goal (e.g. catalog-seeded twins on an env
+        # whose legacy rows were already removed). The goal is what lists the
+        # workflow in the agent's menu, so a missing one silently hides it.
+        for workflow in (
+            db.query(WorkflowModel)
+            .filter(WorkflowModel.status == "published", WorkflowModel.instructions_markdown.isnot(None))
+            .all()
+        ):
+            if (workflow.goal or "").strip():
+                continue
+            match = _GOAL_RE.search(workflow.instructions_markdown or "")
+            if match and match.group(1).strip():
+                workflow.goal = match.group(1).strip()
+                db.add(workflow)
+                changed += 1
 
         # 2: repair dangling subworkflow refs in every remaining workflow.
         for workflow in db.query(WorkflowModel).filter(WorkflowModel.graph_spec.isnot(None)).all():
