@@ -6,7 +6,7 @@ This application runs as a Databricks App.
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from app.api.v1 import router as api_router
 from app.core.config import settings
 import asyncio
@@ -261,6 +261,17 @@ app.include_router(api_router, prefix="/api/v1")
 # Streamable HTTP is the transport Databricks AI Gateway's custom/external MCP
 # registration expects. The session manager's lifespan is started in `lifespan`
 # above (the mount only attaches the ASGI app; the manager must be run()).
+# The FastMCP streamable app serves at the mount's root, so the canonical
+# endpoint is "/mcp/" (with trailing slash). Clients and AI Gateway commonly
+# omit the slash; without this redirect a bare "/mcp" would fall through to the
+# SPA 404 handler. Registered BEFORE the mount so the exact-path route wins over
+# the "/mcp" prefix mount, and uses 307 to preserve the POST method + body.
+@app.api_route("/mcp", methods=["GET", "POST", "DELETE", "OPTIONS"], include_in_schema=False)
+async def _mcp_trailing_slash_redirect(request: Request):
+    query = request.url.query
+    return RedirectResponse(url="/mcp/" + (f"?{query}" if query else ""), status_code=307)
+
+
 try:
     from app.mcp_server import mcp
     app.mount("/mcp", mcp.streamable_http_app())
