@@ -549,6 +549,21 @@ def _refresh_data_asset_quality(db, discovered_resources: List[Dict[str, Any]]) 
         dq["failed_rules"] = aggregated_failed_rules
         asset.data_quality = dq
         flag_modified(asset, "data_quality")
+        # Roll up the live Unity Catalog certification tag into the cached flag
+        # the certification UI reads (DataAsset.certified). A product is
+        # certified iff it has backing tables and every one carries
+        # system.certification_status=certified — the same source of truth the
+        # manual certify action writes. Discovery already fetched these tags, so
+        # this is free (no extra Databricks round-trips) and keeps the UI in
+        # sync with reality on every scan, not just after a manual "Review and
+        # Act".
+        if assets:
+            asset.certified = all(
+                str((a.get("tags") or {}).get("system.certification_status", "")).lower() == "certified"
+                for a in assets
+            )
+        else:
+            asset.certified = False
         # The certification UI surfaces this as "Last Policy Run"; a sentinel
         # scan IS a policy evaluation, so bump it here (not just on data sync)
         # so one-off runs reflect a fresh evaluation timestamp.

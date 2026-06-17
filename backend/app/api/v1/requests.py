@@ -752,5 +752,38 @@ async def execute_enforcement_action(
         logger.error(f"Failed to execute manual action {action_to_take} on {body.resource_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to execute action: {str(e)}")
 
+    # Reflect the new certification state in the local cache the certification
+    # UI reads (DataAsset.certified), so the page updates immediately instead of
+    # waiting for (or never getting) the next scheduled sync. We re-read the live
+    # UC tag rather than assuming success, so the cache mirrors reality even on
+    # partial failures. Best-effort: a refresh hiccup must not fail the action
+    # the user already executed against Databricks.
+    if (
+        body.resource_type in ("data_product", "table")
+        and action_to_take in ("CERTIFY", "UNCERTIFY", "KILL")
+        and hasattr(handler, "get_certification_status")
+    ):
+        try:
+            from app.db.data_asset import DataAssetModel
+
+            asset = db.query(DataAssetModel).filter(
+                DataAssetModel.id == body.resource_id
+            ).first()
+            if asset:
+                asset.certified = await handler.get_certification_status(body.resource_id)
+                asset.last_synced_at = datetime.now(timezone.utc)
+                db.add(asset)
+                db.commit()
+            else:
+                logger.info(
+                    f"No cached DataAsset for {body.resource_id}; certification "
+                    f"status will refresh on the next data asset sync."
+                )
+        except Exception as e:
+            logger.warning(
+                f"Executed {action_to_take} on {body.resource_id} but could not "
+                f"refresh cached certification status: {e}"
+            )
+
     return {"status": "success", "message": f"Successfully executed {action_to_take} on {body.resource_id}"}
 

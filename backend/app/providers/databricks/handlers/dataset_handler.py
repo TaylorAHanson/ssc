@@ -242,61 +242,80 @@ ORDER BY resultPercent ASC
                 
         return resources
         
+    def _resolve_physical_tables(self, resource_id: str) -> List[str]:
+        """Resolve the fully-qualified physical tables backing a data product.
+
+        Reads the active ODCS contract for ``resource_id`` and expands its
+        ``schema`` entries to ``catalog.schema.table`` names, applying the same
+        catalog/schema fallbacks used during discovery. Returns ``[]`` when
+        there is no active contract or it can't be parsed. Centralizing this
+        here keeps certify / uncertify / status-read in lockstep on exactly
+        which tables make up a product.
+        """
+        from app.db.session import get_db
+        from app.db.data_contract import DataContractModel
+
+        db = next(get_db())
+        try:
+            contract = db.query(DataContractModel).filter(
+                DataContractModel.dataset_id == resource_id,
+                DataContractModel.is_active == True
+            ).first()
+        finally:
+            db.close()
+
+        if not contract:
+            logger.error(f"No active contract found for data product {resource_id}")
+            return []
+
+        try:
+            dataset_def = yaml.safe_load(contract.yaml_content) or {}
+        except Exception as e:
+            logger.error(f"Failed to parse contract YAML for {resource_id}: {e}")
+            return []
+
+        servers = dataset_def.get("servers", [])
+        default_catalog = servers[0].get("catalog", "") if servers else ""
+        default_schema = servers[0].get("schema", "") if servers else ""
+
+        tables: List[str] = []
+        for this_schema in dataset_def.get("schema", []) or []:
+            physical_table = this_schema.get("physicalName")
+            if not physical_table:
+                continue
+
+            table_catalog = this_schema.get("catalog")
+            table_schema = this_schema.get("schema")
+
+            if table_catalog and table_schema:
+                if "." in physical_table:
+                    full_name = physical_table
+                else:
+                    full_name = f"{table_catalog}.{table_schema}.{physical_table}"
+            elif "." in physical_table and len(physical_table.split(".")) == 3:
+                full_name = physical_table
+            else:
+                if not default_catalog or not default_schema:
+                    continue
+                full_name = f"{default_catalog}.{default_schema}.{physical_table}"
+
+            tables.append(full_name)
+
+        return tables
+
     async def certify(self, resource_id: str) -> bool:
         logger.info(f"Certifying data product {resource_id}")
         try:
             if not hasattr(settings, "DATABRICKS_WAREHOUSE_ID") or not settings.DATABRICKS_WAREHOUSE_ID:
                 logger.error("No warehouse_id defined, cannot certify dataset via SQL")
                 return False
-                
-            from app.db.session import get_db
-            from app.db.data_contract import DataContractModel
-            import yaml
-            
-            db = next(get_db())
-            contract = db.query(DataContractModel).filter(
-                DataContractModel.dataset_id == resource_id,
-                DataContractModel.is_active == True
-            ).first()
-            db.close()
-            
-            if not contract:
-                logger.error(f"No active contract found for data product {resource_id}")
+
+            tables = self._resolve_physical_tables(resource_id)
+            if not tables:
                 return False
-                
-            dataset_def = yaml.safe_load(contract.yaml_content)
-            servers = dataset_def.get("servers", [])
-            default_catalog = servers[0].get("catalog", "") if servers else ""
-            default_schema = servers[0].get("schema", "") if servers else ""
-            
-            schemas = dataset_def.get("schema", [])
+
             success = True
-            
-            for this_schema in schemas:
-                physical_table = this_schema.get("physicalName")
-                if not physical_table:
-                    continue
-                    
-                table_catalog = this_schema.get("catalog")
-                table_schema = this_schema.get("schema")
-                
-                if table_catalog and table_schema:
-                    catalog = table_catalog
-                    schema = table_schema
-                    if "." in physical_table:
-                        full_name = physical_table
-                    else:
-                        full_name = f"{catalog}.{schema}.{physical_table}"
-                elif "." in physical_table and len(physical_table.split(".")) == 3:
-                    full_name = physical_table
-                    catalog, schema, table = full_name.split(".")
-                else:
-                    catalog = default_catalog
-                    schema = default_schema
-                    if not catalog or not schema:
-                        continue
-                    full_name = f"{catalog}.{schema}.{physical_table}"
-                    
+            for full_name in tables:
                 query = f"ALTER TABLE {full_name} SET TAGS ('system.certification_status' = 'certified')"
                 res = self.workspace_client.statement_execution.execute_statement(
                     statement=query,
@@ -307,7 +326,7 @@ ORDER BY resultPercent ASC
                     error_msg = res.status.error.message if res.status.error else "Unknown SQL error"
                     logger.error(f"SQL execution failed to certify {full_name}: {error_msg}")
                     success = False
-                    
+
             return success
         except Exception as e:
             logger.error(f"Failed to certify dataset {resource_id}: {e}")
@@ -319,55 +338,13 @@ ORDER BY resultPercent ASC
             if not hasattr(settings, "DATABRICKS_WAREHOUSE_ID") or not settings.DATABRICKS_WAREHOUSE_ID:
                 logger.error("No warehouse_id defined, cannot uncertify dataset via SQL")
                 return False
-                
-            from app.db.session import get_db
-            from app.db.data_contract import DataContractModel
-            import yaml
-            
-            db = next(get_db())
-            contract = db.query(DataContractModel).filter(
-                DataContractModel.dataset_id == resource_id,
-                DataContractModel.is_active == True
-            ).first()
-            db.close()
-            
-            if not contract:
-                logger.error(f"No active contract found for data product {resource_id}")
+
+            tables = self._resolve_physical_tables(resource_id)
+            if not tables:
                 return False
-                
-            dataset_def = yaml.safe_load(contract.yaml_content)
-            servers = dataset_def.get("servers", [])
-            default_catalog = servers[0].get("catalog", "") if servers else ""
-            default_schema = servers[0].get("schema", "") if servers else ""
-            
-            schemas = dataset_def.get("schema", [])
+
             success = True
-            
-            for this_schema in schemas:
-                physical_table = this_schema.get("physicalName")
-                if not physical_table:
-                    continue
-                    
-                table_catalog = this_schema.get("catalog")
-                table_schema = this_schema.get("schema")
-                
-                if table_catalog and table_schema:
-                    catalog = table_catalog
-                    schema = table_schema
-                    if "." in physical_table:
-                        full_name = physical_table
-                    else:
-                        full_name = f"{catalog}.{schema}.{physical_table}"
-                elif "." in physical_table and len(physical_table.split(".")) == 3:
-                    full_name = physical_table
-                    catalog, schema, table = full_name.split(".")
-                else:
-                    catalog = default_catalog
-                    schema = default_schema
-                    if not catalog or not schema:
-                        continue
-                    full_name = f"{catalog}.{schema}.{physical_table}"
-                    
+            for full_name in tables:
                 query = f"ALTER TABLE {full_name} UNSET TAGS ('system.certification_status')"
                 res = self.workspace_client.statement_execution.execute_statement(
                     statement=query,
@@ -378,11 +355,45 @@ ORDER BY resultPercent ASC
                     error_msg = res.status.error.message if res.status.error else "Unknown SQL error"
                     logger.error(f"SQL execution failed to uncertify {full_name}: {error_msg}")
                     success = False
-                    
+
             return success
         except Exception as e:
             logger.error(f"Failed to un-certify dataset {resource_id}: {e}")
             return False
+
+    async def get_certification_status(self, resource_id: str) -> bool:
+        """Read the live Unity Catalog certification state for a data product.
+
+        This is the source-of-truth rollup the certification UI relies on: a
+        product is certified iff it has at least one backing table and *every*
+        table carries ``system.certification_status = certified``. Reading the
+        UC tag back (rather than assuming the action succeeded) means the
+        cached flag self-heals against partial failures and out-of-band tag
+        changes. If any tag read fails we conservatively report uncertified so
+        we never show a stale "certified" badge.
+        """
+        tables = self._resolve_physical_tables(resource_id)
+        if not tables:
+            return False
+
+        for full_name in tables:
+            tag_value = None
+            try:
+                assignments = self.workspace_client.entity_tag_assignments.list(
+                    entity_type='tables', entity_name=full_name
+                )
+                for assignment in assignments:
+                    if assignment.tag_key == 'system.certification_status':
+                        tag_value = assignment.tag_value
+                        break
+            except Exception as e:
+                logger.warning(f"Failed to read certification tag for {full_name}: {e}")
+                return False
+
+            if str(tag_value or "").lower() != "certified":
+                return False
+
+        return True
 
     async def kill(self, resource_id: str) -> bool:
         return await self.uncertify(resource_id)
