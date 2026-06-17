@@ -302,9 +302,14 @@ class ToolRegistryService:
 
     # ----------------------------------------------------------- MCP discovery
     @staticmethod
-    def discover_source(db: Session, source_id: str) -> Dict[str, Any]:
-        """List tools on a source with the SP and upsert them as ``origin='mcp'``.
+    def discover_source(
+        db: Session, source_id: str, obo_token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """List tools on a source and upsert them as ``origin='mcp'``.
 
+        Lists On-Behalf-Of the calling admin when ``obo_token`` is provided (so
+        AI-Gateway external MCP servers with Per-User OAuth — which the Service
+        Principal gets 403 on — are discoverable), falling back to the SP.
         Newly-discovered tools default disabled and unassigned to any surface so
         nothing goes live until an admin opts in. Records sync status on the source.
         Returns ``{"ok", "count", "error"}``.
@@ -316,7 +321,7 @@ class ToolRegistryService:
         from app.tools.external import mcp_client
 
         try:
-            discovered = mcp_client.list_tools(source.server_url)
+            discovered = mcp_client.list_tools(source.server_url, obo_token=obo_token)
         except Exception as e:  # noqa: BLE001 - surface as a recorded sync failure
             source.last_synced_at = datetime.utcnow()
             source.last_sync_status = "error"
@@ -370,6 +375,87 @@ class ToolRegistryService:
         db.commit()
         logger.info("ToolRegistry: discovered %d tool(s) from %s", len(discovered), source.name)
         return {"ok": True, "count": len(discovered), "error": None}
+
+    @staticmethod
+    def quick_add_source(
+        db: Session,
+        *,
+        name: str,
+        server_url: str,
+        kind: str = "managed_functions",
+        default_identity_mode: str = IDENTITY_OBO,
+        created_by: Optional[str] = None,
+        auto_enable_read_only: bool = True,
+        obo_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Register an MCP server and bring it online in one shot.
+
+        Creates the source, immediately discovers its tools, and (by default)
+        enables the newly-discovered *read-only* tools for the main agent so the
+        server is usable the moment it's added — no separate "now click Sync,
+        then toggle each tool" steps. Mutating tools are left disabled so an admin
+        explicitly opts into anything with side effects. Returns the created
+        source, the discovery result, and how many tools were auto-enabled.
+        """
+        source = ToolRegistryService.create_source(
+            db,
+            name=name,
+            server_url=server_url,
+            kind=kind,
+            default_identity_mode=default_identity_mode,
+            created_by=created_by,
+        )
+        result = ToolRegistryService.discover_source(db, source.id, obo_token=obo_token)
+
+        enabled_count = 0
+        if result.get("ok") and auto_enable_read_only:
+            rows = (
+                db.query(ToolRegistryModel)
+                .filter(ToolRegistryModel.source_id == source.id)
+                .all()
+            )
+            for row in rows:
+                # Read-only = no declared side effects. Anything mutating stays off
+                # until an admin opts in (matches the discover_source default).
+                if not row.is_mutating and row.side_effect_class == "read":
+                    row.enabled = True
+                    row.enabled_for_main_agent = True
+                    enabled_count += 1
+            if enabled_count:
+                db.commit()
+                logger.info(
+                    "ToolRegistry: auto-enabled %d read-only tool(s) from %s for the main agent",
+                    enabled_count, source.name,
+                )
+
+        db.refresh(source)
+        return {
+            "source": ToolRegistryService.source_to_dict(source),
+            "discovery": result,
+            "auto_enabled": enabled_count,
+        }
+
+    @staticmethod
+    def list_workspace_mcp_candidates(
+        db: Session, obo_token: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """MCP servers discoverable in the workspace via the SDK (for the picker).
+
+        Lists On-Behalf-Of the caller when ``obo_token`` is provided so per-user
+        connections/spaces show up. Flags candidates already registered (by
+        matching ``server_url`` against existing sources) so the UI can
+        annotate/disable them.
+        """
+        from app.tools.external import mcp_client
+
+        existing_urls = {
+            (s.server_url or "").rstrip("/")
+            for s in db.query(McpSourceModel.server_url).all()
+        }
+        candidates = mcp_client.list_workspace_mcp_servers(obo_token=obo_token)
+        for c in candidates:
+            c["already_registered"] = (c.get("server_url") or "").rstrip("/") in existing_urls
+        return candidates
 
     # ------------------------------------------------------ surface resolution
     @staticmethod

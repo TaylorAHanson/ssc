@@ -185,7 +185,7 @@ const navItems: NavItem[] = [
   },
   {
     id: 'workflows',
-    title: 'Workflows',
+    title: 'Workflow Studio',
     icon: <Sparkles className="w-5 h-5" />,
     path: '/build/workflows',
     group: 'Control Tower',
