@@ -2,17 +2,20 @@ import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
-import { Loader2, Plus, Wrench, Trash2, RefreshCw, Server, Cpu, Search, X } from 'lucide-react';
+import { Loader2, Plus, Wrench, Trash2, RefreshCw, Server, Cpu, Search, X, Database } from 'lucide-react';
+import { InfoTip } from '../../components/ui/InfoTip';
 import {
   getToolRegistry,
   updateRegistryTool,
   syncLocalTools,
-  createMcpSource,
+  quickAddMcpSource,
+  getAvailableMcpSources,
   deleteMcpSource,
   syncMcpSource,
   type RegistryTool,
   type McpSource,
   type RegistryToolUpdate,
+  type AvailableMcpSource,
 } from '../../services/api';
 import { format, parseISO } from 'date-fns';
 
@@ -33,6 +36,14 @@ export function ToolRegistry() {
   const [srcUrl, setSrcUrl] = useState('');
   const [srcKind, setSrcKind] = useState('managed_functions');
   const [srcIdentity, setSrcIdentity] = useState<'sp' | 'obo'>('obo');
+  const [srcAutoEnable, setSrcAutoEnable] = useState(true);
+  const [addingSource, setAddingSource] = useState(false);
+
+  // "Browse from Databricks" picker
+  const [showBrowse, setShowBrowse] = useState(false);
+  const [browseLoading, setBrowseLoading] = useState(false);
+  const [available, setAvailable] = useState<AvailableMcpSource[]>([]);
+  const [browseQuery, setBrowseQuery] = useState('');
 
   // Tool table filters
   const [search, setSearch] = useState('');
@@ -44,6 +55,16 @@ export function ToolRegistry() {
     sources.forEach((s) => (map[s.id] = s.name));
     return map;
   }, [sources]);
+
+  const filteredAvailable = useMemo(() => {
+    const q = browseQuery.trim().toLowerCase();
+    if (!q) return available;
+    return available.filter((c) =>
+      [c.name, c.kind, c.detail, c.server_url]
+        .filter(Boolean)
+        .some((v) => v!.toLowerCase().includes(q))
+    );
+  }, [available, browseQuery]);
 
   const filteredTools = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -152,19 +173,74 @@ export function ToolRegistry() {
     }
   };
 
+  const resetSourceForm = () => {
+    setSrcName('');
+    setSrcUrl('');
+    setSrcKind('managed_functions');
+    setSrcIdentity('obo');
+    setSrcAutoEnable(true);
+  };
+
+  // Pull MCP servers from Databricks (AI Gateway connections, Genie spaces, MCP
+  // apps) so the admin can pick instead of hand-typing a name + URL.
+  const handleBrowse = async () => {
+    setShowBrowse(true);
+    setBrowseLoading(true);
+    try {
+      const res = await getAvailableMcpSources();
+      setAvailable(res.sources);
+      if (res.sources.length === 0) {
+        flash('error', 'No MCP servers found in the workspace (the Service Principal may lack access).');
+      }
+    } catch (error) {
+      flash('error', error instanceof Error ? error.message : 'Failed to list workspace MCP servers');
+      setShowBrowse(false);
+    } finally {
+      setBrowseLoading(false);
+    }
+  };
+
+  // Prefill the Add form from a picked workspace candidate so the admin can
+  // review identity / auto-enable before connecting.
+  const pickCandidate = (c: AvailableMcpSource) => {
+    setSrcName(c.name);
+    setSrcUrl(c.server_url);
+    setSrcKind(c.kind);
+    setShowBrowse(false);
+    setShowSourceForm(true);
+  };
+
+  // One-shot: register the server, discover its tools, and (optionally) enable
+  // the read-only ones for the main agent — so it's usable immediately instead
+  // of register → sync → toggle-each-tool.
   const handleCreateSource = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAddingSource(true);
     try {
-      await createMcpSource({ name: srcName, server_url: srcUrl, kind: srcKind, default_identity_mode: srcIdentity });
-      flash('success', 'MCP source added. Click Sync to discover its tools.');
-      setSrcName('');
-      setSrcUrl('');
-      setSrcKind('managed_functions');
-      setSrcIdentity('obo');
-      setShowSourceForm(false);
+      const res = await quickAddMcpSource({
+        name: srcName,
+        server_url: srcUrl,
+        kind: srcKind,
+        default_identity_mode: srcIdentity,
+        auto_enable_read_only: srcAutoEnable,
+      });
+      if (res.discovery.ok) {
+        const enabledNote = srcAutoEnable
+          ? ` ${res.auto_enabled} read-only tool(s) enabled for the main agent.`
+          : '';
+        flash('success', `Connected "${res.source.name}": discovered ${res.discovery.count} tool(s).${enabledNote}`);
+        resetSourceForm();
+        setShowSourceForm(false);
+      } else {
+        // The source was created but discovery failed — keep the form open with
+        // the error so the admin can fix the URL/scope and retry.
+        flash('error', `Added "${res.source.name}" but discovery failed: ${res.discovery.error}`);
+      }
       await load();
     } catch (error) {
-      flash('error', error instanceof Error ? error.message : 'Failed to create source');
+      flash('error', error instanceof Error ? error.message : 'Failed to add source');
+    } finally {
+      setAddingSource(false);
     }
   };
 
@@ -224,25 +300,85 @@ export function ToolRegistry() {
             <Server className="w-4 h-4" /> MCP Sources (Databricks Unity AI Gateway)
           </CardTitle>
           {!showSourceForm && (
-            <Button size="sm" onClick={() => setShowSourceForm(true)} className="flex items-center gap-2">
-              <Plus className="w-4 h-4" /> Add Source
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button size="sm" onClick={handleBrowse} className="flex items-center gap-2">
+                <Database className="w-4 h-4" /> Browse from Databricks
+              </Button>
+              <Button size="sm" onClick={() => setShowSourceForm(true)} className="flex items-center gap-2">
+                <Plus className="w-4 h-4" /> Add Source
+              </Button>
+            </div>
           )}
         </CardHeader>
         <CardContent className="pt-4 space-y-4">
+          {showBrowse && (
+            <div className="rounded-md border border-gray-200 bg-gray-50/50">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-gray-200">
+                <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                  <Database className="w-4 h-4" /> MCP servers in your workspace
+                </span>
+                <button onClick={() => setShowBrowse(false)} className="text-gray-400 hover:text-gray-700" title="Close">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              {browseLoading ? (
+                <div className="py-8 flex justify-center">
+                  <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+                </div>
+              ) : available.length === 0 ? (
+                <p className="text-sm text-gray-500 px-3 py-4">No MCP servers found in the workspace.</p>
+              ) : (
+                <>
+                  <div className="relative px-3 py-2 border-b border-gray-100">
+                    <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                    <Input
+                      value={browseQuery}
+                      onChange={(e) => setBrowseQuery(e.target.value)}
+                      placeholder="Quick search MCP servers in your workspace…"
+                      className="pl-9 h-9"
+                    />
+                  </div>
+                  {filteredAvailable.length === 0 ? (
+                    <p className="text-sm text-gray-500 px-3 py-4">No servers match “{browseQuery}”.</p>
+                  ) : (
+                <ul className="divide-y divide-gray-100 max-h-72 overflow-auto">
+                  {filteredAvailable.map((c) => (
+                    <li key={c.server_url} className="flex items-center justify-between px-3 py-2 gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-gray-900 truncate">{c.name}</span>
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-800">{c.kind}</span>
+                        </div>
+                        <div className="text-xs text-gray-500 truncate" title={c.server_url}>{c.detail || c.server_url}</div>
+                      </div>
+                      {c.already_registered ? (
+                        <span className="text-xs text-gray-400 whitespace-nowrap">Already added</span>
+                      ) : (
+                        <Button size="sm" onClick={() => pickCandidate(c)} className="flex items-center gap-2 whitespace-nowrap">
+                          <Plus className="w-3.5 h-3.5" /> Use
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           {showSourceForm && (
             <form onSubmit={handleCreateSource} className="grid grid-cols-2 gap-3 p-3 rounded-md border border-gray-200 bg-gray-50/50">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-600">Name</label>
-                <Input value={srcName} onChange={(e) => setSrcName(e.target.value)} placeholder="UC system.ai functions" required />
+                <Input value={srcName} onChange={(e) => setSrcName(e.target.value)} placeholder="UC system.ai functions" required disabled={addingSource} />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-600">Server URL</label>
-                <Input value={srcUrl} onChange={(e) => setSrcUrl(e.target.value)} placeholder="https://<host>/api/2.0/mcp/functions/system/ai" required />
+                <Input value={srcUrl} onChange={(e) => setSrcUrl(e.target.value)} placeholder="https://<host>/api/2.0/mcp/functions/system/ai" required disabled={addingSource} />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-600">Kind</label>
-                <select value={srcKind} onChange={(e) => setSrcKind(e.target.value)} className="w-full h-10 px-3 border border-gray-300 rounded-md bg-white text-sm">
+                <select value={srcKind} onChange={(e) => setSrcKind(e.target.value)} disabled={addingSource} className="w-full h-10 px-3 border border-gray-300 rounded-md bg-white text-sm disabled:opacity-50">
                   {(sourceKinds.length ? sourceKinds : ['managed_functions']).map((k) => (
                     <option key={k} value={k}>{k}</option>
                   ))}
@@ -250,14 +386,27 @@ export function ToolRegistry() {
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-600">Default Identity</label>
-                <select value={srcIdentity} onChange={(e) => setSrcIdentity(e.target.value as 'sp' | 'obo')} className="w-full h-10 px-3 border border-gray-300 rounded-md bg-white text-sm">
+                <select value={srcIdentity} onChange={(e) => setSrcIdentity(e.target.value as 'sp' | 'obo')} disabled={addingSource} className="w-full h-10 px-3 border border-gray-300 rounded-md bg-white text-sm disabled:opacity-50">
                   <option value="obo">On-Behalf-Of user (OBO)</option>
                   <option value="sp">Service Principal (SP)</option>
                 </select>
               </div>
+              <label className="col-span-2 flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={srcAutoEnable}
+                  onChange={(e) => setSrcAutoEnable(e.target.checked)}
+                  disabled={addingSource}
+                  className="w-4 h-4"
+                />
+                Enable read-only tools for the Main Agent immediately (mutating tools stay off until you opt in)
+              </label>
               <div className="col-span-2 flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => setShowSourceForm(false)}>Cancel</Button>
-                <Button type="submit">Add Source</Button>
+                <Button type="button" variant="outline" onClick={() => { setShowSourceForm(false); resetSourceForm(); }} disabled={addingSource}>Cancel</Button>
+                <Button type="submit" disabled={addingSource} className="flex items-center gap-2">
+                  {addingSource ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  {addingSource ? 'Connecting…' : 'Add & Connect'}
+                </Button>
               </div>
             </form>
           )}
@@ -265,7 +414,8 @@ export function ToolRegistry() {
           {sources.length === 0 ? (
             <p className="text-sm text-gray-500 py-2">
               No MCP sources yet. Add one (e.g. a managed UC functions, Genie, AI Search, or external
-              connection endpoint) and Sync to discover its tools with the Service Principal.
+              connection endpoint) — it's registered, its tools are discovered, and read-only tools go
+              live for the Main Agent in one step.
             </p>
           ) : (
             <table className="w-full text-sm text-left">
@@ -384,17 +534,61 @@ export function ToolRegistry() {
             <table className="w-full text-sm text-left">
               <thead className="bg-gray-50 text-gray-900 font-medium">
                 <tr>
-                  <th className="p-3 cursor-help" title="The tool's name and description as exposed to the agents.">Tool</th>
-                  <th className="p-3 cursor-help" title="Where the tool comes from: 'Local' (chat tool defined in this app), 'Provider' (a workflow building block backed by a provider integration), or an MCP source (discovered from a Databricks Unity AI Gateway server).">Source</th>
-                  <th className="p-3 text-center cursor-help" title="Available to the main unified chat agent (EDH) when checked.">Main Agent</th>
-                  <th className="p-3 text-center cursor-help" title="Available to the workflow-authoring chat assistant when checked.">Workflow Agent</th>
-                  <th className="p-3 text-center cursor-help" title="Usable as a workflow building block (a graph step tool) when checked. This is how provider/mutating tools are exposed to workflow execution.">Used in Workflows</th>
-                  <th className="p-3 text-center cursor-help" title="Publish this tool over the in-app MCP server (/mcp) so external agents/apps (e.g. via Databricks AI Gateway) can call it.">MCP</th>
-                  <th className="p-3 cursor-help" title="Restrict the tool to users with at least one of the selected roles. No roles selected = available to everyone.">Roles</th>
-                  <th className="p-3 cursor-help" title="Execution identity: OBO runs as the calling user (On-Behalf-Of); SP runs as the app's Service Principal.">Identity</th>
-                  <th className="p-3 text-center cursor-help" title="Marks the tool as having side effects (writes/changes state). Mutating tools are subject to policy enforcement and idempotency handling.">Mutating</th>
-                  <th className="p-3 text-center cursor-help" title="Optional success check: a JSON $-expression evaluated against the tool's result. Catches tools that return HTTP 200 but actually failed (e.g. an external/MCP call). When the check evaluates falsy the call is treated as a failure and a workflow will not advance.">Success check</th>
-                  <th className="p-3 text-center cursor-help" title="Master switch. When off, the tool is unavailable to every agent surface regardless of the Main Agent/Workflow settings.">Enabled</th>
+                  <th className="p-3">
+                    <span className="inline-flex items-center gap-1">Tool
+                      <InfoTip align="left" text="The tool's name and description as exposed to the agents." />
+                    </span>
+                  </th>
+                  <th className="p-3">
+                    <span className="inline-flex items-center gap-1">Source
+                      <InfoTip align="left" text="Where the tool comes from: 'Local' (chat tool defined in this app), 'Provider' (a workflow building block backed by a provider integration), or an MCP source (discovered from a Databricks Unity AI Gateway server)." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">Main Agent
+                      <InfoTip text="Available to the main unified chat agent (EDH) when checked." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">Workflow Agent
+                      <InfoTip text="Available to the workflow-authoring chat assistant when checked." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">Used in Workflows
+                      <InfoTip text="Usable as a workflow building block (a graph step tool) when checked. This is how provider/mutating tools are exposed to workflow execution." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">MCP
+                      <InfoTip text="Publish this tool over the in-app MCP server (/mcp) so external agents/apps (e.g. via Databricks AI Gateway) can call it. Takes effect after the server restarts." />
+                    </span>
+                  </th>
+                  <th className="p-3">
+                    <span className="inline-flex items-center gap-1">Roles
+                      <InfoTip text="Restrict the tool to users with at least one of the selected roles. No roles selected = available to everyone." />
+                    </span>
+                  </th>
+                  <th className="p-3">
+                    <span className="inline-flex items-center gap-1">Identity
+                      <InfoTip text="Execution identity: OBO runs as the calling user (On-Behalf-Of); SP runs as the app's Service Principal." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">Mutating
+                      <InfoTip text="Marks the tool as having side effects (writes/changes state). Mutating tools are subject to policy enforcement and idempotency handling." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">Success check
+                      <InfoTip align="right" text="Optional success check: a JSON $-expression evaluated against the tool's result. Catches tools that return HTTP 200 but actually failed (e.g. an external/MCP call). When the check evaluates falsy the call is treated as a failure and a workflow will not advance." />
+                    </span>
+                  </th>
+                  <th className="p-3 text-center">
+                    <span className="inline-flex items-center gap-1">Enabled
+                      <InfoTip align="right" text="Master switch. When off, the tool is unavailable to every agent surface regardless of the Main Agent/Workflow settings." />
+                    </span>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -407,7 +601,14 @@ export function ToolRegistry() {
                       )}
                     </td>
                     <td className="p-3">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${t.origin === 'local' ? 'bg-gray-100 text-gray-700' : t.origin === 'workflow' ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-800'}`}>
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium cursor-help ${t.origin === 'local' ? 'bg-gray-100 text-gray-700' : t.origin === 'workflow' ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-800'}`}
+                        title={t.origin === 'local'
+                          ? 'Local: a chat tool defined in this app.'
+                          : t.origin === 'workflow'
+                            ? 'Provider: a workflow building block backed by a provider integration.'
+                            : `MCP: discovered from the Unity AI Gateway source${t.source_id && sourceNameById[t.source_id] ? ` "${sourceNameById[t.source_id]}"` : ''}.`}
+                      >
                         {t.origin === 'local'
                           ? 'Local'
                           : t.origin === 'workflow'
@@ -416,16 +617,16 @@ export function ToolRegistry() {
                       </span>
                     </td>
                     <td className="p-3 text-center">
-                      <input type="checkbox" checked={t.enabled_for_main_agent} onChange={(e) => patchTool(t, { enabled_for_main_agent: e.target.checked })} className="w-4 h-4" />
+                      <input type="checkbox" checked={t.enabled_for_main_agent} onChange={(e) => patchTool(t, { enabled_for_main_agent: e.target.checked })} className="w-4 h-4 cursor-pointer" title="Available to the main unified chat agent (EDH) when checked." />
                     </td>
                     <td className="p-3 text-center">
-                      <input type="checkbox" checked={t.enabled_for_workflow_agent} onChange={(e) => patchTool(t, { enabled_for_workflow_agent: e.target.checked })} className="w-4 h-4" />
+                      <input type="checkbox" checked={t.enabled_for_workflow_agent} onChange={(e) => patchTool(t, { enabled_for_workflow_agent: e.target.checked })} className="w-4 h-4 cursor-pointer" title="Available to the workflow-authoring chat assistant when checked." />
                     </td>
                     <td className="p-3 text-center">
-                      <input type="checkbox" checked={t.enabled_for_workflow_execution} onChange={(e) => patchTool(t, { enabled_for_workflow_execution: e.target.checked })} className="w-4 h-4" />
+                      <input type="checkbox" checked={t.enabled_for_workflow_execution} onChange={(e) => patchTool(t, { enabled_for_workflow_execution: e.target.checked })} className="w-4 h-4 cursor-pointer" title="Usable as a workflow building block (a graph step tool) when checked." />
                     </td>
                     <td className="p-3 text-center">
-                      <input type="checkbox" checked={t.exposed_via_mcp} onChange={(e) => patchTool(t, { exposed_via_mcp: e.target.checked })} className="w-4 h-4" />
+                      <input type="checkbox" checked={t.exposed_via_mcp} onChange={(e) => patchTool(t, { exposed_via_mcp: e.target.checked })} className="w-4 h-4 cursor-pointer" title="Publish this tool over the in-app MCP server (/mcp) so external agents/apps (e.g. via Databricks AI Gateway) can call it. Takes effect after the server restarts." />
                     </td>
                     <td className="p-3">
                       <div className="flex flex-wrap gap-1 max-w-[220px]">
@@ -451,7 +652,8 @@ export function ToolRegistry() {
                       <select
                         value={t.identity_mode}
                         onChange={(e) => patchTool(t, { identity_mode: e.target.value as 'sp' | 'obo' })}
-                        className="h-8 px-2 border border-gray-300 rounded-md bg-white text-xs"
+                        className="h-8 px-2 border border-gray-300 rounded-md bg-white text-xs cursor-pointer"
+                        title="Execution identity: OBO runs as the calling user (On-Behalf-Of); SP runs as the app's Service Principal."
                       >
                         <option value="obo">OBO</option>
                         <option value="sp">SP</option>
@@ -471,7 +673,7 @@ export function ToolRegistry() {
                       </button>
                     </td>
                     <td className="p-3 text-center">
-                      <input type="checkbox" checked={t.enabled} onChange={(e) => patchTool(t, { enabled: e.target.checked })} className="w-4 h-4" />
+                      <input type="checkbox" checked={t.enabled} onChange={(e) => patchTool(t, { enabled: e.target.checked })} className="w-4 h-4 cursor-pointer" title="Master switch. When off, the tool is unavailable to every agent surface regardless of the Main Agent/Workflow settings." />
                     </td>
                   </tr>
                 ))}

@@ -9,6 +9,7 @@ idempotency) as any local tool — no special-casing in the runner.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, Optional
 
 from app.tools.external import mcp_client
@@ -110,7 +111,13 @@ class RemoteMcpTool:
         """
         obo_token = kwargs.get("_obo_token")
         arguments = {k: v for k, v in kwargs.items() if not k.startswith("_")}
-        return mcp_client.call_tool(
+        # ``mcp_client.call_tool`` is fully synchronous and the underlying
+        # ``DatabricksMCPClient`` spins up its own event loop via ``asyncio.run()``.
+        # Calling it directly from this coroutine (which already runs inside the
+        # agent's event loop) raises "asyncio.run() cannot be called from a running
+        # event loop", so we offload it to a worker thread.
+        return await asyncio.to_thread(
+            mcp_client.call_tool,
             self._server_url,
             self._name,
             arguments,
