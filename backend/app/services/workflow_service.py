@@ -31,6 +31,43 @@ _BODY_FIELDS = (
     "policy_ref", "params_schema", "graph_spec", "request_type",
 )
 
+# Obsolete instruction-only workflow keys mapped to the executable catalog
+# workflow that superseded them. Early builds seeded agent *instructions* under
+# one key while the runnable graph catalog later landed under a different key,
+# leaving two published rows for the same workflow: the legacy one with rich
+# instructions but no graph (so a request created for it dies with "no workflow
+# graph registered"), and the catalog one with the graph but blank instructions.
+# :meth:`consolidate_legacy_workflows` reconciles them. Add a row here whenever a
+# workflow is renamed so the rename self-heals across environments.
+LEGACY_WORKFLOW_ALIASES = {
+    "request_data_access": "data_access_request",
+    "create_workspace": "workspace_provision",
+    "onboarding": "project_onboarding",
+    "create_catalog_schema": "catalog_schema_table",
+    "data_deduplication_sentinel": "asset_deduplication",
+}
+
+
+def _rewrite_subworkflow_refs(node: Any, alias_map: Dict[str, str]) -> bool:
+    """Recursively remap ``"ref"`` values in a graph_spec via ``alias_map``.
+
+    Returns True if anything changed. Walks the whole spec (not just top-level
+    stages) so nested/compound subgraphs are covered too.
+    """
+    changed = False
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "ref" and isinstance(value, str) and value in alias_map:
+                node[key] = alias_map[value]
+                changed = True
+            elif _rewrite_subworkflow_refs(value, alias_map):
+                changed = True
+    elif isinstance(node, list):
+        for item in node:
+            if _rewrite_subworkflow_refs(item, alias_map):
+                changed = True
+    return changed
+
 
 class WorkflowService:
     # ------------------------------------------------------------------ reads
@@ -485,6 +522,62 @@ class WorkflowService:
             db.commit()
             logger.info("Seeded workflow graph_specs: %d new, %d backfilled", inserted, updated)
         return inserted + updated
+
+    @staticmethod
+    def consolidate_legacy_workflows(db: Session) -> int:
+        """Retire obsolete instruction-only workflow keys onto their catalog twins.
+
+        For each ``LEGACY_WORKFLOW_ALIASES`` entry this:
+          1. carries the legacy row's instructions over to the catalog row when
+             the catalog row has none (never clobbering existing prose),
+          2. rewrites any other workflow's subworkflow ``ref`` that still points
+             at the legacy key (e.g. project_onboarding -> ``create_workspace``),
+          3. deletes the orphaned legacy row (and its version snapshots).
+
+        Idempotent: once the legacy rows are gone there's nothing left to do, so
+        it's safe to run on every boot. Runs after both seed passes so the
+        catalog twin is guaranteed to exist.
+        """
+        from sqlalchemy.orm.attributes import flag_modified
+
+        changed = 0
+
+        # 1 + 3: fold each legacy row into its catalog twin, then delete it.
+        for legacy_key, catalog_key in LEGACY_WORKFLOW_ALIASES.items():
+            legacy = WorkflowService.get_by_key(db, legacy_key)
+            if not legacy:
+                continue
+            target = WorkflowService.get_by_key(db, catalog_key)
+            if not target:
+                # Catalog twin missing (unexpected once seed_specs has run): leave
+                # the legacy row in place rather than silently dropping content.
+                logger.warning(
+                    "consolidate_legacy_workflows: no catalog twin '%s' for legacy "
+                    "'%s'; leaving legacy row intact", catalog_key, legacy_key,
+                )
+                continue
+            if legacy.instructions_markdown and not (target.instructions_markdown or "").strip():
+                target.instructions_markdown = legacy.instructions_markdown
+                db.add(target)
+            db.query(WorkflowVersionModel).filter(
+                WorkflowVersionModel.workflow_id == legacy.id
+            ).delete(synchronize_session=False)
+            db.delete(legacy)
+            changed += 1
+
+        # 2: repair dangling subworkflow refs in every remaining workflow.
+        for workflow in db.query(WorkflowModel).filter(WorkflowModel.graph_spec.isnot(None)).all():
+            spec = workflow.graph_spec
+            if isinstance(spec, dict) and _rewrite_subworkflow_refs(spec, LEGACY_WORKFLOW_ALIASES):
+                workflow.graph_spec = spec
+                flag_modified(workflow, "graph_spec")
+                db.add(workflow)
+                changed += 1
+
+        if changed:
+            db.commit()
+            logger.info("Consolidated %d legacy workflow alias(es) / refs", changed)
+        return changed
 
     # --------------------------------------------------------------- mapping
     @staticmethod

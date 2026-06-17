@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.exceptions import RetryableError
 
 class GetWorkflowInstructionsInput(BaseModel):
-    workflow_name: str = Field(..., description="The internal name of the workflow to retrieve instructions for, e.g. 'create_catalog_schema'")
+    workflow_name: str = Field(..., description="The internal name of the workflow to retrieve instructions for, e.g. 'catalog_schema_table'")
 
 @tool(
     name="get_workflow_instructions",

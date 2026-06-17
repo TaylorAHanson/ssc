@@ -64,6 +64,11 @@ async def lifespan(app: FastAPI):
                 # Attach the workflow graph catalog as editable graph_spec data so
                 # the no-code executor can run DB-authored graphs.
                 WorkflowService.seed_specs_from_catalog(db)
+                # Fold obsolete instruction-only workflow keys (e.g.
+                # request_data_access) onto their executable catalog twins and
+                # repair any subworkflow refs still pointing at the old keys, so
+                # requests never fail with "no workflow graph registered".
+                WorkflowService.consolidate_legacy_workflows(db)
                 # Remove the legacy workflow-authoring guide from the Context
                 # Catalog (idempotent cleanup): the authoring agent now relies on
                 # list_workflow_building_blocks as its single source of truth, and
