@@ -103,16 +103,114 @@ def _tool_to_dict(tool: Any) -> Dict[str, Any]:
     }
 
 
-def list_tools(server_url: str) -> List[Dict[str, Any]]:
-    """List tools the Service Principal can see on ``server_url``.
+def _readable_exc(exc: BaseException) -> str:
+    """Flatten anyio/MCP ``ExceptionGroup``s into a human-readable cause string.
 
-    Returns normalized dicts; raises on connection/auth errors so the caller can
-    record a sync failure.
+    ``DatabricksMCPClient`` runs its HTTP calls inside an anyio task group, so the
+    real cause (e.g. ``403 Forbidden`` when the identity lacks ``USE CONNECTION``)
+    surfaces only as "unhandled errors in a TaskGroup (1 sub-exception)". Unwrap
+    the leaves so the source's ``last_sync_error`` shows the actual reason.
     """
-    ws = build_sp_workspace_client()
+    subs = getattr(exc, "exceptions", None)
+    if subs:
+        return "; ".join(_readable_exc(s) for s in subs)
+    return f"{type(exc).__name__}: {exc}"
+
+
+def list_tools(server_url: str, obo_token: Optional[str] = None) -> List[Dict[str, Any]]:
+    """List tools on ``server_url``.
+
+    When ``obo_token`` is provided the listing runs On-Behalf-Of the user, so
+    AI-Gateway external MCP servers registered with Per-User OAuth (which the
+    Service Principal cannot see) are discoverable under the caller's identity.
+    Falls back to the Service Principal otherwise. Returns normalized dicts;
+    raises a ``RuntimeError`` with the unwrapped cause on connection/auth errors
+    so the caller can record a useful sync failure.
+    """
+    ws = build_obo_workspace_client(obo_token) if obo_token else build_sp_workspace_client()
     client = _mcp_client(server_url, ws)
-    raw = client.list_tools()
+    try:
+        raw = client.list_tools()
+    except Exception as e:  # noqa: BLE001 - normalize the opaque TaskGroup wrapper
+        raise RuntimeError(_readable_exc(e)) from e
     return [_tool_to_dict(t) for t in (raw or [])]
+
+
+def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Enumerate MCP servers available in the workspace via the Databricks SDK.
+
+    Lets an admin pick a server instead of hand-typing a name + URL. Pulls the
+    bounded, cheap-to-list kinds:
+
+    - **External MCP servers registered in AI Gateway** — these are Unity Catalog
+      ``HTTP`` connections, reachable at ``/api/2.0/mcp/external/{name}``.
+    - **Genie spaces** — ``/api/2.0/mcp/genie/{space_id}``.
+    - **Custom MCP servers hosted as Databricks Apps** (name starts ``mcp-``) —
+      ``{app_url}/mcp``.
+
+    Runs On-Behalf-Of the user when ``obo_token`` is given (so per-user
+    connections/spaces are visible), else as the Service Principal. Best-effort
+    per kind: a failure listing one source never blocks the others. Returns dicts
+    shaped for the quick-add form: ``{name, server_url, kind, detail}``. (Managed
+    UC-function servers are not enumerated — there's one per schema, so those
+    stay a manual catalog/schema entry.)
+    """
+    host = _host()
+    ws = build_obo_workspace_client(obo_token) if obo_token else build_sp_workspace_client()
+    out: List[Dict[str, Any]] = []
+
+    # External MCP == Unity Catalog HTTP connections (AI Gateway registration).
+    try:
+        from databricks.sdk.service.catalog import ConnectionType
+
+        for conn in ws.connections.list():
+            if getattr(conn, "connection_type", None) != ConnectionType.HTTP:
+                continue
+            name = conn.name
+            out.append({
+                "name": name,
+                "server_url": f"{host}/api/2.0/mcp/external/{name}",
+                "kind": "external",
+                "detail": (getattr(conn, "comment", None) or getattr(conn, "url", None) or "HTTP connection"),
+            })
+    except Exception as e:  # noqa: BLE001 - one source kind failing must not block others
+        logger.warning("list_workspace_mcp_servers: connections failed: %s", e)
+
+    # Managed Genie MCP servers.
+    try:
+        resp = ws.genie.list_spaces()
+        spaces = getattr(resp, "spaces", None) or []
+        for space in spaces:
+            sid = getattr(space, "space_id", None) or getattr(space, "id", None)
+            if not sid:
+                continue
+            title = getattr(space, "title", None) or getattr(space, "name", None) or sid
+            out.append({
+                "name": f"Genie: {title}",
+                "server_url": f"{host}/api/2.0/mcp/genie/{sid}",
+                "kind": "genie",
+                "detail": f"Genie space {sid}",
+            })
+    except Exception as e:  # noqa: BLE001
+        logger.warning("list_workspace_mcp_servers: genie failed: %s", e)
+
+    # Custom MCP servers hosted as Databricks Apps (naming convention: mcp-*).
+    try:
+        for app in ws.apps.list():
+            app_name = getattr(app, "name", "") or ""
+            app_url = getattr(app, "url", None)
+            if not (app_url and app_name.startswith("mcp-")):
+                continue
+            out.append({
+                "name": app_name,
+                "server_url": app_url.rstrip("/") + "/mcp",
+                "kind": "custom_app",
+                "detail": getattr(app, "description", None) or "Databricks App",
+            })
+    except Exception as e:  # noqa: BLE001
+        logger.warning("list_workspace_mcp_servers: apps failed: %s", e)
+
+    return out
 
 
 def _content_to_text(result: Any) -> str:
@@ -152,7 +250,10 @@ def call_tool(
         used = "sp"
     logger.info("MCP call tool=%s server=%s identity=%s", tool_name, server_url, used)
     client = _mcp_client(server_url, ws)
-    result = client.call_tool(tool_name, arguments or {})
+    try:
+        result = client.call_tool(tool_name, arguments or {})
+    except Exception as e:  # noqa: BLE001 - normalize the opaque TaskGroup wrapper
+        return {"ok": False, "error": _readable_exc(e), "tool": tool_name}
     is_error = bool(getattr(result, "isError", False)) or (
         isinstance(result, dict) and result.get("isError")
     )

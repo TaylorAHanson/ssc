@@ -831,6 +831,25 @@ export interface McpSourceCreate {
   default_identity_mode?: 'sp' | 'obo';
 }
 
+export interface McpSourceQuickAdd extends McpSourceCreate {
+  /** Enable newly-discovered read-only tools for the main agent immediately. */
+  auto_enable_read_only?: boolean;
+}
+
+export interface McpQuickAddResult {
+  source: McpSource;
+  discovery: { ok: boolean; count: number; error: string | null };
+  auto_enabled: number;
+}
+
+export interface AvailableMcpSource {
+  name: string;
+  server_url: string;
+  kind: string;
+  detail?: string;
+  already_registered?: boolean;
+}
+
 export async function getToolRegistry(): Promise<ToolRegistryData> {
   const response = await fetch(`${API_BASE_URL}/tool-registry`, { headers: getHeaders() });
   if (!response.ok) {
@@ -873,6 +892,28 @@ export async function createMcpSource(data: McpSourceCreate): Promise<McpSource>
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
     throw new Error(error.detail || `Failed to create source: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function getAvailableMcpSources(): Promise<{ sources: AvailableMcpSource[] }> {
+  const response = await fetch(`${API_BASE_URL}/tool-registry/sources/available`, { headers: getHeaders() });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to list available sources: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function quickAddMcpSource(data: McpSourceQuickAdd): Promise<McpQuickAddResult> {
+  const response = await fetch(`${API_BASE_URL}/tool-registry/sources/quick-add`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to add source: ${response.statusText}`);
   }
   return response.json();
 }

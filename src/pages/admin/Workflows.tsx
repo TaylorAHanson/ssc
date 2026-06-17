@@ -621,7 +621,7 @@ export function Workflows() {
         <div>
           <h1 className="text-2xl font-bold text-heading flex items-center gap-2">
             <Wand2 className="w-6 h-6 text-accent" />
-            Workflows
+            Workflow Studio
           </h1>
           <p className="text-sm text-gray-500 mt-1 max-w-3xl">
             Author the agent's capabilities as data. Each published workflow appears in the
@@ -767,7 +767,7 @@ export function Workflows() {
                   title="Back to all workflows"
                   className="shrink-0 -ml-2 text-gray-500"
                 >
-                  <ArrowLeft className="w-4 h-4 mr-1" /> Workflows
+                  <ArrowLeft className="w-4 h-4 mr-1" /> Workflow Studio
                 </Button>
                 <div className="min-w-0">
                 <CardTitle className="text-base">

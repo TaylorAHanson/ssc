@@ -182,11 +182,32 @@ resources:
         - "sql"
         - "sql.statement-execution"
         - "sql.warehouses"
+        - "catalog.connections"
+        - "dashboards.genie"
         - "files.files"
         - "genie"
         - "mcp.functions"
         - "ai-gateway"
 
+      permissions:
+        - level: CAN_MANAGE
+          user_name: "${workspace.current_user.userName}"
+        - level: CAN_USE
+          group_name: "users"
+
+    # ── Example standalone MCP server ──────────────────────────────────────
+    # A minimal Streamable-HTTP MCP server hosted as its own Databricks App.
+    # The "mcp-" name prefix is the documented signal that makes Databricks
+    # surface it under Workspace → AI Gateway → MCPs. Source lives in ./mcp_app
+    # (added to the sync include below). It serves the protocol at <app-url>/mcp.
+    mcp-server:
+      name: "mcp-${var.app_name}"
+      description: "Example MCP server (Streamable HTTP) — discoverable in AI Gateway → MCPs"
+      source_code_path: "./mcp_app"
+      config:
+        command:
+          - python
+          - server.py
       permissions:
         - level: CAN_MANAGE
           user_name: "${workspace.current_user.userName}"
@@ -237,7 +258,15 @@ sync:
     # Include all backend code
     - backend/**
     - configuration.yaml
+    # Standalone example MCP server (deployed as its own mcp-* Databricks App)
+    - mcp_app/**
   exclude:
+    # Frontend dependencies and build output (never needed in the app source —
+    # node_modules is ~340MB and stalls the app's "Downloading source code" phase)
+    - node_modules/**
+    - "**/node_modules/**"
+    - dist/**
+    - .vite/**
     # Python cache and compiled files
     - backend/__pycache__/**
     - backend/**/__pycache__/**

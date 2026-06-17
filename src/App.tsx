@@ -149,7 +149,7 @@ function App() {
           )}
           {uiTabs?.tool_registry !== false && (
             <Route
-              path="/governance/tool-registry"
+              path="/build/tool-registry"
               element={
                 <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
                   <ToolRegistry />
@@ -157,6 +157,11 @@ function App() {
               }
             />
           )}
+          {/* Back-compat: Tool Registry moved out of /governance/. */}
+          <Route
+            path="/governance/tool-registry"
+            element={<Navigate to="/build/tool-registry" replace />}
+          />
           {/* Generic config-driven iframe apps (embedded_apps in
               configuration.yaml). */}
           <Route path="/embedded/:appId" element={<EmbeddedApp />} />

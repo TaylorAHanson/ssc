@@ -6,7 +6,7 @@ This application runs as a Databricks App.
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from app.api.v1 import router as api_router
 from app.core.config import settings
 import asyncio
@@ -155,10 +155,32 @@ async def lifespan(app: FastAPI):
                 
         thread = threading.Thread(target=run_poller_thread, daemon=True, name="PollerThread")
         thread.start()
-    
+
+    # Start the MCP Streamable HTTP session manager. The mounted ASGI app
+    # (mcp.streamable_http_app(), attached below) only handles requests while
+    # its session manager task group is running, so we enter it here for the
+    # lifetime of the app and exit it on shutdown. Best-effort: a failure here
+    # must not prevent the rest of the API from serving.
+    mcp_session_cm = None
+    try:
+        from app.mcp_server import mcp as _mcp
+        session_manager = getattr(_mcp, "session_manager", None)
+        if session_manager is not None:
+            mcp_session_cm = session_manager.run()
+            await mcp_session_cm.__aenter__()
+            logger.info("MCP Streamable HTTP session manager started.")
+    except Exception as e:
+        logger.warning(f"MCP session manager failed to start: {e}", exc_info=True)
+        mcp_session_cm = None
+
     yield
-    
+
     logger.info("Application shutting down...")
+    if mcp_session_cm is not None:
+        try:
+            await mcp_session_cm.__aexit__(None, None, None)
+        except Exception as e:
+            logger.warning(f"Error stopping MCP session manager: {e}")
     try:
         from app.providers.opa.server_manager import stop_embedded_opa
         stop_embedded_opa()
@@ -235,12 +257,25 @@ app.add_middleware(PyinstrumentMiddleware)
 # Include API routes
 app.include_router(api_router, prefix="/api/v1")
 
-# Mount MCP Server (SSE)
-# This enables external agents to connect via /mcp/sse
+# Mount MCP Server (Streamable HTTP)
+# Streamable HTTP is the transport Databricks AI Gateway's custom/external MCP
+# registration expects. The session manager's lifespan is started in `lifespan`
+# above (the mount only attaches the ASGI app; the manager must be run()).
+# The FastMCP streamable app serves at the mount's root, so the canonical
+# endpoint is "/mcp/" (with trailing slash). Clients and AI Gateway commonly
+# omit the slash; without this redirect a bare "/mcp" would fall through to the
+# SPA 404 handler. Registered BEFORE the mount so the exact-path route wins over
+# the "/mcp" prefix mount, and uses 307 to preserve the POST method + body.
+@app.api_route("/mcp", methods=["GET", "POST", "DELETE", "OPTIONS"], include_in_schema=False)
+async def _mcp_trailing_slash_redirect(request: Request):
+    query = request.url.query
+    return RedirectResponse(url="/mcp/" + (f"?{query}" if query else ""), status_code=307)
+
+
 try:
     from app.mcp_server import mcp
-    app.mount("/mcp", mcp.sse_app())
-    logger.info("Mounted MCP Server at /mcp")
+    app.mount("/mcp", mcp.streamable_http_app())
+    logger.info("Mounted MCP Server (Streamable HTTP) at /mcp")
 except Exception as e:
     logger.warning(f"Failed to mount MCP Server: {e}")
 
