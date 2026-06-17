@@ -51,6 +51,7 @@ class ToolUpdate(BaseModel):
     enabled_for_main_agent: Optional[bool] = None
     enabled_for_workflow_agent: Optional[bool] = None
     enabled_for_workflow_execution: Optional[bool] = None
+    exposed_via_mcp: Optional[bool] = None
     allowed_roles: Optional[List[str]] = None
     identity_mode: Optional[str] = Field(default=None, description="'sp' or 'obo'")
     is_mutating: Optional[bool] = None

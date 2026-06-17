@@ -182,6 +182,8 @@ resources:
         - "sql"
         - "sql.statement-execution"
         - "sql.warehouses"
+        - "catalog.connections"
+        - "dashboards.genie"
         - "files.files"
         - "genie"
         - "mcp.functions"
@@ -238,6 +240,12 @@ sync:
     - backend/**
     - configuration.yaml
   exclude:
+    # Frontend dependencies and build output (never needed in the app source —
+    # node_modules is ~340MB and stalls the app's "Downloading source code" phase)
+    - node_modules/**
+    - "**/node_modules/**"
+    - dist/**
+    - .vite/**
     # Python cache and compiled files
     - backend/__pycache__/**
     - backend/**/__pycache__/**

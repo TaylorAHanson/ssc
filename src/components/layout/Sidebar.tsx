@@ -195,7 +195,7 @@ const navItems: NavItem[] = [
     id: 'tool_registry',
     title: 'Tool Registry',
     icon: <Wrench className="w-5 h-5" />,
-    path: '/governance/tool-registry',
+    path: '/build/tool-registry',
     group: 'Control Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },

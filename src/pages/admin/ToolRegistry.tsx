@@ -556,7 +556,14 @@ export function ToolRegistry() {
                       )}
                     </td>
                     <td className="p-3">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${t.origin === 'local' ? 'bg-gray-100 text-gray-700' : t.origin === 'workflow' ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-800'}`}>
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium cursor-help ${t.origin === 'local' ? 'bg-gray-100 text-gray-700' : t.origin === 'workflow' ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-800'}`}
+                        title={t.origin === 'local'
+                          ? 'Local: a chat tool defined in this app.'
+                          : t.origin === 'workflow'
+                            ? 'Provider: a workflow building block backed by a provider integration.'
+                            : `MCP: discovered from the Unity AI Gateway source${t.source_id && sourceNameById[t.source_id] ? ` "${sourceNameById[t.source_id]}"` : ''}.`}
+                      >
                         {t.origin === 'local'
                           ? 'Local'
                           : t.origin === 'workflow'
@@ -565,16 +572,16 @@ export function ToolRegistry() {
                       </span>
                     </td>
                     <td className="p-3 text-center">
-                      <input type="checkbox" checked={t.enabled_for_main_agent} onChange={(e) => patchTool(t, { enabled_for_main_agent: e.target.checked })} className="w-4 h-4" />
+                      <input type="checkbox" checked={t.enabled_for_main_agent} onChange={(e) => patchTool(t, { enabled_for_main_agent: e.target.checked })} className="w-4 h-4 cursor-pointer" title="Available to the main unified chat agent (EDH) when checked." />
                     </td>
                     <td className="p-3 text-center">
-                      <input type="checkbox" checked={t.enabled_for_workflow_agent} onChange={(e) => patchTool(t, { enabled_for_workflow_agent: e.target.checked })} className="w-4 h-4" />
+                      <input type="checkbox" checked={t.enabled_for_workflow_agent} onChange={(e) => patchTool(t, { enabled_for_workflow_agent: e.target.checked })} className="w-4 h-4 cursor-pointer" title="Available to the workflow-authoring chat assistant when checked." />
                     </td>
                     <td className="p-3 text-center">
-                      <input type="checkbox" checked={t.enabled_for_workflow_execution} onChange={(e) => patchTool(t, { enabled_for_workflow_execution: e.target.checked })} className="w-4 h-4" />
+                      <input type="checkbox" checked={t.enabled_for_workflow_execution} onChange={(e) => patchTool(t, { enabled_for_workflow_execution: e.target.checked })} className="w-4 h-4 cursor-pointer" title="Usable as a workflow building block (a graph step tool) when checked." />
                     </td>
                     <td className="p-3 text-center">
-                      <input type="checkbox" checked={t.exposed_via_mcp} onChange={(e) => patchTool(t, { exposed_via_mcp: e.target.checked })} className="w-4 h-4" />
+                      <input type="checkbox" checked={t.exposed_via_mcp} onChange={(e) => patchTool(t, { exposed_via_mcp: e.target.checked })} className="w-4 h-4 cursor-pointer" title="Publish this tool over the in-app MCP server (/mcp) so external agents/apps (e.g. via Databricks AI Gateway) can call it. Takes effect after the server restarts." />
                     </td>
                     <td className="p-3">
                       <div className="flex flex-wrap gap-1 max-w-[220px]">
@@ -600,7 +607,8 @@ export function ToolRegistry() {
                       <select
                         value={t.identity_mode}
                         onChange={(e) => patchTool(t, { identity_mode: e.target.value as 'sp' | 'obo' })}
-                        className="h-8 px-2 border border-gray-300 rounded-md bg-white text-xs"
+                        className="h-8 px-2 border border-gray-300 rounded-md bg-white text-xs cursor-pointer"
+                        title="Execution identity: OBO runs as the calling user (On-Behalf-Of); SP runs as the app's Service Principal."
                       >
                         <option value="obo">OBO</option>
                         <option value="sp">SP</option>
@@ -620,7 +628,7 @@ export function ToolRegistry() {
                       </button>
                     </td>
                     <td className="p-3 text-center">
-                      <input type="checkbox" checked={t.enabled} onChange={(e) => patchTool(t, { enabled: e.target.checked })} className="w-4 h-4" />
+                      <input type="checkbox" checked={t.enabled} onChange={(e) => patchTool(t, { enabled: e.target.checked })} className="w-4 h-4 cursor-pointer" title="Master switch. When off, the tool is unavailable to every agent surface regardless of the Main Agent/Workflow settings." />
                     </td>
                   </tr>
                 ))}
