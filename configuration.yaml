@@ -19,7 +19,7 @@
 #     client_secret_env: "DEV_WS_CLIENT_SECRET"
 
 branding:
-  name: "Enterprise Data Hub"
+  name: "ATLAS Self-Service Center"
   # Short, identifier-friendly form of the name used where the brand appears as a
   # slug rather than display text (e.g. provisioned GitHub repo-name prefixes and
   # the git commit author for bot PRs). Defaults to `name` when omitted; set this
@@ -30,13 +30,14 @@ branding:
   # git_username: ""
   # git_email: ""
   # Your organization's wordmark/logo URL. Leave blank to render the name only.
-  logo_url: ""
-  # Accent blue aligned with the companion Command Center app's design tokens
-  # (see src/theme.ts). The dark navy sidebar / heading color is structural
-  # and lives in CSS variables (--theme-nav-bg, --theme-heading).
-  primary_color: "#007BFF"
-  secondary_color: "#001E3C"
-  info_color: "#007BFF"
+  # Served from public/ (Vite copies it into backend/static at build time).
+  logo_url: "/atlas-logo.svg"
+  # ATLAS palette — Databricks "Lava" red accent. The light/white sidebar and
+  # heading colors are structural and live in CSS variables
+  # (--theme-nav-bg, --theme-accent, --theme-heading in src/index.css).
+  primary_color: "#FF3621"
+  secondary_color: "#1B3139"
+  info_color: "#3253DC"
   alert_color: "#D32F2F"
   warning_color: "#FFC107"
   success_color: "#388E3C"
