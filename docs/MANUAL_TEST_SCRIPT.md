@@ -35,7 +35,7 @@ Work top to bottom; each step lists the **action** and the **expected result**.
 - [x] Visit each top route and confirm it loads without errors:
       `/` (Home), `/discovery`, `/requests`, `/approvals`, `/reports`,
       `/community/training`, `/community/events`, `/community/assets`,
-      `/community/links`, `/command-center`.
+      `/community/links`.
 
 ---
 
