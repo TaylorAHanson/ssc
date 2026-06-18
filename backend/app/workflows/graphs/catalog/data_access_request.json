@@ -8,15 +8,19 @@
       "tool": "resolve_data_owners",
       "running_status": "data_owner_approval",
       "writes_context": ["data_owners"],
+      "success_fact": "owners_resolved",
       "args": {
-        "assets": {
-          "$coalesce": [
-            {"$var": "assets"},
-            {"$list": [{"$obj": {"asset_name": {"$var": "asset_name"}, "asset_type": {"$var": "asset_type"}}}]}
-          ]
-        },
-        "data_owners": {"$var": "data_owners"}
+        "assets": {"$var": "assets"},
+        "asset_name": {"$var": "asset_name"},
+        "asset_type": {"$var": "asset_type"}
       }
+    },
+    {
+      "kind": "gate",
+      "name": "manager_approval",
+      "type": "manager",
+      "waiting_status": "manager_approval",
+      "approvers_from": {"$var": "manager_email"}
     },
     {
       "kind": "gate",
@@ -29,7 +33,7 @@
       "kind": "step",
       "name": "provision",
       "tool": "grant_uc_access",
-      "approvals": ["data_owner"],
+      "approvals": ["manager", "data_owner"],
       "success_fact": "access_granted",
       "for_each": {
         "$coalesce": [

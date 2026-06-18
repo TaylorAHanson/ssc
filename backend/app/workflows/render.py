@@ -72,9 +72,14 @@ def render_state(request, db, facts=None, spec_dict=None) -> StateMachineState:
     def gate_satisfied(gtype: str) -> bool:
         return _gate_satisfied(gtype, have, facts)
 
-    # Determine the active node.
-    if status in _TERMINAL:
-        current = status
+    # Determine the active node. Walk to the first unsatisfied stage — for an
+    # in-flight request that's the active stage; for a FAILED/REJECTED request
+    # it's the stage where it stopped, so downstream stages aren't painted as
+    # completed. (Steps carry a ``success_fact`` so a failed step — e.g.
+    # resolve_owners — is correctly identified as the stopping point rather than
+    # assumed done.)
+    if status == "completed":
+        current = "completed"
     else:
         current = "completed"
         for s in specs:
@@ -83,10 +88,14 @@ def render_state(request, db, facts=None, spec_dict=None) -> StateMachineState:
             elif s["success_fact"]:
                 satisfied = s["success_fact"] in have
             else:
-                satisfied = True  # transient provision step; runs instantly
+                satisfied = True  # transient step with no tracked fact
             if not satisfied:
                 current = s["name"]
                 break
+        # Terminal but everything satisfied (e.g. failed in the final transient
+        # step): fall back to the terminal marker so the failure still shows.
+        if status in _TERMINAL and current == "completed":
+            current = status
 
     # Ordered UI ids.
     ids: List[str] = ["pending"] + [s["name"] for s in specs] + ["completed"]
@@ -94,6 +103,9 @@ def render_state(request, db, facts=None, spec_dict=None) -> StateMachineState:
         ids.append(current)
 
     cur_idx = ids.index(current) if current in ids else len(ids) - 1
+    # Map each gate node to its gate type so the UI can identify approval
+    # steps (and surface their approver) regardless of the stage's name/id.
+    gate_types = {s["name"]: s.get("gate_type") for s in specs if s.get("kind") == "gate"}
     states_view: List[StateInfo] = []
     for idx, node_id in enumerate(ids):
         states_view.append(StateInfo(
@@ -106,6 +118,7 @@ def render_state(request, db, facts=None, spec_dict=None) -> StateMachineState:
             completedAt=None,
             startedAt=request.created_at if idx == 0 else None,
             facts=None,
+            gateType=gate_types.get(node_id),
         ))
 
     return StateMachineState(currentState=current, states=states_view, currentProgress=None)
