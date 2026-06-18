@@ -15,10 +15,9 @@ interface LayoutProps {
 // collapse the sidebar on entry to give the embedded view as much room
 // as possible — the user can still manually re-expand it.
 //
-// `/embedded/*` covers all config-driven embedded apps; `/command-center`
-// is kept for the legacy redirect target.
+// `/embedded/*` covers all config-driven embedded apps.
 function isFullBleedRoute(pathname: string): boolean {
-  return pathname.startsWith('/embedded/') || pathname === '/command-center';
+  return pathname.startsWith('/embedded/');
 }
 
 type BannerType = 'alert' | 'warning' | 'success' | 'info';

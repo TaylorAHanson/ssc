@@ -8,7 +8,7 @@ resources:
   
   database_instances:
     edh_ssc_db:
-      name: "atlas-${var.environment}-v5"
+      name: "atlas-${var.environment}"
       enable_pg_native_login: true
       capacity: "CU_1"
       lifecycle:

@@ -17,7 +17,6 @@ import {
   Search,
   Sparkles,
   WandSparkles,
-  Database,
   ExternalLink,
   ShieldCheck,
   ShieldAlert,
@@ -34,17 +33,16 @@ import { FeedbackModal } from '../feedback/FeedbackModal';
 import { useBrandingStore } from '../../stores/brandingStore';
 import { useUserStore } from '../../stores/userStore';
 import { useRequestStore } from '../../stores/requestStore';
-import { genieHomeUrl, workspaceHomeUrl } from '../../lib/databricksLinks';
+import { genieHomeUrl } from '../../lib/databricksLinks';
 import type { UserPersona } from '../../types';
 
 // Explicit render order for sidebar groups. Groups not listed here fall to
 // the end (preserving their relative insertion order). Driving rendering
 // from this constant — rather than from the order items happen to appear
-// in `navItems` — keeps the layout stable as dynamic items (Genie,
-// Command Center, Lakehouse) get spliced in based on branding config.
+// in `navItems` — keeps the layout stable as dynamic items (Genie)
+// get spliced in based on branding config.
 const GROUP_ORDER = [
   'Discover & Analyze',
-  'Build & Customize',
   'Requests & Approvals',
   'Learn & Share',
   'Watch Tower',
@@ -62,7 +60,6 @@ const GROUP_ORDER = [
 const GROUP_COLLAPSE_STORAGE_KEY = 'sidebar-collapsed-groups';
 
 const DEFAULT_COLLAPSED_GROUPS: Record<string, boolean> = {
-  'Build & Customize': true,
   'Requests & Approvals': true,
   'Learn & Share': true,
   'Watch Tower': true,
@@ -355,16 +352,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         path: `/embedded/${app.id}`,
         group: app.group || 'Build & Customize',
         ...(app.allowedPersonas ? { allowedPersonas: app.allowedPersonas } : {}),
-      });
-    }
-    const lakehouseUrl = workspaceHomeUrl(databricksWorkspaceUrl);
-    if (lakehouseUrl) {
-      items.push({
-        id: 'databricks_lakehouse',
-        title: 'Lakehouse',
-        icon: <Database className="w-5 h-5" />,
-        href: lakehouseUrl,
-        group: 'Build & Customize',
       });
     }
     return items;

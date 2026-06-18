@@ -66,13 +66,7 @@ branding:
 #   allowed_personas: optional role gate (omit = visible to everyone), e.g.
 #                     ["Platform Admin", "Governance Admin"].
 # Set to [] to disable all embedded apps.
-embedded_apps:
-  - id: command_center
-    title: "Command Center"
-    url: "https://google.com"
-    icon: "LayoutDashboard"
-    group: "Build & Customize"
-    description: "Operations dashboards for the platform."
+embedded_apps: []
 #   - id: grafana
 #     title: "Grafana"
 #     url: "https://grafana.internal.example.com/d/abc"
