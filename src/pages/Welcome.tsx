@@ -8,7 +8,6 @@ import {
   Calendar,
   CheckCircle2,
   Compass,
-  Database,
   ExternalLink,
   FileText,
   GraduationCap,
@@ -20,12 +19,11 @@ import {
   Sparkles,
   Users,
   WandSparkles,
-  Wrench,
 } from 'lucide-react';
 import { useBrandingStore } from '../stores/brandingStore';
 import type { EmbeddedApp } from '../stores/brandingStore';
 import { useUserStore } from '../stores/userStore';
-import { genieHomeUrl, workspaceHomeUrl } from '../lib/databricksLinks';
+import { genieHomeUrl } from '../lib/databricksLinks';
 import { renderNavIcon } from '../lib/navIcons';
 import type { UserPersona } from '../types';
 
@@ -69,7 +67,6 @@ function buildGroups(opts: {
   currentPersona: UserPersona;
 }): WelcomeGroup[] {
   const genieUrl = genieHomeUrl(opts.workspaceUrl);
-  const lakehouseUrl = workspaceHomeUrl(opts.workspaceUrl);
 
   const groups: WelcomeGroup[] = [
     {
@@ -138,25 +135,6 @@ function buildGroups(opts: {
             'See usage metrics and request reports at a glance.',
           icon: <BarChart className={ICON_CLASS} />,
           to: '/reports',
-        },
-      ],
-    },
-    {
-      id: 'build-deploy',
-      title: 'Build & Customize',
-      description:
-        'Jump into the building blocks of the lakehouse and the companion operations tooling.',
-      icon: <Wrench className="w-5 h-5" />,
-      accentClass: 'bg-indigo-50 text-indigo-600',
-      items: [
-        {
-          id: 'databricks_lakehouse',
-          title: 'Lakehouse',
-          description:
-            'Jump straight to your Databricks workspace.',
-          icon: <Database className={ICON_CLASS} />,
-          href: lakehouseUrl ?? undefined,
-          requireUrl: lakehouseUrl,
         },
       ],
     },
