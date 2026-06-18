@@ -74,6 +74,10 @@ class StateInfo(BaseModel):
     completedAt: Optional[datetime] = None
     startedAt: Optional[datetime] = None
     facts: Optional[List[Dict[str, Any]]] = None
+    # Gate type for approval/gate states ("data_owner", "manager",
+    # "platform_admin", ...); None for non-gate states. Lets the UI identify
+    # the approval step and show its assigned approver(s).
+    gateType: Optional[str] = None
 
 
 class StateMachineState(BaseModel):

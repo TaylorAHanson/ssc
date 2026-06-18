@@ -70,6 +70,13 @@ Gather only what you couldn't already infer from the steps above.
         substance must be theirs.
     *   *Validation*: Must be at least 10 characters and reference a specific
         business need that the user actually provided.
+6.  **Manager Email**: The email address of the requester's manager. Data-access
+    requests require **manager approval**, so this is **required** — the manager
+    is the person the approval is routed to.
+    *   *Reuse first*: if the manager is already known from the conversation,
+        use it; only ask if you genuinely can't resolve it.
+    *   *Validation*: Must be a valid email address (contains `@`). Do not invent
+        one — ask the user if unknown.
 
 ## Validation Loop
 Before calling `execute_workflow`:
@@ -94,7 +101,8 @@ Call `execute_workflow` with:
     ],
     "access_level": "...",
     "duration": "...",
-    "justification": "..."
+    "justification": "...",
+    "manager_email": "..."
   }
 }
 ```

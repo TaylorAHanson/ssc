@@ -76,6 +76,9 @@ export interface State {
   isFinal: boolean;
   completedAt?: string;
   startedAt?: string;
+  // Gate type for approval steps ("data_owner", "manager", ...); undefined for
+  // non-gate steps. Used to render the approval step's assigned approver(s).
+  gateType?: string;
   facts?: {
     type: string;
     data: Record<string, any>;
