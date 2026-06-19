@@ -86,3 +86,54 @@ async def test_deduplicates_and_sorts_multiple_owners():
             {"asset_name": "main.a.v", "asset_type": "table"},
         ])
     assert res["data_owners"] == ["team-a", "team-b"]
+
+
+# --- Resilience to malformed agent params (loose input coercion) -------------
+# The agent occasionally emits `assets` as a bare name string or a single dict,
+# and sometimes injects a stray `data_owners` string. These must not fail the
+# step — we coerce to the structured form and resolve owners anyway.
+
+@pytest.mark.asyncio
+async def test_coerces_bare_string_assets_using_asset_type():
+    """`assets` as a bare name string + `asset_type` is coerced and resolved."""
+    provider = _provider_returning(
+        tags_by_asset={},
+        owners_by_asset={"atlas_dev_catalog.supply_chain": "owner@corp.com"})
+    with patch("app.workflows.tools._get_databricks_provider", return_value=provider), \
+         patch("app.core.config.settings.APPROVER_GROUP_TAG_KEY", "approver_group"):
+        res = await resolve_data_owners.execute(
+            assets="atlas_dev_catalog.supply_chain", asset_type="schema")
+    assert res["data_owners"] == ["owner@corp.com"]
+    provider.get_asset_owner.assert_awaited_with("schema", "atlas_dev_catalog.supply_chain")
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_single_asset_name_and_type():
+    """When `assets` is absent, the backwards-compat single fields are used."""
+    provider = _provider_returning({"main.s.t": {"approver_group": "grp"}})
+    with patch("app.workflows.tools._get_databricks_provider", return_value=provider), \
+         patch("app.core.config.settings.APPROVER_GROUP_TAG_KEY", "approver_group"):
+        res = await resolve_data_owners.execute(asset_name="main.s.t", asset_type="table")
+    assert res["data_owners"] == ["grp"]
+
+
+@pytest.mark.asyncio
+async def test_normalizes_single_dict_assets():
+    provider = _provider_returning({"main.s.t": {"approver_group": "grp"}})
+    with patch("app.workflows.tools._get_databricks_provider", return_value=provider), \
+         patch("app.core.config.settings.APPROVER_GROUP_TAG_KEY", "approver_group"):
+        res = await resolve_data_owners.execute(
+            assets={"asset_name": "main.s.t", "asset_type": "table"})
+    assert res["data_owners"] == ["grp"]
+
+
+@pytest.mark.asyncio
+async def test_ignores_stray_string_data_owners_and_resolves_from_assets():
+    """A non-list `data_owners` (agent quirk) is not trusted; resolve from assets."""
+    provider = _provider_returning({"main.s.t": {"approver_group": "real-owners"}})
+    with patch("app.workflows.tools._get_databricks_provider", return_value=provider), \
+         patch("app.core.config.settings.APPROVER_GROUP_TAG_KEY", "approver_group"):
+        res = await resolve_data_owners.execute(
+            assets=[{"asset_name": "main.s.t", "asset_type": "table"}],
+            data_owners="someone@corp.com")  # stray string, must be ignored
+    assert res["data_owners"] == ["real-owners"]
