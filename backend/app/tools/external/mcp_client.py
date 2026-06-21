@@ -171,20 +171,37 @@ def _readable_exc(exc: BaseException) -> str:
 def list_tools(server_url: str, obo_token: Optional[str] = None) -> List[Dict[str, Any]]:
     """List tools on ``server_url``.
 
-    When ``obo_token`` is provided the listing runs On-Behalf-Of the user, so
-    AI-Gateway external MCP servers registered with Per-User OAuth (which the
-    Service Principal cannot see) are discoverable under the caller's identity.
-    Falls back to the Service Principal otherwise. Returns normalized dicts;
-    raises a ``RuntimeError`` with the unwrapped cause on connection/auth errors
-    so the caller can record a useful sync failure.
+    Tries multiple auth strategies in order:
+    1. **OBO** (On-Behalf-Of user) — required for AI-Gateway external MCP servers
+       that use Per-User OAuth (e.g. system_ai_agent_github_mcp).
+    2. **Service Principal** (OAuth M2M) — required for custom MCP apps hosted on
+       Databricks Apps (DatabricksMCPClient rejects non-standard OAuth types).
+
+    Falls through on auth/protocol errors so at least one strategy can succeed.
+    Returns normalized dicts; raises a ``RuntimeError`` with the unwrapped cause
+    when ALL strategies fail.
     """
-    ws = build_obo_workspace_client(obo_token) if obo_token else build_sp_workspace_client()
-    client = _mcp_client(server_url, ws)
-    try:
-        raw = client.list_tools()
-    except Exception as e:  # noqa: BLE001 - normalize the opaque TaskGroup wrapper
-        raise RuntimeError(_readable_exc(e)) from e
-    return [_tool_to_dict(t) for t in (raw or [])]
+    strategies: list = []
+    if obo_token:
+        strategies.append(("OBO", lambda: build_obo_workspace_client(obo_token)))
+    strategies.append(("SP", build_sp_workspace_client))
+
+    last_error: Optional[Exception] = None
+    for label, build_ws in strategies:
+        ws = build_ws()
+        client = _mcp_client(server_url, ws)
+        try:
+            raw = client.list_tools()
+            return [_tool_to_dict(t) for t in (raw or [])]
+        except Exception as e:  # noqa: BLE001
+            last_error = e
+            logger.info(
+                "list_tools [%s]: %s strategy failed: %s",
+                server_url, label, _readable_exc(e),
+            )
+            continue
+
+    raise RuntimeError(_readable_exc(last_error)) from last_error
 
 
 def _list_mcp_servers_with_client(ws, host: str) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -332,21 +349,33 @@ def call_tool(
 ) -> Dict[str, Any]:
     """Invoke ``tool_name`` on ``server_url`` as the SP or the user (OBO).
 
-    ``identity_mode='obo'`` uses the forwarded user token when available and falls
-    back to the SP only if no token is present; ``'sp'`` always uses the SP.
+    ``identity_mode='obo'`` tries the forwarded user token first (needed for
+    Per-User OAuth servers like system_ai_*), then falls back to SP if the OBO
+    auth is rejected (e.g. custom apps that only accept OAuth M2M).
+    ``'sp'`` always uses the SP directly.
     """
+    strategies: list = []
     if identity_mode == "obo" and obo_token:
-        ws = build_obo_workspace_client(obo_token)
-        used = "obo"
+        strategies.append(("obo", lambda: build_obo_workspace_client(obo_token)))
+    strategies.append(("sp", build_sp_workspace_client))
+
+    last_error: Optional[str] = None
+    for used, build_ws in strategies:
+        ws = build_ws()
+        logger.info("MCP call tool=%s server=%s identity=%s", tool_name, server_url, used)
+        client = _mcp_client(server_url, ws)
+        try:
+            result = client.call_tool(tool_name, arguments or {})
+            break
+        except Exception as e:  # noqa: BLE001
+            last_error = _readable_exc(e)
+            logger.info(
+                "MCP call_tool [%s]: %s strategy failed: %s",
+                tool_name, used, last_error,
+            )
+            continue
     else:
-        ws = build_sp_workspace_client()
-        used = "sp"
-    logger.info("MCP call tool=%s server=%s identity=%s", tool_name, server_url, used)
-    client = _mcp_client(server_url, ws)
-    try:
-        result = client.call_tool(tool_name, arguments or {})
-    except Exception as e:  # noqa: BLE001 - normalize the opaque TaskGroup wrapper
-        return {"ok": False, "error": _readable_exc(e), "tool": tool_name}
+        return {"ok": False, "error": last_error, "tool": tool_name}
     is_error = bool(getattr(result, "isError", False)) or (
         isinstance(result, dict) and result.get("isError")
     )
