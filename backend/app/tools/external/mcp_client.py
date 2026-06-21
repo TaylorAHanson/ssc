@@ -34,14 +34,15 @@ def _host() -> str:
     return host
 
 
-class _PlatformOAuthM2M:
-    """CredentialsStrategy that wraps platform-injected auth as ``oauth-m2m``.
+class _PlatformOAuthStrategy:
+    """CredentialsStrategy that wraps platform-injected auth as an ``OAuthCredentialsProvider``.
 
-    Inside a Databricks App the platform injects credentials (typically via
-    ``DATABRICKS_TOKEN``). The SDK auto-detects them but may label the auth type
-    as ``'pat'``, which ``DatabricksMCPClient`` rejects. This wrapper delegates
-    actual token generation to the platform-configured client while reporting
-    ``auth_type='oauth-m2m'`` so ``DatabricksMCPClient`` accepts it.
+    ``DatabricksMCPClient`` validates OAuth by calling ``config.oauth_token()`` which
+    checks ``isinstance(config._header_factory, OAuthCredentialsProvider)``. The SDK's
+    built-in auth (``'runtime'``, ``'pat'``, etc.) does NOT produce an
+    ``OAuthCredentialsProvider`` — even though the actual token IS OAuth inside a
+    Databricks App. This strategy wraps the auto-detected client's
+    ``config.authenticate()`` so the header factory satisfies the isinstance check.
     """
 
     def __init__(self, inner_ws):
@@ -51,16 +52,29 @@ class _PlatformOAuthM2M:
         return "oauth-m2m"
 
     def __call__(self, cfg):
+        from databricks.sdk.credentials_provider import OAuthCredentialsProvider
+        from databricks.sdk.oauth import Token as OAuthToken
+
         inner = self._inner_ws
-        return lambda: inner.config.authenticate()
+
+        def _headers():
+            return inner.config.authenticate()
+
+        def _token():
+            hdrs = inner.config.authenticate()
+            access_token = hdrs.get("Authorization", "").replace("Bearer ", "")
+            return OAuthToken(access_token=access_token, token_type="Bearer")
+
+        return OAuthCredentialsProvider(_headers, _token)
 
 
 def build_sp_workspace_client():
     """A ``WorkspaceClient`` authenticated as the app Service Principal.
 
     Prefers explicit M2M client_id/secret when configured; otherwise relies on the
-    SDK's default auth chain. Inside a Databricks App, wraps the auto-detected
-    credentials with an ``oauth-m2m`` label so ``DatabricksMCPClient`` accepts them.
+    SDK's default auth chain. Inside a Databricks App, wraps the auto-detected auth
+    with ``OAuthCredentialsProvider`` so ``DatabricksMCPClient``'s
+    ``config.oauth_token()`` check passes.
     """
     from databricks.sdk import WorkspaceClient
     from databricks.sdk.config import Config
@@ -75,13 +89,17 @@ def build_sp_workspace_client():
         return WorkspaceClient(host=host, client_id=client_id, client_secret=client_secret)
 
     # Inside a Databricks App: create an inner client that auto-detects platform
-    # credentials, then wrap it with a strategy that reports 'oauth-m2m' so
-    # DatabricksMCPClient accepts it (it rejects 'pat'-labeled clients).
+    # credentials, then wrap it so _header_factory is an OAuthCredentialsProvider
+    # (required by DatabricksMCPClient's oauth_token() isinstance check).
     if os.environ.get("DATABRICKS_APP_PORT"):
         inner_ws = WorkspaceClient()
+        logger.info(
+            "build_sp_workspace_client (app env): inner auth_type='%s'",
+            getattr(inner_ws.config, 'auth_type', '?'),
+        )
         config = Config(
             host=inner_ws.config.host,
-            credentials_strategy=_PlatformOAuthM2M(inner_ws),
+            credentials_strategy=_PlatformOAuthStrategy(inner_ws),
         )
         return WorkspaceClient(config=config)
 
@@ -92,12 +110,12 @@ def build_sp_workspace_client():
 
 
 class _OboOAuthCredentials:
-    """CredentialsStrategy that wraps a forwarded OAuth token.
+    """CredentialsStrategy that wraps a forwarded OAuth token as ``OAuthCredentialsProvider``.
 
-    Reports ``auth_type`` as ``'oauth-m2m'`` so ``DatabricksMCPClient``
-    recognizes it as OAuth-compatible. The actual token is the user's
-    forwarded OAuth token (OBO) — the label is just for client-side gating;
-    the Databricks API validates the token itself regardless of the label.
+    ``DatabricksMCPClient`` validates OAuth via ``config.oauth_token()`` which checks
+    ``isinstance(config._header_factory, OAuthCredentialsProvider)``. A plain lambda
+    returning headers does NOT satisfy this. We return a proper
+    ``OAuthCredentialsProvider`` so the isinstance check passes.
     """
 
     def __init__(self, token: str):
@@ -107,8 +125,18 @@ class _OboOAuthCredentials:
         return "oauth-m2m"
 
     def __call__(self, cfg):
+        from databricks.sdk.credentials_provider import OAuthCredentialsProvider
+        from databricks.sdk.oauth import Token as OAuthToken
+
         token = self._token
-        return lambda: {"Authorization": f"Bearer {token}"}
+
+        def _headers():
+            return {"Authorization": f"Bearer {token}"}
+
+        def _token_provider():
+            return OAuthToken(access_token=token, token_type="Bearer")
+
+        return OAuthCredentialsProvider(_headers, _token_provider)
 
 
 def build_obo_workspace_client(token: str):
@@ -117,7 +145,7 @@ def build_obo_workspace_client(token: str):
     The forwarded access token from Databricks Apps IS an OAuth access token.
     Using ``auth_type='pat'`` makes ``DatabricksMCPClient`` reject it (custom and
     external MCP servers require OAuth). Instead we supply a proper
-    ``CredentialsStrategy`` that reports ``auth_type='oauth-m2m'`` and sends the
+    ``CredentialsStrategy`` that reports ``auth_type='oauth-obo'`` and sends the
     token as ``Authorization: Bearer ...``.
 
     Explicitly passing empty ``client_id``/``client_secret`` suppresses the
