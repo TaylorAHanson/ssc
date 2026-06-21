@@ -34,17 +34,36 @@ def _host() -> str:
     return host
 
 
+class _PlatformOAuthM2M:
+    """CredentialsStrategy that wraps platform-injected auth as ``oauth-m2m``.
+
+    Inside a Databricks App the platform injects credentials (typically via
+    ``DATABRICKS_TOKEN``). The SDK auto-detects them but may label the auth type
+    as ``'pat'``, which ``DatabricksMCPClient`` rejects. This wrapper delegates
+    actual token generation to the platform-configured client while reporting
+    ``auth_type='oauth-m2m'`` so ``DatabricksMCPClient`` accepts it.
+    """
+
+    def __init__(self, inner_ws):
+        self._inner_ws = inner_ws
+
+    def auth_type(self) -> str:
+        return "oauth-m2m"
+
+    def __call__(self, cfg):
+        inner = self._inner_ws
+        return lambda: inner.config.authenticate()
+
+
 def build_sp_workspace_client():
     """A ``WorkspaceClient`` authenticated as the app Service Principal.
 
     Prefers explicit M2M client_id/secret when configured; otherwise relies on the
-    SDK's default auth chain. Inside a Databricks App the platform injects OAuth
-    M2M credentials that the SDK auto-detects — but ONLY when ``WorkspaceClient()``
-    is called with NO arguments. Passing only ``host`` risks the SDK resolving a
-    PAT token from the environment or ``.databrickscfg``, which
-    ``DatabricksMCPClient`` rejects (custom/external MCP servers require OAuth).
+    SDK's default auth chain. Inside a Databricks App, wraps the auto-detected
+    credentials with an ``oauth-m2m`` label so ``DatabricksMCPClient`` accepts them.
     """
     from databricks.sdk import WorkspaceClient
+    from databricks.sdk.config import Config
     import os
 
     host = _host()
@@ -55,11 +74,16 @@ def build_sp_workspace_client():
     if host and client_id and client_secret:
         return WorkspaceClient(host=host, client_id=client_id, client_secret=client_secret)
 
-    # Inside a Databricks App the platform provides OAuth credentials implicitly.
-    # WorkspaceClient() with NO arguments lets the SDK fully auto-detect app-native
-    # OAuth (it reads DATABRICKS_* env vars + the app identity in one shot).
+    # Inside a Databricks App: create an inner client that auto-detects platform
+    # credentials, then wrap it with a strategy that reports 'oauth-m2m' so
+    # DatabricksMCPClient accepts it (it rejects 'pat'-labeled clients).
     if os.environ.get("DATABRICKS_APP_PORT"):
-        return WorkspaceClient()
+        inner_ws = WorkspaceClient()
+        config = Config(
+            host=inner_ws.config.host,
+            credentials_strategy=_PlatformOAuthM2M(inner_ws),
+        )
+        return WorkspaceClient(config=config)
 
     # Local development: SDK picks up auth from .databrickscfg or env vars.
     if host:
@@ -70,17 +94,17 @@ def build_sp_workspace_client():
 class _OboOAuthCredentials:
     """CredentialsStrategy that wraps a forwarded OAuth token.
 
-    Reports ``auth_type`` as ``'oauth-obo'`` (not ``'pat'``) so
-    ``DatabricksMCPClient`` recognizes it as OAuth-compatible.
-    Implements the ``CredentialsStrategy`` ABC interface:
-    ``auth_type() -> str`` and ``__call__(cfg) -> HeaderFactory``.
+    Reports ``auth_type`` as ``'oauth-m2m'`` so ``DatabricksMCPClient``
+    recognizes it as OAuth-compatible. The actual token is the user's
+    forwarded OAuth token (OBO) — the label is just for client-side gating;
+    the Databricks API validates the token itself regardless of the label.
     """
 
     def __init__(self, token: str):
         self._token = token
 
     def auth_type(self) -> str:
-        return "oauth-obo"
+        return "oauth-m2m"
 
     def __call__(self, cfg):
         token = self._token
@@ -93,7 +117,7 @@ def build_obo_workspace_client(token: str):
     The forwarded access token from Databricks Apps IS an OAuth access token.
     Using ``auth_type='pat'`` makes ``DatabricksMCPClient`` reject it (custom and
     external MCP servers require OAuth). Instead we supply a proper
-    ``CredentialsStrategy`` that reports ``auth_type='oauth-obo'`` and sends the
+    ``CredentialsStrategy`` that reports ``auth_type='oauth-m2m'`` and sends the
     token as ``Authorization: Bearer ...``.
 
     Explicitly passing empty ``client_id``/``client_secret`` suppresses the
