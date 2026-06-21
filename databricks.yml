@@ -187,7 +187,6 @@ resources:
         - "files.files"
         - "genie"
         - "mcp.functions"
-        - "unity-catalog"
         - "ai-gateway"
 
       permissions:
