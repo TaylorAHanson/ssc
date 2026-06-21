@@ -7,12 +7,11 @@
  * deep-link behavior lives here; everything else (streaming, tool pills,
  * pending-poll lifecycle, form-route CTA) is owned by `ChatView`.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Sparkles, WandSparkles, LayoutGrid } from 'lucide-react';
+import { Sparkles, WandSparkles, LayoutGrid, Sun, Sunrise, Moon } from 'lucide-react';
 
 import { ChatView, type ChatRouteInfo, type ChatViewHandle } from '../components/chat/ChatView';
-import { AgentWelcome } from '../components/chat/AgentWelcome';
 import { api } from '../services/api';
 import { useUserStore } from '../stores/userStore';
 import { useBrandingStore } from '../stores/brandingStore';
@@ -70,8 +69,24 @@ export function Home() {
     const chatRef = useRef<ChatViewHandle | null>(null);
 
     const currentPersona = useUserStore((s) => s.currentPersona);
+    const currentUser = useUserStore((s) => s.currentUser);
     const isInitialized = useUserStore((s) => s.isInitialized);
     const onboardingEnabled = useBrandingStore((s) => s.features?.onboarding_suggestions !== false);
+
+    // Personalized greeting: the user's first name + a time-of-day salutation
+    // and matching icon. Derived from full_name (falling back to the email
+    // local part), title-cased.
+    const firstName = useMemo(() => {
+        const raw = (currentUser?.full_name || currentUser?.email?.split('@')[0] || '').trim();
+        const first = raw.split(/[ .]+/)[0];
+        return first ? first.charAt(0).toUpperCase() + first.slice(1) : '';
+    }, [currentUser]);
+    const { greeting, TimeIcon } = useMemo(() => {
+        const h = new Date().getHours();
+        if (h < 12) return { greeting: 'Good morning', TimeIcon: Sunrise };
+        if (h < 18) return { greeting: 'Good afternoon', TimeIcon: Sun };
+        return { greeting: 'Good evening', TimeIcon: Moon };
+    }, []);
     const [suggestions, setSuggestions] = useState<string[]>([]);
 
     // Branding-driven header + Self-Service Center catalog. The header uses the
@@ -160,10 +175,30 @@ export function Home() {
     };
 
     const welcomeNode = (
-        <AgentWelcome
-            title="What would you like to know?"
-            icon={<Sparkles className="w-7 h-7 text-primary" />}
-        />
+        <div className="flex flex-col items-center justify-center pt-3 pb-6 gap-1.5 text-center">
+            <div className="max-w-xl">
+                {firstName ? (
+                    <>
+                        <p className="flex items-center justify-center gap-1.5 text-sm font-medium text-gray-500">
+                            <TimeIcon className="w-4 h-4 text-primary" />
+                            {greeting},
+                        </p>
+                        <h2 className="mt-0.5 text-2xl font-bold text-gray-900">
+                            Welcome, {firstName}
+                        </h2>
+                        <p className="mt-2 flex items-center justify-center gap-2 text-base text-gray-500">
+                            <Sparkles className="w-5 h-5 text-primary" />
+                            What would you like to know?
+                        </p>
+                    </>
+                ) : (
+                    <h2 className="flex items-center justify-center gap-2 text-xl font-semibold text-gray-900">
+                        <Sparkles className="w-6 h-6 text-primary" />
+                        What would you like to know?
+                    </h2>
+                )}
+            </div>
+        </div>
     );
 
     return (
