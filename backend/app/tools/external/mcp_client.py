@@ -65,15 +65,34 @@ def build_sp_workspace_client():
     return WorkspaceClient()
 
 
+class _OboOAuthCredentials:
+    """CredentialsStrategy that wraps a forwarded OAuth token.
+
+    Reports ``auth_type`` as ``'oauth-obo'`` (not ``'pat'``) so
+    ``DatabricksMCPClient`` recognizes it as OAuth-compatible.
+    Implements the ``CredentialsStrategy`` ABC interface:
+    ``auth_type() -> str`` and ``__call__(cfg) -> HeaderFactory``.
+    """
+
+    def __init__(self, token: str):
+        self._token = token
+
+    def auth_type(self) -> str:
+        return "oauth-obo"
+
+    def __call__(self, cfg):
+        token = self._token
+        return lambda: {"Authorization": f"Bearer {token}"}
+
+
 def build_obo_workspace_client(token: str):
     """A ``WorkspaceClient`` authenticated as the user via a forwarded OBO token.
 
     The forwarded access token from Databricks Apps IS an OAuth access token.
     Using ``auth_type='pat'`` makes ``DatabricksMCPClient`` reject it (custom and
-    external MCP servers require OAuth authentication). Instead we supply the token
-    via a custom ``credentials_provider`` which bypasses the SDK's auth-type
-    classification altogether - the token is sent as ``Authorization: Bearer ...``
-    and the ``DatabricksMCPClient`` no longer sees it as PAT.
+    external MCP servers require OAuth). Instead we supply a proper
+    ``CredentialsStrategy`` that reports ``auth_type='oauth-obo'`` and sends the
+    token as ``Authorization: Bearer ...``.
 
     Explicitly passing empty ``client_id``/``client_secret`` suppresses the
     "more than one authorization method" error that would otherwise fire when
@@ -83,14 +102,9 @@ def build_obo_workspace_client(token: str):
     from databricks.sdk.config import Config
 
     host = _host()
-
-    def _obo_credentials(cfg):
-        """Static credential supplier returning the forwarded OAuth token."""
-        return lambda: {"Authorization": f"Bearer {token}"}
-
     config = Config(
         host=host,
-        credentials_provider=_obo_credentials,
+        credentials_strategy=_OboOAuthCredentials(token),
         # Suppress platform-injected SP creds to avoid multi-auth conflict.
         client_id="",
         client_secret="",
