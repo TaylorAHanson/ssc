@@ -28,8 +28,10 @@ class McpDependencyError(RuntimeError):
 
 
 def _host() -> str:
-    host = (settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL or "").strip()
-    return host.rstrip("/")
+    host = (settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL or "").strip().rstrip("/")
+    if host and not host.startswith(("https://", "http://")):
+        host = f"https://{host}"
+    return host
 
 
 def build_sp_workspace_client():
