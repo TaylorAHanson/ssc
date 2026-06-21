@@ -238,17 +238,51 @@ def list_tools(server_url: str, obo_token: Optional[str] = None) -> List[Dict[st
         strategies.append(("OBO", lambda: build_obo_workspace_client(obo_token)))
     strategies.append(("SP", build_sp_workspace_client))
 
+    # Decode OBO token to identify the user (JWT payload is base64, no secret needed).
+    obo_identity = "None"
+    if obo_token:
+        try:
+            import base64, json as _json
+            parts = obo_token.split(".")
+            if len(parts) == 3:
+                payload = base64.urlsafe_b64decode(parts[1] + "==")
+                claims = _json.loads(payload)
+                obo_identity = (
+                    f"sub={claims.get('sub', '?')}, "
+                    f"email={claims.get('email', claims.get('upn', '?'))}, "
+                    f"azp={claims.get('azp', '?')}"
+                )
+            else:
+                obo_identity = f"opaque (len={len(obo_token)})"
+        except Exception:
+            obo_identity = f"decode-failed (len={len(obo_token)}, starts='{obo_token[:8]}...')"
+
+    logger.info(
+        "list_tools [%s]: obo_identity=[%s], strategies=%s",
+        server_url, obo_identity, [s[0] for s in strategies],
+    )
+
     last_error: Optional[Exception] = None
     for label, build_ws in strategies:
         ws = build_ws()
+        logger.info(
+            "list_tools [%s]: trying %s — auth_type='%s', client_id='%s'",
+            server_url, label,
+            getattr(ws.config, 'auth_type', '?'),
+            getattr(ws.config, 'client_id', '(none)'),
+        )
         client = _mcp_client(server_url, ws)
         try:
             raw = client.list_tools()
+            logger.info(
+                "list_tools [%s]: %s succeeded — %d tools found",
+                server_url, label, len(raw or []),
+            )
             return [_tool_to_dict(t) for t in (raw or [])]
         except Exception as e:  # noqa: BLE001
             last_error = e
-            logger.info(
-                "list_tools [%s]: %s strategy failed: %s",
+            logger.warning(
+                "list_tools [%s]: %s FAILED — %s",
                 server_url, label, _readable_exc(e),
             )
             continue
