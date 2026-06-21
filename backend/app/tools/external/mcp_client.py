@@ -16,7 +16,7 @@ environments where the optional dependency isn't installed.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import settings
 
@@ -35,17 +35,31 @@ def _host() -> str:
 def build_sp_workspace_client():
     """A ``WorkspaceClient`` authenticated as the app Service Principal.
 
-    Prefers explicit M2M client_id/secret when configured; otherwise falls back to
-    the SDK's default auth chain (which, inside a Databricks App, is the injected
-    SP OAuth).
+    Prefers explicit M2M client_id/secret when configured; otherwise relies on the
+    SDK's default auth chain. Inside a Databricks App the platform injects OAuth
+    M2M credentials that the SDK auto-detects — but ONLY when ``WorkspaceClient()``
+    is called with NO arguments. Passing only ``host`` risks the SDK resolving a
+    PAT token from the environment or ``.databrickscfg``, which
+    ``DatabricksMCPClient`` rejects (custom/external MCP servers require OAuth).
     """
     from databricks.sdk import WorkspaceClient
+    import os
 
     host = _host()
     client_id = (settings.DATABRICKS_CLIENT_ID or "").strip()
     client_secret = (settings.DATABRICKS_CLIENT_SECRET or "").strip()
+
+    # Explicit OAuth M2M credentials take precedence.
     if host and client_id and client_secret:
         return WorkspaceClient(host=host, client_id=client_id, client_secret=client_secret)
+
+    # Inside a Databricks App the platform provides OAuth credentials implicitly.
+    # WorkspaceClient() with NO arguments lets the SDK fully auto-detect app-native
+    # OAuth (it reads DATABRICKS_* env vars + the app identity in one shot).
+    if os.environ.get("DATABRICKS_APP_PORT"):
+        return WorkspaceClient()
+
+    # Local development: SDK picks up auth from .databrickscfg or env vars.
     if host:
         return WorkspaceClient(host=host)
     return WorkspaceClient()
@@ -54,13 +68,34 @@ def build_sp_workspace_client():
 def build_obo_workspace_client(token: str):
     """A ``WorkspaceClient`` authenticated as the user via a forwarded OBO token.
 
-    Forces ``auth_type='pat'`` to avoid the "more than one authorization method"
-    error when SP OAuth env vars are also present (as they are inside a Databricks
-    App).
+    The forwarded access token from Databricks Apps IS an OAuth access token.
+    Using ``auth_type='pat'`` makes ``DatabricksMCPClient`` reject it (custom and
+    external MCP servers require OAuth authentication). Instead we supply the token
+    via a custom ``credentials_provider`` which bypasses the SDK's auth-type
+    classification altogether - the token is sent as ``Authorization: Bearer ...``
+    and the ``DatabricksMCPClient`` no longer sees it as PAT.
+
+    Explicitly passing empty ``client_id``/``client_secret`` suppresses the
+    "more than one authorization method" error that would otherwise fire when
+    the platform-injected SP OAuth env vars are present alongside the token.
     """
     from databricks.sdk import WorkspaceClient
+    from databricks.sdk.config import Config
 
-    return WorkspaceClient(host=_host(), token=token, auth_type="pat")
+    host = _host()
+
+    def _obo_credentials(cfg):
+        """Static credential supplier returning the forwarded OAuth token."""
+        return lambda: {"Authorization": f"Bearer {token}"}
+
+    config = Config(
+        host=host,
+        credentials_provider=_obo_credentials,
+        # Suppress platform-injected SP creds to avoid multi-auth conflict.
+        client_id="",
+        client_secret="",
+    )
+    return WorkspaceClient(config=config)
 
 
 def _mcp_client(server_url: str, workspace_client):
@@ -136,28 +171,13 @@ def list_tools(server_url: str, obo_token: Optional[str] = None) -> List[Dict[st
     return [_tool_to_dict(t) for t in (raw or [])]
 
 
-def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Enumerate MCP servers available in the workspace via the Databricks SDK.
+def _list_mcp_servers_with_client(ws, host: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Core discovery logic using a pre-built WorkspaceClient.
 
-    Lets an admin pick a server instead of hand-typing a name + URL. Pulls the
-    bounded, cheap-to-list kinds:
-
-    - **External MCP servers registered in AI Gateway** — these are Unity Catalog
-      ``HTTP`` connections, reachable at ``/api/2.0/mcp/external/{name}``.
-    - **Genie spaces** — ``/api/2.0/mcp/genie/{space_id}``.
-    - **Custom MCP servers hosted as Databricks Apps** (name starts ``mcp-``) —
-      ``{app_url}/mcp``.
-
-    Runs On-Behalf-Of the user when ``obo_token`` is given (so per-user
-    connections/spaces are visible), else as the Service Principal. Best-effort
-    per kind: a failure listing one source never blocks the others. Returns dicts
-    shaped for the quick-add form: ``{name, server_url, kind, detail}``. (Managed
-    UC-function servers are not enumerated — there's one per schema, so those
-    stay a manual catalog/schema entry.)
+    Separated so we can retry with a different client on auth failure.
     """
-    host = _host()
-    ws = build_obo_workspace_client(obo_token) if obo_token else build_sp_workspace_client()
     out: List[Dict[str, Any]] = []
+    errors: List[str] = []
 
     # External MCP == Unity Catalog HTTP connections (AI Gateway registration).
     try:
@@ -174,6 +194,7 @@ def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> List[Dict[str
                 "detail": (getattr(conn, "comment", None) or getattr(conn, "url", None) or "HTTP connection"),
             })
     except Exception as e:  # noqa: BLE001 - one source kind failing must not block others
+        errors.append(f"connections: {e}")
         logger.warning("list_workspace_mcp_servers: connections failed: %s", e)
 
     # Managed Genie MCP servers.
@@ -192,6 +213,7 @@ def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> List[Dict[str
                 "detail": f"Genie space {sid}",
             })
     except Exception as e:  # noqa: BLE001
+        errors.append(f"genie: {e}")
         logger.warning("list_workspace_mcp_servers: genie failed: %s", e)
 
     # Custom MCP servers hosted as Databricks Apps (naming convention: mcp-*).
@@ -208,9 +230,64 @@ def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> List[Dict[str
                 "detail": getattr(app, "description", None) or "Databricks App",
             })
     except Exception as e:  # noqa: BLE001
+        errors.append(f"apps: {e}")
         logger.warning("list_workspace_mcp_servers: apps failed: %s", e)
 
-    return out
+    return out, errors
+
+
+def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Enumerate MCP servers available in the workspace via the Databricks SDK.
+
+    Lets an admin pick a server instead of hand-typing a name + URL. Pulls the
+    bounded, cheap-to-list kinds:
+
+    - **External MCP servers registered in AI Gateway** — these are Unity Catalog
+      ``HTTP`` connections, reachable at ``/api/2.0/mcp/external/{name}``.
+    - **Genie spaces** — ``/api/2.0/mcp/genie/{space_id}``.
+    - **Custom MCP servers hosted as Databricks Apps** (name starts ``mcp-``) —
+      ``{app_url}/mcp``.
+
+    Tries OBO first (when available) so per-user connections are visible. If OBO
+    returns nothing (possibly due to auth issues), automatically retries with the
+    Service Principal as fallback. Returns dicts shaped for the quick-add form:
+    ``{name, server_url, kind, detail}``.
+    """
+    host = _host()
+
+    # Primary attempt: OBO if token available, otherwise SP.
+    if obo_token:
+        ws = build_obo_workspace_client(obo_token)
+        out, errors = _list_mcp_servers_with_client(ws, host)
+        if out:
+            return out
+        # OBO returned nothing — retry with SP as fallback (the SP may have
+        # broader visibility, e.g. system connections granted to the app).
+        if errors:
+            logger.info(
+                "list_workspace_mcp_servers: OBO returned empty (errors: %s). "
+                "Retrying with Service Principal.",
+                "; ".join(errors),
+            )
+        ws_sp = build_sp_workspace_client()
+        out_sp, errors_sp = _list_mcp_servers_with_client(ws_sp, host)
+        if out_sp:
+            return out_sp
+        if errors_sp:
+            logger.warning(
+                "list_workspace_mcp_servers: SP fallback also failed: %s",
+                "; ".join(errors_sp),
+            )
+        return []
+    else:
+        ws = build_sp_workspace_client()
+        out, errors = _list_mcp_servers_with_client(ws, host)
+        if errors and not out:
+            logger.warning(
+                "list_workspace_mcp_servers: SP returned empty (errors: %s)",
+                "; ".join(errors),
+            )
+        return out
 
 
 def _content_to_text(result: Any) -> str:
