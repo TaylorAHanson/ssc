@@ -110,6 +110,7 @@ async def get_branding():
     )
     return {
         "brand_name": settings.BRAND_NAME,
+        "brand_short_name": settings.BRAND_SHORT_NAME or settings.BRAND_NAME,
         "brand_logo_url": settings.BRAND_LOGO_URL,
         "brand_color_primary": settings.BRAND_COLOR_PRIMARY,
         "brand_color_secondary": settings.BRAND_COLOR_SECONDARY,
@@ -135,6 +136,11 @@ async def get_branding():
         "features": _yaml_config.get("features", {}),
         "tools": _yaml_config.get("tools", {}),
         "ui": _yaml_config.get("ui", {}),
+        # Config-driven Self-Service Center catalog (categories + quick-action
+        # cards) shown as an alternate landing view to the Assistant chat.
+        "self_service_center": _yaml_config.get("self_service_center", {}),
+        # Config-driven Community Links page (categories of external resources).
+        "community_links": _yaml_config.get("community_links", {}),
         # When true, this environment locks in-place workflow (Workflow) authoring;
         # the frontend hides edit/publish/delete and steers admins to bundle import.
         "workflow_authoring_locked": settings.WORKFLOW_AUTHORING_LOCKED,
