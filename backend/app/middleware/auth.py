@@ -125,15 +125,21 @@ class AuthMiddleware:
 
                 obo_token = headers.get("x-forwarded-access-token")
                 if obo_token:
-                    logger.debug(
-                        "AuthMiddleware: OBO Token found in standard header. "
-                        f"Length: {len(obo_token)}"
+                    logger.info(
+                        "AuthMiddleware [%s %s]: OBO token present (len=%d, "
+                        "starts='%s')",
+                        method, path, len(obo_token), obo_token[:10],
                     )
                 else:
-                    logger.debug(
-                        "AuthMiddleware: OBO Token HEADER MISSING in standard "
-                        "location (X-Forwarded-Access-Token). If this is local "
-                        "dev, this is expected."
+                    # Log all forwarded headers to diagnose missing token
+                    fwd_headers = {
+                        k: v[:30] for k, v in headers.items()
+                        if k.startswith("x-forwarded") or k.startswith("x-databricks")
+                    }
+                    logger.info(
+                        "AuthMiddleware [%s %s]: OBO token MISSING. "
+                        "Forwarded headers: %s",
+                        method, path, fwd_headers,
                     )
                 if not obo_token and settings.MOCK_USER_TOKEN:
                     obo_token = settings.MOCK_USER_TOKEN

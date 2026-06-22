@@ -102,6 +102,20 @@ class RemoteMcpTool:
     def friendly_completion_label(self) -> Optional[str]:
         return None
 
+    @property
+    def accepted_args(self) -> Dict[str, Any]:
+        """Derive accepted arg metadata from ``input_schema`` for the workflow engine.
+
+        The workflow authoring UI + spec validator use this to know which arguments
+        an author can wire into a step. For remote tools, we derive it from the
+        JSON-Schema ``input_schema`` stored in the Tool Registry DB.
+        """
+        props = (self._input_schema or {}).get("properties", {})
+        required_set = set((self._input_schema or {}).get("required", []))
+        named = set(props.keys())
+        required = named & required_set
+        return {"named": named, "required": required, "accepts_var_kw": True}
+
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """Invoke the remote tool, honoring the configured identity mode.
 
