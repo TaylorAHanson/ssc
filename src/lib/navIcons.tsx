@@ -30,6 +30,10 @@ import {
   Cloud,
   Link as LinkIcon,
   AppWindow,
+  BookOpen,
+  Code,
+  Eye,
+  DollarSign,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -69,6 +73,10 @@ const ICON_MAP: Record<string, LucideIcon> = {
   cloud: Cloud,
   link: LinkIcon,
   appwindow: AppWindow,
+  bookopen: BookOpen,
+  code: Code,
+  eye: Eye,
+  dollarsign: DollarSign,
 };
 
 const DEFAULT_ICON = AppWindow;

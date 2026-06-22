@@ -8,6 +8,7 @@ import {
   Calendar,
   CheckCircle2,
   Compass,
+  // Database, // re-enable together with the (disabled) Lakehouse tile below
   ExternalLink,
   FileText,
   GraduationCap,
@@ -19,11 +20,12 @@ import {
   Sparkles,
   Users,
   WandSparkles,
+  // Wrench, // re-enable together with the (disabled) Lakehouse tile below
 } from 'lucide-react';
 import { useBrandingStore } from '../stores/brandingStore';
 import type { EmbeddedApp } from '../stores/brandingStore';
 import { useUserStore } from '../stores/userStore';
-import { genieHomeUrl } from '../lib/databricksLinks';
+import { genieHomeUrl /*, workspaceHomeUrl */ } from '../lib/databricksLinks';
 import { renderNavIcon } from '../lib/navIcons';
 import type { UserPersona } from '../types';
 
@@ -67,6 +69,7 @@ function buildGroups(opts: {
   currentPersona: UserPersona;
 }): WelcomeGroup[] {
   const genieUrl = genieHomeUrl(opts.workspaceUrl);
+  // const lakehouseUrl = workspaceHomeUrl(opts.workspaceUrl); // Lakehouse tile disabled
 
   const groups: WelcomeGroup[] = [
     {
@@ -138,6 +141,29 @@ function buildGroups(opts: {
         },
       ],
     },
+    /* Lakehouse tile — DISABLED (kept for easy re-enable). To restore, uncomment
+       this block plus the `Database`/`Wrench`/`workspaceHomeUrl` imports and the
+       `lakehouseUrl` line above.
+    {
+      id: 'build-deploy',
+      title: 'Build & Customize',
+      description:
+        'Jump into the building blocks of the lakehouse and the companion operations tooling.',
+      icon: <Wrench className="w-5 h-5" />,
+      accentClass: 'bg-indigo-50 text-indigo-600',
+      items: [
+        {
+          id: 'databricks_lakehouse',
+          title: 'Lakehouse',
+          description:
+            'Jump straight to your Databricks workspace.',
+          icon: <Database className={ICON_CLASS} />,
+          href: lakehouseUrl ?? undefined,
+          requireUrl: lakehouseUrl,
+        },
+      ],
+    },
+    */
     {
       id: 'community',
       title: 'Learn & Share',

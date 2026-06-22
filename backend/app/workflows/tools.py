@@ -93,13 +93,47 @@ async def grant_uc_access(asset_type: str, asset_name: str, principal: str,
 
 
 class ResolveDataOwnersInput(BaseModel):
-    assets: List[Dict[str, Any]] = Field(
-        default_factory=list,
-        description="Assets to resolve owners for: [{asset_name, asset_type}, ...]",
+    # Loosely typed on purpose: the agent occasionally emits `assets` as a bare
+    # name string or a single dict instead of the documented list, and sometimes
+    # injects a stray `data_owners` string. We normalize inside the tool, so we
+    # accept anything here rather than 422-ing (and failing) the workflow step.
+    assets: Optional[Any] = Field(
+        default=None,
+        description="Assets: a list of {asset_name, asset_type}, a single such dict, or a bare asset-name string.",
     )
-    data_owners: Optional[List[str]] = Field(
-        None, description="Pre-supplied owners; when set they are returned as-is (no lookup)."
+    asset_name: Optional[str] = Field(
+        default=None, description="Single asset name (backwards-compat) when `assets` isn't a list."
     )
+    asset_type: Optional[str] = Field(
+        default=None, description="Single asset type for the backwards-compat single-asset form."
+    )
+    data_owners: Optional[Any] = Field(
+        default=None, description="Pre-supplied owners — honored only when it's a real list of strings."
+    )
+
+
+def _normalize_assets(assets: Any, asset_name: Optional[str] = None,
+                      asset_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Coerce agent-supplied asset params into ``[{asset_name, asset_type}, ...]``.
+
+    The agent sometimes sends ``assets`` as a bare name string or a single dict
+    rather than the documented list. Recover the structured form so owner
+    resolution still runs instead of failing the whole step.
+    """
+    out: List[Dict[str, Any]] = []
+    if isinstance(assets, list):
+        for a in assets:
+            if isinstance(a, dict) and a.get("asset_name"):
+                out.append({"asset_name": a.get("asset_name"), "asset_type": a.get("asset_type") or asset_type})
+            elif isinstance(a, str) and a:
+                out.append({"asset_name": a, "asset_type": asset_type})
+    elif isinstance(assets, dict) and assets.get("asset_name"):
+        out.append({"asset_name": assets.get("asset_name"), "asset_type": assets.get("asset_type") or asset_type})
+    elif isinstance(assets, str) and assets:
+        out.append({"asset_name": assets, "asset_type": asset_type})
+    if not out and asset_name:
+        out.append({"asset_name": asset_name, "asset_type": asset_type})
+    return out
 
 
 async def resolve_owner_groups_from_assets(
@@ -143,19 +177,25 @@ async def resolve_owner_groups_from_assets(
 @tool(name="resolve_data_owners", args_schema=ResolveDataOwnersInput, side_effect_class="read",
       description="Resolve the data-owner approver group(s) for the requested assets from UC "
                   "tags (approver_group), falling back to the asset owner. Read-only.")
-async def resolve_data_owners(assets: Optional[List[Dict[str, Any]]] = None,
-                              data_owners: Optional[List[str]] = None,
+async def resolve_data_owners(assets: Any = None,
+                              data_owners: Any = None,
+                              asset_name: Optional[str] = None,
+                              asset_type: Optional[str] = None,
                               **kwargs) -> Dict[str, Any]:
     """Owner resolution for data-access gates, as a tool.
 
     Lets the declarative spec engine express what used to require the dedicated
     ``data_access`` code graph: a pre-gate step that discovers who must approve.
-    Best-effort — if the provider is unavailable we return whatever owners the
-    caller already had so the gate still renders.
+
+    Defensive about its inputs: the agent sometimes sends ``assets`` as a bare
+    string/dict or injects a stray ``data_owners`` string. We normalize the
+    assets and only honor ``data_owners`` when it's a genuine list of strings;
+    otherwise we resolve owners from the assets (tag -> owner).
     """
-    owners = list(data_owners or [])
+    owners = [o for o in data_owners if isinstance(o, str)] if isinstance(data_owners, list) else []
     if not owners:
-        owners = await resolve_owner_groups_from_assets(assets)
+        norm = _normalize_assets(assets, asset_name, asset_type)
+        owners = await resolve_owner_groups_from_assets(norm)
     return {"ok": True, "data_owners": owners}
 
 

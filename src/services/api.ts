@@ -464,10 +464,58 @@ export interface EmbeddedAppConfig {
 }
 
 /**
+ * Self-Service Center catalog config (GET /branding › self_service_center).
+ * Drives the alternate landing view: categories of quick-action cards that
+ * either seed the Assistant (`prompt`) or navigate to a route (`route`).
+ */
+export interface SelfServiceCenterCard {
+  title: string;
+  description?: string;
+  prompt?: string;
+  route?: string;
+  icon?: string;
+  allowed_personas?: string[];
+}
+export interface SelfServiceCenterCategory {
+  title: string;
+  icon?: string;
+  cards?: SelfServiceCenterCard[];
+}
+export interface SelfServiceCenterConfig {
+  enabled?: boolean;
+  categories?: SelfServiceCenterCategory[];
+}
+
+/**
+ * Community Links page config (GET /branding › community_links). Categories of
+ * external resource cards, fully curated per customer in configuration.yaml.
+ */
+export interface CommunityLinkItem {
+  title: string;
+  url: string;
+  description?: string;
+  icon?: string;
+}
+export interface CommunityLinkCategory {
+  id?: string;
+  name: string;
+  icon?: string;
+  description?: string;
+  // Each link is either the full object form or a compact shorthand string
+  // "Title | URL | icon | description" (icon/description optional).
+  links?: (CommunityLinkItem | string)[];
+}
+export interface CommunityLinksConfig {
+  enabled?: boolean;
+  categories?: CommunityLinkCategory[];
+}
+
+/**
  * Get branding settings.
  */
 export async function getBranding(): Promise<{
   brand_name: string;
+  brand_short_name?: string;
   brand_logo_url: string;
   brand_color_primary: string;
   brand_color_secondary: string;
@@ -480,9 +528,11 @@ export async function getBranding(): Promise<{
   genie_full_experience_url?: string;
   features?: Record<string, boolean>;
   tools?: Record<string, boolean>;
-  ui?: { 
+  ui?: {
     tabs?: Record<string, boolean>;
   };
+  self_service_center?: SelfServiceCenterConfig;
+  community_links?: CommunityLinksConfig;
   workflow_authoring_locked?: boolean;
 }> {
   const response = await fetch(`${API_BASE_URL}/branding`, {

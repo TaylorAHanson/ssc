@@ -42,7 +42,11 @@ def _map_approval(approval_model: ApprovalModel, request_model: RequestModel) ->
         requestTitle=request_model.title,
         requestType=request_model.type,
         approvalType=approval_model.approval_type,
-        requestedBy=approval_model.requested_by,
+        # ``requested_by`` (display name) may be null for approvals created by the
+        # workflow poller (which only records ``requested_by_email``). Fall back to
+        # the email so the required ``requestedBy: str`` field never gets None —
+        # otherwise serializing this row raises and 500s the whole inbox.
+        requestedBy=approval_model.requested_by or approval_model.requested_by_email or "",
         requestedByEmail=approval_model.requested_by_email or "",
         assignedToEmail=approval_model.assigned_to_email,
         assignedToRole=approval_model.assigned_to_role,
