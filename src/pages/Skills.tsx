@@ -11,6 +11,7 @@ import {
   type Skill, type SkillLocation,
 } from '../services/api';
 import { ChatView } from '../components/chat/ChatView';
+import { AssistantShelf } from '../components/assistant/AssistantShelf';
 
 const SKILL_TOOLS = new Set(['save_skill', 'delete_skill', 'get_skill', 'list_skills']);
 
@@ -191,29 +192,18 @@ export function Skills() {
   const isCreating = editor && !editor.skillId;
 
   return (
-    <div className="h-[calc(100vh-3rem)] flex flex-col bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 shrink-0">
-        <div className="flex items-center gap-2">
-          <BookOpen className="w-5 h-5 text-primary" />
-          <h2 className="text-base font-semibold text-heading">Skills</h2>
-          <span className="text-xs text-gray-500 hidden sm:inline">
-            Reusable instructions your agent can load — yours and your team's
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant={assistantOpen ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setAssistantOpen((v) => !v)}
-          >
-            <Sparkles className="w-4 h-4 mr-1.5" />
-            Assistant
-          </Button>
-        </div>
+    <div className="h-[calc(100vh-6rem)] flex flex-col">
+      {/* Page header — matches the shared page pattern (h1 + subtitle). The
+          agent assistant is reached via the shared floating launcher (bottom
+          right), exactly like the Workflow Studio. */}
+      <div className="mb-4 shrink-0">
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">Skills</h1>
+        <p className="text-gray-600">
+          Reusable instructions your agent can load — yours and your team's.
+        </p>
       </div>
 
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 rounded-xl border border-gray-200 bg-white overflow-hidden">
         {/* Left rail: skills list */}
         <div className="w-72 shrink-0 border-r border-gray-200 flex flex-col min-h-0">
           <div className="p-3 flex items-center gap-2 border-b border-gray-100">
@@ -388,38 +378,40 @@ export function Skills() {
           )}
         </div>
 
-        {/* Right: agent assistant */}
-        {assistantOpen && (
-          <div className="w-[26rem] shrink-0 border-l border-gray-200 flex flex-col min-h-0 bg-gray-50/50">
-            <div className="px-4 py-2.5 border-b border-gray-100 flex items-center gap-2 shrink-0">
-              <Sparkles className="w-4 h-4 text-primary" />
-              <span className="text-sm font-medium text-heading">Skill assistant</span>
-            </div>
-            <div className="flex-1 min-h-0 p-3">
-              <ChatView
-                mode="skill_authoring"
-                storageKey="chatview_messages_skill_authoring"
-                onToolResult={handleAssistantToolResult}
-                placeholder="Ask me to draft or improve a skill..."
-                welcomeNode={
-                  <div className="text-center px-2 pt-2">
-                    <Sparkles className="w-6 h-6 text-primary mx-auto mb-2" />
-                    <p className="text-xs text-gray-500">
-                      I can draft a new skill, refine an existing one, or explain how skills work.
-                    </p>
-                  </div>
-                }
-                samplePrompts={[
-                  'Draft a skill for requesting table access the right way.',
-                  'Show me my skills.',
-                  'Improve the instructions in my onboarding skill.',
-                  'Create a shared skill for our team’s data-tagging standards.',
-                ]}
-              />
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* Agent assistant — shared full-screen overlay shelf + navy floating
+          launcher, identical to the Workflow Studio. */}
+      <AssistantShelf
+        open={assistantOpen}
+        onOpen={() => setAssistantOpen(true)}
+        onClose={() => setAssistantOpen(false)}
+        title="Skill assistant"
+        widthStorageKey="skill_assistant_width"
+        subtitle="Ask me to draft or refine a skill. When I save one, it opens automatically in the editor on the left."
+      >
+        <ChatView
+          mode="skill_authoring"
+          storageKey="chatview_messages_skill_authoring"
+          onToolResult={handleAssistantToolResult}
+          placeholder="Ask me to draft or improve a skill..."
+          welcomeNode={
+            <div className="text-center px-2 pt-2">
+              <Sparkles className="w-6 h-6 text-accent mx-auto mb-2" />
+              <p className="text-sm font-medium text-heading">Skill assistant</p>
+              <p className="text-xs text-gray-500 mt-1">
+                I can draft a new skill, refine an existing one, or explain how skills work.
+              </p>
+            </div>
+          }
+          samplePrompts={[
+            'Draft a skill for requesting table access the right way.',
+            'Show me my skills.',
+            'Improve the instructions in my onboarding skill.',
+            'Create a shared skill for our team’s data-tagging standards.',
+          ]}
+        />
+      </AssistantShelf>
     </div>
   );
 }

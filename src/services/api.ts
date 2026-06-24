@@ -2125,6 +2125,32 @@ export interface DryRunResult {
   warnings?: string[];
 }
 
+export type EvaluationSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+export interface EvaluationFinding {
+  severity: EvaluationSeverity;
+  category: string;
+  message: string;
+  stage: string | null;
+  fix: string;
+}
+
+export interface WorkflowEvaluation {
+  valid: boolean;
+  error?: string;
+  risk: { score: number; tier: string };
+  quality: { score: number; tier: string };
+  findings: EvaluationFinding[];
+  summary: {
+    stage_count?: number;
+    gate_count?: number;
+    step_count?: number;
+    mutating_steps?: number;
+    approval_gates?: string[];
+    composes?: string[];
+  };
+}
+
 export interface WorkflowVersion {
   id: string;
   workflow_id: string;
@@ -2307,6 +2333,21 @@ export async function testSpec(
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
     throw new Error(error.detail || `Dry-run failed: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/** Advisory evaluation of a workflow graph_spec: risk + quality scores and findings.
+ *  Deterministic, side-effect free, and never blocks — purely an authoring signal. */
+export async function evaluateSpec(graphSpec: WorkflowGraphSpec): Promise<WorkflowEvaluation> {
+  const response = await fetch(`${API_BASE_URL}/workflows/evaluate-spec`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ graph_spec: graphSpec }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Evaluation failed: ${response.statusText}`);
   }
   return response.json();
 }
@@ -2568,6 +2609,7 @@ export const api = {
   unpublishWorkflow,
   deleteWorkflow,
   validateSpec,
+  evaluateSpec,
   listWorkflowTools,
   testSpec,
   cloneWorkflow,

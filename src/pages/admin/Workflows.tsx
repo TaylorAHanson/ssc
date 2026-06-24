@@ -35,9 +35,10 @@ import { PublishConfirmModal } from '../../components/admin/PublishConfirmModal'
 import { VersionHistoryModal } from '../../components/admin/VersionHistoryModal';
 import { ImportWorkflowsModal } from '../../components/admin/ImportWorkflowsModal';
 import { useBrandingStore } from '../../stores/brandingStore';
-import { Lock, Sparkles, X, RefreshCw } from 'lucide-react';
+import { Lock, Sparkles, RefreshCw } from 'lucide-react';
 import { LabelWithHelp, AskAgentHint } from '../../components/ui/help-tip';
 import { ChatView } from '../../components/chat/ChatView';
+import { AssistantShelf } from '../../components/assistant/AssistantShelf';
 
 const inputClass =
   'w-full border border-gray-300 rounded-md h-10 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent';
@@ -138,49 +139,10 @@ export function Workflows() {
   const [publishTarget, setPublishTarget] = useState<Workflow | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  // In-page authoring assistant: a resizable shelf that overlays the editor so
-  // admins can ask questions / co-author without leaving the page.
+  // In-page authoring assistant: a shared full-screen overlay shelf (see
+  // AssistantShelf) that admins can ask questions / co-author in without
+  // leaving the page.
   const [showAssistant, setShowAssistant] = useState(false);
-  const [assistantWidth, setAssistantWidth] = useState<number>(() => {
-    if (typeof window === 'undefined') return 440;
-    const saved = Number(window.localStorage.getItem('authoring_assistant_width'));
-    return saved >= 360 ? saved : 440;
-  });
-  const resizingRef = useRef(false);
-  const assistantRef = useRef<HTMLElement | null>(null);
-  // Mirror the latest width so the drag-end handler persists the current value
-  // (its closure would otherwise capture a stale width from mousedown time).
-  const assistantWidthRef = useRef(assistantWidth);
-  assistantWidthRef.current = assistantWidth;
-
-  // Drag the panel's left edge to resize. It's an overlay shelf, so widening it
-  // simply covers more of the editor (no content reflow).
-  const startAssistantResize = (e: React.MouseEvent) => {
-    e.preventDefault();
-    resizingRef.current = true;
-    document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'ew-resize';
-    const onMove = (ev: MouseEvent) => {
-      if (!resizingRef.current) return;
-      const max = Math.min(960, window.innerWidth - 80);
-      const next = Math.min(Math.max(window.innerWidth - ev.clientX, 360), max);
-      setAssistantWidth(next);
-    };
-    const onUp = () => {
-      resizingRef.current = false;
-      document.body.style.userSelect = '';
-      document.body.style.cursor = '';
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      try {
-        window.localStorage.setItem('authoring_assistant_width', String(assistantWidthRef.current));
-      } catch {
-        /* ignore */
-      }
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
 
   // React to the authoring assistant's tool calls so the editor on the left
   // mirrors what the agent is doing on the right:
@@ -432,20 +394,6 @@ export function Workflows() {
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load workflow'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflowParam]);
-
-  // Collapse the authoring assistant when the user clicks outside it (but not
-  // while dragging its resize handle). The shelf is an overlay, so a click on the
-  // editor underneath means "I'm done with the assistant".
-  useEffect(() => {
-    if (!showAssistant) return;
-    const onPointerDown = (e: MouseEvent) => {
-      if (resizingRef.current) return;
-      const el = assistantRef.current;
-      if (el && !el.contains(e.target as Node)) setShowAssistant(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [showAssistant]);
 
   // After "New workflow", focus the Key field and bring the editor into view.
   useEffect(() => {
@@ -1173,87 +1121,46 @@ export function Workflows() {
         />
       )}
 
-      {showAssistant && (
-        <aside
-          ref={assistantRef}
-          className="fixed top-0 right-0 bottom-0 z-40 w-full bg-white border-l border-gray-200 shadow-2xl flex flex-col"
-          style={{ width: assistantWidth, maxWidth: '95vw' }}
-        >
-          {/* Drag handle on the left edge to resize the shelf. */}
-          <div
-            onMouseDown={startAssistantResize}
-            title="Drag to resize"
-            className="absolute left-0 top-0 bottom-0 w-1.5 -ml-0.5 cursor-ew-resize group z-10"
+      <AssistantShelf
+        open={showAssistant}
+        onOpen={() => setShowAssistant(true)}
+        onClose={() => setShowAssistant(false)}
+        title="Authoring assistant"
+        widthStorageKey="authoring_assistant_width"
+        subtitle="Ask me to explain a field, or to draft / edit this workflow. When I save a draft, it opens automatically in the editor on the left."
+        headerActions={
+          <button
+            type="button"
+            onClick={() => loadList()}
+            title="Reload the workflows list (after the assistant saves changes)"
+            className="text-gray-400 hover:text-accent p-1"
           >
-            <div className="h-full w-px mx-auto bg-transparent group-hover:bg-accent/60 transition-colors" />
-          </div>
-          <header className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
-            <div className="flex items-center gap-2 text-sm font-semibold text-heading">
-              <Sparkles className="w-4 h-4 text-accent" />
-              Authoring assistant
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        }
+      >
+        <ChatView
+          mode="authoring"
+          storageKey="chatview_messages_authoring"
+          onToolResult={handleAuthoringToolResult}
+          placeholder="Ask about authoring workflows..."
+          welcomeNode={
+            <div className="text-center px-2 pt-2">
+              <Sparkles className="w-6 h-6 text-accent mx-auto mb-2" />
+              <p className="text-sm font-medium text-heading">Authoring assistant</p>
+              <p className="text-xs text-gray-500 mt-1">
+                I can explain how workflows work and help you build or edit one.
+              </p>
             </div>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => loadList()}
-                title="Reload the workflows list (after the assistant saves changes)"
-                className="text-gray-400 hover:text-accent p-1"
-              >
-                <RefreshCw className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowAssistant(false)}
-                title="Close assistant"
-                className="text-gray-400 hover:text-gray-700 p-1"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-          </header>
-          <div className="px-4 py-2 border-b border-gray-100 text-[11px] text-gray-500 shrink-0">
-            Ask me to explain a field, or to draft / edit this workflow. When I save a draft,
-            it opens automatically in the editor on the left.
-          </div>
-          <div className="flex-1 min-h-0 p-3">
-            <ChatView
-              mode="authoring"
-              storageKey="chatview_messages_authoring"
-              onToolResult={handleAuthoringToolResult}
-              placeholder="Ask about authoring workflows..."
-              welcomeNode={
-                <div className="text-center px-2 pt-2">
-                  <Sparkles className="w-6 h-6 text-accent mx-auto mb-2" />
-                  <p className="text-sm font-medium text-heading">Authoring assistant</p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    I can explain how workflows work and help you build or edit one.
-                  </p>
-                </div>
-              }
-              samplePrompts={[
-                'How do I add an approval gate before a provisioning step?',
-                'What tools can a workflow step call?',
-                'Draft a workflow that grants table access after manager approval.',
-                'Explain the auto-approve condition options.',
-              ]}
-            />
-          </div>
-        </aside>
-      )}
-
-      {/* Floating launcher — dark navy to match the sidebar. Hidden while the
-          shelf is open (the panel has its own close control). */}
-      {!showAssistant && (
-        <button
-          type="button"
-          onClick={() => setShowAssistant(true)}
-          title="Open the authoring assistant"
-          className="fixed bottom-6 right-6 z-30 flex items-center gap-2 rounded-full bg-nav-bg text-nav-text pl-4 pr-5 py-3 shadow-lg hover:bg-nav-hover transition-colors"
-        >
-          <Sparkles className="w-5 h-5" />
-          <span className="text-sm font-semibold">Assistant</span>
-        </button>
-      )}
+          }
+          samplePrompts={[
+            'How do I add an approval gate before a provisioning step?',
+            'What tools can a workflow step call?',
+            'Draft a workflow that grants table access after manager approval.',
+            'Explain the auto-approve condition options.',
+          ]}
+        />
+      </AssistantShelf>
     </div>
   );
 }

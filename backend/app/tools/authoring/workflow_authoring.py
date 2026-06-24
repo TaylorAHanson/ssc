@@ -375,6 +375,35 @@ async def preview_workflow_spec(
     return {"ok": True, "projection": projection, "warnings": warnings}
 
 
+class EvaluateSpecInput(BaseModel):
+    graph_spec: Dict[str, Any] = Field(..., description="The candidate workflow graph_spec to evaluate.")
+
+
+@tool(
+    name="evaluate_workflow_spec",
+    description=(
+        "Evaluate a candidate workflow graph_spec for SAFETY and COMPLETENESS without "
+        "saving it. Returns a deterministic report: a risk score 0-100 (higher = riskier) "
+        "+ tier, a quality score 0-100 (higher = better) + tier, and findings (each with "
+        "severity, category, message, and a fix). Call this after validate/preview and "
+        "BEFORE recommending save/publish: read the findings back to the admin in plain "
+        "language, explain the scores, and propose concrete fixes for any high/critical "
+        "items (e.g. a risky mutation with no approval gate)."
+    ),
+    required_role=_AUTHOR_ROLE,
+    args_schema=EvaluateSpecInput,
+    friendly_label="Evaluating workflow...",
+)
+async def evaluate_workflow_spec(graph_spec: Dict[str, Any]) -> Dict[str, Any]:
+    from app.workflows.evaluator import evaluate_spec
+
+    db = _db()
+    try:
+        return evaluate_spec(graph_spec, db)
+    finally:
+        db.close()
+
+
 # --------------------------------------------------------------------------
 # Mutating tools (DB-only; governed + audited via the ToolExecutor)
 # --------------------------------------------------------------------------

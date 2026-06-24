@@ -209,6 +209,29 @@ class SkillsProvider:
             return configured.rstrip("/")
         return f"/Workspace/Users/{user_email}/{self._dir_name}"
 
+    def _effective_personal_dir(self, client, user_email: str) -> str:
+        """Personal ``.skills`` dir under the home of whoever the token resolves to.
+
+        A Workspace home folder only exists for (and is only writable by) the
+        principal the token authenticates as. In true OBO that's the user
+        (== ``user_email``); in a non-OBO/dev fallback the client authenticates
+        as the app/developer principal, so deriving the path from ``user_email``
+        would point at a home that doesn't exist / can't be written. Resolve the
+        real identity from the workspace when possible. An explicit
+        ``SKILLS_PERSONAL_WORKSPACE_DIR`` override always wins.
+        """
+        configured = (settings.SKILLS_PERSONAL_WORKSPACE_DIR or "").strip()
+        if configured:
+            return configured.rstrip("/")
+        email = user_email
+        try:
+            uname = getattr(client.current_user.me(), "user_name", None)
+            if uname:
+                email = uname
+        except Exception as exc:  # noqa: BLE001 - fall back to the provided email
+            logger.debug("current_user.me() failed; using '%s': %s", user_email, exc)
+        return f"/Workspace/Users/{email}/{self._dir_name}"
+
     # ---- listing ----------------------------------------------------------
     def list_skills(
         self,
@@ -226,7 +249,7 @@ class SkillsProvider:
         return skills
 
     def _list_personal(self, client, user_email: str) -> List[SkillRef]:
-        base = self.personal_dir(user_email)
+        base = self._effective_personal_dir(client, user_email)
         out: List[SkillRef] = []
         try:
             from databricks.sdk.service.workspace import ObjectType
@@ -391,7 +414,7 @@ class SkillsProvider:
         else:
             slug = slugify(name)
             if store == STORE_WORKSPACE:
-                base = (base_path or self.personal_dir(user_email)).rstrip("/")
+                base = (base_path or self._effective_personal_dir(client, user_email)).rstrip("/")
             else:
                 if not base_path:
                     raise SkillsError("A target .skills volume path is required.")
@@ -443,16 +466,16 @@ class SkillsProvider:
         user_email: str,
         include_shared: bool = True,
     ) -> List[SkillLocation]:
+        client = self._client(obo_token)
         locations: List[SkillLocation] = [
             SkillLocation(
                 store=STORE_WORKSPACE,
-                base_path=self.personal_dir(user_email),
+                base_path=self._effective_personal_dir(client, user_email),
                 label="Personal workspace",
                 is_personal=True,
             )
         ]
         if include_shared:
-            client = self._client(obo_token)
             seen = set()
             for ref in self._discover_shared(client):
                 base = ref.dir_path.rsplit("/", 1)[0]  # the .skills dir
@@ -484,10 +507,21 @@ class SkillsProvider:
     def _write_workspace(self, client, dir_path: str, md_path: str, data: bytes) -> None:
         from databricks.sdk.service.workspace import ImportFormat
 
+        # The Workspace import API does NOT create parent directories — the skill
+        # folder (and any missing ancestors, e.g. the user's `.skills` dir or even
+        # their home) must exist first. ``mkdirs`` is recursive, so if it fails the
+        # import can't succeed either; surface the *real* reason here instead of
+        # letting import raise the misleading "parent folder does not exist".
         try:
             client.workspace.mkdirs(dir_path)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("mkdirs(%s) failed (continuing): %s", dir_path, exc)
+            logger.warning("Skills: mkdirs(%s) failed: %s", dir_path, exc)
+            raise SkillsError(
+                f"Could not create the skill folder '{dir_path}': {exc}. Skills are "
+                "saved on your behalf, so your own Workspace home must exist and be "
+                "writable by you. If this app can't act on your behalf, set "
+                "SKILLS_PERSONAL_WORKSPACE_DIR to a folder you can write to."
+            ) from exc
         try:
             client.workspace.import_(
                 path=md_path,

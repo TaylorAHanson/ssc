@@ -527,6 +527,19 @@ tools/workflows granted in Unity Catalog.
   to project which gates auto-approve and the exact args each step receives. Publishing goes
   through a **blast-radius confirmation** (gates/steps/mutating-actions, external-MCP steps,
   missing-request-type warning) that validates before the workflow goes live.
+- **Evaluator (advisory safety + completeness scoring).** `POST /workflows/evaluate-spec` →
+  `app/workflows/evaluator.py::evaluate_spec` returns a deterministic, side-effect-free report:
+  a **risk score** 0–100 (higher = riskier; tiers low/medium/high/critical) driven by each
+  mutating step's `side_effect_class` blast radius, whether risky mutations sit behind a human
+  approval gate, fan-out, and gates that auto-approve unconditionally; a **quality score** 0–100
+  (higher = better; poor/fair/good/excellent) driven by structural validity, the same
+  `lint_step_tool_args`/`lint_subworkflow_refs` lints, and reliability gaps (missing `success_fact`,
+  a `data_owner` gate with no approver source, no actionable stage); and **findings**
+  (`severity`, `category`, `message`, `stage`, `fix`). It reuses `validate_spec_dict` + the tool
+  registry — it runs no tool, calls no LLM, and is **advisory only (never blocks publish)**. Surfaced
+  in the editor via an **Evaluate** button (`WorkflowEvaluationModal`) and to the authoring assistant
+  via the read-only `evaluate_workflow_spec` tool; the LLM "is this safe/complete?" reasoning lives
+  in the assistant, which calls the evaluator for the hard numbers and explains/proposes fixes.
 - **Versioning + env promotion.** Each publish writes an immutable snapshot to `workflow_versions`
   (`WorkflowVersionModel`); `GET /workflows/{id}/versions` + `POST /workflows/{id}/rollback` give
   history and one-click restore (as a *draft* for review). Portable **export/import**
@@ -572,15 +585,16 @@ tools/workflows granted in Unity Catalog.
   tools route through it. Access/approver group names come from configurable UC tag keys
   (`ACCESS_GROUP_TAG_KEY`/`APPROVER_GROUP_TAG_KEY`).
 - **Agent-driven workflow authoring.** The same unified agent can co-author no-code workflows for
-  admins. Six tools (`app/tools/authoring/workflow_authoring.py`), gated with
+  admins. The tools (`app/tools/authoring/workflow_authoring.py`), gated with
   `required_role="Governance Admin"`, wrap the same `WorkflowService` / `spec_loader` / `dry_run` /
-  publish gate the visual editor uses: `list_workflow_building_blocks`, `get_workflow`,
-  `validate_workflow_spec`, `preview_workflow_spec` (dry-run), `save_workflow_draft` (`app_write`),
+  `evaluator` / publish gate the visual editor uses: `list_workflow_building_blocks`, `get_workflow`,
+  `search_similar_workflows`, `validate_workflow_spec`, `preview_workflow_spec` (dry-run),
+  `evaluate_workflow_spec` (advisory risk/quality), `save_workflow_draft` (`app_write`),
   and `publish_workflow` (`app_write`, runs the full pre-publish gate + version snapshot). A
   conditional **prompt section** (`_get_authoring_section`) appears only when the user holds the
   authoring tools, instructing the agent to start from `list_workflow_building_blocks`, then
-  validate → preview → save draft → publish only on explicit confirmation. The mutating tools
-  route through the governed `ToolExecutor` (audited).
+  validate → preview → evaluate → save draft → publish only on explicit confirmation. The mutating
+  tools route through the governed `ToolExecutor` (audited).
 - **Authoring source of truth is `list_workflow_building_blocks`.** The agent learns the real step
   tools (with exact arg names), gate types, stage kinds (including `subworkflow` for compound
   workflows), spec shape, and expression operators from that live tool — always in sync with the

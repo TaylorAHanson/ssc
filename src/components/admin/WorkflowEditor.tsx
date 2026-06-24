@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
+  Gauge,
   GitBranch,
   GripVertical,
   Layers,
@@ -43,6 +44,7 @@ import {
 } from '../../lib/workflowSpec';
 import WorkflowGraphPreview from './WorkflowGraphPreview';
 import WorkflowTestModal from './WorkflowTestModal';
+import WorkflowEvaluationModal from './WorkflowEvaluationModal';
 import { HelpTip, LabelWithHelp, AskAgentHint } from '../ui/help-tip';
 
 // `inputBase` has no width so it can be combined with flex/explicit widths
@@ -67,6 +69,7 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
   const [validating, setValidating] = useState(false);
   const [validation, setValidation] = useState<{ ok: boolean; msg: string } | null>(null);
   const [showTest, setShowTest] = useState(false);
+  const [showEvaluate, setShowEvaluate] = useState(false);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dropIdx, setDropIdx] = useState<number | null>(null);
 
@@ -207,10 +210,13 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
             )}
             Validate
           </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => setShowEvaluate(true)} disabled={stages.length === 0}>
+            <Gauge className="w-3.5 h-3.5 mr-1" /> Evaluate
+          </Button>
           <Button type="button" size="sm" onClick={() => setShowTest(true)} disabled={stages.length === 0}>
             <Play className="w-3.5 h-3.5 mr-1" /> Test
           </Button>
-          <HelpTip text="Validate checks the structure (gate types, real tools, well-formed expressions). Test dry-runs the workflow against a sample request — projecting which gates auto-approve and the exact args each step gets — without running anything." />
+          <HelpTip text="Validate checks the structure (gate types, real tools, well-formed expressions). Evaluate scores safety (risk) and completeness (quality) and lists findings to fix. Test dry-runs the workflow against a sample request — projecting which gates auto-approve and the exact args each step gets — without running anything." />
         </div>
       </div>
 
@@ -362,6 +368,7 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
       </div>
 
       {showTest && <WorkflowTestModal spec={spec} onClose={() => setShowTest(false)} />}
+      {showEvaluate && <WorkflowEvaluationModal spec={spec} onClose={() => setShowEvaluate(false)} />}
     </div>
   );
 }

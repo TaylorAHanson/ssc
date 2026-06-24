@@ -280,6 +280,9 @@ tools:
   get_workflow: true
   validate_workflow_spec: true
   preview_workflow_spec: true
+  # Advisory safety + completeness scoring (risk/quality + findings) the agent
+  # runs before recommending save/publish.
+  evaluate_workflow_spec: true
   save_workflow_draft: true
   publish_workflow: true
 

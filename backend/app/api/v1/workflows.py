@@ -82,6 +82,10 @@ class SpecTestRequest(BaseModel):
     sample_context: Optional[Dict[str, Any]] = None
 
 
+class SpecEvaluateRequest(BaseModel):
+    graph_spec: Dict[str, Any]
+
+
 class RollbackRequest(BaseModel):
     version: int
 
@@ -244,6 +248,24 @@ def test_spec(
         spec, _composable_keys(db)
     )
     return projection
+
+
+@router.post("/evaluate-spec")
+def evaluate_spec_endpoint(
+    *,
+    body: SpecEvaluateRequest,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    _: None = Depends(_require_feature),
+) -> Any:
+    """Advisory evaluation of a workflow graph_spec (risk + quality + findings).
+
+    Never blocks anything — it's an author-time signal surfaced in the editor.
+    Computed deterministically from the spec (no tools run, no LLM).
+    """
+    from app.workflows.evaluator import evaluate_spec
+
+    return evaluate_spec(body.graph_spec or {}, db)
 
 
 @router.post("/{workflow_id}/publish")
