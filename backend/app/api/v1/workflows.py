@@ -139,7 +139,32 @@ def list_workflows(
     _: None = Depends(_require_feature),
 ) -> Any:
     workflows = WorkflowService.list_workflows(db, include_drafts=include_drafts)
-    return [WorkflowService.to_dict(s, include_body=False) for s in workflows]
+    from app.workflows.evaluator import evaluate_spec
+
+    out = []
+    for s in workflows:
+        d = WorkflowService.to_dict(s, include_body=False)
+        # Attach an at-a-glance advisory evaluation (risk + quality) so the list
+        # can badge each workflow without opening it. ``db=None`` keeps this cheap
+        # (skips the per-row subworkflow-ref lint); the editor's Evaluate modal
+        # runs the full db-backed report.
+        spec = s.graph_spec
+        evaluation = None
+        if spec and spec.get("stages"):
+            try:
+                rep = evaluate_spec(spec)
+                evaluation = {
+                    "valid": rep["valid"],
+                    "risk": rep["risk"],
+                    "quality": rep["quality"],
+                    "findings": len(rep["findings"]),
+                    "top_severity": rep["findings"][0]["severity"] if rep["findings"] else None,
+                }
+            except Exception as e:  # noqa: BLE001 - never break the list on a bad spec
+                logger.debug("evaluation skipped for workflow %s: %s", s.key, e)
+        d["evaluation"] = evaluation
+        out.append(d)
+    return out
 
 
 @router.post("")

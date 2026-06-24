@@ -29,7 +29,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { api } from '../../services/api';
-import type { Workflow, WorkflowInput, WorkflowGraphSpec, WorkflowTool } from '../../services/api';
+import type { Workflow, WorkflowInput, WorkflowGraphSpec, WorkflowListEvaluation, WorkflowTool } from '../../services/api';
 import { WorkflowEditor } from '../../components/admin/WorkflowEditor';
 import { PublishConfirmModal } from '../../components/admin/PublishConfirmModal';
 import { VersionHistoryModal } from '../../components/admin/VersionHistoryModal';
@@ -77,6 +77,42 @@ const emptyForm: WorkflowFormState = {
 function specComposition(spec: WorkflowGraphSpec | null | undefined): 'atomic' | 'compound' {
   const stages = spec?.stages ?? [];
   return stages.some((s) => s.kind === 'subworkflow') ? 'compound' : 'atomic';
+}
+
+// Tier -> pill styles for the at-a-glance risk/quality badges on the list.
+const RISK_TIER_PILL: Record<string, string> = {
+  low: 'text-green-700 bg-green-50 border-green-100',
+  medium: 'text-amber-700 bg-amber-50 border-amber-100',
+  high: 'text-orange-700 bg-orange-50 border-orange-100',
+  critical: 'text-red-700 bg-red-50 border-red-100',
+};
+const QUALITY_TIER_PILL: Record<string, string> = {
+  excellent: 'text-green-700 bg-green-50 border-green-100',
+  good: 'text-emerald-700 bg-emerald-50 border-emerald-100',
+  fair: 'text-amber-700 bg-amber-50 border-amber-100',
+  poor: 'text-red-700 bg-red-50 border-red-100',
+};
+
+function EvaluationBadges({ evaluation }: { evaluation?: WorkflowListEvaluation | null }) {
+  if (!evaluation) return null;
+  const { risk, quality, findings } = evaluation;
+  const fallback = 'text-gray-600 bg-gray-50 border-gray-200';
+  return (
+    <>
+      <span
+        className={`inline-flex items-center text-[10px] border rounded px-1.5 py-0.5 ${RISK_TIER_PILL[risk.tier] || fallback}`}
+        title={`Risk ${risk.score}/100 (${risk.tier})${findings ? ` · ${findings} finding${findings === 1 ? '' : 's'}` : ''} — open Evaluate for details`}
+      >
+        R {risk.score}
+      </span>
+      <span
+        className={`inline-flex items-center text-[10px] border rounded px-1.5 py-0.5 ${QUALITY_TIER_PILL[quality.tier] || fallback}`}
+        title={`Quality ${quality.score}/100 (${quality.tier}) — open Evaluate for details`}
+      >
+        Q {quality.score}
+      </span>
+    </>
+  );
 }
 
 const splitList = (value: string): string[] =>
@@ -657,6 +693,7 @@ export function Workflows() {
                     <div className="text-xs text-gray-500 truncate">{s.goal || '—'}</div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
+                    <EvaluationBadges evaluation={s.evaluation} />
                     {s.composition === 'compound' && (
                       <span
                         className="inline-flex items-center gap-1 text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-1.5 py-0.5"

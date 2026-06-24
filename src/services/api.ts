@@ -2200,6 +2200,17 @@ export interface Workflow {
   composition?: 'atomic' | 'compound';
   /** Derived: the workflow keys this one composes, in order. */
   subworkflow_refs?: string[];
+  /** Advisory at-a-glance evaluation (risk + quality) attached by the list API.
+   *  Null when the workflow has no graph_spec to score. */
+  evaluation?: WorkflowListEvaluation | null;
+}
+
+export interface WorkflowListEvaluation {
+  valid: boolean;
+  risk: { score: number; tier: string };
+  quality: { score: number; tier: string };
+  findings: number;
+  top_severity: EvaluationSeverity | null;
 }
 
 export interface WorkflowInput {
