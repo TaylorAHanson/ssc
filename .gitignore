@@ -58,3 +58,7 @@ sync-personal.sh
 
 # Binaries
 backend/bin/
+
+# checkpoints
+*.db-shm
+*.db-wal

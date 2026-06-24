@@ -5,7 +5,6 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 from app.db.training import TrainingCompletionModel
-from app.agents.content_registry import get_content
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +28,33 @@ class TrainingProvider:
         return [c.course_code for c in completions]
 
     def get_all_tracks(self) -> List[Dict[str, Any]]:
+        """Return published tracks in the legacy persona-shaped structure.
+
+        Kept for backward compatibility with any consumer expecting the old
+        ``training.json`` shape (a list of persona objects whose section keys
+        map to course lists). Tracks/courses now live in the DB; courses are
+        grouped under their ``section`` (defaulting to "fundamentals").
         """
-        Get all training tracks from content registry.
-        """
-        return get_content("training.json")
+        from app.services.training_service import TrainingService
+
+        tracks = TrainingService.list_tracks(self.db, include_drafts=False)
+        out: List[Dict[str, Any]] = []
+        for track in tracks:
+            persona_obj: Dict[str, Any] = {"persona": track.persona or track.name}
+            for course in TrainingService.list_courses(self.db, track.id):
+                if course.status != "published":
+                    continue
+                section = course.section or "fundamentals"
+                persona_obj.setdefault(section, []).append({
+                    "id": course.course_code or course.id,
+                    "name": course.title,
+                    "duration": course.duration,
+                    "type": course.course_type,
+                    "unlocks": course.unlocks,
+                    "url": course.external_url,
+                })
+            out.append(persona_obj)
+        return out
 
     def ingest_training_csv(self, file_content: str) -> Dict[str, int]:
         """
@@ -111,7 +133,8 @@ class TrainingProvider:
                         course_name=row.get("Course_Name"),
                         course_code=course_code,
                         completed_at=completed_at,
-                        status=status
+                        status=status,
+                        source="academy",
                     )
                     self.db.add(new_record)
                     stats["added"] += 1

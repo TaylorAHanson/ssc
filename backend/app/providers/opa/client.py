@@ -4,6 +4,8 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
+import weakref
 from typing import Any, Dict, Optional
 
 import httpx
@@ -14,35 +16,56 @@ from app.providers.base import BaseProvider
 logger = logging.getLogger(__name__)
 
 
-# Module-level shared async HTTP client. Reused across OpaProvider instances
-# so that TCP connections to the embedded/remote OPA stay pooled — important
-# because we may make thousands of evaluation calls back-to-back during a
-# sentinel discover phase. Creating a new client per call adds ~1-3 ms of
-# connection setup overhead per call, which adds up quickly at scale.
-_shared_async_client: Optional[httpx.AsyncClient] = None
-_shared_async_client_lock = asyncio.Lock()
+# Pooled async HTTP client, keyed by event loop. Reused across OpaProvider
+# instances so TCP connections to the embedded/remote OPA stay pooled — we may
+# make thousands of evaluation calls back-to-back during a sentinel discover
+# phase, and a fresh client per call adds ~1-3 ms of connection setup each.
+#
+# IMPORTANT: the client is keyed by the *running event loop*, not shared
+# process-wide. httpx's async transport allocates asyncio primitives (locks /
+# Events) bound to the loop they're first used on. We evaluate policy from more
+# than one loop — the FastAPI request loop AND the background poller's own loop
+# (app.main starts the poller on a dedicated ``asyncio.new_event_loop()``).
+# A single shared client raised "<asyncio.Event ...> is bound to a different
+# event loop" on every poller-driven tool check (e.g. send_notification),
+# which in ENFORCE mode fails closed and otherwise floods the logs. A
+# WeakKeyDictionary lets each loop keep its own pooled client and drops the
+# entry automatically when a loop is finalized.
+_clients_by_loop: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient]" = (
+    weakref.WeakKeyDictionary()
+)
+_clients_guard = threading.Lock()
 
 
 async def _get_shared_async_client() -> httpx.AsyncClient:
-    global _shared_async_client
-    if _shared_async_client is not None and not _shared_async_client.is_closed:
-        return _shared_async_client
-    async with _shared_async_client_lock:
-        if _shared_async_client is None or _shared_async_client.is_closed:
+    loop = asyncio.get_running_loop()
+    client = _clients_by_loop.get(loop)
+    if client is not None and not client.is_closed:
+        return client
+    with _clients_guard:
+        client = _clients_by_loop.get(loop)
+        if client is None or client.is_closed:
             limits = httpx.Limits(max_connections=32, max_keepalive_connections=16)
-            _shared_async_client = httpx.AsyncClient(timeout=30.0, limits=limits)
-        return _shared_async_client
+            client = httpx.AsyncClient(timeout=30.0, limits=limits)
+            _clients_by_loop[loop] = client
+        return client
 
 
 async def close_shared_async_client() -> None:
-    """Close the shared async client. Called from FastAPI lifespan shutdown."""
-    global _shared_async_client
-    if _shared_async_client is not None and not _shared_async_client.is_closed:
+    """Close the current loop's pooled client. Called from FastAPI lifespan
+    shutdown (which runs on the main loop); other loops' clients are released
+    when their loop is finalized."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    with _clients_guard:
+        client = _clients_by_loop.pop(loop, None)
+    if client is not None and not client.is_closed:
         try:
-            await _shared_async_client.aclose()
+            await client.aclose()
         except Exception:
             pass
-    _shared_async_client = None
 
 OPA_SETUP_HINT = (
     "Open Policy Agent (opa) is not available. Install it (e.g. `brew install opa`) so `opa` is on PATH, "

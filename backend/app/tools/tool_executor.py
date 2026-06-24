@@ -149,6 +149,15 @@ class ToolExecutor:
             },
             "approvals": ctx.approvals,
         }
+        # Distinguish a real policy outcome from an *infrastructure* failure:
+        # OPA being unreachable, a transport error, or the async client being
+        # misused across event loops is NOT the same as a deliberate "deny".
+        # Conflating them means a transient OPA blip permanently hard-fails a
+        # workflow step (mislabeled as a policy denial). We flag infra failures
+        # so the executor can surface them as RETRYABLE instead (see ``run``).
+        from app.core.exceptions import RetryableError
+
+        infra_error: Optional[Exception] = None
         try:
             opa = self._get_opa()
             result = await opa.evaluate(
@@ -162,10 +171,29 @@ class ToolExecutor:
                 "ToolExecutor: empty/invalid OPA decision for '%s' (%s)",
                 tool.name, tool.side_effect_class,
             )
+        except RetryableError as e:
+            # OPA client already classified this as transport/transient.
+            infra_error = e
+            logger.warning("ToolExecutor: OPA unavailable for '%s': %s", tool.name, e)
         except Exception as e:
+            if _is_opa_infra_error(e):
+                infra_error = e
             logger.warning("ToolExecutor: OPA evaluation failed for '%s': %s", tool.name, e)
 
         if settings.AGENT_TOOL_OPA_ENFORCE:
+            if infra_error is not None:
+                # Transient: not a denial. ``run`` turns this into a RetryableError.
+                return {
+                    "allow": False,
+                    "requires_approval": False,
+                    "approval_type": "",
+                    "opa_unavailable": True,
+                    "retryable": True,
+                    "reason": (
+                        "OPA policy service unavailable (infra/transport error), "
+                        f"not a policy denial: {infra_error}"
+                    ),
+                }
             return {
                 "allow": False,
                 "requires_approval": True,
@@ -272,6 +300,17 @@ class ToolExecutor:
         decision: Optional[Dict[str, Any]] = None
         if tool.is_mutating:
             decision = await self._evaluate_policy(tool, model_args, ctx)
+            # Infra/transport OPA failure (not a real deny): surface as a
+            # *retryable* error so a transient OPA blip / restart is retried by
+            # the poller instead of permanently failing the step, and the chat
+            # path shows a transient error rather than a bogus "policy denied".
+            if decision.get("opa_unavailable"):
+                from app.core.exceptions import RetryableError
+                self._audit(tool, ctx, ok=False, decision=decision,
+                            error="OPA policy service unavailable (infra); retryable")
+                raise RetryableError(
+                    decision.get("reason") or "OPA policy service unavailable"
+                )
             blocked = self._enforce(tool, decision, ctx)
             if blocked is not None:
                 self._audit(tool, ctx, ok=False, decision=decision,
@@ -358,6 +397,30 @@ class ToolExecutor:
     def _approval_satisfied(self, decision: Dict[str, Any], ctx: ToolContext) -> bool:
         atype = decision.get("approval_type")
         return bool(atype) and atype in (ctx.approvals or [])
+
+
+def _is_opa_infra_error(exc: Exception) -> bool:
+    """True if ``exc`` is an OPA *infrastructure* failure rather than a real deny.
+
+    Transport problems (connection refused/reset, timeouts) and async client
+    misuse across event loops (``...is bound to a different event loop``) are
+    operational, not governance decisions. Treating them distinctly lets the
+    executor retry them rather than permanently failing a step as if denied.
+    """
+    try:
+        import httpx
+        if isinstance(exc, (httpx.TransportError, httpx.TimeoutException)):
+            return True
+    except Exception:  # noqa: BLE001 - httpx always present; never let this wedge
+        pass
+    msg = str(exc).lower()
+    return (
+        "different event loop" in msg
+        or "event loop is closed" in msg
+        or "connection" in msg
+        or "timed out" in msg
+        or "timeout" in msg
+    )
 
 
 def _audit_safe(result: Any) -> Any:

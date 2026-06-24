@@ -27,6 +27,8 @@ import { TagManagement } from './pages/admin/TagManagement';
 import { ContextCatalog } from './pages/admin/ContextCatalog';
 import { Workflows } from './pages/admin/Workflows';
 import { ToolRegistry } from './pages/admin/ToolRegistry';
+import { TrainingAdmin } from './pages/admin/TrainingAdmin';
+import { Skills } from './pages/Skills';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -65,6 +67,7 @@ function App() {
           <Route path="/requests/:requestId" element={<Requests />} />
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/reports" element={<AdminReports />} />
+          {uiTabs?.skills !== false && <Route path="/skills" element={<Skills />} />}
           <Route
             path="/admin"
             element={<Navigate to="/admin/dashboard" replace />}
@@ -162,6 +165,16 @@ function App() {
             path="/governance/tool-registry"
             element={<Navigate to="/build/tool-registry" replace />}
           />
+          {uiTabs?.training_admin !== false && (
+            <Route
+              path="/build/training"
+              element={
+                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                  <TrainingAdmin />
+                </ProtectedRoute>
+              }
+            />
+          )}
           {/* Generic config-driven iframe apps (embedded_apps in
               configuration.yaml). */}
           <Route path="/embedded/:appId" element={<EmbeddedApp />} />

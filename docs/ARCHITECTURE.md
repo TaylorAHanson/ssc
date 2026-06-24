@@ -588,6 +588,63 @@ tools/workflows granted in Unity Catalog.
   drifted from the spec model and the shared `search_context_catalog` tool could surface this
   admin-only doc to the main self-service agent); `app/services/authoring_guide.py` now only
   cleans up that doc on startup (idempotent).
+- **Training LMS (admin-authored tracks + UC-Volume media + consumption).** The Training page is
+  no longer driven by a static `training.json`; tracks/courses live in the DB and media bytes live
+  on a Unity Catalog Volume (never in the DB), modeled on the Context Catalog precedent.
+  - **Schema** (`app/db/training.py`): `TrainingTrackModel` → `TrainingCourseModel` →
+    `TrainingMediaModel` (metadata + UC Volume `storage_path`) and `TrainingConsumptionModel`
+    (per-learner, per-media progress). `TrainingCompletionModel` is retained as the Academy-CSV
+    authority for course-code-pinned `training` gates, now tagged with `source` (`academy` |
+    `in_app`).
+  - **Storage** (`app/providers/training/storage.py`): `TrainingMediaStorage` writes/reads media
+    via the Databricks Files API when `TRAINING_VOLUME_PATH` is set, with a local-dir fallback for
+    dev. Reads are **Range-aware** so the learner UI can seek within a video; the API streams via
+    `GET /training/media/{id}/stream` (206 Partial Content).
+  - **Service** (`app/services/training_service.py`): CRUD for tracks/courses/media, playback
+    heartbeat recording, and the consumption→completion rule — watching every video in a course
+    past `TRAINING_COMPLETION_THRESHOLD` writes a `TrainingCompletionModel` (`source="in_app"`) so
+    **in-app consumption satisfies the same workflow training gates** as an Academy completion.
+    Also per-course consumption analytics and the catalog import.
+  - **Catalog scrape** (`app/providers/training/catalog_scraper.py`): no customer-facing
+    Academy API exists, so the admin "Sync from Catalog" action scrapes the public
+    `databricks.com/training/catalog` (via the SSRF-safe `safe_fetch`) for course titles +
+    stable course-detail deeplinks and upserts them as `source="catalog"` courses; course titles
+    link to the deeplink in the UI.
+  - **API/UI**: `/api/v1/training` gains admin CRUD + media upload + Range stream + `/consumption`
+    + `/catalog/sync` + `/analytics/consumption` (writes gated to Platform/Governance Admin). The
+    learner `Training.tsx` plays videos with a native HTML5 player that posts progress heartbeats;
+    the admin **Training Studio** (`src/pages/admin/TrainingAdmin.tsx`, `/build/training`, gated by
+    the `training_admin` feature flag/ui tab) manages tracks/courses/media, catalog sync, the
+    consumption dashboard, and the legacy Academy CSV upload. A one-time idempotent seeder
+    (`app/services/training_seed.py`) migrates the legacy `training.json` into DB rows on first
+    boot.
+- **Agent Skills (OBO author-once `SKILL.md` folders).** Users (and the agent, on their behalf)
+  can author reusable *skills* — a folder with a `SKILL.md` (YAML frontmatter `name` +
+  `description`, then markdown instructions) the agent can load on demand. There is **no new page**:
+  a single global modal (`src/components/skills/SkillsModal.tsx`, mounted in `Layout`, opened from a
+  Sidebar "Skills" launcher via `skillsStore`) lists/edits/creates skills with a Monaco editor and
+  an embedded `ChatView` "Skill assistant" that co-authors them.
+  - **Storage is fully OBO** (`app/providers/skills/client.py` → `SkillsProvider`): every call
+    builds a user-scoped `WorkspaceClient(token=<forwarded OBO token>)`, so Unity Catalog / the
+    Workspace ACLs decide what each user can see/edit — we never re-implement permission checks.
+    Two scopes: **personal** skills live in the user's Workspace folder
+    (`/Workspace/Users/<email>/.skills/<slug>/SKILL.md`, read/written via the Workspace API with
+    `RAW` format so content round-trips), and **shared** skills live in any `.skills` directory on a
+    UC Volume the user can read/write (read/written via the Files API). Shared skills are discovered
+    by a **bounded** OBO walk of catalogs → schemas → volumes (caps + optional allowlist via
+    `SKILLS_SCAN_*` settings) looking for `.skills` dirs; the walk is best-effort and degrades
+    silently on permission errors.
+  - **API** (`/api/v1/skills`, gated by the `skills` feature flag): `GET /` (list), `GET /locations`
+    (where the caller can create), `GET/POST /` + `PUT/DELETE /{id}` for CRUD. `{id}` is an opaque
+    URL-safe encoding of `store|dir_path`. The OBO token is read from `request.state.token`.
+  - **Agent tools** (`app/tools/skills/skill_authoring.py`, `skills` feature flag, OBO via injected
+    `_obo_token`/`_user_email`): `list_skills`, `list_skill_locations`, `get_skill` (read) and
+    `save_skill`, `delete_skill` (`app_write` — audited, no approval gate). Unlike workflow
+    authoring these need **no special role** — they only ever touch the caller's own scope. A
+    conditional prompt block (`_get_skills_section` in `app/agents/prompts.py`) appears whenever the
+    skill tools are present and guides the agent to interview the user, draft a clear SKILL.md, and
+    save only on explicit confirmation. The modal's embedded chat reacts to `save_skill` results
+    (via `onToolResult`) to refresh the list and hydrate the editor.
 - **Remaining:** pooled Postgres checkpointer; wire the SSE `trace_id` into the chat-UI feedback
   control; end-to-end validation of the ResponsesAgent registration + `--sandbox` harness against
   a live workspace (both require workspace credentials).

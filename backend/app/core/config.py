@@ -98,6 +98,42 @@ class Settings(BaseSettings):
     # When empty, originals are not persisted (only the extracted text is kept).
     CONTEXT_CATALOG_VOLUME_PATH: str = os.getenv("CONTEXT_CATALOG_VOLUME_PATH", "")
 
+    # Training / lightweight LMS
+    # Admin-authored learning tracks + courses, with media/docs stored on a UC
+    # Volume (never in the DB) and per-learner consumption tracked in Postgres.
+    # TRAINING_VOLUME_PATH is the UC Volume root under which uploaded media is
+    # written (e.g. /Volumes/main/default/training_media). When empty, uploads
+    # fall back to a local directory (TRAINING_LOCAL_MEDIA_DIR) for development.
+    TRAINING_VOLUME_PATH: str = os.getenv("TRAINING_VOLUME_PATH", "")
+    TRAINING_LOCAL_MEDIA_DIR: str = os.getenv("TRAINING_LOCAL_MEDIA_DIR", "backend/training_media")
+    TRAINING_MAX_UPLOAD_MB: int = int(os.getenv("TRAINING_MAX_UPLOAD_MB", "512"))
+    # Fraction of a video that must be watched for it to count as "completed".
+    TRAINING_COMPLETION_THRESHOLD: float = float(os.getenv("TRAINING_COMPLETION_THRESHOLD", "0.9"))
+    # Public Databricks training catalog scraped by the "Sync from Catalog"
+    # admin action. No customer-facing Academy API exists; this scrapes the
+    # public catalog for course titles + stable course-detail deeplinks.
+    TRAINING_CATALOG_URL: str = os.getenv("TRAINING_CATALOG_URL", "https://www.databricks.com/training/catalog")
+
+    # Agent Skills (author-once, governed, OBO-discovered)
+    # A "skill" is a folder containing a SKILL.md (YAML frontmatter + markdown
+    # instructions) that the agent can load. Skills live in two OBO-scoped
+    # places: (1) the user's personal Databricks Workspace folder, and (2) any
+    # ``.skills`` directory inside a UC Volume the user can read/write — so
+    # skills can be shared/domain-scoped by where they're stored.
+    SKILLS_DIR_NAME: str = os.getenv("SKILLS_DIR_NAME", ".skills")
+    # Personal workspace root for skills. Empty -> derived per user as
+    # ``/Workspace/Users/<email>/.skills``.
+    SKILLS_PERSONAL_WORKSPACE_DIR: str = os.getenv("SKILLS_PERSONAL_WORKSPACE_DIR", "")
+    SKILLS_MAX_BYTES: int = int(os.getenv("SKILLS_MAX_BYTES", str(512 * 1024)))
+    # Bounds on the cross-schema UC Volume scan that discovers shared ``.skills``
+    # folders (the scan runs OBO, so a user only ever sees what they can access;
+    # these caps keep the metastore walk from being unbounded at enterprise
+    # scale). Optionally restrict to specific catalogs via SKILLS_SCAN_CATALOGS.
+    SKILLS_SCAN_CATALOGS: str = os.getenv("SKILLS_SCAN_CATALOGS", "")
+    SKILLS_SCAN_MAX_CATALOGS: int = int(os.getenv("SKILLS_SCAN_MAX_CATALOGS", "25"))
+    SKILLS_SCAN_MAX_SCHEMAS: int = int(os.getenv("SKILLS_SCAN_MAX_SCHEMAS", "50"))
+    SKILLS_SCAN_MAX_VOLUMES: int = int(os.getenv("SKILLS_SCAN_MAX_VOLUMES", "50"))
+
     # CORS (can be overridden in .env as JSON array or comma-separated)
     # Example in .env: CORS_ORIGINS=["http://localhost:5173","http://localhost:3000"]
     # Or: CORS_ORIGINS=http://localhost:5173,http://localhost:3000

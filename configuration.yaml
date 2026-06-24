@@ -141,6 +141,15 @@ features:
   # (EDH chat vs workflow-authoring chat), set allowed roles, and pick SP/OBO
   # identity. Gates the /tool-registry API and the admin UI.
   tool_registry: true
+  # Training LMS: admin-authored learning tracks + courses with media/docs
+  # uploaded to a UC Volume and per-learner consumption tracking. Gates the
+  # Training admin UI (the learner Training page is always available).
+  training_admin: true
+  # Agent Skills: author-once SKILL.md folders the agent can load, stored OBO in
+  # the user's personal Workspace folder and in `.skills` dirs on UC Volumes the
+  # user can read/write. Gates the Skills modal, the /skills API, and the
+  # skill-authoring agent tools.
+  skills: true
 
 ui:
   tabs:
@@ -165,6 +174,8 @@ ui:
     workflows: true
     tool_registry: true
     feedback: true
+    training_admin: true
+    skills: true
 
 tools:
   check_allowlist_status: true
@@ -208,6 +219,13 @@ tools:
   check_asset_quality: true
   find_owner: true
   check_training_status: true
+  # Agent Skills authoring tools (gated by the `skills` feature flag). OBO:
+  # they only ever touch the caller's own Workspace folder / writable volumes.
+  list_skills: true
+  list_skill_locations: true
+  get_skill: true
+  save_skill: true
+  delete_skill: true
   # Context Catalog retrieval tools (gated by the context_catalog feature flag)
   list_context_domains: true
   search_context_catalog: true

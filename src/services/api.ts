@@ -661,6 +661,209 @@ export async function uploadTrainingData(file: File): Promise<{ message: string,
   return response.json();
 }
 
+// --- Training LMS (tracks, courses, media, consumption) ---
+
+export interface TrainingConsumption {
+  media_id: string;
+  course_id: string;
+  position_seconds: number;
+  percent_complete: number;
+  completed: boolean;
+  view_count: number;
+  last_viewed_at?: string | null;
+}
+
+export interface TrainingMedia {
+  id: string;
+  course_id: string;
+  title: string;
+  kind: 'video' | 'pdf' | 'slides' | 'doc' | string;
+  source_filename?: string | null;
+  mime_type?: string | null;
+  size_bytes?: number | null;
+  duration_seconds?: number | null;
+  sort_order: number;
+  has_file: boolean;
+  created_at?: string | null;
+  consumption?: TrainingConsumption | null;
+}
+
+export interface TrainingCourseFull {
+  id: string;
+  track_id: string;
+  title: string;
+  description?: string | null;
+  course_code?: string | null;
+  external_url?: string | null;
+  section?: string | null;
+  course_type?: string | null;
+  duration?: string | null;
+  unlocks?: string | null;
+  source: string;
+  sort_order: number;
+  status: string;
+  media?: TrainingMedia[];
+  // Present on the learner /me payload:
+  progress?: number;
+  status_label?: string;
+}
+
+export interface TrainingTrackFull {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string | null;
+  persona?: string | null;
+  icon?: string | null;
+  source: string;
+  sort_order: number;
+  status: string;
+  course_count: number;
+  courses?: TrainingCourseFull[];
+  completed_count?: number;
+  total_count?: number;
+}
+
+export interface CatalogSyncResult {
+  ok: boolean;
+  note?: string;
+  found: number;
+  stats: { added: number; updated: number; skipped: number };
+}
+
+export interface CourseConsumptionRow {
+  course_id: string;
+  course_title: string;
+  learners: number;
+  avg_percent: number;
+  media_completions: number;
+}
+
+export function trainingMediaStreamUrl(mediaId: string): string {
+  return `${API_BASE_URL}/training/media/${mediaId}/stream`;
+}
+
+export async function recordTrainingConsumption(
+  mediaId: string,
+  positionSeconds: number,
+  totalSeconds?: number,
+): Promise<TrainingConsumption> {
+  const response = await fetch(`${API_BASE_URL}/training/consumption`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ media_id: mediaId, position_seconds: positionSeconds, total_seconds: totalSeconds }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to record consumption: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+// Admin: tracks
+export async function adminListTrainingTracks(): Promise<TrainingTrackFull[]> {
+  const response = await fetch(`${API_BASE_URL}/training/tracks`, { headers: getHeaders() });
+  if (!response.ok) throw new Error(`Failed to list tracks: ${response.statusText}`);
+  return response.json();
+}
+
+export async function adminCreateTrainingTrack(data: Partial<TrainingTrackFull>): Promise<TrainingTrackFull> {
+  const response = await fetch(`${API_BASE_URL}/training/tracks`, {
+    method: 'POST', headers: getHeaders(), body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const e = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(e.detail || `Failed to create track: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function adminUpdateTrainingTrack(trackId: string, data: Partial<TrainingTrackFull>): Promise<TrainingTrackFull> {
+  const response = await fetch(`${API_BASE_URL}/training/tracks/${trackId}`, {
+    method: 'PATCH', headers: getHeaders(), body: JSON.stringify(data),
+  });
+  if (!response.ok) throw new Error(`Failed to update track: ${response.statusText}`);
+  return response.json();
+}
+
+export async function adminDeleteTrainingTrack(trackId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/training/tracks/${trackId}`, {
+    method: 'DELETE', headers: getHeaders(),
+  });
+  if (!response.ok) throw new Error(`Failed to delete track: ${response.statusText}`);
+}
+
+// Admin: courses
+export async function adminCreateTrainingCourse(trackId: string, data: Partial<TrainingCourseFull>): Promise<TrainingCourseFull> {
+  const response = await fetch(`${API_BASE_URL}/training/tracks/${trackId}/courses`, {
+    method: 'POST', headers: getHeaders(), body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const e = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(e.detail || `Failed to create course: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function adminUpdateTrainingCourse(courseId: string, data: Partial<TrainingCourseFull>): Promise<TrainingCourseFull> {
+  const response = await fetch(`${API_BASE_URL}/training/courses/${courseId}`, {
+    method: 'PATCH', headers: getHeaders(), body: JSON.stringify(data),
+  });
+  if (!response.ok) throw new Error(`Failed to update course: ${response.statusText}`);
+  return response.json();
+}
+
+export async function adminDeleteTrainingCourse(courseId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/training/courses/${courseId}`, {
+    method: 'DELETE', headers: getHeaders(),
+  });
+  if (!response.ok) throw new Error(`Failed to delete course: ${response.statusText}`);
+}
+
+// Admin: media
+export async function adminUploadTrainingMedia(
+  courseId: string, file: File, title: string, kind: string,
+): Promise<TrainingMedia> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('title', title);
+  formData.append('kind', kind);
+  const response = await fetch(`${API_BASE_URL}/training/courses/${courseId}/media`, {
+    method: 'POST',
+    headers: {
+      'Authorization': getHeaders()['Authorization'] || '',
+      'X-Dev-Role-Override': getHeaders()['X-Dev-Role-Override'] || '',
+    },
+    body: formData,
+  });
+  if (!response.ok) {
+    const e = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(e.detail || `Failed to upload media: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function adminDeleteTrainingMedia(mediaId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/training/media/${mediaId}`, {
+    method: 'DELETE', headers: getHeaders(),
+  });
+  if (!response.ok) throw new Error(`Failed to delete media: ${response.statusText}`);
+}
+
+// Admin: catalog sync + analytics
+export async function adminSyncTrainingCatalog(): Promise<CatalogSyncResult> {
+  const response = await fetch(`${API_BASE_URL}/training/catalog/sync`, {
+    method: 'POST', headers: getHeaders(),
+  });
+  if (!response.ok) throw new Error(`Failed to sync catalog: ${response.statusText}`);
+  return response.json();
+}
+
+export async function adminTrainingConsumptionAnalytics(): Promise<CourseConsumptionRow[]> {
+  const response = await fetch(`${API_BASE_URL}/training/analytics/consumption`, { headers: getHeaders() });
+  if (!response.ok) throw new Error(`Failed to load analytics: ${response.statusText}`);
+  return response.json();
+}
+
 export async function editRequestParameters(
   requestId: string,
   parameters: Record<string, any>,
@@ -2189,6 +2392,108 @@ export async function cloneWorkflow(workflowId: string): Promise<Workflow> {
   });
 }
 
+// --------------------------------------------------------------------- Skills
+
+export interface Skill {
+  id: string;
+  store: 'workspace' | 'volume';
+  dir_path: string;
+  name: string;
+  description: string;
+  location_label: string;
+  writable: boolean;
+  content?: string;
+}
+
+export interface SkillLocation {
+  store: 'workspace' | 'volume';
+  base_path: string;
+  label: string;
+  is_personal: boolean;
+}
+
+export interface SkillCreate {
+  name: string;
+  content?: string;
+  description?: string;
+  store?: 'workspace' | 'volume';
+  base_path?: string | null;
+}
+
+export interface SkillUpdate {
+  name: string;
+  content?: string;
+  description?: string;
+}
+
+/** List the caller's skills (personal + discovered shared `.skills`). */
+export async function listSkills(includeShared: boolean = true): Promise<Skill[]> {
+  const response = await fetch(
+    `${API_BASE_URL}/skills?include_shared=${includeShared}`,
+    { headers: getHeaders() }
+  );
+  if (!response.ok) throw new Error(`Failed to list skills: ${response.statusText}`);
+  const data = await response.json();
+  return data.skills ?? [];
+}
+
+/** Where the caller can save a new skill (personal + writable `.skills` dirs). */
+export async function listSkillLocations(includeShared: boolean = true): Promise<SkillLocation[]> {
+  const response = await fetch(
+    `${API_BASE_URL}/skills/locations?include_shared=${includeShared}`,
+    { headers: getHeaders() }
+  );
+  if (!response.ok) throw new Error(`Failed to list skill locations: ${response.statusText}`);
+  const data = await response.json();
+  return data.locations ?? [];
+}
+
+/** Read a single skill's full SKILL.md content. */
+export async function getSkill(skillId: string): Promise<Skill> {
+  const response = await fetch(`${API_BASE_URL}/skills/${encodeURIComponent(skillId)}`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) throw new Error(`Failed to load skill: ${response.statusText}`);
+  return response.json();
+}
+
+export async function createSkill(payload: SkillCreate): Promise<Skill> {
+  const response = await fetch(`${API_BASE_URL}/skills`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to create skill: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function updateSkill(skillId: string, payload: SkillUpdate): Promise<Skill> {
+  const response = await fetch(`${API_BASE_URL}/skills/${encodeURIComponent(skillId)}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to update skill: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function deleteSkill(skillId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/skills/${encodeURIComponent(skillId)}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to delete skill: ${response.statusText}`);
+  }
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -2271,4 +2576,23 @@ export const api = {
   exportWorkflowsBundle,
   importWorkflowsBundle,
   listTrainingCourses,
+  trainingMediaStreamUrl,
+  recordTrainingConsumption,
+  adminListTrainingTracks,
+  adminCreateTrainingTrack,
+  adminUpdateTrainingTrack,
+  adminDeleteTrainingTrack,
+  adminCreateTrainingCourse,
+  adminUpdateTrainingCourse,
+  adminDeleteTrainingCourse,
+  adminUploadTrainingMedia,
+  adminDeleteTrainingMedia,
+  adminSyncTrainingCatalog,
+  adminTrainingConsumptionAnalytics,
+  listSkills,
+  listSkillLocations,
+  getSkill,
+  createSkill,
+  updateSkill,
+  deleteSkill,
 };

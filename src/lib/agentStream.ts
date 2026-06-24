@@ -156,6 +156,49 @@ export interface StreamConversationOptions {
 
 // ─── Public API ──────────────────────────────────────────────────────
 
+/**
+ * Build a clean Error from a non-OK response.
+ *
+ * Critically, this never surfaces a raw response body in the UI: when a request
+ * is proxied through Databricks Apps and the upstream app is unhealthy, the body
+ * is the platform's HTML "502 Bad Gateway" page. Dumping that into a chat bubble
+ * is the "weird HTML" users see. We extract a JSON `detail`/`message` when the
+ * backend sent one, otherwise fall back to a friendly, status-based message.
+ */
+async function httpError(response: Response, label: string): Promise<Error> {
+    const status = response.status;
+    const body = await response.text().catch(() => '');
+    const contentType = response.headers.get('content-type') || '';
+
+    let detail = '';
+    const looksJson = contentType.includes('application/json') || body.trim().startsWith('{');
+    if (body && looksJson) {
+        try {
+            const parsed = JSON.parse(body);
+            if (typeof parsed?.detail === 'string') detail = parsed.detail;
+            else if (typeof parsed?.message === 'string') detail = parsed.message;
+        } catch {
+            /* not JSON after all — fall through to the status-based message */
+        }
+    }
+
+    if (!detail) {
+        if (status === 502 || status === 503) {
+            detail = 'The agent service is temporarily unavailable. Please try again in a moment.';
+        } else if (status === 504) {
+            detail = 'The request timed out before the agent responded. Please try again.';
+        } else if (status === 401 || status === 403) {
+            detail = 'Your session may have expired or you don’t have access. Try reloading the page.';
+        } else if (status === 429) {
+            detail = 'Too many requests right now. Please wait a moment and try again.';
+        } else {
+            detail = response.statusText || 'Unexpected server error.';
+        }
+    }
+
+    return new Error(`${label} (HTTP ${status}): ${detail}`);
+}
+
 function authHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -187,8 +230,7 @@ export async function* streamAgentConversation(
     });
 
     if (!response.ok) {
-        const text = await response.text().catch(() => response.statusText);
-        throw new Error(`Stream failed: HTTP ${response.status} ${text}`);
+        throw await httpError(response, 'The agent service could not be reached');
     }
 
     if (!response.body) {
@@ -321,8 +363,7 @@ export async function pollGenieResponse(
         signal: options.signal,
     });
     if (!response.ok) {
-        const text = await response.text().catch(() => response.statusText);
-        throw new Error(`Poll failed: HTTP ${response.status} ${text}`);
+        throw await httpError(response, 'The data agent could not be reached');
     }
     return response.json();
 }

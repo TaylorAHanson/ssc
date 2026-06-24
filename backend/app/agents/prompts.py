@@ -628,6 +628,9 @@ You have access to the following tools:
     # Workflow-authoring guidance (only when the admin authoring tools are present)
     authoring_section = _get_authoring_section(effective_tools)
 
+    # Skill-authoring guidance (only when the skills tools are present)
+    skills_section = _get_skills_section(effective_tools)
+
     return f"""{SYSTEM_PROMPT}
 
 {CORE_INSTRUCTIONS}
@@ -635,6 +638,7 @@ You have access to the following tools:
 {WORKFLOW_EXECUTION_GUIDELINES}
 {tools_section}
 {authoring_section}
+{skills_section}
 {capabilities_section}
 {context_domains_section}
 {web_search_section}
@@ -709,6 +713,38 @@ workflow:
 5. `publish_workflow` ONLY after the admin explicitly confirms — it makes the
    workflow live for its request_type. Summarize the blast radius first.
 Never publish without validating + previewing + explicit confirmation.
+"""
+
+
+def _get_skills_section(tools: Optional[List[Any]]) -> str:
+    """Skill-authoring guidance, included only when the skills tools are present
+    (i.e. the ``skills`` feature flag is on). Skills are OBO, so this is offered
+    to every user — each only ever touches their own Workspace folder / writable
+    volumes."""
+    names = {getattr(t, "name", "") for t in (tools or [])}
+    if "save_skill" not in names:
+        return ""
+    return """
+## Authoring Skills
+A *skill* is a reusable, named instruction set (a `SKILL.md`: a short YAML
+frontmatter with `name` + `description`, then markdown instructions) the agent
+can load later. Skills are stored On-Behalf-Of the user — personal skills in
+their Workspace folder, shared skills in a `.skills` folder on a UC Volume they
+can write to — so where a skill lives controls who can use it. Help the user
+view, create, and edit their skills:
+1. To see what exists, call `list_skills`. To inspect one, `get_skill`.
+2. When co-authoring a new skill, interview the user briefly: what should the
+   skill do, and WHEN should it be used? Draft a clear `name`, a one-line
+   `description` (the trigger — "use this when…"), and concrete, step-by-step
+   instructions. Keep instructions imperative and self-contained.
+3. Decide where it goes: a *personal* skill (default, `store='personal'`) or a
+   *shared* one (`store='volume'` + a `target_path` from `list_skill_locations`,
+   for skills a whole domain/team should see).
+4. Show the user the drafted SKILL.md and get explicit confirmation BEFORE
+   calling `save_skill`. Pass `skill_id` to edit an existing skill in place.
+5. Use `delete_skill` only after the user confirms.
+Never save or delete a skill without the user's go-ahead. Don't invent a
+`target_path` — it must come from `list_skill_locations`.
 """
 
 

@@ -81,6 +81,11 @@ async def lifespan(app: FastAPI):
                 # overrides admin toggles).
                 from app.services.tool_registry_service import ToolRegistryService
                 ToolRegistryService.sync_local_tools(db)
+                # Seed training tracks/courses from the legacy training.json on
+                # first boot (idempotent once any track exists), so the new
+                # DB-backed Training LMS keeps the existing curriculum.
+                from app.services.training_seed import seed_training_from_json
+                seed_training_from_json(db)
             except Exception as e:
                 logger.warning(f"Workflow seeding skipped: {e}")
         finally:
