@@ -184,6 +184,38 @@ def build_skill_markdown(name: str, description: str, body: str = "") -> str:
     return "\n".join(lines) + "\n"
 
 
+def _is_missing_workspace_scope(exc: Exception) -> bool:
+    """True if a Workspace-API call failed because the OBO token lacks the scope.
+
+    In Databricks Apps the user's forwarded token is *downscoped* to the app's
+    declared ``user_api_scopes``. If the Workspace scope isn't declared, writes
+    under ``/Workspace/Users/...`` fail with "does not have required scopes:
+    workspace" — a config problem, not a per-user permission problem.
+    """
+    msg = str(exc).lower()
+    return "required scopes" in msg and "workspace" in msg
+
+
+def _workspace_write_error(dir_path: str, exc: Exception) -> str:
+    """User-facing message for a failed personal (Workspace) skill write."""
+    if _is_missing_workspace_scope(exc):
+        return (
+            "Can't save personal skills: this app's on-behalf-of token isn't "
+            "authorized for the Workspace API. Add the 'workspace.workspace' scope "
+            "to the app's user authorization scopes (databricks.yml "
+            "`user_api_scopes`, or the app's Authorization tab), restart the app, "
+            "and re-consent on next sign-in. Until then you can save a shared skill "
+            "to a UC Volume instead (those use the already-authorized Files API). "
+            f"(Underlying error: {exc})"
+        )
+    return (
+        f"Could not create the skill folder '{dir_path}': {exc}. Skills are saved on "
+        "your behalf, so your own Workspace home must exist and be writable by you. "
+        "If this app can't act on your behalf, set SKILLS_PERSONAL_WORKSPACE_DIR to a "
+        "folder you can write to."
+    )
+
+
 class SkillsProvider:
     """OBO CRUD for skills across the Workspace tree and UC Volumes."""
 
@@ -516,12 +548,7 @@ class SkillsProvider:
             client.workspace.mkdirs(dir_path)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Skills: mkdirs(%s) failed: %s", dir_path, exc)
-            raise SkillsError(
-                f"Could not create the skill folder '{dir_path}': {exc}. Skills are "
-                "saved on your behalf, so your own Workspace home must exist and be "
-                "writable by you. If this app can't act on your behalf, set "
-                "SKILLS_PERSONAL_WORKSPACE_DIR to a folder you can write to."
-            ) from exc
+            raise SkillsError(_workspace_write_error(dir_path, exc)) from exc
         try:
             client.workspace.import_(
                 path=md_path,
@@ -530,7 +557,7 @@ class SkillsProvider:
                 overwrite=True,
             )
         except Exception as exc:  # noqa: BLE001
-            raise SkillsError(f"Could not save skill to workspace: {exc}") from exc
+            raise SkillsError(_workspace_write_error(dir_path, exc)) from exc
 
     # ---- low-level volume IO ---------------------------------------------
     def _read_volume_text(self, client, md_path: str) -> Optional[str]:

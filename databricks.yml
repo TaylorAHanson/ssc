@@ -185,6 +185,12 @@ resources:
         - "catalog.connections"
         - "dashboards.genie"
         - "files.files"
+        # Workspace API (import/export/mkdirs). Required for OBO PERSONAL skills,
+        # which live under /Workspace/Users/<user>/.skills. Without this the
+        # user's forwarded token is downscoped and saving a personal skill fails
+        # with "OAuth token does not have required scopes: workspace".
+        # (files.files only covers UC Volumes via the Files API — shared skills.)
+        - "workspace.workspace"
         - "genie"
         - "mcp.functions"
         - "ai-gateway"
