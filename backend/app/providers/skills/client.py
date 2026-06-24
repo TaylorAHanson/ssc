@@ -184,6 +184,30 @@ def build_skill_markdown(name: str, description: str, body: str = "") -> str:
     return "\n".join(lines) + "\n"
 
 
+def _ws_path_variants(path: str) -> List[str]:
+    """Both namespaces the Workspace API might honor for ``path``.
+
+    The Workspace (notebooks) API canonically addresses objects as
+    ``/Users/<email>/...`` while the files-in-workspace mount uses the
+    ``/Workspace/Users/<email>/...`` form. Deployments/SDK versions normalize
+    these differently, so a write can succeed under one form while a subsequent
+    ``workspace.list``/``export`` on the other form comes back empty. For reads
+    we try both (configured form first) rather than guess, which makes listing
+    resilient to whichever namespace the workspace actually persisted under.
+    """
+    p = (path or "").rstrip("/")
+    variants = [p]
+    if p.startswith("/Workspace/"):
+        alt = p[len("/Workspace"):]  # "/Workspace/Users/x" -> "/Users/x"
+    elif p.startswith("/"):
+        alt = "/Workspace" + p       # "/Users/x" -> "/Workspace/Users/x"
+    else:
+        alt = p
+    if alt and alt not in variants:
+        variants.append(alt)
+    return variants
+
+
 def _is_missing_workspace_scope(exc: Exception) -> bool:
     """True if a Workspace-API call failed because the OBO token lacks the scope.
 
@@ -281,30 +305,45 @@ class SkillsProvider:
         return skills
 
     def _list_personal(self, client, user_email: str) -> List[SkillRef]:
-        base = self._effective_personal_dir(client, user_email)
-        out: List[SkillRef] = []
-        try:
-            from databricks.sdk.service.workspace import ObjectType
+        from databricks.sdk.service.workspace import ObjectType
 
-            for obj in client.workspace.list(base):
-                if obj.object_type != ObjectType.DIRECTORY:
-                    continue
-                text = self._read_workspace_text(client, f"{obj.path}/{SKILL_FILE}")
-                if text is None:
-                    continue
-                name, desc = parse_frontmatter(text)
-                out.append(
-                    SkillRef(
-                        store=STORE_WORKSPACE,
-                        dir_path=obj.path,
-                        name=name or _basename(obj.path),
-                        description=desc or "",
-                        location_label="Personal",
-                        writable=True,
-                    )
+        base = self._effective_personal_dir(client, user_email)
+        # A write may have persisted under either path namespace (see
+        # ``_ws_path_variants``), so try each until one lists entries. This is
+        # what fixes "saved but not shown on refresh" when the save and the
+        # listing disagree on the /Workspace prefix.
+        objs: List[Any] = []
+        used_base = base
+        for cand in _ws_path_variants(base):
+            try:
+                listed = list(client.workspace.list(cand))
+            except Exception as exc:  # noqa: BLE001 - missing dir / no workspace is fine
+                logger.debug("Personal skills list(%s) failed: %s", cand, exc)
+                continue
+            used_base = cand
+            if listed:
+                objs = listed
+                break
+        logger.info("Skills: personal listing base=%s entries=%d", used_base, len(objs))
+
+        out: List[SkillRef] = []
+        for obj in objs:
+            if obj.object_type != ObjectType.DIRECTORY:
+                continue
+            text = self._read_workspace_text(client, f"{obj.path}/{SKILL_FILE}")
+            if text is None:
+                continue
+            name, desc = parse_frontmatter(text)
+            out.append(
+                SkillRef(
+                    store=STORE_WORKSPACE,
+                    dir_path=obj.path,
+                    name=name or _basename(obj.path),
+                    description=desc or "",
+                    location_label="Personal",
+                    writable=True,
                 )
-        except Exception as exc:  # noqa: BLE001 - missing dir / no workspace is fine
-            logger.debug("Personal skills listing skipped for %s: %s", base, exc)
+            )
         return out
 
     def _discover_shared(self, client) -> List[SkillRef]:
@@ -475,10 +514,14 @@ class SkillsProvider:
         store, dir_path = decode_skill_id(skill_id)
         client = self._client(obo_token)
         if store == STORE_WORKSPACE:
-            try:
-                client.workspace.delete(dir_path, recursive=True)
-            except Exception as exc:  # noqa: BLE001
-                raise SkillsError(f"Could not delete skill: {exc}") from exc
+            last_exc: Optional[Exception] = None
+            for cand in _ws_path_variants(dir_path):
+                try:
+                    client.workspace.delete(cand, recursive=True)
+                    return
+                except Exception as exc:  # noqa: BLE001 - try the other namespace
+                    last_exc = exc
+            raise SkillsError(f"Could not delete skill: {last_exc}") from last_exc
         else:
             md_path = f"{dir_path.rstrip('/')}/{SKILL_FILE}"
             try:
@@ -525,16 +568,16 @@ class SkillsProvider:
 
     # ---- low-level workspace IO ------------------------------------------
     def _read_workspace_text(self, client, md_path: str) -> Optional[str]:
-        try:
-            from databricks.sdk.service.workspace import ExportFormat
+        from databricks.sdk.service.workspace import ExportFormat
 
-            resp = client.workspace.export(path=md_path, format=ExportFormat.RAW)
-            if not resp or not getattr(resp, "content", None):
-                return None
-            return base64.b64decode(resp.content).decode("utf-8", errors="replace")
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("workspace export failed for %s: %s", md_path, exc)
-            return None
+        for cand in _ws_path_variants(md_path):
+            try:
+                resp = client.workspace.export(path=cand, format=ExportFormat.RAW)
+                if resp and getattr(resp, "content", None):
+                    return base64.b64decode(resp.content).decode("utf-8", errors="replace")
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("workspace export failed for %s: %s", cand, exc)
+        return None
 
     def _write_workspace(self, client, dir_path: str, md_path: str, data: bytes) -> None:
         from databricks.sdk.service.workspace import ImportFormat
