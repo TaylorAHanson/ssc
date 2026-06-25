@@ -19,27 +19,133 @@
 #     client_secret_env: "DEV_WS_CLIENT_SECRET"
 
 branding:
-  name: "Enterprise Data Hub"
+  name: "ATLAS Self-Service Center"
   # Short, identifier-friendly form of the name used where the brand appears as a
   # slug rather than display text (e.g. provisioned GitHub repo-name prefixes and
   # the git commit author for bot PRs). Defaults to `name` when omitted; set this
-  # to keep generated identifiers concise (e.g. "edh").
-  # short_name: "edh"
+  # to keep generated identifiers concise (e.g. "edh"). Also used as the compact
+  # landing-page header label (logo + short_name) next to the view toggle.
+  short_name: "ATLAS"
   # Optional explicit git commit author for bot-authored PRs/commits. Defaults are
   # derived from the brand (e.g. "Enterprise Data Hub Bot") when omitted.
   # git_username: ""
   # git_email: ""
   # Your organization's wordmark/logo URL. Leave blank to render the name only.
-  logo_url: ""
-  # Accent blue aligned with the companion Command Center app's design tokens
-  # (see src/theme.ts). The dark navy sidebar / heading color is structural
-  # and lives in CSS variables (--theme-nav-bg, --theme-heading).
-  primary_color: "#007BFF"
-  secondary_color: "#001E3C"
-  info_color: "#007BFF"
+  # Served from public/ (Vite copies it into backend/static at build time).
+  logo_url: "/atlas-logo.svg"
+  # ATLAS palette — Databricks "Lava" red accent. The light/white sidebar and
+  # heading colors are structural and live in CSS variables
+  # (--theme-nav-bg, --theme-accent, --theme-heading in src/index.css).
+  primary_color: "#FF3621"
+  secondary_color: "#1B3139"
+  info_color: "#3253DC"
   alert_color: "#D32F2F"
   warning_color: "#FFC107"
   success_color: "#388E3C"
+
+# ─── Self-Service Center ──────────────────────────────────────────────────
+# The landing page offers two views: "Assistant" (the conversational agent) and
+# "Self-Service Center" — a catalog of quick-action cards grouped by category.
+# This whole section is data-driven so each customer can curate the cards (and
+# rebrand) without touching code.
+#
+# Per category:
+#   title:  category heading (required)
+#   icon:   optional lucide icon name (e.g. Database, Boxes, Search). Default: Boxes.
+#   cards:  list of action cards. Each card:
+#     title:        card label (required)
+#     description:  optional tooltip / one-line blurb
+#     prompt:       seeds the Assistant with this text and switches to it (preferred)
+#     route:        OR navigate to an in-app route instead of the Assistant
+#                   (exactly one of prompt/route; if both, route wins)
+#     allowed_personas: optional role gate, e.g. ["Platform Admin"]
+#
+# Set `enabled: false` to hide the toggle and show only the Assistant.
+self_service_center:
+  enabled: true
+  categories:
+    - title: "Data Access"
+      icon: "Database"
+      cards:
+        - title: "Request Data Access"
+          description: "Get read/write access to a catalog, schema, table, or volume."
+          prompt: "I need to request access to a data asset."
+        - title: "REST API Access"
+          description: "Request access to a REST API or external endpoint."
+          prompt: "I need REST API access."
+        - title: "My Groups"
+          description: "See the identity groups you belong to."
+          prompt: "What groups am I a member of?"
+        - title: "My Current Access"
+          description: "Review the data access you already have."
+          prompt: "Show me my current data access."
+    - title: "Enterprise Data"
+      icon: "Search"
+      cards:
+        - title: "Discover Enterprise Data"
+          description: "Browse the catalog of available data products and datasets."
+          route: "/discovery"
+        - title: "Marketplace Certification"
+          description: "Learn about certified data products (ODCS)."
+          prompt: "Tell me about data product certification."
+        - title: "Learn About Data Quality"
+          description: "Understand data quality scores and checks."
+          prompt: "How does data quality scoring work here?"
+    - title: "Platform Services"
+      icon: "Boxes"
+      cards:
+        - title: "Workspace Access"
+          description: "Request access to a Databricks workspace."
+          prompt: "I need access to a workspace."
+        - title: "Provision Workspace"
+          description: "Request a new workspace to be provisioned."
+          prompt: "I need a new workspace provisioned."
+        - title: "Create Catalog or Schema"
+          description: "Request a new Unity Catalog catalog or schema."
+          prompt: "I want to create a new catalog or schema."
+        - title: "Service Principal"
+          description: "Request a new service principal."
+          prompt: "I need a service principal created."
+        - title: "GitHub Repository"
+          description: "Request a new GitHub repository."
+          prompt: "I need a new GitHub repository."
+
+# ─── Community Links ──────────────────────────────────────────────────────
+# The "Community Links" page (sidebar › Learn & Share) is fully data-driven so
+# each customer curates their own resources/tools — no hardcoded links.
+#
+# Each category has: name, optional icon, and a `links` list. Every link is a
+# compact one-line string:  "Title | URL | icon | description"
+#   - Title + URL are required; icon + description are optional (trailing parts).
+#   - icon is a lucide name (BookOpen, GraduationCap, Code, Eye, Activity,
+#     BarChart, DollarSign, Settings, Globe, FileText, ...); defaults to the
+#     category icon when omitted.
+# Set `enabled: false` to hide the Community Links page entirely.
+# Replace placeholder (example.com) URLs with your real internal tools.
+community_links:
+  enabled: true
+  categories:
+    - name: "Documentation & Knowledge"
+      icon: "BookOpen"
+      links:
+        - "Confluence | https://databricks.atlassian.net | FileText | Internal docs, wikis, and knowledge base"
+        - "Databricks Documentation | https://docs.databricks.com | BookOpen | Official Databricks docs and guides"
+    - name: "Training & Learning"
+      icon: "GraduationCap"
+      links:
+        - "Databricks Academy | https://www.databricks.com/learn/training/home | GraduationCap | Courses, certifications, and learning"
+    - name: "Development & Code"
+      icon: "Code"
+      links:
+        - "GitHub | https://github.com/example | Code | Source code repositories and version control"
+        - "Jenkins | https://jenkins.example.com | Settings | CI/CD pipeline management and automation"
+    - name: "Monitoring & Observability"
+      icon: "Eye"
+      links:
+        - "Datadog UI | https://datadog.example.com | Activity | App performance monitoring and observability"
+        - "Acceldata UI | https://acceldata.example.com | BarChart | Data observability and quality monitoring"
+        - "Finout UI | https://finout.example.com | DollarSign | Cloud cost management and optimization"
+
 # Embedded apps: external web apps surfaced *inside* this app via an iframe.
 # Each entry adds a sidebar link that opens the app in-page at
 # `/embedded/<id>` — no tab switch, normal back/forward history. Add as many
@@ -65,13 +171,16 @@ branding:
 #   allowed_personas: optional role gate (omit = visible to everyone), e.g.
 #                     ["Platform Admin", "Governance Admin"].
 # Set to [] to disable all embedded apps.
-embedded_apps:
-  - id: command_center
-    title: "Command Center"
-    url: "https://google.com"
-    icon: "LayoutDashboard"
-    group: "Build & Customize"
-    description: "Operations dashboards for the platform."
+# Command Center embedded app — DISABLED via config (implementation code is
+# kept intact). To re-enable it as a "Build & Customize" sidebar item, remove
+# the `[]` below and uncomment the block.
+embedded_apps: []
+#  - id: command_center
+#    title: "Command Center"
+#    url: "https://google.com"
+#    icon: "LayoutDashboard"
+#    group: "Build & Customize"
+#    description: "Operations dashboards for the platform."
 #   - id: grafana
 #     title: "Grafana"
 #     url: "https://grafana.internal.example.com/d/abc"
@@ -160,7 +269,7 @@ ui:
     pending_approvals: true
     training: true
     event_calendar: true
-    templates_assets: true
+    templates_assets: false
     community_links: true
     admin: true
     reports: false
@@ -170,7 +279,7 @@ ui:
     allowlist: true
     sentinel: true
     tag_management: true
-    context_catalog: true
+    context_catalog: false
     workflows: true
     tool_registry: true
     feedback: true

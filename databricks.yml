@@ -8,11 +8,11 @@ resources:
   
   database_instances:
     edh_ssc_db:
-      name: "edh-ssc-${var.environment}-v5"
+      name: "atlas-${var.environment}"
       enable_pg_native_login: true
       capacity: "CU_1"
       lifecycle:
-        prevent_destroy: true
+        prevent_destroy: false
       permissions:
         # Authoritative ACL: must re-grant the deploying user CAN_MANAGE,
         # otherwise applying this block strips the creator's manage rights and
@@ -309,7 +309,7 @@ variables:
     default: "taylor"
   app_name:
     description: "Application name"
-    default: "edh-ssc"
+    default: "atlas"
   environment:
     description: "Environment name (local, dev, stage, prod)"
     default: "local"
@@ -427,7 +427,7 @@ targets:
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     variables:
-      app_name: "edh-ssc-local-${var.dev_user}"
+      app_name: "atlas-local-${var.dev_user}"
       environment: "local"
       source_code_path: "."
       data_quality_table: "edh-ssc_local_catalog.edh-ssc.data_quality_results"
@@ -448,7 +448,7 @@ targets:
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     variables:
-      app_name: "edh-ssc-dev"
+      app_name: "atlas-dev"
       environment: "dev"
       source_code_path: "."
       data_quality_table: "edh-ssc_dev_catalog.edh-ssc.data_quality_results"
@@ -469,7 +469,7 @@ targets:
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     variables:
-      app_name: "edh-ssc-stage"
+      app_name: "atlas-stage"
       environment: "stage"
       source_code_path: "."
       data_quality_table: "enterprise_stg..data_quality_results"
@@ -490,7 +490,7 @@ targets:
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     variables:
-      app_name: "edh-ssc-prod"
+      app_name: "atlas-prod"
       environment: "prod"
       source_code_path: "."
       data_quality_table: "edh-ssc_prod_catalog.edh-ssc.data_quality_results"

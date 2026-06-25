@@ -17,7 +17,7 @@ import {
   Search,
   Sparkles,
   WandSparkles,
-  Database,
+  // Database, // re-enable together with the (disabled) Lakehouse nav item below
   ExternalLink,
   ShieldCheck,
   ShieldAlert,
@@ -34,7 +34,7 @@ import { FeedbackModal } from '../feedback/FeedbackModal';
 import { useBrandingStore } from '../../stores/brandingStore';
 import { useUserStore } from '../../stores/userStore';
 import { useRequestStore } from '../../stores/requestStore';
-import { genieHomeUrl, workspaceHomeUrl } from '../../lib/databricksLinks';
+import { genieHomeUrl /*, workspaceHomeUrl */ } from '../../lib/databricksLinks';
 import type { UserPersona } from '../../types';
 
 // Explicit render order for sidebar groups. Groups not listed here fall to
@@ -365,6 +365,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         ...(app.allowedPersonas ? { allowedPersonas: app.allowedPersonas } : {}),
       });
     }
+    /* Lakehouse nav item — DISABLED (kept for easy re-enable). To restore,
+       uncomment this block and the `Database` / `workspaceHomeUrl` imports above.
     const lakehouseUrl = workspaceHomeUrl(databricksWorkspaceUrl);
     if (lakehouseUrl) {
       items.push({
@@ -375,6 +377,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         group: 'Build & Customize',
       });
     }
+    */
     return items;
   }, [databricksWorkspaceUrl, embeddedApps, uiTabs?.ask_your_data, features?.ask_your_data]);
 
@@ -443,7 +446,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               to="/"
               aria-label={`${brandName} home`}
               title={brandName}
-              className="w-10 h-10 flex items-center justify-center rounded-lg bg-white/10 text-white hover:bg-nav-hover transition-colors"
+              className="w-10 h-10 flex items-center justify-center rounded-lg text-accent hover:bg-nav-hover transition-colors"
             >
               <Home className="w-5 h-5" />
             </Link>
@@ -452,7 +455,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               onClick={onToggle}
               aria-label="Expand navigation"
               aria-expanded={false}
-              className="p-1.5 rounded text-white/80 hover:text-white hover:bg-nav-hover transition-colors"
+              className="p-1.5 rounded text-nav-text-muted hover:text-nav-text hover:bg-nav-hover transition-colors"
             >
               <ChevronsRight className="w-5 h-5" />
             </button>
@@ -473,14 +476,14 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 <img
                   src={brandLogoUrl}
                   alt=""
-                  className="h-8 w-auto max-w-[180px] object-contain"
+                  className="h-12 w-auto max-w-[180px] object-contain"
                 />
               )}
               <span className={cn(
-                "font-semibold text-white truncate leading-tight",
+                "font-semibold text-accent leading-tight break-words",
                 // With no logo the name is the only branding, so give it more
                 // presence; when a logo sits above it, keep the name compact.
-                brandLogoUrl ? "text-sm" : "text-xl"
+                brandLogoUrl ? "text-base" : "text-sm"
               )}>
                 {brandName}
               </span>
@@ -490,7 +493,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               onClick={onToggle}
               aria-label="Collapse navigation"
               aria-expanded={true}
-              className="p-1.5 mt-0.5 rounded text-white/80 hover:text-white hover:bg-nav-hover transition-colors shrink-0"
+              className="p-1.5 mt-0.5 rounded text-nav-text-muted hover:text-nav-text hover:bg-nav-hover transition-colors shrink-0"
             >
               <ChevronsLeft className="w-5 h-5" />
             </button>
@@ -520,14 +523,14 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 onClick={() => toggleGroup(group)}
                 aria-expanded={!isGroupCollapsed}
                 aria-controls={`sidebar-group-${groupSlug}`}
-                className="group w-full flex items-center justify-between mb-2 px-1 py-1 -mx-1 -my-1 rounded text-nav-text-muted hover:text-white transition-colors"
+                className="group w-full flex items-center justify-between mb-2 px-1 py-1 -mx-1 -my-1 rounded text-nav-text-muted hover:text-nav-text transition-colors"
               >
                 <h3 className="text-xs font-semibold uppercase tracking-wider">
                   {group}
                 </h3>
                 <ChevronDown
                   className={cn(
-                    "w-5 h-5 transition-transform duration-200 text-white/80 group-hover:text-white",
+                    "w-5 h-5 transition-transform duration-200 text-nav-text-muted group-hover:text-nav-text",
                     isGroupCollapsed && "-rotate-90"
                   )}
                   aria-hidden="true"
@@ -567,13 +570,13 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                         "justify-center w-10 h-10 mx-auto rounded-lg",
                         isActive
                           ? "bg-nav-active text-nav-active-text shadow-sm"
-                          : "bg-white/5 text-gray-200 hover:bg-nav-hover hover:text-white"
+                          : "text-nav-text hover:bg-nav-hover hover:text-nav-text"
                       )
                     : cn(
                         "gap-3 px-3 py-2 rounded-md",
                         isActive
                           ? "bg-nav-active text-nav-active-text"
-                          : "text-gray-300 hover:bg-nav-hover hover:text-white"
+                          : "text-nav-text hover:bg-nav-hover hover:text-nav-text"
                       )
                 );
                 const title = collapsed
@@ -646,9 +649,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 : undefined
           }
           className={cn(
-            "flex items-center text-sm transition-colors text-gray-300 hover:bg-nav-hover hover:text-white",
+            "flex items-center text-sm transition-colors text-nav-text hover:bg-nav-hover hover:text-nav-text",
             collapsed
-              ? "relative justify-center w-10 h-10 mx-auto rounded-lg bg-white/5"
+              ? "relative justify-center w-10 h-10 mx-auto rounded-lg bg-nav-hover"
               : "gap-3 px-3 py-2 rounded-md"
           )}
         >
@@ -674,7 +677,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             aria-label={`Account menu for ${userDisplayName}`}
             title={collapsed ? userDisplayName : undefined}
             className={cn(
-              "w-full flex items-center text-sm transition-colors text-gray-200 hover:bg-nav-hover hover:text-white",
+              "w-full flex items-center text-sm transition-colors text-nav-text hover:bg-nav-hover hover:text-nav-text",
               collapsed
                 ? "justify-center p-1 rounded-lg"
                 : "gap-3 px-2 py-2 rounded-md"
@@ -686,7 +689,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             {!collapsed && (
               <>
                 <span className="flex-1 flex flex-col items-start min-w-0">
-                  <span className="text-sm font-semibold text-white truncate leading-tight max-w-[160px]">
+                  <span className="text-sm font-semibold text-nav-text truncate leading-tight max-w-[160px]">
                     {userDisplayName}
                   </span>
                   <span className="text-[10px] uppercase tracking-tight font-bold text-nav-text-muted">

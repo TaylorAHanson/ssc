@@ -874,6 +874,10 @@ def _ensure_approval_task(db: Session, request: RequestModel, payload) -> None:
                 id=f"appr-{uuid.uuid4()}",
                 request_id=request.id,
                 approval_type=gtype,
+                # Record both the display name and email. We only have the
+                # requester's email here, so use it for both — the Approval API
+                # requires a non-null ``requested_by`` and 500s otherwise.
+                requested_by=request.requester_email,
                 requested_by_email=request.requester_email,
                 assigned_to_email=assigned_email,
                 assigned_to_role=assigned_role,

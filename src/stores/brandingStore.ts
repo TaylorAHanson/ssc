@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { getBranding } from '../services/api';
+import type { SelfServiceCenterConfig, CommunityLinksConfig } from '../services/api';
 import type { UserPersona } from '../types';
 
 /** A config-driven, iframe-embedded app surfaced in the sidebar. */
@@ -15,6 +16,7 @@ export interface EmbeddedApp {
 
 interface BrandingState {
     brandName: string;
+    brandShortName: string;
     brandLogoUrl: string;
     brandColorPrimary: string;
     brandColorSecondary: string;
@@ -30,6 +32,8 @@ interface BrandingState {
     features: Record<string, boolean>;
     tools: Record<string, boolean>;
     uiTabs: Record<string, boolean>;
+    selfServiceCenter: SelfServiceCenterConfig;
+    communityLinks: CommunityLinksConfig;
     workflowAuthoringLocked: boolean;
     isLoading: boolean;
     hasLoaded: boolean;
@@ -39,6 +43,7 @@ interface BrandingState {
 
 export const useBrandingStore = create<BrandingState>((set) => ({
     brandName: 'Self Service Hub',
+    brandShortName: 'Self Service Hub',
     brandLogoUrl: '',
     brandColorPrimary: '#FF3621',
     brandColorSecondary: '#1B5162',
@@ -53,6 +58,8 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     features: {},
     tools: {},
     uiTabs: {},
+    selfServiceCenter: {},
+    communityLinks: {},
     workflowAuthoringLocked: false,
     isLoading: false,
     hasLoaded: false,
@@ -63,6 +70,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
             const branding = await getBranding();
             set({
                 brandName: branding.brand_name,
+                brandShortName: branding.brand_short_name || branding.brand_name,
                 brandLogoUrl: branding.brand_logo_url || '',
                 brandColorPrimary: branding.brand_color_primary,
                 brandColorSecondary: branding.brand_color_secondary,
@@ -92,6 +100,8 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 features: branding.features || {},
                 tools: branding.tools || {},
                 uiTabs: branding.ui?.tabs || {},
+                selfServiceCenter: branding.self_service_center || {},
+                communityLinks: branding.community_links || {},
                 workflowAuthoringLocked: branding.workflow_authoring_locked ?? false,
                 isLoading: false,
                 hasLoaded: true,

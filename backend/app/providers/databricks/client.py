@@ -516,26 +516,39 @@ class DatabricksProvider(BaseProvider):
         try:
             asset_type_lower = asset_type.lower()
             parts = asset_name.split(".")
-            
-            if asset_type_lower not in ("table", "view"):
-                logger.warning(f"Fetching tags is currently only supported for tables and views. Got: {asset_type_lower}")
-                return {}
-                
-            if len(parts) < 3:
-                logger.warning(f"Invalid {asset_type_lower} name format: {asset_name}. Expected catalog.schema.{asset_type_lower}")
-                return {}
-                
-            catalog, schema, table = parts[0], parts[1], parts[2]
-            
+
             # Format tag names for SQL IN clause
             tags_list_str = ", ".join([f"'{t}'" for t in tag_names])
-            
+
+            # Resolve the UC system tags table + key predicate per asset type, so
+            # tags (e.g. approver_group) resolve for catalogs, schemas, volumes
+            # and tables/views — not just tables. Each *_tags view is keyed by the
+            # object's name columns (verified against system.information_schema).
+            if asset_type_lower == "catalog" and len(parts) >= 1:
+                tags_table = "catalog_tags"
+                where = f"catalog_name = '{parts[0]}'"
+            elif asset_type_lower == "schema" and len(parts) >= 2:
+                tags_table = "schema_tags"
+                where = f"catalog_name = '{parts[0]}' AND schema_name = '{parts[1]}'"
+            elif asset_type_lower in ("table", "view") and len(parts) >= 3:
+                tags_table = "table_tags"
+                where = (f"catalog_name = '{parts[0]}' AND schema_name = '{parts[1]}' "
+                         f"AND table_name = '{parts[2]}'")
+            elif asset_type_lower == "volume" and len(parts) >= 3:
+                tags_table = "volume_tags"
+                where = (f"catalog_name = '{parts[0]}' AND schema_name = '{parts[1]}' "
+                         f"AND volume_name = '{parts[2]}'")
+            else:
+                logger.warning(
+                    f"Cannot fetch tags for {asset_type} '{asset_name}': unsupported "
+                    f"asset_type or malformed name."
+                )
+                return {}
+
             query = f"""
-            SELECT tag_name, tag_value 
-            FROM system.information_schema.table_tags 
-            WHERE catalog_name = '{catalog}' 
-              AND schema_name = '{schema}' 
-              AND table_name = '{table}'
+            SELECT tag_name, tag_value
+            FROM system.information_schema.{tags_table}
+            WHERE {where}
               AND tag_name IN ({tags_list_str})
             """
             
@@ -603,7 +616,9 @@ class DatabricksProvider(BaseProvider):
                     catalog = parts[0]
                     schema = parts[1]
                     volume = parts[2]
-                    query = f"DESCRIBE VOLUME EXTENDED {catalog}.{schema}.{volume}"
+                    # Volumes don't support EXTENDED; plain DESCRIBE VOLUME returns
+                    # a single tabular row that includes an explicit `owner` column.
+                    query = f"DESCRIBE VOLUME {catalog}.{schema}.{volume}"
                 else:
                     logger.warning(f"Invalid volume name format: {asset_name}. Expected catalog.schema.volume")
                     return None
@@ -614,27 +629,39 @@ class DatabricksProvider(BaseProvider):
             logger.info(f"Fetching owner for {asset_type} '{asset_name}' using query: {query}")
             result = await self.execute_sql(query)
 
-            # Parse the result to find Owner field
-            # DESCRIBE EXTENDED returns rows in different formats depending on asset type:
-            # - Tables: ["col_name", "data_type", "comment"]
-            # - Schemas/Catalogs: ["database_description_item", "database_description_value"]
-            # Look for a row where the first column is "Owner"
+            # Parse the result to find the Owner. DESCRIBE output shape varies by
+            # asset type:
+            #   - Table/view:  key/value rows  ["col_name", "data_type", ...]
+            #   - Schema:      key/value rows  ["database_description_item", "..._value"]
+            #   - Catalog:     key/value rows  ["info_name", "info_value"]
+            #   - Volume:      a single tabular row with an explicit "owner" column
             for row in result.get("rows", []):
-                if isinstance(row, dict):
-                    # Try different column name patterns
-                    col_name = (row.get("col_name") or
-                               row.get("database_description_item") or
-                               row.get("key") or
-                               row.get("name"))
+                if not isinstance(row, dict):
+                    continue
 
-                    data_value = (row.get("data_type") or
-                                 row.get("database_description_value") or
-                                 row.get("value"))
-
-                    if col_name and str(col_name).strip().lower() == "owner":
-                        owner = str(data_value).strip()
+                # Tabular form (DESCRIBE VOLUME): owner is its own column.
+                if row.get("owner"):
+                    owner = str(row["owner"]).strip()
+                    if owner:
                         logger.info(f"Found owner for {asset_name}: {owner}")
-                        return owner if owner else None
+                        return owner
+
+                # Key/value form: a row whose name cell is "Owner".
+                col_name = (row.get("col_name") or
+                           row.get("database_description_item") or
+                           row.get("info_name") or
+                           row.get("key") or
+                           row.get("name"))
+
+                data_value = (row.get("data_type") or
+                             row.get("database_description_value") or
+                             row.get("info_value") or
+                             row.get("value"))
+
+                if col_name and str(col_name).strip().lower() == "owner":
+                    owner = str(data_value).strip()
+                    logger.info(f"Found owner for {asset_name}: {owner}")
+                    return owner if owner else None
 
             logger.warning(f"Owner not found in DESCRIBE output for {asset_name}")
             return None

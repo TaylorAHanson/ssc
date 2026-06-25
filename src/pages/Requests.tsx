@@ -207,6 +207,7 @@ export function RequestStateList({ request }: { request: Request }) {
           id: state.id,
           name: state.name,
           status,
+          type: state.gateType,
           order: index + 1,
           completedAt: state.completedAt,
           facts: state.facts
@@ -220,6 +221,7 @@ export function RequestStateList({ request }: { request: Request }) {
         id: 'completed_goal',
         name: 'Completed',
         status: request.status === 'completed' ? 'completed' : 'pending',
+        type: undefined,
         order: stateSteps.length + 1,
         completedAt: completionState?.completedAt,
         facts: []
@@ -241,6 +243,7 @@ export function RequestStateList({ request }: { request: Request }) {
             id: 'system_failure',
             name: 'System Processing',
             status: 'failed',
+            type: undefined,
             order: stateSteps.length + 1,
             completedAt: request.updatedAt,
             facts: []
@@ -261,6 +264,17 @@ export function RequestStateList({ request }: { request: Request }) {
           const isFailed = step.status === 'failed';
           const isActive = step.status === 'active';
           const isTraining = step.id === 'training_pending';
+
+          // Human approval gates (data_owner / manager / admin roles). The step
+          // id is the stage name (e.g. "await_approval"), so we identify the
+          // gate by its `type` rather than a hardcoded id.
+          const HUMAN_GATE_TYPES = ['data_owner', 'manager', 'platform_admin', 'security', 'security_admin', 'governance_admin', 'finance_admin'];
+          const isApprovalStep = (!!step.type && HUMAN_GATE_TYPES.includes(step.type)) || step.id === 'data_owner_approval' || /approval/i.test(step.id);
+          const stepApprovals = isApprovalStep
+            ? (request.approvals || []).filter((a) =>
+                step.type ? a.approvalType === step.type : HUMAN_GATE_TYPES.includes(a.approvalType)
+              )
+            : [];
 
           const getStepBg = () => {
             if (isFailed || isRejected) return 'color-mix(in srgb, var(--brand-alert), transparent 95%)';
@@ -297,8 +311,8 @@ export function RequestStateList({ request }: { request: Request }) {
                     <div className="flex items-center gap-2 mb-1">
                       <p className="text-base font-semibold text-gray-900">{step.name}</p>
                       {step.type && (
-                        <span className="text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">
-                          {step.type}
+                        <span className="text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full capitalize">
+                          {step.type.replace(/_/g, ' ')}
                         </span>
                       )}
                     </div>
@@ -345,37 +359,52 @@ export function RequestStateList({ request }: { request: Request }) {
                 </div>
               )}
 
-              {/* Multiple Data Owner Approvals */}
-              {step.id === 'data_owner_approval' && request.approvals && request.approvals.filter(a => a.approvalType === 'data_owner').length > 0 && (
+              {/* Approver(s) for this human gate (data_owner / manager / admin).
+                  Surfaced so the requester can see who must approve — and who
+                  approved/rejected. Falls back to a clear message when no
+                  specific owner was resolved (then any Platform Admin can act). */}
+              {isApprovalStep && (
                 <div className="ml-14 mt-3 space-y-2">
-                  <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-1">Required Approvals</p>
-                  <div className="grid gap-2">
-                    {request.approvals.filter(a => a.approvalType === 'data_owner').map((approval, aIdx) => (
-                      <div key={aIdx} className="flex items-center justify-between bg-white border border-gray-200 rounded p-2 text-sm">
-                        <div className="flex items-center gap-2">
-                          {approval.status === 'approved' ? (
-                            <CheckCircle2 className="w-4 h-4 text-success" />
-                          ) : approval.status === 'rejected' ? (
-                            <X className="w-4 h-4 text-alert" />
-                          ) : (
-                            <Circle className="w-4 h-4 text-gray-300" />
-                          )}
-                          <span className="font-medium text-gray-700">
-                            {approval.assignedToEmail || approval.assignedToRole || 'Unknown Owner'}
+                  <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-1">
+                    {stepApprovals.length > 1 ? 'Approvers' : 'Approver'}
+                  </p>
+                  {stepApprovals.length > 0 ? (
+                    <div className="grid gap-2">
+                      {stepApprovals.map((approval, aIdx) => (
+                        <div key={aIdx} className="flex items-center justify-between bg-white border border-gray-200 rounded p-2 text-sm">
+                          <div className="flex items-center gap-2">
+                            {approval.status === 'approved' ? (
+                              <CheckCircle2 className="w-4 h-4 text-success" />
+                            ) : approval.status === 'rejected' ? (
+                              <X className="w-4 h-4 text-alert" />
+                            ) : (
+                              <Circle className="w-4 h-4 text-gray-300" />
+                            )}
+                            <span className="font-medium text-gray-700">
+                              {approval.assignedToEmail || approval.assignedToRole || 'Any Platform Admin'}
+                            </span>
+                          </div>
+                          <span className={`text-xs font-medium ${
+                            approval.status === 'approved' ? 'text-success' :
+                            approval.status === 'rejected' ? 'text-alert' :
+                            'text-gray-500'
+                          }`}>
+                            {approval.status === 'approved' ? `Approved by ${approval.approvedBy || approval.assignedToEmail || approval.assignedToRole || 'Platform Admin'}` :
+                             approval.status === 'rejected' ? `Rejected by ${approval.rejectedBy || approval.assignedToEmail || approval.assignedToRole || 'Platform Admin'}` :
+                             'Pending'}
                           </span>
                         </div>
-                        <span className={`text-xs font-medium ${
-                          approval.status === 'approved' ? 'text-success' :
-                          approval.status === 'rejected' ? 'text-alert' :
-                          'text-gray-500'
-                        }`}>
-                          {approval.status === 'approved' ? `Approved by ${approval.approvedBy || approval.assignedToEmail || approval.assignedToRole}` :
-                           approval.status === 'rejected' ? `Rejected by ${approval.rejectedBy || approval.assignedToEmail || approval.assignedToRole}` :
-                           'Pending'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="bg-white border border-gray-200 rounded p-2 text-sm italic text-gray-500">
+                      {step.type === 'manager'
+                        ? 'No manager was resolved for this request — pending review by a Platform Admin.'
+                        : step.type === 'data_owner'
+                        ? 'No data owner was resolved for the requested asset — pending review by a Platform Admin.'
+                        : 'No approver was resolved — pending review by a Platform Admin.'}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -601,6 +630,7 @@ export function Requests() {
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50">
                   <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Title</th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Request ID</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Type</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Status</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Created</th>
@@ -611,7 +641,7 @@ export function Requests() {
               <tbody>
                 {filteredRequests.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-20 text-center">
+                    <td colSpan={7} className="py-20 text-center">
                       <div className="flex flex-col items-center justify-center space-y-3">
                         <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center">
                           <Clock className="w-6 h-6 text-gray-400" />
@@ -627,6 +657,16 @@ export function Requests() {
                   filteredRequests.map((request) => (
                     <tr key={request.id} className="border-b border-gray-100 hover:bg-gray-50">
                       <td className="py-3 px-4 text-sm text-gray-900">{request.title}</td>
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(request.id); }}
+                          title={`${request.id} (click to copy)`}
+                          className="font-mono text-xs text-gray-500 hover:text-primary cursor-pointer"
+                        >
+                          {request.id}
+                        </button>
+                      </td>
                       <td className="py-3 px-4 text-sm text-gray-600">
                         {request.type.replace(/_/g, ' ')}
                       </td>
@@ -695,6 +735,14 @@ export function Requests() {
                     <p className="text-sm text-gray-500 mt-1">
                       Created {formatDate(selectedRequest.createdAt)}
                     </p>
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard?.writeText(selectedRequest.id)}
+                      title="Click to copy Request ID"
+                      className="mt-1 font-mono text-xs text-gray-400 hover:text-primary cursor-pointer"
+                    >
+                      ID: {selectedRequest.id}
+                    </button>
                   </div>
                   <Button
                     variant="outline"

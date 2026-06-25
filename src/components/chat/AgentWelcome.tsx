@@ -37,7 +37,7 @@ export interface AgentWelcomeProps {
 
 export function AgentWelcome({ title, description, examples = [], icon }: AgentWelcomeProps) {
     return (
-        <div className="flex flex-col items-center justify-center py-10 gap-4 text-center">
+        <div className="flex flex-col items-center justify-center pt-3 pb-6 gap-3 text-center">
             <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center">
                 {icon ?? <Sparkles className="w-7 h-7 text-primary" />}
             </div>

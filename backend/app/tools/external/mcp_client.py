@@ -16,7 +16,7 @@ environments where the optional dependency isn't installed.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import settings
 
@@ -28,39 +28,142 @@ class McpDependencyError(RuntimeError):
 
 
 def _host() -> str:
-    host = (settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL or "").strip()
-    return host.rstrip("/")
+    host = (settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL or "").strip().rstrip("/")
+    if host and not host.startswith(("https://", "http://")):
+        host = f"https://{host}"
+    return host
+
+
+class _PlatformOAuthStrategy:
+    """CredentialsStrategy that wraps platform-injected auth as an ``OAuthCredentialsProvider``.
+
+    ``DatabricksMCPClient`` validates OAuth by calling ``config.oauth_token()`` which
+    checks ``isinstance(config._header_factory, OAuthCredentialsProvider)``. The SDK's
+    built-in auth (``'runtime'``, ``'pat'``, etc.) does NOT produce an
+    ``OAuthCredentialsProvider`` — even though the actual token IS OAuth inside a
+    Databricks App. This strategy wraps the auto-detected client's
+    ``config.authenticate()`` so the header factory satisfies the isinstance check.
+    """
+
+    def __init__(self, inner_ws):
+        self._inner_ws = inner_ws
+
+    def auth_type(self) -> str:
+        return "oauth-m2m"
+
+    def __call__(self, cfg):
+        from databricks.sdk.credentials_provider import OAuthCredentialsProvider
+        from databricks.sdk.oauth import Token as OAuthToken
+
+        inner = self._inner_ws
+
+        def _headers():
+            return inner.config.authenticate()
+
+        def _token():
+            hdrs = inner.config.authenticate()
+            access_token = hdrs.get("Authorization", "").replace("Bearer ", "")
+            return OAuthToken(access_token=access_token, token_type="Bearer")
+
+        return OAuthCredentialsProvider(_headers, _token)
 
 
 def build_sp_workspace_client():
     """A ``WorkspaceClient`` authenticated as the app Service Principal.
 
-    Prefers explicit M2M client_id/secret when configured; otherwise falls back to
-    the SDK's default auth chain (which, inside a Databricks App, is the injected
-    SP OAuth).
+    Prefers explicit M2M client_id/secret when configured; otherwise relies on the
+    SDK's default auth chain. Inside a Databricks App, wraps the auto-detected auth
+    with ``OAuthCredentialsProvider`` so ``DatabricksMCPClient``'s
+    ``config.oauth_token()`` check passes.
     """
     from databricks.sdk import WorkspaceClient
+    from databricks.sdk.config import Config
+    import os
 
     host = _host()
     client_id = (settings.DATABRICKS_CLIENT_ID or "").strip()
     client_secret = (settings.DATABRICKS_CLIENT_SECRET or "").strip()
+
+    # Explicit OAuth M2M credentials take precedence.
     if host and client_id and client_secret:
         return WorkspaceClient(host=host, client_id=client_id, client_secret=client_secret)
+
+    # Inside a Databricks App: create an inner client that auto-detects platform
+    # credentials, then wrap it so _header_factory is an OAuthCredentialsProvider
+    # (required by DatabricksMCPClient's oauth_token() isinstance check).
+    if os.environ.get("DATABRICKS_APP_PORT"):
+        inner_ws = WorkspaceClient()
+        logger.info(
+            "build_sp_workspace_client (app env): inner auth_type='%s'",
+            getattr(inner_ws.config, 'auth_type', '?'),
+        )
+        config = Config(
+            host=inner_ws.config.host,
+            credentials_strategy=_PlatformOAuthStrategy(inner_ws),
+        )
+        return WorkspaceClient(config=config)
+
+    # Local development: SDK picks up auth from .databrickscfg or env vars.
     if host:
         return WorkspaceClient(host=host)
     return WorkspaceClient()
 
 
+class _OboOAuthCredentials:
+    """CredentialsStrategy that wraps a forwarded OAuth token as ``OAuthCredentialsProvider``.
+
+    ``DatabricksMCPClient`` validates OAuth via ``config.oauth_token()`` which checks
+    ``isinstance(config._header_factory, OAuthCredentialsProvider)``. A plain lambda
+    returning headers does NOT satisfy this. We return a proper
+    ``OAuthCredentialsProvider`` so the isinstance check passes.
+    """
+
+    def __init__(self, token: str):
+        self._token = token
+
+    def auth_type(self) -> str:
+        return "oauth-m2m"
+
+    def __call__(self, cfg):
+        from databricks.sdk.credentials_provider import OAuthCredentialsProvider
+        from databricks.sdk.oauth import Token as OAuthToken
+
+        token = self._token
+
+        def _headers():
+            return {"Authorization": f"Bearer {token}"}
+
+        def _token_provider():
+            return OAuthToken(access_token=token, token_type="Bearer")
+
+        return OAuthCredentialsProvider(_headers, _token_provider)
+
+
 def build_obo_workspace_client(token: str):
     """A ``WorkspaceClient`` authenticated as the user via a forwarded OBO token.
 
-    Forces ``auth_type='pat'`` to avoid the "more than one authorization method"
-    error when SP OAuth env vars are also present (as they are inside a Databricks
-    App).
+    The forwarded access token from Databricks Apps IS an OAuth access token.
+    Using ``auth_type='pat'`` makes ``DatabricksMCPClient`` reject it (custom and
+    external MCP servers require OAuth). Instead we supply a proper
+    ``CredentialsStrategy`` that reports ``auth_type='oauth-obo'`` and sends the
+    token as ``Authorization: Bearer ...``.
+
+    Explicitly passing empty ``client_id``/``client_secret`` suppresses the
+    "more than one authorization method" error that would otherwise fire when
+    the platform-injected SP OAuth env vars are present alongside the token.
     """
     from databricks.sdk import WorkspaceClient
+    from databricks.sdk.config import Config
 
-    return WorkspaceClient(host=_host(), token=token, auth_type="pat")
+    host = _host()
+    config = Config(
+        host=host,
+        credentials_strategy=_OboOAuthCredentials(token),
+        # Suppress platform-injected SP creds to avoid multi-auth conflict.
+        client_id="",
+        client_secret="",
+    )
+    return WorkspaceClient(config=config)
 
 
 def _mcp_client(server_url: str, workspace_client):
@@ -120,44 +223,80 @@ def _readable_exc(exc: BaseException) -> str:
 def list_tools(server_url: str, obo_token: Optional[str] = None) -> List[Dict[str, Any]]:
     """List tools on ``server_url``.
 
-    When ``obo_token`` is provided the listing runs On-Behalf-Of the user, so
-    AI-Gateway external MCP servers registered with Per-User OAuth (which the
-    Service Principal cannot see) are discoverable under the caller's identity.
-    Falls back to the Service Principal otherwise. Returns normalized dicts;
-    raises a ``RuntimeError`` with the unwrapped cause on connection/auth errors
-    so the caller can record a useful sync failure.
+    Tries multiple auth strategies in order:
+    1. **OBO** (On-Behalf-Of user) — required for AI-Gateway external MCP servers
+       that use Per-User OAuth (e.g. system_ai_agent_github_mcp).
+    2. **Service Principal** (OAuth M2M) — required for custom MCP apps hosted on
+       Databricks Apps (DatabricksMCPClient rejects non-standard OAuth types).
+
+    Falls through on auth/protocol errors so at least one strategy can succeed.
+    Returns normalized dicts; raises a ``RuntimeError`` with the unwrapped cause
+    when ALL strategies fail.
     """
-    ws = build_obo_workspace_client(obo_token) if obo_token else build_sp_workspace_client()
-    client = _mcp_client(server_url, ws)
-    try:
-        raw = client.list_tools()
-    except Exception as e:  # noqa: BLE001 - normalize the opaque TaskGroup wrapper
-        raise RuntimeError(_readable_exc(e)) from e
-    return [_tool_to_dict(t) for t in (raw or [])]
+    strategies: list = []
+    if obo_token:
+        strategies.append(("OBO", lambda: build_obo_workspace_client(obo_token)))
+    strategies.append(("SP", build_sp_workspace_client))
+
+    # Decode OBO token to identify the user (JWT payload is base64, no secret needed).
+    obo_identity = "None"
+    if obo_token:
+        try:
+            import base64, json as _json
+            parts = obo_token.split(".")
+            if len(parts) == 3:
+                payload = base64.urlsafe_b64decode(parts[1] + "==")
+                claims = _json.loads(payload)
+                obo_identity = (
+                    f"sub={claims.get('sub', '?')}, "
+                    f"email={claims.get('email', claims.get('upn', '?'))}, "
+                    f"azp={claims.get('azp', '?')}"
+                )
+            else:
+                obo_identity = f"opaque (len={len(obo_token)})"
+        except Exception:
+            obo_identity = f"decode-failed (len={len(obo_token)}, starts='{obo_token[:8]}...')"
+
+    logger.info(
+        "list_tools [%s]: obo_identity=[%s], strategies=%s",
+        server_url, obo_identity, [s[0] for s in strategies],
+    )
+
+    last_error: Optional[Exception] = None
+    for label, build_ws in strategies:
+        ws = build_ws()
+        logger.info(
+            "list_tools [%s]: trying %s — auth_type='%s', client_id='%s'",
+            server_url, label,
+            getattr(ws.config, 'auth_type', '?'),
+            getattr(ws.config, 'client_id', '(none)'),
+        )
+        client = _mcp_client(server_url, ws)
+        try:
+            raw = client.list_tools()
+            logger.info(
+                "list_tools [%s]: %s succeeded — %d tools found",
+                server_url, label, len(raw or []),
+            )
+            return [_tool_to_dict(t) for t in (raw or [])]
+        except Exception as e:  # noqa: BLE001
+            last_error = e
+            logger.warning(
+                "list_tools [%s]: %s FAILED — %s",
+                server_url, label, _readable_exc(e),
+            )
+            continue
+
+    raise RuntimeError(_readable_exc(last_error)) from last_error
 
 
-def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Enumerate MCP servers available in the workspace via the Databricks SDK.
+def _list_mcp_servers_with_client(ws, host: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Core discovery logic using a pre-built WorkspaceClient.
 
-    Lets an admin pick a server instead of hand-typing a name + URL. Pulls the
-    bounded, cheap-to-list kinds:
-
-    - **External MCP servers registered in AI Gateway** — these are Unity Catalog
-      ``HTTP`` connections, reachable at ``/api/2.0/mcp/external/{name}``.
-    - **Genie spaces** — ``/api/2.0/mcp/genie/{space_id}``.
-    - **Custom MCP servers hosted as Databricks Apps** (name starts ``mcp-``) —
-      ``{app_url}/mcp``.
-
-    Runs On-Behalf-Of the user when ``obo_token`` is given (so per-user
-    connections/spaces are visible), else as the Service Principal. Best-effort
-    per kind: a failure listing one source never blocks the others. Returns dicts
-    shaped for the quick-add form: ``{name, server_url, kind, detail}``. (Managed
-    UC-function servers are not enumerated — there's one per schema, so those
-    stay a manual catalog/schema entry.)
+    Separated so we can retry with a different client on auth failure.
     """
-    host = _host()
-    ws = build_obo_workspace_client(obo_token) if obo_token else build_sp_workspace_client()
     out: List[Dict[str, Any]] = []
+    errors: List[str] = []
 
     # External MCP == Unity Catalog HTTP connections (AI Gateway registration).
     try:
@@ -174,6 +313,7 @@ def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> List[Dict[str
                 "detail": (getattr(conn, "comment", None) or getattr(conn, "url", None) or "HTTP connection"),
             })
     except Exception as e:  # noqa: BLE001 - one source kind failing must not block others
+        errors.append(f"connections: {e}")
         logger.warning("list_workspace_mcp_servers: connections failed: %s", e)
 
     # Managed Genie MCP servers.
@@ -192,6 +332,7 @@ def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> List[Dict[str
                 "detail": f"Genie space {sid}",
             })
     except Exception as e:  # noqa: BLE001
+        errors.append(f"genie: {e}")
         logger.warning("list_workspace_mcp_servers: genie failed: %s", e)
 
     # Custom MCP servers hosted as Databricks Apps (naming convention: mcp-*).
@@ -208,9 +349,64 @@ def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> List[Dict[str
                 "detail": getattr(app, "description", None) or "Databricks App",
             })
     except Exception as e:  # noqa: BLE001
+        errors.append(f"apps: {e}")
         logger.warning("list_workspace_mcp_servers: apps failed: %s", e)
 
-    return out
+    return out, errors
+
+
+def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Enumerate MCP servers available in the workspace via the Databricks SDK.
+
+    Lets an admin pick a server instead of hand-typing a name + URL. Pulls the
+    bounded, cheap-to-list kinds:
+
+    - **External MCP servers registered in AI Gateway** — these are Unity Catalog
+      ``HTTP`` connections, reachable at ``/api/2.0/mcp/external/{name}``.
+    - **Genie spaces** — ``/api/2.0/mcp/genie/{space_id}``.
+    - **Custom MCP servers hosted as Databricks Apps** (name starts ``mcp-``) —
+      ``{app_url}/mcp``.
+
+    Tries OBO first (when available) so per-user connections are visible. If OBO
+    returns nothing (possibly due to auth issues), automatically retries with the
+    Service Principal as fallback. Returns dicts shaped for the quick-add form:
+    ``{name, server_url, kind, detail}``.
+    """
+    host = _host()
+
+    # Primary attempt: OBO if token available, otherwise SP.
+    if obo_token:
+        ws = build_obo_workspace_client(obo_token)
+        out, errors = _list_mcp_servers_with_client(ws, host)
+        if out:
+            return out
+        # OBO returned nothing — retry with SP as fallback (the SP may have
+        # broader visibility, e.g. system connections granted to the app).
+        if errors:
+            logger.info(
+                "list_workspace_mcp_servers: OBO returned empty (errors: %s). "
+                "Retrying with Service Principal.",
+                "; ".join(errors),
+            )
+        ws_sp = build_sp_workspace_client()
+        out_sp, errors_sp = _list_mcp_servers_with_client(ws_sp, host)
+        if out_sp:
+            return out_sp
+        if errors_sp:
+            logger.warning(
+                "list_workspace_mcp_servers: SP fallback also failed: %s",
+                "; ".join(errors_sp),
+            )
+        return []
+    else:
+        ws = build_sp_workspace_client()
+        out, errors = _list_mcp_servers_with_client(ws, host)
+        if errors and not out:
+            logger.warning(
+                "list_workspace_mcp_servers: SP returned empty (errors: %s)",
+                "; ".join(errors),
+            )
+        return out
 
 
 def _content_to_text(result: Any) -> str:
@@ -239,21 +435,33 @@ def call_tool(
 ) -> Dict[str, Any]:
     """Invoke ``tool_name`` on ``server_url`` as the SP or the user (OBO).
 
-    ``identity_mode='obo'`` uses the forwarded user token when available and falls
-    back to the SP only if no token is present; ``'sp'`` always uses the SP.
+    ``identity_mode='obo'`` tries the forwarded user token first (needed for
+    Per-User OAuth servers like system_ai_*), then falls back to SP if the OBO
+    auth is rejected (e.g. custom apps that only accept OAuth M2M).
+    ``'sp'`` always uses the SP directly.
     """
+    strategies: list = []
     if identity_mode == "obo" and obo_token:
-        ws = build_obo_workspace_client(obo_token)
-        used = "obo"
+        strategies.append(("obo", lambda: build_obo_workspace_client(obo_token)))
+    strategies.append(("sp", build_sp_workspace_client))
+
+    last_error: Optional[str] = None
+    for used, build_ws in strategies:
+        ws = build_ws()
+        logger.info("MCP call tool=%s server=%s identity=%s", tool_name, server_url, used)
+        client = _mcp_client(server_url, ws)
+        try:
+            result = client.call_tool(tool_name, arguments or {})
+            break
+        except Exception as e:  # noqa: BLE001
+            last_error = _readable_exc(e)
+            logger.info(
+                "MCP call_tool [%s]: %s strategy failed: %s",
+                tool_name, used, last_error,
+            )
+            continue
     else:
-        ws = build_sp_workspace_client()
-        used = "sp"
-    logger.info("MCP call tool=%s server=%s identity=%s", tool_name, server_url, used)
-    client = _mcp_client(server_url, ws)
-    try:
-        result = client.call_tool(tool_name, arguments or {})
-    except Exception as e:  # noqa: BLE001 - normalize the opaque TaskGroup wrapper
-        return {"ok": False, "error": _readable_exc(e), "tool": tool_name}
+        return {"ok": False, "error": last_error, "tool": tool_name}
     is_error = bool(getattr(result, "isError", False)) or (
         isinstance(result, dict) and result.get("isError")
     )
