@@ -5,26 +5,25 @@
 :root {
   --radius: 0.5rem;
   --brand-primary: #FF3621;
-  --brand-secondary: #1B3139;
-  --brand-info: #3253DC;
-  --brand-alert: #D32F2F;
-  --brand-warning: #FFC107;
-  --brand-success: #388E3C;
+  --brand-secondary: #1B5162;
+  --brand-info: #1B5162;
+  --brand-alert: #98102A;
+  --brand-warning: #FFAB00;
+  --brand-success: #00A972;
 
   /* Shared design tokens (mirror of src/theme.ts).
-     ATLAS look: a light/white navigation surface with a Databricks "Lava"
-     red (#FF3621) accent + active state, dark slate text. */
-  --theme-nav-bg: #FFFFFF;
-  --theme-nav-border: #E5E7EB;
-  --theme-nav-text: #1B3139;
-  --theme-nav-text-muted: #6B7280;
-  --theme-nav-hover-bg: #F3F4F6;
-  --theme-nav-active-bg: #FF3621;
+     Semantic names so the same palette can be reused across products. */
+  --theme-nav-bg: #001E3C;
+  --theme-nav-border: #1F2937;
+  --theme-nav-text: #FFFFFF;
+  --theme-nav-text-muted: #9CA3AF;
+  --theme-nav-hover-bg: #1F2937;
+  --theme-nav-active-bg: #007BFF;
   --theme-nav-active-text: #FFFFFF;
 
-  --theme-heading: #1B3139;
-  --theme-accent: #FF3621;
-  --theme-accent-soft: #FFECE8;
+  --theme-heading: #001E3C;
+  --theme-accent: #007BFF;
+  --theme-accent-soft: #EBF4FF;
 
   --theme-surface: #F8F9FA;
   --theme-surface-muted: #F3F4F6;

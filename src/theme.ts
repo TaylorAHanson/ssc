@@ -17,23 +17,23 @@
 
 export const theme = {
   colors: {
-    // Light navigation surface (sidebar / vertical nav) — ATLAS look.
+    // Dark navigation surface (sidebar / vertical nav).
     nav: {
-      bg: '#FFFFFF',
-      border: '#E5E7EB', // ~ tailwind gray-200
-      text: '#1B3139', // Databricks dark slate
-      textMuted: '#6B7280', // ~ tailwind gray-500
-      hoverBg: '#F3F4F6', // ~ tailwind gray-100
-      activeBg: '#FF3621', // Databricks "Lava" red
+      bg: '#001E3C',
+      border: '#1F2937', // ~ tailwind gray-800
+      text: '#FFFFFF',
+      textMuted: '#9CA3AF', // ~ tailwind gray-400
+      hoverBg: '#1F2937',
+      activeBg: '#007BFF',
       activeText: '#FFFFFF',
     },
 
     // Headings used in light surfaces (top bar titles, page H1s).
-    heading: '#1B3139',
+    heading: '#001E3C',
 
     // Primary accent. Drives buttons, links, badges, active highlights.
-    accent: '#FF3621',
-    accentSoft: '#FFECE8',
+    accent: '#007BFF',
+    accentSoft: '#EBF4FF',
 
     // App-level light surfaces.
     surface: '#F8F9FA',
