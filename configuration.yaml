@@ -19,29 +19,26 @@
 #     client_secret_env: "DEV_WS_CLIENT_SECRET"
 
 branding:
-  name: "ATLAS Self-Service Center"
+  name: "Enterprise Data Hub"
   # Short, identifier-friendly form of the name used where the brand appears as a
   # slug rather than display text (e.g. provisioned GitHub repo-name prefixes and
   # the git commit author for bot PRs). Defaults to `name` when omitted; set this
   # to keep generated identifiers concise (e.g. "edh"). Also used as the compact
-  # landing-page header label (logo + short_name) next to the view toggle.
-  short_name: "ATLAS"
+  # landing-page header label (logo + short_name).
+  # short_name: "edh"
   # Optional explicit git commit author for bot-authored PRs/commits. Defaults are
   # derived from the brand (e.g. "Enterprise Data Hub Bot") when omitted.
   # git_username: ""
   # git_email: ""
   # Your organization's wordmark/logo URL. Leave blank to render the name only.
-  # Served from public/ (Vite copies it into backend/static at build time).
-  logo_url: "/atlas-logo.svg"
-  # ATLAS palette — Databricks "Lava" red accent. The light/white sidebar and
-  # heading colors are structural and live in CSS variables
-  # (--theme-nav-bg, --theme-accent, --theme-heading in src/index.css).
-  primary_color: "#FF3621"
-  secondary_color: "#1B3139"
-  info_color: "#3253DC"
+  logo_url: ""
+  # Accent blue aligned with the companion Command Center app's design tokens
+  # (see src/theme.ts). The dark navy sidebar / heading color is structural
+  # and lives in CSS variables (--theme-nav-bg, --theme-heading).
+  primary_color: "#007BFF"
+  secondary_color: "#001E3C"
+  info_color: "#007BFF"
   alert_color: "#D32F2F"
-  warning_color: "#FFC107"
-  success_color: "#388E3C"
 
 # ─── Self-Service Center ──────────────────────────────────────────────────
 # The landing page offers two views: "Assistant" (the conversational agent) and
@@ -259,6 +256,14 @@ features:
   # user can read. Authoring now lives in the Command Center's Agent Studio; this
   # flag gates the read-only /skills API and the list_skills/get_skill load tools.
   skills: true
+  # Enhanced landing page: shows the verbose header stack on the home / new-chat
+  # page — the brand title, the time-of-day greeting + "Welcome, <name>", the
+  # "What would you like to know?" line, and the "Assistant / Self-Service
+  # Center" view toggle (when a self_service_center catalog is configured below).
+  # When false (default for this build) those header lines are hidden for a
+  # clean, uncluttered landing. The chat input, starter-prompt chips, and the
+  # pinned catalog rails are always shown regardless of this flag.
+  enhanced_landing_page: false
 
 ui:
   tabs:

@@ -42,15 +42,7 @@ def _obo_token(request: Request) -> Optional[str]:
     Service Principal — required for AI-Gateway external MCP servers that use
     Per-User OAuth (the SP gets 403).
     """
-    import logging
-    _log = logging.getLogger(__name__)
-
     token = getattr(getattr(request, "state", None), "token", None)
-    _log.info(
-        "_obo_token: token=%s, state_keys=%s",
-        f"present (len={len(token)})" if token else "NONE",
-        list(getattr(request, "state", {}).__dict__.keys()) if hasattr(getattr(request, "state", None), "__dict__") else "no-state",
-    )
     return token or None
 
 

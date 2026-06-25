@@ -12,6 +12,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Sparkles, WandSparkles, LayoutGrid, Sun, Sunrise, Moon } from 'lucide-react';
 
 import { ChatView, type ChatRouteInfo, type ChatViewHandle } from '../components/chat/ChatView';
+import { AgentWelcome } from '../components/chat/AgentWelcome';
 import { api } from '../services/api';
 import { useUserStore } from '../stores/userStore';
 import { useBrandingStore } from '../stores/brandingStore';
@@ -90,12 +91,17 @@ export function Home() {
     const [suggestions, setSuggestions] = useState<string[]>([]);
 
     // Branding-driven header + Self-Service Center catalog. The header uses the
-    // compact `short_name` (e.g. "ATLAS") so it doesn't duplicate the
-    // "Self-Service Center" toggle next to it.
+    // compact `short_name` (e.g. "edh") so it doesn't duplicate the
+    // "Self-Service Center" toggle next to it when the enhanced landing is on.
     const brandShortName = useBrandingStore((s) => s.brandShortName);
     const brandLogoUrl = useBrandingStore((s) => s.brandLogoUrl);
     const selfServiceCenter = useBrandingStore((s) => s.selfServiceCenter);
+    // The Assistant / Self-Service Center view toggle is the "enhanced landing
+    // page" feature. Off by default (e.g. the EDH/Qualcomm build) so the landing
+    // is Assistant-only with no toggle, regardless of any configured catalog.
+    const enhancedLandingPage = useBrandingStore((s) => s.features.enhanced_landing_page === true);
     const centerEnabled =
+        enhancedLandingPage &&
         selfServiceCenter.enabled !== false &&
         (selfServiceCenter.categories || []).length > 0;
     const [view, setView] = useState<LandingView>('assistant');
@@ -174,7 +180,10 @@ export function Home() {
         window.setTimeout(() => chatRef.current?.submitQuery(prompt), 0);
     };
 
-    const welcomeNode = (
+    // Default (pre-merge) welcome is a single "What would you like to know?"
+    // prompt. The enhanced landing replaces it with the brand title + time-of-day
+    // greeting + "Welcome, <name>" stack (gated on the feature flag).
+    const welcomeNode = enhancedLandingPage ? (
         <div className="flex flex-col items-center justify-center pt-3 pb-6 gap-1.5 text-center">
             <div className="max-w-xl">
                 {firstName ? (
@@ -199,12 +208,20 @@ export function Home() {
                 )}
             </div>
         </div>
+    ) : (
+        <AgentWelcome
+            title="What would you like to know?"
+            icon={<Sparkles className="w-7 h-7 text-primary" />}
+        />
     );
 
     return (
         <div className="px-6 py-4 h-[calc(100vh-3rem)] flex flex-col">
-            {/* Branded header — logo + short name come from configuration.yaml ›
-                branding so per-customer rebrand is pure config. */}
+            {/* Branded header (logo + short name) and the Assistant /
+                Self-Service Center toggle. This whole block is part of the
+                "enhanced landing page" and is hidden by default so the landing
+                isn't crowded with the brand title (the sidebar already brands). */}
+            {enhancedLandingPage && (
             <div className="flex flex-col items-center gap-2 pt-1 pb-2 shrink-0">
                 <div className="flex items-center gap-2.5">
                     {brandLogoUrl && (
@@ -252,6 +269,7 @@ export function Home() {
                     </div>
                 )}
             </div>
+            )}
 
             {/* ChatView stays mounted across views so its chat state and the
                 imperative submitQuery handle survive a toggle; we just hide it
