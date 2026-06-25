@@ -28,7 +28,6 @@ import { ContextCatalog } from './pages/admin/ContextCatalog';
 import { Workflows } from './pages/admin/Workflows';
 import { ToolRegistry } from './pages/admin/ToolRegistry';
 import { TrainingAdmin } from './pages/admin/TrainingAdmin';
-import { Skills } from './pages/Skills';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -67,7 +66,6 @@ function App() {
           <Route path="/requests/:requestId" element={<Requests />} />
           <Route path="/approvals" element={<Approvals />} />
           <Route path="/reports" element={<AdminReports />} />
-          {uiTabs?.skills !== false && <Route path="/skills" element={<Skills />} />}
           <Route
             path="/admin"
             element={<Navigate to="/admin/dashboard" replace />}

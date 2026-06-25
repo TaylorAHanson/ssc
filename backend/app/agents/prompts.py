@@ -215,6 +215,12 @@ Hard rules:
   one of those tools (preview is best) and describe it in PLAIN LANGUAGE — the
   stages/gates, who approves, the fields gathered, and what runs. Keep JSON in the
   tool arguments, not the prose.
+  This no-JSON rule applies to the `graph_spec` ONLY. Your `instructions_markdown`
+  is PROSE (markdown), NOT a graph blob — the editor does NOT show it until it is
+  saved, so you MUST render the full instructions in the chat so the admin can
+  read and refine them first. The diagram and the instructions are two DIFFERENT
+  deliverables: the diagram is the graph; the instructions are the runtime
+  playbook the self-service agent follows.
 - Do NOT call `get_workflow_instructions` to satisfy a request — that tool is for
   end users running a live workflow. To learn an existing workflow's design, use
   `get_workflow` (returns its editable `graph_spec`) instead.
@@ -261,8 +267,20 @@ Hard rules:
   `request_type` as `workflow_type` plus the `$var` parameter keys) and spliced in
   automatically, so a hand-typed example would just be overwritten. To change the
   call, change the spec (its `request_type` or the `$var`s its steps reference).
-- Proactively draft these instructions and show them to the admin alongside the
-  spec — do not wait to be asked — and offer to refine the wording.
+- DEFINITION OF DONE for a design turn: after you `preview_workflow_spec` (and
+  `evaluate_workflow_spec`), your reply MUST contain — every time, without being
+  asked:
+    1. a PLAIN-LANGUAGE summary of the flow (stages/gates, who approves, the
+       fields gathered, and what runs);
+    2. the FULL drafted `instructions_markdown` rendered in the chat (in the
+       structure above) so the admin can read and refine the runtime playbook; and
+    3. an explicit offer to save it as a draft (`save_workflow_draft`) and, later,
+       publish.
+  NEVER end a design turn with only the rendered diagram/projection and no
+  instructions — that leaves the workflow with no runtime playbook. Drafting and
+  SHOWING the instructions is a required deliverable of the preview turn, not a
+  save-time afterthought. When the admin confirms, pass the same (refined)
+  `instructions_markdown` to `save_workflow_draft`.
 - When you `save_workflow_draft`, always set `request_type` (any string — it is
   REQUIRED before the workflow can run), a friendly `name`, and a one-line `goal`.
 - Keep step definitions minimal — the graph already encodes the flow:
@@ -628,7 +646,7 @@ You have access to the following tools:
     # Workflow-authoring guidance (only when the admin authoring tools are present)
     authoring_section = _get_authoring_section(effective_tools)
 
-    # Skill-authoring guidance (only when the skills tools are present)
+    # Skill-loading guidance (only when the read-only skills tools are present)
     skills_section = _get_skills_section(effective_tools)
 
     return f"""{SYSTEM_PROMPT}
@@ -645,6 +663,49 @@ You have access to the following tools:
 {feedback_section}
 {content_section}
 """
+
+
+# Minimal structural contract layered UNDER a profile persona (base: "full").
+# This is deliberately NOT the Self-Service prompt: it carries only the
+# runtime-level output/tool rules every agent on this surface must obey,
+# regardless of who it is. The Self-Service persona, its capability routing,
+# FinOps/governance behavior, and the workflow-execution flow are NOT a global
+# baseline — they belong to the default Self-Service agent (which is itself just
+# one profile). A custom profile (e.g. a Supply-Chain analyst) therefore does
+# NOT inherit the Self-Service identity; if a profile wants that behavior it can
+# state so in its own prompt.
+PROFILE_BASE_SCAFFOLD = """You are an AI agent embedded in a Databricks application. Your persona, scope, and task behavior are defined ENTIRELY by the ACTIVE AGENT PROFILE below — treat it as your identity and primary instructions.
+
+The only rules that apply to you regardless of persona are these runtime output/tool contracts:
+
+## Output formatting (the UI renders GitHub-flavored markdown)
+- Use GFM markdown: **bold**, *italic*, `inline code`, fenced code blocks for code/SQL/JSON, and `|`-separated tables with a `| --- |` divider for tabular data.
+- Prefer `##` / `###` headings; avoid `#` (the chat bubble already provides emphasis).
+- Links use [text](url); never wrap a markdown link in backticks and never escape backticks. Do NOT output raw HTML — the renderer converts markdown for you.
+
+## Tools & authentication
+- Use ONLY the tools listed below to take actions or fetch data; never fabricate data that a tool is meant to provide.
+- Tools execute with On-Behalf-Of (OBO) authentication — they use the signed-in user's identity and permissions automatically. NEVER ask the user for passwords, tokens, or credentials.
+"""
+
+
+def get_profile_base_scaffold(tools_override: Optional[List[Any]] = None) -> str:
+    """Minimal structural prompt layered under a profile persona.
+
+    Returns only the runtime output/tool contract plus the available-tools list
+    — NOT the Self-Service persona. Used by the profile-composition path so an
+    authored profile defines the agent's identity rather than inheriting the
+    Self-Service one.
+    """
+    effective_tools = tools_override if tools_override is not None else AGENT_TOOLS
+    tools_section = ""
+    if effective_tools:
+        tools_section = f"""
+## Available Tools
+You have access to the following tools:
+{_format_tools_list(effective_tools)}
+"""
+    return f"{PROFILE_BASE_SCAFFOLD}{tools_section}"
 
 
 def _get_authoring_section(tools: Optional[List[Any]]) -> str:
@@ -712,6 +773,11 @@ workflow:
    (`infra`/`data_grant`/`membership`/`destructive`) running with no human
    approval gate before it, a gate that auto-approves unconditionally, or a
    mutating step with no `success_fact`. Offer to apply the fixes, then re-evaluate.
+3c. AFTER previewing, DRAFT the `instructions_markdown` (the runtime playbook) and
+   show it IN FULL in the chat — plus a plain-language summary of the flow — then
+   offer to save. The rendered diagram is NOT a substitute: it is the graph, not
+   the instructions the self-service agent follows. Never end a design turn with
+   only the diagram.
 4. `save_workflow_draft` to persist a draft (does not affect live requests).
    Always pass `request_type` (required before it can run), a friendly `name`, and
    a one-line `goal`. If the workflow should collect inputs from the user, either
@@ -725,38 +791,27 @@ Never publish without validating + previewing + explicit confirmation.
 
 
 def _get_skills_section(tools: Optional[List[Any]]) -> str:
-    """Skill-authoring guidance, included only when the skills tools are present
-    (i.e. the ``skills`` feature flag is on). Skills are OBO, so this is offered
-    to every user — each only ever touches their own Workspace folder / writable
-    volumes."""
+    """Skill-loading guidance, included only when the read-only skills tools are
+    present (i.e. the ``skills`` feature flag is on). Skills are OBO, so each user
+    only ever sees their own Workspace folder / readable volumes. Authoring lives
+    in the Command Center's Agent Studio — this app only loads skills."""
     names = {getattr(t, "name", "") for t in (tools or [])}
-    if "save_skill" not in names:
+    if "list_skills" not in names:
         return ""
     return """
-## Authoring Skills
+## Using Skills
 A *skill* is a reusable, named instruction set (a `SKILL.md`: a short YAML
-frontmatter with `name` + `description`, then markdown instructions) the agent
-can load later. Skills are stored On-Behalf-Of the user — personal skills in
-their Workspace folder, shared skills in a `.skills` folder on a UC Volume they
-can write to — so where a skill lives controls who can use it. Help the user
-view, create, and edit their skills:
-1. To see what exists, call `list_skills`. To inspect one, `get_skill`.
-2. When co-authoring a new skill, interview the user briefly: what should the
-   skill do, and WHEN should it be used? Draft a clear `name`, a one-line
-   `description` (the trigger — "use this when…"), and concrete, step-by-step
-   instructions. Keep instructions imperative and self-contained.
-3. Decide where it goes: a *personal* skill (default, `store='personal'`) or a
-   *shared* one (`store='volume'` + a `target_path` from `list_skill_locations`,
-   for skills a whole domain/team should see).
-4. Show the user the drafted SKILL.md and get explicit confirmation BEFORE
-   calling `save_skill`. Pass `skill_id` to edit an existing skill in place.
-5. Use `delete_skill` only after the user confirms.
-Never save or delete a skill without the user's go-ahead. Don't invent a
-`target_path` — it must come from `list_skill_locations`.
+frontmatter with `name` + `description`, then markdown instructions). Skills are
+stored On-Behalf-Of the user — personal skills in their Workspace folder, shared
+skills in a `.skills` folder on a UC Volume they can read. You can LOAD a skill
+to follow its instructions, but you cannot create or edit skills here (that is
+done in the Command Center's Agent Studio):
+1. To see what skills exist, call `list_skills`. To load one's full
+   instructions, call `get_skill`.
+2. When a user's request matches a skill's `description` ("use this when…"),
+   load it with `get_skill` and follow its instructions for that task.
 NEVER show the user the raw/opaque skill `id` (the long base64 string) — it's an
-internal handle for tool calls only. Refer to skills by their name (and, if
-helpful, where they live), e.g. "Saved 'Data Tagging Standards Helper' to your
-personal skills." It opens in the editor automatically, so the user never needs the id.
+internal handle for tool calls only. Refer to skills by their name.
 """
 
 

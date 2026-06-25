@@ -15,6 +15,7 @@ from app.agents.events import (
 )
 from app.agents.prompts import (
     get_agent_prompt,
+    get_profile_base_scaffold,
     AGENT_TOOLS,
     get_onboarding_suggestions_messages,
     default_onboarding_suggestions,
@@ -153,6 +154,17 @@ class ConversationRequest(BaseModel):
     query: str
     conversation_history: Optional[List[ChatMessage]] = None
     context: Optional[Dict[str, Any]] = None
+    # Optional reference to an agent profile (authored in the Command Center
+    # Agent Studio) stored as ``AGENT.md`` on a UC Volume / Workspace folder.
+    # When present, the profile's prompt, skills, and tool allowlist drive this
+    # turn. May be a filesystem path or the Studio's opaque profile id. Can also
+    # be supplied via ``context.profile_ref``.
+    profile_ref: Optional[str] = None
+    # An UNSAVED draft profile for the Agent Studio "Try it" loop. Same shape as
+    # a saved profile ({name, prompt, base, tools, skills, model}); applied with
+    # identical governance (tool intersection + model allowlist). Takes
+    # precedence over ``profile_ref`` when both are present.
+    inline_profile: Optional[Dict[str, Any]] = None
 
 class FollowUpQuestion(BaseModel):
     id: str
@@ -195,10 +207,224 @@ async def get_agent_prompt_endpoint(current_user: User = Depends(get_current_use
         }
     }
 
+# Process-wide profile metrics (cheap, in-memory). Surfaced via the structured
+# log line below and readable by tests / a future scrape endpoint. Keys:
+#   applied        — a profile drove a turn
+#   load_error     — profile could not be loaded (bad ref / no access / missing)
+#   tool_fallback  — profile listed tools but none matched this surface
+#   model_rejected — profile pinned a model not in the allowlist
+from collections import Counter as _Counter
+
+_PROFILE_METRICS: "_Counter[str]" = _Counter()
+_PROFILE_LOAD_MS_TOTAL = {"sum": 0.0, "n": 0}
+
+
+def _profile_metric(name: str, inc: int = 1) -> None:
+    _PROFILE_METRICS[name] += inc
+
+
+def get_profile_metrics() -> Dict[str, Any]:
+    """Snapshot of profile counters + mean load latency (for tests / scraping)."""
+    n = _PROFILE_LOAD_MS_TOTAL["n"]
+    return {
+        **dict(_PROFILE_METRICS),
+        "load_ms_avg": (_PROFILE_LOAD_MS_TOTAL["sum"] / n) if n else 0.0,
+        "load_count": n,
+    }
+
+
+def _apply_agent_profile(
+    profile_ref: str,
+    obo_token: Optional[str],
+    visible_tools: List[Any],
+    user_identity: Dict[str, str],
+    agent_mode: str = "unified",
+) -> tuple[Optional[str], List[Any], Optional[str]]:
+    """Load an agent profile and derive (system_prompt, tools, model_endpoint).
+
+    Best-effort: any failure to load the profile (bad ref, no access, missing
+    file) logs a warning and falls back to the default prompt + full surface
+    toolset, so a broken reference never breaks chat.
+
+    Tools: the profile's allowlist is *intersected* with ``visible_tools`` — it
+    can only narrow what the admin-governed surface already permits. Because the
+    profile is authored against the Command Center's AI Gateway MCP tool names
+    (which may differ from this runtime's tool registry), an allowlist that
+    matches *nothing* is treated as a namespace mismatch: we log loudly and fall
+    back to the full surface toolset rather than leaving the agent tool-less.
+
+    Prompt: by default the profile persona is *layered on top of* the runtime's
+    structural prompt (formatting, tool mechanics, workflow/form routing) so a
+    profile doesn't silently drop those contracts. A profile can opt into full
+    replacement with ``base: none`` in its frontmatter.
+    """
+    import time as _time
+
+    from app.providers.profiles import ProfileError, get_profile_provider
+
+    _t0 = _time.perf_counter()
+    try:
+        profile = get_profile_provider().get_profile(obo_token, profile_ref)
+    except ProfileError as exc:
+        _profile_metric("load_error")
+        logger.warning("Agent profile '%s' could not be loaded: %s", profile_ref, exc)
+        return None, visible_tools, None
+    except Exception as exc:  # noqa: BLE001 - never break chat on profile load
+        _profile_metric("load_error")
+        logger.warning("Unexpected error loading agent profile '%s': %s", profile_ref, exc)
+        return None, visible_tools, None
+    finally:
+        _PROFILE_LOAD_MS_TOTAL["sum"] += (_time.perf_counter() - _t0) * 1000.0
+        _PROFILE_LOAD_MS_TOTAL["n"] += 1
+
+    return _compose_profile(profile, visible_tools, user_identity, agent_mode)
+
+
+def _compose_profile(
+    profile: Any,
+    visible_tools: List[Any],
+    user_identity: Dict[str, str],
+    agent_mode: str = "unified",
+) -> tuple[Optional[str], List[Any], Optional[str]]:
+    """Turn a loaded/inline profile into (system_prompt, tools, model_endpoint).
+
+    Shared by the saved-profile (``_apply_agent_profile``) and unsaved-draft
+    (``_apply_inline_profile`` / Try-it) paths so both enforce the same tool
+    intersection, prompt layering, and model allowlist rules.
+    """
+    # ---- tools: narrow to the profile's allowlist (intersection only) --------
+    # Profiles store canonical, server-qualified tool ids ("<server>/<tool>"),
+    # but this runtime's tool registry keys on the bare tool name. Match on the
+    # full id when present, else on the suffix after the last "/", so a profile
+    # authored as "sql/run_sql" still binds to this surface's "run_sql".
+    allow = {t.strip() for t in (profile.tools or []) if t.strip()}
+    if not allow:
+        # An empty allowlist means the profile grants NO tools — NOT the full
+        # surface. A new/blank draft therefore can't masquerade as the
+        # Self-Service agent by inheriting all 50+ tools (which is what made an
+        # unconfigured agent describe itself like Self-Service). This is distinct
+        # from a NON-empty list that matches nothing (namespace drift), which
+        # still falls back to the full surface below.
+        tools = []
+    else:
+        allow_suffixes = {a.rsplit("/", 1)[-1] for a in allow}
+
+        def _tool_allowed(t: Any) -> bool:
+            n = getattr(t, "name", None)
+            return n is not None and (n in allow or n in allow_suffixes)
+
+        matched = [t for t in visible_tools if _tool_allowed(t)]
+        matched_names = {getattr(t, "name", None) for t in matched}
+        missing = {a for a in allow if a.rsplit("/", 1)[-1] not in matched_names}
+        if not matched:
+            _profile_metric("tool_fallback")
+            logger.warning(
+                "Agent profile '%s' lists tools but NONE match this surface (%s). "
+                "Tool names likely differ between the Agent Studio (AI Gateway MCP) "
+                "and this runtime — falling back to the full surface toolset.",
+                profile.name, ", ".join(sorted(allow)),
+            )
+            tools = visible_tools
+        else:
+            tools = matched
+            if missing:
+                logger.info(
+                    "Agent profile '%s' references tools not available on this surface: %s",
+                    profile.name, ", ".join(sorted(missing)),
+                )
+
+    # ---- prompt: layer the profile on a MINIMAL structural scaffold ----------
+    # The profile body is the agent's identity. We layer it on a small runtime
+    # output/tool contract (markdown + OBO + tool list) — NOT the Self-Service
+    # persona. The Self-Service prompt is one profile among many, not a global
+    # baseline, so a custom profile never inherits the Self-Service identity. A
+    # profile can drop even the scaffold with ``base: none`` (standalone).
+    profile_block = profile.system_prompt()
+    if profile.standalone:
+        system_prompt = profile_block
+    else:
+        base_prompt = get_profile_base_scaffold(tools_override=tools)
+        system_prompt = (
+            f"{base_prompt}\n\n"
+            "## ACTIVE AGENT PROFILE (authoritative persona & task instructions)\n"
+            f"You are running as the **{profile.name}** profile. The instructions "
+            "below define your persona, specialization, and task behavior. They are "
+            "your primary identity — follow them fully. The only rules that override "
+            "them are the runtime output/tool contracts above (markdown formatting "
+            "and tool-use/OBO mechanics).\n\n"
+            f"{profile_block}"
+        )
+
+    if user_identity:
+        system_prompt += "\n\nCURRENT USER IDENTITY:\n" + "".join(
+            f"- {k.title()}: {v}\n" for k, v in user_identity.items()
+        )
+
+    # ---- model: honor the profile's pinned endpoint only if allowlisted ------
+    # Routing to an arbitrary serving endpoint bypasses the AI Gateway's
+    # guardrails / rate + cost limits, so a profile's model must be explicitly
+    # allowlisted (AGENT_PROFILE_MODEL_ALLOWLIST). Otherwise we ignore it and let
+    # the default gateway routing apply.
+    model_endpoint: Optional[str] = None
+    if profile.model:
+        allow = settings.agent_profile_model_allowlist
+        if "*" in allow or profile.model in allow:
+            model_endpoint = profile.model
+        else:
+            _profile_metric("model_rejected")
+            logger.warning(
+                "Agent profile '%s' pins model '%s' which is not in "
+                "AGENT_PROFILE_MODEL_ALLOWLIST — ignoring and using default routing.",
+                profile.name, profile.model,
+            )
+
+    _profile_metric("applied")
+    logger.info(
+        "Applied agent profile '%s' (tools=%d, skills=%d, model=%s, base=%s)",
+        profile.name, len(tools), len(profile.skills),
+        model_endpoint or "default", "standalone" if profile.standalone else "layered",
+    )
+    return system_prompt, tools, model_endpoint
+
+
+def _apply_inline_profile(
+    spec: Dict[str, Any],
+    visible_tools: List[Any],
+    user_identity: Dict[str, str],
+    agent_mode: str = "unified",
+) -> tuple[Optional[str], List[Any], Optional[str]]:
+    """Apply an UNSAVED draft profile (Agent Studio "Try it").
+
+    Same governance as a saved profile — tools intersect the user's surface and
+    the model is allowlist-gated — but the spec is supplied inline rather than
+    loaded from UC, so an author can test a draft before persisting it.
+    """
+    from app.providers.profiles.client import LoadedProfile
+
+    skills = [
+        (s.get("name") or "Skill", s.get("content") or "")
+        for s in (spec.get("skills") or [])
+        if isinstance(s, dict)
+    ]
+    profile = LoadedProfile(
+        store="inline",
+        dir_path="(draft)",
+        name=(spec.get("name") or "Draft").strip(),
+        prompt=spec.get("prompt") or "",
+        tools=[t for t in (spec.get("tools") or []) if isinstance(t, str)],
+        skills=skills,
+        model=(spec.get("model") or "").strip(),
+        base=(spec.get("base") or "full").strip(),
+    )
+    _profile_metric("inline_applied")
+    return _compose_profile(profile, visible_tools, user_identity, agent_mode)
+
+
 def _build_runner_and_history(
     request: ConversationRequest,
     current_user: User,
     db: Session,
+    obo_token: Optional[str] = None,
 ) -> tuple[AgentRunner, List[Dict[str, Any]], str]:
     """Shared setup for both the streaming and non-streaming endpoints.
 
@@ -230,11 +456,32 @@ def _build_runner_and_history(
         "entitlements": ", ".join(current_user.entitlements),
     }
 
+    # An agent profile (authored in the Command Center Agent Studio) can drive
+    # this turn: it supplies the system prompt + skills, narrows the tool
+    # allowlist, and optionally routes to a specific model. Tools are always
+    # intersected with the admin-governed surface toolset, so a profile can only
+    # ever *narrow* what the user could already use — never widen it.
+    profile_ref = request.profile_ref or ((request.context or {}).get("profile_ref"))
+    inline_profile = request.inline_profile or ((request.context or {}).get("inline_profile"))
+    profile_system_prompt: Optional[str] = None
+    model_endpoint: Optional[str] = None
+    if inline_profile:
+        # Unsaved draft ("Try it") takes precedence over a saved reference.
+        profile_system_prompt, visible_tools, model_endpoint = _apply_inline_profile(
+            inline_profile, visible_tools, user_identity, agent_mode
+        )
+    elif profile_ref:
+        profile_system_prompt, visible_tools, model_endpoint = _apply_agent_profile(
+            profile_ref, obo_token, visible_tools, user_identity, agent_mode
+        )
+
     runner = AgentRunner(
+        system_prompt=profile_system_prompt,
         tools=visible_tools,
         user_identity=user_identity,
         max_iterations=settings.AGENT_MAX_ITERATIONS,
         mode=agent_mode,
+        model_endpoint=model_endpoint,
     )
 
     history: List[Dict[str, Any]] = []
@@ -294,8 +541,8 @@ async def handle_conversation(
 ):
     """Handle a conversation turn with the agent."""
     try:
-        runner, history, _agent_mode = _build_runner_and_history(request, current_user, db)
         obo_token = _extract_obo_token(req)
+        runner, history, _agent_mode = _build_runner_and_history(request, current_user, db, obo_token)
 
         # Run agent
         result = await runner.run(
@@ -362,8 +609,10 @@ async def stream_conversation(
     streaming are surfaced as ``error`` events so the UI can render
     them in-line without dropping the response.
     """
+    obo_token = _extract_obo_token(req)
+
     try:
-        runner, history, _agent_mode = _build_runner_and_history(request, current_user, db)
+        runner, history, _agent_mode = _build_runner_and_history(request, current_user, db, obo_token)
     except HTTPException:
         raise
     except Exception as e:
@@ -372,8 +621,6 @@ async def stream_conversation(
             status_code=500,
             detail="An internal error occurred while preparing the agent stream.",
         )
-
-    obo_token = _extract_obo_token(req)
 
     async def event_source() -> AsyncIterator[bytes]:
         try:

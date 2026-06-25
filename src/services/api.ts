@@ -2444,108 +2444,6 @@ export async function cloneWorkflow(workflowId: string): Promise<Workflow> {
   });
 }
 
-// --------------------------------------------------------------------- Skills
-
-export interface Skill {
-  id: string;
-  store: 'workspace' | 'volume';
-  dir_path: string;
-  name: string;
-  description: string;
-  location_label: string;
-  writable: boolean;
-  content?: string;
-}
-
-export interface SkillLocation {
-  store: 'workspace' | 'volume';
-  base_path: string;
-  label: string;
-  is_personal: boolean;
-}
-
-export interface SkillCreate {
-  name: string;
-  content?: string;
-  description?: string;
-  store?: 'workspace' | 'volume';
-  base_path?: string | null;
-}
-
-export interface SkillUpdate {
-  name: string;
-  content?: string;
-  description?: string;
-}
-
-/** List the caller's skills (personal + discovered shared `.skills`). */
-export async function listSkills(includeShared: boolean = true): Promise<Skill[]> {
-  const response = await fetch(
-    `${API_BASE_URL}/skills?include_shared=${includeShared}`,
-    { headers: getHeaders() }
-  );
-  if (!response.ok) throw new Error(`Failed to list skills: ${response.statusText}`);
-  const data = await response.json();
-  return data.skills ?? [];
-}
-
-/** Where the caller can save a new skill (personal + writable `.skills` dirs). */
-export async function listSkillLocations(includeShared: boolean = true): Promise<SkillLocation[]> {
-  const response = await fetch(
-    `${API_BASE_URL}/skills/locations?include_shared=${includeShared}`,
-    { headers: getHeaders() }
-  );
-  if (!response.ok) throw new Error(`Failed to list skill locations: ${response.statusText}`);
-  const data = await response.json();
-  return data.locations ?? [];
-}
-
-/** Read a single skill's full SKILL.md content. */
-export async function getSkill(skillId: string): Promise<Skill> {
-  const response = await fetch(`${API_BASE_URL}/skills/${encodeURIComponent(skillId)}`, {
-    headers: getHeaders(),
-  });
-  if (!response.ok) throw new Error(`Failed to load skill: ${response.statusText}`);
-  return response.json();
-}
-
-export async function createSkill(payload: SkillCreate): Promise<Skill> {
-  const response = await fetch(`${API_BASE_URL}/skills`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.detail || `Failed to create skill: ${response.statusText}`);
-  }
-  return response.json();
-}
-
-export async function updateSkill(skillId: string, payload: SkillUpdate): Promise<Skill> {
-  const response = await fetch(`${API_BASE_URL}/skills/${encodeURIComponent(skillId)}`, {
-    method: 'PUT',
-    headers: getHeaders(),
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.detail || `Failed to update skill: ${response.statusText}`);
-  }
-  return response.json();
-}
-
-export async function deleteSkill(skillId: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/skills/${encodeURIComponent(skillId)}`, {
-    method: 'DELETE',
-    headers: getHeaders(),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.detail || `Failed to delete skill: ${response.statusText}`);
-  }
-}
-
 export const api = {
   createRequest,
   getRequests,
@@ -2642,10 +2540,4 @@ export const api = {
   adminDeleteTrainingMedia,
   adminSyncTrainingCatalog,
   adminTrainingConsumptionAnalytics,
-  listSkills,
-  listSkillLocations,
-  getSkill,
-  createSkill,
-  updateSkill,
-  deleteSkill,
 };

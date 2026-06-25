@@ -145,10 +145,10 @@ features:
   # uploaded to a UC Volume and per-learner consumption tracking. Gates the
   # Training admin UI (the learner Training page is always available).
   training_admin: true
-  # Agent Skills: author-once SKILL.md folders the agent can load, stored OBO in
+  # Agent Skills: SKILL.md folders the agent can LOAD at run time, stored OBO in
   # the user's personal Workspace folder and in `.skills` dirs on UC Volumes the
-  # user can read/write. Gates the Skills modal, the /skills API, and the
-  # skill-authoring agent tools.
+  # user can read. Authoring now lives in the Command Center's Agent Studio; this
+  # flag gates the read-only /skills API and the list_skills/get_skill load tools.
   skills: true
 
 ui:
@@ -175,7 +175,6 @@ ui:
     tool_registry: true
     feedback: true
     training_admin: true
-    skills: true
 
 tools:
   check_allowlist_status: true
@@ -219,13 +218,11 @@ tools:
   check_asset_quality: true
   find_owner: true
   check_training_status: true
-  # Agent Skills authoring tools (gated by the `skills` feature flag). OBO:
-  # they only ever touch the caller's own Workspace folder / writable volumes.
+  # Agent Skills load tools (gated by the `skills` feature flag). Read-only and
+  # OBO: they only ever surface the caller's own Workspace folder / readable
+  # volumes. Authoring moved to the Command Center's Agent Studio.
   list_skills: true
-  list_skill_locations: true
   get_skill: true
-  save_skill: true
-  delete_skill: true
   # Context Catalog retrieval tools (gated by the context_catalog feature flag)
   list_context_domains: true
   search_context_catalog: true

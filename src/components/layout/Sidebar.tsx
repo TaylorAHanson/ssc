@@ -26,7 +26,6 @@ import {
   MessageSquarePlus,
   Eraser,
   Wrench,
-  BookOpen,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { renderNavIcon } from '../../lib/navIcons';
@@ -114,10 +113,6 @@ const navItems: NavItem[] = [
   // is overridden at render time with a brand-derived label (see allNavItems).
   { id: 'home', title: 'Agent', icon: <WandSparkles className="w-5 h-5" />, path: '/request', group: 'Discover & Analyze' },
   { id: 'data_discovery', title: 'View & Search Catalog', icon: <Search className="w-5 h-5" />, path: '/discovery', group: 'Discover & Analyze' },
-
-  // Skills — author-once SKILL.md instructions. Available to everyone; OBO
-  // scoping in the backend decides which skills each user can see/edit.
-  { id: 'skills', title: 'Skills', icon: <BookOpen className="w-5 h-5" />, path: '/skills', group: 'Build & Customize' },
 
   // Self Service
   { id: 'my_requests', title: 'My Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Requests & Approvals' },

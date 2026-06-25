@@ -20,19 +20,25 @@ logger = logging.getLogger(__name__)
 class AgentLLMClient:
     """Client for agent LLM model serving endpoint."""
     
-    def __init__(self):
+    def __init__(self, endpoint_name: Optional[str] = None):
         # Share the process-wide transport client (warm connection pool + cached,
         # auto-refreshing auth) instead of building a new one — with a blocking
         # OAuth round-trip — on every AgentRunner / chat request.
         self.client = get_model_serving_client()
-        # Best practice: prefer the AI Gateway endpoint when configured so model
+        # An explicit ``endpoint_name`` (e.g. from an agent profile's ``model``)
+        # routes this turn to a specific serving endpoint, bypassing the gateway.
+        # Otherwise: prefer the AI Gateway endpoint when configured so model
         # routing / A-B split, rate + cost limits, and input guardrails live in
         # the gateway (config, not code). Falls back to the direct serving
         # endpoint otherwise.
-        self.endpoint_name = (
-            settings.AI_GATEWAY_ENDPOINT or settings.MODEL_SERVING_AGENT_LLM_ENDPOINT
-        )
-        self.via_gateway = bool(settings.AI_GATEWAY_ENDPOINT)
+        if endpoint_name:
+            self.endpoint_name = endpoint_name
+            self.via_gateway = False
+        else:
+            self.endpoint_name = (
+                settings.AI_GATEWAY_ENDPOINT or settings.MODEL_SERVING_AGENT_LLM_ENDPOINT
+            )
+            self.via_gateway = bool(settings.AI_GATEWAY_ENDPOINT)
 
         if not self.endpoint_name:
             raise ValueError(

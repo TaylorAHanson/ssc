@@ -171,8 +171,9 @@ class AgentRunner:
         user_identity: Optional[Dict[str, str]] = None,
         max_iterations: int = 5,
         mode: str = "self_service",
+        model_endpoint: Optional[str] = None,
     ):
-        self.llm_client = AgentLLMClient()
+        self.llm_client = AgentLLMClient(endpoint_name=model_endpoint)
         self.tools = tools or []
         self.max_iterations = max_iterations
         self.user_identity = user_identity or {}

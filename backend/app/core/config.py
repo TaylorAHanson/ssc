@@ -318,6 +318,21 @@ class Settings(BaseSettings):
     # `data.agent.tools` policy is tuned against real traffic.
     AGENT_TOOL_OPA_ENFORCE: bool = False
 
+    # Agent profiles (authored in the Command Center Agent Studio) may pin a
+    # ``model``. Routing a turn to an arbitrary serving endpoint bypasses the AI
+    # Gateway's guardrails / rate + cost limits, so a profile's model is honored
+    # ONLY if it appears in this comma-separated allowlist of endpoint names.
+    # Empty (default) = ignore profile models entirely and always use the
+    # gateway/default routing. Use "*" to allow any endpoint (NOT recommended).
+    AGENT_PROFILE_MODEL_ALLOWLIST: str = ""
+
+    @property
+    def agent_profile_model_allowlist(self) -> set:
+        raw = (self.AGENT_PROFILE_MODEL_ALLOWLIST or "").strip()
+        if not raw:
+            return set()
+        return {m.strip() for m in raw.split(",") if m.strip()}
+
     # No-code workflow (Workflow) authoring lock. When True, all in-place authoring
     # of workflows is disabled — create/update/publish/unpublish/delete/rollback
     # via the API, and the agent's `save_workflow_draft`/`publish_workflow` tools.

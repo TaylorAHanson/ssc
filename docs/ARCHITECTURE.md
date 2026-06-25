@@ -632,33 +632,76 @@ tools/workflows granted in Unity Catalog.
     consumption dashboard, and the legacy Academy CSV upload. A one-time idempotent seeder
     (`app/services/training_seed.py`) migrates the legacy `training.json` into DB rows on first
     boot.
-- **Agent Skills (OBO author-once `SKILL.md` folders).** Users (and the agent, on their behalf)
-  can author reusable *skills* — a folder with a `SKILL.md` (YAML frontmatter `name` +
-  `description`, then markdown instructions) the agent can load on demand. There is **no new page**:
-  a single global modal (`src/components/skills/SkillsModal.tsx`, mounted in `Layout`, opened from a
-  Sidebar "Skills" launcher via `skillsStore`) lists/edits/creates skills with a Monaco editor and
-  an embedded `ChatView` "Skill assistant" that co-authors them.
+- **Agent Skills (OBO `SKILL.md` folders — load-only here; authored in the Command Center).** A
+  *skill* is a folder with a `SKILL.md` (YAML frontmatter `name` + `description`, then markdown
+  instructions) the agent can load on demand. **Authoring has moved out of this app** into the
+  Command Center's *Agent Studio* (single-file markdown skills written to UC Volumes); this app now
+  only **loads** skills at run time. The `/skills` page, the writable API, and the `save_skill`/
+  `delete_skill` tools were removed.
   - **Storage is fully OBO** (`app/providers/skills/client.py` → `SkillsProvider`): every call
     builds a user-scoped `WorkspaceClient(token=<forwarded OBO token>)`, so Unity Catalog / the
-    Workspace ACLs decide what each user can see/edit — we never re-implement permission checks.
+    Workspace ACLs decide what each user can see — we never re-implement permission checks.
     Two scopes: **personal** skills live in the user's Workspace folder
-    (`/Workspace/Users/<email>/.skills/<slug>/SKILL.md`, read/written via the Workspace API with
-    `RAW` format so content round-trips), and **shared** skills live in any `.skills` directory on a
-    UC Volume the user can read/write (read/written via the Files API). Shared skills are discovered
-    by a **bounded** OBO walk of catalogs → schemas → volumes (caps + optional allowlist via
-    `SKILLS_SCAN_*` settings) looking for `.skills` dirs; the walk is best-effort and degrades
-    silently on permission errors.
-  - **API** (`/api/v1/skills`, gated by the `skills` feature flag): `GET /` (list), `GET /locations`
-    (where the caller can create), `GET/POST /` + `PUT/DELETE /{id}` for CRUD. `{id}` is an opaque
-    URL-safe encoding of `store|dir_path`. The OBO token is read from `request.state.token`.
+    (`/Workspace/Users/<email>/.skills/<slug>/SKILL.md`, read via the Workspace API with `RAW`
+    format), and **shared** skills live in any `.skills` directory on a UC Volume the user can read
+    (read via the Files API). Shared skills are discovered by a **bounded** OBO walk of catalogs →
+    schemas → volumes (caps + optional allowlist via `SKILLS_SCAN_*` settings); the walk is
+    best-effort and degrades silently on permission errors. (The `SkillsProvider` retains write
+    methods, but no API/tool calls them in this app.)
+  - **API** (`/api/v1/skills`, gated by the `skills` feature flag): read-only — `GET /` (list) and
+    `GET /{id}` (read). `{id}` is an opaque URL-safe encoding of `store|dir_path`. The OBO token is
+    read from `request.state.token`.
   - **Agent tools** (`app/tools/skills/skill_authoring.py`, `skills` feature flag, OBO via injected
-    `_obo_token`/`_user_email`): `list_skills`, `list_skill_locations`, `get_skill` (read) and
-    `save_skill`, `delete_skill` (`app_write` — audited, no approval gate). Unlike workflow
-    authoring these need **no special role** — they only ever touch the caller's own scope. A
-    conditional prompt block (`_get_skills_section` in `app/agents/prompts.py`) appears whenever the
-    skill tools are present and guides the agent to interview the user, draft a clear SKILL.md, and
-    save only on explicit confirmation. The modal's embedded chat reacts to `save_skill` results
-    (via `onToolResult`) to refresh the list and hydrate the editor.
+    `_obo_token`/`_user_email`): `list_skills` and `get_skill` (read-only). They need **no special
+    role** — they only ever surface the caller's own scope. A conditional prompt block
+    (`_get_skills_section` in `app/agents/prompts.py`) appears whenever the load tools are present
+    and guides the agent to discover (`list_skills`) and load (`get_skill`) a matching skill, then
+    follow its instructions.
+- **Agent Profiles (per-request `AGENT.md` reference — load-only here; authored in the Command
+  Center).** A *profile* is a folder authored by the Command Center *Agent Studio* —
+  `<base>/.agents/<slug>/AGENT.md` (+ `skills/*.md`) — where `AGENT.md` is markdown with YAML
+  frontmatter (`name`/`description`/`model`/`tools`) and a body that is the system prompt. A chat
+  request can carry a `profile_ref` (on `ConversationRequest`, or `context.profile_ref`) and the
+  runtime will run *that* profile for the turn:
+  - **Loading is fully OBO** (`app/providers/profiles/client.py` → `ProfileProvider`, read-only):
+    `get_profile(obo_token, profile_ref)` builds a user-scoped `WorkspaceClient`, reads `AGENT.md`
+    (UC Volume via Files API, or Workspace via Export `RAW`), parses the frontmatter, and inlines
+    the sibling `skills/*.md` bodies. `profile_ref` may be a filesystem path
+    (`/Volumes/.../.agents/<slug>` or `.../AGENT.md`) or the Studio's opaque `store|dir_path` id.
+  - **Effect on the turn** (`_apply_agent_profile` → `_compose_profile` in `app/api/v1/agent.py`):
+    - **Prompt layering (default).** The profile body + inlined skills are the agent's identity.
+      They are layered on a **minimal structural scaffold** only — `get_profile_base_scaffold()`:
+      the runtime output/tool contract (GFM markdown rules, "tools only / no fabrication", OBO
+      auth) plus the available-tools list. The scaffold is deliberately **not** the Self-Service
+      prompt: the Self-Service persona, its capability routing, FinOps/governance behavior, and the
+      workflow-execution flow are **one profile among many**, not a global baseline, so a custom
+      profile never inherits the Self-Service identity. (The default no-profile agent still uses the
+      full `get_agent_prompt()`.) A profile may drop even the scaffold with `base: none` (a.k.a.
+      `standalone`) in its frontmatter.
+    - **Tools — server-qualified ids.** Profiles store **canonical** ids `"<server>/<tool>"`
+      (e.g. `sql/run_sql`) authored against the Command Center's AI Gateway MCP catalog. The runtime
+      keys on bare names, so matching accepts the full id **or** the suffix after the last `/`. The
+      result is **intersected** with the admin-governed surface (a profile can only *narrow*).
+      An **empty** allowlist means the profile grants **no tools** (not the full surface) — so a
+      blank/new draft can't masquerade as the Self-Service agent by inheriting all 50+ tools. That
+      is distinct from a **non-empty** list that matches *nothing* on this surface (namespace
+      drift): that logs loudly, increments the `tool_fallback` counter, and falls back to the full
+      surface rather than going tool-less.
+    - **Model — allowlisted only.** A profile's `model` routes the turn to a specific endpoint
+      (`AgentRunner(model_endpoint=…)` → `AgentLLMClient(endpoint_name=…)`) **only** if it appears in
+      `AGENT_PROFILE_MODEL_ALLOWLIST` (empty = always use the gateway default; `*` = allow any).
+      Otherwise it is ignored (counter `model_rejected`) so a profile can't silently bypass the
+      gateway's guardrails / rate + cost limits.
+  - **Try-it (inline profiles).** A chat request may instead carry an `inline_profile`
+    (`{name, prompt, base, tools, skills, model}`) — an **unsaved** draft applied via
+    `_apply_inline_profile` with identical governance (tool intersection + model allowlist). This
+    powers the Command Center Agent Studio "Try it" tab, letting an author test a draft before
+    persisting it. `inline_profile` takes precedence over `profile_ref`.
+  - **Observability.** `_apply_*_profile` maintains in-process counters (`applied`, `inline_applied`,
+    `load_error`, `tool_fallback`, `model_rejected`) plus mean load latency, readable via
+    `get_profile_metrics()` (tests / future scrape endpoint).
+  - **Fail-safe:** any load failure (bad ref, no access, missing file) logs a warning and falls
+    back to the default prompt + full surface toolset — a broken reference never breaks chat.
 - **Remaining:** pooled Postgres checkpointer; wire the SSE `trace_id` into the chat-UI feedback
   control; end-to-end validation of the ResponsesAgent registration + `--sandbox` harness against
   a live workspace (both require workspace credentials).
