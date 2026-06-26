@@ -1,4 +1,4 @@
-package databricks.governance.apps_and_genie
+package databricks.governance.lakebase
 
 import data.databricks.governance.common
 import future.keywords.if
@@ -12,43 +12,20 @@ default severity := "NONE"
 
 # === Rule catalog ===
 rule_metadata := {
-	"no_apps_enterprise_prod": "Apps not hosted in enterprise prod without allowlist",
-	"no_genie_enterprise_prod": "Genie spaces not hosted in enterprise prod without allowlist",
-	"app_not_idle": "App has been accessed in the last 30 days",
+	"no_lakebase_enterprise_prod": "Lakebase database instances not hosted in enterprise prod without allowlist",
 }
 
 # === Applicability ===
-applies contains "no_apps_enterprise_prod" if {
-	input.resource.type == "app"
+applies contains "no_lakebase_enterprise_prod" if {
+	input.resource.type == "lakebase"
 	input.workspace.type == "enterprise"
 	input.workspace.environment == "prod"
-}
-
-applies contains "no_genie_enterprise_prod" if {
-	input.resource.type == "genie_space"
-	input.workspace.type == "enterprise"
-	input.workspace.environment == "prod"
-}
-
-applies contains "app_not_idle" if {
-	input.resource.type == "app"
 }
 
 # === Violations ===
-violations["no_apps_enterprise_prod"] contains msg if {
-	applies["no_apps_enterprise_prod"]
-	msg := "Apps must not be hosted in enterprise prod unless they are on a centrally managed allowlist with documented risk review."
-}
-
-violations["no_genie_enterprise_prod"] contains msg if {
-	applies["no_genie_enterprise_prod"]
-	msg := "Genie spaces must not be hosted in enterprise prod unless they are on a centrally managed allowlist with documented risk review."
-}
-
-violations["app_not_idle"] contains msg if {
-	applies["app_not_idle"]
-	input.resource.idle_days > 30
-	msg := "Apps must be stopped if no one has accessed the app in over 30 days."
+violations["no_lakebase_enterprise_prod"] contains msg if {
+	applies["no_lakebase_enterprise_prod"]
+	msg := "Lakebase database instances must not be hosted in enterprise prod unless they are on a centrally managed allowlist with documented risk review."
 }
 
 # === Structured per-rule results ===

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { X } from 'lucide-react';
 import { Sidebar } from './Sidebar';
@@ -11,9 +11,8 @@ interface LayoutProps {
 
 // Routes that render their own full-bleed content (e.g. iframed apps). On
 // these routes we strip the default `main` padding and disable scrolling
-// so the child can occupy the entire pane edge-to-edge. We also auto-
-// collapse the sidebar on entry to give the embedded view as much room
-// as possible — the user can still manually re-expand it.
+// so the child can occupy the entire pane edge-to-edge. The sidebar is
+// NEVER auto-collapsed — collapsing is entirely the user's choice.
 //
 // `/embedded/*` covers all config-driven embedded apps; `/command-center`
 // is kept for the legacy redirect target.
@@ -52,15 +51,6 @@ export function Layout({ children }: LayoutProps) {
     !bannerDismissed
   );
   const bannerColors = getBannerColors(bannerData?.type);
-
-  useEffect(() => {
-    if (isFullBleedRoute(location.pathname)) {
-      setSidebarCollapsed(true);
-    }
-    // Intentionally only depends on pathname: we collapse on *navigation into*
-    // a full-bleed route, but never fight the user if they manually re-expand
-    // the rail while still on that route.
-  }, [location.pathname]);
 
   return (
     // Side-by-side flex: sidebar owns its full vertical extent (with its

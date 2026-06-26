@@ -55,31 +55,19 @@ const GROUP_ORDER = [
 // remembers each section's expanded/collapsed state across page reloads.
 // The map shape is `{ [groupId: string]: true /* collapsed */ }`.
 //
-// First-load defaults below collapse every group EXCEPT the primary
-// "Discover & Analyze" section, so a brand-new visitor sees a focused,
-// uncluttered rail. Once the user toggles a group, that choice is written
-// to localStorage and overrides the default on subsequent loads.
+// Nothing is collapsed by default: every section starts EXPANDED so the
+// full navigation is always discoverable. Collapsing is entirely opt-in —
+// once the user collapses a section, that choice is written to localStorage
+// and restored on subsequent loads.
 const GROUP_COLLAPSE_STORAGE_KEY = 'sidebar-collapsed-groups';
 
-const DEFAULT_COLLAPSED_GROUPS: Record<string, boolean> = {
-  'Build & Customize': true,
-  'Requests & Approvals': true,
-  'Learn & Share': true,
-  'Watch Tower': true,
-  'Control Tower': true,
-};
-
 function loadCollapsedGroups(): Record<string, boolean> {
-  if (typeof window === 'undefined') return { ...DEFAULT_COLLAPSED_GROUPS };
+  if (typeof window === 'undefined') return {};
   try {
     const raw = window.localStorage.getItem(GROUP_COLLAPSE_STORAGE_KEY);
-    const stored = raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
-    // Stored entries override defaults per-group, so a user who has
-    // explicitly expanded e.g. "Learn & Share" keeps it expanded across
-    // reloads even though the default is collapsed.
-    return { ...DEFAULT_COLLAPSED_GROUPS, ...stored };
+    return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
   } catch {
-    return { ...DEFAULT_COLLAPSED_GROUPS };
+    return {};
   }
 }
 
@@ -452,9 +440,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               onClick={onToggle}
               aria-label="Expand navigation"
               aria-expanded={false}
-              className="p-1.5 rounded text-white/80 hover:text-white hover:bg-nav-hover transition-colors"
+              title="Expand navigation"
+              className="w-10 h-10 flex items-center justify-center rounded-lg bg-white/10 text-white ring-1 ring-white/20 hover:bg-nav-hover hover:ring-white/40 transition-colors"
             >
-              <ChevronsRight className="w-5 h-5" />
+              <ChevronsRight className="w-7 h-7" />
             </button>
           </div>
         ) : (
@@ -490,9 +479,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               onClick={onToggle}
               aria-label="Collapse navigation"
               aria-expanded={true}
-              className="p-1.5 mt-0.5 rounded text-white/80 hover:text-white hover:bg-nav-hover transition-colors shrink-0"
+              title="Collapse navigation"
+              className="w-9 h-9 mt-0.5 flex items-center justify-center rounded-lg bg-white/10 text-white ring-1 ring-white/20 hover:bg-nav-hover hover:ring-white/40 transition-colors shrink-0"
             >
-              <ChevronsLeft className="w-5 h-5" />
+              <ChevronsLeft className="w-6 h-6" />
             </button>
           </div>
         )}
@@ -527,7 +517,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 </h3>
                 <ChevronDown
                   className={cn(
-                    "w-5 h-5 transition-transform duration-200 text-white/80 group-hover:text-white",
+                    "w-5 h-5 transition-transform duration-200 text-white group-hover:text-white",
                     isGroupCollapsed && "-rotate-90"
                   )}
                   aria-hidden="true"

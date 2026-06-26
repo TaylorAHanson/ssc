@@ -18,7 +18,7 @@ router = APIRouter()
 
 class AllowlistCreate(BaseModel):
     resource_id: str = Field(..., description="Normalized Databricks ID or path of the resource")
-    resource_type: str = Field(..., description="Enum: app, notebook, dashboard, genie_space, etc.")
+    resource_type: str = Field(..., description="Enum: app, notebook, dashboard, genie_space, lakebase, etc.")
     workspace: str = Field(..., description="The workspace ID or name where this resource lives")
     justification: str = Field(..., description="Reason for the exception")
     status: str = Field(default="pending", description="Status: pending, approved, rejected")
