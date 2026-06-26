@@ -203,13 +203,18 @@ def test_inline_standalone_replaces_base():
 
 # ----------------------------------------------------------------- fail-safe
 
-def test_load_failure_falls_back_to_defaults(monkeypatch):
+def test_load_failure_fails_safe_no_masquerade(monkeypatch):
+    """A profile that can't be loaded must NOT inherit the full surface +
+    default persona (which makes the narrow agent masquerade as the whole hub).
+    Instead it fails safe: no tools and a visible "profile unavailable" notice."""
     from app.providers.profiles import ProfileError
 
     _patch_provider(monkeypatch, exc=ProfileError("nope"))
 
     sp, tools, model = _apply_agent_profile("ref", "tok", _surface_tools(), {})
-    assert sp is None                                   # default prompt path
-    assert {t.name for t in tools} == {"a", "b", "c"}   # full surface
+    assert tools == []                                  # NOT the full surface
+    assert sp is not None                               # explicit notice, not default prompt
+    assert "UNAVAILABLE" in sp
+    assert "Available Tools" not in sp                  # zero tools listed
     assert model is None
     assert get_profile_metrics().get("load_error") == 1

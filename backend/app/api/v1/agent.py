@@ -233,6 +233,32 @@ def get_profile_metrics() -> Dict[str, Any]:
     }
 
 
+def _profile_unavailable_result(
+    profile_ref: str, reason: str
+) -> tuple[str, List[Any], Optional[str]]:
+    """Fail-safe result for a profile that was requested but couldn't be loaded.
+
+    A profile was *explicitly* selected, so the worst possible outcome is to
+    silently fall back to the full Self-Service surface + default persona — the
+    narrow agent then masquerades as the whole hub (every tool, every capability)
+    which is both confusing and a governance hole. Instead we grant NO tools and
+    a minimal prompt that tells the user the selected agent could not be loaded,
+    so the failure is visible and actionable rather than masked.
+    """
+    scaffold = get_profile_base_scaffold(tools_override=[])
+    notice = (
+        "\n\n## SELECTED AGENT PROFILE UNAVAILABLE\n"
+        "The agent profile the user selected could not be loaded, so NO "
+        "specialized persona or tools are active for this turn. Do not pretend "
+        "to be the Self-Service Hub or any other agent, and do not claim access "
+        "to tools you were not given (you have none). Briefly tell the user that "
+        "their selected agent profile could not be loaded and to retry or contact "
+        "an administrator, then answer only from general knowledge if you can.\n"
+        f"(diagnostic — load failure: {reason})"
+    )
+    return f"{scaffold}{notice}", [], None
+
+
 def _apply_agent_profile(
     profile_ref: str,
     obo_token: Optional[str],
@@ -242,9 +268,12 @@ def _apply_agent_profile(
 ) -> tuple[Optional[str], List[Any], Optional[str]]:
     """Load an agent profile and derive (system_prompt, tools, model_endpoint).
 
-    Best-effort: any failure to load the profile (bad ref, no access, missing
-    file) logs a warning and falls back to the default prompt + full surface
-    toolset, so a broken reference never breaks chat.
+    A failure to load the profile (bad ref, no access, missing file) never
+    breaks chat, but it also must NOT silently fall back to the full surface +
+    default Self-Service persona — that turns the explicitly-selected narrow
+    agent into a masquerade of the whole hub. Instead we fail safe via
+    ``_profile_unavailable_result`` (no tools + a visible "profile unavailable"
+    notice) so the failure is surfaced rather than masked.
 
     Tools: the profile's allowlist is *intersected* with ``visible_tools`` — it
     can only ever narrow what the admin-governed surface already permits, never
@@ -269,11 +298,11 @@ def _apply_agent_profile(
     except ProfileError as exc:
         _profile_metric("load_error")
         logger.warning("Agent profile '%s' could not be loaded: %s", profile_ref, exc)
-        return None, visible_tools, None
+        return _profile_unavailable_result(profile_ref, str(exc))
     except Exception as exc:  # noqa: BLE001 - never break chat on profile load
         _profile_metric("load_error")
         logger.warning("Unexpected error loading agent profile '%s': %s", profile_ref, exc)
-        return None, visible_tools, None
+        return _profile_unavailable_result(profile_ref, str(exc))
     finally:
         _PROFILE_LOAD_MS_TOTAL["sum"] += (_time.perf_counter() - _t0) * 1000.0
         _PROFILE_LOAD_MS_TOTAL["n"] += 1
