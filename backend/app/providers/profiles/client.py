@@ -252,13 +252,23 @@ class ProfileProvider:
     def _read_workspace(self, client, path: str) -> Optional[str]:
         from databricks.sdk.service.workspace import ExportFormat
 
+        # Agent Studio writes AGENT.md / SKILL.md as RAW *files* (ObjectType.FILE)
+        # via ``workspace.import_``. Reading them back with ExportFormat.RAW is
+        # REJECTED by the Workspace API ("Invalid export request: format=RAW,
+        # directDownload=false") because the SDK doesn't set directDownload — so
+        # the file reads back as None and the profile looks "not found". SOURCE
+        # returns the bytes for these objects; we keep RAW as a fallback for any
+        # older workspaces. This mirrors the Command Center store's reader.
         for cand in _ws_variants(path):
-            try:
-                resp = client.workspace.export(path=cand, format=ExportFormat.RAW)
-                if resp and getattr(resp, "content", None):
-                    return base64.b64decode(resp.content).decode("utf-8", errors="replace")
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("profile workspace export failed for %s: %s", cand, exc)
+            for fmt in (ExportFormat.SOURCE, ExportFormat.RAW):
+                try:
+                    resp = client.workspace.export(path=cand, format=fmt)
+                    if resp and getattr(resp, "content", None):
+                        return base64.b64decode(resp.content).decode("utf-8", errors="replace")
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "profile workspace export (%s) failed for %s: %s", fmt, cand, exc
+                    )
         return None
 
 

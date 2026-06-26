@@ -443,6 +443,12 @@ targets:
           permissions:
             - level: CAN_USE
               group_name: "All account users"
+        mcp-server:
+          # Dev-only org-wide CAN_USE, mirroring the main app so the MCP
+          # server is reachable by anyone in the org in dev.
+          permissions:
+            - level: CAN_USE
+              group_name: "All account users"
 
   # Development environment
   dev:
@@ -470,6 +476,12 @@ targets:
           # Dev-only: "Anyone in my organization can use" (grants the
           # `All account users` group CAN_USE). Appended to the base app
           # permissions; stage/prod stay restricted to explicit grants.
+          permissions:
+            - level: CAN_USE
+              group_name: "All account users"
+        mcp-server:
+          # Dev-only org-wide CAN_USE, mirroring the main app so the MCP
+          # server is reachable by anyone in the org in dev.
           permissions:
             - level: CAN_USE
               group_name: "All account users"
