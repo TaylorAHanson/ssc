@@ -247,11 +247,12 @@ def _apply_agent_profile(
     toolset, so a broken reference never breaks chat.
 
     Tools: the profile's allowlist is *intersected* with ``visible_tools`` — it
-    can only narrow what the admin-governed surface already permits. Because the
-    profile is authored against the Command Center's AI Gateway MCP tool names
-    (which may differ from this runtime's tool registry), an allowlist that
-    matches *nothing* is treated as a namespace mismatch: we log loudly and fall
-    back to the full surface toolset rather than leaving the agent tool-less.
+    can only ever narrow what the admin-governed surface already permits, never
+    widen it. If the allowlist matches *nothing* (e.g. the profile is authored
+    against the Command Center's AI Gateway MCP tool ids, which differ from this
+    runtime's tool registry) the agent gets NO tools and we log loudly — we do
+    NOT fall back to the full surface, since handing a narrow agent every tool
+    makes it behave (and describe itself) like the full Self-Service Hub.
 
     Prompt: by default the profile persona is *layered on top of* the runtime's
     structural prompt (formatting, tool mechanics, workflow/form routing) so a
@@ -302,36 +303,63 @@ def _compose_profile(
         # An empty allowlist means the profile grants NO tools — NOT the full
         # surface. A new/blank draft therefore can't masquerade as the
         # Self-Service agent by inheriting all 50+ tools (which is what made an
-        # unconfigured agent describe itself like Self-Service). This is distinct
-        # from a NON-empty list that matches nothing (namespace drift), which
-        # still falls back to the full surface below.
+        # unconfigured agent describe itself like Self-Service).
         tools = []
     else:
-        allow_suffixes = {a.rsplit("/", 1)[-1] for a in allow}
-
         def _tool_allowed(t: Any) -> bool:
+            # Match a runtime tool against the profile's allowlist. Profiles store
+            # canonical ids; a bare name ("run_sql") or a server-qualified id
+            # ("<server_label>/<tool>") authored against the AI Gateway MCP
+            # catalog. Runtime MCP tools carry a ``server_label`` (the registered
+            # source name); local tools don't.
+            #  - bare allow id  -> matches a tool with that name (any server)
+            #  - "L/t" allow id -> if the tool HAS a label, require an EXACT
+            #    "label/name" match (so it can't bind a same-named tool on a
+            #    different server); if the tool has NO label (local tool), fall
+            #    back to a suffix match so "sql/run_sql" still binds local "run_sql".
             n = getattr(t, "name", None)
-            return n is not None and (n in allow or n in allow_suffixes)
+            if n is None:
+                return False
+            label = getattr(t, "server_label", None)
+            for a in allow:
+                if a == n:
+                    return True
+                if "/" in a:
+                    srv, suffix = a.rsplit("/", 1)
+                    if label is not None:
+                        if a == f"{label}/{n}":
+                            return True
+                    elif suffix == n:
+                        return True
+            return False
 
         matched = [t for t in visible_tools if _tool_allowed(t)]
         matched_names = {getattr(t, "name", None) for t in matched}
         missing = {a for a in allow if a.rsplit("/", 1)[-1] not in matched_names}
+        # A profile can only ever NARROW the admin-governed surface — never widen
+        # it. So we grant exactly the intersection. When NOTHING matches we grant
+        # NO tools (not the full surface): handing a narrow agent all 50+ tools is
+        # the opposite of narrowing and makes it describe itself as the full
+        # Self-Service Hub. An empty match usually means the profile's tool ids
+        # (authored against the Agent Studio's AI Gateway MCP catalog) aren't
+        # exposed on this runtime — surface that loudly so it gets fixed at the
+        # source rather than silently masking it with the whole toolset.
+        tools = matched
         if not matched:
-            _profile_metric("tool_fallback")
+            _profile_metric("tool_no_match")
             logger.warning(
                 "Agent profile '%s' lists tools but NONE match this surface (%s). "
-                "Tool names likely differ between the Agent Studio (AI Gateway MCP) "
-                "and this runtime — falling back to the full surface toolset.",
+                "Granting NO tools (a profile can only narrow, never widen). The "
+                "tool ids likely differ between the Agent Studio (AI Gateway MCP) "
+                "and this runtime's registry — align the names so the agent can "
+                "bind its intended tools.",
                 profile.name, ", ".join(sorted(allow)),
             )
-            tools = visible_tools
-        else:
-            tools = matched
-            if missing:
-                logger.info(
-                    "Agent profile '%s' references tools not available on this surface: %s",
-                    profile.name, ", ".join(sorted(missing)),
-                )
+        elif missing:
+            logger.info(
+                "Agent profile '%s' references tools not available on this surface: %s",
+                profile.name, ", ".join(sorted(missing)),
+            )
 
     # ---- prompt: layer the profile on a MINIMAL structural scaffold ----------
     # The profile body is the agent's identity. We layer it on a small runtime

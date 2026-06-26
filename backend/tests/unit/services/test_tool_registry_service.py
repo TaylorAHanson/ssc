@@ -204,7 +204,7 @@ def test_discover_source_upserts_disabled_tools(db_session, monkeypatch):
         {"name": "genie_ask", "description": "ask", "input_schema": {"type": "object"}, "is_mutating": False, "side_effect_class": "read"},
         {"name": "genie_poll_response", "description": "poll", "input_schema": {"type": "object"}, "is_mutating": False, "side_effect_class": "read"},
     ]
-    monkeypatch.setattr("app.tools.external.mcp_client.list_tools", lambda url: fake)
+    monkeypatch.setattr("app.tools.external.mcp_client.list_tools", lambda url, obo_token=None: fake)
 
     result = ToolRegistryService.discover_source(db_session, src.id)
     assert result["ok"] and result["count"] == 2
@@ -230,7 +230,7 @@ def test_discover_source_upserts_disabled_tools(db_session, monkeypatch):
 def test_discover_source_records_error(db_session, monkeypatch):
     src = ToolRegistryService.create_source(db_session, name="bad", server_url="https://h/api/2.0/mcp/sql")
 
-    def boom(url):
+    def boom(url, obo_token=None):
         raise RuntimeError("connection refused")
 
     monkeypatch.setattr("app.tools.external.mcp_client.list_tools", boom)

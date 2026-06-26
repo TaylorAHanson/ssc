@@ -10,9 +10,31 @@ idempotency) as any local tool — no special-casing in the runner.
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any, Dict, Optional
 
 from app.tools.external import mcp_client
+
+
+def mcp_server_label(server_url: str) -> str:
+    """Derive a stable, server-qualifying label from an MCP server URL.
+
+    This MUST mirror Command Center's Agent Studio (``_server_label``) so that a
+    profile's server-qualified tool id (``<label>/<tool>``) — authored against the
+    same AI Gateway MCP URL — binds to the matching runtime tool without any
+    out-of-band coordination on the admin-chosen source *name*. We take the path
+    segments after ``mcp`` and join them, so ``/api/2.0/mcp/functions/main/sales``
+    -> ``functions.main.sales`` and ``/api/2.0/mcp/sql`` -> ``sql``. The invariant
+    is: same ``server_url`` -> same label on both sides.
+    """
+    s = (server_url or "").rstrip("/")
+    s = re.sub(r"^https?://[^/]+", "", s)  # strip scheme+host
+    parts = [p for p in s.split("/") if p]
+    if "mcp" in parts:
+        tail = parts[parts.index("mcp") + 1:]
+        if tail:
+            return ".".join(tail)
+    return parts[-1] if parts else "mcp"
 
 
 class RemoteMcpTool:
@@ -30,9 +52,16 @@ class RemoteMcpTool:
         identity_mode: str = "obo",
         policy_ref: Optional[str] = None,
         success_predicate: Optional[Any] = None,
+        server_label: Optional[str] = None,
     ):
         self._name = name
         self._server_url = server_url
+        # URL-derived server label (see ``mcp_server_label``). Lets an agent
+        # profile bind a server-qualified tool id ("<label>/<tool>") to exactly
+        # this tool rather than any same-named tool on another server. Falls back
+        # to deriving from ``server_url`` so callers can't accidentally pass an
+        # admin-chosen source name that won't match Command Center's label.
+        self._server_label = server_label or mcp_server_label(server_url)
         self._description = description or f"Remote MCP tool '{name}'."
         self._input_schema = input_schema or {"type": "object", "properties": {}}
         self._is_mutating = bool(is_mutating)
@@ -47,6 +76,10 @@ class RemoteMcpTool:
     @property
     def name(self) -> str:
         return self._name
+
+    @property
+    def server_label(self) -> Optional[str]:
+        return self._server_label
 
     @property
     def description(self) -> str:

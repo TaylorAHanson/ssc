@@ -682,11 +682,13 @@ tools/workflows granted in Unity Catalog.
       (e.g. `sql/run_sql`) authored against the Command Center's AI Gateway MCP catalog. The runtime
       keys on bare names, so matching accepts the full id **or** the suffix after the last `/`. The
       result is **intersected** with the admin-governed surface (a profile can only *narrow*).
-      An **empty** allowlist means the profile grants **no tools** (not the full surface) — so a
-      blank/new draft can't masquerade as the Self-Service agent by inheriting all 50+ tools. That
-      is distinct from a **non-empty** list that matches *nothing* on this surface (namespace
-      drift): that logs loudly, increments the `tool_fallback` counter, and falls back to the full
-      surface rather than going tool-less.
+      Because a profile can only ever *narrow*, an allowlist that matches **nothing** grants **no
+      tools** — never the full surface. This covers both an **empty** allowlist (blank/new draft)
+      and a **non-empty** list whose ids match nothing on this runtime (namespace drift: ids
+      authored against the AI Gateway MCP catalog that this runtime's registry doesn't expose). The
+      no-match case logs loudly and increments the `tool_no_match` counter so the parity gap gets
+      fixed at the source; handing a narrow agent all 50+ tools would make it masquerade as the full
+      Self-Service Hub.
     - **Model — allowlisted only.** A profile's `model` routes the turn to a specific endpoint
       (`AgentRunner(model_endpoint=…)` → `AgentLLMClient(endpoint_name=…)`) **only** if it appears in
       `AGENT_PROFILE_MODEL_ALLOWLIST` (empty = always use the gateway default; `*` = allow any).
@@ -698,7 +700,7 @@ tools/workflows granted in Unity Catalog.
     powers the Command Center Agent Studio "Try it" tab, letting an author test a draft before
     persisting it. `inline_profile` takes precedence over `profile_ref`.
   - **Observability.** `_apply_*_profile` maintains in-process counters (`applied`, `inline_applied`,
-    `load_error`, `tool_fallback`, `model_rejected`) plus mean load latency, readable via
+    `load_error`, `tool_no_match`, `model_rejected`) plus mean load latency, readable via
     `get_profile_metrics()` (tests / future scrape endpoint).
   - **Fail-safe:** any load failure (bad ref, no access, missing file) logs a warning and falls
     back to the default prompt + full surface toolset — a broken reference never breaks chat.

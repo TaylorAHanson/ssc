@@ -2,7 +2,7 @@
 
 Verifies the review-hardening behaviors:
   * prompt layering (default) vs standalone (``base: none``)
-  * tool allowlist intersection, and the empty-intersection fallback
+  * tool allowlist intersection (narrow-only; no-match grants no tools)
   * model allowlist gating
   * load failure fail-safe
   * observability counters
@@ -107,8 +107,8 @@ def test_tool_allowlist_narrows(monkeypatch):
 
 
 def test_server_qualified_tool_ids_match_bare_names(monkeypatch):
-    # Profiles store canonical "<server>/<tool>" ids; the runtime keys on bare
-    # names. The matcher must bind "sql/a" to this surface's "a".
+    # Profiles store canonical "<server>/<tool>" ids; LOCAL runtime tools key on
+    # bare names (no server_label). The matcher must bind "sql/a" to local "a".
     prof = LoadedProfile(store="volume", dir_path="/x", name="A", prompt="p", tools=["sql/a", "genie/b"])
     _patch_provider(monkeypatch, profile=prof)
 
@@ -116,13 +116,43 @@ def test_server_qualified_tool_ids_match_bare_names(monkeypatch):
     assert {t.name for t in tools} == {"a", "b"}
 
 
-def test_empty_tool_intersection_falls_back_to_full(monkeypatch):
+class _McpTool(_Tool):
+    """Tool stand-in that carries a ``server_label`` like a RemoteMcpTool."""
+
+    def __init__(self, name: str, server_label: str):
+        super().__init__(name)
+        self.server_label = server_label
+
+
+def test_server_qualified_id_binds_correct_server(monkeypatch):
+    # Two registered MCP servers expose a same-named tool. A server-qualified
+    # profile id must bind ONLY the tool on the matching server, never the other.
+    surface = [
+        _McpTool("list_items", "catalog_explorer"),
+        _McpTool("list_items", "other_server"),
+    ]
+    prof = LoadedProfile(
+        store="volume", dir_path="/x", name="A", prompt="p",
+        tools=["catalog_explorer/list_items"],
+    )
+    _patch_provider(monkeypatch, profile=prof)
+
+    _sp, tools, _model = _apply_agent_profile("ref", "tok", surface, {})
+    assert len(tools) == 1
+    assert tools[0].server_label == "catalog_explorer"
+
+
+def test_nonmatching_tool_allowlist_grants_no_tools(monkeypatch):
+    # A profile that lists tools which match NOTHING on this surface must NOT
+    # inherit the full surface (that would widen, not narrow, and make the agent
+    # masquerade as the full Self-Service Hub). It gets no tools instead.
     prof = LoadedProfile(store="volume", dir_path="/x", name="A", prompt="p", tools=["zzz", "qqq"])
     _patch_provider(monkeypatch, profile=prof)
 
-    _sp, tools, _model = _apply_agent_profile("ref", "tok", _surface_tools(), {})
-    assert {t.name for t in tools} == {"a", "b", "c"}         # full surface restored
-    assert get_profile_metrics().get("tool_fallback") == 1
+    sp, tools, _model = _apply_agent_profile("ref", "tok", _surface_tools(), {})
+    assert tools == []                                        # narrowed to nothing
+    assert "Available Tools" not in sp                        # no tool list leaks in
+    assert get_profile_metrics().get("tool_no_match") == 1
 
 
 # -------------------------------------------------------------------- model

@@ -518,7 +518,7 @@ class ToolRegistryService:
             source = sources.get(row.source_id) if row.source_id else None
             if not source or not source.enabled:
                 continue
-            from app.tools.external.mcp_remote import RemoteMcpTool
+            from app.tools.external.mcp_remote import RemoteMcpTool, mcp_server_label
 
             resolved.append(
                 RemoteMcpTool(
@@ -530,6 +530,9 @@ class ToolRegistryService:
                     side_effect_class=row.side_effect_class,
                     identity_mode=row.identity_mode,
                     success_predicate=getattr(row, "success_predicate", None),
+                    # URL-derived label (NOT the admin-chosen source.name) so it
+                    # matches Command Center's server-qualified tool ids.
+                    server_label=mcp_server_label(source.server_url),
                 )
             )
         return resolved
