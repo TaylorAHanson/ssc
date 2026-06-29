@@ -475,10 +475,12 @@ class Settings(BaseSettings):
     # Databricks App. See get_ses_aws_credentials() below.
     NOTIFICATION_EMAIL_SES_REGION: str = "us-west-2"
     NOTIFICATION_EMAIL_SES_SOURCE: str = "" # Source email address (must be SES-verified)
-    # Databricks secret scope + keys holding the AWS IAM credentials.
+    # Databricks secret scope holding the AWS IAM credentials. Only the SCOPE is
+    # environment-specific (passed via databricks.yml per target); the key names
+    # follow a fixed convention so they never have to be configured.
     NOTIFICATION_EMAIL_SES_SECRET_SCOPE: str = ""  # Databricks secret scope
-    NOTIFICATION_EMAIL_SES_ACCESS_KEY_ID_SECRET_KEY: str = ""  # key for AWS access key id
-    NOTIFICATION_EMAIL_SES_SECRET_ACCESS_KEY_SECRET_KEY: str = ""  # key for AWS secret access key
+    NOTIFICATION_EMAIL_SES_ACCESS_KEY_ID_SECRET_KEY: str = "aws_access_key_id"  # convention
+    NOTIFICATION_EMAIL_SES_SECRET_ACCESS_KEY_SECRET_KEY: str = "aws_secret_access_key"  # convention
     NOTIFICATION_EMAIL_SES_SESSION_TOKEN_SECRET_KEY: str = ""  # optional key for AWS session token (temp creds)
     # Legacy: Databricks service credential name (dbutils-based). No longer used
     # by the in-app boto3 path; kept for backward compatibility / reference.
@@ -528,15 +530,24 @@ class Settings(BaseSettings):
         if self._ses_aws_credentials_cached:
             return self._ses_aws_credentials_cached
 
+        import logging
+        logger = logging.getLogger(__name__)
+
         scope = self.NOTIFICATION_EMAIL_SES_SECRET_SCOPE
         access_key_id_key = self.NOTIFICATION_EMAIL_SES_ACCESS_KEY_ID_SECRET_KEY
         secret_access_key_key = self.NOTIFICATION_EMAIL_SES_SECRET_ACCESS_KEY_SECRET_KEY
 
         if not (scope and access_key_id_key and secret_access_key_key):
+            logger.warning(
+                "SES IAM credential lookup skipped: scope/keys not fully configured "
+                "(NOTIFICATION_EMAIL_SES_SECRET_SCOPE=%r, ACCESS_KEY_ID_SECRET_KEY=%r, "
+                "SECRET_ACCESS_KEY_SECRET_KEY=%r). boto3 will use the ambient AWS "
+                "credential chain, which typically fails on a serverless App with "
+                "'Unable to locate credentials'.",
+                scope or "", access_key_id_key or "", secret_access_key_key or "",
+            )
             return None
 
-        import logging
-        logger = logging.getLogger(__name__)
         try:
             from databricks.sdk import WorkspaceClient
             import base64

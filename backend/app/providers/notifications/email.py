@@ -98,6 +98,15 @@ class SESEmailProvider(BaseEmailProvider):
         # IAM credentials from a Databricks secret. Returns None to let boto3
         # use its default credential resolution chain.
         creds = settings.get_ses_aws_credentials() or {}
+        if not creds:
+            logger.warning(
+                "No SES IAM credentials resolved from Databricks secrets "
+                "(scope=%s); boto3 will use the ambient AWS credential chain. On a "
+                "serverless Databricks App this usually yields 'Unable to locate "
+                "credentials' — set NOTIFICATION_EMAIL_SES_SECRET_SCOPE and the "
+                "access/secret key names to a scope the app SP can READ.",
+                settings.NOTIFICATION_EMAIL_SES_SECRET_SCOPE or "<unset>",
+            )
 
         session = boto3.Session(region_name=self.region, **creds)
         client = session.client("ses")
