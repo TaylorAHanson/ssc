@@ -171,10 +171,10 @@ resources:
           - name: NOTIFICATION_EMAIL_SES_SECRET_SCOPE
             value: "${var.controltower_secret_scope}"
           # LMWS / FWS-API group management. The vendored notebook reads the
-          # service-account creds (username/password) from this secret scope
-          # cluster-side; the app only needs to know the scope name.
+          # service-account creds (username/password, by convention) from the
+          # same control-tower scope cluster-side; the app only passes the scope.
           - name: LMWS_SECRET_SCOPE
-            value: "${var.lmws_secret_scope}"
+            value: "${var.controltower_secret_scope}"
           # Multi-workspace targeting: per-environment service principal scope.
           # Same control-tower scope as SES above — holds the sp_dbxgrc_<env>_*
           # creds, read at runtime (never plaintext). The env->key map lives in
@@ -406,14 +406,13 @@ variables:
     default: "notifications@example.com"
   controltower_secret_scope:
     description: >-
-      Single per-environment control-tower secret scope. Holds BOTH the SES IAM
-      credentials (keys aws_access_key_id / aws_secret_access_key, by convention)
-      and the per-environment target-workspace SP credentials (sp_dbxgrc_<env>_*).
-      Only the scope is env-specific; set it per target. The app SP needs READ.
+      Single per-environment control-tower secret scope. Holds all the app's
+      cross-system creds, by fixed key-name convention: SES IAM
+      (aws_access_key_id / aws_secret_access_key), the per-environment
+      target-workspace SPs (sp_dbxgrc_<env>_*), and the LMWS service account
+      (username / password). Only the scope is env-specific; set it per target.
+      The app SP needs READ.
     default: "controltower_secret_scope_prd"
-  lmws_secret_scope:
-    description: "Databricks secret scope holding the LMWS service-account creds (keys: username, password)"
-    default: "lmws"
 # Target environments
 targets:
   # Local development (default)
