@@ -1,22 +1,72 @@
-# Target Workspaces Configuration
-# Define authoritative target workspaces for the agent to operate on.
-# To securely map Databricks Secrets to these workspaces without hardcoding them,
-# use Databricks Apps environment variable mapping in your app.yaml:
-#   env:
-#     - name: PROD_WS_CLIENT_ID
-#       valueFrom: databricks-secret:app_sp_credentials:prod_client_id
+# =============================================================================
+# Service Principals (per-environment, with per-workspace overrides)
+# =============================================================================
+# Strategy: one SP pair (client_id + client_secret) per ENVIRONMENT, shared by
+# every target workspace in that environment. e.g. sp_dbxgrc_dev connects to any
+# dev workspace. Credentials are read at RUNTIME from a Databricks secret scope
+# (like SES/GitHub secrets) — NOT injected as plaintext env vars — so changing
+# the strategy is a config edit, never a code change or redeploy.
+#
+# Resolution precedence per workspace (highest first), so you can change your
+# mind or go hybrid (sp_dbxgrc_dev for most dev workspaces, a different SP for a
+# few) without re-architecting:
+#   1. Per-workspace env vars:    client_id_env / client_secret_env / token_env
+#   2. Per-workspace secret keys: client_id_secret / client_secret_secret
+#                                 (+ optional secret_scope override)
+#   3. Per-environment shared SP: service_principals.environments[<env>] (below)
+#   4. Global default SP / PAT:   settings.DATABRICKS_* (the app's own identity)
+#
+# Prereqs for the per-environment SP to work:
+#   - The app's own SP must have READ on the secret scope.
+#   - Each sp_dbxgrc_<env> SP must be granted access to the workspaces it targets.
+#
+# NOTE: the secret SCOPE is the one environment-specific piece, so it lives in
+# databricks.yml (var.target_workspace_sp_secret_scope -> the
+# TARGET_WORKSPACE_SP_SECRET_SCOPE env var) and is set per deploy target. The
+# key-NAME convention below is constant across environments. You can still pin a
+# fallback scope here (uncomment secret_scope), but databricks.yml wins.
+service_principals:
+  # secret_scope: "controltower_secret_scope_prd"   # optional fallback; databricks.yml overrides
+  environments:
+    dev:
+      client_id_key: "sp_dbxgrc_dev_client_id"
+      client_secret_key: "sp_dbxgrc_dev_client_secret"
+    stg:
+      client_id_key: "sp_dbxgrc_stg_client_id"
+      client_secret_key: "sp_dbxgrc_stg_client_secret"
+    prod:
+      client_id_key: "sp_dbxgrc_prd_client_id"
+      client_secret_key: "sp_dbxgrc_prd_client_secret"
+
+# =============================================================================
+# Target Workspaces
+# =============================================================================
+# Define the authoritative target workspaces for the agent to operate on. Each
+# workspace inherits its environment's shared SP (above) automatically — list a
+# workspace with just name/host/environment and it uses sp_dbxgrc_<env>.
+#
+# To override a single workspace (the hybrid case), pin its own credentials with
+# either per-workspace secret keys or env vars (see precedence above).
 #
 # target_workspaces:
+#   # Inherits the shared dev SP (sp_dbxgrc_dev) — no credentials needed.
+#   - name: "dev-domain-a"
+#     host: "https://adb-987654321.2.azuredatabricks.net"
+#     environment: "dev"
+#   - name: "dev-domain-b"
+#     host: "https://adb-111111111.3.azuredatabricks.net"
+#     environment: "dev"
+#   # Hybrid override: this dev workspace uses a DIFFERENT SP than the rest.
+#   - name: "dev-domain-special"
+#     host: "https://adb-222222222.4.azuredatabricks.net"
+#     environment: "dev"
+#     client_id_secret: "sp_special_dev_client_id"
+#     client_secret_secret: "sp_special_dev_client_secret"
+#     # Optionally read this workspace's SP from a different scope:
+#     # secret_scope: "team_special_secret_scope"
 #   - name: "enterprise-prod"
 #     host: "https://adb-123456789.1.azuredatabricks.net"
 #     environment: "prod"
-#     client_id_env: "PROD_WS_CLIENT_ID"
-#     client_secret_env: "PROD_WS_CLIENT_SECRET"
-#   - name: "enterprise-dev"
-#     host: "https://adb-987654321.2.azuredatabricks.net"
-#     environment: "dev"
-#     client_id_env: "DEV_WS_CLIENT_ID"
-#     client_secret_env: "DEV_WS_CLIENT_SECRET"
 
 branding:
   name: "Enterprise Data Hub"

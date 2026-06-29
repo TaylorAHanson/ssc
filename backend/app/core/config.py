@@ -246,6 +246,15 @@ class Settings(BaseSettings):
     DATABRICKS_CLIENT_ID: str = ""  # SECRET: Set in .env - Service principal client ID for MWS
     DATABRICKS_CLIENT_SECRET: str = ""  # SECRET: Set in .env - Service principal client secret for MWS
 
+    # Multi-workspace targeting: secret scope holding the per-environment target
+    # SP credentials (keys sp_dbxgrc_<env>_client_id / _client_secret). This is
+    # the one environment-specific piece of the service_principals strategy, so
+    # it's set per-target in databricks.yml rather than in configuration.yaml.
+    # Read at runtime (never injected as plaintext); blank disables the shared-SP
+    # tier so target-workspace credential resolution falls back to the app's own
+    # SP. The env→key map itself lives in configuration.yaml (service_principals).
+    TARGET_WORKSPACE_SP_SECRET_SCOPE: str = ""
+
     # Databricks Job Runner (classic compute) — used by BaseDatabricksJobStateMachine
     # for workloads that need control-plane network connectivity (email, LDAP, etc.).
     # The defaults below describe a small single-node job cluster. Override the node

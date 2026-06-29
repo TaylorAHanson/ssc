@@ -177,6 +177,14 @@ resources:
           # cluster-side; the app only needs to know the scope name.
           - name: LMWS_SECRET_SCOPE
             value: "${var.lmws_secret_scope}"
+          # Multi-workspace targeting: per-environment service principal scope.
+          # Holds sp_dbxgrc_<env>_* creds, read at runtime (never plaintext).
+          # Env-specific, hence set here per target rather than configuration.yaml.
+          # The env->key map lives in configuration.yaml (service_principals). The
+          # tier is only consulted when target_workspaces is configured, so an
+          # unused scope here (e.g. local) is harmless.
+          - name: TARGET_WORKSPACE_SP_SECRET_SCOPE
+            value: "${var.target_workspace_sp_secret_scope}"
 
       user_api_scopes:
         - "sql"
@@ -410,6 +418,16 @@ variables:
   lmws_secret_scope:
     description: "Databricks secret scope holding the LMWS service-account creds (keys: username, password)"
     default: "lmws"
+  target_workspace_sp_secret_scope:
+    description: >-
+      Databricks secret scope holding the per-environment target-workspace SP
+      credentials (keys: sp_dbxgrc_<env>_client_id / sp_dbxgrc_<env>_client_secret).
+      Read at runtime, never injected as plaintext. The env->key map lives in
+      configuration.yaml (service_principals); only the scope is env-specific and
+      set here per target. Must be non-empty (Databricks Apps rejects empty env
+      values); to effectively disable the shared-SP tier, simply leave
+      target_workspaces unset so the scope is never consulted.
+    default: "controltower_secret_scope_prd"
 
 # Target environments
 targets:
@@ -470,6 +488,9 @@ targets:
       event_sync_cron: "0 * * * *"
       data_asset_sync_cron: "0 * * * *"
       enforcement_sentinel_cron: "*/30 * * * *"
+      # Per-target override: point this deployment's target-workspace SP lookups
+      # at a different secret scope than the default, if dev creds live elsewhere.
+      # target_workspace_sp_secret_scope: "controltower_secret_scope_dev"
     resources:
       apps:
         edh-ssc:

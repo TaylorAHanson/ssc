@@ -88,6 +88,7 @@ async def _ping_one(ws: WorkspaceConfig, timeout: float) -> Dict[str, Any]:
         "name": ws.name,
         "host": ws.host,
         "environment": ws.environment,
+        "credential_source": ws.credential_source,
         "auth_method": None,
         "network_reachable": False,
         "authenticated": False,
