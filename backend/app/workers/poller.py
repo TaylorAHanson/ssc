@@ -301,20 +301,26 @@ async def process_scheduled_reports():
                 # 2. Update Subscription
                 sub.last_run_at = now
                 
-                # Calculate next run
-                # Calculate next run in PST to respect user timezone
-                pst_tz = ZoneInfo("America/Los_Angeles")
-                
-                # Convert current UTC time to PST
-                now_utc = now.replace(tzinfo=ZoneInfo("UTC"))
-                now_pst = now_utc.astimezone(pst_tz)
-                
-                # Get next scheduled time in PST
-                iter = croniter(sub.schedule_cron, now_pst)
-                next_pst = iter.get_next(datetime)
-                
-                # Convert back to UTC for storage (naive)
-                sub.next_run_at = next_pst.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+                # Calculate the next run in the subscription's own timezone so a
+                # cron like '0 7 * * 1' fires at 7am local. Fall back to the
+                # historical default if the column is unset or invalid.
+                tz_name = getattr(sub, "timezone", None) or "America/Los_Angeles"
+                try:
+                    sched_tz = ZoneInfo(tz_name)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "Subscription %s has invalid timezone %r; falling back to UTC",
+                        sub.id, tz_name,
+                    )
+                    sched_tz = ZoneInfo("UTC")
+
+                # Convert current UTC time to the subscription's timezone.
+                now_local = now.replace(tzinfo=ZoneInfo("UTC")).astimezone(sched_tz)
+
+                # Get next scheduled time in local tz, then store as naive UTC.
+                iter = croniter(sub.schedule_cron, now_local)
+                next_local = iter.get_next(datetime)
+                sub.next_run_at = next_local.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
                 
                 db.commit()
                 logger.info(f"Spawned report request {req_id} for subscription {sub.id}. Next run: {sub.next_run_at}")

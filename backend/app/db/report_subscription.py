@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Boolean, JSON, func
+from sqlalchemy import Column, String, DateTime, Boolean, JSON, func, text
 from app.db.base import Base
 
 class ReportSubscription(Base):
@@ -8,6 +8,16 @@ class ReportSubscription(Base):
     name = Column(String, nullable=False)          # e.g., 'Weekly Admin Audit'
     subscribers = Column(String, nullable=False)   # Comma-separated emails
     schedule_cron = Column(String, nullable=False) # e.g., '0 7 * * 1'
+    # IANA timezone the cron expression is evaluated against (e.g.
+    # 'America/Los_Angeles'). server_default keeps existing rows + raw inserts
+    # valid; the matching startup migration backfills the column on existing
+    # tables (create_all never adds columns to an existing table).
+    timezone = Column(
+        String,
+        nullable=False,
+        default="America/Los_Angeles",
+        server_default=text("'America/Los_Angeles'"),
+    )
     
     # Dynamic definition
     prompts = Column(JSON, nullable=False)         # List of {label, prompt} objects

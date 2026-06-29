@@ -3,6 +3,7 @@ Reports API endpoints.
 """
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -15,6 +16,35 @@ from croniter import croniter, CroniterBadCronError
 import uuid
 
 router = APIRouter()
+
+# Fallback timezone for cron evaluation when a subscription doesn't specify one.
+# Mirrors the scheduler's historical hardcoded zone so behavior is unchanged.
+DEFAULT_REPORT_TIMEZONE = "America/Los_Angeles"
+
+
+def _resolve_zone(tz_name: Optional[str]) -> ZoneInfo:
+    """Validate an IANA timezone name, raising HTTP 400 if it's unknown."""
+    name = (tz_name or DEFAULT_REPORT_TIMEZONE).strip() or DEFAULT_REPORT_TIMEZONE
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, KeyError):
+        raise HTTPException(status_code=400, detail=f"Unknown timezone: {tz_name}")
+
+
+def _next_run_utc(schedule_cron: str, tz_name: Optional[str]) -> datetime:
+    """Next cron fire time, evaluated in ``tz_name`` and returned as naive UTC.
+
+    The cron is interpreted against the subscription's wall clock (so '0 7 * * 1'
+    means 7am local), then converted to a naive UTC datetime to match how
+    ``next_run_at`` is stored and compared by the poller.
+    """
+    tz = _resolve_zone(tz_name)
+    base_local = datetime.now(timezone.utc).astimezone(tz)
+    try:
+        nxt = croniter(schedule_cron, base_local).get_next(datetime)
+    except (CroniterBadCronError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid cron expression")
+    return nxt.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
 # ----------------------------------------------------------------------
 # Models
@@ -30,6 +60,7 @@ class ReportSubscriptionCreate(BaseModel):
     schedule_cron: str
     prompts: List[PromptDef]
     is_active: bool = True
+    timezone: str = DEFAULT_REPORT_TIMEZONE
 
 class ReportSubscriptionUpdate(BaseModel):
     name: Optional[str] = None
@@ -37,6 +68,7 @@ class ReportSubscriptionUpdate(BaseModel):
     schedule_cron: Optional[str] = None
     prompts: Optional[List[PromptDef]] = None
     is_active: Optional[bool] = None
+    timezone: Optional[str] = None
 
 class ReportSubscriptionResponse(ReportSubscriptionCreate):
     id: str
@@ -67,12 +99,8 @@ def list_subscriptions(db: Session = Depends(get_db)):
 def create_subscription(sub: ReportSubscriptionCreate, db: Session = Depends(get_db)):
     """Create a new scheduled report."""
     
-    # Validate cron
-    try:
-        iter = croniter(sub.schedule_cron, datetime.now(timezone.utc))
-        next_run = iter.get_next(datetime)
-    except (CroniterBadCronError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid cron expression")
+    # Validate timezone + cron, then compute the first run in that timezone.
+    next_run = _next_run_utc(sub.schedule_cron, sub.timezone)
 
     prompts_json = [p.dict() for p in sub.prompts]
 
@@ -81,6 +109,7 @@ def create_subscription(sub: ReportSubscriptionCreate, db: Session = Depends(get
         name=sub.name,
         subscribers=sub.subscribers,
         schedule_cron=sub.schedule_cron,
+        timezone=(sub.timezone or DEFAULT_REPORT_TIMEZONE),
         prompts=prompts_json,
         is_active=sub.is_active,
         next_run_at=next_run
@@ -109,16 +138,18 @@ def update_subscription(id: str, update: ReportSubscriptionUpdate, db: Session =
     if update.subscribers is not None: sub.subscribers = update.subscribers
     if update.prompts is not None: sub.prompts = [p.dict() for p in update.prompts]
     if update.is_active is not None: sub.is_active = update.is_active
-    
+
+    if update.timezone is not None:
+        _resolve_zone(update.timezone)  # validate before persisting
+        sub.timezone = update.timezone
+
     if update.schedule_cron is not None:
-        try:
-            iter = croniter(update.schedule_cron, datetime.now(timezone.utc))
-            next_run = iter.get_next(datetime)
-            sub.schedule_cron = update.schedule_cron
-            sub.next_run_at = next_run
-        except (CroniterBadCronError, ValueError):
-            raise HTTPException(status_code=400, detail="Invalid cron expression")
-            
+        sub.schedule_cron = update.schedule_cron
+
+    # Recompute the next run whenever the cadence OR its timezone changed.
+    if update.schedule_cron is not None or update.timezone is not None:
+        sub.next_run_at = _next_run_utc(sub.schedule_cron, sub.timezone)
+
     db.commit()
     db.refresh(sub)
     return sub

@@ -98,6 +98,15 @@ def run_startup_migrations(engine: Engine) -> None:
         _add_column(engine, "tool_registry", "exposed_via_mcp", "INTEGER DEFAULT 0")
         # Tool false-success detection: an author-declared success condition.
         _add_column(engine, "tool_registry", "success_predicate", "TEXT")
+        # Scheduled reports: per-subscription timezone for cron evaluation.
+        # Default mirrors the previously-hardcoded scheduling tz so existing
+        # subscriptions keep running at the same wall-clock time.
+        _add_column(
+            engine,
+            "report_subscriptions",
+            "timezone",
+            "VARCHAR DEFAULT 'America/Los_Angeles'",
+        )
         # Performance: hot-path indexes for existing DBs (fresh DBs get these from
         # the models via create_all). Names mirror SQLAlchemy's generated names.
         _add_index(engine, "ix_events_request_id_type", "events", ["request_id", "event_type"])
