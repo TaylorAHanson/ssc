@@ -32,11 +32,20 @@ class NotificationProvider(BaseProvider):
         provider_type = getattr(settings, "NOTIFICATION_EMAIL_PROVIDER", "smtp").lower()
         
         if provider_type == "ses":
-            return SESEmailProvider(
-                region=getattr(settings, "NOTIFICATION_EMAIL_SES_REGION", "us-west-2")
+            region = getattr(settings, "NOTIFICATION_EMAIL_SES_REGION", "us-west-2")
+            source = getattr(settings, "NOTIFICATION_EMAIL_SES_SOURCE", "")
+            scope = getattr(settings, "NOTIFICATION_EMAIL_SES_SECRET_SCOPE", "")
+            logger.info(
+                "Email notifications using SES provider (region=%s, source=%s, iam_secret_scope=%s)",
+                region, source or "<unset>", scope or "<unset -> ambient AWS creds>",
             )
+            return SESEmailProvider(region=region)
         elif provider_type == "smtp":
             if settings.NOTIFICATION_EMAIL_SMTP_HOST:
+                logger.info(
+                    "Email notifications using SMTP provider (host=%s, port=%s)",
+                    settings.NOTIFICATION_EMAIL_SMTP_HOST, settings.NOTIFICATION_EMAIL_SMTP_PORT,
+                )
                 return SMTPEmailProvider(
                     host=settings.NOTIFICATION_EMAIL_SMTP_HOST,
                     port=settings.NOTIFICATION_EMAIL_SMTP_PORT,
@@ -44,8 +53,16 @@ class NotificationProvider(BaseProvider):
                     password=settings.NOTIFICATION_EMAIL_SMTP_PASSWORD
                 )
             else:
+                logger.warning(
+                    "NOTIFICATION_EMAIL_PROVIDER=smtp but NOTIFICATION_EMAIL_SMTP_HOST is "
+                    "unset; using Mock provider (emails are logged, NOT delivered)."
+                )
                 return MockEmailProvider()
         else:
+            logger.info(
+                "Email notifications using Mock provider (provider=%r); emails are "
+                "logged, NOT delivered.", provider_type,
+            )
             return MockEmailProvider()
     
     @retry_on_retryable(max_attempts=3)
