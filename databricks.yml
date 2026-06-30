@@ -95,6 +95,12 @@ resources:
             value: "${var.github_app_private_key_secret_key}"
           - name: DATABRICKS_WAREHOUSE_ID
             value: "${var.sql_warehouse_id}"
+          # Existing all-purpose cluster for classic-compute jobs (e.g. LMWS group
+          # management). Pinning it means the app SP runs jobs WITHOUT cluster-create
+          # rights — the SP only needs CAN_RESTART on this cluster. Empty values are
+          # rejected by Databricks Apps, so it's a per-target variable.
+          - name: DATABRICKS_JOB_CLUSTER_ID
+            value: "${var.databricks_job_cluster_id}"
           - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
             value: "${var.model_serving_endpoint}"
           # AI Gateway (best practice): when set, agent LLM calls route through
@@ -368,6 +374,13 @@ variables:
   github_app_private_key_secret_key:
     description: "Secret key name for the GitHub App private key"
     default: "github-app-private-key"
+  databricks_job_cluster_id:
+    description: >-
+      Existing all-purpose cluster ID for classic-compute jobs (LMWS group
+      management, etc.). The app's service principal needs CAN_RESTART on it.
+      Set per target; the placeholder keeps `bundle deploy` from failing on
+      empty env values, but job submission will fail until it's replaced.
+    default: "REPLACE_WITH_CLUSTER_ID"
   sql_warehouse_id:
     description: "Databricks SQL Warehouse ID"
     lookup:
@@ -494,6 +507,9 @@ targets:
       # Control-tower dev secret scope (app SP needs READ). Holds both the SES
       # IAM creds and the per-environment target-workspace SP creds.
       controltower_secret_scope: "controltower_secret_scope_dev"
+      # Existing all-purpose cluster for dev classic-compute jobs (LMWS, etc.).
+      # The app SP needs CAN_RESTART on it. Replace with the real cluster ID.
+      databricks_job_cluster_id: "REPLACE_WITH_DEV_CLUSTER_ID"
       # GitHub App identifiers for dev. Replace with real values; the private
       # key lives in the secret scope (github_app_private_key_secret_scope).
       # github_org: "your-dev-github-org"
