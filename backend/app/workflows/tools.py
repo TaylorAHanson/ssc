@@ -44,13 +44,9 @@ def _get_databricks_provider():
 
 
 def _get_github_provider():
-    from app.core.config import settings
     from app.providers.github.client import GitHubProvider
 
-    return GitHubProvider(
-        token=settings.GITHUB_TOKEN or settings.get_git_token(),
-        org=settings.GITHUB_ORG,
-    )
+    return GitHubProvider.from_settings()
 
 
 def _get_gitops_provider():

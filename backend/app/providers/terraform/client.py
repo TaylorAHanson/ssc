@@ -15,78 +15,9 @@ import time
 import requests
 from pathlib import Path
 
+from app.providers.github.app_auth import generate_github_app_token
+
 logger = logging.getLogger(__name__)
-
-
-def generate_github_app_token(app_id: str, private_key: str, installation_id: str = None) -> str:
-    """
-    Generate a GitHub App installation access token.
-    
-    Args:
-        app_id: GitHub App ID
-        private_key: PEM-encoded private key
-        installation_id: Optional installation ID (will be fetched if not provided)
-    
-    Returns:
-        Installation access token for git operations
-    """
-    try:
-        import jwt
-    except ImportError:
-        logger.error("PyJWT not installed. Run: pip install PyJWT")
-        raise RetryableError("PyJWT library not available")
-    
-    # Generate JWT
-    now = int(time.time())
-    payload = {
-        "iat": now - 60,  # Issued 60 seconds ago (clock skew)
-        "exp": now + (10 * 60),  # Expires in 10 minutes
-        "iss": app_id
-    }
-    
-    try:
-        encoded_jwt = jwt.encode(payload, private_key, algorithm="RS256")
-    except Exception as e:
-        # Log key format details for debugging
-        key_preview = private_key[:50] if len(private_key) > 50 else private_key
-        has_newlines = '\n' in private_key
-        has_escaped_newlines = '\\n' in private_key
-        logger.error(f"Failed to generate JWT: {e}. Key length: {len(private_key)}, has_newlines: {has_newlines}, has_escaped_newlines: {has_escaped_newlines}, starts_with: {repr(key_preview)}")
-        raise RetryableError(f"JWT generation failed: {e}")
-    
-    headers = {
-        "Authorization": f"Bearer {encoded_jwt}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28"
-    }
-    
-    # Get installation ID if not provided
-    if not installation_id:
-        resp = requests.get("https://api.github.com/app/installations", headers=headers)
-        if resp.status_code != 200:
-            logger.error(f"Failed to get installations: {resp.text}")
-            raise RetryableError(f"Failed to get GitHub App installations: {resp.status_code}")
-        
-        installations = resp.json()
-        if not installations:
-            raise PermanentError("GitHub App has no installations")
-        
-        # Use first installation (or find specific one by org/repo)
-        installation_id = installations[0]["id"]
-        logger.info(f"Using GitHub App installation ID: {installation_id}")
-    
-    # Get installation access token
-    resp = requests.post(
-        f"https://api.github.com/app/installations/{installation_id}/access_tokens",
-        headers=headers
-    )
-    
-    if resp.status_code != 201:
-        logger.error(f"Failed to get installation token: {resp.text}")
-        raise RetryableError(f"Failed to get installation token: {resp.status_code}")
-    
-    token_data = resp.json()
-    return token_data["token"]
 
 
 class TerraformProvider(BaseProvider):
@@ -109,7 +40,6 @@ class TerraformProvider(BaseProvider):
                 - git_username: Git commit author name
                 - git_email: Git commit author email
                 - ssh_key_path: Path to SSH key (for SSH auth)
-                - git_token: GitHub PAT (for simple HTTPS auth)
                 - github_app_id: GitHub App ID (for GitHub App auth)
                 - github_app_private_key: PEM-encoded private key
                 - github_app_installation_id: Optional installation ID
@@ -121,9 +51,8 @@ class TerraformProvider(BaseProvider):
         self.username = self.config.get("git_username", settings.GIT_USERNAME)
         self.email = self.config.get("git_email", settings.GIT_EMAIL)
         self.ssh_key_path = self.config.get("ssh_key_path")
-        self.git_token = self.config.get("git_token")  # GitHub PAT for HTTPS auth
-        
-        # GitHub App authentication (preferred over PAT)
+
+        # GitHub App authentication (the only HTTPS auth mechanism).
         self.github_app_id = self.config.get("github_app_id")
         self.github_app_private_key = self.config.get("github_app_private_key")
         self.github_app_installation_id = self.config.get("github_app_installation_id")
@@ -162,15 +91,11 @@ class TerraformProvider(BaseProvider):
         if not self.repo_url.startswith("https://"):
             return self.repo_url
             
-        # Try GitHub App authentication first
+        # GitHub App installation token (the only HTTPS auth path).
         app_token = self._get_github_app_token()
         if app_token:
             return self.repo_url.replace("https://", f"https://x-access-token:{app_token}@")
-        
-        # Fall back to PAT if provided
-        if self.git_token:
-            return self.repo_url.replace("https://", f"https://x-access-token:{self.git_token}@")
-        
+
         return self.repo_url
         
     @retry_on_retryable(max_attempts=3)

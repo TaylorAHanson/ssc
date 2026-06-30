@@ -182,11 +182,9 @@ async def setup_github_templates():
         from datetime import datetime, timezone
         import base64
 
-        token = settings.GITHUB_TOKEN or settings.get_git_token()
         org = settings.GITHUB_ORG
-        
-        if not token or not org:
-            raise HTTPException(status_code=400, detail="GITHUB_TOKEN and GITHUB_ORG must be configured")
+        if not (settings.GITHUB_APP_ID and org):
+            raise HTTPException(status_code=400, detail="GITHUB_APP_ID and GITHUB_ORG must be configured")
 
         templates = {
             "data-engineering": ["pipeline", "etl", "databricks", "spark"],
@@ -196,7 +194,7 @@ async def setup_github_templates():
         }
         results = []
 
-        async with GitHubProvider(token=token, org=org) as github:
+        async with GitHubProvider.from_settings() as github:
             for template_name, topics in templates.items():
                 # 1. Check if repo exists
                 exists = await github.check_repo_exists(template_name)

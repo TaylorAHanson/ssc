@@ -79,14 +79,20 @@ resources:
             value: "${var.infra_repo_url}"
           - name: INFRA_REPO_BRANCH
             value: "${var.infra_repo_branch}"
-          - name: GIT_TOKEN_SECRET_SCOPE
-            value: "${var.github_pat_secret_scope}"
-          - name: GIT_TOKEN_SECRET_KEY
-            value: "${var.github_pat_secret_key}"
+          # GitHub App is the ONLY GitHub auth (no PAT). Org + App ID +
+          # Installation ID are non-secret identifiers; the private key is read
+          # at runtime from the secret scope below. Empty values are rejected by
+          # Databricks Apps, so set these per target (see dev overrides).
+          - name: GITHUB_ORG
+            value: "${var.github_org}"
+          - name: GITHUB_APP_ID
+            value: "${var.github_app_id}"
+          - name: GITHUB_APP_INSTALLATION_ID
+            value: "${var.github_app_installation_id}"
           - name: GITHUB_APP_PRIVATE_KEY_SECRET_SCOPE
-            value: "edh-ssc-hub"
+            value: "${var.github_app_private_key_secret_scope}"
           - name: GITHUB_APP_PRIVATE_KEY_SECRET_KEY
-            value: "github-app-private-key"
+            value: "${var.github_app_private_key_secret_key}"
           - name: DATABRICKS_WAREHOUSE_ID
             value: "${var.sql_warehouse_id}"
           - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
@@ -343,12 +349,25 @@ variables:
   infra_repo_branch:
     description: "Branch for the infrastructure repository"
     default: "main"
-  github_pat_secret_scope:
-    description: "Secret scope for GitHub PAT"
+  # GitHub App auth (no PAT). Org / App ID / Installation ID are non-secret
+  # identifiers — set them to your real values per target. The placeholder
+  # defaults below keep `bundle deploy` from failing on empty env values, but
+  # token minting will fail (and log) until they are replaced.
+  github_org:
+    description: "GitHub org the App is installed on (owns all created repos)"
+    default: "REPLACE_WITH_GITHUB_ORG"
+  github_app_id:
+    description: "GitHub App ID (numeric, from the App's settings page)"
+    default: "REPLACE_WITH_APP_ID"
+  github_app_installation_id:
+    description: "GitHub App installation ID for the org (from the install URL)"
+    default: "REPLACE_WITH_INSTALLATION_ID"
+  github_app_private_key_secret_scope:
+    description: "Databricks secret scope holding the GitHub App private key (PEM)"
     default: "edh-ssc-hub"
-  github_pat_secret_key:
-    description: "Secret key for GitHub PAT"
-    default: "github-pat"
+  github_app_private_key_secret_key:
+    description: "Secret key name for the GitHub App private key"
+    default: "github-app-private-key"
   sql_warehouse_id:
     description: "Databricks SQL Warehouse ID"
     lookup:
@@ -440,17 +459,17 @@ targets:
       apps:
         edh-ssc:
           # Dev-only: "Anyone in my organization can use" (grants the
-          # `All account users` group CAN_USE). Appended to the base app
+          # `account users` system group CAN_USE). Appended to the base app
           # permissions; stage/prod stay restricted to explicit grants.
           permissions:
             - level: CAN_USE
-              group_name: "All account users"
+              group_name: "account users"
         mcp-server:
           # Dev-only org-wide CAN_USE, mirroring the main app so the MCP
           # server is reachable by anyone in the org in dev.
           permissions:
             - level: CAN_USE
-              group_name: "All account users"
+              group_name: "account users"
 
   # Development environment
   dev:
@@ -475,6 +494,11 @@ targets:
       # Control-tower dev secret scope (app SP needs READ). Holds both the SES
       # IAM creds and the per-environment target-workspace SP creds.
       controltower_secret_scope: "controltower_secret_scope_dev"
+      # GitHub App identifiers for dev. Replace with real values; the private
+      # key lives in the secret scope (github_app_private_key_secret_scope).
+      # github_org: "your-dev-github-org"
+      # github_app_id: "123456"
+      # github_app_installation_id: "78901234"
     resources:
       apps:
         edh-ssc:

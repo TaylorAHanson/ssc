@@ -119,8 +119,26 @@ class LmwsProvider(BaseProvider):
 
     @classmethod
     def notebook_path(cls) -> str:
-        """Absolute local path to the vendored LMWS notebook."""
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), NOTEBOOK_FILENAME)
+        """Absolute local path to the vendored LMWS notebook.
+
+        The file's first line is ``# Databricks notebook source``, so Databricks
+        Asset Bundles import it into the workspace **as a notebook** — which
+        drops the ``.py`` extension in the deployed source tree
+        (``/app/python/source_code/.../lmws_group_management_job``). Locally
+        (dev/checkout) it keeps ``.py``. Resolve whichever form actually exists
+        so both environments work; fall back to the ``.py`` name so any
+        not-found error names the file clearly.
+        """
+        here = os.path.dirname(os.path.abspath(__file__))
+        stem = os.path.splitext(NOTEBOOK_FILENAME)[0]
+        candidates = [
+            os.path.join(here, NOTEBOOK_FILENAME),  # lmws_group_management_job.py (local/dev)
+            os.path.join(here, stem),               # lmws_group_management_job  (deployed notebook)
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        return candidates[0]
 
     def compute(self) -> ComputeSpec:
         """Classic compute target (API-only, no Spark). Honors DATABRICKS_JOB_* settings."""

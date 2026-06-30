@@ -18,20 +18,11 @@ class CheckGitHubRepoInput(BaseModel):
 async def check_github_repo(repo_name: str) -> Dict[str, Any]:
     """Execute the tool."""
     try:
-        # settings.get_git_token() might be needed if GITHUB_TOKEN is not set
-        # But settings usually has properties. Let's assume settings.GITHUB_TOKEN or separate method access.
-        # The original code had: settings.GITHUB_TOKEN or settings.get_git_token()
-        # I'll preserve that.
-        token = settings.GITHUB_TOKEN 
-        if not token and hasattr(settings, 'get_git_token'):
-            token = settings.get_git_token()
-            
         org = settings.GITHUB_ORG
-        
-        if not token:
-            return {"status": "error", "message": "GitHub token not configured"}
-            
-        async with GitHubProvider(token=token, org=org) as github:
+        if not (settings.GITHUB_APP_ID and org):
+            return {"status": "error", "message": "GitHub App not configured (GITHUB_APP_ID/GITHUB_ORG)"}
+
+        async with GitHubProvider.from_settings() as github:
             exists = await github.check_repo_exists(repo_name)
             
             return {
