@@ -4,7 +4,7 @@ package agent.tools
 #
 # Input shape (built by app.tools.tool_executor.ToolExecutor):
 #   {
-#     "tool": "execute_workflow",
+#     "tool": "github_create_repo",
 #     "side_effect_class": "infra",   # read|app_write|data_grant|infra|membership|notify|destructive
 #     "is_mutating": true,
 #     "policy_ref": null,
@@ -12,91 +12,52 @@ package agent.tools
 #     "user": {"email": "...", "roles": [...], "entitlements": [...]},
 #     "approvals": ["manager", ...]   # approvals already gathered for this call
 #   }
+#   (Only *mutating* tools are evaluated here; the executor skips OPA for reads.)
 #
 # Output (`decision`):
 #   {
 #     "allow": bool,                 # hard allow/deny (capability scope, explicit deny)
-#     "requires_approval": bool,     # gate before the mutating call may execute
-#     "approval_type": "none|manager|admin",
+#     "requires_approval": bool,     # always false — see APPROVAL MODEL below
+#     "approval_type": "none",
 #     "reason": "..."
 #   }
 #
-# NOTE (V2 staging): this package currently enforces *approval gates* keyed on
-# side_effect_class. Hard capability scoping (the workflow's allowed_tools) lands
-# with the Workflow object (M3); until then `allow` stays true. The ToolExecutor
-# runs this in SHADOW mode by default (logs, never blocks) until
-# AGENT_TOOL_OPA_ENFORCE is flipped on.
+# APPROVAL MODEL (graph-authoritative)
+# ------------------------------------
+# Human-in-the-loop approval is owned ENTIRELY by the workflow graph. A graph
+# `gate` node (e.g. `manager_approval`) pauses the request until an approver
+# acts, and a step cannot execute until every gate preceding it is satisfied.
+# Gate present in the flow => approval required; no gate => no approval. This is
+# exactly the "use the graph as the graph" model.
+#
+# This policy therefore does NOT re-derive approval from `side_effect_class`.
+# It previously mapped infra/data_grant/membership -> "manager" and destructive
+# -> "admin", which double-gated every workflow (the graph gate AND OPA) and
+# forced per-tool exemptions (`execute_workflow`, `github_create_repo`, ...).
+# Since the genuinely-mutating provisioning tools live in `app.workflows.tools`
+# and are only reachable through the graph (they are not in the chat agent's
+# toolset), that second gate was redundant with the graph and is removed.
+#
+# `side_effect_class` / `is_mutating` remain in the input for audit fidelity and
+# for future *hard-deny* rules (e.g. capability scope, destructive-without-
+# entitlement) — those belong under `allow`, not as an approval gate.
 
 import future.keywords.if
-import future.keywords.in
 
-# Approval requirement per side-effect class.
-_approval_type_by_class := {
-	"read": "none",
-	"app_write": "none",
-	"notify": "none",
-	"data_grant": "manager",
-	"infra": "manager",
-	"membership": "manager",
-	"destructive": "admin",
-}
-
-# The workflow entry tool (`execute_workflow`) creates a *governed request* and
-# hands off to the durable graph, which runs its own HITL approval gates on the
-# real infra/data mutations. Approval therefore happens in-graph, not at chat
-# entry; gating initiation here would deadlock every workflow. It still carries
-# its `infra` side_effect_class for audit fidelity.
-#
-# Otherwise: resolve approval type by side-effect class. Unknown *mutating*
-# classes fail safe to "manager"; non-mutating/unknown falls through to "none".
-approval_type := "none" if {
-	input.tool == "execute_workflow"
-} else := t if {
-	t := _approval_type_by_class[input.side_effect_class]
-} else := "manager" if {
-	input.is_mutating
-} else := "none"
-
-requires_approval if {
-	approval_type != "none"
-	not approval_satisfied
-}
-
-requires_approval := false if {
-	approval_type == "none"
-}
-
-requires_approval := false if {
-	approval_type != "none"
-	approval_satisfied
-}
-
-approval_satisfied if {
-	approval_type != "none"
-	approval_type in input.approvals
-}
-
-# Hard allow/deny. Default allow; explicit deny rules can be added here later
-# (e.g. capability scope from the active workflow, destructive-without-entitlement).
+# Hard allow/deny. Default allow; add explicit deny rules here as needed.
 default allow := true
 
 decision := {
 	"allow": allow,
-	"requires_approval": requires_approval,
-	"approval_type": approval_type,
+	"requires_approval": false,
+	"approval_type": "none",
 	"reason": reason,
 }
 
-reason := sprintf("Mutating tool '%v' (%v) requires '%v' approval.", [input.tool, input.side_effect_class, approval_type]) if {
-	approval_type != "none"
-	not approval_satisfied
+reason := sprintf("Tool '%v' (%v) permitted; approvals are governed by the workflow graph.", [input.tool, input.side_effect_class]) if {
+	allow
 }
 
-reason := sprintf("Tool '%v' (%v) approved (%v approval present).", [input.tool, input.side_effect_class, approval_type]) if {
-	approval_type != "none"
-	approval_satisfied
-}
-
-reason := sprintf("Tool '%v' (%v) permitted without approval.", [input.tool, input.side_effect_class]) if {
-	approval_type == "none"
+reason := sprintf("Tool '%v' (%v) denied by policy.", [input.tool, input.side_effect_class]) if {
+	not allow
 }
