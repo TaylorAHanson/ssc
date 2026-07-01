@@ -341,63 +341,10 @@ async def github_add_team_members(team_slug: str, members: List[str],
     return {"team_slug": team_slug, "members": members, "results": results}
 
 
-# --------------------------------------------------------------------------
-# GitHub access request (native-gate model).
-#
-# The app does NOT grant repo/team access and imposes NO app-side approval.
-# Instead it returns the GitHub-native "request access" / "request to join team"
-# deep-link so the *repo/team owner* approves inside GitHub. This is a read tool
-# (it computes a URL + guidance); the actual approval lives entirely on GitHub.
-# --------------------------------------------------------------------------
-class GithubAccessRequestInput(BaseModel):
-    target_type: str = Field(default="repo", description="repo | team")
-    target: str = Field(..., description="Repository name (repo) or team slug (team)")
-    permission: Optional[str] = Field(
-        default=None, description="Desired permission/role, for the request note only (advisory)."
-    )
-
-
-@tool(name="request_github_access", args_schema=GithubAccessRequestInput, side_effect_class="read",
-      description=("Get the GitHub-native request link for repo or team access. Access is "
-                   "approved by the repo/team owner inside GitHub; the app does not grant it."))
-async def request_github_access(target_type: str = "repo", target: str = "",
-                                permission: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-    from app.core.config import settings
-
-    org = settings.GITHUB_ORG
-    web = (settings.GITHUB_WEB_BASE_URL or "https://github.com").rstrip("/")
-    if not org:
-        return {"status": "error", "message": "GITHUB_ORG is not configured."}
-    if not target:
-        return {"status": "error", "message": "A target (repo name or team slug) is required."}
-
-    ttype = (target_type or "repo").lower()
-    if ttype == "team":
-        url = f"{web}/orgs/{org}/teams/{target}/members"
-        instructions = (
-            f"Open {url} and choose **Request to join** the '{target}' team. "
-            f"A team maintainer approves the request in GitHub."
-        )
-    else:
-        url = f"{web}/{org}/{target}"
-        instructions = (
-            f"Open {url} and click **Request access** (top of the repo page). "
-            f"A repository admin approves the request in GitHub."
-        )
-
-    return {
-        "status": "completed",
-        "target_type": ttype,
-        "target": target,
-        "org": org,
-        "requested_permission": permission,
-        "request_url": url,
-        "instructions": instructions,
-        "message": (
-            f"Access to the {ttype} '{target}' is granted by its owner in GitHub, not by this app. "
-            f"{instructions}"
-        ),
-    }
+# NOTE: GitHub repo/team access is intentionally NOT a workflow. It carries no
+# app-side gate or request record — the repo/team owner approves natively in
+# GitHub. That capability lives as an agent-level chat tool
+# (app.tools.self_service.request_github_access), not here.
 
 
 @tool(name="open_tag_change_pr", side_effect_class="infra",

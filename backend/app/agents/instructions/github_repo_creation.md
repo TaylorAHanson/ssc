@@ -19,6 +19,11 @@
     *   Use the **Project Description** to filter or recommend templates.
     *   Present the available templates to the user and ask if they would like to use one.
     *   If they choose a template, use its `name` in the `execute_workflow` call.
+8.  **Contributors**: Ask for the **GitHub usernames** of the people who will be contributing to this repository.
+    *   *Explain the team setup*: Tell the user that a **GitHub team will be created alongside the repository** (named after the repo by default) and granted **write** access, and that the contributors they name will be added to that team. This is how ongoing access is managed — add/remove people from the team rather than the repo directly.
+    *   *Validation (MANDATORY when usernames are given)*: Call `check_github_user` with the list of usernames to confirm each login exists. If any are not found, show which ones and ask the user to correct them before proceeding.
+    *   *Set expectations*: Users who are already org members are added immediately; anyone who isn't will receive a GitHub invitation they must accept.
+    *   Contributors are optional — if the user has none yet, proceed and note the team can have members added later.
 
 ## Naming Convention
 You MUST construct the repository name as: `{{brand_slug}}-{businessdomain}-{projectname}`.
@@ -37,6 +42,12 @@ Try to determine what the user is doing. There are currently templates for the f
 ## SLA
 This workflow is near instant. There is a high likelihood that it completes in less than a minute. Let the user know this. 
 
+## What This Workflow Does
+For transparency, tell the user this workflow will, in one go:
+1. Create the repository.
+2. Create a GitHub **team** (named after the repo by default) and grant it **write** access to the repo.
+3. Add the named contributors to that team (org members immediately; others by invitation).
+
 ## Execution
 Call `execute_workflow` with:
 ```json
@@ -47,7 +58,10 @@ Call `execute_workflow` with:
     "description": "...",
     "admin_group": "...",
     "visibility": "...",
-    "template": "..."
+    "template": "...",
+    "members": ["contributor1", "contributor2"]
   }
 }
 ```
+
+*Optional overrides*: `team_name` (defaults to the repo name), `team_permission` (defaults to `push`/write), `team_privacy` (defaults to `closed`), and `member_role` (defaults to `member`).

@@ -78,14 +78,6 @@
       "send_notification"
     ]
   },
-  "github_repo_access": {
-    "gates": 0,
-    "mutating": 0,
-    "status": "completed",
-    "tools": [
-      "request_github_access"
-    ]
-  },
   "github_repo_creation": {
     "gates": 0,
     "mutating": 4,

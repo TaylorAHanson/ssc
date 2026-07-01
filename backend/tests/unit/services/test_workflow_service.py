@@ -177,9 +177,41 @@ def test_seed_from_filesystem_is_idempotent(db_session):
     published_keys = {s.key for s in WorkflowService.list_published(db_session)}
     assert published_keys, "seeded workflows should be published"
 
-    # Second run must be a no-op (never clobbers admin edits).
+    # Second run must be a no-op (unchanged files produce no writes).
     second = WorkflowService.seed_from_filesystem(db_session)
     assert second == 0
+
+
+def test_seed_from_filesystem_resyncs_seed_rows(db_session):
+    """Bundled .md edits re-deploy: a seed-owned row with stale prose is refreshed."""
+    WorkflowService.seed_from_filesystem(db_session)
+    row = WorkflowService.get_by_key(db_session, "workspace_access")
+    assert row is not None and row.source == "seed"
+    fresh = row.instructions_markdown
+
+    # Simulate a stale DB row (seeded by an older bundle) and re-run the seed.
+    row.instructions_markdown = "STALE"
+    db_session.commit()
+
+    changed = WorkflowService.seed_from_filesystem(db_session)
+    assert changed >= 1
+    row2 = WorkflowService.get_by_key(db_session, "workspace_access")
+    assert row2.instructions_markdown == fresh  # re-synced from the .md
+    assert row2.instructions_markdown != "STALE"
+
+
+def test_seed_from_filesystem_does_not_clobber_user_edits(db_session):
+    """Admin-edited (source='user') instructions survive the instruction re-sync."""
+    WorkflowService.create(
+        db_session, key="workspace_access", name="WS",
+        request_type="workspace_access",
+        instructions_markdown="# My custom guidance\nGather X.",
+        status="published",
+    )
+    WorkflowService.seed_from_filesystem(db_session)
+    row = WorkflowService.get_by_key(db_session, "workspace_access")
+    assert row.source == "user"
+    assert row.instructions_markdown.startswith("# My custom guidance")
 
 
 # --- data-driven request-type registry -----------------------------------

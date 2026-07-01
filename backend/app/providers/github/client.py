@@ -312,6 +312,65 @@ class GitHubProvider(BaseProvider):
                 results.append({"username": username, "ok": False, "error": str(e)})
         return results
 
+    async def get_user(self, username: str) -> Optional[Dict[str, Any]]:
+        """Return a GitHub user's public profile, or ``None`` if the login doesn't exist."""
+        try:
+            response = await self.client.get(f"/users/{username}")
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            u = response.json()
+            return {
+                "login": u.get("login"),
+                "name": u.get("name"),
+                "type": u.get("type"),
+                "html_url": u.get("html_url"),
+                "id": u.get("id"),
+            }
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            raise PermanentError(f"Failed to look up user '{username}': {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
+    async def is_org_member(self, username: str) -> bool:
+        """True if ``username`` is a member of the org.
+
+        ``GET /orgs/{org}/members/{username}`` returns 204 for a member, 404 when
+        not a member (and the caller is a member). Non-members are added to a team
+        via an org invitation they must accept.
+        """
+        org = self._require_org("is_org_member")
+        try:
+            response = await self.client.get(f"/orgs/{org}/members/{username}")
+            return response.status_code == 204
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
+    async def get_team(self, team_slug: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single org team by slug, or ``None`` if it doesn't exist."""
+        org = self._require_org("get_team")
+        try:
+            response = await self.client.get(f"/orgs/{org}/teams/{team_slug}")
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            t = response.json()
+            return {
+                "name": t.get("name"),
+                "slug": t.get("slug"),
+                "description": t.get("description"),
+                "privacy": t.get("privacy"),
+                "html_url": t.get("html_url"),
+            }
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            raise PermanentError(f"Failed to fetch team '{team_slug}': {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
     async def list_teams(self) -> List[Dict[str, Any]]:
         """List org teams (name, slug, description, permission)."""
         org = self._require_org("list_teams")

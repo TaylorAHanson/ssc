@@ -433,10 +433,15 @@ class WorkflowService:
     # --------------------------------------------------------------- seeding
     @staticmethod
     def seed_from_filesystem(db: Session) -> int:
-        """Import legacy instruction markdown files as published Workflows, once.
+        """Seed / re-sync workflow instruction markdown from the bundled ``.md`` files.
 
-        Idempotent: only inserts keys not already present, so re-running (or
-        running after admins have edited Workflows) never clobbers DB state.
+        For each ``agents/instructions/*.md`` file: insert a published workflow when
+        the key is new, otherwise re-sync ``instructions_markdown`` (and the parsed
+        ``goal``) for ``source="seed"`` rows whose stored prose differs from the file.
+        This mirrors :meth:`seed_specs_from_catalog` so bundled instruction edits
+        actually deploy (the DB row persists across deploys, so a one-time insert is
+        not enough). Admin edits fork the row to ``source="user"`` (see :meth:`update`),
+        which is never touched here. Idempotent: unchanged files produce no writes.
         """
         instructions_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -444,14 +449,13 @@ class WorkflowService:
         )
         if not os.path.isdir(instructions_dir):
             return 0
-        existing = {s.key for s in db.query(WorkflowModel.key).all()}
+        existing = {w.key: w for w in db.query(WorkflowModel).all()}
         inserted = 0
+        updated = 0
         for filename in sorted(os.listdir(instructions_dir)):
             if not filename.endswith(".md"):
                 continue
             key = filename[:-3]
-            if key in existing:
-                continue
             try:
                 with open(os.path.join(instructions_dir, filename), "r") as f:
                     content = f.read()
@@ -459,21 +463,34 @@ class WorkflowService:
                 logger.warning("Skipping instruction %s: %s", filename, e)
                 continue
             goal_match = _GOAL_RE.search(content)
-            db.add(WorkflowModel(
-                id=str(uuid.uuid4()),
-                key=key,
-                name=key.replace("_", " ").title(),
-                goal=goal_match.group(1).strip() if goal_match else None,
-                instructions_markdown=content,
-                status="published",
-                source="seed",
-                created_by="system",
-            ))
-            inserted += 1
-        if inserted:
+            goal_val = goal_match.group(1).strip() if goal_match else None
+
+            row = existing.get(key)
+            if row is None:
+                db.add(WorkflowModel(
+                    id=str(uuid.uuid4()),
+                    key=key,
+                    name=key.replace("_", " ").title(),
+                    goal=goal_val,
+                    instructions_markdown=content,
+                    status="published",
+                    source="seed",
+                    created_by="system",
+                ))
+                inserted += 1
+                continue
+
+            # Re-sync catalog-managed (seed) rows; never clobber admin edits.
+            if row.source == "seed" and (row.instructions_markdown or "") != content:
+                row.instructions_markdown = content
+                if goal_val:
+                    row.goal = goal_val
+                db.add(row)
+                updated += 1
+        if inserted or updated:
             db.commit()
-            logger.info("Seeded %d workflows from filesystem instructions", inserted)
-        return inserted
+            logger.info("Seeded workflow instructions: %d new, %d re-synced", inserted, updated)
+        return inserted + updated
 
     @staticmethod
     def seed_specs_from_catalog(db: Session) -> int:

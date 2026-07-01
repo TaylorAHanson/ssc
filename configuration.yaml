@@ -343,6 +343,13 @@ ui:
 tools:
   check_allowlist_status: true
   check_github_repo: true
+  # Validates contributor GitHub usernames (exists? org member?) before adding
+  # them to a repo's team during github_repo_creation.
+  check_github_user: true
+  # Agent-level GitHub access request: looks up a repo/team and returns the
+  # GitHub-native "request access" / "request to join" link. No app-side gate —
+  # a repo/team owner approves in GitHub. (Not a workflow.)
+  request_github_access: true
   check_orphaned_assets: true
   does_service_principal_exist: true
   get_workflow_instructions: true

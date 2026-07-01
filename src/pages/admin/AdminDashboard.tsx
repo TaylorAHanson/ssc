@@ -23,7 +23,6 @@ const EFFORT_ESTIMATES: Record<string, number> = {
     'service_principal': 2,
     'data_certification': 8,
     'github_repo_creation': 0.5,
-    'github_repo_access': 0.5,
     'project_onboarding': 8,
     'rest_api_access': 1,
     'batch_data_access': 1,
