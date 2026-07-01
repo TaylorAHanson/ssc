@@ -56,15 +56,21 @@ secret_scope = dbutils.widgets.get("secret_scope").strip() or "lmws"
 print(f"LMWS action={action} list_name={list_name} members={members} request_id={request_id}")
 
 # ---------------------------------------------------------------------------
-# Authentication — service-account creds from the Databricks secret scope
+# Authentication — service-account creds
 # ---------------------------------------------------------------------------
+# Only the PASSWORD is stored in the Databricks secret scope (a single secret).
+# The username is NOT stored as a secret, so it's hardcoded here. Update both
+# constants if the LMWS/FWS-API service account changes (the secret key is named
+# after the service account in the control-tower scope).
+SERVICE_USERNAME = "edhapisvc"        # LMWS/FWS-API service-account username
+PASSWORD_SECRET_KEY = "edhapisvc"     # key (in `secret_scope`) holding its password
+
 try:
-    SERVICE_USERNAME = dbutils.secrets.get(scope=secret_scope, key="username")
-    SERVICE_PASSWORD = dbutils.secrets.get(scope=secret_scope, key="password")
+    SERVICE_PASSWORD = dbutils.secrets.get(scope=secret_scope, key=PASSWORD_SECRET_KEY)
 except Exception as e:
     raise RuntimeError(
-        f"Unable to read LMWS service-account credentials from secret scope "
-        f"'{secret_scope}' (keys: username/password): {e}"
+        f"Unable to read LMWS service-account password from secret scope "
+        f"'{secret_scope}' (key: '{PASSWORD_SECRET_KEY}'): {e}"
     )
 
 

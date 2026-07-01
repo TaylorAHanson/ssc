@@ -645,8 +645,28 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 handleStreamEvent(event);
             }
         } catch (err) {
+            // If the stream dies (network error, server/proxy timeout, abort)
+            // while a synchronous tool pill is still 'running', it would spin
+            // forever — the matching `tool_result` event never arrives. Flip any
+            // still-running pills to 'error' so the spinner stops and the failure
+            // is visible. ('pending' Genie poll pills are owned by the poll hook,
+            // so we leave those alone.)
+            const failRunningTools = (note: string) =>
+                setMessages((prev) =>
+                    prev.map((m) =>
+                        m.kind === 'tool' && m.status === 'running'
+                            ? {
+                                ...m,
+                                status: 'error',
+                                completedAt: Date.now(),
+                                errorMessage: m.errorMessage ?? note,
+                            }
+                            : m,
+                    ),
+                );
             if (controller.signal.aborted) {
                 // User-initiated abort; surface a quiet agent line.
+                failRunningTools('Cancelled');
                 setMessages((prev) => [
                     ...prev,
                     {
@@ -657,6 +677,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     },
                 ]);
             } else {
+                failRunningTools(err instanceof Error ? err.message : String(err));
                 setMessages((prev) => [
                     ...prev,
                     {
