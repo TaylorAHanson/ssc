@@ -426,6 +426,22 @@ variables:
       (username / password). Only the scope is env-specific; set it per target.
       The app SP needs READ.
     default: "controltower_secret_scope_prd"
+  # LMWS / FWS-API base URLs (OPTIONAL). The app passes these to the LMWS job as
+  # widgets so they're never hardcoded in the notebook. Declared with empty
+  # defaults and referenced ONLY in targets that set them (see dev) — this keeps
+  # stage/prod from rendering an empty env value, which Databricks Apps rejects.
+  lmws_authn_url:
+    description: "LMWS authn base URL (e.g. https://<gateway>/iam/v1/lmwsrest-authn). Optional; set per target."
+    default: ""
+  lmws_rest_url:
+    description: "LMWS REST base URL (e.g. https://<gateway>/iam/v1/lmws-rest/publicAPIrest). Optional; set per target."
+    default: ""
+  lmws_cache_url:
+    description: "LMWS list-cache-info base URL (e.g. https://<gateway>/iam/v1/lmws-rest/listCacheInfo). Optional; set per target."
+    default: ""
+  lmws_fws_url:
+    description: "FWS-API entitlement base URL (e.g. https://<gateway>/iam/v1/fws-api/entitlement). Optional; set per target."
+    default: ""
 # Target environments
 targets:
   # Local development (default)
@@ -491,6 +507,13 @@ targets:
       # Existing all-purpose cluster for dev classic-compute jobs (LMWS, etc.).
       # The app SP needs CAN_RESTART on it. Replace with the real cluster ID.
       databricks_job_cluster_id: "REPLACE_WITH_DEV_CLUSTER_ID"
+      # LMWS / FWS-API base URLs (OPTIONAL). Fill in the real gateway URLs below.
+      # Placeholders are non-empty so `bundle deploy` won't fail on empty env
+      # values; the LMWS actions that need a URL error clearly until it's set.
+      lmws_authn_url: "REPLACE_WITH_LMWS_AUTHN_URL"
+      lmws_rest_url: "REPLACE_WITH_LMWS_REST_URL"
+      lmws_cache_url: "REPLACE_WITH_LMWS_CACHE_URL"
+      lmws_fws_url: "REPLACE_WITH_LMWS_FWS_URL"
     resources:
       apps:
         edh-ssc:
@@ -500,6 +523,19 @@ targets:
           permissions:
             - level: CAN_USE
               group_name: "account users"
+          # Dev-only LMWS/FWS-API base URLs. Appended to the base app env (DAB
+          # concatenates sequences), so stage/prod never carry these entries and
+          # can't hit the empty-value rejection. Remove/blank a line to drop it.
+          config:
+            env:
+              - name: LMWS_AUTHN_URL
+                value: "${var.lmws_authn_url}"
+              - name: LMWS_REST_URL
+                value: "${var.lmws_rest_url}"
+              - name: LMWS_CACHE_URL
+                value: "${var.lmws_cache_url}"
+              - name: LMWS_FWS_URL
+                value: "${var.lmws_fws_url}"
         mcp-server:
           # Dev-only org-wide CAN_USE, mirroring the main app so the MCP
           # server is reachable by anyone in the org in dev.

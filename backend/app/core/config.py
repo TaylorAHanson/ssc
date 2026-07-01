@@ -440,6 +440,14 @@ class Settings(BaseSettings):
     # cluster-side; the app never reads these creds itself. See
     # app/providers/lmws/.
     LMWS_SECRET_SCOPE: str = "lmws"  # Databricks secret scope (keys: username, password)
+    # LMWS / FWS-API base URLs. Optional and NOT hardcoded in the notebook — the
+    # app passes them to the job as widgets. Empty by default; set per deployment
+    # via databricks.yml (see the dev target). When blank the LMWS actions that
+    # need them fail with a clear "not configured" error.
+    LMWS_AUTHN_URL: str = ""   # e.g. https://<gateway>/iam/v1/lmwsrest-authn
+    LMWS_REST_URL: str = ""    # e.g. https://<gateway>/iam/v1/lmws-rest/publicAPIrest
+    LMWS_CACHE_URL: str = ""   # e.g. https://<gateway>/iam/v1/lmws-rest/listCacheInfo
+    LMWS_FWS_URL: str = ""     # e.g. https://<gateway>/iam/v1/fws-api/entitlement
     LMWS_JOB_TIMEOUT_SECONDS: int = 1800  # Job-level timeout for an LMWS action run
     LMWS_DEFAULT_JUSTIFICATION: str = "Automated via Databricks job"
     LMWS_DEFAULT_CLONE_SOURCE: str = ""  # Default clone source for createSPGroup (set per-deployment)

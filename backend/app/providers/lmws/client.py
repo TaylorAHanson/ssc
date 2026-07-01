@@ -59,7 +59,7 @@ class LmwsAction:
     LIST_MEMBERS_REMOVE = "list_members_remove"
     LIST_MEMBERS_UPDATE = "list_members_update"
 
-    # --- Group/SPAC lifecycle (stubbed for now) ---
+    # --- Group/SPAC lifecycle ---
     LIST_CREATE_NEW = "list_create_new"
     CREATE_SP_GROUP = "create_sp_group"
     PROCESS_SPAC_POLICY = "process_spac_policy"
@@ -77,7 +77,7 @@ CORE_ACTIONS = frozenset(
     }
 )
 
-STUBBED_ACTIONS = frozenset(
+LIFECYCLE_ACTIONS = frozenset(
     {
         LmwsAction.LIST_CREATE_NEW,
         LmwsAction.CREATE_SP_GROUP,
@@ -175,7 +175,7 @@ class LmwsProvider(BaseProvider):
         The ``secret_scope`` is passed through so the notebook knows which
         Databricks secret scope holds the service-account credentials.
         """
-        if action not in CORE_ACTIONS and action not in STUBBED_ACTIONS:
+        if action not in CORE_ACTIONS and action not in LIFECYCLE_ACTIONS:
             raise ValueError(f"Unknown LMWS action: {action!r}")
 
         return {
@@ -190,6 +190,12 @@ class LmwsProvider(BaseProvider):
             "request_id": request_id or "",
             "spac_policies": _csv(spac_policies),
             "secret_scope": self.secret_scope,
+            # LMWS/FWS-API base URLs are configured app-side (databricks.yml) and
+            # passed through so they're never hardcoded in the notebook.
+            "authn_url": settings.LMWS_AUTHN_URL,
+            "rest_url": settings.LMWS_REST_URL,
+            "cache_url": settings.LMWS_CACHE_URL,
+            "fws_url": settings.LMWS_FWS_URL,
         }
 
     @staticmethod
