@@ -126,16 +126,36 @@ def _require_url(base: str, name: str) -> str:
     return base
 
 
+def _check_body(data, where: str):
+    """Raise on a body-level LMWS/FWS-API error.
+
+    The gateway returns HTTP 200 even for logical failures, signalling them via a
+    non-empty ``errorInfos`` (or ``errorInfo``) array, e.g.
+    ``{"errorInfos": [{"code": "90002", "message": "Requester is not authorized ..."}]}``.
+    ``raise_for_status`` can't catch these, so surface them as a job failure.
+    """
+    if not isinstance(data, dict):
+        return data
+    errs = data.get("errorInfos") or data.get("errorInfo")
+    if errs:
+        if isinstance(errs, list):
+            msgs = "; ".join(str(e.get("message") or e) for e in errs)
+        else:
+            msgs = str(errs)
+        raise RuntimeError(f"LMWS API error from {where}: {msgs}")
+    return data
+
+
 def _get(base: str, name: str, path: str, params: dict) -> dict:
     resp = requests.get(f"{_require_url(base, name)}/{path}", params=params, auth=_AUTH, verify=False)
     resp.raise_for_status()
-    return resp.json()
+    return _check_body(resp.json(), f"{name}/{path}")
 
 
 def _post(base: str, name: str, path: str, payload: dict) -> dict:
     resp = requests.post(f"{_require_url(base, name)}/{path}", json=payload, auth=_AUTH, verify=False)
     resp.raise_for_status()
-    return resp.json()
+    return _check_body(resp.json(), f"{name}/{path}")
 
 
 # ---------------------------------------------------------------------------

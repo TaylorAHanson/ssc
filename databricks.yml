@@ -40,23 +40,19 @@ resources:
       description: "edh-ssc - Self-service platform for ${var.environment}"
       source_code_path: "${var.source_code_path}"
       resources:
-        # Attach the Lakebase database as an AUTOSCALING resource (`postgres:`),
-        # not the Provisioned `database:` type. Since Mar 12 2026 every instance
-        # created via `database_instances` is an Autoscaling *project*; attaching
-        # it with the Provisioned `database:` block makes the platform validate
-        # MANAGE against a provisioned-instance securable that doesn't match the
-        # project ACL you actually hold -> "User needs MANAGE permission on the
-        # resource", even when you have Can Manage on the project.
+        # Attach the Lakebase database as an AUTOSCALING resource (`postgres:`).
+        # Since Mar 12 2026 every instance created via `database_instances` is an
+        # Autoscaling *project*, and Databricks recommends the autoscaling path for
+        # new work — so this is the correct, forward-looking attach.
         #
-        # Autoscaling path facts (from `databricks postgres list-branches/-databases`):
-        #   - project name  == the database instance name (edh-ssc-<env>-v5)
-        #   - default branch == "production" (auto-created, not the instance name)
-        #   - database id    == "databricks-postgres" (hyphen; the logical PG db
-        #                        is "databricks_postgres" with an underscore)
+        # The `database` field takes the Postgres-API database *ID* (docs form
+        # `databases/db-xxxx-yyyyyyyy`), NOT the display name `databricks_postgres`.
+        # The id is per-project, so it's a per-target variable set from the
+        # database's "Resource name" in the Lakebase UI (or the app-resource picker).
         - name: postgres
           postgres:
             branch: projects/${resources.database_instances.edh_ssc_db.name}/branches/production
-            database: projects/${resources.database_instances.edh_ssc_db.name}/branches/production/databases/databricks-postgres
+            database: projects/${resources.database_instances.edh_ssc_db.name}/branches/production/databases/${var.lakebase_database_id}
             permission: CAN_CONNECT_AND_CREATE
       config:
         command:
@@ -331,6 +327,15 @@ variables:
   lakebase_host:
     description: "Lakebase Database Host"
     default: "instance-c77ef127-eeca-44f5-80ba-76b800757462.database.cloud.databricks.com"
+  lakebase_database_id:
+    description: >-
+      Addressable Lakebase (autoscaling) database resource id used in the app's
+      `postgres.database` path: projects/<instance>/branches/production/databases/<id>.
+      NOTE: this is the resource id, NOT the raw datname. It's the datname slug
+      (underscores -> hyphens) for instances that registered a default database
+      (e.g. dev/prod -> `databricks-postgres`). Older instances whose default DB
+      has no addressable resource must point this at a freshly-registered DB.
+    default: "databricks-postgres"
   gitops_mode:
     description: "GitOps mode (volume or direct)"
     default: "volume"
@@ -563,6 +568,12 @@ targets:
       event_sync_cron: "0 * * * *"
       data_asset_sync_cron: "0 * * * *"
       enforcement_sentinel_cron: "*/30 * * * *"
+      # This (older, 2026-05-05) instance registered its default DB with an OPAQUE
+      # id instead of the friendly `databricks-postgres` slug dev uses. Both map to
+      # the same underlying postgres_database `databricks_postgres` (the existing
+      # data). Verified via:
+      #   databricks api get /api/2.0/postgres/projects/edh-ssc-stage-v5/branches/production/databases
+      lakebase_database_id: "db-zm1o-5e047bf1j3"
 
   # Production environment
   prod:
