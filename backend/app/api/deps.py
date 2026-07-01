@@ -143,5 +143,8 @@ async def get_github_provider() -> GitHubProvider:
     """
     Dependency to get a GitHub provider instance.
     """
-    async with GitHubProvider.from_settings() as github:
+    async with GitHubProvider(
+        token=settings.GITHUB_TOKEN or settings.get_git_token(),
+        org=settings.GITHUB_ORG
+    ) as github:
         yield github

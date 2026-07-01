@@ -401,6 +401,9 @@ class Settings(BaseSettings):
     GIT_USERNAME: str = _branding.get("git_username", os.getenv("GIT_USERNAME", f"{_brand_short_name} Bot"))
     GIT_EMAIL: str = _branding.get("git_email", os.getenv("GIT_EMAIL", f"{_brand_slug}-bot@databricks.com"))
     GIT_SSH_KEY_PATH: str = "" # Path to SSH key for git operations
+    GIT_TOKEN: str = "" # GitHub personal access token for HTTPS auth (fallback)
+    GIT_TOKEN_SECRET_SCOPE: str = ""  # Databricks secret scope for PAT
+    GIT_TOKEN_SECRET_KEY: str = ""  # Secret key name for PAT
     
     # Volume-based GitOps Settings (recommended - avoids IP allowlist issues)
     # When GITOPS_MODE is "volume", requests are written to a Unity Catalog Volume
@@ -410,10 +413,7 @@ class Settings(BaseSettings):
     # For local dev or non-Databricks runs, use a local directory (e.g. ./gitops_volume or /tmp/gitops_volume).
     GITOPS_VOLUME_PATH: str = "/Volumes/main/default/gitops_requests"  # UC or local path
     
-    # GitHub App Authentication — the ONLY GitHub auth mechanism.
-    # All GitHub REST operations (repo create, templates, branches, PRs) and the
-    # GitOps git clone/push authenticate with a short-lived installation token
-    # minted from this App's private key. There is no PAT fallback.
+    # GitHub App Authentication (blocked by org IP allowlist, kept for future)
     GITHUB_APP_ID: str = "" # GitHub App ID
     GITHUB_APP_PRIVATE_KEY: str = "" # PEM-encoded private key (store in secrets)
     GITHUB_APP_INSTALLATION_ID: str = "" # Optional: specific installation ID
@@ -489,8 +489,9 @@ class Settings(BaseSettings):
     NOTIFICATION_SLACK_WEBHOOK_URL: str = ""  # SECRET: Set in .env
     NOTIFICATION_TEAMS_WEBHOOK_URL: str = ""  # SECRET: Set in .env
     
-    # GitHub Settings — org the GitHub App is installed on. All repo operations
-    # are owned by this org; auth is via the GitHub App (see GITHUB_APP_* above).
+    # GitHub Settings
+    # SECRET: Set in .env file
+    GITHUB_TOKEN: str = ""  # SECRET: Set in .env
     GITHUB_ORG: str = ""  # GitHub organization name
 
     # Governance Tag Management (GitOps for UC tag changes)
@@ -508,6 +509,7 @@ class Settings(BaseSettings):
     
     # Cache for runtime-fetched secrets
     _github_app_private_key_cached: str = ""
+    _git_token_cached: str = ""
     _ses_aws_credentials_cached: Optional[dict] = None
 
     def get_ses_aws_credentials(self) -> Optional[dict]:
@@ -581,6 +583,45 @@ class Settings(BaseSettings):
         except Exception as e:
             logger.warning(f"Failed to fetch SES IAM credentials from secrets: {e}")
             return None
+    
+    def get_git_token(self) -> str:
+        """
+        Get GitHub PAT, fetching from Databricks secrets at runtime if needed.
+        """
+        # If already set via env var, use it
+        if self.GIT_TOKEN:
+            return self.GIT_TOKEN
+        
+        # If we already fetched it, return cached value
+        if self._git_token_cached:
+            return self._git_token_cached
+        
+        # Try to fetch from Databricks secrets at runtime
+        if self.GIT_TOKEN_SECRET_SCOPE and self.GIT_TOKEN_SECRET_KEY:
+            try:
+                from databricks.sdk import WorkspaceClient
+                import base64
+                import logging
+                logger = logging.getLogger(__name__)
+                
+                w = WorkspaceClient()
+                secret = w.secrets.get_secret(
+                    scope=self.GIT_TOKEN_SECRET_SCOPE,
+                    key=self.GIT_TOKEN_SECRET_KEY
+                )
+                if secret and secret.value:
+                    # Databricks SDK returns secrets base64 encoded
+                    token_value = base64.b64decode(secret.value).decode('utf-8').strip()
+                    self._git_token_cached = token_value
+                    logger.info(
+                        f"Fetched GitHub PAT from secrets/{self.GIT_TOKEN_SECRET_SCOPE}/{self.GIT_TOKEN_SECRET_KEY}"
+                    )
+                    return self._git_token_cached
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to fetch GitHub PAT from secrets: {e}")
+        
+        return ""
     
     def get_github_app_private_key(self) -> str:
         """

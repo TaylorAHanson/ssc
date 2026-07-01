@@ -18,11 +18,17 @@ class ListGitHubTemplatesInput(BaseModel):
 async def list_github_templates(description_hint: Optional[str] = None) -> Dict[str, Any]:
     """Execute the tool."""
     try:
+        # settings.get_git_token() might be needed if GITHUB_TOKEN is not set
+        token = settings.GITHUB_TOKEN 
+        if not token and hasattr(settings, 'get_git_token'):
+            token = settings.get_git_token()
+            
         org = settings.GITHUB_ORG
-        if not (settings.GITHUB_APP_ID and org):
-            return {"status": "error", "message": "GitHub App not configured (GITHUB_APP_ID/GITHUB_ORG)"}
-
-        async with GitHubProvider.from_settings() as github:
+        
+        if not token:
+            return {"status": "error", "message": "GitHub token not configured"}
+            
+        async with GitHubProvider(token=token, org=org) as github:
             templates = await github.list_templates()
             
             # Filter by hint if provided
