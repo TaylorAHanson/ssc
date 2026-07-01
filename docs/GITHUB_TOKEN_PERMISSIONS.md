@@ -17,15 +17,13 @@ All calls go to `https://api.github.com` and are implemented in
 
 ---
 
-## Authentication options
+## Authentication
 
-The app supports two credential types. **A GitHub App is strongly recommended**
-for organization use.
+The app authenticates to GitHub with a **Personal Access Token (PAT)**.
 
-| Mode | Config | Notes |
-| --- | --- | --- |
-| **GitHub App** (recommended) | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (or the secret-scope variant), `GITHUB_APP_INSTALLATION_ID` | Per-installation, fine-grained, org-approved. **Can create org-level repositories** (fine-grained PATs cannot — see caveats). Best security + audit story. |
-| **Personal Access Token (PAT)** | `GITHUB_TOKEN`, `GITHUB_ORG` | Simpler to set up. Use a **fine-grained** PAT where possible; a classic PAT is the fallback. |
+| Config | Notes |
+| --- | --- |
+| `GITHUB_TOKEN`, `GITHUB_ORG` | Use a token owned by a dedicated machine/service account. A **classic PAT** with `repo` scope is required for org-level repo creation (fine-grained PATs are blocked from `POST /orgs/{org}/repos` — see caveats). The token is stored in a Databricks secret scope and read at runtime. |
 
 ---
 
@@ -52,7 +50,7 @@ for organization use.
 
 ---
 
-## Fine-grained PAT / GitHub App permissions (recommended)
+## Fine-grained PAT permissions
 
 Grant **only** these repository permissions, scoped to the specific org and the
 specific repositories the app touches (template repos + the GitOps config repo):
@@ -69,9 +67,9 @@ specific repositories the app touches (template repos + the GitOps config repo):
 
 ---
 
-## Classic PAT scopes (fallback)
+## Classic PAT scopes (required for org repo creation)
 
-If you must use a classic PAT instead of fine-grained / GitHub App:
+Use a classic PAT when the app must create repositories at the org level:
 
 | Scope | Why |
 | --- | --- |
@@ -86,8 +84,8 @@ If you must use a classic PAT instead of fine-grained / GitHub App:
 
 1. **Fine-grained PATs cannot create org-level repositories.** `POST /orgs/{org}/repos`
    returns `403 Forbidden` with a fine-grained PAT even when all repo permissions
-   are granted. For org repo creation use a **GitHub App** (preferred) or a
-   **classic PAT**, or have the org pre-create the repos.
+   are granted. For org repo creation use a **classic PAT** or have the org
+   pre-create the repos.
 2. **Org approval is required.** A fine-grained PAT scoped to an org's resources
    must be approved by an org owner before it works.
 3. **SSO authorization.** If the org enforces SAML SSO, the token must be
@@ -112,20 +110,21 @@ If you must use a classic PAT instead of fine-grained / GitHub App:
 > GitOps flow (create a branch, commit config files, open a PR) against our
 > governance config repo.
 >
-> **Preferred:** a **GitHub App** installed on our org, restricted to the
-> template repositories and the config repo, with these **repository
-> permissions**:
+> We'd like a **Personal Access Token owned by a dedicated machine/service
+> account**, scoped to the template repositories and the config repo.
+>
+> Because we create repositories at the org level, we need a **classic PAT** with
+> the `repo` scope (plus `workflow` only if we commit files under
+> `.github/workflows/`). A fine-grained PAT can't create org-level repos — GitHub
+> blocks `POST /orgs/{org}/repos` with a 403 — so if you'd prefer fine-grained,
+> we'd need the org to pre-create the repos instead. For reference, the
+> equivalent fine-grained repository permissions would be:
 >
 > - Metadata: **Read**
 > - Contents: **Read & write**
 > - Pull requests: **Read & write**
 > - Administration: **Read & write** (needed for repo creation + adding collaborators)
 > - Workflows: **Read & write** (only if our templates include `.github/workflows/` files)
->
-> If a GitHub App isn't feasible, a **classic PAT** with the `repo` scope (plus
-> `workflow` if we commit workflow files) works as a fallback. Please avoid a
-> fine-grained PAT for repo creation at the org level — GitHub blocks that with a
-> 403.
 >
 > We'll store the credential in our Databricks secret scope and never in source
 > control. Happy to walk through the exact API calls — they're documented on our
