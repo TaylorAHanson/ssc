@@ -79,8 +79,10 @@ resources:
             value: "${var.infra_repo_url}"
           - name: INFRA_REPO_BRANCH
             value: "${var.infra_repo_branch}"
+          # GitHub PAT lives in the same control-tower scope as everything else;
+          # only the key name is configurable (default: github-pat).
           - name: GIT_TOKEN_SECRET_SCOPE
-            value: "${var.github_pat_secret_scope}"
+            value: "${var.controltower_secret_scope}"
           - name: GIT_TOKEN_SECRET_KEY
             value: "${var.github_pat_secret_key}"
           - name: GITHUB_ORG
@@ -347,11 +349,8 @@ variables:
   infra_repo_branch:
     description: "Branch for the infrastructure repository"
     default: "main"
-  github_pat_secret_scope:
-    description: "Secret scope for GitHub PAT"
-    default: "edh-ssc-hub"
   github_pat_secret_key:
-    description: "Secret key for GitHub PAT"
+    description: "Secret key for the GitHub PAT within controltower_secret_scope"
     default: "github-pat"
   github_org:
     description: "GitHub organization for repo/template operations (same across envs)"
