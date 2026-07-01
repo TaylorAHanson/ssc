@@ -293,6 +293,113 @@ async def github_set_permissions(repo_name: str, username: str,
     return {"repo": repo_name, "username": username, "result": result}
 
 
+# --------------------------------------------------------------------------
+# GitHub org team management (requires an org token with admin:org)
+# --------------------------------------------------------------------------
+class GithubCreateTeamInput(BaseModel):
+    team_name: str = Field(..., description="Team name to create")
+    description: Optional[str] = Field(default=None, description="Team description")
+    privacy: str = Field(default="closed", description="closed (visible to org) | secret")
+
+
+@tool(name="github_create_team", args_schema=GithubCreateTeamInput, side_effect_class="infra",
+      description="Create a GitHub org team (idempotent). Returns the team, including its slug.")
+async def github_create_team(team_name: str, description: Optional[str] = None,
+                             privacy: str = "closed", **kwargs) -> Dict[str, Any]:
+    provider = _get_github_provider()
+    team = await provider.create_team(team_name, description=description, privacy=privacy)
+    return {"team_name": team_name, "team_slug": team.get("slug"), "result": team}
+
+
+class GithubGrantTeamRepoInput(BaseModel):
+    team_slug: str = Field(..., description="Team slug (from github_create_team / list_github_teams)")
+    repo_name: str = Field(..., description="Repository name")
+    permission: str = Field(default="push", description="pull | triage | push | maintain | admin")
+
+
+@tool(name="github_grant_team_repo", args_schema=GithubGrantTeamRepoInput, side_effect_class="infra",
+      description="Give a GitHub team a permission level on a repository.")
+async def github_grant_team_repo(team_slug: str, repo_name: str,
+                                 permission: str = "push", **kwargs) -> Dict[str, Any]:
+    provider = _get_github_provider()
+    ok = await provider.grant_team_repo(team_slug, repo_name, permission)
+    return {"team_slug": team_slug, "repo": repo_name, "permission": permission, "result": ok}
+
+
+class GithubAddTeamMembersInput(BaseModel):
+    team_slug: str = Field(..., description="Team slug (from github_create_team / list_github_teams)")
+    members: List[str] = Field(default_factory=list, description="GitHub usernames to add")
+    role: str = Field(default="member", description="member | maintainer")
+
+
+@tool(name="github_add_team_members", args_schema=GithubAddTeamMembersInput, side_effect_class="membership",
+      description="Add one or more GitHub users to a team (org members: immediate; others: invited).")
+async def github_add_team_members(team_slug: str, members: List[str],
+                                  role: str = "member", **kwargs) -> Dict[str, Any]:
+    provider = _get_github_provider()
+    results = await provider.add_team_members(team_slug, members or [], role)
+    return {"team_slug": team_slug, "members": members, "results": results}
+
+
+# --------------------------------------------------------------------------
+# GitHub access request (native-gate model).
+#
+# The app does NOT grant repo/team access and imposes NO app-side approval.
+# Instead it returns the GitHub-native "request access" / "request to join team"
+# deep-link so the *repo/team owner* approves inside GitHub. This is a read tool
+# (it computes a URL + guidance); the actual approval lives entirely on GitHub.
+# --------------------------------------------------------------------------
+class GithubAccessRequestInput(BaseModel):
+    target_type: str = Field(default="repo", description="repo | team")
+    target: str = Field(..., description="Repository name (repo) or team slug (team)")
+    permission: Optional[str] = Field(
+        default=None, description="Desired permission/role, for the request note only (advisory)."
+    )
+
+
+@tool(name="request_github_access", args_schema=GithubAccessRequestInput, side_effect_class="read",
+      description=("Get the GitHub-native request link for repo or team access. Access is "
+                   "approved by the repo/team owner inside GitHub; the app does not grant it."))
+async def request_github_access(target_type: str = "repo", target: str = "",
+                                permission: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    from app.core.config import settings
+
+    org = settings.GITHUB_ORG
+    web = (settings.GITHUB_WEB_BASE_URL or "https://github.com").rstrip("/")
+    if not org:
+        return {"status": "error", "message": "GITHUB_ORG is not configured."}
+    if not target:
+        return {"status": "error", "message": "A target (repo name or team slug) is required."}
+
+    ttype = (target_type or "repo").lower()
+    if ttype == "team":
+        url = f"{web}/orgs/{org}/teams/{target}/members"
+        instructions = (
+            f"Open {url} and choose **Request to join** the '{target}' team. "
+            f"A team maintainer approves the request in GitHub."
+        )
+    else:
+        url = f"{web}/{org}/{target}"
+        instructions = (
+            f"Open {url} and click **Request access** (top of the repo page). "
+            f"A repository admin approves the request in GitHub."
+        )
+
+    return {
+        "status": "completed",
+        "target_type": ttype,
+        "target": target,
+        "org": org,
+        "requested_permission": permission,
+        "request_url": url,
+        "instructions": instructions,
+        "message": (
+            f"Access to the {ttype} '{target}' is granted by its owner in GitHub, not by this app. "
+            f"{instructions}"
+        ),
+    }
+
+
 @tool(name="open_tag_change_pr", side_effect_class="infra",
       description="Open a GitOps pull request that applies a UC tag change on merge.")
 async def open_tag_change_pr(**kwargs) -> Dict[str, Any]:

@@ -486,6 +486,10 @@ class Settings(BaseSettings):
     # SECRET: Set in .env file
     GITHUB_TOKEN: str = ""  # SECRET: Set in .env
     GITHUB_ORG: str = ""  # GitHub organization name
+    # Web base URL for user-facing GitHub deep-links (native "request access" /
+    # "request to join team" pages). Enterprise Cloud = https://github.com;
+    # override for a self-hosted GitHub Enterprise Server host.
+    GITHUB_WEB_BASE_URL: str = "https://github.com"
 
     # Governance Tag Management (GitOps for UC tag changes)
     # The app opens PRs against this repo; a GitHub Action in the repo runs the

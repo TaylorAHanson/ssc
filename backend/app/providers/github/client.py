@@ -9,6 +9,17 @@ import base64
 import httpx
 import subprocess
 import asyncio
+import re
+
+
+def _slugify_team(name: str) -> str:
+    """Approximate GitHub's team-slug derivation (lowercase, non-alnum -> hyphen).
+
+    Used only as a best-effort fallback to re-fetch a team when creation returns
+    422 (already exists); GitHub itself is the source of truth for the real slug.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower())
+    return slug.strip("-")
 
 
 class GitHubProvider(BaseProvider):
@@ -203,7 +214,127 @@ class GitHubProvider(BaseProvider):
                 raise PermanentError(f"Failed to set permissions: {str(e)}")
         except httpx.RequestError as e:
             raise RetryableError(f"Request error: {str(e)}")
-    
+
+    # ------------------------------------------------------------------
+    # Org team management (requires an org token with admin:org / org
+    # Members: Read & write). Teams are org-scoped, so ``self.org`` is
+    # required for every call below.
+    # ------------------------------------------------------------------
+    def _require_org(self, op: str) -> str:
+        if not self.org:
+            raise PermanentError(f"{op} requires an organization (GITHUB_ORG is not set).")
+        return self.org
+
+    @retry_on_retryable(max_attempts=3)
+    async def create_team(self, name: str, description: Optional[str] = None,
+                          privacy: str = "closed") -> Dict[str, Any]:
+        """Create an org team (idempotent: returns the existing team on 422).
+
+        Returns the team object (notably ``slug``, used by the other team calls).
+        """
+        org = self._require_org("create_team")
+        try:
+            payload: Dict[str, Any] = {"name": name, "privacy": privacy}
+            if description:
+                payload["description"] = description
+            response = await self.client.post(f"/orgs/{org}/teams", json=payload)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            # 422 => a team with this name already exists. Treat as success and
+            # fetch it so the flow is idempotent on re-run.
+            if e.response.status_code == 422:
+                slug = _slugify_team(name)
+                existing = await self.client.get(f"/orgs/{org}/teams/{slug}")
+                if existing.status_code == 200:
+                    return existing.json()
+                raise PermanentError(f"Team '{name}' exists but could not be resolved: {existing.text}")
+            if e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            raise PermanentError(f"Failed to create team '{name}': {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
+    @retry_on_retryable(max_attempts=3)
+    async def grant_team_repo(self, team_slug: str, repo: str,
+                              permission: str = "push") -> bool:
+        """Give a team a permission level on a repo.
+
+        ``permission`` is one of pull|triage|push|maintain|admin.
+        """
+        org = self._require_org("grant_team_repo")
+        try:
+            response = await self.client.put(
+                f"/orgs/{org}/teams/{team_slug}/repos/{org}/{repo}",
+                json={"permission": permission},
+            )
+            response.raise_for_status()
+            return True
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            raise PermanentError(f"Failed to grant team '{team_slug}' access to '{repo}': {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
+    @retry_on_retryable(max_attempts=3)
+    async def add_team_member(self, team_slug: str, username: str,
+                              role: str = "member") -> Dict[str, Any]:
+        """Add/update a single user's membership in a team (``role``: member|maintainer).
+
+        For org members this is immediate; for non-members GitHub sends an org
+        invitation the user must accept.
+        """
+        org = self._require_org("add_team_member")
+        try:
+            response = await self.client.put(
+                f"/orgs/{org}/teams/{team_slug}/memberships/{username}",
+                json={"role": role},
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            raise PermanentError(f"Failed to add '{username}' to team '{team_slug}': {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
+    async def add_team_members(self, team_slug: str, members: List[str],
+                               role: str = "member") -> List[Dict[str, Any]]:
+        """Add several users to a team; returns a per-member result list."""
+        results: List[Dict[str, Any]] = []
+        for username in members:
+            try:
+                res = await self.add_team_member(team_slug, username, role)
+                results.append({"username": username, "state": res.get("state", "active"), "ok": True})
+            except PermanentError as e:
+                results.append({"username": username, "ok": False, "error": str(e)})
+        return results
+
+    async def list_teams(self) -> List[Dict[str, Any]]:
+        """List org teams (name, slug, description, permission)."""
+        org = self._require_org("list_teams")
+        try:
+            response = await self.client.get(f"/orgs/{org}/teams", params={"per_page": 100})
+            response.raise_for_status()
+            teams = response.json()
+            return [
+                {
+                    "name": t.get("name"),
+                    "slug": t.get("slug"),
+                    "description": t.get("description"),
+                    "privacy": t.get("privacy"),
+                }
+                for t in teams
+            ]
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            raise PermanentError(f"Failed to list teams for org '{org}': {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
     async def _resolve_repo_path(self, repo: str) -> str:
         """Resolve a repo reference to a full ``owner/repo`` path.
 

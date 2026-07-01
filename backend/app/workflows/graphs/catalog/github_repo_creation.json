@@ -1,11 +1,11 @@
 {
   "key": "github_repo_creation",
   "name": "github_repo_creation",
-  "complete_fact": "repo_created",
+  "complete_fact": "provisioning_completed",
   "stages": [
     {
       "kind": "step",
-      "name": "provision",
+      "name": "provision_repo",
       "tool": "github_create_repo",
       "success_fact": "repo_created",
       "args": {
@@ -13,6 +13,40 @@
         "template": {"$var": "template"},
         "description": {"$var": "description"},
         "visibility": {"$var": {"path": "visibility", "default": "private"}}
+      }
+    },
+    {
+      "kind": "step",
+      "name": "provision_team",
+      "tool": "github_create_team",
+      "success_fact": "team_created",
+      "writes_context": ["team_slug"],
+      "args": {
+        "team_name": {"$coalesce": [{"$var": "team_name"}, {"$var": {"path": "repo_name", "default": ""}}]},
+        "description": {"$var": "description"},
+        "privacy": {"$var": {"path": "team_privacy", "default": "closed"}}
+      }
+    },
+    {
+      "kind": "step",
+      "name": "grant_team",
+      "tool": "github_grant_team_repo",
+      "success_fact": "team_granted",
+      "args": {
+        "team_slug": {"$var": "team_slug"},
+        "repo_name": {"$var": {"path": "repo_name", "default": ""}},
+        "permission": {"$var": {"path": "team_permission", "default": "push"}}
+      }
+    },
+    {
+      "kind": "step",
+      "name": "add_members",
+      "tool": "github_add_team_members",
+      "success_fact": "provisioning_completed",
+      "args": {
+        "team_slug": {"$var": "team_slug"},
+        "members": {"$var": {"path": "members", "default": []}},
+        "role": {"$var": {"path": "member_role", "default": "member"}}
       }
     }
   ]

@@ -366,6 +366,9 @@ tools:
   # cross-VPC / hub-spoke reachability (reuses existing credentials).
   ping_workspaces: false
   list_github_templates: true
+  # Lists GitHub org teams so users can pick which team to request access to
+  # (pairs with the github_repo_access workflow / native GitHub request links).
+  list_github_teams: true
   list_workspaces: true
   search_events: true
   search_requests: true

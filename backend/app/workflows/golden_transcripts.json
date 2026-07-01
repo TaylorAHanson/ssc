@@ -79,19 +79,22 @@
     ]
   },
   "github_repo_access": {
-    "gates": 2,
-    "mutating": 1,
+    "gates": 0,
+    "mutating": 0,
     "status": "completed",
     "tools": [
-      "github_set_permissions"
+      "request_github_access"
     ]
   },
   "github_repo_creation": {
     "gates": 0,
-    "mutating": 1,
+    "mutating": 4,
     "status": "completed",
     "tools": [
-      "github_create_repo"
+      "github_create_repo",
+      "github_create_team",
+      "github_grant_team_repo",
+      "github_add_team_members"
     ]
   },
   "project_onboarding": {

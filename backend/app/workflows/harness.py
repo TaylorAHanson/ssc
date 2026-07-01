@@ -50,6 +50,11 @@ class _FakeProvider:
     async def create_repo(self, *a, **k): return {"repo": "created"}
     async def create_from_template(self, *a, **k): return {"repo": "created"}
     async def set_permissions(self, *a, **k): return {"perm": "set"}
+    async def create_team(self, *a, **k): return {"slug": "demo-team", "id": 1}
+    async def grant_team_repo(self, *a, **k): return {"granted": True}
+    async def add_team_member(self, *a, **k): return {"added": True}
+    async def add_team_members(self, *a, **k): return [{"added": True}]
+    async def list_teams(self, *a, **k): return [{"name": "demo", "slug": "demo-team"}]
     async def create_pull_request(self, **k): return {"number": 1}
     async def list_members_add(self, *a, **k): return {"added": True}
     async def submit_job(self, *a, **k): return {"run_id": 1, "state": "SUCCESS"}
