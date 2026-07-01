@@ -83,6 +83,8 @@ resources:
             value: "${var.github_pat_secret_scope}"
           - name: GIT_TOKEN_SECRET_KEY
             value: "${var.github_pat_secret_key}"
+          - name: GITHUB_ORG
+            value: "${var.github_org}"
           - name: DATABRICKS_WAREHOUSE_ID
             value: "${var.sql_warehouse_id}"
           # Existing all-purpose cluster for classic-compute jobs (e.g. LMWS group
@@ -351,6 +353,9 @@ variables:
   github_pat_secret_key:
     description: "Secret key for GitHub PAT"
     default: "github-pat"
+  github_org:
+    description: "GitHub organization for repo/template operations (same across envs)"
+    default: "databricks-field-eng"
   databricks_job_cluster_id:
     description: >-
       Existing all-purpose cluster ID for classic-compute jobs (LMWS group
