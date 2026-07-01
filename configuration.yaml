@@ -372,6 +372,10 @@ tools:
   # Connectivity diagnostic: SDK "ping" of target workspaces to prove
   # cross-VPC / hub-spoke reachability (reuses existing credentials).
   ping_workspaces: false
+  # Generic connectivity diagnostic: HTTP-ping any URL from the app to prove
+  # network reachability (e.g. an internal API gateway across corporate egress).
+  # Sends no credentials; supports verify_tls=false for internal-CA hosts.
+  ping_url: true
   list_github_templates: true
   # Lists GitHub org teams so users can pick which team to request access to
   # (pairs with the github_repo_access workflow / native GitHub request links).
