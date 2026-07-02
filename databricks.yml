@@ -574,6 +574,20 @@ targets:
       # data). Verified via:
       #   databricks api get /api/2.0/postgres/projects/edh-ssc-stage-v5/branches/production/databases
       lakebase_database_id: "db-zm1o-5e047bf1j3"
+      controltower_secret_scope: "controltower_secret_scope_stg"
+    resources:
+      apps:
+        edh-ssc:
+          # TEMPORARY (stage only): the existing stage data lives in the old
+          # `atlas` schema (pre-rebrand). Point the app there so it reads that
+          # data in place instead of the default `selfservice` schema. Appended
+          # to the base app env (DAB concatenates sequences), so dev/prod keep
+          # the `selfservice` default. Remove this block once stage is migrated
+          # off `atlas` (schema rename) or the stage env is retired.
+          config:
+            env:
+              - name: DB_SCHEMA
+                value: "atlas"
 
   # Production environment
   prod:

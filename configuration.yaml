@@ -334,7 +334,7 @@ ui:
     allowlist: true
     sentinel: true
     tag_management: true
-    context_catalog: false
+    context_catalog: true
     workflows: true
     tool_registry: true
     feedback: true
