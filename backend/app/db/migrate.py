@@ -12,11 +12,16 @@ and on fresh databases (where the old tables never existed).
 from __future__ import annotations
 
 import logging
+import re
 
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)
+
+# Bare SQL identifier guard for schema names interpolated into DDL/DML that
+# can't be parameterized (schema-qualified names).
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _rename_table(engine: Engine, old: str, new: str) -> None:
@@ -119,3 +124,134 @@ def run_startup_migrations(engine: Engine) -> None:
         _add_index(engine, "ix_approvals_status", "approvals", ["status"])
     except Exception as e:  # noqa: BLE001 - never block startup on a migration
         logger.warning("Startup migration step failed (continuing): %s", e)
+
+
+def backfill_from_schema(
+    engine: Engine, source_schema: str, target_schema: str
+) -> None:
+    """One-time, idempotent adoption of legacy data from another schema.
+
+    Copies rows from ``source_schema.<table>`` into ``target_schema.<table>``
+    for every table present in *both* schemas, but only when the target table
+    is empty (so it never clobbers live data and is a no-op once populated).
+
+    This exists because the app can only ``ALTER``/``create_all`` tables it
+    *owns* — which is the SP-owned ``target_schema`` (``DB_SCHEMA``), never a
+    legacy schema like ``atlas`` whose tables belong to another role. Rather
+    than run the app against un-ownable legacy tables (where every migration
+    fails), we let ``create_all`` build the correct, owned tables here and pull
+    the old rows across. The copy uses the intersection of columns, so columns
+    the legacy schema lacks (e.g. newly-added ``timezone``) simply take their
+    model defaults.
+
+    Runs as the app service principal — the only role that can write the
+    SP-owned target schema — which is why this can't be a plain SQL script run
+    as a human/superuser (they hit the ``SET ROLE`` wall on the SP's objects).
+    Postgres only; a no-op on SQLite (dev) since there are no schemas there.
+    """
+    if not source_schema:
+        return
+    if engine.dialect.name != "postgresql":
+        return  # schemas are a Postgres concept; SQLite dev has none
+    if not _IDENT_RE.match(source_schema) or not _IDENT_RE.match(target_schema):
+        logger.warning(
+            "Skipping backfill: invalid schema identifier(s) source=%r target=%r",
+            source_schema,
+            target_schema,
+        )
+        return
+    if source_schema == target_schema:
+        return
+
+    try:
+        insp = inspect(engine)
+        source_tables = set(insp.get_table_names(schema=source_schema))
+        target_tables = set(insp.get_table_names(schema=target_schema))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Backfill: could not inspect schemas (skipping): %s", e)
+        return
+
+    shared = sorted(source_tables & target_tables)
+    if not shared:
+        logger.info(
+            "Backfill: no shared tables between '%s' and '%s'; nothing to copy.",
+            source_schema,
+            target_schema,
+        )
+        return
+
+    copied_tables = 0
+    for table in shared:
+        try:
+            src_cols = {c["name"] for c in insp.get_columns(table, schema=source_schema)}
+            tgt_cols = {c["name"] for c in insp.get_columns(table, schema=target_schema)}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Backfill: skipping %s (column introspection failed): %s", table, e)
+            continue
+
+        common = [c for c in src_cols & tgt_cols]
+        if not common:
+            continue
+
+        with engine.begin() as conn:
+            # Only adopt into an empty target table, so we never overwrite live
+            # data and the whole step is safe to re-run on every boot.
+            tgt_count = conn.execute(
+                text(f'SELECT COUNT(*) FROM "{target_schema}"."{table}"')
+            ).scalar()
+            if tgt_count:
+                continue
+            src_count = conn.execute(
+                text(f'SELECT COUNT(*) FROM "{source_schema}"."{table}"')
+            ).scalar()
+            if not src_count:
+                continue
+
+            col_list = ", ".join(f'"{c}"' for c in common)
+            conn.execute(
+                text(
+                    f'INSERT INTO "{target_schema}"."{table}" ({col_list}) '
+                    f'SELECT {col_list} FROM "{source_schema}"."{table}"'
+                )
+            )
+            logger.info(
+                "Backfill: copied %s row(s) into %s.%s from %s.%s",
+                src_count,
+                target_schema,
+                table,
+                source_schema,
+                table,
+            )
+            copied_tables += 1
+
+            # Realign owned sequences so post-copy inserts don't collide with
+            # adopted PKs. Only touches columns backed by a serial/identity seq.
+            for col in common:
+                try:
+                    seq = conn.execute(
+                        text("SELECT pg_get_serial_sequence(:tbl, :col)"),
+                        {"tbl": f'"{target_schema}"."{table}"', "col": col},
+                    ).scalar()
+                    if not seq:
+                        continue
+                    conn.execute(
+                        text(
+                            f'SELECT setval(:seq, '
+                            f'COALESCE((SELECT MAX("{col}") FROM "{target_schema}"."{table}"), 1))'
+                        ),
+                        {"seq": seq},
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "Backfill: could not realign sequence for %s.%s: %s",
+                        table,
+                        col,
+                        e,
+                    )
+
+    logger.info(
+        "Backfill from '%s' -> '%s' complete: adopted %d table(s).",
+        source_schema,
+        target_schema,
+        copied_tables,
+    )

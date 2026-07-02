@@ -578,15 +578,18 @@ targets:
     resources:
       apps:
         edh-ssc:
-          # TEMPORARY (stage only): the existing stage data lives in the old
-          # `atlas` schema (pre-rebrand). Point the app there so it reads that
-          # data in place instead of the default `selfservice` schema. Appended
-          # to the base app env (DAB concatenates sequences), so dev/prod keep
-          # the `selfservice` default. Remove this block once stage is migrated
-          # off `atlas` (schema rename) or the stage env is retired.
+          # Stage carries pre-rebrand data in the legacy `atlas` schema, whose
+          # tables the app can't own/migrate (they belong to another role, so
+          # every ALTER/create_all fails). Instead of running against `atlas`,
+          # run on the SP-owned default schema (`selfservice`) and do a one-time
+          # backfill: startup builds the correct owned tables, then copies the
+          # `atlas` rows into any empty ones. The copy runs as the app SP (the
+          # only role that can write the owned schema) and is idempotent — safe
+          # to leave set. Requires the SP to have SELECT on `atlas` (granted).
+          # Remove once stage is retired.
           config:
             env:
-              - name: DB_SCHEMA
+              - name: DB_MIGRATE_FROM_SCHEMA
                 value: "atlas"
 
   # Production environment

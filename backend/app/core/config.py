@@ -226,6 +226,19 @@ class Settings(BaseSettings):
     # roles hit this), so the app creates/owns its own schema. Override per
     # deployment (e.g. DB_SCHEMA=edh_ssc). Must be a bare SQL identifier.
     DB_SCHEMA: str = "selfservice"
+
+    # GRANT USAGE ON SCHEMA atlas TO "b32ade74-56be-410f-87bb-b651d9f248e5";
+    # GRANT SELECT ON ALL TABLES IN SCHEMA atlas TO "b32ade74-56be-410f-87bb-b651d9f248e5";
+
+    # One-time data backfill source schema. When set (e.g. DB_MIGRATE_FROM_SCHEMA
+    # =atlas), startup copies rows from that legacy schema into the matching
+    # app-owned DB_SCHEMA tables *only when the target table is empty*. This lets
+    # us adopt data from a schema the app can't own/migrate (legacy tables) by
+    # moving it into the SP-owned schema where migrations/create_all work. The
+    # copy runs as the app service principal (the only role that can write the
+    # SP-owned schema) and is idempotent — safe to leave set across deploys.
+    # Must be a bare SQL identifier. Empty disables the backfill.
+    DB_MIGRATE_FROM_SCHEMA: str = ""
     
     # Databricks Settings
     # SECRET: Set in .env file

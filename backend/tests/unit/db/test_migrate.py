@@ -7,7 +7,7 @@ and that running twice is a no-op.
 """
 from sqlalchemy import create_engine, inspect, text
 
-from app.db.migrate import run_startup_migrations
+from app.db.migrate import backfill_from_schema, run_startup_migrations
 
 
 def _columns(engine, table):
@@ -49,3 +49,28 @@ def test_tool_registry_rename_and_add_column_idempotent():
     # Running again is a no-op (idempotent).
     run_startup_migrations(engine)
     assert _columns(engine, "tool_registry") == cols
+
+
+def test_backfill_guards_are_noops_and_never_raise():
+    """The cross-schema backfill must be a safe no-op when it can't/shouldn't run.
+
+    Schemas are a Postgres concept, so on SQLite (dev/tests) and for empty or
+    invalid schema names the function returns without touching anything and
+    without raising — startup must never be blocked by it.
+    """
+    engine = create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE t (id INTEGER PRIMARY KEY)"))
+
+    # Empty source disables the backfill.
+    backfill_from_schema(engine, source_schema="", target_schema="selfservice")
+    # SQLite dialect => no-op regardless of args.
+    backfill_from_schema(engine, source_schema="atlas", target_schema="selfservice")
+    # Invalid identifiers are guarded (would otherwise be interpolated into DDL).
+    backfill_from_schema(engine, source_schema="atlas; DROP TABLE t", target_schema="selfservice")
+    # Same source/target is a no-op.
+    backfill_from_schema(engine, source_schema="selfservice", target_schema="selfservice")
+
+    # The seed table is untouched by any of the above.
+    with engine.begin() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM t")).scalar() == 0
