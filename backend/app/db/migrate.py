@@ -171,7 +171,7 @@ def backfill_from_schema(
         logger.warning("Backfill: could not inspect schemas (skipping): %s", e)
         return
 
-    shared = sorted(source_tables & target_tables)
+    shared = source_tables & target_tables
     if not shared:
         logger.info(
             "Backfill: no shared tables between '%s' and '%s'; nothing to copy.",
@@ -180,74 +180,82 @@ def backfill_from_schema(
         )
         return
 
+    # Copy parents before children so FK constraints are satisfied as we go
+    # (e.g. `requests` before `approvals`). SQLAlchemy's ``sorted_tables``
+    # returns tables in dependency order for exactly this reason; anything not
+    # modeled falls to the end (alphabetical) as a best effort.
+    ordered = _ordered_tables(shared)
+
     copied_tables = 0
-    for table in shared:
+    for table in ordered:
+        # Each table is isolated in its own transaction + try/except so a single
+        # bad table (e.g. orphaned rows that violate a FK) is logged and skipped
+        # rather than aborting the whole startup.
         try:
             src_cols = {c["name"] for c in insp.get_columns(table, schema=source_schema)}
             tgt_cols = {c["name"] for c in insp.get_columns(table, schema=target_schema)}
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Backfill: skipping %s (column introspection failed): %s", table, e)
-            continue
-
-        common = [c for c in src_cols & tgt_cols]
-        if not common:
-            continue
-
-        with engine.begin() as conn:
-            # Only adopt into an empty target table, so we never overwrite live
-            # data and the whole step is safe to re-run on every boot.
-            tgt_count = conn.execute(
-                text(f'SELECT COUNT(*) FROM "{target_schema}"."{table}"')
-            ).scalar()
-            if tgt_count:
-                continue
-            src_count = conn.execute(
-                text(f'SELECT COUNT(*) FROM "{source_schema}"."{table}"')
-            ).scalar()
-            if not src_count:
+            common = [c for c in src_cols & tgt_cols]
+            if not common:
                 continue
 
-            col_list = ", ".join(f'"{c}"' for c in common)
-            conn.execute(
-                text(
-                    f'INSERT INTO "{target_schema}"."{table}" ({col_list}) '
-                    f'SELECT {col_list} FROM "{source_schema}"."{table}"'
+            with engine.begin() as conn:
+                # Only adopt into an empty target table, so we never overwrite
+                # live data and the whole step is safe to re-run on every boot.
+                tgt_count = conn.execute(
+                    text(f'SELECT COUNT(*) FROM "{target_schema}"."{table}"')
+                ).scalar()
+                if tgt_count:
+                    continue
+                src_count = conn.execute(
+                    text(f'SELECT COUNT(*) FROM "{source_schema}"."{table}"')
+                ).scalar()
+                if not src_count:
+                    continue
+
+                col_list = ", ".join(f'"{c}"' for c in common)
+                conn.execute(
+                    text(
+                        f'INSERT INTO "{target_schema}"."{table}" ({col_list}) '
+                        f'SELECT {col_list} FROM "{source_schema}"."{table}"'
+                    )
                 )
-            )
-            logger.info(
-                "Backfill: copied %s row(s) into %s.%s from %s.%s",
-                src_count,
-                target_schema,
-                table,
-                source_schema,
-                table,
-            )
-            copied_tables += 1
+                logger.info(
+                    "Backfill: copied %s row(s) into %s.%s from %s.%s",
+                    src_count,
+                    target_schema,
+                    table,
+                    source_schema,
+                    table,
+                )
+                copied_tables += 1
 
-            # Realign owned sequences so post-copy inserts don't collide with
-            # adopted PKs. Only touches columns backed by a serial/identity seq.
-            for col in common:
-                try:
-                    seq = conn.execute(
-                        text("SELECT pg_get_serial_sequence(:tbl, :col)"),
-                        {"tbl": f'"{target_schema}"."{table}"', "col": col},
-                    ).scalar()
-                    if not seq:
-                        continue
-                    conn.execute(
-                        text(
-                            f'SELECT setval(:seq, '
-                            f'COALESCE((SELECT MAX("{col}") FROM "{target_schema}"."{table}"), 1))'
-                        ),
-                        {"seq": seq},
-                    )
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        "Backfill: could not realign sequence for %s.%s: %s",
-                        table,
-                        col,
-                        e,
-                    )
+                # Realign owned sequences so post-copy inserts don't collide with
+                # adopted PKs. Only touches columns backed by a serial/identity seq.
+                for col in common:
+                    try:
+                        seq = conn.execute(
+                            text("SELECT pg_get_serial_sequence(:tbl, :col)"),
+                            {"tbl": f'"{target_schema}"."{table}"', "col": col},
+                        ).scalar()
+                        if not seq:
+                            continue
+                        conn.execute(
+                            text(
+                                f'SELECT setval(:seq, '
+                                f'COALESCE((SELECT MAX("{col}") FROM "{target_schema}"."{table}"), 1))'
+                            ),
+                            {"seq": seq},
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            "Backfill: could not realign sequence for %s.%s: %s",
+                            table,
+                            col,
+                            e,
+                        )
+        except Exception as e:  # noqa: BLE001 - never let one table block startup
+            logger.warning("Backfill: skipping table %s (copy failed): %s", table, e)
+            continue
 
     logger.info(
         "Backfill from '%s' -> '%s' complete: adopted %d table(s).",
@@ -255,3 +263,24 @@ def backfill_from_schema(
         target_schema,
         copied_tables,
     )
+
+
+def _ordered_tables(shared: set[str]) -> list[str]:
+    """Order ``shared`` table names parents-first for FK-safe inserts.
+
+    Uses ``Base.metadata.sorted_tables`` (topological, dependency order). Tables
+    not present in the model metadata are appended alphabetically. Falls back to
+    plain alphabetical order if metadata can't be imported for any reason.
+    """
+    try:
+        from app.db.base import Base
+        import app.db  # noqa: F401 - ensure all models register on the metadata
+
+        model_order = [t.name for t in Base.metadata.sorted_tables]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Backfill: metadata unavailable, using name order: %s", e)
+        return sorted(shared)
+
+    ranked = [t for t in model_order if t in shared]
+    leftovers = sorted(shared - set(ranked))
+    return ranked + leftovers
