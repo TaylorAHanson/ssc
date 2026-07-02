@@ -49,18 +49,9 @@ async def lifespan(app: FastAPI):
         engine = get_engine()
         # Apply in-place schema renames BEFORE create_all so renamed tables keep
         # their data instead of being recreated empty alongside the old ones.
-        from app.db.migrate import run_startup_migrations, backfill_from_schema
+        from app.db.migrate import run_startup_migrations
         run_startup_migrations(engine)
         Base.metadata.create_all(bind=engine)
-        # One-time adoption of legacy data from another schema (e.g. atlas) into
-        # the app-owned DB_SCHEMA. No-op unless DB_MIGRATE_FROM_SCHEMA is set and
-        # only fills empty target tables, so it's safe to leave configured.
-        from app.db.session import get_db_schema
-        backfill_from_schema(
-            engine,
-            source_schema=(settings.DB_MIGRATE_FROM_SCHEMA or "").strip(),
-            target_schema=get_db_schema(),
-        )
         
         db = get_session_local()()
         try:
