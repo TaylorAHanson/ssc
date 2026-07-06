@@ -8,6 +8,12 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Lookback window (days) used for data-quality evaluation when a table does not
+# carry an explicit ``reliability_window`` tag. We still evaluate DQ so that DQ
+# failures surface in the SAME scan as the missing-tag finding, rather than only
+# appearing on a later run once the tag is added.
+DEFAULT_RELIABILITY_WINDOW_DAYS = 7
+
 class DatasetResourceHandler(BaseResourceHandler):
     async def discover(self) -> List[Dict[str, Any]]:
         resources = []
@@ -97,50 +103,57 @@ class DatasetResourceHandler(BaseResourceHandler):
                         except Exception as e:
                             logger.error(f"Failed to fetch tags for {full_name}: {e}")
                             
+                        # Evaluate data quality regardless of whether the
+                        # reliability_window tag is set. Gating the DQ fetch on the
+                        # tag meant DQ failures stayed hidden until someone added the
+                        # tag, so deficiencies dribbled out across multiple scans
+                        # instead of all at once. When the tag is absent we fall back
+                        # to a default lookback window; the missing tag is still
+                        # reported separately by the reliability_window_tag rule.
                         reliability_window = asset_info["tags"].get("reliability_window")
-                        if reliability_window:
+                        # Extract just the number from values like "7-days"; fall back
+                        # to the default window when no reliability_window tag is set.
+                        digits = "".join([c for c in str(reliability_window) if c.isdigit()]) if reliability_window else ""
+                        window_days = int(digits) if digits else DEFAULT_RELIABILITY_WINDOW_DAYS
+                        if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
                             try:
-                                # Extract just the number from values like "7-days"
-                                digits = "".join([c for c in str(reliability_window) if c.isdigit()])
-                                window_days = int(digits) if digits else 7
-                                if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
-                                    # Pull per-rule failure DETAILS (not just a count) so the
-                                    # certification UI can surface actionable specifics: the rule
-                                    # name/dimension, the score vs. threshold, and the column /
-                                    # table impacted. We dedupe to the most recent occurrence per
-                                    # rule-item (ruleItemId) inside the reliability window so a rule
-                                    # that fails on every daily run is counted once, reflecting its
-                                    # current state. failed_rule_count is then derived from this set.
-                                    # The ADOC *_history tables live under a configurable
-                                    # catalog.schema so the same code works against the real
-                                    # customer environment (enterprise_stg.data_quality) and
-                                    # local/dev workspaces where they live elsewhere.
-                                    adoc_schema = settings.DATA_QUALITY_ADOC_SCHEMA or "enterprise_stg.data_quality"
-                                    # NOTE: each ADOC *_history table has a slightly different
-                                    # `items` struct schema (e.g. nested columnMapping/thresholdLevel
-                                    # types differ), so UNION-ing the raw `items` array fails with
-                                    # INCOMPATIBLE_COLUMN_TYPE. We instead explode + project only the
-                                    # scalar fields we need inside each arm, so the unioned columns
-                                    # are all compatible scalar types.
-                                    item_projection = (
-                                        "assetInfo.assetUid AS assetUid, assetInfo.assetName AS assetName, "
-                                        "execution.ruleName AS ruleName, execution.ruleType AS ruleType, processed_at, "
-                                        "item.ruleItemId AS ruleItemId, item.columnName AS columnName, "
-                                        "item.dimension AS dimension, item.resultPercent AS resultPercent, "
-                                        "item.threshold AS threshold, item.rowsFailed AS rowsFailed"
-                                    )
-                                    adoc_tables = [
-                                        "adoc_dq_history",
-                                        "adoc_freshness_history",
-                                        "adoc_data_drift_history",
-                                        "adoc_profile_anomaly_history",
-                                        "adoc_schema_drift_history",
-                                    ]
-                                    arms = "\n    UNION ALL\n    ".join(
-                                        f"SELECT {item_projection} FROM {adoc_schema}.{t} LATERAL VIEW explode(items) exploded AS item"
-                                        for t in adoc_tables
-                                    )
-                                    query = f"""
+                                # Pull per-rule failure DETAILS (not just a count) so the
+                                # certification UI can surface actionable specifics: the rule
+                                # name/dimension, the score vs. threshold, and the column /
+                                # table impacted. We dedupe to the most recent occurrence per
+                                # rule-item (ruleItemId) inside the reliability window so a rule
+                                # that fails on every daily run is counted once, reflecting its
+                                # current state. failed_rule_count is then derived from this set.
+                                # The ADOC *_history tables live under a configurable
+                                # catalog.schema so the same code works against the real
+                                # customer environment (enterprise_stg.data_quality) and
+                                # local/dev workspaces where they live elsewhere.
+                                adoc_schema = settings.DATA_QUALITY_ADOC_SCHEMA or "enterprise_stg.data_quality"
+                                # NOTE: each ADOC *_history table has a slightly different
+                                # `items` struct schema (e.g. nested columnMapping/thresholdLevel
+                                # types differ), so UNION-ing the raw `items` array fails with
+                                # INCOMPATIBLE_COLUMN_TYPE. We instead explode + project only the
+                                # scalar fields we need inside each arm, so the unioned columns
+                                # are all compatible scalar types.
+                                item_projection = (
+                                    "assetInfo.assetUid AS assetUid, assetInfo.assetName AS assetName, "
+                                    "execution.ruleName AS ruleName, execution.ruleType AS ruleType, processed_at, "
+                                    "item.ruleItemId AS ruleItemId, item.columnName AS columnName, "
+                                    "item.dimension AS dimension, item.resultPercent AS resultPercent, "
+                                    "item.threshold AS threshold, item.rowsFailed AS rowsFailed"
+                                )
+                                adoc_tables = [
+                                    "adoc_dq_history",
+                                    "adoc_freshness_history",
+                                    "adoc_data_drift_history",
+                                    "adoc_profile_anomaly_history",
+                                    "adoc_schema_drift_history",
+                                ]
+                                arms = "\n    UNION ALL\n    ".join(
+                                    f"SELECT {item_projection} FROM {adoc_schema}.{t} LATERAL VIEW explode(items) exploded AS item"
+                                    for t in adoc_tables
+                                )
+                                query = f"""
 WITH exploded AS (
     {arms}
 )
@@ -152,40 +165,41 @@ WHERE assetUid LIKE '%{full_name}%'
 QUALIFY ROW_NUMBER() OVER (PARTITION BY ruleItemId ORDER BY processed_at DESC) = 1
 ORDER BY resultPercent ASC
 """
-                                    logger.info(
-                                        f"Fetching failed data quality rules for asset '{full_name}' "
-                                        f"(reliability_window={window_days} days)."
-                                    )
-                                    response = self.workspace_client.statement_execution.execute_statement(
-                                        statement=query,
-                                        warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
-                                        wait_timeout="30s"
-                                    )
+                                logger.info(
+                                    f"Fetching failed data quality rules for asset '{full_name}' "
+                                    f"(reliability_window={window_days} days"
+                                    f"{'' if reliability_window else ', default - no tag'})."
+                                )
+                                response = self.workspace_client.statement_execution.execute_statement(
+                                    statement=query,
+                                    warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
+                                    wait_timeout="30s"
+                                )
 
-                                    if response.status.state.value in ("FAILED", "CANCELED", "CLOSED"):
-                                        error_msg = response.status.error.message if response.status.error else "Unknown SQL error"
-                                        logger.error(f"SQL execution failed when fetching failed rules for {full_name}. Query: {query} | Error: {error_msg}")
-                                    else:
-                                        rows = response.result.data_array if (response.result and response.result.data_array) else []
-                                        failed_rules = []
-                                        for r in rows:
-                                            # Pad short rows so unpacking is safe; column order
-                                            # matches the SELECT list above. The statement API
-                                            # returns all values as strings.
-                                            r = list(r) + [None] * (8 - len(r))
-                                            rule_name, rule_type, asset_name, column_name, dimension, result_percent, threshold, rows_failed = r[:8]
-                                            failed_rules.append({
-                                                "rule": rule_name or "Unnamed rule",
-                                                "rule_type": rule_type,
-                                                "table": asset_name or full_name,
-                                                "column": column_name,
-                                                "dimension": dimension,
-                                                "score": float(result_percent) if result_percent not in (None, "") else None,
-                                                "threshold": float(threshold) if threshold not in (None, "") else None,
-                                                "rows_failed": int(rows_failed) if rows_failed not in (None, "") else None,
-                                            })
-                                        asset_info["failed_rules"] = failed_rules
-                                        asset_info["failed_rule_count"] = len(failed_rules)
+                                if response.status.state.value in ("FAILED", "CANCELED", "CLOSED"):
+                                    error_msg = response.status.error.message if response.status.error else "Unknown SQL error"
+                                    logger.error(f"SQL execution failed when fetching failed rules for {full_name}. Query: {query} | Error: {error_msg}")
+                                else:
+                                    rows = response.result.data_array if (response.result and response.result.data_array) else []
+                                    failed_rules = []
+                                    for r in rows:
+                                        # Pad short rows so unpacking is safe; column order
+                                        # matches the SELECT list above. The statement API
+                                        # returns all values as strings.
+                                        r = list(r) + [None] * (8 - len(r))
+                                        rule_name, rule_type, asset_name, column_name, dimension, result_percent, threshold, rows_failed = r[:8]
+                                        failed_rules.append({
+                                            "rule": rule_name or "Unnamed rule",
+                                            "rule_type": rule_type,
+                                            "table": asset_name or full_name,
+                                            "column": column_name,
+                                            "dimension": dimension,
+                                            "score": float(result_percent) if result_percent not in (None, "") else None,
+                                            "threshold": float(threshold) if threshold not in (None, "") else None,
+                                            "rows_failed": int(rows_failed) if rows_failed not in (None, "") else None,
+                                        })
+                                    asset_info["failed_rules"] = failed_rules
+                                    asset_info["failed_rule_count"] = len(failed_rules)
                             except Exception as e:
                                 logger.error(f"Failed to fetch failed rules for {full_name} via SQL. Query: {query if 'query' in locals() else 'Unknown'} | Exception: {e}")
                         

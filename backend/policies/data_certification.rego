@@ -66,12 +66,16 @@ violations["reliability_window_tag"] contains msg if {
 	msg := sprintf("The 'reliability_window' tag is required for %v '%v'.", [asset.type, asset.name])
 }
 
+# DQ rules are intentionally NOT gated on the reliability_window tag. Discovery
+# evaluates data quality even when the tag is absent (using a default lookback
+# window), so DQ failures surface in the SAME scan as the missing-tag finding
+# rather than only appearing on a later run once the tag is added. The missing
+# tag itself is still reported separately by the reliability_window_tag rule.
 violations["dq_history_fetched"] contains msg if {
 	applies["dq_history_fetched"]
 	some asset in input.resource.assets
 	asset.table_exists != false
 	asset.type == "table"
-	asset.tags["reliability_window"]
 	asset.failed_rule_count < 0
 	msg := sprintf("Failed to fetch data quality rule history within the reliability window for %v '%v'.", [asset.type, asset.name])
 }
@@ -81,7 +85,6 @@ violations["dq_zero_failed"] contains msg if {
 	some asset in input.resource.assets
 	asset.table_exists != false
 	asset.type == "table"
-	asset.tags["reliability_window"]
 	asset.failed_rule_count > 0
 	msg := sprintf("Failed data quality rule count is %v within the reliability window for %v '%v'. Must be 0.", [asset.failed_rule_count, asset.type, asset.name])
 }

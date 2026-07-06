@@ -73,7 +73,7 @@ The Data Certification flow operates in four distinct phases:
 
 3. **Sentinel Evaluation & Certification (Automated Policy as Code)**
    * The newly drafted contract is evaluated by the Enforcement Sentinel during its next run.
-   * The Sentinel dynamically fetches the latest metadata and queries the `adoc_dq_history` table for the specified `reliability_window` (a mandatory tag on the table).
+   * The Sentinel dynamically fetches the latest metadata and queries the `adoc_dq_history` table over the `reliability_window` tag's timeframe. The `reliability_window` tag is still required by the checklist (a missing tag is reported as its own deficiency), but data quality is now evaluated even when the tag is absent — using a default lookback window — so DQ failures surface in the *same* scan as the missing-tag finding rather than only on a later run once the tag is added.
    * It evaluates the metadata and data quality rules against the strict OPA certification checklist (`data_certification.rego`).
    * If any table fails the policy checklist (e.g., if there are any failed data quality rules in the history table within the window), the certification is rejected.
    * If all checks pass, the Sentinel automatically applies the `system.certification_status = 'certified'` tag in Databricks to *every* table defined in the contract.
