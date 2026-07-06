@@ -13,6 +13,20 @@ import yaml from 'js-yaml';
 const parseUtc = (value: string): Date =>
   parseISO(/Z|[+-]\d{2}:?\d{2}$/.test(value) ? value : `${value}Z`);
 
+// Render a UTC timestamp in US Pacific time with an explicit tz label. Uses the
+// America/Los_Angeles zone so the abbreviation auto-switches between PST and PDT
+// with daylight saving rather than being hardcoded.
+const formatPacific = (value: string): string =>
+  parseUtc(value).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'America/Los_Angeles',
+    timeZoneName: 'short',
+  });
+
 export function DataCertification() {
   const [datasets, setDatasets] = useState<DataContract[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -365,7 +379,7 @@ export function DataCertification() {
                     const dq = contract.data_quality || {} as any;
                     
                     const rel = dq.failed_rule_count !== undefined ? dq.failed_rule_count : (dq.reliability !== undefined ? dq.reliability : 'N/A');
-                    const lastRun = contract.last_synced_at ? format(parseUtc(contract.last_synced_at), 'MMM d, HH:mm') : 'Unknown';
+                    const lastRun = contract.last_synced_at ? formatPacific(contract.last_synced_at) : 'Unknown';
                     const createdDate = contract.created_at ? format(parseUtc(contract.created_at), 'MMM d, yyyy') : 'Unknown';
                     const status = getStatus(contract);
                     const failedRules = Array.isArray(dq.failed_rules) ? dq.failed_rules : [];

@@ -244,7 +244,12 @@ async def run_sync_contracts_background(dataset_groups: dict, force: bool, speci
             
             if asset:
                 asset.contract_url = f"/governance/certification?dataset={dataset_name}"
-                if asset.catalog == "multiple":
+                # Refresh the count summary whenever we actually resolved real
+                # tables/views. This corrects placeholder subtitles (e.g. a
+                # sentinel-seeded "Multiple datasets") that would otherwise stick
+                # forever. When no tables could be counted we leave the existing
+                # value alone rather than clobbering a good count with a placeholder.
+                if parts:
                     asset.catalog = summary_str
                     asset.schema = ""
                 db.add(asset)

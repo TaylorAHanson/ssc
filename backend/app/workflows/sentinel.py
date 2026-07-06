@@ -378,6 +378,14 @@ async def run_discovery(db, request) -> Dict[str, Any]:
             if policy_name not in allowed_policy_names:
                 continue
 
+            # Persist certification results for data products BEFORE the vacuous-pass
+            # skip below. Otherwise a first scan that returns a clean/empty result
+            # leaves certification_violations NULL, which the UI reads as "never
+            # scanned" (status "awaiting") — the initial run then appears to
+            # under-report. Recording here marks it scanned (empty == no violations).
+            if policy_name == "data_certification" and resource.get("type") == "data_product":
+                _record_certification_violations(db, resource, result)
+
             rule_results_raw = result.get("rule_results", []) or []
             if not rule_results_raw and not result.get("is_violation"):
                 # No applicable rules for this resource (e.g. compute_and_jobs vs a
@@ -433,9 +441,6 @@ async def run_discovery(db, request) -> Dict[str, Any]:
                     "evaluated_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
-
-            if policy_name == "data_certification" and resource.get("type") == "data_product":
-                _record_certification_violations(db, resource, result)
 
             if is_violation or action in ["CERTIFY", "UNCERTIFY"]:
                 violation_record = {

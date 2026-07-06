@@ -3,7 +3,28 @@ import { Button } from '../../components/ui/button';
 import { ShieldAlert, AlertTriangle, Search, Unlock, Lock, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, ClipboardList, XCircle, SlidersHorizontal } from 'lucide-react';
 import { api } from '../../services/api';
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { format, parseISO } from 'date-fns';
+import { parseISO } from 'date-fns';
+
+// The backend serializes naive UTC datetimes (no timezone suffix). Treat any
+// such string as UTC so it isn't misread as the viewer's local wall-clock time.
+const parseUtc = (value: string): Date =>
+  parseISO(/Z|[+-]\d{2}:?\d{2}$/.test(value) ? value : `${value}Z`);
+
+// Render a UTC timestamp in US Pacific time with an explicit tz label. Uses the
+// America/Los_Angeles zone so the abbreviation auto-switches between PST and PDT
+// with daylight saving rather than being hardcoded.
+const formatPacific = (value: string, opts?: Intl.DateTimeFormatOptions): string =>
+  parseUtc(value).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'America/Los_Angeles',
+    timeZoneName: 'short',
+    ...opts,
+  });
 
 const formatReason = (v: any) => {
     if (v.violation_reasons && Array.isArray(v.violation_reasons) && v.violation_reasons.length > 0) {
@@ -172,7 +193,7 @@ export function EnforcementSentinel() {
             
             setExecutedActions(prev => ({
                 ...prev,
-                [`${runId}-${v.resource_id}-${v.policy}-${v.action}`]: { at: format(new Date(), 'MMM d, HH:mm') }
+                [`${runId}-${v.resource_id}-${v.policy}-${v.action}`]: { at: formatPacific(new Date().toISOString(), { year: undefined }) }
             }));
         } catch (e: any) {
             console.error(e);
@@ -204,7 +225,7 @@ export function EnforcementSentinel() {
                             </div>
                             {schedules?.enforcement_sentinel?.next_run && (
                                 <div className="text-xs text-gray-400 mt-0.5">
-                                    Next scheduled run: {format(parseISO(schedules.enforcement_sentinel.next_run), 'MMM d, HH:mm')}
+                                    Next scheduled run: {formatPacific(schedules.enforcement_sentinel.next_run, { year: undefined })}
                                 </div>
                             )}
                         </div>
@@ -389,17 +410,28 @@ export function EnforcementSentinel() {
                                     const ctx = (run as any).stateContext || run.metadata || (run as any).state_context || {};
                                     const mode = ctx.enforcement_mode === 'active_enforcement' ? 'Enforcement' : 'Audit Only';
                                     const violations = ctx.violations || [];
-                                    
+
+                                    // True failure count is the per-rule total in scan_stats. `violations.length`
+                                    // under-counts (each entry aggregates all failed rules for one resource+policy)
+                                    // and over-counts (it also includes CERTIFY/UNCERTIFY actions that aren't
+                                    // failures). Prefer scan_stats; fall back to summing per-rule reasons, then to
+                                    // the record count for older runs that predate scan_stats.
                                     const discoverFact = run.stateMachine?.states?.flatMap((s: any) => s.facts || []).find((f: any) => f.type === 'discover_completed');
-                                    let vCount = violations.length;
-                                    if (discoverFact && discoverFact.data && discoverFact.data.violation_count !== undefined) {
+                                    let vCount: number;
+                                    if (ctx.scan_stats && typeof ctx.scan_stats.violation_count === 'number') {
+                                        vCount = ctx.scan_stats.violation_count;
+                                    } else if (discoverFact?.data?.violation_count !== undefined) {
                                         vCount = discoverFact.data.violation_count;
+                                    } else {
+                                        vCount = violations.reduce((sum: number, v: any) => (
+                                            sum + (Array.isArray(v.violation_reasons) && v.violation_reasons.length > 0 ? v.violation_reasons.length : 1)
+                                        ), 0);
                                     }
 
                                     return (
                                         <tr key={run.id} className="hover:bg-gray-50 transition-colors cursor-pointer group" onClick={() => setSelectedRunId(run.id)}>
                                             <td className="p-3 pl-4 font-medium text-gray-900">
-                                                {format(parseISO(run.createdAt), 'MMM d, yyyy HH:mm')}
+                                                {formatPacific(run.createdAt)}
                                             </td>
                                             <td className="p-3">
                                                 <span className={`px-2 py-1 rounded text-xs ${mode === 'Enforcement' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800'}`}>
@@ -474,7 +506,7 @@ export function EnforcementSentinel() {
                                     Sentinel Run Report
                                 </h2>
                                 <p className="text-sm text-gray-500 mt-1">
-                                    {format(parseISO(selectedRun.createdAt), 'MMMM d, yyyy @ HH:mm:ss')} • 
+                                    {formatPacific(selectedRun.createdAt, { month: 'long', second: '2-digit' })} • 
                                     {((selectedRun as any).stateContext || selectedRun.metadata || (selectedRun as any).state_context || {}).workspace || 'ws-enterprise-prod'}
                                 </p>
                             </div>

@@ -42,6 +42,22 @@ _engine = None
 _SessionLocal = None
 _connection_verified = False
 
+# get_database_url() is called on a hot path (the LangGraph checkpointer mints a
+# fresh Lakebase OAuth token per advance), so its connection summary would spam
+# the logs every few seconds. Remember the last summary and only emit it at INFO
+# when it actually changes; unchanged repeats go to DEBUG.
+_last_logged_conn_summary = None
+
+
+def _log_conn_summary(summary: str) -> None:
+    """Log the resolved DB connection summary once (re-log only if it changes)."""
+    global _last_logged_conn_summary
+    if summary != _last_logged_conn_summary:
+        logger.info(summary)
+        _last_logged_conn_summary = summary
+    else:
+        logger.debug(summary)
+
 
 def reset_database_connection():
     """Reset database engine and session factory (useful if credentials change)."""
@@ -146,14 +162,14 @@ def get_database_url() -> str:
     db_id = None
     if host and user and name:
         if pg_host:
-            logger.info("Using Databricks Apps auto-injected PG variables for Lakebase connection.")
+            logger.debug("Using Databricks Apps auto-injected PG variables for Lakebase connection.")
             password = get_lakebase_token()
             if password:
-                logger.info("Successfully acquired Databricks OAuth token for Lakebase password.")
+                logger.debug("Successfully acquired Databricks OAuth token for Lakebase password.")
             else:
                 logger.error("Failed to acquire OAuth token from WorkspaceClient.")
         elif settings.DATABASE_PASSWORD:
-            logger.info("Using injected DATABASE_PASSWORD from environment (Resource Binding).")
+            logger.debug("Using injected DATABASE_PASSWORD from environment (Resource Binding).")
             password = settings.DATABASE_PASSWORD
             # When a resource is bound, Databricks injects the specific DATABASE_USER and DATABASE_NAME too
             user = settings.DATABASE_USER
@@ -178,7 +194,7 @@ def get_database_url() -> str:
                     # The user is the Databricks Service Principal / User running the app
                     # This overrides the default 'app_user' native role
                     user = sdk.current_user.me().user_name
-                    logger.info(f"Using Databricks Workspace user for Lakebase: {user}")
+                    logger.debug(f"Using Databricks Workspace user for Lakebase: {user}")
                     
                     # Fetch all autoscaling projects
                     projects_res = sdk.api_client.do("GET", "/api/2.0/postgres/projects")
@@ -215,7 +231,7 @@ def get_database_url() -> str:
                         
                         password = get_lakebase_token()
                         if password:
-                            logger.info("Successfully acquired short-lived OAuth token for Lakebase.")
+                            logger.debug("Successfully acquired short-lived OAuth token for Lakebase.")
                         else:
                             logger.error("API returned success but no token was found in the response.")
                     else:
@@ -224,8 +240,9 @@ def get_database_url() -> str:
                 except Exception as e:
                     logger.error(f"Failed to fetch Lakebase OAuth credentials: {type(e).__name__}: {e}")
                 
-        # Log final configuration
-        logger.info(f"Final DB config - Host: {host}, User: {user}, Password set: {password is not None}")
+        # Log final configuration (per-call debug; the once-only summary is
+        # emitted below via _log_conn_summary once we've built the URL).
+        logger.debug(f"Final DB config - Host: {host}, User: {user}, Password set: {password is not None}")
         
         # If we have all required params, build the PostgreSQL URL
         if password:
@@ -239,15 +256,11 @@ def get_database_url() -> str:
             
             url = f"postgresql://{safe_user}:{safe_password}@{host}:{settings.DATABASE_PORT}/{db_name_to_use}?sslmode=require"
             
-            # CRITICAL: Log the final URL structure (without password) for debugging
+            # Log the final URL structure (without password). This runs on a hot
+            # path (per checkpointer open), so only announce it at INFO when the
+            # resolved connection target changes; unchanged repeats go to DEBUG.
             safe_url = f"postgresql://{safe_user}:***@{host}:{settings.DATABASE_PORT}/{db_name_to_use}?sslmode=require"
-            logger.debug(f"FINAL DATABASE URL (safe): {safe_url}")
-            logger.info(f"=== LAKEBASE CONNECTION ===")
-            logger.info(f"  Host: {host}")
-            logger.info(f"  User: {user} (encoded: {safe_user})")
-            logger.info(f"  Database: {db_name_to_use}")
-            logger.info(f"  Password length: {len(password)}")
-            logger.info(f"  Safe URL: {safe_url}")
+            _log_conn_summary(f"Lakebase connection: {safe_url}")
             return url
         else:
             logger.warning("No valid password/token found for Lakebase. Falling back to SQLite.")
