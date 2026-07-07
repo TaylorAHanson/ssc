@@ -771,7 +771,10 @@ async def execute_enforcement_action(
             ).first()
             if asset:
                 asset.certified = await handler.get_certification_status(body.resource_id)
-                asset.last_synced_at = datetime.now(timezone.utc)
+                # Intentionally do NOT touch last_synced_at here. That column
+                # backs the certification UI's "Last Policy Run" column, which
+                # must mean exactly that — the last Enforcement Sentinel policy
+                # evaluation — not a manual certify/uncertify action.
                 db.add(asset)
                 db.commit()
             else:

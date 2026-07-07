@@ -320,7 +320,13 @@ async def run_discovery(db, request) -> Dict[str, Any]:
             ]
         discovered_resources.extend(resources)
 
-    _refresh_data_asset_quality(db, discovered_resources)
+    # Single timestamp for the whole run so every product's "Last Policy Run"
+    # equals the run's date on the Sentinel page (the request's created_at),
+    # rather than a per-product datetime.utcnow() that drifts by the discovery +
+    # evaluation duration and looks mismatched across the two views.
+    scan_time = getattr(request, "created_at", None) or datetime.utcnow()
+
+    _refresh_data_asset_quality(db, discovered_resources, scan_time)
     try:
         db.commit()
     except Exception as e:  # noqa: BLE001
@@ -384,7 +390,7 @@ async def run_discovery(db, request) -> Dict[str, Any]:
             # scanned" (status "awaiting") — the initial run then appears to
             # under-report. Recording here marks it scanned (empty == no violations).
             if policy_name == "data_certification" and resource.get("type") == "data_product":
-                _record_certification_violations(db, resource, result)
+                _record_certification_violations(db, resource, result, scan_time)
 
             rule_results_raw = result.get("rule_results", []) or []
             if not rule_results_raw and not result.get("is_violation"):
@@ -521,8 +527,14 @@ async def run_discovery(db, request) -> Dict[str, Any]:
     }
 
 
-def _refresh_data_asset_quality(db, discovered_resources: List[Dict[str, Any]]) -> None:
-    """Mirror data-product DQ rollups into the local DataAsset cache for the UI."""
+def _refresh_data_asset_quality(db, discovered_resources: List[Dict[str, Any]], scan_time: datetime) -> None:
+    """Mirror data-product DQ rollups into the local DataAsset cache for the UI.
+
+    ``scan_time`` is a single timestamp for the whole run (the sentinel request's
+    created_at) so every product's "Last Policy Run" matches the run's date shown
+    on the Enforcement Sentinel page, instead of drifting by the per-product
+    processing time.
+    """
     from sqlalchemy.orm.attributes import flag_modified
 
     from app.db.data_asset import DataAssetModel
@@ -574,13 +586,13 @@ def _refresh_data_asset_quality(db, discovered_resources: List[Dict[str, Any]]) 
         else:
             asset.certified = False
         # The certification UI surfaces this as "Last Policy Run"; a sentinel
-        # scan IS a policy evaluation, so bump it here (not just on data sync)
-        # so one-off runs reflect a fresh evaluation timestamp.
-        asset.last_synced_at = datetime.utcnow()
+        # scan IS a policy evaluation, so bump it here (not just on data sync).
+        # Use the shared run timestamp so it matches the Sentinel run's date.
+        asset.last_synced_at = scan_time
         db.add(asset)
 
 
-def _record_certification_violations(db, resource: Dict[str, Any], result: Dict[str, Any]) -> None:
+def _record_certification_violations(db, resource: Dict[str, Any], result: Dict[str, Any], scan_time: datetime) -> None:
     """Update the local DataAsset cache with the latest certification violations."""
     from sqlalchemy.orm.attributes import flag_modified
 
@@ -603,7 +615,7 @@ def _record_certification_violations(db, resource: Dict[str, Any], result: Dict[
         db.flush()
     asset.certification_violations = result.get("violation_reasons", [])
     flag_modified(asset, "certification_violations")
-    asset.last_synced_at = datetime.utcnow()
+    asset.last_synced_at = scan_time
     db.add(asset)
 
 
