@@ -24,7 +24,13 @@ def get_next_run(cron_expr: str) -> Optional[str]:
         from croniter import croniter
         now = datetime.now(timezone.utc)
         iter = croniter(cron_expr, now)
-        return iter.get_next(datetime).isoformat() + "Z"
+        # croniter returns a tz-aware (UTC) datetime here, whose isoformat()
+        # already carries a "+00:00" offset. Appending "Z" on top of that yields
+        # a malformed "...+00:00Z" string that the frontend parses as an Invalid
+        # Date. Normalize to a clean naive-UTC ISO string with a single trailing
+        # "Z", matching how every other timestamp is emitted to the UI.
+        next_run = iter.get_next(datetime).astimezone(timezone.utc).replace(tzinfo=None)
+        return next_run.isoformat() + "Z"
     except Exception:
         return None
 

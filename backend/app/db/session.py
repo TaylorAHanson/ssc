@@ -324,7 +324,18 @@ def get_engine():
                 # hand out a connection whose server-side auth has lapsed.
                 pool_recycle=settings.DB_POOL_RECYCLE_SECONDS,
                 echo=False,
-                connect_args={"options": f"-csearch_path={_schema},public"},
+                # Pin the Postgres session timezone to UTC. Our timestamp columns
+                # are naive `DateTime` (TIMESTAMP WITHOUT TIME ZONE) and are written
+                # inconsistently: some via Python `datetime.utcnow()` (always UTC)
+                # and some via `server_default=func.now()` / tz-aware inserts (cast
+                # to the *session* timezone when stored into a naive column). If the
+                # session zone isn't UTC those two groups drift apart — and because a
+                # DST-observing zone shifts by exactly one hour, the offset looks
+                # "random" (it depends which column you compare) and moves by an hour
+                # across DST boundaries. Forcing UTC makes every write land as true
+                # UTC wall-clock, which is what the frontend assumes when it appends
+                # "Z" before rendering in Pacific time.
+                connect_args={"options": f"-csearch_path={_schema},public -ctimezone=UTC"},
             )
 
             @event.listens_for(_engine, "connect")
