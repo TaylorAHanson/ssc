@@ -401,6 +401,11 @@ class WorkflowService:
                 for col in _BODY_FIELDS:
                     setattr(existing, col, body.get(col))
                 existing.status = as_status
+                # Never let an import persist a graph with blank instructions.
+                existing.instructions_markdown = WorkflowService._synced_instructions(
+                    existing.instructions_markdown, existing.graph_spec,
+                    existing.request_type, goal=existing.goal,
+                )
                 report["updated"].append(key)
             else:
                 db.add(WorkflowModel(
@@ -408,7 +413,12 @@ class WorkflowService:
                     key=key,
                     name=body.get("name") or key,
                     goal=body.get("goal"),
-                    instructions_markdown=body.get("instructions_markdown"),
+                    instructions_markdown=WorkflowService._synced_instructions(
+                        body.get("instructions_markdown"),
+                        body.get("graph_spec"),
+                        body.get("request_type"),
+                        goal=body.get("goal"),
+                    ),
                     allowed_tools=body.get("allowed_tools"),
                     policy_ref=body.get("policy_ref"),
                     params_schema=body.get("params_schema"),
@@ -508,11 +518,12 @@ class WorkflowService:
         for rt, spec in SPECS.items():
             existing = WorkflowService.get_by_key(db, rt)
             if existing:
+                touched = False
                 if not existing.graph_spec:
                     # Backfill a missing spec regardless of source.
                     existing.graph_spec = spec
                     existing.request_type = existing.request_type or rt
-                    updated += 1
+                    touched = True
                 elif existing.source == "seed" and existing.graph_spec != spec:
                     # Re-sync catalog-managed workflows so bundled spec changes
                     # actually deploy (the DB row persists across deploys, so a
@@ -521,6 +532,26 @@ class WorkflowService:
                     # touch here — so this only refreshes untouched seeds.
                     existing.graph_spec = spec
                     existing.request_type = existing.request_type or rt
+                    touched = True
+                # Guarantee instructions are never blank when a graph exists.
+                # Catalog seeds carry ONLY a graph_spec (there's no bundled .md for
+                # keys like simple_email/tag_change), so without this they persist
+                # with NULL instructions_markdown and render as a completely blank
+                # Details page. Generate the graph-derived baseline whenever prose is
+                # missing; we never clobber existing prose (an admin edit forks the
+                # row to source="user"), so this only heals empty rows.
+                if existing.graph_spec and not (existing.instructions_markdown or "").strip():
+                    generated = WorkflowService._synced_instructions(
+                        None, existing.graph_spec, existing.request_type or rt, goal=existing.goal
+                    )
+                    # Only assign when a real baseline was produced. A stage-less
+                    # spec yields nothing (see _synced_instructions), so guarding
+                    # here keeps re-seeding idempotent instead of re-touching those
+                    # rows on every boot.
+                    if generated and generated.strip():
+                        existing.instructions_markdown = generated
+                        touched = True
+                if touched:
                     updated += 1
                 continue
             db.add(WorkflowModel(
@@ -529,6 +560,11 @@ class WorkflowService:
                 name=rt.replace("_", " ").title(),
                 goal=None,
                 graph_spec=spec,
+                # Derive a baseline playbook up front so a freshly-seeded catalog
+                # workflow is never blank (mirrors create()/update()).
+                instructions_markdown=WorkflowService._synced_instructions(
+                    None, spec, rt, goal=None
+                ),
                 request_type=rt,
                 status="published",
                 source="seed",

@@ -122,6 +122,33 @@ async def test_save_draft_autogenerates_instructions_when_blank(patched_db, blan
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("blank", [None, "", "   "])
+async def test_save_draft_flags_auto_generated_instructions(patched_db, blank):
+    """Omitting/blanking instructions must surface an explicit, actionable signal
+    (not a silent ok) so the agent knows it left a thin baseline and re-authors."""
+    res = await wa.save_workflow_draft.execute(
+        key="autogen_signal", graph_spec=_valid_spec(), instructions_markdown=blank
+    )
+    assert res["ok"] is True
+    assert res["instructions_auto_generated"] is True
+    assert res["instructions_source"] == "auto_baseline"
+    assert any("instructions_markdown was NOT provided" in w for w in res["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_save_draft_marks_authored_instructions(patched_db):
+    """A real playbook is reported as authored with no auto-generation warning."""
+    res = await wa.save_workflow_draft.execute(
+        key="authored_signal", graph_spec=_valid_spec(),
+        instructions_markdown="# Real playbook\nGather X then Y.",
+    )
+    assert res["ok"] is True
+    assert res["instructions_auto_generated"] is False
+    assert res["instructions_source"] == "authored"
+    assert not any("auto-generated" in w.lower() for w in res["warnings"])
+
+
+@pytest.mark.asyncio
 async def test_save_draft_keeps_explicit_instructions_and_appends_execution(patched_db):
     """The author's prose is preserved; the canonical Execution block is spliced in."""
     res = await wa.save_workflow_draft.execute(

@@ -230,6 +230,14 @@ export function Workflows() {
       const argName = typeof args?.name === 'string' ? (args.name as string) : '';
       const argRt = typeof args?.request_type === 'string' ? (args.request_type as string) : '';
       const argGoal = typeof args?.goal === 'string' ? (args.goal as string) : '';
+      // save_workflow_draft carries the drafted playbook in its args; mirror it
+      // into the editor live, exactly like the graph, so a new workflow's
+      // instructions field fills in instead of showing "just the graph".
+      const argInstructions =
+        typeof args?.instructions_markdown === 'string' &&
+        (args.instructions_markdown as string).trim()
+          ? (args.instructions_markdown as string)
+          : '';
       setForm((prev) => {
         const targetKey = argKey || specName || prev.key;
         // If the agent is drafting a *different* workflow than what's open,
@@ -245,6 +253,7 @@ export function Workflows() {
           request_type: base.request_type || argRt || specName,
           goal: base.goal || argGoal,
           graph_spec: spec,
+          instructions_markdown: argInstructions || base.instructions_markdown,
         };
       });
       // Show the editor full-page so the admin watches the design take shape.
@@ -265,10 +274,16 @@ export function Workflows() {
     //    but parse a stringified one defensively so the open never silently skips.
     const r = (typeof result === 'string'
       ? safeParseJson(result)
-      : result) as { ok?: boolean; key?: string } | null;
+      : result) as { ok?: boolean; key?: string; instructions_markdown?: string } | null;
     const persisted = toolName === 'save_workflow_draft' || toolName === 'publish_workflow';
     if (persisted && ok && r?.ok && r.key) {
       const savedKey = r.key;
+      // Fill the instructions field from the authoritative save result (includes
+      // the server-generated baseline when the agent passed none), so it's never
+      // blank even if the canonical reload below races or misses a new draft.
+      if (typeof r.instructions_markdown === 'string' && r.instructions_markdown.trim()) {
+        setForm((prev) => ({ ...prev, instructions_markdown: r.instructions_markdown as string }));
+      }
       // Switch to the editor view immediately — before the (heavier) reload — so
       // a refetch hiccup or a key→id lookup miss can't strand the admin on the
       // list. "Save a draft" should always land you on that draft's page.

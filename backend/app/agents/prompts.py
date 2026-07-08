@@ -90,6 +90,7 @@ CURRENT MODEL: {settings.MODEL_SERVING_AGENT_LLM_ENDPOINT}
 
 ### 4. Security & Authentication
 - OBO (On-Behalf-Of): Many of your tools execute using OBO authentication. This means the tool securely uses the user's own identity and permissions automatically in the background. You NEVER need to ask the user for passwords, tokens, or credentials.
+- Permission errors reflect the USER's access, not yours. Because these tools run as the signed-in user, an authorization failure (e.g. "User does not have USE SCHEMA on Schema 'psk.uct'", "does not have SELECT", "permission denied") means the USER lacks that entitlement — it does NOT mean "you" (the agent) can't see it. Phrase it in the second person ("You don't have access to `psk.uct` yet"), never "I don't have access". Then REMEMBER it for the rest of the conversation: treat that catalog/schema/table/volume/workspace as inaccessible to this user, do not silently retry the same blocked scope, and let it inform every later step — proactively offer to request access, or point them to a similar asset they CAN access.
 """
 
 # Unified agent instructions.
@@ -686,6 +687,7 @@ The only rules that apply to you regardless of persona are these runtime output/
 ## Tools & authentication
 - Use ONLY the tools listed below to take actions or fetch data; never fabricate data that a tool is meant to provide.
 - Tools execute with On-Behalf-Of (OBO) authentication — they use the signed-in user's identity and permissions automatically. NEVER ask the user for passwords, tokens, or credentials.
+- A permission/authorization failure from a tool (e.g. "User does not have USE SCHEMA...", "permission denied") reflects the USER's own access, not yours. Say "You don't have access to X yet" (second person), never "I don't have access". Remember it for the rest of the conversation: don't retry the blocked scope, and use it to inform next steps (offer to request access, or suggest an asset they can access).
 """
 
 
@@ -738,10 +740,21 @@ workflow:
    for the real step tools (with their exact arg names), gate types, stage kinds
    (including `subworkflow` for compound workflows), the spec shape, and the
    expression operators. Rely on it rather than any external guide.
-1b. REUSE BEFORE BUILDING: call `search_similar_workflows` with the admin's
-   description. If a close match comes back, surface it and propose reusing/
-   cloning/editing it (inspect with `get_workflow`) instead of authoring a
-   duplicate. Only build new when nothing suitable exists.
+1b. CHECK FOR SIMILAR, BUT STILL DRAFT: call `search_similar_workflows` with the
+   admin's description. If a close match comes back, mention it in ONE line as an
+   FYI ("Heads up, `data_access_request` already covers table access — say the word
+   and I'll edit that instead"). But when the admin asked to CREATE / DRAFT / build
+   a NEW workflow (especially "from scratch"), DO NOT stop to recommend reuse and
+   DO NOT wait for a reply — proceed to build and `preview_workflow_spec` a real
+   `graph_spec` this same turn so the editor on the left populates. A reuse
+   suggestion is never a reason to end the turn without a drafted, previewed spec.
+1b-ii. BIAS TO A PREVIEWABLE DRAFT — don't get stuck asking questions. When
+   details are unspecified (key, approval chain, grant scope), make reasonable,
+   clearly-stated assumptions (e.g. key `table_access_request`, manager approval,
+   SELECT on a table), build the spec, `preview_workflow_spec` it, and THEN invite
+   the admin to correct the assumptions. The editor must never be left blank while
+   you interrogate the admin — draft first, refine after. Only block on a question
+   when the request is truly unbuildable without it.
 1c. TOOL-GAP CHECK: when the workflow needs a capability that has NO matching
    step tool in `list_workflow_building_blocks`, do NOT invent or force-fit a
    tool. Tell the admin the capability is missing and suggest how to add it:
@@ -779,11 +792,14 @@ workflow:
    the instructions the self-service agent follows. Never end a design turn with
    only the diagram.
 4. `save_workflow_draft` to persist a draft (does not affect live requests).
-   Always pass `request_type` (required before it can run), a friendly `name`, and
-   a one-line `goal`. If the workflow should collect inputs from the user, either
-   reference each as a `$var` in a step's args or pass `instructions_markdown`
-   listing them — the auto-generated baseline only covers vars the steps use, so
-   fields no step references are never gathered. Never pass empty `instructions_markdown`.
+   Always pass `request_type` (required before it can run), a friendly `name`, a
+   one-line `goal`, AND the full `instructions_markdown` you drafted in step 3c —
+   on EVERY save. Never omit or pass empty `instructions_markdown`: if you do, the
+   tool falls back to a thin graph-derived stub and returns
+   `instructions_auto_generated: true` with a warning — treat that as a FAILURE to
+   finish the job, author the real playbook, and call `save_workflow_draft` again.
+   (The auto-baseline only covers vars the steps use, so fields no step references
+   are never gathered.)
 5. `publish_workflow` ONLY after the admin explicitly confirms — it makes the
    workflow live for its request_type. Summarize the blast radius first.
 Never publish without validating + previewing + explicit confirmation.

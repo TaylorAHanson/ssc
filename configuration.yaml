@@ -69,7 +69,7 @@ service_principals:
 #     environment: "prod"
 
 branding:
-  name: "Enterprise Data Hub"
+  name: "Atlas"
   # Short, identifier-friendly form of the name used where the brand appears as a
   # slug rather than display text (e.g. provisioned GitHub repo-name prefixes and
   # the git commit author for bot PRs). Defaults to `name` when omitted; set this

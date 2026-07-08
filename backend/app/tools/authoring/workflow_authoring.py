@@ -419,10 +419,13 @@ class SaveDraftInput(BaseModel):
     instructions_markdown: Optional[str] = Field(
         default=None,
         description=(
-            "Optional markdown the self-service agent follows at runtime (the goal, what to "
-            "gather from the user, and how to format the execute_workflow call). If omitted OR "
-            "left blank, a baseline is auto-generated from the graph_spec so instructions are "
-            "never empty — so prefer passing real instructions over an empty string."
+            "The runtime playbook (markdown) the self-service agent follows to gather inputs "
+            "from the user, validate them, and format the execute_workflow call. STRONGLY "
+            "recommended on every save. If omitted OR left blank, only a THIN baseline is "
+            "auto-generated from the graph (a goal stub + the $var list + a flow overview) and "
+            "the response will flag instructions_auto_generated=true with a warning to author "
+            "and re-save — i.e. the workflow will be 'just the graph' until you supply real "
+            "instructions. Pass a full playbook here rather than relying on that fallback."
         ),
     )
 
@@ -489,6 +492,11 @@ async def save_workflow_draft(
         # pass "" for optional fields, which would otherwise defeat the safety
         # net and persist blank instructions (and a blank Details page).
         has_explicit_instructions = bool(instructions_markdown and instructions_markdown.strip())
+        # Track whether this save had to fall back to the graph-derived baseline so
+        # we can tell the agent. Without this signal the agent gets a bare ok:True,
+        # never realizes it skipped authoring the runtime playbook, and the workflow
+        # ends up as "just the graph" (a thin auto-stub) — the exact complaint.
+        instructions_auto_generated = False
         if has_explicit_instructions:
             fields["instructions_markdown"] = instructions_markdown
         elif not (existing and existing.instructions_markdown):
@@ -497,6 +505,7 @@ async def save_workflow_draft(
                 request_type=request_type or (existing.request_type if existing else None),
                 goal=goal or (existing.goal if existing else None),
             )
+            instructions_auto_generated = True
         if existing:
             workflow = WorkflowService.update(db, existing.id, **fields)
             action = "updated"
@@ -506,6 +515,17 @@ async def save_workflow_draft(
         warnings: List[str] = list(arg_warnings)
         if not workflow.request_type:
             warnings.append("No request_type set — set one before publishing or the graph won't run.")
+        if instructions_auto_generated:
+            warnings.append(
+                "instructions_markdown was NOT provided, so a THIN baseline was "
+                "auto-generated from the graph (just a goal stub, the $var input "
+                "list, and a flow overview). This is the 'just the graph' fallback — "
+                "the runtime self-service agent has no real playbook to gather inputs "
+                "or validate them. Author proper instructions (a '## Information to "
+                "Gather' numbered list with per-field description/required/format/hint, "
+                "'## Validation & Guidance', and '## Approvals & Flow') and call "
+                "save_workflow_draft again with instructions_markdown set."
+            )
         return {
             "ok": True,
             "action": action,
@@ -513,8 +533,22 @@ async def save_workflow_draft(
             "status": workflow.status,
             "version": workflow.version,
             "request_type": workflow.request_type,
+            # Return the persisted playbook so the authoring UI can hydrate its
+            # instructions field directly from this result — the studio mirrors the
+            # graph live but had no instructions to show until a (race-prone)
+            # canonical reload, which is why a new workflow looked "just the graph".
+            "instructions_markdown": workflow.instructions_markdown,
+            # Explicit, machine-readable signal so the agent (and UI) can tell an
+            # authored playbook from the auto-baseline instead of guessing.
+            "instructions_source": "auto_baseline" if instructions_auto_generated else "authored",
+            "instructions_auto_generated": instructions_auto_generated,
             "warnings": warnings,
-            "note": "Saved as a draft. Publish it (publish_workflow) to make it live.",
+            "note": (
+                "Saved as a draft, but with an AUTO-GENERATED baseline playbook — "
+                "author real instructions_markdown and re-save before publishing. "
+                if instructions_auto_generated
+                else "Saved as a draft. Publish it (publish_workflow) to make it live."
+            ),
         }
     except ValueError as e:
         return {"ok": False, "error": str(e)}
