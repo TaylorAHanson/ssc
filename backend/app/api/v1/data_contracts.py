@@ -31,6 +31,9 @@ class DataContractResponse(BaseModel):
     table_name: Optional[str] = None
     data_quality: Optional[dict] = None
     certification_violations: Optional[List[str]] = None
+    # Full per-rule checklist (pass + fail, with category) from the last policy
+    # evaluation, so the UI can render the identical Sentinel checklist.
+    certification_rule_results: Optional[List[dict]] = None
     certified: Optional[bool] = False
     last_synced_at: Optional[datetime] = None
 
@@ -389,18 +392,178 @@ def list_contracts(db: Session = Depends(get_db)):
                     violations = json.loads(violations)
                 except Exception:
                     violations = None
-                    
+
+            rule_results = asset.certification_rule_results
+            if isinstance(rule_results, str):
+                try:
+                    rule_results = json.loads(rule_results)
+                except Exception:
+                    rule_results = None
+
             contract_dict.update({
                 "catalog": asset.catalog,
                 "schema_name": asset.schema,
                 "table_name": asset.table_name,
                 "data_quality": asset.data_quality,
                 "certification_violations": violations,
+                "certification_rule_results": rule_results,
                 "certified": asset.certified,
                 "last_synced_at": asset.last_synced_at
             })
         results.append(contract_dict)
     return results
+
+
+# Category display order for the exec report. Mirrors the buckets defined in
+# ``policies/data_certification.rego`` (rule_category); "Other" catches any rule
+# not yet mapped so a new rego rule never silently drops out of the report.
+_REPORT_CATEGORY_ORDER = ["Structure", "Metadata", "Tagging", "Data Quality"]
+
+
+def _category_status(rule_results: list, category: str) -> str:
+    """Roll a category's rules up to a single pass/fail/n-a for the exec sheet."""
+    rules = [r for r in (rule_results or []) if (r.get("category") or "Other") == category]
+    if not rules:
+        return "n/a"
+    return "fail" if any(not r.get("passed") for r in rules) else "pass"
+
+
+@router.get("/certification-report")
+def certification_report(db: Session = Depends(get_db)):
+    """Download an XLSX certification report for leadership.
+
+    Sheet 1 (Overview): one row per dataset with a green ``pass`` / red ``fail``
+    cell per high-level category (Structure, Metadata, Tagging, Data Quality).
+    Sheet 2 (Details): one row per exact failure (dataset x failed check x
+    message) for the teams that need to remediate.
+    """
+    import json
+    from io import BytesIO
+    from fastapi.responses import StreamingResponse
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    contracts = (
+        db.query(DataContractModel)
+        .filter(DataContractModel.is_active == True)  # noqa: E712
+        .all()
+    )
+    assets = {a.id: a for a in db.query(DataAssetModel).all()}
+
+    def _rule_results(asset) -> list:
+        rr = getattr(asset, "certification_rule_results", None) if asset else None
+        if isinstance(rr, str):
+            try:
+                rr = json.loads(rr)
+            except Exception:
+                rr = None
+        return rr or []
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="374151", end_color="374151", fill_type="solid")
+    pass_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    pass_font = Font(color="006100", bold=True)
+    fail_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    fail_font = Font(color="9C0006", bold=True)
+    na_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+    na_font = Font(color="9CA3AF")
+    center = Alignment(horizontal="center", vertical="center")
+
+    wb = Workbook()
+
+    # --- Sheet 1: Overview (exec) ---
+    ws = wb.active
+    ws.title = "Overview"
+    overview_headers = ["Dataset", "Status"] + _REPORT_CATEGORY_ORDER
+    ws.append(overview_headers)
+    for col in range(1, len(overview_headers) + 1):
+        cell = ws.cell(row=1, column=col)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center
+
+    detail_rows = []  # collected for sheet 2
+
+    sorted_contracts = sorted(contracts, key=lambda c: (c.dataset_id or "").lower())
+    for c in sorted_contracts:
+        asset = assets.get(c.dataset_id)
+        rule_results = _rule_results(asset)
+        name = (asset.table_name if asset and asset.table_name else c.dataset_id)
+        status = "Certified" if (asset and asset.certified) else "Uncertified"
+        row = [name, status]
+        for cat in _REPORT_CATEGORY_ORDER:
+            row.append(_category_status(rule_results, cat))
+        ws.append(row)
+        r = ws.max_row
+        status_cell = ws.cell(row=r, column=2)
+        status_cell.alignment = center
+        if status == "Certified":
+            status_cell.font = pass_font
+        for i, cat in enumerate(_REPORT_CATEGORY_ORDER):
+            cell = ws.cell(row=r, column=3 + i)
+            cell.alignment = center
+            val = cell.value
+            if val == "pass":
+                cell.fill, cell.font = pass_fill, pass_font
+            elif val == "fail":
+                cell.fill, cell.font = fail_fill, fail_font
+            else:
+                cell.value = "n/a"
+                cell.fill, cell.font = na_fill, na_font
+
+        # Collect exact failures for the detail sheet.
+        for rr in rule_results:
+            if rr.get("passed"):
+                continue
+            msgs = rr.get("messages") or []
+            check = rr.get("description") or rr.get("id") or ""
+            category = rr.get("category") or "Other"
+            if msgs:
+                for m in msgs:
+                    detail_rows.append([name, category, check, m])
+            else:
+                detail_rows.append([name, category, check, "Failed"])
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(overview_headers))}{ws.max_row}"
+    ws.column_dimensions["A"].width = 34
+    ws.column_dimensions["B"].width = 14
+    for i in range(len(_REPORT_CATEGORY_ORDER)):
+        ws.column_dimensions[get_column_letter(3 + i)].width = 16
+
+    # --- Sheet 2: Details ---
+    ws2 = wb.create_sheet("Failure Details")
+    detail_headers = ["Dataset", "Category", "Failed Check", "Detail"]
+    ws2.append(detail_headers)
+    for col in range(1, len(detail_headers) + 1):
+        cell = ws2.cell(row=1, column=col)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center
+    if detail_rows:
+        for dr in detail_rows:
+            ws2.append(dr)
+    else:
+        ws2.append(["All datasets pass every check.", "", "", ""])
+    ws2.freeze_panes = "A2"
+    ws2.auto_filter.ref = f"A1:{get_column_letter(len(detail_headers))}{ws2.max_row}"
+    ws2.column_dimensions["A"].width = 34
+    ws2.column_dimensions["B"].width = 16
+    ws2.column_dimensions["C"].width = 44
+    ws2.column_dimensions["D"].width = 80
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    filename = f"data-certification-report-{stamp}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
 
 @router.get("/{dataset_id}", response_model=List[DataContractResponse])
 def get_contract_history(dataset_id: str, db: Session = Depends(get_db)):
@@ -429,13 +592,21 @@ def get_contract_history(dataset_id: str, db: Session = Depends(get_db)):
                     violations = json.loads(violations)
                 except Exception:
                     violations = None
-                    
+
+            rule_results = asset.certification_rule_results
+            if isinstance(rule_results, str):
+                try:
+                    rule_results = json.loads(rule_results)
+                except Exception:
+                    rule_results = None
+
             contract_dict.update({
                 "catalog": asset.catalog,
                 "schema_name": asset.schema,
                 "table_name": asset.table_name,
                 "data_quality": asset.data_quality,
                 "certification_violations": violations,
+                "certification_rule_results": rule_results,
                 "certified": asset.certified,
                 "last_synced_at": asset.last_synced_at
             })

@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
-import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, ChevronUp, ChevronDown, Filter, Trash2, RefreshCw } from 'lucide-react';
+import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, ChevronUp, ChevronDown, Filter, Trash2, RefreshCw, Download, ClipboardList } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { api } from '../../services/api';
 import type { DataContract } from '../../services/api';
+import { CertificationChecklist } from '../../components/admin/CertificationChecklist';
+import type { ChecklistRuleRow } from '../../components/admin/CertificationChecklist';
 import { format, parseISO } from 'date-fns';
 import Editor from '@monaco-editor/react';
 import yaml from 'js-yaml';
@@ -35,6 +37,7 @@ export function DataCertification() {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [statusFilter, setStatusFilter] = useState<'all' | 'certified' | 'uncertified' | 'awaiting'>('all');
   const [isSyncingContracts, setIsSyncingContracts] = useState(false);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [isCheckingPolicy, setIsCheckingPolicy] = useState(false);
   const [syncMessage, setSyncMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
@@ -186,6 +189,20 @@ export function DataCertification() {
     }
   };
 
+  const handleGenerateReport = async () => {
+    setIsGeneratingReport(true);
+    setSyncMessage(null);
+    try {
+      await api.downloadCertificationReport();
+    } catch (e: any) {
+      console.error(e);
+      setSyncMessage({ type: 'error', text: e.message || 'Error generating report.' });
+      setTimeout(() => setSyncMessage(null), 5000);
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
+
   useEffect(() => {
     let mounted = true;
     async function loadData() {
@@ -316,6 +333,16 @@ export function DataCertification() {
             </div>
             <div className="flex items-center gap-3">
               <Button
+                variant="outline"
+                onClick={handleGenerateReport}
+                disabled={isGeneratingReport}
+                className="flex items-center gap-2 disabled:opacity-50"
+                title="Download an XLSX certification report (exec overview + failure details)"
+              >
+                {isGeneratingReport ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                Generate Report
+              </Button>
+              <Button
                 onClick={() => handleSyncContracts()}
                 disabled={isSyncingContracts}
                 className="flex items-center gap-2 bg-primary text-white disabled:opacity-50"
@@ -377,13 +404,25 @@ export function DataCertification() {
                 ) : (
                   processedDatasets.map(contract => {
                     const dq = contract.data_quality || {} as any;
-                    
-                    const rel = dq.failed_rule_count !== undefined ? dq.failed_rule_count : (dq.reliability !== undefined ? dq.reliability : 'N/A');
+
+                    // Authoritative per-rule checklist (all categories) from the last
+                    // policy run — the same rows the Sentinel report renders. The failed
+                    // count here MATCHES the Sentinel exactly.
+                    const ruleResults = Array.isArray(contract.certification_rule_results) ? contract.certification_rule_results : [];
+                    const hasRuleResults = ruleResults.length > 0;
+                    const failedRuleCount = ruleResults.filter(r => !r.passed).length;
+
+                    const failedRules = Array.isArray(dq.failed_rules) ? dq.failed_rules : [];
+                    // Legacy DQ-only count for datasets scanned before rule_results were cached.
+                    const legacyRel = dq.failed_rule_count !== undefined ? dq.failed_rule_count : (dq.reliability !== undefined ? dq.reliability : 'N/A');
+                    const failedCount: number | string = hasRuleResults ? failedRuleCount : legacyRel;
+
                     const lastRun = contract.last_synced_at ? formatPacific(contract.last_synced_at) : 'Unknown';
                     const createdDate = contract.created_at ? format(parseUtc(contract.created_at), 'MMM d, yyyy') : 'Unknown';
                     const status = getStatus(contract);
-                    const failedRules = Array.isArray(dq.failed_rules) ? dq.failed_rules : [];
-                    const hasViolations = !!((contract.certification_violations && contract.certification_violations.length > 0) || failedRules.length > 0);
+                    // Whether the checklist modal has anything to show.
+                    const canOpenChecklist = hasRuleResults || failedRules.length > 0 || !!(contract.certification_violations && contract.certification_violations.length > 0);
+                    const hasViolations = canOpenChecklist;
 
                     return (
                       <tr key={contract.dataset_id} className="hover:bg-gray-50 transition-colors">
@@ -406,13 +445,13 @@ export function DataCertification() {
                               <Info className="w-3 h-3 mr-1" /> Awaiting Scan
                             </span>
                           ) : hasViolations ? (
-                            <button
-                              onClick={() => setViolationAsset(contract)}
-                              className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800 cursor-pointer hover:bg-gray-200 transition-colors"
+                            <span
+                              className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800"
+                              title="See the Failed Rules count for the full certification checklist"
                             >
                               Uncertified
                               <AlertCircle className="w-3 h-3 ml-1 text-amber-500" />
-                            </button>
+                            </span>
                           ) : (
                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
                               Uncertified
@@ -422,22 +461,22 @@ export function DataCertification() {
                         <td className="p-3 text-gray-600 whitespace-nowrap">{createdDate}</td>
                         <td className="p-3 text-gray-600 whitespace-nowrap">{lastRun}</td>
                         <td className="p-3">
-                          {failedRules.length > 0 ? (
+                          {canOpenChecklist ? (
                             <button
                               onClick={() => setViolationAsset(contract)}
-                              className="font-semibold text-red-600 hover:underline cursor-pointer"
-                              title="View failing data quality rules"
+                              className={`font-semibold hover:underline cursor-pointer ${(typeof failedCount === 'number' && failedCount === 0) ? 'text-green-600' : 'text-red-600'}`}
+                              title="View the full certification checklist (passing and failing rules)"
                             >
-                              {rel}
+                              {failedCount}
                             </button>
-                          ) : (typeof rel === 'number' && rel === 0) ? (
+                          ) : (typeof failedCount === 'number' && failedCount === 0) ? (
                             <span className="font-semibold text-green-600">0</span>
-                          ) : (typeof rel === 'number' && rel > 0) ? (
-                            <span className="font-semibold text-red-600">{rel}</span>
+                          ) : (typeof failedCount === 'number' && failedCount > 0) ? (
+                            <span className="font-semibold text-red-600">{failedCount}</span>
                           ) : (
                             <span
                               className="text-gray-400 cursor-help"
-                              title={rel === -1 || rel === '-1'
+                              title={failedCount === -1 || failedCount === '-1'
                                 ? "Couldn't fetch data quality history. Check that the table has a 'reliability_window' tag, then re-run the Enforcement Sentinel."
                                 : 'Run the Enforcement Sentinel to evaluate data quality.'}
                             >
@@ -606,15 +645,78 @@ export function DataCertification() {
         </div>
       )}
 
-      {/* Violations Modal */}
-      {violationAsset && (
+      {/* Certification Checklist Modal — the SAME checklist the Enforcement
+          Sentinel renders (pass + fail), driven by the shared component. */}
+      {violationAsset && (() => {
+        const rr = Array.isArray(violationAsset.certification_rule_results) ? violationAsset.certification_rule_results : [];
+        const hasChecklist = rr.length > 0;
+        // Enrich the stored per-rule results into the shape the shared checklist
+        // expects — resource is the data product itself.
+        const ruleRows: ChecklistRuleRow[] = rr.map(r => ({
+          ...r,
+          resource_type: 'data_product',
+          resource_id: violationAsset.dataset_id,
+          resource: { name: violationAsset.table_name || violationAsset.dataset_id },
+          policy: 'data_certification',
+          severity: r.passed ? 'NONE' : 'HIGH',
+        }));
+        const failedRules = Array.isArray(violationAsset.data_quality?.failed_rules) ? violationAsset.data_quality.failed_rules : [];
+
+        const dqDetail = failedRules.length > 0 ? (
+          <div>
+            <p className="text-sm text-gray-600 mb-3">
+              Failing data quality rules within the reliability window:
+            </p>
+            <div className="overflow-hidden rounded-lg border border-gray-200">
+              <table className="w-full text-sm bg-white">
+                <thead className="bg-gray-50 text-gray-500 text-xs border-b border-gray-200">
+                  <tr>
+                    <th className="text-left font-medium p-2 pl-3">Rule</th>
+                    <th className="text-left font-medium p-2">Column</th>
+                    <th className="text-right font-medium p-2">Score</th>
+                    <th className="text-right font-medium p-2">Threshold</th>
+                    <th className="text-right font-medium p-2 pr-3">Rows Failed</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {failedRules.map((fr: any, i: number) => (
+                    <tr key={i} className="align-top">
+                      <td className="p-2 pl-3">
+                        <div className="font-medium text-gray-900">{fr.rule || 'Unnamed rule'}</div>
+                        <div className="text-[11px] text-gray-500">
+                          {[fr.dimension, fr.rule_type].filter(Boolean).join(' · ')}
+                        </div>
+                        {fr.table && <div className="text-[10px] text-gray-400 font-mono break-all">{fr.table}</div>}
+                      </td>
+                      <td className="p-2 text-gray-700">{fr.column || '—'}</td>
+                      <td className="p-2 text-right font-semibold text-red-600">{fr.score != null ? `${Number(fr.score).toFixed(2)}%` : '—'}</td>
+                      <td className="p-2 text-right text-gray-600">{fr.threshold != null ? `${Number(fr.threshold).toFixed(2)}%` : '—'}</td>
+                      <td className="p-2 pr-3 text-right text-gray-600">{fr.rows_failed != null ? Number(fr.rows_failed).toLocaleString() : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null;
+
+        // Only nudge remediation when something actually failed — the checklist
+        // modal now also opens for fully-passing datasets.
+        const hasFailures = ruleRows.some(r => !r.passed) || failedRules.length > 0 || !!(violationAsset.certification_violations && violationAsset.certification_violations.length > 0);
+        const nextSteps = hasFailures ? (
+          <div className="p-4 bg-blue-50 text-blue-800 rounded-lg border border-blue-100 text-sm">
+            <p><strong>Next Steps:</strong> Once the data engineering team resolves these issues in Databricks (e.g., by adding missing tags, defining RBAC, or improving data quality scores), the next Enforcement Sentinel run will automatically detect the changes and generate a Data Certification request.</p>
+          </div>
+        ) : null;
+
+        return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in" onClick={() => setViolationAsset(null)}>
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl flex flex-col overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+          <div className={`bg-white rounded-xl shadow-xl w-full ${hasChecklist ? 'max-w-5xl' : 'max-w-2xl'} flex flex-col overflow-hidden animate-in zoom-in-95`} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-white">
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                  <AlertCircle className="w-5 h-5 text-amber-500" />
-                  Certification Issues
+                  {hasChecklist ? <ClipboardList className="w-5 h-5 text-gray-700" /> : <AlertCircle className="w-5 h-5 text-amber-500" />}
+                  {hasChecklist ? 'Certification Checklist' : 'Certification Issues'}
                 </h3>
                 <p className="text-xs text-gray-500 mt-1 font-mono">{violationAsset.catalog || ''}.{violationAsset.schema_name || ''}.{violationAsset.table_name || violationAsset.dataset_id}</p>
               </div>
@@ -627,78 +729,50 @@ export function DataCertification() {
                 <X className="w-4 h-4" />
               </Button>
             </div>
-            <div className="p-6 bg-gray-50 flex-1 overflow-y-auto max-h-[60vh]">
-              {(() => {
-                const failedRules = Array.isArray(violationAsset.data_quality?.failed_rules) ? violationAsset.data_quality.failed_rules : [];
-                if (failedRules.length === 0) return null;
-                return (
-                  <div className="mb-6">
-                    <p className="text-sm text-gray-600 mb-3">
-                      Failing data quality rules within the reliability window:
-                    </p>
-                    <div className="overflow-hidden rounded-lg border border-gray-200">
-                      <table className="w-full text-sm bg-white">
-                        <thead className="bg-gray-50 text-gray-500 text-xs border-b border-gray-200">
-                          <tr>
-                            <th className="text-left font-medium p-2 pl-3">Rule</th>
-                            <th className="text-left font-medium p-2">Column</th>
-                            <th className="text-right font-medium p-2">Score</th>
-                            <th className="text-right font-medium p-2">Threshold</th>
-                            <th className="text-right font-medium p-2 pr-3">Rows Failed</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100">
-                          {failedRules.map((fr: any, i: number) => (
-                            <tr key={i} className="align-top">
-                              <td className="p-2 pl-3">
-                                <div className="font-medium text-gray-900">{fr.rule || 'Unnamed rule'}</div>
-                                <div className="text-[11px] text-gray-500">
-                                  {[fr.dimension, fr.rule_type].filter(Boolean).join(' · ')}
-                                </div>
-                                {fr.table && <div className="text-[10px] text-gray-400 font-mono break-all">{fr.table}</div>}
-                              </td>
-                              <td className="p-2 text-gray-700">{fr.column || '—'}</td>
-                              <td className="p-2 text-right font-semibold text-red-600">{fr.score != null ? `${Number(fr.score).toFixed(2)}%` : '—'}</td>
-                              <td className="p-2 text-right text-gray-600">{fr.threshold != null ? `${Number(fr.threshold).toFixed(2)}%` : '—'}</td>
-                              <td className="p-2 pr-3 text-right text-gray-600">{fr.rows_failed != null ? Number(fr.rows_failed).toLocaleString() : '—'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                );
-              })()}
 
-              {violationAsset.certification_violations && violationAsset.certification_violations.length > 0 && (
-                <>
-                  <p className="text-sm text-gray-600 mb-4">
-                    This dataset fails the following Open Policy Agent (OPA) checks required for certification:
-                  </p>
-                  <ul className="space-y-3">
-                    {violationAsset.certification_violations?.map((v, i) => (
-                      <li key={i} className="flex items-start gap-3 bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
-                        <span className="flex-shrink-0 w-6 h-6 rounded-full bg-red-100 text-red-700 flex items-center justify-center text-xs font-bold mt-0.5">
-                          {i + 1}
-                        </span>
-                        <span className="text-sm text-gray-800 leading-snug pt-0.5">
-                          {v.replace(/^\d+\.\s*/, '')}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-              <div className="mt-6 p-4 bg-blue-50 text-blue-800 rounded-lg border border-blue-100 text-sm">
-                <p><strong>Next Steps:</strong> Once the data engineering team resolves these issues in Databricks (e.g., by adding missing tags, defining RBAC, or improving data quality scores), the next Enforcement Sentinel run will automatically detect the changes and generate a Data Certification request.</p>
+            {hasChecklist ? (
+              <div className="flex-1 overflow-y-auto">
+                <CertificationChecklist ruleRows={ruleRows} />
+                {(dqDetail || nextSteps) && (
+                  <div className="p-6 bg-gray-50 border-t border-gray-100 space-y-6">
+                    {dqDetail}
+                    {nextSteps}
+                  </div>
+                )}
               </div>
-            </div>
+            ) : (
+              <div className="p-6 bg-gray-50 flex-1 overflow-y-auto max-h-[60vh] space-y-6">
+                {dqDetail}
+                {violationAsset.certification_violations && violationAsset.certification_violations.length > 0 && (
+                  <div>
+                    <p className="text-sm text-gray-600 mb-4">
+                      This dataset fails the following Open Policy Agent (OPA) checks required for certification:
+                    </p>
+                    <ul className="space-y-3">
+                      {violationAsset.certification_violations?.map((v, i) => (
+                        <li key={i} className="flex items-start gap-3 bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
+                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-red-100 text-red-700 flex items-center justify-center text-xs font-bold mt-0.5">
+                            {i + 1}
+                          </span>
+                          <span className="text-sm text-gray-800 leading-snug pt-0.5">
+                            {v.replace(/^\d+\.\s*/, '')}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {nextSteps}
+              </div>
+            )}
+
             <div className="p-4 border-t border-gray-100 bg-white flex justify-end">
               <Button onClick={() => setViolationAsset(null)}>Close</Button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
     </div>
   );

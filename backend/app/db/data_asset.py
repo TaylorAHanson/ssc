@@ -53,6 +53,10 @@ class DataAssetModel(Base):
     contract_url = Column(String, nullable=True)
     data_quality = Column(JSONType, nullable=True) # e.g. {"freshness": "99%", ...}
     certification_violations = Column(JSONType, nullable=True) # List of strings explaining why certification failed
+    # Full per-rule checklist from the last policy evaluation (OPA rule_results):
+    # [{id, description, category, passed, messages}, ...]. Powers the DRY
+    # "identical to the Sentinel" checklist view and the exec XLS report.
+    certification_rule_results = Column(JSONType, nullable=True)
     sla = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=True)
     last_synced_at = Column(DateTime, default=datetime.utcnow, nullable=False)

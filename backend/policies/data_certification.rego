@@ -33,6 +33,22 @@ rule_metadata := {
 	"required_tags": "Required tags present (dataset, reliability_window, data_owner, approver_group, access_group)",
 }
 
+# === Rule -> category map (single source of truth for the exec report + UI) ===
+# Categories group the checklist into the high-level buckets leadership cares
+# about: is the contract structurally sound, is metadata documented, are the
+# governance tags present, and does the data pass its quality rules.
+rule_category := {
+	"yaml_valid": "Structure",
+	"table_exists": "Structure",
+	"catalog_description": "Metadata",
+	"schema_description": "Metadata",
+	"column_descriptions": "Metadata",
+	"required_tags": "Tagging",
+	"reliability_window_tag": "Tagging",
+	"dq_history_fetched": "Data Quality",
+	"dq_zero_failed": "Data Quality",
+}
+
 # === Applicability ===
 # Every rule in this policy applies whenever the resource is a data_product.
 policy_applies if input.resource.type == "data_product"
@@ -134,6 +150,7 @@ rule_results contains result if {
 	result := {
 		"id": rule_id,
 		"description": rule_metadata[rule_id],
+		"category": object.get(rule_category, rule_id, "Other"),
 		"passed": count(rule_violations) == 0,
 		"messages": sort([m | some m in rule_violations]),
 	}

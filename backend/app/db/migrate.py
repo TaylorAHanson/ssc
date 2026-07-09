@@ -91,6 +91,11 @@ def run_startup_migrations(engine: Engine) -> None:
         # Context Catalog retrieval-usage signal columns.
         _add_column(engine, "context_documents", "retrieval_count", "INTEGER DEFAULT 0")
         _add_column(engine, "context_documents", "last_retrieved_at", "TIMESTAMP")
+        # Data Certification: full per-rule checklist cache on the data asset.
+        # JSONB on Postgres (matches the model's JSONType) / TEXT on SQLite, which
+        # stores the JSON string the JSONType serializes.
+        _json_ddl = "JSONB" if engine.dialect.name == "postgresql" else "TEXT"
+        _add_column(engine, "data_assets", "certification_rule_results", _json_ddl)
         # Tool Registry: unified catalog rename to the three usage contexts.
         _rename_column(engine, "tool_registry", "enabled_for_edh", "enabled_for_main_agent")
         _rename_column(engine, "tool_registry", "enabled_for_workflow", "enabled_for_workflow_agent")

@@ -615,6 +615,15 @@ def _record_certification_violations(db, resource: Dict[str, Any], result: Dict[
         db.flush()
     asset.certification_violations = result.get("violation_reasons", [])
     flag_modified(asset, "certification_violations")
+    # Cache the FULL per-rule checklist (pass + fail, with category) so the
+    # certification UI can render the exact same checklist the Sentinel shows and
+    # the exec report can bucket by category — sorted violations-first, matching
+    # how the Sentinel run report orders them.
+    rule_results = result.get("rule_results", []) or []
+    asset.certification_rule_results = sorted(
+        rule_results, key=lambda r: (bool(r.get("passed")), r.get("id", ""))
+    )
+    flag_modified(asset, "certification_rule_results")
     asset.last_synced_at = scan_time
     db.add(asset)
 

@@ -790,3 +790,42 @@ async def execute_enforcement_action(
 
     return {"status": "success", "message": f"Successfully executed {action_to_take} on {body.resource_id}"}
 
+
+@router.get("/{request_id}/enforcement-actions", status_code=status.HTTP_200_OK)
+async def list_enforcement_actions(
+    request_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Return manual enforcement actions recorded for a run.
+
+    Lets the Sentinel UI durably rehydrate the "Executed" state after a page
+    refresh instead of relying on ephemeral client state.
+    """
+    if not current_user.has_role("Platform Admin") and not current_user.has_role("Governance Admin"):
+        raise HTTPException(status_code=403, detail="Not authorized to view enforcement actions")
+
+    from app.db.enforcement_audit import EnforcementAuditModel
+
+    records = (
+        db.query(EnforcementAuditModel)
+        .filter(
+            EnforcementAuditModel.request_id == request_id,
+            EnforcementAuditModel.executed_action.like("manual_%"),
+        )
+        .order_by(EnforcementAuditModel.created_at.asc())
+        .all()
+    )
+    return [
+        {
+            "resource_id": r.resource_id,
+            "resource_type": r.resource_type,
+            "policy_name": r.policy_name,
+            "action": r.intended_action,
+            "executed_action": r.executed_action,
+            "reason": r.reason,
+            "at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in records
+    ]
+

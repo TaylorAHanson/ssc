@@ -334,6 +334,28 @@ export async function getRequest(requestId: string): Promise<Request> {
   return response.json();
 }
 
+export interface EnforcementActionRecord {
+  resource_id: string;
+  resource_type: string;
+  policy_name: string;
+  action: string;
+  executed_action: string;
+  reason?: string | null;
+  at: string | null;
+}
+
+// Manual enforcement actions recorded for a Sentinel run, used to durably
+// rehydrate the "Executed" state after a page refresh.
+export async function getEnforcementActions(requestId: string): Promise<EnforcementActionRecord[]> {
+  const response = await fetch(`${API_BASE_URL}/requests/${requestId}/enforcement-actions`, {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to get enforcement actions: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export type GraphRunState = 'done' | 'current' | 'pending' | 'rejected';
 
 export interface RequestGraph {
@@ -1276,6 +1298,17 @@ export async function getAccessibleAssetIds(): Promise<AccessibleAssetsResponse>
   return response.json();
 }
 
+// A single per-rule evaluation from the OPA data_certification policy. Shared by
+// the Sentinel run report and the ODCS certification checklist so both render an
+// identical view (DRY).
+export interface CertificationRuleResult {
+  id: string;
+  description?: string;
+  category?: string;
+  passed: boolean;
+  messages?: string[];
+}
+
 export interface DataContract {
   id: string;
   dataset_id: string;
@@ -1290,6 +1323,7 @@ export interface DataContract {
   table_name?: string | null;
   data_quality?: any | null;
   certification_violations?: string[] | null;
+  certification_rule_results?: CertificationRuleResult[] | null;
   certified?: boolean;
   last_synced_at?: string | null;
 }
@@ -1353,6 +1387,29 @@ export async function deleteDataContract(datasetId: string): Promise<void> {
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`Failed to delete data contract: ${response.status} ${errorText}`);
   }
+}
+
+// Streams the XLSX certification report and triggers a browser download.
+export async function downloadCertificationReport(): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/data-contracts/certification-report`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(errorText || `Failed to generate report: ${response.statusText}`);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match ? match[1] : 'data-certification-report.xlsx';
+  const objectUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(objectUrl);
 }
 
 export interface OdpsDocument {
@@ -2498,6 +2555,7 @@ export const api = {
   createRequest,
   getRequests,
   getPaginatedRequests,
+  getEnforcementActions,
   getRequest,
   getRequestGraph,
   approveRequest,
@@ -2526,6 +2584,7 @@ export const api = {
   createDataContract,
   syncDataContracts,
   deleteDataContract,
+  downloadCertificationReport,
   checkPolicy,
   getOdpsList,
   draftOdps,
