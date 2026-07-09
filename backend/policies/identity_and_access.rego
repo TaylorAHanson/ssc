@@ -67,4 +67,4 @@ has_pending_exception := common.has_pending_exception(input.allowlist_records, i
 
 action := common.resolve_action(is_violation, has_approved_exception, has_pending_exception, "KILL")
 reason := common.resolve_reason(is_violation, has_approved_exception, has_pending_exception, input.allowlist_records, input.resource.id, input.request_time, violation_reasons)
-severity := common.resolve_severity(is_violation, has_approved_exception, has_pending_exception, "CRITICAL")
+severity := common.resolve_severity(is_violation, has_approved_exception, has_pending_exception, "HIGH")

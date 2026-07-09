@@ -25,6 +25,11 @@ class RequestModel(Base):
     # Timestamps
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    # Enforcement Sentinel: set on the one scheduled run per local day that emitted
+    # the governance digest email. Lets the sentinel run on any cadence (e.g. every
+    # 30 min) while sending the digest at most once/day (anchored to a target hour).
+    digest_emitted_at = Column(DateTime, nullable=True)
     
     # State machine state (serialized)
     current_state = Column(String)  # Current state ID

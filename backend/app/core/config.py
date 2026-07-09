@@ -382,6 +382,13 @@ class Settings(BaseSettings):
     # expired AND that hasn't been updated within this many minutes is treated as
     # stale and no longer blocks new scheduled runs.
     ENFORCEMENT_SENTINEL_STALE_MINUTES: int = int(os.getenv("ENFORCEMENT_SENTINEL_STALE_MINUTES", "45"))
+    # Governance digest: HIGH-severity violations email governance admins
+    # immediately (on transition); everything else is rolled into a once-per-day
+    # digest. The digest is "anchored" — it goes out on the first sentinel run at or
+    # after this local hour on a new calendar day (in ENFORCEMENT_DIGEST_TIMEZONE),
+    # so cadence changes (e.g. */30) don't produce duplicate or skipped digests.
+    ENFORCEMENT_DIGEST_HOUR_LOCAL: int = int(os.getenv("ENFORCEMENT_DIGEST_HOUR_LOCAL", "7"))
+    ENFORCEMENT_DIGEST_TIMEZONE: str = os.getenv("ENFORCEMENT_DIGEST_TIMEZONE", "America/Los_Angeles")
     # Max concurrent units of work during a sentinel scan (resource handler
     # discovery + per-resource OPA evaluation). Bounds fan-out so we don't spawn
     # an unbounded number of OPA subprocesses / SDK calls at once. Set to 1 to

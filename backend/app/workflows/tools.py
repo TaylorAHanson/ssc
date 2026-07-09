@@ -451,21 +451,38 @@ async def sentinel_discover(**kwargs) -> Dict[str, Any]:
         db.close()
 
 
-@tool(name="sentinel_enforce", side_effect_class="destructive",
-      description="Remediate discovered violations (warn/kill/uncertify). Irreversible.")
+@tool(name="sentinel_enforce", side_effect_class="app_write",
+      description="Apply automated remediation for discovered violations: safe/reversible "
+                  "actions (certify/uncertify/warn) execute; destructive intents are "
+                  "downgraded to an owner warning and left for manual Review & Act.")
 async def sentinel_enforce(**kwargs) -> Dict[str, Any]:
     request_id = kwargs.get("_request_id")
     db, request = _load_request(request_id)
     if request is None:
         logger.warning("sentinel_enforce: no request found for id=%s", request_id)
-        return {"enforced": True, "mode": kwargs.get("enforcement_mode", "audit_only"),
-                "actions": [], "summary": "No request context; nothing to enforce."}
+        return {"enforced": True, "actions": [], "summary": "No request context; nothing to enforce."}
 
-    logger.info("sentinel_enforce: request=%s mode=%s", request_id,
-                (request.state_context or {}).get("enforcement_mode"))
+    logger.info("sentinel_enforce: request=%s", request_id)
     try:
         from app.workflows.sentinel import run_enforcement
         return await run_enforcement(db, request)
+    finally:
+        db.close()
+
+
+@tool(name="sentinel_notify", side_effect_class="notify",
+      description="Send governance notifications for a sentinel run: immediate email for "
+                  "new HIGH-severity violations (deduped by transition) + an anchored "
+                  "once-per-day digest to the governance group.")
+async def sentinel_notify(**kwargs) -> Dict[str, Any]:
+    request_id = kwargs.get("_request_id")
+    db, request = _load_request(request_id)
+    if request is None:
+        logger.warning("sentinel_notify: no request found for id=%s", request_id)
+        return {"notified": False, "reason": "no_request_context"}
+    try:
+        from app.workflows.sentinel import run_notify
+        return await run_notify(db, request)
     finally:
         db.close()
 
@@ -619,6 +636,14 @@ async def execute_report(**kwargs) -> Dict[str, Any]:
 
         results: List[Dict[str, str]] = []
         for p in prompts:
+            # Be defensive: a subscription may store a prompt as a bare string
+            # instead of the documented {label, prompt} dict. Coerce so a malformed
+            # entry never 500s the scheduled report.
+            if isinstance(p, str):
+                p = {"label": report_name, "prompt": p}
+            elif not isinstance(p, dict):
+                logger.warning("execute_report: skipping malformed prompt %r (request=%s)", p, request_id)
+                continue
             label = p.get("label", "Untitled")
             prompt_text = p.get("prompt", "")
             logger.info("execute_report: running prompt '%s' (request=%s)", label, request_id)

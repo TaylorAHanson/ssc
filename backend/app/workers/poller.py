@@ -109,7 +109,7 @@ async def process_enforcement_sentinel_cron():
                     title=f"Scheduled Sentinel Run",
                     status=RequestStatus.PENDING.value,
                     current_state="pending",
-                    state_context={"enforcement_mode": "audit_only"},
+                    state_context={},
                     created_at=now,
                     updated_at=now
                 )

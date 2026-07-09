@@ -21,7 +21,15 @@ def test_invalid_spec_scores_zero_quality():
     assert any(f["category"] == "validity" for f in report["findings"])
 
 
-def test_ungated_destructive_is_critical_risk():
+def test_ungated_destructive_is_critical_risk(monkeypatch):
+    # The Sentinel no longer exposes a destructive *workflow* tool (destructive
+    # actions are manual-only now), so force the destructive class to exercise the
+    # evaluator's ungated-destruction guardrail — it must still flag an ungated
+    # destructive step as critical for any future destructive tool.
+    monkeypatch.setattr(
+        "app.workflows.evaluator._tool_meta",
+        lambda name: ("destructive", True),
+    )
     spec = {
         "name": "danger",
         "stages": [_step("enforce", "sentinel_enforce", success_fact="enforced")],

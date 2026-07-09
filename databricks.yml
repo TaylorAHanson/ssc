@@ -121,6 +121,10 @@ resources:
             value: "${var.data_asset_sync_cron}"
           - name: ENFORCEMENT_SENTINEL_CRON
             value: "${var.enforcement_sentinel_cron}"
+          # Governance admins: recipients of the Sentinel's immediate HIGH-severity
+          # alerts and the anchored once-per-day digest.
+          - name: GOVERNANCE_EMAIL_GROUP
+            value: "${var.governance_email_group}"
           - name: DATA_QUALITY_TABLE
             value: "${var.data_quality_table}"
           - name: DATA_QUALITY_ADOC_SCHEMA
@@ -342,6 +346,12 @@ variables:
   enforcement_sentinel_cron:
     description: "Cron schedule for running enforcement sentinel"
     default: "*/30 * * * *"
+  governance_email_group:
+    description: >-
+      Governance-admin email address / distribution group that receives
+      Enforcement Sentinel notifications: immediate alerts for new HIGH-severity
+      violations and the anchored once-per-day governance digest.
+    default: "data-governance@example.com"
   notification_email_provider:
     description: "Email provider for notifications (smtp, ses, mock)"
     default: "ses"

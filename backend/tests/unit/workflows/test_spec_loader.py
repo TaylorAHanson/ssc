@@ -270,16 +270,19 @@ def test_writes_context_rejects_non_string_list(bad):
 
 def test_data_access_is_data_defined_with_resolve_gate_grant():
     """The former dedicated data_access graph is now a graph_spec: a
-    resolve_owners step lifts data_owners into context, the data_owner gate reads
-    them via approvers_from, and grants fan out per asset."""
+    resolve_owners step lifts data_owners into context, a manager gate and a
+    data_owner gate (reading owners via approvers_from) both authorize, and grants
+    fan out per asset."""
     data = SPECS["data_access_request"]
     spec = spec_from_dict(data)            # validates + compiles
     build_spec_graph(spec)                 # builds a StateGraph
-    resolve, gate, grant = spec.stages
+    resolve, manager_gate, gate, grant = spec.stages
 
     assert resolve.tool.name == "resolve_data_owners"
     assert resolve.writes_context == ["data_owners"]
     assert resolve.tool.is_mutating is False  # owner discovery is read-only
+
+    assert manager_gate.type == "manager"
 
     assert gate.type == "data_owner"
     assert gate.approvers_from is not None
@@ -303,7 +306,7 @@ def test_resolve_data_owners_is_registered_read_tool():
     meta = {t["name"]: t for t in available_tools()}["resolve_data_owners"]
     assert meta["is_mutating"] is False
     assert meta["side_effect_class"] == "read"
-    assert set(meta["args"]) == {"assets", "data_owners"}
+    assert set(meta["args"]) == {"assets", "asset_name", "asset_type", "data_owners"}
 
 
 def test_for_each_and_item_args_closures():

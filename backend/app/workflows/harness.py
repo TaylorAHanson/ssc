@@ -59,18 +59,26 @@ class _FakeProvider:
     async def list_members_add(self, *a, **k): return {"added": True}
     async def submit_job(self, *a, **k): return {"run_id": 1, "state": "SUCCESS"}
     async def send(self, **k): return {"sent": True}
+    async def send_email(self, **k): return True
 
 
 def _install_fakes():
     import app.state_machines.facts as facts
     import app.workflows.graphs as graphs
     import app.workflows.tools as T
+    import app.agents.runner as runner_mod
 
     facts.add_fact = lambda *a, **k: None
     facts.get_latest_fact = lambda *a, **k: None
     # Force the code catalog (ignore any graph_spec seeded in the local dev DB)
     # so the harness is deterministic regardless of DB state.
     graphs.published_graph_spec = lambda *a, **k: None
+
+    # execute_report drives a read-only AgentRunner (real LLM calls). Fake it so
+    # the reporting graph is exercised hermetically with a canned answer.
+    async def _fake_run(self, *a, **k):
+        return {"content": "<p>hermetic report content</p>"}
+    runner_mod.AgentRunner.run = _fake_run
 
     fake = _FakeProvider()
     for getter in ("_get_databricks_provider", "_get_github_provider",
@@ -103,7 +111,6 @@ def _make_request(rtype_value: str):
             "recipients": ["a@corp.com", "b@corp.com"],
             "children": [{"child_type": "github_repo_creation", "parameters": {}}],
             "notebook_path": "/Shared/dedup",
-            "enforcement_mode": "audit_only",
             "assets": [{"asset_name": "main.sales.orders", "asset_type": "table"}],
             "access_level": "read",
         },

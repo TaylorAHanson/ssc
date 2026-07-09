@@ -96,6 +96,9 @@ def run_startup_migrations(engine: Engine) -> None:
         # stores the JSON string the JSONType serializes.
         _json_ddl = "JSONB" if engine.dialect.name == "postgresql" else "TEXT"
         _add_column(engine, "data_assets", "certification_rule_results", _json_ddl)
+        # Enforcement Sentinel: marks the scheduled run that emitted the daily
+        # governance digest (anchored once-per-local-day dispatch).
+        _add_column(engine, "requests", "digest_emitted_at", "TIMESTAMP")
         # Tool Registry: unified catalog rename to the three usage contexts.
         _rename_column(engine, "tool_registry", "enabled_for_edh", "enabled_for_main_agent")
         _rename_column(engine, "tool_registry", "enabled_for_workflow", "enabled_for_workflow_agent")

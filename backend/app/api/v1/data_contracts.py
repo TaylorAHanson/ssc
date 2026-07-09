@@ -732,7 +732,6 @@ async def check_policy(
             state_context={
                 "dataset_id": dataset_id,
                 "policies": ["data_certification"],
-                "enforcement_mode": "audit_only",
             },
         )
         

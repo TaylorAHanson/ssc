@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { ShieldAlert, AlertTriangle, Search, Unlock, Lock, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, ClipboardList, SlidersHorizontal } from 'lucide-react';
+import { ShieldAlert, AlertTriangle, Search, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, ClipboardList, SlidersHorizontal } from 'lucide-react';
 import { api } from '../../services/api';
 import { CertificationChecklist } from '../../components/admin/CertificationChecklist';
 import { useState, useMemo, useEffect, useCallback } from 'react';
@@ -45,9 +45,8 @@ const formatReason = (v: any) => {
 
 export function EnforcementSentinel() {
     const [isRunning, setIsRunning] = useState(false);
-    const [isEnforcementUnlocked, setIsEnforcementUnlocked] = useState(false);
-    // Keep the primary surface to a single "Run Audit" action. Scan scope and
-    // the destructive active-enforcement controls live behind this disclosure.
+    // Keep the primary surface to a single "Run Scan" action; scan scope lives
+    // behind this disclosure.
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<string>('all');
@@ -155,17 +154,10 @@ export function EnforcementSentinel() {
         return <span className="flex items-center text-blue-600 font-medium text-xs"><Loader2 className="w-3 h-3 mr-1 animate-spin"/> {activeState?.name || 'Running'}</span>;
     };
 
-    const handleRunSentinel = async (mode: 'audit_only' | 'active_enforcement') => {
-        const modeLabel = mode === 'audit_only' ? 'Audit Only' : 'Active Enforcement';
-        
-        if (mode === 'active_enforcement') {
-            if (!confirm(`Run the Enforcement Sentinel across the environment in ${modeLabel} mode?`)) return;
-        }
-        
+    const handleRunSentinel = async () => {
         setIsRunning(true);
         try {
-            await api.createRequest('enforcement_sentinel' as any, `Manual Sentinel Run (${modeLabel})`, environment, {
-                enforcement_mode: mode,
+            await api.createRequest('enforcement_sentinel' as any, 'Manual Sentinel Run', environment, {
                 workspace: workspace,
                 environment: environment
             });
@@ -176,18 +168,11 @@ export function EnforcementSentinel() {
             } else {
                 fetchSentinelRuns(); // Explicitly fetch if already on page 1 (don't await so UI unblocks faster)
             }
-            
-            if (mode === 'active_enforcement') {
-                alert('Sentinel run started! Check the requests list on the Dashboard to track progress.');
-            }
         } catch (e) {
             console.error(e);
             alert('Failed to start Sentinel run');
         } finally {
             setIsRunning(false);
-            if (mode === 'active_enforcement') {
-                setIsEnforcementUnlocked(false);
-            }
         }
     };
 
@@ -240,13 +225,18 @@ export function EnforcementSentinel() {
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
-                    {/* Primary action: a single, clearly-explained "Run Audit". */}
+                    {/* Primary action: a single "Run Scan". */}
                     <div className="bg-gray-50 border border-gray-200 rounded-md p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                         <div className="flex flex-col gap-1">
                             <div className="flex items-center gap-2 text-sm text-gray-800 font-medium">
                                 <Search className="w-4 h-4" />
-                                <span>Run a governance audit</span>
+                                <span>Run a governance scan</span>
                             </div>
+                            <p className="text-[11px] text-gray-500 max-w-2xl leading-relaxed">
+                                Evaluates every resource against all policies and applies the safe, reversible
+                                remediations automatically (certify / uncertify / warn the owner). Destructive
+                                actions are never automated — they surface below for manual <span className="font-medium text-gray-700">Review &amp; Act</span>.
+                            </p>
                             {schedules?.enforcement_sentinel?.next_run && (
                                 <div className="text-xs text-gray-400 mt-0.5">
                                     Next scheduled run: {formatPacific(schedules.enforcement_sentinel.next_run, { year: undefined })}
@@ -255,12 +245,12 @@ export function EnforcementSentinel() {
                         </div>
 
                         <Button
-                            onClick={() => handleRunSentinel('audit_only')}
+                            onClick={() => handleRunSentinel()}
                             disabled={isRunning}
                             className="h-9 whitespace-nowrap self-start sm:self-auto text-white"
                         >
                             <Search className="w-4 h-4 mr-1.5" />
-                            {isRunning ? 'Starting...' : 'Run Audit'}
+                            {isRunning ? 'Starting...' : 'Run Scan'}
                         </Button>
                     </div>
 
@@ -280,18 +270,6 @@ export function EnforcementSentinel() {
 
                         {advancedOpen && (
                             <div className="mt-3 border border-gray-200 rounded-md divide-y divide-gray-100 animate-in fade-in slide-in-from-top-1">
-                                {/* Audit mode explainer */}
-                                <div className="p-4 flex flex-col gap-1.5">
-                                    <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-                                        Audit mode
-                                    </div>
-                                    <p className="text-[11px] text-gray-500 max-w-2xl leading-relaxed">
-                                        Scans every resource in the workspace and evaluates it against all Open Policy
-                                        Agent (OPA) policies. Audit mode is <span className="font-medium text-gray-700">read-only</span> —
-                                        it reports which checks pass and fail but never changes, terminates, or uncertifies anything.
-                                    </p>
-                                </div>
-
                                 {/* Scan scope */}
                                 <div className="p-4 flex flex-col gap-3">
                                     <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">
@@ -336,56 +314,6 @@ export function EnforcementSentinel() {
                                         </div>
                                     </div>
                                 </div>
-
-                                {/* Active enforcement (destructive) */}
-                                <div className="p-4 flex flex-col gap-3">
-                                    <div className="text-xs font-semibold uppercase tracking-wider text-red-600 flex items-center gap-1.5">
-                                        <AlertTriangle className="w-3.5 h-3.5" />
-                                        Active enforcement
-                                    </div>
-                                    <p className="text-[11px] text-gray-500 max-w-2xl leading-relaxed">
-                                        Runs the same scan but <span className="font-medium text-gray-700">executes remediation</span> on
-                                        violating resources (warn, uncertify, terminate, etc.) according to each policy's severity.
-                                        This is destructive — it can stop jobs, revoke access, and uncertify datasets, so it stays
-                                        locked until you explicitly unlock it.
-                                    </p>
-                                    <div className={`inline-flex items-center self-start transition-colors duration-300 rounded-md border ${isEnforcementUnlocked ? 'bg-red-50 border-red-200 shadow-sm' : 'bg-white border-gray-200'}`}>
-                                        {!isEnforcementUnlocked ? (
-                                            <Button
-                                                onClick={() => setIsEnforcementUnlocked(true)}
-                                                variant="outline"
-                                                disabled={isRunning}
-                                                size="sm"
-                                                className="h-8 border-0 bg-transparent hover:bg-gray-100 text-xs"
-                                            >
-                                                <Unlock className="w-3 h-3 mr-1 text-gray-500" />
-                                                Unlock Enforcement
-                                            </Button>
-                                        ) : (
-                                            <div className="flex items-center animate-in fade-in slide-in-from-left-2">
-                                                <Button
-                                                    onClick={() => handleRunSentinel('active_enforcement')}
-                                                    variant="default"
-                                                    disabled={isRunning}
-                                                    size="sm"
-                                                    className="h-8 rounded-r-none text-xs"
-                                                >
-                                                    <AlertTriangle className="w-3 h-3 mr-1" />
-                                                    {isRunning ? 'Starting...' : 'Execute Enforcement'}
-                                                </Button>
-                                                <Button
-                                                    onClick={() => setIsEnforcementUnlocked(false)}
-                                                    variant="ghost"
-                                                    disabled={isRunning}
-                                                    size="sm"
-                                                    className="text-gray-500 hover:text-gray-700 h-8 rounded-l-none text-xs px-2"
-                                                >
-                                                    <Lock className="w-3 h-3" />
-                                                </Button>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
                             </div>
                         )}
                     </div>
@@ -415,7 +343,6 @@ export function EnforcementSentinel() {
                         <thead className="bg-gray-50 text-gray-900 font-medium border-b border-gray-200">
                             <tr>
                                 <th className="p-3 pl-4">Run Date</th>
-                                <th className="p-3">Mode</th>
                                 <th className="p-3">Status</th>
                                 <th className="p-3">Found</th>
                                 <th className="p-3">Workspace</th>
@@ -425,14 +352,13 @@ export function EnforcementSentinel() {
                         <tbody className="divide-y divide-gray-100">
                             {sentinelRuns.length === 0 ? (
                                 <tr>
-                                    <td colSpan={6} className="p-6 text-center text-gray-500">
+                                    <td colSpan={5} className="p-6 text-center text-gray-500">
                                         No Sentinel runs found.
                                     </td>
                                 </tr>
                             ) : (
                                 sentinelRuns.map(run => {
                                     const ctx = (run as any).stateContext || run.metadata || (run as any).state_context || {};
-                                    const mode = ctx.enforcement_mode === 'active_enforcement' ? 'Enforcement' : 'Audit Only';
                                     const violations = ctx.violations || [];
 
                                     // True failure count is the per-rule total in scan_stats. `violations.length`
@@ -456,11 +382,6 @@ export function EnforcementSentinel() {
                                         <tr key={run.id} className="hover:bg-gray-50 transition-colors cursor-pointer group" onClick={() => setSelectedRunId(run.id)}>
                                             <td className="p-3 pl-4 font-medium text-gray-900">
                                                 {formatPacific(run.createdAt)}
-                                            </td>
-                                            <td className="p-3">
-                                                <span className={`px-2 py-1 rounded text-xs ${mode === 'Enforcement' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800'}`}>
-                                                    {mode}
-                                                </span>
                                             </td>
                                             <td className="p-3">
                                                 {getRunStatus(run)}
@@ -796,9 +717,7 @@ export function EnforcementSentinel() {
                                                                     <th className="p-3 text-left">Severity</th>
                                                                     <th className="p-3 text-left">Action</th>
                                                                     <th className="p-3 text-left w-1/3">Reason</th>
-                                                                    {ctx.enforcement_mode === 'audit_only' && (
-                                                                        <th className="p-3 text-right">Controls</th>
-                                                                    )}
+                                                                    <th className="p-3 text-right">Controls</th>
                                                                 </tr>
                                                             </thead>
                                                             <tbody className="divide-y divide-gray-100">
@@ -823,7 +742,6 @@ export function EnforcementSentinel() {
                                                                         </td>
                                                                         <td className="p-3 font-mono text-xs font-bold text-gray-700">{v.action}</td>
                                                                         <td className="p-3 text-xs text-gray-600 break-words leading-relaxed">{formatReason(v)}</td>
-                                                                        {ctx.enforcement_mode === 'audit_only' && (
                                                                             <td className="p-3 text-right">
                                                                                 {(() => {
                                                                                     const execKey = `${selectedRun.id}-${v.resource_id}-${v.policy}-${v.action}`;
@@ -863,9 +781,8 @@ export function EnforcementSentinel() {
                                                                                             Review and Act
                                                                                         </Button>
                                                                                     );
-                                                                                })()}
+                                                                })()}
                                                                             </td>
-                                                                        )}
                                                                     </tr>
                                                                 ))}
                                                             </tbody>

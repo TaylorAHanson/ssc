@@ -60,7 +60,7 @@
     ]
   },
   "data_access_request": {
-    "gates": 1,
+    "gates": 2,
     "mutating": 1,
     "status": "completed",
     "tools": [
@@ -75,7 +75,7 @@
     "tools": [
       "sentinel_discover",
       "sentinel_enforce",
-      "send_notification"
+      "sentinel_notify"
     ]
   },
   "github_repo_creation": {

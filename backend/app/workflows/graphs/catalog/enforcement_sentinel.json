@@ -17,18 +17,14 @@
       "tool": "sentinel_enforce",
       "success_fact": "enforce_completed",
       "writes_context": ["summary"],
-      "approvals": ["admin"],
       "args": {}
     },
     {
       "kind": "step",
       "name": "notify",
-      "tool": "send_notification",
+      "tool": "sentinel_notify",
       "success_fact": "notify_completed",
-      "args": {
-        "subject": "Enforcement Sentinel run complete",
-        "body": {"$var": {"path": "summary", "default": "Enforcement Sentinel run complete."}}
-      }
+      "args": {}
     }
   ]
 }

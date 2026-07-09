@@ -74,11 +74,19 @@ DESTRUCTIVE_ACTIONS = frozenset(
 
 
 def normalize_severity(raw: Any) -> str:
-    """Normalize OPA severity to a known tier; missing values default to HIGH (fail-safe)."""
+    """Normalize OPA severity to a known tier; missing values default to HIGH (fail-safe).
+
+    Severity tiers are HIGH / MEDIUM / LOW / NONE. The former ``CRITICAL`` tier was
+    collapsed into HIGH (it drove no distinct behavior once destructive actions
+    became manual-only); we still map any stray ``CRITICAL`` from old audit rows or
+    yet-unmigrated policies up to HIGH defensively.
+    """
     if raw is None or raw == "":
         return "HIGH"
     s = str(raw).strip().upper()
-    if s in {"CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE"}:
+    if s == "CRITICAL":
+        return "HIGH"
+    if s in {"HIGH", "MEDIUM", "LOW", "NONE"}:
         return s
     logger.warning("Unknown severity %r from policy; treating as HIGH", raw)
     return "HIGH"
@@ -99,26 +107,32 @@ def determine_intended_step(severity_raw: Any, action: str) -> str:
         return "warn"
     if severity == "MEDIUM" and action in DESTRUCTIVE_ACTIONS:
         return "warn"
-    if action == "KILL" and severity in {"HIGH", "CRITICAL"}:
+    if action == "KILL" and severity == "HIGH":
         return "kill"
-    # HIGH/CRITICAL non-KILL actions (PAUSE, DROP, …): no typed handler yet — notify owner.
-    if severity in {"HIGH", "CRITICAL"}:
+    # HIGH non-KILL actions (PAUSE, DROP, …): no typed handler yet — notify owner.
+    if severity == "HIGH":
         return "warn"
     if severity == "MEDIUM":
         return "warn"
     return "skip"
 
 
-def resolve_enforcement_step(mode: str, severity_raw: Any, action: str) -> str:
-    """Decide what the enforcement phase should do for one violation.
+def resolve_automated_step(severity_raw: Any, action: str) -> str:
+    """Decide what the automated enforcement phase actually executes for one violation.
 
-    Returns one of: ``skip``, ``audit_skipped``, ``warn``, ``kill``,
-    ``certify``, ``uncertify``. In any mode other than ``active_enforcement``
-    a would-be action is demoted to ``audit_skipped`` (recorded, not executed).
+    Returns one of: ``skip``, ``warn``, ``certify``, ``uncertify``.
+
+    There is no enforcement *mode* and no dry-run: the sentinel never performs
+    destructive actions automatically. Safe, reversible actions (certify,
+    uncertify, warn) execute on every run; a destructive intent (``kill``) is
+    downgraded to ``warn`` so the owner is notified while the destructive action
+    remains available only via a human "Review & Act". The true, un-downgraded
+    intent is still recorded as ``intended_action`` (see :func:`determine_intended_step`)
+    so the manual escalation and audit trail stay accurate.
     """
     intended = determine_intended_step(severity_raw, action)
-    if mode != "active_enforcement" and intended != "skip":
-        return "audit_skipped"
+    if intended == "kill":
+        return "warn"
     return intended
 
 
@@ -634,15 +648,17 @@ def _record_certification_violations(db, resource: Dict[str, Any], result: Dict[
 async def run_enforcement(db, request) -> Dict[str, Any]:
     """Remediate the violations discovered for this request.
 
-    Reads ``enforcement_mode`` + ``violations`` from ``request.state_context``
-    (written by :func:`run_discovery`), resolves a remediation step per
-    violation, calls the typed handler, and records an audit row. Returns a
-    summary for the notify step.
+    Reads ``violations`` from ``request.state_context`` (written by
+    :func:`run_discovery`), resolves the automated step per violation, calls the
+    typed handler, and records an audit row. Returns a summary for the notify step.
+
+    There is no enforcement mode: safe/reversible actions (certify, uncertify,
+    warn) execute on every run; destructive intents are downgraded to an owner
+    warning and left for manual "Review & Act" (see :func:`resolve_automated_step`).
     """
     from app.db.enforcement_audit import EnforcementAuditModel
 
     state_ctx = request.state_context or {}
-    mode = state_ctx.get("enforcement_mode", "audit_only")
     violations = state_ctx.get("violations", []) or []
     scan_summary = state_ctx.get("summary", "")
 
@@ -652,9 +668,9 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
     if not violations:
         summary = _combined("No policy violations required enforcement.")
         _persist_state_context(
-            db, request, {"enforcement_actions": [], "enforcement_mode": mode, "summary": summary}
+            db, request, {"enforcement_actions": [], "summary": summary}
         )
-        return {"enforced": True, "mode": mode, "actions": [], "executed_count": 0, "summary": summary}
+        return {"enforced": True, "actions": [], "executed_count": 0, "summary": summary}
 
     try:
         workspace_client = _new_workspace_client()
@@ -662,7 +678,6 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
         logger.error("Sentinel: enforcement could not reach Databricks: %s", e)
         return {
             "enforced": False,
-            "mode": mode,
             "actions": [],
             "executed_count": 0,
             "summary": _combined(f"Enforcement skipped: unable to reach Databricks ({e})."),
@@ -679,12 +694,12 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
         resource_id = violation.get("resource_id")
         handler = handlers.get(resource_type)
 
-        step = resolve_enforcement_step(mode, severity, action)
+        step = resolve_automated_step(severity, action)
         intended = determine_intended_step(severity, action)
         executed_action = step
 
         try:
-            if step in ("skip", "audit_skipped"):
+            if step == "skip":
                 logger.debug(
                     "Enforcement %s: policy=%s resource=%s action=%s severity=%s",
                     step, violation.get("policy"), resource_id, action, normalize_severity(severity),
@@ -695,20 +710,11 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
                     logger.warning("No handler for resource_type=%s; cannot warn", resource_type)
                 else:
                     body = violation.get("reason", "")
+                    # Destructive intents are downgraded to a warning here; make the
+                    # recommended (manual-only) action explicit to the owner.
                     if action != "WARN":
                         body = f"{warn_prefix(severity, action)} {body}".strip()
                     await handler.warn(resource_id, body)
-                    executed_count += 1
-            elif step == "kill":
-                if not handler:
-                    executed_action = "error_no_handler"
-                    logger.warning("No handler for resource_type=%s; cannot kill", resource_type)
-                else:
-                    logger.info(
-                        "Executing KILL for resource=%s policy=%s severity=%s",
-                        resource_id, violation.get("policy"), normalize_severity(severity),
-                    )
-                    await handler.kill(resource_id)
                     executed_count += 1
             elif step == "certify":
                 if not handler:
@@ -764,22 +770,185 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
         logger.error("Sentinel: failed to commit enforcement audit logs: %s", e)
         db.rollback()
 
-    mode_label = "Enforcement" if mode == "active_enforcement" else "Audit-only"
+    manual_required = sum(1 for a in actions if a["intended_action"] != a["executed_action"])
     enforce_summary = (
-        f"{mode_label} mode: processed {len(violations)} violation(s); "
-        f"executed {executed_count} remediation action(s)."
-        + ("" if mode == "active_enforcement" else " No destructive changes were applied (audit-only).")
+        f"Processed {len(violations)} violation(s); executed {executed_count} automated "
+        f"action(s) (certify/uncertify/warn)."
+        + (
+            f" {manual_required} destructive action(s) were downgraded to a warning and "
+            "require manual Review & Act."
+            if manual_required else " No destructive actions were required."
+        )
     )
     summary = _combined(enforce_summary)
 
     _persist_state_context(
-        db, request, {"enforcement_actions": actions, "enforcement_mode": mode, "summary": summary}
+        db, request, {"enforcement_actions": actions, "summary": summary}
     )
 
     return {
         "enforced": True,
-        "mode": mode,
         "actions": actions,
         "executed_count": executed_count,
         "summary": summary,
     }
+
+
+# ---------------------------------------------------------------------------
+# Notification (governance)
+# ---------------------------------------------------------------------------
+def _active_violations(state_ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Current-run violations that warrant a governance signal (severity != NONE).
+
+    ``CERTIFY`` outcomes resolve to severity NONE and are intentionally excluded
+    (they're good news, not something to alert on)."""
+    out = []
+    for v in state_ctx.get("violations", []) or []:
+        sev = normalize_severity(v.get("severity"))
+        if sev == "NONE":
+            continue
+        out.append({
+            "resource_id": v.get("resource_id"),
+            "resource_type": v.get("resource_type"),
+            "policy": v.get("policy", "unknown"),
+            "reason": v.get("reason", ""),
+            "severity": sev,
+        })
+    return out
+
+
+def _prior_severity(db, request_id: str, resource_id: str, policy_name: str) -> Optional[str]:
+    """Normalized severity of the most recent *earlier* audit row for this
+    (resource, policy), from a run other than the current one. ``None`` if the
+    pair was never recorded before (i.e. it's brand new)."""
+    from app.db.enforcement_audit import EnforcementAuditModel
+
+    row = (
+        db.query(EnforcementAuditModel)
+        .filter(
+            EnforcementAuditModel.resource_id == (resource_id or "unknown"),
+            EnforcementAuditModel.policy_name == policy_name,
+            EnforcementAuditModel.request_id != request_id,
+        )
+        .order_by(EnforcementAuditModel.created_at.desc())
+        .first()
+    )
+    return normalize_severity(row.severity) if row else None
+
+
+def _digest_should_emit(db, request) -> bool:
+    """Anchored once-per-local-day gate: emit on the first sentinel run at/after
+    ``ENFORCEMENT_DIGEST_HOUR_LOCAL`` on a new local calendar day. Cadence-agnostic
+    (works whether the sentinel runs daily or every 30 min) with no midnight
+    double-send and no drift."""
+    from zoneinfo import ZoneInfo
+    from sqlalchemy import func as _func
+    from app.db import RequestModel
+    from app.models.request import RequestType
+
+    try:
+        tz = ZoneInfo(getattr(settings, "ENFORCEMENT_DIGEST_TIMEZONE", "America/Los_Angeles"))
+    except Exception:  # noqa: BLE001 - bad tz string shouldn't break the run
+        tz = ZoneInfo("America/Los_Angeles")
+    target_hour = int(getattr(settings, "ENFORCEMENT_DIGEST_HOUR_LOCAL", 7))
+
+    now_local = datetime.now(timezone.utc).astimezone(tz)
+    if now_local.hour < target_hour:
+        return False
+
+    last_emit = (
+        db.query(_func.max(RequestModel.digest_emitted_at))
+        .filter(
+            RequestModel.type == RequestType.ENFORCEMENT_SENTINEL.value,
+            RequestModel.digest_emitted_at.isnot(None),
+        )
+        .scalar()
+    )
+    if last_emit is None:
+        return True
+    # Column is naive UTC; interpret as UTC then compare local calendar dates.
+    last_local_date = last_emit.replace(tzinfo=timezone.utc).astimezone(tz).date()
+    return last_local_date < now_local.date()
+
+
+def _violations_table_html(rows: List[Dict[str, Any]]) -> str:
+    body = "".join(
+        f"<tr><td>{r['severity']}</td><td>{r['policy']}</td>"
+        f"<td>{r.get('resource_type','')}</td><td><code>{r.get('resource_id','')}</code></td>"
+        f"<td>{r.get('reason','')}</td></tr>"
+        for r in rows
+    )
+    return (
+        "<table><thead><tr><th>Severity</th><th>Policy</th><th>Type</th>"
+        f"<th>Resource</th><th>Reason</th></tr></thead><tbody>{body}</tbody></table>"
+    )
+
+
+async def run_notify(db, request) -> Dict[str, Any]:
+    """Governance notifications for a completed sentinel run.
+
+    Two channels (owners are already warned per-resource during enforcement):
+      * **Immediate HIGH** — HIGH-severity violations that are *new this run*
+        (severity transition, deduped against the prior run's audit row) email the
+        governance group right away. Steady-state HIGHs don't re-fire every scan.
+      * **Daily digest** — an anchored once-per-local-day snapshot of all current
+        violations, emailed to the governance group.
+    """
+    from app.providers.notifications.client import NotificationProvider
+
+    state_ctx = request.state_context or {}
+    rows = _active_violations(state_ctx)
+    recipient = getattr(settings, "GOVERNANCE_EMAIL_GROUP", "") or ""
+    if not recipient:
+        logger.warning("Sentinel notify: GOVERNANCE_EMAIL_GROUP is unset; skipping governance emails.")
+        return {"notified": False, "reason": "no_recipient"}
+
+    notifier = NotificationProvider()
+    sent_immediate = 0
+    sent_digest = False
+
+    # --- Immediate HIGH (transition-gated) ---
+    high_rows = [r for r in rows if r["severity"] == "HIGH"]
+    new_high = [
+        r for r in high_rows
+        if _prior_severity(db, request.id, r["resource_id"], r["policy"]) != "HIGH"
+    ]
+    if new_high:
+        subject = f"[Enforcement] {len(new_high)} new high-severity violation(s)"
+        body = (
+            f"<p><strong>{len(new_high)}</strong> new high-severity policy violation(s) "
+            "were detected in the latest Enforcement Sentinel scan and require attention.</p>"
+            + _violations_table_html(new_high)
+        )
+        try:
+            await notifier.send_email(to=recipient, subject=subject, body=body, is_html=True)
+            sent_immediate = len(new_high)
+        except Exception as e:  # noqa: BLE001 - notification failure shouldn't fail the run
+            logger.error("Sentinel notify: immediate HIGH email failed: %s", e)
+
+    # --- Daily digest (anchored) ---
+    if _digest_should_emit(db, request):
+        if rows:
+            body = (
+                f"<p>Daily Enforcement Sentinel digest — <strong>{len(rows)}</strong> "
+                "active policy violation(s) across the workspace.</p>"
+                + _violations_table_html(sorted(rows, key=lambda r: {"HIGH": 0, "MEDIUM": 1, "LOW": 2}.get(r["severity"], 3)))
+            )
+        else:
+            body = "<p>Daily Enforcement Sentinel digest — no active policy violations. All clear.</p>"
+        try:
+            await notifier.send_email(
+                to=recipient, subject="[Enforcement] Daily governance digest", body=body, is_html=True
+            )
+            request.digest_emitted_at = datetime.utcnow()
+            db.commit()
+            sent_digest = True
+        except Exception as e:  # noqa: BLE001
+            logger.error("Sentinel notify: daily digest email failed: %s", e)
+            db.rollback()
+
+    logger.info(
+        "Sentinel notify: request=%s immediate_high=%d digest_sent=%s active_violations=%d",
+        request.id, sent_immediate, sent_digest, len(rows),
+    )
+    return {"notified": True, "immediate_high": sent_immediate, "digest_sent": sent_digest}
