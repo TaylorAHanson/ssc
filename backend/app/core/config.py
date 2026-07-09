@@ -376,6 +376,12 @@ class Settings(BaseSettings):
     
     # Sentinel Settings
     ENFORCEMENT_SENTINEL_CRON: str = "*/30 * * * *"  # Cron schedule to automatically run sentinel (empty = disabled)
+    # Safeguard: a scheduled sentinel run is skipped while a prior run is still
+    # in flight (PENDING/PROCESSING). If a run gets orphaned (worker died, lock
+    # expired) it would otherwise stall scheduling forever. A run whose lock has
+    # expired AND that hasn't been updated within this many minutes is treated as
+    # stale and no longer blocks new scheduled runs.
+    ENFORCEMENT_SENTINEL_STALE_MINUTES: int = int(os.getenv("ENFORCEMENT_SENTINEL_STALE_MINUTES", "45"))
     # Max concurrent units of work during a sentinel scan (resource handler
     # discovery + per-resource OPA evaluation). Bounds fan-out so we don't spawn
     # an unbounded number of OPA subprocesses / SDK calls at once. Set to 1 to

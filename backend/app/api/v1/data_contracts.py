@@ -438,11 +438,16 @@ def certification_report(db: Session = Depends(get_db)):
     message) for the teams that need to remediate.
     """
     import json
+    import re
     from io import BytesIO
     from fastapi.responses import StreamingResponse
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
+    from app.core.config import settings
+
+    environment = (settings.ENVIRONMENT or "unknown").strip()
+    generated_at = datetime.now(timezone.utc)
 
     contracts = (
         db.query(DataContractModel)
@@ -476,9 +481,23 @@ def certification_report(db: Session = Depends(get_db)):
     ws = wb.active
     ws.title = "Overview"
     overview_headers = ["Dataset", "Status"] + _REPORT_CATEGORY_ORDER
-    ws.append(overview_headers)
-    for col in range(1, len(overview_headers) + 1):
-        cell = ws.cell(row=1, column=col)
+    last_col = len(overview_headers)
+
+    # Metadata block (environment + generation time) above the table. Written at
+    # fixed rows so the table's header/freeze/filter positions stay deterministic
+    # (row 4 is left blank as a spacer; the table header sits on row 5).
+    title_font = Font(bold=True, size=14)
+    meta_font = Font(bold=True, color="374151")
+    ws.cell(row=1, column=1, value="Data Certification Report").font = title_font
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
+    ws.cell(row=2, column=1, value="Environment").font = meta_font
+    ws.cell(row=2, column=2, value=environment)
+    ws.cell(row=3, column=1, value="Generated (UTC)").font = meta_font
+    ws.cell(row=3, column=2, value=generated_at.strftime("%Y-%m-%d %H:%M:%S"))
+
+    header_row = 5
+    for col, header in enumerate(overview_headers, start=1):
+        cell = ws.cell(row=header_row, column=col, value=header)
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = center
@@ -525,8 +544,8 @@ def certification_report(db: Session = Depends(get_db)):
             else:
                 detail_rows.append([name, category, check, "Failed"])
 
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(overview_headers))}{ws.max_row}"
+    ws.freeze_panes = f"A{header_row + 1}"
+    ws.auto_filter.ref = f"A{header_row}:{get_column_letter(len(overview_headers))}{ws.max_row}"
     ws.column_dimensions["A"].width = 34
     ws.column_dimensions["B"].width = 14
     for i in range(len(_REPORT_CATEGORY_ORDER)):
@@ -556,8 +575,9 @@ def certification_report(db: Session = Depends(get_db)):
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
-    filename = f"data-certification-report-{stamp}.xlsx"
+    stamp = generated_at.strftime("%Y%m%d")
+    env_slug = re.sub(r"[^A-Za-z0-9._-]+", "-", environment).strip("-").lower() or "unknown"
+    filename = f"data-certification-report-{env_slug}-{stamp}.xlsx"
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

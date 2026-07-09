@@ -252,6 +252,11 @@ features:
   workflows: true
   data_discovery: true # Turns on the data discovery feature
   calendar: true # Turns on the calendar feature
+  # Gates the SCHEDULED Enforcement Sentinel run in the background poller
+  # (ENFORCEMENT_SENTINEL_CRON). Without this the poller never invokes the
+  # sentinel scheduler, so only manual runs happen. (The `ui.tabs.sentinel`
+  # flag below only controls tab visibility, not the schedule.)
+  sentinel: true # Turns on the scheduled Enforcement Sentinel poller
   # Enables the new "Ask Your Data" tab and the matching ask_your_data tool.
   # Backed by Databricks Genie (Managed MCP). Disable this in environments
   # where Genie isn't available or OBO auth isn't configured.

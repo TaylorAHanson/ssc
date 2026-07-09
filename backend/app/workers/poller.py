@@ -13,7 +13,7 @@ import socket
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from typing import Optional
-from sqlalchemy import or_
+from sqlalchemy import or_, and_
 from sqlalchemy.orm import Session
 from app.db.session import get_db, get_engine, reset_database_connection
 from app.db.base import Base
@@ -60,13 +60,47 @@ async def process_enforcement_sentinel_cron():
         # Time to run
         db = next(get_db())
         try:
-            # Check if there is an active (pending/processing) sentinel run to avoid duplicates
-            from app.models.request import RequestModel, RequestType, RequestStatus
+            # Check if there is an active (in-flight) sentinel run to avoid duplicates.
+            # "In flight" = any non-terminal run (matches how process_open_requests
+            # treats work). A run only *blocks* a new scheduled run if it's genuinely
+            # still being worked: either it was updated recently OR it holds a live
+            # lock. A run that's been orphaned (worker died -> lock expired AND no
+            # update for a while) is considered stale and must NOT stall scheduling
+            # forever. (RequestModel/RequestType/RequestStatus are module-scope imports.)
+            now_naive = datetime.utcnow()  # locked_until / updated_at are naive UTC
+            stale_minutes = getattr(settings, 'ENFORCEMENT_SENTINEL_STALE_MINUTES', 45)
+            stale_cutoff = now_naive - timedelta(minutes=stale_minutes)
+            terminal_statuses = [
+                RequestStatus.COMPLETED.value,
+                RequestStatus.REJECTED.value,
+                RequestStatus.FAILED.value,
+            ]
             active_run = db.query(RequestModel).filter(
                 RequestModel.type == RequestType.ENFORCEMENT_SENTINEL.value,
-                RequestModel.status.in_([RequestStatus.PENDING.value, RequestStatus.PROCESSING.value])
+                RequestModel.status.notin_(terminal_statuses),
+                or_(
+                    RequestModel.updated_at >= stale_cutoff,
+                    and_(
+                        RequestModel.locked_until.isnot(None),
+                        RequestModel.locked_until > now_naive,
+                    ),
+                ),
             ).first()
-            
+
+            # Surface orphaned runs that we're intentionally ignoring, so a stuck
+            # request is visible in logs rather than silently unblocking.
+            if not active_run:
+                stale_run = db.query(RequestModel).filter(
+                    RequestModel.type == RequestType.ENFORCEMENT_SENTINEL.value,
+                    RequestModel.status.notin_(terminal_statuses),
+                ).first()
+                if stale_run:
+                    logger.warning(
+                        "Enforcement Sentinel run %s appears stale (status=%s, updated_at=%s, "
+                        "locked_until=%s); ignoring it and spawning a fresh scheduled run.",
+                        stale_run.id, stale_run.status, stale_run.updated_at, stale_run.locked_until,
+                    )
+
             if not active_run:
                 req_id = f"req-{uuid.uuid4()}"
                 new_request = RequestModel(
