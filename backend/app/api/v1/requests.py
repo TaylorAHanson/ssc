@@ -658,6 +658,10 @@ class EnforcementActionRequest(_PydanticBase):
     action: str
     policy_name: str
     reason: Optional[str] = None
+    # Host of the workspace the resource lives in (multi-workspace runs). When
+    # set, the action is executed against that workspace; otherwise the app's
+    # home workspace is used.
+    workspace_host: Optional[str] = None
 
 
 @router.post("/{request_id}/enforcement-action", status_code=status.HTTP_200_OK)
@@ -671,8 +675,6 @@ async def execute_enforcement_action(
     if not current_user.has_role("Platform Admin") and not current_user.has_role("Governance Admin"):
         raise HTTPException(status_code=403, detail="Not authorized to execute enforcement actions")
 
-    from app.core.config import settings
-    from app.providers.databricks.client import DatabricksProvider
     from app.providers.databricks.handlers import (
         AppResourceHandler, ClusterResourceHandler, JobResourceHandler,
         SqlWarehouseResourceHandler, DashboardResourceHandler,
@@ -681,18 +683,28 @@ async def execute_enforcement_action(
     )
     from app.providers.databricks.handlers.dataset_handler import DatasetResourceHandler
     from app.db.enforcement_audit import EnforcementAuditModel
+    from app.workflows.sentinel import _new_workspace_client
     import uuid
 
+    host = (body.workspace_host or "").strip() or None
     try:
-        provider = DatabricksProvider(
-            host=settings.DATABRICKS_HOST, 
-            client_id=settings.DATABRICKS_CLIENT_ID, 
-            client_secret=settings.DATABRICKS_CLIENT_SECRET
-        )
-        workspace_client = provider.client
+        # Resolve the client for the resource's workspace (multi-workspace runs);
+        # falls back to the app's home workspace when no host is provided.
+        workspace_client = _new_workspace_client(host)
     except Exception as e:
         logger.error(f"Failed to init databricks client: {e}")
         raise HTTPException(status_code=500, detail="Failed to initialize Databricks client")
+
+    # Resolve the workspace NAME (for the audit row's dedup key) from the host.
+    workspace_name: Optional[str] = None
+    if host:
+        try:
+            from app.core.workspaces import get_workspace_config
+
+            cfg = get_workspace_config(host)
+            workspace_name = cfg.name if cfg else None
+        except Exception:  # noqa: BLE001 - audit tagging is best-effort
+            workspace_name = None
 
     handlers = {
         "app": AppResourceHandler(workspace_client),
@@ -739,6 +751,7 @@ async def execute_enforcement_action(
             request_id=request_id,
             resource_id=body.resource_id,
             resource_type=body.resource_type,
+            workspace=workspace_name,
             policy_name=body.policy_name,
             severity="MANUAL",
             intended_action=action_to_take,
@@ -820,6 +833,7 @@ async def list_enforcement_actions(
         {
             "resource_id": r.resource_id,
             "resource_type": r.resource_type,
+            "workspace": r.workspace,
             "policy_name": r.policy_name,
             "action": r.intended_action,
             "executed_action": r.executed_action,

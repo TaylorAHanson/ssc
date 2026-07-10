@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 from typing import Optional
 from sqlalchemy import or_, and_
 from sqlalchemy.orm import Session
-from app.db.session import get_db, get_engine, reset_database_connection
+from app.db.session import get_lakebase_session, get_engine, reset_database_connection
 from app.db.base import Base
 from app.db import RequestModel, FailureModel
 from app.state_machines.lock import acquire_lock, release_lock, heartbeat_lock
@@ -58,7 +58,7 @@ async def process_enforcement_sentinel_cron():
             
     if now >= _next_sentinel_time:
         # Time to run
-        db = next(get_db())
+        db = get_lakebase_session()
         try:
             # Check if there is an active (in-flight) sentinel run to avoid duplicates.
             # "In flight" = any non-terminal run (matches how process_open_requests
@@ -231,7 +231,7 @@ async def start_poller():
 
 async def process_open_requests():
     """Find and process all open requests in parallel."""
-    db = next(get_db())
+    db = get_lakebase_session()
     try:
         # Find requests that need processing (not completed/rejected/failed)
         # and are not locked (or lock has expired)
@@ -295,7 +295,7 @@ async def process_open_requests():
 
 async def process_scheduled_reports():
     """Check for and spawn scheduled reports."""
-    db = next(get_db())
+    db = get_lakebase_session()
     try:
         now = datetime.now(timezone.utc)
         due_subs = db.query(ReportSubscription).filter(
@@ -403,7 +403,7 @@ async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
     endpoint_token = current_endpoint.set("PollerWorker")
     
     async with semaphore:  # Limit concurrent processing
-        db = next(get_db())
+        db = get_lakebase_session()
         heartbeat_task = None
         try:
             # Load request from database
@@ -552,7 +552,7 @@ async def _heartbeat_lock_loop(request_id: str, timeout_minutes: int):
             await asyncio.sleep(heartbeat_interval)
             
             # Extend the lock
-            db = next(get_db())
+            db = get_lakebase_session()
             try:
                 success = heartbeat_lock(
                     db, request_id, _worker_id, timeout_minutes

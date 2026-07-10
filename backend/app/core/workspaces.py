@@ -74,21 +74,19 @@ def _resolve_credentials(
 
     Model: one secret scope per installation, and each workspace names the
     secret KEYS of the service principal it uses inline (``client_id_key`` /
-    ``client_secret_key`` / optional ``token_key``). Workspaces that share an SP
-    reference the same key names. A workspace that leaves them blank falls back
-    to the app's own SP / PAT (``settings.DATABRICKS_*``).
+    ``client_secret_key``). Workspaces that share an SP reference the same key
+    names. A workspace that leaves them blank falls back to the app's own
+    SP / PAT (``settings.DATABRICKS_*``).
     """
     scope = _target_scope()
     cid_key = ws.get("client_id_key")
     csec_key = ws.get("client_secret_key")
-    tok_key = ws.get("token_key")
 
-    if scope and (cid_key or tok_key):
-        cid = _read_secret(scope, cid_key) if cid_key else None
+    if scope and cid_key:
+        cid = _read_secret(scope, cid_key)
         csec = _read_secret(scope, csec_key) if csec_key else None
-        tok = _read_secret(scope, tok_key) if tok_key else None
-        if cid or tok:
-            return cid, csec, tok, f"workspace_sp:{scope}"
+        if cid:
+            return cid, csec, None, f"workspace_sp:{scope}"
 
     # Fall back to the app's own SP / PAT.
     return (

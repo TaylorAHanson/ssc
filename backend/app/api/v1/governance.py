@@ -123,3 +123,24 @@ async def send_digest_now(
         "violation_count": len(rows),
         "source_run_id": run.id,
     }
+
+
+@router.get("/target-workspaces")
+async def list_target_workspaces(
+    current_user: User = Depends(get_current_user),
+):
+    """List the target workspaces the Enforcement Sentinel scans.
+
+    Returns non-secret metadata only (name / environment / host) so the Sentinel
+    UI can offer a workspace picker for a scan. Credentials/secret key names are
+    never included.
+    """
+    _require_governance_admin(current_user)
+    from app.core.workspaces import get_target_workspaces
+
+    workspaces = [
+        {"name": w.name, "environment": w.environment, "host": w.host}
+        for w in get_target_workspaces()
+    ]
+    cert_workspace = (getattr(settings, "SENTINEL_DATA_CERT_WORKSPACE", "") or "").strip()
+    return {"workspaces": workspaces, "data_certification_workspace": cert_workspace}

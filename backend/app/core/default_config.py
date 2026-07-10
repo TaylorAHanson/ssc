@@ -31,7 +31,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # or Admin -> Settings); each entry names, inline, the secret KEYS of the
     # service principal it uses. Empty by default. Edited live under
     # Admin -> Settings -> Target Workspaces. Each entry:
-    #   {name, host, environment, client_id_key, client_secret_key, token_key?}
+    #   {name, host, environment, client_id_key, client_secret_key}
     # Blank SP keys fall back to the app's own SP (settings.DATABRICKS_*).
     # -------------------------------------------------------------------
     "target_workspaces": [],

@@ -289,6 +289,7 @@ export async function getRequest(requestId: string): Promise<Request> {
 export interface EnforcementActionRecord {
   resource_id: string;
   resource_type: string;
+  workspace?: string | null;
   policy_name: string;
   action: string;
   executed_action: string;
@@ -684,6 +685,26 @@ export async function sendDigestNow(
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
     throw new Error(error.detail || `Failed to send digest: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export interface TargetWorkspace {
+  name: string;
+  environment: string;
+  host: string;
+}
+
+export async function getTargetWorkspaces(): Promise<{
+  workspaces: TargetWorkspace[];
+  data_certification_workspace: string;
+}> {
+  const response = await fetch(`${API_BASE_URL}/governance/target-workspaces`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to load target workspaces: ${response.statusText}`);
   }
   return response.json();
 }
@@ -2716,6 +2737,7 @@ export const api = {
   getSystemSchedules,
   getDigestInfo,
   sendDigestNow,
+  getTargetWorkspaces,
   getDatabricksDashboards,
   getDatabricksJobs,
   getDatabricksApps,

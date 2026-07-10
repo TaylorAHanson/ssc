@@ -4,12 +4,13 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
 import { Loader2, Plus, ShieldCheck, Trash2, Edit } from 'lucide-react';
-import { getAllowlist, createAllowlistEntry, deleteAllowlistEntry, updateAllowlistEntry } from '../../services/api';
-import type { AllowlistEntry, AllowlistCreate } from '../../services/api';
+import { getAllowlist, createAllowlistEntry, deleteAllowlistEntry, updateAllowlistEntry, getTargetWorkspaces } from '../../services/api';
+import type { AllowlistEntry, AllowlistCreate, TargetWorkspace } from '../../services/api';
 import { format, parseISO } from 'date-fns';
 
 export function Allowlist() {
   const [entries, setEntries] = useState<AllowlistEntry[]>([]);
+  const [targetWorkspaces, setTargetWorkspaces] = useState<TargetWorkspace[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -38,6 +39,9 @@ export function Allowlist() {
 
   useEffect(() => {
     loadEntries();
+    getTargetWorkspaces()
+      .then(res => setTargetWorkspaces(res.workspaces || []))
+      .catch(err => console.error('Failed to load target workspaces:', err));
   }, []);
 
   const resetForm = () => {
@@ -166,13 +170,27 @@ export function Allowlist() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Workspace</label>
-                  <Input 
-                    value={workspace} 
-                    onChange={(e) => setWorkspace(e.target.value)} 
-                    placeholder="ws-enterprise-prod" 
-                    required 
+                  <select
+                    value={workspace}
+                    onChange={(e) => setWorkspace(e.target.value)}
+                    required
                     disabled={!!editingId}
-                  />
+                    className="w-full h-10 px-3 border border-gray-300 rounded-md bg-white text-sm disabled:opacity-50"
+                  >
+                    <option value="" disabled>Select a workspace…</option>
+                    {targetWorkspaces.map(w => (
+                      <option key={w.name} value={w.name}>
+                        {w.name}{w.environment ? ` (${w.environment})` : ''}
+                      </option>
+                    ))}
+                    {/* Preserve a legacy/custom value not in the current target list. */}
+                    {workspace && !targetWorkspaces.some(w => w.name === workspace) && (
+                      <option value={workspace}>{workspace}</option>
+                    )}
+                  </select>
+                  <p className="text-[11px] text-gray-500">
+                    Must match a target workspace name so the Sentinel applies this exception when it scans that workspace.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Status</label>

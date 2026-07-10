@@ -175,6 +175,18 @@ def _all_handler_classes():
     ]
 
 
+def _workspace_scoped_handler_classes():
+    """Handlers whose resources are workspace-specific (compute, jobs, apps, ...).
+
+    Everything except :class:`DatasetResourceHandler`, which is Unity Catalog
+    (metastore) scoped and handled once by the data-certification pass rather
+    than per target workspace.
+    """
+    from app.providers.databricks.handlers import DatasetResourceHandler
+
+    return [hc for hc in _all_handler_classes() if hc is not DatasetResourceHandler]
+
+
 def _handlers_by_type(workspace_client) -> Dict[str, Any]:
     from app.providers.databricks.handlers import (
         AppResourceHandler,
@@ -206,9 +218,29 @@ def _handlers_by_type(workspace_client) -> Dict[str, Any]:
     }
 
 
-def _new_workspace_client():
-    """Build a Databricks workspace client from the configured service principal."""
+def _new_workspace_client(host: Optional[str] = None):
+    """Build a Databricks workspace client for a target workspace.
+
+    When ``host`` is given, resolve that target workspace's credentials via
+    :func:`app.core.workspaces.get_workspace_config` (install-wide secret scope +
+    the workspace's inline SP key names, with a fall-back to the app's own SP).
+    When ``host`` is omitted, build from the app's own service principal — the
+    app's home workspace (historical behavior).
+    """
     from app.providers.databricks.client import DatabricksProvider
+
+    if host:
+        from app.core.workspaces import get_workspace_config
+
+        cfg = get_workspace_config(host)
+        if cfg is not None:
+            provider = DatabricksProvider(
+                host=cfg.host,
+                token=cfg.token,
+                client_id=cfg.client_id,
+                client_secret=cfg.client_secret,
+            )
+            return provider.client
 
     provider = DatabricksProvider(
         host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
@@ -242,27 +274,53 @@ def _persist_state_context(db, request, updates: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
-async def run_discovery(db, request) -> Dict[str, Any]:
-    """Discover workspace resources and evaluate them against OPA policies.
+def _rule_outcomes(check: Dict[str, Any]) -> List[bool]:
+    """Per-rule pass/fail outcomes for a check, falling back to one unit per
+    evaluation for policies that don't emit per-rule results yet."""
+    rr = check.get("rule_results") or []
+    if rr:
+        return [bool(r.get("passed")) for r in rr]
+    return [check["result"] == "PASS"]
 
-    Persists ``violations`` + ``checks`` onto ``request.state_context`` and
-    returns a result dict (also written to graph context via ``writes_context``)
-    containing a human-readable ``summary`` for the notify step.
+
+async def _scan_and_evaluate(
+    *,
+    db,
+    opa_provider,
+    allowed_policy_names,
+    workspace_ctx: Dict[str, Any],
+    workspace_client,
+    handler_classes,
+    dataset_id: Optional[str],
+    scan_time: datetime,
+    limit: int,
+    record_certification: bool,
+) -> tuple:
+    """Discover + OPA-evaluate one workspace's resources.
+
+    Returns ``(violations, checks, resource_count)`` with every record tagged
+    with ``workspace_ctx`` (``{name, host, environment}``). When
+    ``record_certification`` is set (the single data-certification pass), data
+    product results are mirrored into the local DataAsset cache.
     """
     from app.db.allowlist import AllowlistModel
+    from app.providers.databricks.handlers import DatasetResourceHandler
 
-    state_ctx = request.state_context or {}
-    workspace_name = state_ctx.get("workspace", "ws-enterprise-prod")
-    environment = state_ctx.get("environment", "prod")
-    dataset_id = state_ctx.get("dataset_id")
-    requested_policies = state_ctx.get("policies", []) or []
-    workspace_type = "enterprise" if "enterprise" in workspace_name else "domain"
+    ws_name = workspace_ctx.get("name")
+    ws_host = workspace_ctx.get("host")
+    ws_env = workspace_ctx.get("environment")
+    ws_type = "enterprise" if "enterprise" in (ws_name or "") else "domain"
+    # Tag stored on every check/violation so the report + email can show which
+    # workspace a finding came from. The OPA input keeps its historical shape
+    # (name/type/environment) that the .rego policies read.
+    ws_tag = {"name": ws_name, "host": ws_host, "environment": ws_env}
+    opa_ws = {"name": ws_name, "type": ws_type, "environment": ws_env}
 
-    # 1. Allowlist context (exceptions that suppress violations).
+    # Allowlist context for THIS workspace (exceptions that suppress violations).
     allowlist_records: List[Dict[str, Any]] = []
     try:
         for entry in (
-            db.query(AllowlistModel).filter(AllowlistModel.workspace == workspace_name).all()
+            db.query(AllowlistModel).filter(AllowlistModel.workspace == ws_name).all()
         ):
             allowlist_records.append(
                 {
@@ -273,51 +331,20 @@ async def run_discovery(db, request) -> Dict[str, Any]:
                 }
             )
     except Exception as e:  # noqa: BLE001
-        logger.warning("Sentinel: failed to load allowlist for %s: %s", workspace_name, e)
-
-    # 2. Build the workspace client (fail-soft: a missing/blocked workspace is an
-    #    environmental condition, not a sentinel bug — record an empty scan).
-    try:
-        workspace_client = _new_workspace_client()
-    except Exception as e:  # noqa: BLE001
-        logger.error("Sentinel: failed to initialize DatabricksProvider: %s", e)
-        summary = (
-            f"Sentinel scan of '{workspace_name}' could not start: unable to reach "
-            f"Databricks ({e}). No resources were evaluated."
-        )
-        _persist_state_context(
-            db, request, {"violations": [], "checks": [], "scan_error": str(e)}
-        )
-        return {
-            "violations": [],
-            "checks": [],
-            "violation_count": 0,
-            "pass_count": 0,
-            "total_resources_scanned": 0,
-            "summary": summary,
-        }
-
-    # 3. Discover resources. A single dataset request scopes to the dataset
-    #    handler; otherwise every resource type is scanned.
-    from app.providers.databricks.handlers import DatasetResourceHandler
-
-    if dataset_id:
-        handler_classes = [DatasetResourceHandler]
-    else:
-        handler_classes = _all_handler_classes()
+        logger.warning("Sentinel: failed to load allowlist for %s: %s", ws_name, e)
 
     # Discover each resource type concurrently. The handler ``.discover()``
     # methods are async but wrap *blocking* SDK calls (no internal to_thread), so
     # awaiting them on the event loop would serialize on the first blocking call.
     # We offload each to a worker thread (running its own loop) so the network
     # I/O genuinely overlaps; concurrency is bounded by SENTINEL_SCAN_CONCURRENCY.
-    limit = max(1, settings.SENTINEL_SCAN_CONCURRENCY)
-
     def _discover_one(handler_class):
         try:
             return list(asyncio.run(handler_class(workspace_client).discover()) or [])
         except Exception as e:  # noqa: BLE001 - one handler failing shouldn't abort the scan
-            logger.warning("Sentinel: %s.discover() failed: %s", handler_class.__name__, e)
+            logger.warning(
+                "Sentinel: %s.discover() failed for %s: %s", handler_class.__name__, ws_name, e
+            )
             return []
 
     handler_results = await _gather_bounded(
@@ -335,48 +362,22 @@ async def run_discovery(db, request) -> Dict[str, Any]:
             ]
         discovered_resources.extend(resources)
 
-    # Single timestamp for the whole run so every product's "Last Policy Run"
-    # equals the run's date on the Sentinel page (the request's created_at),
-    # rather than a per-product datetime.utcnow() that drifts by the discovery +
-    # evaluation duration and looks mismatched across the two views.
-    scan_time = getattr(request, "created_at", None) or datetime.utcnow()
-
-    _refresh_data_asset_quality(db, discovered_resources, scan_time)
-    try:
-        db.commit()
-    except Exception as e:  # noqa: BLE001
-        logger.error("Sentinel: failed to commit DataAsset quality updates: %s", e)
-        db.rollback()
-
-    # 4. Evaluate every resource against the policy namespace.
-    from app.providers.opa.client import OpaProvider
-
-    opa_provider = OpaProvider(settings.opa_provider_config())
-
-    policy_files = glob.glob(os.path.join("policies", "*.rego"))
-    all_policy_names = {os.path.basename(p).replace(".rego", "") for p in policy_files}
-    if requested_policies:
-        policy_files = [p for p in policy_files if any(req in p for req in requested_policies)]
-        allowed_policy_names = {os.path.basename(p).replace(".rego", "") for p in policy_files}
-    else:
-        allowed_policy_names = all_policy_names
-
-    violations: List[Dict[str, Any]] = []
-    checks: List[Dict[str, Any]] = []
+    if record_certification:
+        _refresh_data_asset_quality(db, discovered_resources, scan_time)
+        try:
+            db.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Sentinel: failed to commit DataAsset quality updates: %s", e)
+            db.rollback()
 
     def _input_for(resource: Dict[str, Any]) -> Dict[str, Any]:
         return {
-            "workspace": {"name": workspace_name, "type": workspace_type, "environment": environment},
+            "workspace": opa_ws,
             "resource": resource,
             "request_time": datetime.now(timezone.utc).isoformat(),
             "allowlist_records": allowlist_records,
         }
 
-    # Phase 1: evaluate every resource against the policy namespace concurrently
-    # (bounded). With a remote OPA server these are genuinely-async HTTP calls,
-    # so they overlap; with the local binary the semaphore caps concurrent
-    # subprocess spawns. We collect results, then process them serially below so
-    # DB writes never interleave (the only await is the OPA call).
     async def _eval(resource: Dict[str, Any]):
         input_data = _input_for(resource)
         try:
@@ -391,7 +392,9 @@ async def run_discovery(db, request) -> Dict[str, Any]:
         [(lambda r=r: _eval(r)) for r in discovered_resources], limit
     )
 
-    # Phase 2: process results serially (build checks/violations, write DB cache).
+    violations: List[Dict[str, Any]] = []
+    checks: List[Dict[str, Any]] = []
+
     for resource, input_data, namespace_results in eval_results:
         if namespace_results is None:
             continue
@@ -404,7 +407,11 @@ async def run_discovery(db, request) -> Dict[str, Any]:
             # leaves certification_violations NULL, which the UI reads as "never
             # scanned" (status "awaiting") — the initial run then appears to
             # under-report. Recording here marks it scanned (empty == no violations).
-            if policy_name == "data_certification" and resource.get("type") == "data_product":
+            if (
+                record_certification
+                and policy_name == "data_certification"
+                and resource.get("type") == "data_product"
+            ):
                 _record_certification_violations(db, resource, result, scan_time)
 
             rule_results_raw = result.get("rule_results", []) or []
@@ -417,8 +424,9 @@ async def run_discovery(db, request) -> Dict[str, Any]:
             action = result.get("action", "KILL")
 
             logger.info(
-                "POLICY_CHECK_EVALUATED: Policy=%s | Result=%s | Action=%s | "
+                "POLICY_CHECK_EVALUATED: Workspace=%s | Policy=%s | Result=%s | Action=%s | "
                 "ResourceType=%s | ResourceID=%s | Severity=%s",
+                ws_name,
                 policy_name,
                 "VIOLATION" if is_violation else "PASS",
                 action,
@@ -452,6 +460,7 @@ async def run_discovery(db, request) -> Dict[str, Any]:
                     "resource_id": resource.get("id"),
                     "resource_type": resource.get("type"),
                     "resource": resource_snapshot,
+                    "workspace": ws_tag,
                     "policy": policy_name,
                     "result": "VIOLATION" if is_violation else "PASS",
                     "action": action,
@@ -468,6 +477,7 @@ async def run_discovery(db, request) -> Dict[str, Any]:
                     "resource_id": resource.get("id"),
                     "resource_type": resource.get("type"),
                     "owner": resource.get("owner"),
+                    "workspace": ws_tag,
                     "policy": policy_name,
                     "action": action,
                     "reason": result.get(
@@ -480,8 +490,9 @@ async def run_discovery(db, request) -> Dict[str, Any]:
                 violations.append(violation_record)
                 if is_violation:
                     logger.warning(
-                        "POLICY_VIOLATION_DETECTED: Policy=%s | Action=%s | ResourceType=%s | "
-                        "ResourceID=%s | Reason=%s | Severity=%s",
+                        "POLICY_VIOLATION_DETECTED: Workspace=%s | Policy=%s | Action=%s | "
+                        "ResourceType=%s | ResourceID=%s | Reason=%s | Severity=%s",
+                        ws_name,
                         policy_name,
                         action,
                         violation_record["resource_type"],
@@ -490,55 +501,186 @@ async def run_discovery(db, request) -> Dict[str, Any]:
                         violation_record["severity"],
                     )
 
-    # Count per individual policy rule, falling back to one unit per evaluation
-    # for policies that don't emit per-rule results yet.
-    def _rule_outcomes(check: Dict[str, Any]) -> List[bool]:
-        rr = check.get("rule_results") or []
-        if rr:
-            return [bool(r.get("passed")) for r in rr]
-        return [check["result"] == "PASS"]
-
-    rule_outcomes = [passed for c in checks for passed in _rule_outcomes(c)]
-    pass_count = sum(1 for ok in rule_outcomes if ok)
-    violation_count = sum(1 for ok in rule_outcomes if not ok)
-
     try:
         db.commit()
     except Exception as e:  # noqa: BLE001
         logger.error("Sentinel: failed to commit certification updates: %s", e)
         db.rollback()
 
+    return violations, checks, len(discovered_resources)
+
+
+async def run_discovery(db, request) -> Dict[str, Any]:
+    """Discover resources across all target workspaces and evaluate OPA policies.
+
+    A single run scans every configured target workspace for workspace-scoped
+    resources (compute, jobs, apps, ...) and runs the Unity-Catalog-scoped data
+    certification pass ONCE against the configured certification workspace
+    (``SENTINEL_DATA_CERT_WORKSPACE``; blank = the app's home workspace). All
+    violations/checks are aggregated into one master list on
+    ``request.state_context`` — each tagged with its ``workspace`` — so the
+    report and the governance email stay a single, cross-workspace view.
+    """
+    from app.core.workspaces import get_target_workspaces
+    from app.providers.databricks.handlers import DatasetResourceHandler
+    from app.providers.opa.client import OpaProvider
+
+    state_ctx = request.state_context or {}
+    dataset_id = state_ctx.get("dataset_id")
+    requested_policies = state_ctx.get("policies", []) or []
+    # Optional subset of workspaces to scan (names or hosts). Empty = all
+    # configured target workspaces.
+    requested_workspaces = state_ctx.get("workspaces") or []
+
+    # Single timestamp for the whole run so every product's "Last Policy Run"
+    # equals the run's date on the Sentinel page (the request's created_at).
+    scan_time = getattr(request, "created_at", None) or datetime.utcnow()
+
+    # Resolve the workspace set. get_target_workspaces() already falls back to
+    # the app's home workspace when none are configured.
+    all_ws = get_target_workspaces()
+    if requested_workspaces:
+        req = {str(x) for x in requested_workspaces}
+        scan_ws = [w for w in all_ws if w.name in req or w.host in req]
+        if not scan_ws:
+            logger.warning(
+                "Sentinel: requested workspaces %s matched none; scanning all.", req
+            )
+            scan_ws = list(all_ws)
+    else:
+        scan_ws = list(all_ws)
+
+    # The catalog/metastore-scoped data certification pass runs once. It uses the
+    # configured certification workspace's client if set, else the app's home SP.
+    home_host = settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL
+    home_match = next((w for w in all_ws if w.host == home_host), None)
+    cert_name = (getattr(settings, "SENTINEL_DATA_CERT_WORKSPACE", "") or "").strip()
+    cert_cfg = None
+    if cert_name:
+        cert_cfg = next((w for w in all_ws if w.name == cert_name or w.host == cert_name), None)
+        if cert_cfg is None:
+            logger.warning(
+                "Sentinel: SENTINEL_DATA_CERT_WORKSPACE=%r not found among target "
+                "workspaces; using the home workspace for data certification.",
+                cert_name,
+            )
+    if cert_cfg is not None:
+        cert_ctx = {"name": cert_cfg.name, "host": cert_cfg.host, "environment": cert_cfg.environment}
+        cert_host: Optional[str] = cert_cfg.host
+    else:
+        cert_ctx = {
+            "name": home_match.name if home_match else "home",
+            "host": home_host,
+            "environment": home_match.environment if home_match else settings.ENVIRONMENT,
+        }
+        cert_host = None  # -> _new_workspace_client(None) uses the app's own SP
+
+    # Policy set + OPA provider (shared across every workspace scan).
+    opa_provider = OpaProvider(settings.opa_provider_config())
+    policy_files = glob.glob(os.path.join("policies", "*.rego"))
+    all_policy_names = {os.path.basename(p).replace(".rego", "") for p in policy_files}
+    if requested_policies:
+        policy_files = [p for p in policy_files if any(req in p for req in requested_policies)]
+        allowed_policy_names = {os.path.basename(p).replace(".rego", "") for p in policy_files}
+    else:
+        allowed_policy_names = all_policy_names
+
+    limit = max(1, settings.SENTINEL_SCAN_CONCURRENCY)
+
+    violations: List[Dict[str, Any]] = []
+    checks: List[Dict[str, Any]] = []
+    total_resources = 0
+    scan_errors: List[str] = []
+
+    # 1. Workspace-scoped scans (skipped for a single-dataset certification request).
+    if not dataset_id:
+        ws_handler_classes = _workspace_scoped_handler_classes()
+        for w in scan_ws:
+            ws_ctx = {"name": w.name, "host": w.host, "environment": w.environment}
+            try:
+                client = _new_workspace_client(w.host)
+            except Exception as e:  # noqa: BLE001 - one unreachable workspace shouldn't abort the run
+                logger.error("Sentinel: failed to init client for workspace %s: %s", w.name, e)
+                scan_errors.append(f"{w.name}: {e}")
+                continue
+            v, c, n = await _scan_and_evaluate(
+                db=db,
+                opa_provider=opa_provider,
+                allowed_policy_names=allowed_policy_names,
+                workspace_ctx=ws_ctx,
+                workspace_client=client,
+                handler_classes=ws_handler_classes,
+                dataset_id=None,
+                scan_time=scan_time,
+                limit=limit,
+                record_certification=False,
+            )
+            violations += v
+            checks += c
+            total_resources += n
+
+    # 2. Data certification pass (once, Unity Catalog / metastore scoped).
+    try:
+        cert_client = _new_workspace_client(cert_host)
+        v, c, n = await _scan_and_evaluate(
+            db=db,
+            opa_provider=opa_provider,
+            allowed_policy_names=allowed_policy_names,
+            workspace_ctx=cert_ctx,
+            workspace_client=cert_client,
+            handler_classes=[DatasetResourceHandler],
+            dataset_id=dataset_id,
+            scan_time=scan_time,
+            limit=limit,
+            record_certification=True,
+        )
+        violations += v
+        checks += c
+        total_resources += n
+    except Exception as e:  # noqa: BLE001
+        logger.error("Sentinel: data certification pass failed: %s", e)
+        scan_errors.append(f"data_certification: {e}")
+
+    rule_outcomes = [passed for c in checks for passed in _rule_outcomes(c)]
+    pass_count = sum(1 for ok in rule_outcomes if ok)
+    violation_count = sum(1 for ok in rule_outcomes if not ok)
+
+    scanned_names = [w.name for w in scan_ws] if not dataset_id else [cert_ctx["name"]]
     summary = (
-        f"Sentinel scan of '{workspace_name}' ({environment}): scanned "
-        f"{len(discovered_resources)} resource(s) across {len(policy_files)} policy file(s); "
-        f"{len(rule_outcomes)} checks ({pass_count} passed, {violation_count} failed). "
+        f"Sentinel scan across {len(scanned_names)} workspace(s) "
+        f"({', '.join(scanned_names)}): scanned {total_resources} resource(s) across "
+        f"{len(policy_files)} policy file(s); {len(rule_outcomes)} checks "
+        f"({pass_count} passed, {violation_count} failed). "
         f"{len(violations)} policy violation(s) recorded."
     )
+    if scan_errors:
+        summary += f" {len(scan_errors)} workspace(s) could not be fully scanned."
 
-    _persist_state_context(
-        db,
-        request,
-        {
-            "violations": violations,
-            "checks": checks,
-            "summary": summary,
-            "scan_stats": {
-                "violation_count": violation_count,
-                "pass_count": pass_count,
-                "total_resources_scanned": len(discovered_resources),
-                "policies_evaluated": len(policy_files),
-                "total_checks": len(rule_outcomes),
-                "total_evaluations": len(checks),
-            },
+    persist: Dict[str, Any] = {
+        "violations": violations,
+        "checks": checks,
+        "summary": summary,
+        "workspaces_scanned": scanned_names,
+        "scan_stats": {
+            "violation_count": violation_count,
+            "pass_count": pass_count,
+            "total_resources_scanned": total_resources,
+            "policies_evaluated": len(policy_files),
+            "total_checks": len(rule_outcomes),
+            "total_evaluations": len(checks),
+            "workspaces_scanned": len(scanned_names),
         },
-    )
+    }
+    if scan_errors:
+        persist["scan_error"] = "; ".join(scan_errors)
+    _persist_state_context(db, request, persist)
 
     return {
         "violations": violations,
         "checks": checks,
         "violation_count": violation_count,
         "pass_count": pass_count,
-        "total_resources_scanned": len(discovered_resources),
+        "total_resources_scanned": total_resources,
         "summary": summary,
     }
 
@@ -674,18 +816,23 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
         )
         return {"enforced": True, "actions": [], "executed_count": 0, "summary": summary}
 
-    try:
-        workspace_client = _new_workspace_client()
-    except Exception as e:  # noqa: BLE001
-        logger.error("Sentinel: enforcement could not reach Databricks: %s", e)
-        return {
-            "enforced": False,
-            "actions": [],
-            "executed_count": 0,
-            "summary": _combined(f"Enforcement skipped: unable to reach Databricks ({e})."),
-        }
+    # Violations can span multiple workspaces (each carries a ``workspace`` tag).
+    # Build and cache one typed-handler map per workspace host so each resource is
+    # remediated against the workspace it actually lives in. A host that can't be
+    # reached yields ``None`` (its violations record ``error_no_handler`` rather
+    # than aborting the whole run).
+    _handlers_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 
-    handlers = _handlers_by_type(workspace_client)
+    def _handlers_for(host: Optional[str]) -> Optional[Dict[str, Any]]:
+        key = host or "__home__"
+        if key not in _handlers_cache:
+            try:
+                _handlers_cache[key] = _handlers_by_type(_new_workspace_client(host))
+            except Exception as e:  # noqa: BLE001
+                logger.error("Sentinel: enforcement could not reach workspace %s: %s", key, e)
+                _handlers_cache[key] = None
+        return _handlers_cache[key]
+
     actions: List[Dict[str, Any]] = []
     executed_count = 0
 
@@ -694,6 +841,8 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
         severity = violation.get("severity", "HIGH")
         resource_type = violation.get("resource_type", "unknown")
         resource_id = violation.get("resource_id")
+        ws = violation.get("workspace") or {}
+        handlers = _handlers_for(ws.get("host")) or {}
         handler = handlers.get(resource_type)
 
         step = resolve_automated_step(severity, action)
@@ -756,6 +905,7 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
                     request_id=request.id,
                     resource_id=resource_id or "unknown",
                     resource_type=resource_type,
+                    workspace=ws.get("name"),
                     policy_name=violation.get("policy", "unknown"),
                     severity=normalize_severity(severity),
                     intended_action=intended,
@@ -809,12 +959,16 @@ def _active_violations(state_ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         sev = normalize_severity(v.get("severity"))
         if sev == "NONE":
             continue
+        # Workspace is captured on newer (multi-workspace) records; fall back to
+        # the OPA input snapshot for runs that predate the top-level field.
+        ws = v.get("workspace") or (v.get("input_context") or {}).get("workspace") or {}
         out.append({
             "resource_id": v.get("resource_id"),
             "resource_type": v.get("resource_type"),
             # Owner is captured on newer records; fall back to the OPA input
             # snapshot for runs that predate the top-level field.
             "owner": v.get("owner") or ((v.get("input_context") or {}).get("resource") or {}).get("owner"),
+            "workspace": ws.get("name") or "",
             "policy": v.get("policy", "unknown"),
             "reason": v.get("reason", ""),
             "issue_count": len(v.get("violation_reasons") or []),
@@ -823,22 +977,36 @@ def _active_violations(state_ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
-def _prior_severity(db, request_id: str, resource_id: str, policy_name: str) -> Optional[str]:
+def _prior_severity(
+    db, request_id: str, resource_id: str, policy_name: str, workspace: Optional[str] = None
+) -> Optional[str]:
     """Normalized severity of the most recent *earlier* audit row for this
-    (resource, policy), from a run other than the current one. ``None`` if the
-    pair was never recorded before (i.e. it's brand new)."""
+    (resource, policy[, workspace]), from a run other than the current one.
+    ``None`` if the tuple was never recorded before (i.e. it's brand new).
+
+    ``workspace`` scopes the lookup so the same ``resource_id`` in two different
+    workspaces (Databricks job IDs / notebook paths repeat across workspaces) is
+    not conflated. It's only applied when provided AND matching rows carry a
+    workspace, so legacy audit rows (workspace NULL) still dedup by
+    (resource, policy) and don't spuriously re-fire."""
+    from sqlalchemy import or_
+
     from app.db.enforcement_audit import EnforcementAuditModel
 
-    row = (
-        db.query(EnforcementAuditModel)
-        .filter(
-            EnforcementAuditModel.resource_id == (resource_id or "unknown"),
-            EnforcementAuditModel.policy_name == policy_name,
-            EnforcementAuditModel.request_id != request_id,
-        )
-        .order_by(EnforcementAuditModel.created_at.desc())
-        .first()
+    query = db.query(EnforcementAuditModel).filter(
+        EnforcementAuditModel.resource_id == (resource_id or "unknown"),
+        EnforcementAuditModel.policy_name == policy_name,
+        EnforcementAuditModel.request_id != request_id,
     )
+    if workspace:
+        # Match this workspace, OR legacy rows that predate workspace tagging.
+        query = query.filter(
+            or_(
+                EnforcementAuditModel.workspace == workspace,
+                EnforcementAuditModel.workspace.is_(None),
+            )
+        )
+    row = query.order_by(EnforcementAuditModel.created_at.desc()).first()
     return normalize_severity(row.severity) if row else None
 
 
@@ -947,6 +1115,17 @@ def _owner_html(owner: Any, *, small: bool = False) -> str:
     )
 
 
+def _workspace_html(name: Any) -> str:
+    """Render a workspace name as a small muted pill; em-dash when unknown."""
+    n = ("" if name is None else str(name)).strip()
+    if not n:
+        return '<span style="color:#94a3b8;">&mdash;</span>'
+    return (
+        '<span style="display:inline-block;font-size:11px;font-weight:600;color:#334155;'
+        f'background:#eef2f7;padding:2px 8px;border-radius:6px;word-break:break-word;">{_esc(n)}</span>'
+    )
+
+
 def _truncate_reason(text: Any, limit: int = 160) -> str:
     """Collapse whitespace + multi-reason concatenations to a short one-liner.
 
@@ -982,9 +1161,10 @@ def _violations_table_html(rows: List[Dict[str, Any]], cap: Optional[int] = None
     header = (
         "<tr>"
         + _th("Severity", "72", "border-top-left-radius:10px;")
-        + _th("Policy", "110")
-        + _th("Resource", "150")
-        + _th("Owner", "130")
+        + _th("Workspace", "96")
+        + _th("Policy", "100")
+        + _th("Resource", "140")
+        + _th("Owner", "120")
         + _th("Reason", "", "border-top-right-radius:10px;")
         + "</tr>"
     )
@@ -1007,6 +1187,7 @@ def _violations_table_html(rows: List[Dict[str, Any]], cap: Optional[int] = None
         body_rows.append(
             f'<tr style="background:{bg};">'
             f'<td style="{cell}">{_sev_chip(r["severity"])}</td>'
+            f'<td style="{cell}font-size:12px;color:#334155;">{_workspace_html(r.get("workspace"))}</td>'
             f'<td style="{cell}font-size:13px;color:#0f172a;font-weight:600;">{_esc(r.get("policy"))}</td>'
             f'<td style="{cell}font-size:12px;color:#334155;">'
             f'<div style="font-weight:600;color:#64748b;text-transform:capitalize;margin-bottom:3px;">{_esc(r.get("resource_type"))}</div>'
@@ -1019,7 +1200,7 @@ def _violations_table_html(rows: List[Dict[str, Any]], cap: Optional[int] = None
 
     if cap and total > cap:
         body_rows.append(
-            '<tr><td colspan="5" style="padding:12px 14px;border:0;background:#f8fafc;'
+            '<tr><td colspan="6" style="padding:12px 14px;border:0;background:#f8fafc;'
             'font-size:13px;color:#64748b;font-style:italic;">'
             f'+ {total - cap} more high-severity violation(s) &mdash; see the full report below.'
             "</td></tr>"
@@ -1034,15 +1215,19 @@ def _violations_table_html(rows: List[Dict[str, Any]], cap: Optional[int] = None
 
 
 def _severity_summary_table_html(rows: List[Dict[str, Any]]) -> str:
-    """Aggregate non-HIGH violations by policy + severity (count only).
+    """Aggregate non-HIGH violations by workspace + policy + severity (count only).
 
     Keeps the digest compact at scale: hundreds of medium/low findings collapse
-    to a handful of rows instead of one row each."""
+    to a handful of rows instead of one row each, while still attributing each
+    group to the workspace it came from."""
     counts: Dict[tuple, int] = {}
     for r in rows:
-        key = (r.get("policy", "unknown"), r["severity"])
+        key = (r.get("workspace") or "", r.get("policy", "unknown"), r["severity"])
         counts[key] = counts.get(key, 0) + 1
-    items = sorted(counts.items(), key=lambda kv: (_SEV_ORDER.get(kv[0][1], 3), -kv[1]))
+    # Sort by severity, then workspace, then descending count.
+    items = sorted(
+        counts.items(), key=lambda kv: (_SEV_ORDER.get(kv[0][2], 3), kv[0][0], -kv[1])
+    )
 
     def _th(text: str, align: str, radius: str = "") -> str:
         return (
@@ -1053,17 +1238,19 @@ def _severity_summary_table_html(rows: List[Dict[str, Any]]) -> str:
 
     header = (
         "<tr>"
-        + _th("Policy", "left", "border-top-left-radius:10px;")
+        + _th("Workspace", "left", "border-top-left-radius:10px;")
+        + _th("Policy", "left")
         + _th("Severity", "left")
         + _th("Count", "right", "border-top-right-radius:10px;")
         + "</tr>"
     )
     body = []
-    for i, ((policy, sev), count) in enumerate(items):
+    for i, ((workspace, policy, sev), count) in enumerate(items):
         bg = "#ffffff" if i % 2 == 0 else "#f8fafc"
         cell = "padding:11px 14px;border:0;border-bottom:1px solid #eef2f7;vertical-align:middle;"
         body.append(
             f'<tr style="background:{bg};">'
+            f'<td style="{cell}">{_workspace_html(workspace)}</td>'
             f'<td style="{cell}font-size:13px;color:#0f172a;font-weight:600;word-break:break-word;">{_esc(policy)}</td>'
             f'<td style="{cell}">{_sev_chip(sev)}</td>'
             f'<td style="{cell}text-align:right;font-size:15px;font-weight:800;color:#0f172a;">{count}</td>'
@@ -1234,7 +1421,7 @@ async def run_notify(db, request) -> Dict[str, Any]:
     high_rows = [r for r in rows if r["severity"] == "HIGH"]
     new_high = [
         r for r in high_rows
-        if _prior_severity(db, request.id, r["resource_id"], r["policy"]) != "HIGH"
+        if _prior_severity(db, request.id, r["resource_id"], r["policy"], r.get("workspace")) != "HIGH"
     ]
     if new_high:
         subject = f"[Enforcement] {len(new_high)} new high-severity violation(s)"

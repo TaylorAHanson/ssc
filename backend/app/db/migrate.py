@@ -99,6 +99,16 @@ def run_startup_migrations(engine: Engine) -> None:
         # Enforcement Sentinel: marks the scheduled run that emitted the daily
         # governance digest (anchored once-per-local-day dispatch).
         _add_column(engine, "requests", "digest_emitted_at", "TIMESTAMP")
+        # Multi-workspace Enforcement Sentinel: which workspace an audited
+        # resource lives in, so the immediate-HIGH dedup can distinguish the same
+        # resource_id across workspaces (job IDs / notebook paths repeat).
+        _add_column(engine, "enforcement_audit", "workspace", "VARCHAR")
+        _add_index(
+            engine,
+            "ix_enforcement_audit_workspace",
+            "enforcement_audit",
+            ["workspace"],
+        )
         # Tool Registry: unified catalog rename to the three usage contexts.
         _rename_column(engine, "tool_registry", "enabled_for_edh", "enabled_for_main_agent")
         _rename_column(engine, "tool_registry", "enabled_for_workflow", "enabled_for_workflow_agent")

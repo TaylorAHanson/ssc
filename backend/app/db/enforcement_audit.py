@@ -9,6 +9,12 @@ class EnforcementAuditModel(Base):
     request_id = Column(String, ForeignKey("requests.id", ondelete="CASCADE"), index=True, nullable=False)
     resource_id = Column(String, index=True, nullable=False)
     resource_type = Column(String, nullable=False)
+    # Workspace the resource lives in (multi-workspace scans). Nullable for rows
+    # written before multi-workspace support / for the app's home workspace.
+    # Included in the immediate-HIGH dedup key so the same resource_id in two
+    # workspaces is treated as two distinct findings (Databricks job IDs /
+    # notebook paths / app names are not unique across workspaces).
+    workspace = Column(String, index=True, nullable=True)
     policy_name = Column(String, nullable=False)
     severity = Column(String, nullable=False)
     intended_action = Column(String, nullable=False)

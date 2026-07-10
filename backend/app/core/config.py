@@ -398,6 +398,14 @@ class Settings(BaseSettings):
     # an unbounded number of OPA subprocesses / SDK calls at once. Set to 1 to
     # fully serialize (the pre-parallelization behavior).
     SENTINEL_SCAN_CONCURRENCY: int = int(os.getenv("SENTINEL_SCAN_CONCURRENCY", "5"))
+    # A single sentinel run scans every configured target workspace for
+    # workspace-scoped resources (compute, jobs, apps, ...). Data certification is
+    # catalog/metastore-scoped (Unity Catalog is not workspace-specific), so it
+    # runs ONCE against a single "certification" workspace rather than per
+    # workspace. This names the target workspace whose client runs that pass;
+    # blank = the app's own home workspace (settings.DATABRICKS_*). The DQ
+    # warehouse + ADOC schema always come from the global settings.
+    SENTINEL_DATA_CERT_WORKSPACE: str = os.getenv("SENTINEL_DATA_CERT_WORKSPACE", "")
     
     # Retry Settings
     DEFAULT_MAX_RETRIES: int = 3

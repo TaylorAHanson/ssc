@@ -130,9 +130,11 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
           "placeholder": "sp_prod_client_id", "help": "Secret key NAME — not the value"},
          {"key": "client_secret_key", "label": "Client secret key", "type": "string",
           "placeholder": "sp_prod_client_secret", "help": "Secret key NAME — not the value"},
-         {"key": "token_key", "label": "Token key", "type": "string", "placeholder": "(optional)",
-          "help": "Secret key NAME — not the value"},
      ]},
+    {"group": "Target Workspaces", "key": "SENTINEL_DATA_CERT_WORKSPACE",
+     "label": "Data certification workspace",
+     "type": "string",
+     "help": "The Enforcement Sentinel scans every target workspace for compute/apps/jobs, but data certification is Unity Catalog (metastore) scoped, so it runs ONCE against a single workspace. Enter the NAME of the target workspace that should run it, or leave blank to use the app's own home workspace. The DQ warehouse + ADOC schema always come from the global settings."},
 
     # --- Web Lookup -----------------------------------------------------
     {"group": "Web Lookup", "key": "yaml:web_search.allowed_domains", "label": "Allowed domains",

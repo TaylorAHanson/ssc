@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { ShieldAlert, AlertTriangle, Search, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, ClipboardList, SlidersHorizontal, Mail, Send, Clock } from 'lucide-react';
-import { api } from '../../services/api';
+import { api, type TargetWorkspace } from '../../services/api';
 import { CertificationChecklist } from '../../components/admin/CertificationChecklist';
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { parseISO } from 'date-fns';
@@ -48,6 +48,12 @@ const formatReason = (v: any) => {
 const resolveOwner = (v: any): string =>
     (v?.owner || v?.input_context?.resource?.owner || '').toString().trim();
 
+// Resolve the workspace a violation came from. Newer (multi-workspace) runs
+// carry a top-level `workspace` tag; older ones only have it in the OPA input
+// snapshot.
+const resolveWorkspace = (v: any): string =>
+    (v?.workspace?.name || v?.input_context?.workspace?.name || '').toString().trim();
+
 // Render an owner as an email (verbatim) or a service-principal id behind an
 // "SP" chip; muted "Unknown" when unresolved.
 const OwnerCell = ({ owner }: { owner: string }) => {
@@ -72,7 +78,11 @@ export function EnforcementSentinel() {
     // "Checklist" shows every (resource, policy) evaluation — PASS and
     // VIOLATION — so reviewers can audit what was actually verified.
     const [reportView, setReportView] = useState<'violations' | 'checklist'>('violations');
-    const [workspace, setWorkspace] = useState('ws-enterprise-prod');
+    // Workspace scope for a manual scan. '__all__' scans every configured target
+    // workspace in one aggregated run (matches the scheduled behavior); a specific
+    // name scans just that one.
+    const [workspaceSel, setWorkspaceSel] = useState<string>('__all__');
+    const [targetWorkspaces, setTargetWorkspaces] = useState<TargetWorkspace[]>([]);
     const [environment, setEnvironment] = useState<'dev' | 'stage' | 'prod'>('prod');
     const [actionLoading, setActionLoading] = useState<string | null>(null);
     const [selectedViolation, setSelectedViolation] = useState<any | null>(null);
@@ -133,6 +143,9 @@ export function EnforcementSentinel() {
 
     useEffect(() => {
         api.getSystemSchedules().then(setSchedules).catch(e => console.error("Failed to fetch schedules:", e));
+        api.getTargetWorkspaces()
+            .then(res => setTargetWorkspaces(res.workspaces || []))
+            .catch(e => console.error("Failed to fetch target workspaces:", e));
     }, []);
 
     // Reset page on search change
@@ -177,7 +190,7 @@ export function EnforcementSentinel() {
                 setExecutedActions(prev => {
                     const next = { ...prev };
                     for (const rec of records) {
-                        const key = `${selectedRunId}-${rec.resource_id}-${rec.policy_name}-${rec.action}`;
+                        const key = `${selectedRunId}-${rec.workspace || ''}-${rec.resource_id}-${rec.policy_name}-${rec.action}`;
                         if (!next[key]) {
                             next[key] = { at: rec.at ? formatPacific(rec.at, { year: undefined }) : '' };
                         }
@@ -211,9 +224,12 @@ export function EnforcementSentinel() {
     const handleRunSentinel = async () => {
         setIsRunning(true);
         try {
+            // '__all__' => scan every target workspace (empty list); otherwise
+            // scope to the single selected workspace by name.
+            const workspaces = workspaceSel === '__all__' ? [] : [workspaceSel];
             await api.createRequest('enforcement_sentinel' as any, 'Manual Sentinel Run', environment, {
-                workspace: workspace,
-                environment: environment
+                workspaces,
+                environment: environment,
             });
             
             // Instantly refresh the run list to show the newly added run
@@ -247,7 +263,8 @@ export function EnforcementSentinel() {
                     resource_type: v.resource_type,
                     action: v.action,
                     policy_name: v.policy,
-                    reason: v.reason
+                    reason: v.reason,
+                    workspace_host: v?.workspace?.host || v?.input_context?.workspace?.host || undefined
                 })
             });
             
@@ -256,7 +273,7 @@ export function EnforcementSentinel() {
             
             setExecutedActions(prev => ({
                 ...prev,
-                [`${runId}-${v.resource_id}-${v.policy}-${v.action}`]: { at: formatPacific(new Date().toISOString(), { year: undefined }) }
+                [`${runId}-${resolveWorkspace(v)}-${v.resource_id}-${v.policy}-${v.action}`]: { at: formatPacific(new Date().toISOString(), { year: undefined }) }
             }));
         } catch (e: any) {
             console.error(e);
@@ -344,18 +361,32 @@ export function EnforcementSentinel() {
                                             <label htmlFor="workspace" className="text-xs font-medium text-gray-700">
                                                 Workspace
                                             </label>
-                                            <input
-                                                type="text"
+                                            <select
                                                 id="workspace"
-                                                value={workspace}
-                                                onChange={(e) => setWorkspace(e.target.value)}
-                                                className="flex h-8 w-full rounded-md border border-input bg-white px-2 py-1 text-xs ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                                                placeholder="ws-enterprise-prod"
-                                            />
+                                                value={workspaceSel}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    setWorkspaceSel(val);
+                                                    // Auto-derive environment from the selected workspace.
+                                                    const ws = targetWorkspaces.find(w => w.name === val);
+                                                    if (ws && ['dev', 'stage', 'prod'].includes(ws.environment)) {
+                                                        setEnvironment(ws.environment as 'dev' | 'stage' | 'prod');
+                                                    }
+                                                }}
+                                                className="flex h-8 w-full rounded-md border border-input bg-white px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                            >
+                                                <option value="__all__">All target workspaces</option>
+                                                {targetWorkspaces.map(w => (
+                                                    <option key={w.name} value={w.name}>
+                                                        {w.name}{w.environment ? ` (${w.environment})` : ''}
+                                                    </option>
+                                                ))}
+                                            </select>
                                             <p className="text-[11px] text-gray-500 leading-relaxed">
                                                 Scopes the <span className="font-medium text-gray-700">apps &amp; platform governance</span> policies
-                                                (clusters, jobs, warehouses, dashboards, etc.). It does <span className="font-medium text-gray-700">not</span> affect
-                                                data certification, which always evaluates the contracted datasets regardless of this selection.
+                                                (clusters, jobs, warehouses, dashboards, etc.). <span className="font-medium text-gray-700">All target workspaces</span> runs
+                                                one aggregated scan across every configured workspace. Data certification is Unity Catalog&ndash;scoped and always
+                                                runs once against the configured certification workspace, regardless of this selection.
                                             </p>
                                         </div>
                                         <div className="flex flex-col gap-1">
@@ -458,7 +489,18 @@ export function EnforcementSentinel() {
                                                 )}
                                             </td>
                                             <td className="p-3 text-gray-500">
-                                                {ctx.workspace || 'ws-enterprise-prod'} <span className="text-xs ml-1 px-1.5 py-0.5 bg-gray-100 rounded-md">{ctx.environment || 'prod'}</span>
+                                                {(() => {
+                                                    const names: string[] = Array.isArray(ctx.workspaces_scanned)
+                                                        ? ctx.workspaces_scanned
+                                                        : (ctx.workspace ? [ctx.workspace] : []);
+                                                    if (names.length === 0) return <span className="text-gray-400">&mdash;</span>;
+                                                    if (names.length === 1) return <span>{names[0]}</span>;
+                                                    return (
+                                                        <span title={names.join(', ')}>
+                                                            {names.length} workspaces
+                                                        </span>
+                                                    );
+                                                })()}
                                             </td>
                                             <td className="p-3 text-right">
                                                 <Button variant="ghost" size="sm" className="h-8 text-gray-400 group-hover:text-gray-900 group-hover:bg-gray-200">
@@ -778,6 +820,7 @@ export function EnforcementSentinel() {
                                                                 <tr>
                                                                     <th className="p-3 px-4 text-left">Resource</th>
                                                                     {activeTab === 'all' && <th className="p-3 text-left">Policy</th>}
+                                                                    <th className="p-3 text-left">Workspace</th>
                                                                     <th className="p-3 text-left">Severity</th>
                                                                     <th className="p-3 text-left">Action</th>
                                                                     <th className="p-3 text-left w-1/3">Reason</th>
@@ -798,6 +841,11 @@ export function EnforcementSentinel() {
                                                                             </div>
                                                                         </td>
                                                                         {activeTab === 'all' && <td className="p-3 text-gray-700">{v.policy.replace(/_/g, ' ')}</td>}
+                                                                        <td className="p-3 text-gray-600">
+                                                                            {resolveWorkspace(v)
+                                                                                ? <span className="text-xs px-1.5 py-0.5 bg-gray-100 rounded-md whitespace-nowrap">{resolveWorkspace(v)}</span>
+                                                                                : <span className="text-gray-400">&mdash;</span>}
+                                                                        </td>
                                                                         <td className="p-3">
                                                                             <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded-full ${
                                                                                 v.severity === 'CRITICAL' ? 'bg-red-100 text-red-800 border border-red-200' :
@@ -812,7 +860,7 @@ export function EnforcementSentinel() {
                                                                         <td className="p-3 text-xs text-gray-600 break-words leading-relaxed">{formatReason(v)}</td>
                                                                             <td className="p-3 text-right">
                                                                                 {(() => {
-                                                                                    const execKey = `${selectedRun.id}-${v.resource_id}-${v.policy}-${v.action}`;
+                                                                                    const execKey = `${selectedRun.id}-${resolveWorkspace(v)}-${v.resource_id}-${v.policy}-${v.action}`;
                                                                                     const executed = executedActions[execKey];
                                                                                     if (executed) {
                                                                                         return (
@@ -884,6 +932,7 @@ export function EnforcementSentinel() {
                             <div className="grid grid-cols-2 gap-4 text-sm bg-gray-50 p-4 rounded-lg border border-gray-100">
                                 <div><span className="font-semibold text-gray-500 block mb-1">Resource Type</span> {selectedViolation.resource_type}</div>
                                 <div><span className="font-semibold text-gray-500 block mb-1">Policy</span> {selectedViolation.policy}</div>
+                                <div><span className="font-semibold text-gray-500 block mb-1">Workspace</span> {resolveWorkspace(selectedViolation) || <span className="text-gray-400">Unknown</span>}</div>
                                 <div>
                                     <span className="font-semibold text-gray-500 block mb-1">Severity</span>
                                     <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded-full ${

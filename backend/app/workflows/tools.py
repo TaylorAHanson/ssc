@@ -442,8 +442,8 @@ async def sentinel_discover(**kwargs) -> Dict[str, Any]:
         logger.warning("sentinel_discover: no request found for id=%s; nothing to scan", request_id)
         return {"violations": [], "checks": [], "summary": "No request context; scan skipped."}
 
-    logger.info("sentinel_discover: request=%s workspace=%s", request_id,
-                (request.state_context or {}).get("workspace"))
+    logger.info("sentinel_discover: request=%s workspaces=%s", request_id,
+                (request.state_context or {}).get("workspaces") or "all")
     try:
         from app.workflows.sentinel import run_discovery
         return await run_discovery(db, request)

@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 def mock_db_session(db_session):
     # Prevent the code under test from closing the session
     db_session.close = MagicMock()
-    with patch("app.workers.poller.get_db", side_effect=lambda: iter([db_session])) as mock:
+    with patch("app.workers.poller.get_lakebase_session", return_value=db_session) as mock:
         yield mock
 
 @pytest.mark.asyncio
