@@ -653,6 +653,59 @@ export function EnforcementSentinel() {
                                         </div>
                                     ) : (
                                         <>
+                                            {/* Workspace scan-failure banner: a workspace whose discovery
+                                                calls all failed reports "0" but is NOT confirmed clean.
+                                                Surfaces the definitive cause (auth / permission / network)
+                                                so the run isn't misread as all-clear. */}
+                                            {Array.isArray(ctx.workspace_failures) && ctx.workspace_failures.length > 0 && (() => {
+                                                const failures: any[] = ctx.workspace_failures;
+                                                const hard = failures.filter((f: any) => !f.partial);
+                                                const partial = failures.filter((f: any) => f.partial);
+                                                const CATEGORY_LABEL: Record<string, string> = {
+                                                    authentication: 'Authentication / credentials',
+                                                    authorization: 'Permissions',
+                                                    network: 'Network / connectivity',
+                                                    rate_limited: 'Rate limiting',
+                                                    not_found: 'Missing API / endpoint',
+                                                    unknown: 'Unclassified',
+                                                };
+                                                return (
+                                                    <div className={`rounded-lg border p-4 ${hard.length > 0 ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                                                        <div className="flex items-start gap-3">
+                                                            <AlertTriangle className={`w-5 h-5 mt-0.5 flex-shrink-0 ${hard.length > 0 ? 'text-red-600' : 'text-amber-600'}`} />
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className={`font-semibold ${hard.length > 0 ? 'text-red-900' : 'text-amber-900'}`}>
+                                                                    {hard.length > 0
+                                                                        ? `${hard.length} workspace(s) returned no data — not confirmed clean`
+                                                                        : `${partial.length} workspace(s) returned partial results`}
+                                                                </div>
+                                                                <p className={`text-sm mt-1 ${hard.length > 0 ? 'text-red-700' : 'text-amber-700'}`}>
+                                                                    A scan that fails to authenticate or reach a workspace reports 0 findings, which does not mean the workspace is compliant. Resolve the cause below and re-run.
+                                                                </p>
+                                                                <div className="mt-3 flex flex-col gap-2">
+                                                                    {failures.map((f: any, i: number) => (
+                                                                        <div key={i} className="text-sm bg-white/70 rounded-md border border-gray-200 p-2.5">
+                                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                                <span className="font-semibold text-gray-900">{f.workspace || 'unknown'}</span>
+                                                                                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${f.partial ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'}`}>
+                                                                                    {CATEGORY_LABEL[f.category] || f.category}
+                                                                                </span>
+                                                                                {f.partial && <span className="text-xs text-gray-500">partial ({f.failed}/{f.attempted})</span>}
+                                                                            </div>
+                                                                            <div className="text-xs text-gray-500 mt-1 space-y-0.5">
+                                                                                {f.host && <div>Host: <span className="font-mono">{f.host}</span></div>}
+                                                                                {f.credential_source && <div>Credentials: <span className="font-mono">{f.credential_source}</span></div>}
+                                                                                {f.example && <div className="text-gray-600 break-words">Error: {f.example}</div>}
+                                                                            </div>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
+
                                             {/* High level info cards */}
                                             <div className="flex flex-col gap-4">
                                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

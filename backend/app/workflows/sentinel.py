@@ -283,6 +283,126 @@ def _rule_outcomes(check: Dict[str, Any]) -> List[bool]:
     return [check["result"] == "PASS"]
 
 
+# Human-readable phrasing for each failure category, used in the workspace-level
+# ERROR log + run summary so a 0-result scan is never ambiguous.
+_CATEGORY_HELP = {
+    "authentication": "authentication/credentials",
+    "authorization": "permissions",
+    "network": "network/connectivity",
+    "rate_limited": "rate limiting",
+    "not_found": "missing API/endpoint",
+    "unknown": "unclassified",
+}
+
+
+def _classify_databricks_error(exc: Exception) -> str:
+    """Best-effort, definitive-as-possible classification of a discovery failure.
+
+    Lets the logs state *why* a scan came back empty (bad credentials vs missing
+    permissions vs a network problem) instead of leaving "0 resources"
+    ambiguous. Returns one of: ``authentication``, ``authorization``,
+    ``network``, ``rate_limited``, ``not_found``, ``unknown``. Matches on both
+    the SDK exception type name and the message text (the Databricks SDK often
+    raises OAuth/`invalid_client` failures as generic errors, so text matching is
+    the reliable signal). Diagnostic only — never drives control flow.
+    """
+    msg = str(exc).lower()
+    type_name = type(exc).__name__
+
+    # Network / connectivity — the request never reached a Databricks auth check.
+    network_markers = (
+        "connection", "timed out", "timeout", "getaddrinfo", "temporary failure",
+        "name or service not known", "name resolution", "max retries", "ssl",
+        "certificate", "connection refused", "connection reset",
+        "network is unreachable", "no route to host", "failed to establish",
+    )
+    if type_name in {
+        "ConnectionError", "ConnectTimeout", "ReadTimeout", "Timeout",
+        "NewConnectionError", "MaxRetryError", "SSLError", "ProxyError",
+    } or any(m in msg for m in network_markers):
+        return "network"
+
+    # Authentication — identity itself was rejected (bad/unknown SP, OAuth fail).
+    auth_markers = (
+        "invalid_client", "unauthenticated", "authentication failed",
+        "invalid access token", "invalid_grant", "token request failed",
+        "could not resolve credentials", "default auth", "cannot configure default",
+        "invalid credentials", "401",
+    )
+    if type_name in {"Unauthenticated"} or any(m in msg for m in auth_markers):
+        return "authentication"
+
+    # Authorization — identity is valid but lacks permission on the resource.
+    authz_markers = (
+        "permission denied", "does not have", "not authorized", "forbidden",
+        "insufficient", "is not allowed", "access denied", "403",
+    )
+    if type_name in {"PermissionDenied"} or any(m in msg for m in authz_markers):
+        return "authorization"
+
+    if type_name in {"TooManyRequests"} or "429" in msg or "too many requests" in msg:
+        return "rate_limited"
+
+    if type_name in {"NotFound"} or "404" in msg:
+        return "not_found"
+
+    return "unknown"
+
+
+def _summarize_discovery_failures(
+    ws_name: Optional[str],
+    ws_host: Optional[str],
+    ws_cred_source: Optional[str],
+    discover_errors: List[Dict[str, Any]],
+    attempted: int,
+) -> Optional[Dict[str, Any]]:
+    """Log + summarize a workspace's discovery failures.
+
+    Critically distinguishes a genuinely EMPTY workspace (no errors, 0 resources)
+    from one that FAILED to scan (auth/permission/network). When every handler
+    failed the workspace's "0 findings" is meaningless, so we log an ERROR that
+    names the definitive cause and return a structured record for the run summary
+    / UI. ``None`` when nothing failed.
+    """
+    if not discover_errors:
+        return None
+    from collections import Counter
+
+    cats = Counter(e["category"] for e in discover_errors)
+    dominant = cats.most_common(1)[0][0]
+    failed = len(discover_errors)
+    breakdown = dict(cats)
+    example = discover_errors[0]["error"]
+    record = {
+        "workspace": ws_name,
+        "host": ws_host,
+        "credential_source": ws_cred_source,
+        "category": dominant,
+        "failed": failed,
+        "attempted": attempted,
+        "breakdown": breakdown,
+        "example": example,
+        "partial": not (attempted and failed >= attempted),
+    }
+    if not record["partial"]:
+        logger.error(
+            "Sentinel: workspace '%s' returned NO resources — ALL %d discovery "
+            "call(s) failed (host=%s, credentials=%s). Definitive cause: %s error. "
+            "This is a %s problem, NOT an empty workspace. Breakdown: %s. Example: %s",
+            ws_name, attempted, ws_host, ws_cred_source, dominant,
+            _CATEGORY_HELP.get(dominant, dominant), breakdown, example,
+        )
+    else:
+        logger.warning(
+            "Sentinel: workspace '%s' had %d/%d discovery call(s) fail (host=%s, "
+            "credentials=%s); returning PARTIAL results. Dominant cause: %s (%s). "
+            "Breakdown: %s. Example: %s",
+            ws_name, failed, attempted, ws_host, ws_cred_source, dominant,
+            _CATEGORY_HELP.get(dominant, dominant), breakdown, example,
+        )
+    return record
+
+
 async def _scan_and_evaluate(
     *,
     db,
@@ -298,10 +418,13 @@ async def _scan_and_evaluate(
 ) -> tuple:
     """Discover + OPA-evaluate one workspace's resources.
 
-    Returns ``(violations, checks, resource_count)`` with every record tagged
-    with ``workspace_ctx`` (``{name, host, environment}``). When
-    ``record_certification`` is set (the single data-certification pass), data
-    product results are mirrored into the local DataAsset cache.
+    Returns ``(violations, checks, resource_count, ws_failure)`` with every
+    record tagged with ``workspace_ctx`` (``{name, host, environment,
+    credential_source}``). ``ws_failure`` is ``None`` when discovery succeeded, or
+    a structured record describing why the workspace failed (auth / permission /
+    network) so a 0-result scan can be distinguished from a genuinely empty one.
+    When ``record_certification`` is set (the single data-certification pass),
+    data product results are mirrored into the local DataAsset cache.
     """
     from app.db.allowlist import AllowlistModel
     from app.providers.databricks.handlers import DatasetResourceHandler
@@ -309,6 +432,7 @@ async def _scan_and_evaluate(
     ws_name = workspace_ctx.get("name")
     ws_host = workspace_ctx.get("host")
     ws_env = workspace_ctx.get("environment")
+    ws_cred_source = workspace_ctx.get("credential_source")
     ws_type = "enterprise" if "enterprise" in (ws_name or "") else "domain"
     # Tag stored on every check/violation so the report + email can show which
     # workspace a finding came from. The OPA input keeps its historical shape
@@ -340,12 +464,18 @@ async def _scan_and_evaluate(
     # I/O genuinely overlaps; concurrency is bounded by SENTINEL_SCAN_CONCURRENCY.
     def _discover_one(handler_class):
         try:
-            return list(asyncio.run(handler_class(workspace_client).discover()) or [])
+            return list(asyncio.run(handler_class(workspace_client).discover()) or []), None
         except Exception as e:  # noqa: BLE001 - one handler failing shouldn't abort the scan
+            category = _classify_databricks_error(e)
+            # Per-handler WARNING tagged with the definitive category (auth vs
+            # permission vs network) so a 0-result run is diagnosable from logs
+            # alone, tied to the exact SP/credential source used.
             logger.warning(
-                "Sentinel: %s.discover() failed for %s: %s", handler_class.__name__, ws_name, e
+                "Sentinel: %s.discover() failed for workspace '%s' [%s] "
+                "(host=%s, credentials=%s): %s",
+                handler_class.__name__, ws_name, category, ws_host, ws_cred_source, e,
             )
-            return []
+            return [], {"handler": handler_class.__name__, "category": category, "error": str(e)}
 
     handler_results = await _gather_bounded(
         [(lambda hc=hc: asyncio.to_thread(_discover_one, hc)) for hc in handler_classes],
@@ -353,7 +483,10 @@ async def _scan_and_evaluate(
     )
 
     discovered_resources: List[Dict[str, Any]] = []
-    for handler_class, resources in zip(handler_classes, handler_results):
+    discover_errors: List[Dict[str, Any]] = []
+    for handler_class, (resources, err) in zip(handler_classes, handler_results):
+        if err:
+            discover_errors.append(err)
         if dataset_id and handler_class is DatasetResourceHandler:
             resources = [
                 r
@@ -361,6 +494,10 @@ async def _scan_and_evaluate(
                 if r.get("dataset_id") == dataset_id or r.get("id") == dataset_id
             ]
         discovered_resources.extend(resources)
+
+    ws_failure = _summarize_discovery_failures(
+        ws_name, ws_host, ws_cred_source, discover_errors, len(handler_classes)
+    )
 
     if record_certification:
         _refresh_data_asset_quality(db, discovered_resources, scan_time)
@@ -507,7 +644,7 @@ async def _scan_and_evaluate(
         logger.error("Sentinel: failed to commit certification updates: %s", e)
         db.rollback()
 
-    return violations, checks, len(discovered_resources)
+    return violations, checks, len(discovered_resources), ws_failure
 
 
 async def run_discovery(db, request) -> Dict[str, Any]:
@@ -565,13 +702,19 @@ async def run_discovery(db, request) -> Dict[str, Any]:
                 cert_name,
             )
     if cert_cfg is not None:
-        cert_ctx = {"name": cert_cfg.name, "host": cert_cfg.host, "environment": cert_cfg.environment}
+        cert_ctx = {
+            "name": cert_cfg.name,
+            "host": cert_cfg.host,
+            "environment": cert_cfg.environment,
+            "credential_source": cert_cfg.credential_source,
+        }
         cert_host: Optional[str] = cert_cfg.host
     else:
         cert_ctx = {
             "name": home_match.name if home_match else "home",
             "host": home_host,
             "environment": home_match.environment if home_match else settings.ENVIRONMENT,
+            "credential_source": home_match.credential_source if home_match else "global_default",
         }
         cert_host = None  # -> _new_workspace_client(None) uses the app's own SP
 
@@ -591,19 +734,38 @@ async def run_discovery(db, request) -> Dict[str, Any]:
     checks: List[Dict[str, Any]] = []
     total_resources = 0
     scan_errors: List[str] = []
+    # Structured per-workspace discovery failures (auth/permission/network) so a
+    # 0-result run surfaces WHY, and isn't mistaken for "all clear".
+    ws_failures: List[Dict[str, Any]] = []
 
     # 1. Workspace-scoped scans (skipped for a single-dataset certification request).
     if not dataset_id:
         ws_handler_classes = _workspace_scoped_handler_classes()
         for w in scan_ws:
-            ws_ctx = {"name": w.name, "host": w.host, "environment": w.environment}
+            ws_ctx = {
+                "name": w.name,
+                "host": w.host,
+                "environment": w.environment,
+                "credential_source": w.credential_source,
+            }
             try:
                 client = _new_workspace_client(w.host)
             except Exception as e:  # noqa: BLE001 - one unreachable workspace shouldn't abort the run
-                logger.error("Sentinel: failed to init client for workspace %s: %s", w.name, e)
-                scan_errors.append(f"{w.name}: {e}")
+                category = _classify_databricks_error(e)
+                logger.error(
+                    "Sentinel: failed to init client for workspace '%s' [%s] "
+                    "(host=%s, credentials=%s): %s",
+                    w.name, category, w.host, w.credential_source, e,
+                )
+                scan_errors.append(f"{w.name} ({category}): {e}")
+                ws_failures.append({
+                    "workspace": w.name, "host": w.host,
+                    "credential_source": w.credential_source, "category": category,
+                    "failed": 1, "attempted": 1, "breakdown": {category: 1},
+                    "example": str(e), "partial": False, "stage": "client_init",
+                })
                 continue
-            v, c, n = await _scan_and_evaluate(
+            v, c, n, wf = await _scan_and_evaluate(
                 db=db,
                 opa_provider=opa_provider,
                 allowed_policy_names=allowed_policy_names,
@@ -618,11 +780,13 @@ async def run_discovery(db, request) -> Dict[str, Any]:
             violations += v
             checks += c
             total_resources += n
+            if wf:
+                ws_failures.append(wf)
 
     # 2. Data certification pass (once, Unity Catalog / metastore scoped).
     try:
         cert_client = _new_workspace_client(cert_host)
-        v, c, n = await _scan_and_evaluate(
+        v, c, n, wf = await _scan_and_evaluate(
             db=db,
             opa_provider=opa_provider,
             allowed_policy_names=allowed_policy_names,
@@ -637,9 +801,12 @@ async def run_discovery(db, request) -> Dict[str, Any]:
         violations += v
         checks += c
         total_resources += n
+        if wf:
+            ws_failures.append(wf)
     except Exception as e:  # noqa: BLE001
-        logger.error("Sentinel: data certification pass failed: %s", e)
-        scan_errors.append(f"data_certification: {e}")
+        category = _classify_databricks_error(e)
+        logger.error("Sentinel: data certification pass failed [%s]: %s", category, e)
+        scan_errors.append(f"data_certification ({category}): {e}")
 
     rule_outcomes = [passed for c in checks for passed in _rule_outcomes(c)]
     pass_count = sum(1 for ok in rule_outcomes if ok)
@@ -653,8 +820,21 @@ async def run_discovery(db, request) -> Dict[str, Any]:
         f"({pass_count} passed, {violation_count} failed). "
         f"{len(violations)} policy violation(s) recorded."
     )
-    if scan_errors:
+    # Workspaces where EVERY discovery call failed produced a meaningless "0" —
+    # call that out explicitly so the run isn't read as "all clear".
+    full_fail = [f for f in ws_failures if not f.get("partial")]
+    partial_fail = [f for f in ws_failures if f.get("partial")]
+    if full_fail:
+        cats = "/".join(sorted({f["category"] for f in full_fail}))
+        names = ", ".join(f["workspace"] for f in full_fail)
+        summary += (
+            f" \u26a0 {len(full_fail)} workspace(s) returned NO data due to "
+            f"{cats} error(s) [{names}] — these are NOT confirmed clean."
+        )
+    elif scan_errors:
         summary += f" {len(scan_errors)} workspace(s) could not be fully scanned."
+    if partial_fail and not full_fail:
+        summary += f" {len(partial_fail)} workspace(s) returned partial results."
 
     persist: Dict[str, Any] = {
         "violations": violations,
@@ -669,8 +849,14 @@ async def run_discovery(db, request) -> Dict[str, Any]:
             "total_checks": len(rule_outcomes),
             "total_evaluations": len(checks),
             "workspaces_scanned": len(scanned_names),
+            "workspaces_failed": len(full_fail),
+            "workspaces_partial": len(partial_fail),
         },
     }
+    if ws_failures:
+        # Structured, non-secret failure records (workspace, host, category,
+        # credential source, example error) for the run report / UI.
+        persist["workspace_failures"] = ws_failures
     if scan_errors:
         persist["scan_error"] = "; ".join(scan_errors)
     _persist_state_context(db, request, persist)
