@@ -742,7 +742,14 @@ export function EnforcementSentinel() {
                                                                                         </span>
                                                                                     </div>
                                                                                 )}
-                                                                                {f.example && <div className="text-gray-600 break-words">Error: {f.example}</div>}
+                                                                                {(f.oauth_error || f.oauth_error_description) ? (
+                                                                                    <div className="text-gray-700 break-words">
+                                                                                        <span className="font-semibold">OAuth reason</span>{f.oauth_status ? ` (HTTP ${f.oauth_status})` : ''}:{' '}
+                                                                                        <span className="font-mono">{f.oauth_error || 'error'}</span>{f.oauth_error_description ? ` — ${f.oauth_error_description}` : ''}
+                                                                                    </div>
+                                                                                ) : (
+                                                                                    f.example && <div className="text-gray-600 break-words">Error: {f.example}</div>
+                                                                                )}
                                                                             </div>
                                                                         </div>
                                                                     ))}

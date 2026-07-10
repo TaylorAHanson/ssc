@@ -9,7 +9,7 @@ Databricks/OPA boundaries stubbed, verifying that:
 """
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -190,6 +190,53 @@ def test_prior_severity_is_scoped_by_workspace(db_session):
     # Legacy row (workspace NULL) still matches any workspace lookup.
     _audit("job-2", "p", "HIGH", None, "run-old")
     assert sentinel._prior_severity(db_session, "run-new", "job-2", "p", "ws-b") == "HIGH"
+
+
+@pytest.mark.asyncio
+async def test_probe_enriches_auth_failure_with_oauth_reason():
+    """When the SDK call fails on auth, the probe runs a direct OIDC token
+    exchange and surfaces the precise OAuth error instead of a generic one."""
+    client = MagicMock()
+    client.current_user.me.side_effect = Exception("invalid_client: Client authentication failed")
+
+    diag = {"ok": False, "status": 401, "error": "invalid_client",
+            "error_description": "Client credentials not found for this account"}
+    with patch.object(sentinel, "_oauth_token_diagnostic", return_value=diag):
+        result = await sentinel._probe_workspace_auth(
+            client, "ws-a", host="https://a.databricks.net",
+            client_id="abc", client_secret="shh",
+        )
+
+    assert result["ok"] is False
+    assert result["category"] == "authentication"
+    assert result["network_reachable"] is True
+    assert result["oauth_error"] == "invalid_client"
+    assert "not found" in result["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_probe_detects_valid_sp_without_entitlement():
+    """OAuth succeeds but the API call fails -> a valid SP that just isn't
+    entitled on the workspace (authorization, not bad credentials)."""
+    client = MagicMock()
+    client.current_user.me.side_effect = Exception("PERMISSION_DENIED: not authorized")
+
+    with patch.object(sentinel, "_oauth_token_diagnostic", return_value={"ok": True, "status": 200}):
+        result = await sentinel._probe_workspace_auth(
+            client, "ws-a", host="https://a.databricks.net",
+            client_id="abc", client_secret="shh",
+        )
+
+    assert result["ok"] is False
+    assert result["category"] == "authorization"
+    assert result.get("oauth_ok") is True
+    assert "not entitled" in result["detail"].lower()
+
+
+def test_oauth_diagnostic_no_creds_returns_none():
+    """No SP creds -> nothing to test, returns None (no network call)."""
+    assert sentinel._oauth_token_diagnostic("https://a.databricks.net", None, None) is None
+    assert sentinel._oauth_token_diagnostic(None, "id", "secret") is None
 
 
 def test_classify_databricks_error_categories():

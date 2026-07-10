@@ -403,8 +403,70 @@ def _summarize_discovery_failures(
     return record
 
 
+def _oauth_token_diagnostic(
+    host: Optional[str],
+    client_id: Optional[str],
+    client_secret: Optional[str],
+    timeout: float = 10.0,
+) -> Optional[Dict[str, Any]]:
+    """Exercise the OAuth M2M client-credentials flow directly against a
+    workspace's OIDC token endpoint to capture the PRECISE error the Databricks
+    SDK hides behind a generic ``invalid_client``.
+
+    Returns ``{ok, status, error, error_description}`` (or ``None`` when there
+    aren't SP creds to test). Uses only the stdlib (no new deps) and NEVER logs
+    or returns the secret. The ``error_description`` distinguishes e.g. an
+    unknown/wrong client_id from a bad secret, which is what turns "creds
+    rejected" into an actionable message.
+    """
+    if not (host and client_id and client_secret):
+        return None
+    import base64 as _b64
+    import json as _json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    url = host.rstrip("/") + "/oidc/v1/token"
+    data = urllib.parse.urlencode(
+        {"grant_type": "client_credentials", "scope": "all-apis"}
+    ).encode()
+    basic = _b64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Authorization": f"Basic {basic}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - fixed https host
+            body = _json.loads(resp.read().decode() or "{}")
+        if body.get("access_token"):
+            return {"ok": True, "status": getattr(resp, "status", 200)}
+        return {"ok": False, "status": getattr(resp, "status", None),
+                "error": body.get("error"), "error_description": body.get("error_description")}
+    except urllib.error.HTTPError as e:
+        try:
+            body = _json.loads(e.read().decode() or "{}")
+        except Exception:  # noqa: BLE001
+            body = {}
+        return {"ok": False, "status": e.code,
+                "error": body.get("error"), "error_description": body.get("error_description")}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "status": None, "error": "request_failed",
+                "error_description": str(e)}
+
+
 async def _probe_workspace_auth(
-    workspace_client, ws_name: Optional[str], timeout: float = 10.0
+    workspace_client,
+    ws_name: Optional[str],
+    *,
+    host: Optional[str] = None,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    timeout: float = 10.0,
 ) -> Dict[str, Any]:
     """Cheap auth + reachability probe for one workspace (``current_user.me()``).
 
@@ -418,6 +480,12 @@ async def _probe_workspace_auth(
         (rejected creds) STILL proves the network path is open; only a
         timeout/DNS/connection failure means it isn't.
       * ``ok`` — did the resolved credentials actually authenticate?
+
+    When the SDK call fails on auth and SP creds (``host``/``client_id``/
+    ``client_secret``) are supplied, we additionally run a direct OIDC token
+    exchange to capture the RAW OAuth ``error``/``error_description`` — turning a
+    generic ``invalid_client`` into "client not found" vs "invalid secret" vs
+    "valid client but not entitled on this workspace".
     """
     try:
         me = await asyncio.wait_for(
@@ -434,8 +502,38 @@ async def _probe_workspace_auth(
         category = _classify_databricks_error(e)
         # Anything the control plane answered (auth/permission/rate/not_found)
         # proves the network path is open; only a 'network' category did not.
-        return {"ok": False, "network_reachable": category != "network",
-                "category": category, "identity": None, "detail": str(e)}
+        network_reachable = category != "network"
+        result: Dict[str, Any] = {
+            "ok": False, "network_reachable": network_reachable,
+            "category": category, "identity": None, "detail": str(e),
+        }
+        # Enrich auth-class failures with the precise OAuth reason.
+        if network_reachable and host and client_id and client_secret:
+            diag = await asyncio.to_thread(
+                _oauth_token_diagnostic, host, client_id, client_secret, timeout
+            )
+            if diag is not None and diag.get("ok"):
+                # OAuth itself SUCCEEDS but the API call failed -> the SP is a
+                # valid OAuth client that simply isn't entitled on this workspace.
+                result["category"] = "authorization"
+                result["oauth_ok"] = True
+                result["detail"] = (
+                    "OAuth token exchange SUCCEEDED but the workspace API call was "
+                    "rejected — the service principal authenticates but is not "
+                    "entitled on this workspace. Add/authorize the SP on this "
+                    "workspace (Account console -> workspace assignment / permissions)."
+                )
+            elif diag is not None:
+                result["oauth_ok"] = False
+                result["oauth_error"] = diag.get("error")
+                result["oauth_error_description"] = diag.get("error_description")
+                result["oauth_status"] = diag.get("status")
+                desc = diag.get("error_description") or diag.get("error") or "no detail"
+                result["detail"] = (
+                    f"OAuth token request rejected (HTTP {diag.get('status')}): "
+                    f"{diag.get('error')} — {desc}"
+                )
+        return result
 
 
 async def _scan_and_evaluate(
@@ -469,27 +567,50 @@ async def _scan_and_evaluate(
     ws_env = workspace_ctx.get("environment")
     ws_cred_source = workspace_ctx.get("credential_source")
 
+    # Resolve the raw SP credentials LOCALLY (never persisted / never added to
+    # workspace_ctx) so the probe can run a direct OIDC token exchange and report
+    # the precise OAuth error when auth fails.
+    probe_cid: Optional[str] = None
+    probe_csec: Optional[str] = None
+    try:
+        if ws_host:
+            from app.core.workspaces import get_workspace_config
+
+            _cfg = get_workspace_config(ws_host)
+            if _cfg is not None:
+                probe_cid, probe_csec = _cfg.client_id, _cfg.client_secret
+        if not probe_cid:
+            probe_cid = settings.DATABRICKS_CLIENT_ID or None
+            probe_csec = settings.DATABRICKS_CLIENT_SECRET or None
+    except Exception:  # noqa: BLE001 - diagnostic creds are best-effort
+        probe_cid = probe_csec = None
+
     # Auth/reachability gate. The per-resource handlers swallow discovery errors
     # (log + return []), so without this probe a workspace whose credentials are
     # rejected reports a misleading "0 findings". A failed probe is authoritative:
     # short-circuit with a structured failure that names the definitive cause
     # (authentication vs permissions vs network) so 0 is never read as "clean".
-    probe = await _probe_workspace_auth(workspace_client, ws_name)
+    probe = await _probe_workspace_auth(
+        workspace_client, ws_name,
+        host=ws_host or (settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL),
+        client_id=probe_cid, client_secret=probe_csec,
+    )
     if not probe["ok"]:
         attempted = len(handler_classes)
         logger.error(
             "Sentinel: workspace '%s' auth/connectivity probe FAILED "
             "(host=%s, credentials=%s). Definitive cause: %s error; "
-            "network_reachable=%s. %s. Skipping scan — a 0 here is a FAILURE, "
-            "NOT a clean bill of health.",
+            "network_reachable=%s. %s Detail: %s. Skipping scan — a 0 here is a "
+            "FAILURE, NOT a clean bill of health.",
             ws_name, ws_host, ws_cred_source, probe["category"],
             probe["network_reachable"],
             ("The control plane responded but rejected the credentials, so the "
-             "network path is open and this is purely a credentials/permissions "
-             "problem." if probe["network_reachable"]
+             "network path is open and this is a credentials/permissions problem."
+             if probe["network_reachable"]
              else "The control plane was never reached, so this is a network/"
              "connectivity problem (DNS / VPC peering / PrivateLink / firewall), "
              "not a credentials problem."),
+            probe.get("detail"),
         )
         ws_failure = {
             "workspace": ws_name,
@@ -501,6 +622,10 @@ async def _scan_and_evaluate(
             "attempted": attempted,
             "breakdown": {probe["category"]: attempted},
             "example": probe["detail"],
+            # Precise OAuth reason from the direct token exchange (no secrets).
+            "oauth_error": probe.get("oauth_error"),
+            "oauth_error_description": probe.get("oauth_error_description"),
+            "oauth_status": probe.get("oauth_status"),
             "partial": False,
             "stage": "auth_probe",
         }
