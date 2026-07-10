@@ -221,7 +221,6 @@ sync:
     - src/**
     - public/**
     - backend/**
-    - configuration.yaml
     - mcp_app/**
   exclude:
     # Frontend deps/build output (node_modules ~340MB stalls source download).

@@ -56,6 +56,14 @@ async def lifespan(app: FastAPI):
         db = get_session_local()()
         try:
             init_db(db)
+            # Apply admin-editable runtime settings overrides (app_settings table)
+            # to the live settings/config so they take effect without a redeploy.
+            # Runs before the poller thread starts below so it sees overrides too.
+            try:
+                from app.core import settings_store
+                settings_store.load_overrides(db)
+            except Exception as e:
+                logger.warning(f"Settings override load skipped: {e}")
             # Seed DB-backed Workflows from the legacy filesystem instructions once
             # (idempotent) so "workflows as data" has content on first boot.
             try:

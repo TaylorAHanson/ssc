@@ -18,4 +18,4 @@ alwaysApply: true
 
 ## Gotchas
 - If you create temporary scripts to test things or check things, remember this project runs inside a venv and most libraries aren't natively installed.
-- Don't hardcode the app name or use the app name in any variable naming. There are branding settings in `configuration.yaml` that should be used instead. See `backend/app/core/config.py` for more details.
+- Don't hardcode the app name or use the app name in any variable naming. Use the branding settings instead: in-code defaults live in `backend/app/core/default_config.py` and are exposed via `settings.BRAND_*` in `backend/app/core/config.py` (a Platform Admin can override them live under Admin -> Settings).

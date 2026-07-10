@@ -210,7 +210,7 @@ async def ping_workspaces(target: Optional[str] = None, timeout_seconds: float =
         return {
             "count": 0,
             "results": [],
-            "note": "No target workspaces are configured. Add them under target_workspaces in configuration.yaml.",
+            "note": "No target workspaces are configured. Add them under Admin -> Settings -> Target Workspaces.",
         }
 
     # Ping all targets concurrently — independent network calls.

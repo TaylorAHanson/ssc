@@ -1,18 +1,9 @@
 import os
 
-def load_config_yaml():
-    import yaml
-    paths = ["configuration.yaml", "../configuration.yaml"]
-    for p in paths:
-        if os.path.exists(p):
-            try:
-                with open(p, 'r') as f:
-                    return yaml.safe_load(f) or {}
-            except Exception:
-                pass
-    return {}
-
-_yaml_config = load_config_yaml()
+# Single source of truth: the live process-wide config built from the in-code
+# defaults (default_config.py) in config.py. Importing the same object here
+# means settings-store overrides applied at runtime are reflected immediately.
+from app.core.config import _yaml_config
 
 def is_feature_enabled(feature_flag: str) -> bool:
     """

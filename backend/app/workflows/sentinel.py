@@ -28,10 +28,11 @@ Pipeline:
 
 import asyncio
 import glob
+import html
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
 from app.core.config import settings
@@ -466,6 +467,7 @@ async def run_discovery(db, request) -> Dict[str, Any]:
                 violation_record = {
                     "resource_id": resource.get("id"),
                     "resource_type": resource.get("type"),
+                    "owner": resource.get("owner"),
                     "policy": policy_name,
                     "action": action,
                     "reason": result.get(
@@ -810,8 +812,12 @@ def _active_violations(state_ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         out.append({
             "resource_id": v.get("resource_id"),
             "resource_type": v.get("resource_type"),
+            # Owner is captured on newer records; fall back to the OPA input
+            # snapshot for runs that predate the top-level field.
+            "owner": v.get("owner") or ((v.get("input_context") or {}).get("resource") or {}).get("owner"),
             "policy": v.get("policy", "unknown"),
             "reason": v.get("reason", ""),
+            "issue_count": len(v.get("violation_reasons") or []),
             "severity": sev,
         })
     return out
@@ -871,17 +877,326 @@ def _digest_should_emit(db, request) -> bool:
     return last_local_date < now_local.date()
 
 
-def _violations_table_html(rows: List[Dict[str, Any]]) -> str:
-    body = "".join(
-        f"<tr><td>{r['severity']}</td><td>{r['policy']}</td>"
-        f"<td>{r.get('resource_type','')}</td><td><code>{r.get('resource_id','')}</code></td>"
-        f"<td>{r.get('reason','')}</td></tr>"
-        for r in rows
+# ---------------------------------------------------------------------------
+# Governance email rendering
+# ---------------------------------------------------------------------------
+# All styles are INLINE (no reliance on <style> blocks) so the layout survives
+# Gmail/Outlook/Apple Mail, which strip or ignore head CSS. Tables use
+# role="presentation" for layout so screen readers + Outlook behave.
+# (label, text color, background, border) per severity tier.
+_SEV_META = {
+    "HIGH": ("High", "#B91C1C", "#FEE2E2", "#FCA5A5"),
+    "MEDIUM": ("Medium", "#B45309", "#FEF3C7", "#FCD34D"),
+    "LOW": ("Low", "#334155", "#EEF2F7", "#CBD5E1"),
+}
+_SEV_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+
+
+def _esc(value: Any) -> str:
+    """HTML-escape any cell value (policy reasons can contain arbitrary text)."""
+    return html.escape("" if value is None else str(value))
+
+
+def _sev_chip(sev: str) -> str:
+    label, fg, bg, border = _SEV_META.get(sev, _SEV_META["LOW"])
+    return (
+        '<span style="display:inline-block;padding:3px 10px;border-radius:9999px;'
+        'font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;'
+        f'color:{fg};background:{bg};border:1px solid {border};white-space:nowrap;">{label}</span>'
+    )
+
+
+def _summary_cards_html(rows: List[Dict[str, Any]]) -> str:
+    """A row of three stat cards (HIGH / MEDIUM / LOW counts)."""
+    counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    for r in rows:
+        counts[r["severity"]] = counts.get(r["severity"], 0) + 1
+    cells = []
+    for sev in ("HIGH", "MEDIUM", "LOW"):
+        label, fg, bg, border = _SEV_META[sev]
+        cells.append(
+            '<td width="33.33%" style="border:0;padding:5px;vertical-align:top;">'
+            f'<div style="background:{bg};border:1px solid {border};border-radius:12px;padding:16px 12px;text-align:center;">'
+            f'<div style="font-size:30px;font-weight:800;line-height:1;color:{fg};">{counts[sev]}</div>'
+            f'<div style="margin-top:8px;font-size:11px;font-weight:700;letter-spacing:.08em;'
+            f'text-transform:uppercase;color:{fg};">{label}</div>'
+            '</div></td>'
+        )
+    return (
+        '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" '
+        'style="border-collapse:separate;width:100%;margin:0 0 24px 0;"><tr>'
+        + "".join(cells)
+        + '</tr></table>'
+    )
+
+
+def _owner_html(owner: Any, *, small: bool = False) -> str:
+    """Render the responsible party: an email verbatim, a service-principal id
+    behind an "SP" chip, or a muted "Unknown" when we couldn't resolve one."""
+    o = ("" if owner is None else str(owner)).strip()
+    if not o:
+        return '<span style="color:#94a3b8;">Unknown</span>'
+    if "@" in o:
+        return f'<span style="color:#0f172a;word-break:break-word;">{_esc(o)}</span>'
+    chip = (
+        '<span style="display:inline-block;font-size:10px;font-weight:700;color:#475569;'
+        'background:#e2e8f0;padding:1px 5px;border-radius:4px;margin-right:5px;vertical-align:middle;">SP</span>'
     )
     return (
-        "<table><thead><tr><th>Severity</th><th>Policy</th><th>Type</th>"
-        f"<th>Resource</th><th>Reason</th></tr></thead><tbody>{body}</tbody></table>"
+        f'{chip}<code style="font-size:11px;color:#334155;word-break:break-all;">{_esc(o)}</code>'
     )
+
+
+def _truncate_reason(text: Any, limit: int = 160) -> str:
+    """Collapse whitespace + multi-reason concatenations to a short one-liner.
+
+    Full detail lives in the app; the email only needs the gist so a resource
+    with a dozen sub-reasons can't blow up a whole row (or clip the message)."""
+    t = " ".join(("" if text is None else str(text)).split())
+    if len(t) <= limit:
+        return t
+    return t[:limit].rstrip(" .,;:") + "\u2026"
+
+
+def _section_heading(title: str, sub: str = "") -> str:
+    return (
+        '<div style="margin:30px 0 12px 0;">'
+        f'<div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#0f172a;">{title}</div>'
+        + (f'<div style="font-size:12px;color:#64748b;margin-top:3px;">{sub}</div>' if sub else "")
+        + "</div>"
+    )
+
+
+def _violations_table_html(rows: List[Dict[str, Any]], cap: Optional[int] = None) -> str:
+    """Detailed per-violation table (severity, policy, resource, owner, reason).
+
+    Reasons are truncated to a one-liner and the list is capped at ``cap`` with a
+    "+N more" footer row, so the table stays compact even with many rows."""
+    def _th(text: str, width: str, radius: str = "") -> str:
+        return (
+            f'<th width="{width}" style="text-align:left;padding:11px 14px;background:#0f172a;color:#e2e8f0;'
+            f'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;border:0;{radius}">'
+            f'{text}</th>'
+        )
+
+    header = (
+        "<tr>"
+        + _th("Severity", "72", "border-top-left-radius:10px;")
+        + _th("Policy", "110")
+        + _th("Resource", "150")
+        + _th("Owner", "130")
+        + _th("Reason", "", "border-top-right-radius:10px;")
+        + "</tr>"
+    )
+
+    total = len(rows)
+    shown = rows[:cap] if cap else rows
+
+    # table-layout:fixed keeps columns at their declared widths so text WRAPS
+    # inside the cell instead of stretching the table past the email frame.
+    body_rows = []
+    for i, r in enumerate(shown):
+        bg = "#ffffff" if i % 2 == 0 else "#f8fafc"
+        cell = "padding:13px 14px;border:0;border-bottom:1px solid #eef2f7;vertical-align:top;word-break:break-word;overflow-wrap:anywhere;"
+        issue_count = int(r.get("issue_count") or 0)
+        issue_badge = (
+            f'<span style="display:inline-block;margin-left:6px;font-size:10px;font-weight:700;color:#B91C1C;'
+            f'background:#FEE2E2;padding:1px 6px;border-radius:9999px;white-space:nowrap;">{issue_count} issues</span>'
+            if issue_count > 1 else ""
+        )
+        body_rows.append(
+            f'<tr style="background:{bg};">'
+            f'<td style="{cell}">{_sev_chip(r["severity"])}</td>'
+            f'<td style="{cell}font-size:13px;color:#0f172a;font-weight:600;">{_esc(r.get("policy"))}</td>'
+            f'<td style="{cell}font-size:12px;color:#334155;">'
+            f'<div style="font-weight:600;color:#64748b;text-transform:capitalize;margin-bottom:3px;">{_esc(r.get("resource_type"))}</div>'
+            f'<code style="font-size:12px;color:#0f172a;background:#f1f5f9;padding:2px 6px;border-radius:4px;word-break:break-all;">{_esc(r.get("resource_id"))}</code>'
+            '</td>'
+            f'<td style="{cell}font-size:12px;color:#334155;">{_owner_html(r.get("owner"))}</td>'
+            f'<td style="{cell}font-size:13px;color:#475569;line-height:1.5;">{_esc(_truncate_reason(r.get("reason")))}{issue_badge}</td>'
+            "</tr>"
+        )
+
+    if cap and total > cap:
+        body_rows.append(
+            '<tr><td colspan="5" style="padding:12px 14px;border:0;background:#f8fafc;'
+            'font-size:13px;color:#64748b;font-style:italic;">'
+            f'+ {total - cap} more high-severity violation(s) &mdash; see the full report below.'
+            "</td></tr>"
+        )
+
+    return (
+        '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" '
+        'style="border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;'
+        'border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin:0;">'
+        f"<thead>{header}</thead><tbody>{''.join(body_rows)}</tbody></table>"
+    )
+
+
+def _severity_summary_table_html(rows: List[Dict[str, Any]]) -> str:
+    """Aggregate non-HIGH violations by policy + severity (count only).
+
+    Keeps the digest compact at scale: hundreds of medium/low findings collapse
+    to a handful of rows instead of one row each."""
+    counts: Dict[tuple, int] = {}
+    for r in rows:
+        key = (r.get("policy", "unknown"), r["severity"])
+        counts[key] = counts.get(key, 0) + 1
+    items = sorted(counts.items(), key=lambda kv: (_SEV_ORDER.get(kv[0][1], 3), -kv[1]))
+
+    def _th(text: str, align: str, radius: str = "") -> str:
+        return (
+            f'<th style="text-align:{align};padding:10px 14px;background:#0f172a;color:#e2e8f0;'
+            f'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;border:0;{radius}">'
+            f'{text}</th>'
+        )
+
+    header = (
+        "<tr>"
+        + _th("Policy", "left", "border-top-left-radius:10px;")
+        + _th("Severity", "left")
+        + _th("Count", "right", "border-top-right-radius:10px;")
+        + "</tr>"
+    )
+    body = []
+    for i, ((policy, sev), count) in enumerate(items):
+        bg = "#ffffff" if i % 2 == 0 else "#f8fafc"
+        cell = "padding:11px 14px;border:0;border-bottom:1px solid #eef2f7;vertical-align:middle;"
+        body.append(
+            f'<tr style="background:{bg};">'
+            f'<td style="{cell}font-size:13px;color:#0f172a;font-weight:600;word-break:break-word;">{_esc(policy)}</td>'
+            f'<td style="{cell}">{_sev_chip(sev)}</td>'
+            f'<td style="{cell}text-align:right;font-size:15px;font-weight:800;color:#0f172a;">{count}</td>'
+            "</tr>"
+        )
+    return (
+        '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" '
+        'style="border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;'
+        'border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin:0;">'
+        f"<thead>{header}</thead><tbody>{''.join(body)}</tbody></table>"
+    )
+
+
+def _cta_html(app_url: str, brand_color: str, label: str = "See the full report") -> str:
+    """A 'See the full report' button linking to the Sentinel page.
+
+    Falls back to a plain-text note when no app URL is configured so the intent
+    ("this is a summary — the full, filterable list lives in the app") is always
+    conveyed."""
+    if not app_url:
+        return (
+            '<p style="margin:26px 0 0 0;font-size:13px;line-height:1.5;color:#64748b;">'
+            "This is a summary of the latest scan. Open the Enforcement Sentinel in the "
+            "app for the complete, filterable list of violations.</p>"
+        )
+    url = _esc(app_url.rstrip("/") + "/governance/sentinel")
+    return (
+        '<table role="presentation" cellpadding="0" cellspacing="0" '
+        'style="border-collapse:separate;margin:28px 0 0 0;"><tr>'
+        f'<td style="border:0;border-radius:8px;background:{brand_color};">'
+        f'<a href="{url}" style="display:inline-block;padding:13px 26px;color:#ffffff;'
+        f'text-decoration:none;font-size:14px;font-weight:600;">{_esc(label)} &rarr;</a>'
+        '</td></tr></table>'
+    )
+
+
+def _all_clear_html() -> str:
+    return (
+        '<div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:12px;padding:22px 24px;">'
+        '<div style="font-size:16px;font-weight:700;color:#065f46;">&#10003; All clear</div>'
+        '<div style="margin-top:6px;font-size:14px;color:#047857;line-height:1.5;">'
+        'No active policy violations across the workspace in the latest scan.</div>'
+        '</div>'
+    )
+
+
+# Cap on the number of HIGH-severity rows shown in full detail. Beyond this the
+# table shows a "+N more" footer and points at the app. Keeps the email small
+# and under mail-client clipping limits (Gmail clips ~102KB) even at scale.
+_HIGH_DETAIL_CAP = 25
+
+
+def render_digest_html(rows: List[Dict[str, Any]], brand_color: str = "#2563eb", app_url: str = "") -> str:
+    """Compose the daily-digest email body. Designed to scale to hundreds of
+    violations:
+
+      * **Summary cards** — HIGH / MEDIUM / LOW totals.
+      * **High severity** — full per-violation detail, capped at
+        ``_HIGH_DETAIL_CAP`` with a "+N more" pointer.
+      * **Medium & low** — an aggregated policy x severity count table, not one
+        row per finding.
+      * **See the full report** — a link to the app for the complete list.
+
+    Shared by the scheduled digest and the on-demand send so the two never drift.
+    """
+    cta = _cta_html(app_url, brand_color)
+
+    def _lead(text: str) -> str:
+        return f'<p style="margin:0 0 20px 0;font-size:16px;line-height:1.5;color:#0f172a;">{text}</p>'
+
+    if not rows:
+        return _lead("Daily Enforcement Sentinel digest") + _all_clear_html() + cta
+
+    high = [r for r in rows if r["severity"] == "HIGH"]
+    lower = [r for r in rows if r["severity"] != "HIGH"]
+
+    parts = [
+        _lead(
+            f'Daily Enforcement Sentinel digest &mdash; <strong>{len(rows)}</strong> '
+            "active policy violation(s) across the workspace."
+        ),
+        _summary_cards_html(rows),
+    ]
+
+    if high:
+        sub = (
+            f"Showing the first {_HIGH_DETAIL_CAP} of {len(high)}."
+            if len(high) > _HIGH_DETAIL_CAP
+            else "Every high-severity violation, in full."
+        )
+        parts.append(_section_heading(f"High severity &mdash; {len(high)}", sub))
+        parts.append(_violations_table_html(high, cap=_HIGH_DETAIL_CAP))
+
+    if lower:
+        parts.append(
+            _section_heading(
+                f"Medium &amp; low severity &mdash; {len(lower)}",
+                "Grouped by policy. Open the full report for per-resource detail.",
+            )
+        )
+        parts.append(_severity_summary_table_html(lower))
+
+    parts.append(cta)
+    return "".join(parts)
+
+
+def digest_schedule_info() -> Dict[str, Any]:
+    """Describe the anchored daily-digest schedule for the UI (hour, timezone,
+    a human label, and the next fire time as naive-UTC ISO)."""
+    from zoneinfo import ZoneInfo
+
+    tz_name = getattr(settings, "ENFORCEMENT_DIGEST_TIMEZONE", "America/Los_Angeles") or "America/Los_Angeles"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:  # noqa: BLE001 - bad tz string shouldn't break the UI
+        tz_name = "America/Los_Angeles"
+        tz = ZoneInfo(tz_name)
+
+    hour = int(getattr(settings, "ENFORCEMENT_DIGEST_HOUR_LOCAL", 7) or 0)
+    hour = max(0, min(23, hour))
+
+    now_local = datetime.now(timezone.utc).astimezone(tz)
+    next_local = now_local.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if next_local <= now_local:
+        next_local += timedelta(days=1)
+    next_utc = next_local.astimezone(timezone.utc).replace(tzinfo=None)
+
+    return {
+        "hour": hour,
+        "timezone": tz_name,
+        "label": f"Daily at {hour:02d}:00 {tz_name}",
+        "next_run": next_utc.isoformat() + "Z",
+    }
 
 
 async def run_notify(db, request) -> Dict[str, Any]:
@@ -904,8 +1219,16 @@ async def run_notify(db, request) -> Dict[str, Any]:
         return {"notified": False, "reason": "no_recipient"}
 
     notifier = NotificationProvider()
+    brand_color = (getattr(settings, "BRAND_COLOR_PRIMARY", "") or "#2563eb").strip() or "#2563eb"
+    app_url = (getattr(settings, "APP_BASE_URL", "") or "").strip()
+    cta = _cta_html(app_url, brand_color)
     sent_immediate = 0
     sent_digest = False
+
+    def _lead(text: str, accent: str = "#0f172a") -> str:
+        return (
+            f'<p style="margin:0 0 20px 0;font-size:16px;line-height:1.5;color:{accent};">{text}</p>'
+        )
 
     # --- Immediate HIGH (transition-gated) ---
     high_rows = [r for r in rows if r["severity"] == "HIGH"]
@@ -916,9 +1239,12 @@ async def run_notify(db, request) -> Dict[str, Any]:
     if new_high:
         subject = f"[Enforcement] {len(new_high)} new high-severity violation(s)"
         body = (
-            f"<p><strong>{len(new_high)}</strong> new high-severity policy violation(s) "
-            "were detected in the latest Enforcement Sentinel scan and require attention.</p>"
-            + _violations_table_html(new_high)
+            _lead(
+                f'<strong style="color:#B91C1C;">{len(new_high)}</strong> new high-severity policy '
+                "violation(s) were detected in the latest Enforcement Sentinel scan and require attention."
+            )
+            + _violations_table_html(new_high, cap=_HIGH_DETAIL_CAP)
+            + cta
         )
         try:
             await notifier.send_email(to=recipient, subject=subject, body=body, is_html=True)
@@ -928,14 +1254,7 @@ async def run_notify(db, request) -> Dict[str, Any]:
 
     # --- Daily digest (anchored) ---
     if _digest_should_emit(db, request):
-        if rows:
-            body = (
-                f"<p>Daily Enforcement Sentinel digest — <strong>{len(rows)}</strong> "
-                "active policy violation(s) across the workspace.</p>"
-                + _violations_table_html(sorted(rows, key=lambda r: {"HIGH": 0, "MEDIUM": 1, "LOW": 2}.get(r["severity"], 3)))
-            )
-        else:
-            body = "<p>Daily Enforcement Sentinel digest — no active policy violations. All clear.</p>"
+        body = render_digest_html(rows, brand_color, app_url)
         try:
             await notifier.send_email(
                 to=recipient, subject="[Enforcement] Daily governance digest", body=body, is_html=True

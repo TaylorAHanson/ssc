@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { ShieldAlert, AlertTriangle, Search, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, ClipboardList, SlidersHorizontal } from 'lucide-react';
+import { ShieldAlert, AlertTriangle, Search, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, ClipboardList, SlidersHorizontal, Mail, Send, Clock } from 'lucide-react';
 import { api } from '../../services/api';
 import { CertificationChecklist } from '../../components/admin/CertificationChecklist';
 import { useState, useMemo, useEffect, useCallback } from 'react';
@@ -43,6 +43,24 @@ const formatReason = (v: any) => {
     return v.reason;
 };
 
+// Resolve the responsible party for a violation. Newer runs carry a top-level
+// `owner`; older ones only have it in the OPA input snapshot.
+const resolveOwner = (v: any): string =>
+    (v?.owner || v?.input_context?.resource?.owner || '').toString().trim();
+
+// Render an owner as an email (verbatim) or a service-principal id behind an
+// "SP" chip; muted "Unknown" when unresolved.
+const OwnerCell = ({ owner }: { owner: string }) => {
+    if (!owner) return <span className="text-gray-400">Unknown</span>;
+    if (owner.includes('@')) return <span className="text-gray-700 break-all">{owner}</span>;
+    return (
+        <span className="inline-flex items-center gap-1">
+            <span className="text-[9px] font-bold text-gray-600 bg-gray-200 px-1.5 py-0.5 rounded">SP</span>
+            <span className="font-mono text-[11px] text-gray-600 break-all">{owner}</span>
+        </span>
+    );
+};
+
 export function EnforcementSentinel() {
     const [isRunning, setIsRunning] = useState(false);
     // Keep the primary surface to a single "Run Scan" action; scan scope lives
@@ -70,6 +88,42 @@ export function EnforcementSentinel() {
     const [isLoadingRuns, setIsLoadingRuns] = useState(false);
 
     const [schedules, setSchedules] = useState<any>(null);
+
+    // On-demand digest modal
+    const [digestOpen, setDigestOpen] = useState(false);
+    const [digestInfo, setDigestInfo] = useState<any>(null);
+    const [digestEmail, setDigestEmail] = useState('');
+    const [digestSending, setDigestSending] = useState(false);
+    const [digestResult, setDigestResult] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+    const openDigestModal = async () => {
+        setDigestOpen(true);
+        setDigestResult(null);
+        try {
+            const info = await api.getDigestInfo();
+            setDigestInfo(info);
+            setDigestEmail(info.default_recipient || '');
+        } catch (e: any) {
+            setDigestInfo(null);
+            setDigestResult({ type: 'error', text: e?.message || 'Failed to load digest info' });
+        }
+    };
+
+    const handleSendDigest = async () => {
+        setDigestSending(true);
+        setDigestResult(null);
+        try {
+            const res = await api.sendDigestNow(digestEmail.trim());
+            setDigestResult({
+                type: 'success',
+                text: `Digest sent to ${res.recipient} (${res.violation_count} active violation${res.violation_count === 1 ? '' : 's'}).`,
+            });
+        } catch (e: any) {
+            setDigestResult({ type: 'error', text: e?.message || 'Failed to send digest' });
+        } finally {
+            setDigestSending(false);
+        }
+    };
 
     // Debounce search query
     useEffect(() => {
@@ -244,14 +298,24 @@ export function EnforcementSentinel() {
                             )}
                         </div>
 
-                        <Button
-                            onClick={() => handleRunSentinel()}
-                            disabled={isRunning}
-                            className="h-9 whitespace-nowrap self-start sm:self-auto text-white"
-                        >
-                            <Search className="w-4 h-4 mr-1.5" />
-                            {isRunning ? 'Starting...' : 'Run Scan'}
-                        </Button>
+                        <div className="flex items-center gap-2 self-start sm:self-auto">
+                            <Button
+                                variant="outline"
+                                onClick={openDigestModal}
+                                className="h-9 whitespace-nowrap"
+                            >
+                                <Mail className="w-4 h-4 mr-1.5" />
+                                Email Digest
+                            </Button>
+                            <Button
+                                onClick={() => handleRunSentinel()}
+                                disabled={isRunning}
+                                className="h-9 whitespace-nowrap text-white"
+                            >
+                                <Search className="w-4 h-4 mr-1.5" />
+                                {isRunning ? 'Starting...' : 'Run Scan'}
+                            </Button>
+                        </div>
                     </div>
 
                     {/* Everything else (scan scope + destructive enforcement) lives
@@ -726,7 +790,11 @@ export function EnforcementSentinel() {
                                                                         <td className="p-3 px-4 font-mono text-xs text-gray-900">
                                                                             <div className="flex flex-col">
                                                                                 <span className="text-[10px] text-gray-700 font-semibold uppercase tracking-wider font-sans mb-0.5">{v.resource_type}</span>
-                                                                                {v.resource_id}
+                                                                                <span className="break-all">{v.resource_id}</span>
+                                                                                <span className="mt-1 flex items-center gap-1 font-sans text-[10px] text-gray-500">
+                                                                                    <span className="uppercase tracking-wider">Owner</span>
+                                                                                    <OwnerCell owner={resolveOwner(v)} />
+                                                                                </span>
                                                                             </div>
                                                                         </td>
                                                                         {activeTab === 'all' && <td className="p-3 text-gray-700">{v.policy.replace(/_/g, ' ')}</td>}
@@ -828,18 +896,9 @@ export function EnforcementSentinel() {
                                     </span>
                                 </div>
                                 <div><span className="font-semibold text-gray-500 block mb-1">Action</span> <span className="font-mono font-bold text-gray-700">{selectedViolation.action}</span></div>
+                                <div className="col-span-2"><span className="font-semibold text-gray-500 block mb-1">Owner</span> <OwnerCell owner={resolveOwner(selectedViolation)} /></div>
                                 <div className="col-span-2"><span className="font-semibold text-gray-500 block mb-1">Reason</span> <div className="mt-2 text-gray-700 leading-relaxed">{formatReason(selectedViolation)}</div></div>
                             </div>
-                            
-                            {selectedViolation.input_context && (
-                                <div>
-                                    <h4 className="text-sm font-semibold text-gray-900 mb-2">OPA Input Parameters</h4>
-                                    <div className="text-xs text-gray-500 mb-2">The exact data payload sent to Open Policy Agent (Rego) during the evaluation.</div>
-                                    <pre className="bg-gray-900 p-4 rounded-lg border border-gray-700 text-xs font-mono text-blue-400 overflow-x-auto whitespace-pre-wrap break-words shadow-inner">
-                                        {JSON.stringify(selectedViolation.input_context, null, 2)}
-                                    </pre>
-                                </div>
-                            )}
                             
                             <div>
                                 <h4 className="text-sm font-semibold text-gray-900 mb-2">Full Context Data</h4>
@@ -861,6 +920,80 @@ export function EnforcementSentinel() {
                             >
                                 {actionLoading === selectedViolation.resource_id ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
                                 Execute Action
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* On-demand digest modal */}
+            {digestOpen && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => !digestSending && setDigestOpen(false)}>
+                    <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                        <div className="p-5 border-b border-gray-100 flex items-start justify-between gap-4">
+                            <div className="flex items-center gap-2">
+                                <Mail className="w-5 h-5 text-gray-700" />
+                                <h3 className="text-lg font-semibold text-gray-900">Email governance digest</h3>
+                            </div>
+                            <button onClick={() => !digestSending && setDigestOpen(false)} className="text-gray-400 hover:text-gray-600">
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+
+                        <div className="p-5 space-y-4">
+                            <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 text-blue-800 p-3 rounded-md text-sm">
+                                <Clock className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                                <div>
+                                    {digestInfo ? (
+                                        <>
+                                            <span>The digest is scheduled <strong>{digestInfo.label?.toLowerCase()}</strong>
+                                            {digestInfo.next_run ? <> — next send {formatPacific(digestInfo.next_run, { year: undefined })}</> : null}.</span>
+                                            <span> You can send it now to any address below.</span>
+                                        </>
+                                    ) : (
+                                        <span>Send the current digest now to any address below.</span>
+                                    )}
+                                </div>
+                            </div>
+
+                            {digestInfo && (
+                                <div className="text-sm text-gray-600">
+                                    {digestInfo.latest_run_at ? (
+                                        <>Based on the latest scan from <span className="font-medium text-gray-800">{formatPacific(digestInfo.latest_run_at, { year: undefined })}</span> — <span className="font-medium text-gray-800">{digestInfo.active_violations}</span> active violation{digestInfo.active_violations === 1 ? '' : 's'}.</>
+                                    ) : (
+                                        <span className="text-amber-700">No completed scan yet — run a scan first to generate a digest.</span>
+                                    )}
+                                </div>
+                            )}
+
+                            <div className="space-y-1.5">
+                                <label className="text-sm font-medium text-gray-800">Recipient email</label>
+                                <input
+                                    type="text"
+                                    value={digestEmail}
+                                    onChange={(e) => setDigestEmail(e.target.value)}
+                                    placeholder="name@company.com"
+                                    className="w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 border-gray-200"
+                                />
+                                <p className="text-xs text-gray-500">Separate multiple addresses with commas.</p>
+                            </div>
+
+                            {digestResult && (
+                                <div className={`p-3 rounded-md text-sm ${digestResult.type === 'success' ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'}`}>
+                                    {digestResult.text}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+                            <Button variant="outline" onClick={() => setDigestOpen(false)} disabled={digestSending}>Close</Button>
+                            <Button
+                                onClick={handleSendDigest}
+                                disabled={digestSending || !digestEmail.trim() || (digestInfo && !digestInfo.latest_run_id)}
+                                className="flex items-center text-white"
+                            >
+                                {digestSending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
+                                Send now
                             </Button>
                         </div>
                     </div>

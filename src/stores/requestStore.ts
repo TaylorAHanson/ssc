@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Request, RequestType, Environment, Approval, ApprovalAction, Delegation, DelegationCreate } from '../types';
-import { api, getContent } from '../services/api';
+import { api, getBranding } from '../services/api';
 
 interface BannerData {
   message: string;
@@ -157,7 +157,10 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
 
   fetchBannerMessage: async () => {
     try {
-      const bannerData = await getContent('system-banner') as BannerData;
+      // The site-wide banner is served via /branding (edited under
+      // Admin -> Settings -> System Banner, persisted as a DB override).
+      const branding = await getBranding();
+      const bannerData = (branding?.system_banner || null) as BannerData | null;
       if (bannerData && bannerData.active && bannerData.message) {
         set({
           bannerMessage: bannerData.message,

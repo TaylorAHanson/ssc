@@ -155,29 +155,10 @@ export async function getFormVersions(formPath: string): Promise<FormVersionInfo
 }
 
 /**
- * Content Management API
+ * Content API (read-only). Content files (events, community links, training)
+ * are edited in-repo / synced; the app only reads them here. `getContent` backs
+ * the Events page and any other consumers.
  */
-export interface ContentInfo {
-  filename: string;
-  title: string;
-}
-
-export interface ContentVersionInfo {
-  filename: string;
-  date: string;
-  is_active: boolean;
-}
-
-export async function listContent(): Promise<ContentInfo[]> {
-  const response = await fetch(`${API_BASE_URL}/content/content`, {
-    headers: getHeaders()
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to list content: ${response.statusText}`);
-  }
-  return response.json();
-}
-
 export async function getContent(filename: string, version?: string, params?: Record<string, string>): Promise<Record<string, any> | any[]> {
   const url = new URL(`${API_BASE_URL}/content/content/${filename}`, window.location.origin);
   if (version) {
@@ -191,35 +172,6 @@ export async function getContent(filename: string, version?: string, params?: Re
   });
   if (!response.ok) {
     throw new Error(`Failed to get content: ${response.statusText}`);
-  }
-  return response.json();
-}
-
-export async function saveContent(
-  filename: string,
-  content: Record<string, any> | any[],
-  createVersion: boolean = true
-): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/content/content/${filename}`, {
-    method: 'PUT',
-    headers: getHeaders(),
-    body: JSON.stringify({
-      content,
-      create_version: createVersion,
-    }),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail || `Failed to save content: ${response.statusText}`);
-  }
-}
-
-export async function getContentVersions(filename: string): Promise<ContentVersionInfo[]> {
-  const response = await fetch(`${API_BASE_URL}/content/content/${filename}/versions`, {
-    headers: getHeaders()
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to get content versions: ${response.statusText}`);
   }
   return response.json();
 }
@@ -556,12 +508,182 @@ export async function getBranding(): Promise<{
   self_service_center?: SelfServiceCenterConfig;
   community_links?: CommunityLinksConfig;
   workflow_authoring_locked?: boolean;
+  system_banner?: { active?: boolean; type?: 'info' | 'alert' | 'warning' | 'success'; message?: string };
 }> {
   const response = await fetch(`${API_BASE_URL}/branding`, {
     headers: getHeaders()
   });
   if (!response.ok) {
     throw new Error(`Failed to get branding: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+// ---------------------------------------------------------------------------
+// Admin runtime settings (change-on-the-fly configuration overrides)
+// ---------------------------------------------------------------------------
+
+/** A single row in a collection setting (e.g. one target workspace). */
+export type CollectionRow = Record<string, string | number | boolean | null>;
+
+/** Column spec for a collection (list-of-rows) setting. */
+export interface SettingColumn {
+  key: string;
+  label: string;
+  type: 'string' | 'int' | 'bool';
+  required?: boolean;
+  placeholder?: string;
+  help?: string;
+}
+
+// --- Catalog value shapes (type === 'catalog') -----------------------------
+export interface SelfServiceCard {
+  title: string;
+  description?: string;
+  prompt?: string;
+  route?: string;
+  allowed_personas?: string[];
+}
+export interface SelfServiceCategory {
+  title: string;
+  icon?: string;
+  cards: SelfServiceCard[];
+}
+export interface SelfServiceCatalog {
+  enabled: boolean;
+  categories: SelfServiceCategory[];
+}
+
+export interface CommunityLink {
+  title: string;
+  url: string;
+  icon?: string;
+  description?: string;
+}
+export interface CommunityCategory {
+  name: string;
+  icon?: string;
+  links: CommunityLink[];
+}
+export interface CommunityLinksCatalog {
+  enabled: boolean;
+  categories: CommunityCategory[];
+}
+
+export interface EmbeddedApp {
+  id: string;
+  title: string;
+  url: string;
+  icon?: string;
+  group?: string;
+  description?: string;
+  allowed_personas?: string[];
+}
+
+export type CatalogValue = SelfServiceCatalog | CommunityLinksCatalog | EmbeddedApp[];
+
+/** Any value a setting can hold when read or written. */
+export type SettingWriteValue =
+  | boolean
+  | number
+  | string
+  | CollectionRow[]
+  | string[]
+  | CatalogValue;
+
+export interface SettingField {
+  group: string;
+  key: string;
+  label: string;
+  type: 'bool' | 'int' | 'string' | 'color' | 'select' | 'textarea' | 'collection' | 'string_list' | 'catalog';
+  help?: string;
+  min?: number;
+  max?: number;
+  options?: string[];
+  // Present when type === 'collection'.
+  columns?: SettingColumn[];
+  add_label?: string;
+  // Present when type === 'catalog': which visual editor to render.
+  kind?: 'self_service' | 'community_links' | 'embedded_apps';
+  value: SettingWriteValue | null;
+}
+
+export interface ReadonlySettingField {
+  group: string;
+  key: string;
+  label: string;
+  value: boolean | number | string | null;
+}
+
+export interface SettingsState {
+  fields: SettingField[];
+  readonly: ReadonlySettingField[];
+  group_order: string[];
+  group_descriptions?: Record<string, string>;
+}
+
+/** Get the editable settings spec + current values (Platform Admin only). */
+export async function getSettings(): Promise<SettingsState> {
+  const response = await fetch(`${API_BASE_URL}/settings`, { headers: getHeaders() });
+  if (!response.ok) {
+    throw new Error(`Failed to get settings: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/** Apply + persist a batch of setting overrides. Takes effect immediately. */
+export async function updateSettings(
+  changes: Record<string, SettingWriteValue>
+): Promise<SettingsState> {
+  const response = await fetch(`${API_BASE_URL}/settings`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify({ changes }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to update settings: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+// ---------------------------------------------------------------------------
+// Governance — on-demand Enforcement Sentinel digest
+// ---------------------------------------------------------------------------
+
+export interface DigestInfo {
+  hour: number;
+  timezone: string;
+  label: string;
+  next_run: string;
+  default_recipient: string;
+  latest_run_id: string | null;
+  latest_run_at: string | null;
+  active_violations: number;
+}
+
+/** Schedule + default recipient + latest-run summary for the digest modal. */
+export async function getDigestInfo(): Promise<DigestInfo> {
+  const response = await fetch(`${API_BASE_URL}/governance/digest-info`, { headers: getHeaders() });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to load digest info: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/** Send the current digest now to one or more (comma-separated) addresses. */
+export async function sendDigestNow(
+  email: string
+): Promise<{ sent: boolean; recipient: string; violation_count: number; source_run_id: string }> {
+  const response = await fetch(`${API_BASE_URL}/governance/digest/send`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ email }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to send digest: ${response.statusText}`);
   }
   return response.json();
 }
@@ -2592,6 +2714,8 @@ export const api = {
   getOdpsHistory,
   deleteOdps,
   getSystemSchedules,
+  getDigestInfo,
+  sendDigestNow,
   getDatabricksDashboards,
   getDatabricksJobs,
   getDatabricksApps,

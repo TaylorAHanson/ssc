@@ -1,4 +1,3 @@
-import os
 import base64
 import logging
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,9 +22,9 @@ class WorkspaceConfig(BaseModel):
     client_secret: Optional[str] = None
     token: Optional[str] = None
     # Where the credentials came from (diagnostic only, never a secret value):
-    # "workspace_env" | "workspace_secret:<scope>" | "environment_sp:<env>" |
-    # "global_default" | "none". Lets `ping_workspaces`/logs show which SP a
-    # workspace resolved to without exposing the secret.
+    # "workspace_sp:<scope>" | "global_default" | "none". Lets
+    # `ping_workspaces`/logs show which SP a workspace resolved to without
+    # exposing the secret.
     credential_source: Optional[str] = None
 
 
@@ -58,46 +57,14 @@ def _read_secret(scope: Optional[str], key: Optional[str]) -> Optional[str]:
     return value
 
 
-def _service_principals_config() -> Dict[str, Any]:
-    """The optional ``service_principals`` block from configuration.yaml."""
-    return _yaml_config.get("service_principals", {}) or {}
+def _target_scope() -> str:
+    """The single, install-wide secret scope holding every target-workspace SP.
 
-
-def _environment_sp_keys(environment: str) -> Dict[str, str]:
-    """Per-environment SP secret coordinates (scope + key names).
-
-    Key names come from configuration.yaml (a constant naming convention)::
-
-        service_principals:
-          environments:
-            dev:
-              client_id_key: "sp_dbxgrc_dev_client_id"
-              client_secret_key: "sp_dbxgrc_dev_client_secret"
-
-    The scope is the one *environment-specific* piece, so it is sourced
-    per-deployment from databricks.yml via ``TARGET_WORKSPACE_SP_SECRET_SCOPE``.
-    Scope precedence (highest first):
-      1. ``environments[<env>].secret_scope``      (explicit per-env, yaml)
-      2. ``TARGET_WORKSPACE_SP_SECRET_SCOPE``       (databricks.yml, per-target)
-      3. ``service_principals.secret_scope``        (configuration.yaml default)
-
-    Returns empty strings when nothing is configured (so the caller skips this
-    tier and falls back to the app's own SP).
+    Sourced from ``settings.TARGET_WORKSPACE_SP_SECRET_SCOPE`` — set in
+    databricks.yml or edited live under Admin -> Settings -> Target Workspaces.
+    The app's own SP must have READ on this scope.
     """
-    cfg = _service_principals_config()
-    env_map = (cfg.get("environments", {}) or {}).get((environment or "").strip().lower(), {}) or {}
-    scope = (
-        env_map.get("secret_scope")
-        or getattr(settings, "TARGET_WORKSPACE_SP_SECRET_SCOPE", "")
-        or cfg.get("secret_scope", "")
-        or ""
-    )
-    return {
-        "secret_scope": scope,
-        "client_id_key": env_map.get("client_id_key", "") or "",
-        "client_secret_key": env_map.get("client_secret_key", "") or "",
-        "token_key": env_map.get("token_key", "") or "",
-    }
+    return getattr(settings, "TARGET_WORKSPACE_SP_SECRET_SCOPE", "") or ""
 
 
 def _resolve_credentials(
@@ -105,51 +72,25 @@ def _resolve_credentials(
 ) -> Tuple[Optional[str], Optional[str], Optional[str], str]:
     """Resolve ``(client_id, client_secret, token, source)`` for one workspace.
 
-    Precedence is highest-first, so the SP strategy can change (or go hybrid)
-    purely through configuration — no code change:
-
-      1. **Per-workspace env vars** — ``client_id_env`` / ``client_secret_env`` /
-         ``token_env`` (back-compat; also a valid override).
-      2. **Per-workspace secret keys** — ``client_id_secret`` /
-         ``client_secret_secret`` / ``token_secret`` (+ optional ``secret_scope``),
-         read from a Databricks secret scope. This is the hybrid escape hatch:
-         a single dev workspace can point at a *different* SP than the rest.
-      3. **Per-environment SP** — the shared SP for the workspace's environment
-         (``service_principals.environments[<env>]``), so e.g. every dev
-         workspace inherits ``sp_dbxgrc_dev`` automatically.
-      4. **Global default** — ``settings.DATABRICKS_*`` (the app's own SP / PAT).
+    Model: one secret scope per installation, and each workspace names the
+    secret KEYS of the service principal it uses inline (``client_id_key`` /
+    ``client_secret_key`` / optional ``token_key``). Workspaces that share an SP
+    reference the same key names. A workspace that leaves them blank falls back
+    to the app's own SP / PAT (``settings.DATABRICKS_*``).
     """
-    # 1. Per-workspace env vars.
-    cid = os.getenv(ws["client_id_env"]) if ws.get("client_id_env") else None
-    csec = os.getenv(ws["client_secret_env"]) if ws.get("client_secret_env") else None
-    tok = os.getenv(ws["token_env"]) if ws.get("token_env") else None
-    if cid or tok:
-        return cid, csec, tok, "workspace_env"
+    scope = _target_scope()
+    cid_key = ws.get("client_id_key")
+    csec_key = ws.get("client_secret_key")
+    tok_key = ws.get("token_key")
 
-    env_keys = _environment_sp_keys(ws.get("environment", ""))
-
-    # 2. Per-workspace secret keys (override a specific workspace's SP).
-    ws_cid_key = ws.get("client_id_secret")
-    ws_csec_key = ws.get("client_secret_secret")
-    ws_tok_key = ws.get("token_secret")
-    if ws_cid_key or ws_tok_key:
-        ws_scope = ws.get("secret_scope") or env_keys["secret_scope"]
-        cid = _read_secret(ws_scope, ws_cid_key) if ws_cid_key else None
-        csec = _read_secret(ws_scope, ws_csec_key) if ws_csec_key else None
-        tok = _read_secret(ws_scope, ws_tok_key) if ws_tok_key else None
+    if scope and (cid_key or tok_key):
+        cid = _read_secret(scope, cid_key) if cid_key else None
+        csec = _read_secret(scope, csec_key) if csec_key else None
+        tok = _read_secret(scope, tok_key) if tok_key else None
         if cid or tok:
-            return cid, csec, tok, f"workspace_secret:{ws_scope}"
+            return cid, csec, tok, f"workspace_sp:{scope}"
 
-    # 3. Per-environment shared SP (the default for most workspaces).
-    if env_keys["client_id_key"] or env_keys["token_key"]:
-        scope = env_keys["secret_scope"]
-        cid = _read_secret(scope, env_keys["client_id_key"]) if env_keys["client_id_key"] else None
-        csec = _read_secret(scope, env_keys["client_secret_key"]) if env_keys["client_secret_key"] else None
-        tok = _read_secret(scope, env_keys["token_key"]) if env_keys["token_key"] else None
-        if cid or tok:
-            return cid, csec, tok, f"environment_sp:{(ws.get('environment') or '').strip().lower()}"
-
-    # 4. Global default SP / PAT.
+    # Fall back to the app's own SP / PAT.
     return (
         settings.DATABRICKS_CLIENT_ID or None,
         settings.DATABRICKS_CLIENT_SECRET or None,
@@ -160,12 +101,12 @@ def _resolve_credentials(
 
 def get_target_workspaces() -> List[WorkspaceConfig]:
     """
-    Get the list of target workspaces configured in configuration.yaml.
-    Falls back to the default workspace in settings if none are configured.
+    Get the configured target workspaces (Admin -> Settings -> Target Workspaces,
+    seeded by default_config.target_workspaces). Falls back to the default
+    workspace in settings if none are configured.
 
-    Each workspace's credentials are resolved via :func:`_resolve_credentials`,
-    which supports a per-environment shared SP with per-workspace overrides (see
-    that function's docstring for precedence).
+    Each workspace's credentials are resolved via :func:`_resolve_credentials`
+    using the install-wide secret scope + the workspace's inline SP key names.
     """
     workspaces_config = _yaml_config.get("target_workspaces", []) or []
 

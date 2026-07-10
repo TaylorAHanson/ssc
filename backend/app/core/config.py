@@ -8,6 +8,13 @@ The Settings class uses pydantic-settings which automatically loads from:
 1. Environment variables
 2. .env file (if present)
 3. Default values (if provided)
+
+Structured, non-secret application config (feature flags, navigation tabs, the
+agent tool registry, branding, the Self-Service Center / Community Links
+catalogs, banner, etc.) is defined in code in ``default_config.py`` and exposed
+here as ``_yaml_config``. There is no external ``configuration.yaml``: a Platform
+Admin edits the change-on-the-fly subset live under Admin -> Settings (persisted
+as DB overrides applied at startup by ``settings_store.load_overrides``).
 """
 from pydantic_settings import BaseSettings
 from pydantic import field_validator, Field
@@ -15,20 +22,14 @@ from typing import List, Union, Any, Optional
 import os
 import re
 import json
-import yaml
+import copy
 
-def load_config_yaml():
-    paths = ["configuration.yaml", "../configuration.yaml"]
-    for p in paths:
-        if os.path.exists(p):
-            try:
-                with open(p, 'r') as f:
-                    return yaml.safe_load(f) or {}
-            except Exception:
-                pass
-    return {}
+from app.core.default_config import DEFAULT_CONFIG
 
-_yaml_config = load_config_yaml()
+# Process-wide live config. A deep copy of the in-code defaults so the settings
+# store can mutate this in place (applying DB overrides) without touching the
+# pristine defaults.
+_yaml_config = copy.deepcopy(DEFAULT_CONFIG)
 _branding = _yaml_config.get("branding", {})
 _notifications = _yaml_config.get("notifications", {})
 _web_search = _yaml_config.get("web_search", {}) or {}
@@ -66,6 +67,11 @@ class Settings(BaseSettings):
     
     # Platform Admin
     PLATFORM_ADMIN_EMAIL: str | None = os.getenv("PLATFORM_ADMIN_EMAIL", "admin@example.com")
+
+    # Public base URL of this app (e.g. https://edh-ssc-....databricksapps.com).
+    # Used to build absolute links in outbound emails (e.g. the Enforcement
+    # Sentinel "Review" button in the governance digest). Blank omits the link.
+    APP_BASE_URL: str = os.getenv("APP_BASE_URL", "")
     
     # API Settings
     API_V1_PREFIX: str = "/api/v1"
@@ -75,7 +81,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     
     # Branding Settings
-    # Loaded from configuration.yaml with fallback to environment variables
+    # In-code defaults (default_config.py) with fallback to environment variables
     BRAND_NAME: str = _brand_name
     # Short, identifier-friendly brand used where the name appears as a slug
     # rather than display text (e.g. provisioned repo-name prefixes, git author).
@@ -246,13 +252,11 @@ class Settings(BaseSettings):
     DATABRICKS_CLIENT_ID: str = ""  # SECRET: Set in .env - Service principal client ID for MWS
     DATABRICKS_CLIENT_SECRET: str = ""  # SECRET: Set in .env - Service principal client secret for MWS
 
-    # Multi-workspace targeting: secret scope holding the per-environment target
-    # SP credentials (keys sp_dbxgrc_<env>_client_id / _client_secret). This is
-    # the one environment-specific piece of the service_principals strategy, so
-    # it's set per-target in databricks.yml rather than in configuration.yaml.
-    # Read at runtime (never injected as plaintext); blank disables the shared-SP
-    # tier so target-workspace credential resolution falls back to the app's own
-    # SP. The env→key map itself lives in configuration.yaml (service_principals).
+    # The single, install-wide secret scope holding every target-workspace SP's
+    # credentials. Each target workspace names its own SP key pair inline (see
+    # target_workspaces in Admin -> Settings). Settable in databricks.yml or
+    # edited live in the admin Settings page; read at runtime (never injected as
+    # plaintext). Blank => target workspaces fall back to the app's own SP.
     TARGET_WORKSPACE_SP_SECRET_SCOPE: str = ""
 
     # Databricks Job Runner (classic compute) — used by BaseDatabricksJobStateMachine
@@ -648,7 +652,7 @@ class Settings(BaseSettings):
     WEB_SEARCH_DEFAULT_DOMAIN: str = "docs.databricks.com"
 
     def web_search_config(self) -> dict:
-        """Normalized web-lookup config from configuration.yaml.
+        """Normalized web-lookup config from the in-code defaults.
 
         Returns a dict with always-sane defaults so callers don't have to
         guard against missing keys. ``allowed_domains`` always includes the

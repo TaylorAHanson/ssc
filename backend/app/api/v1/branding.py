@@ -144,4 +144,7 @@ async def get_branding():
         # When true, this environment locks in-place workflow (Workflow) authoring;
         # the frontend hides edit/publish/delete and steers admins to bundle import.
         "workflow_authoring_locked": settings.WORKFLOW_AUTHORING_LOCKED,
+        # Global site-wide banner ({active, type, message}). Edited live under
+        # Admin -> Settings -> System Banner; the frontend shows it when active.
+        "system_banner": _yaml_config.get("banner") or {},
     }

@@ -5,6 +5,7 @@ from app.db.approval import ApprovalModel
 from app.db.event import EventModel
 from app.db.role_mapping import RoleMappingModel
 from app.db.report_subscription import ReportSubscription
+from app.db.app_setting import AppSettingModel
 from app.db.training import (
     TrainingCompletionModel,
     TrainingTrackModel,
