@@ -30,7 +30,10 @@ class LakebaseResourceHandler(BaseResourceHandler):
                     "tags": dict(getattr(inst, "custom_tags", None) or {}),
                 })
         except Exception as e:  # noqa: BLE001
+            # Re-raise so the Sentinel attributes this to the workspace + classifies
+            # it (auth / permission / network) instead of reporting a silent 0.
             logger.error(f"Failed to discover Lakebase database instances: {e}")
+            raise
         return resources
 
     async def kill(self, resource_id: str) -> bool:

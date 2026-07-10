@@ -78,6 +78,8 @@ export function EnforcementSentinel() {
     // "Checklist" shows every (resource, policy) evaluation — PASS and
     // VIOLATION — so reviewers can audit what was actually verified.
     const [reportView, setReportView] = useState<'violations' | 'checklist'>('violations');
+    // Scan-issues (auth/permission/network failures) section is collapsed by default.
+    const [showScanIssues, setShowScanIssues] = useState<boolean>(false);
     // Workspace scope for a manual scan. '__all__' scans every configured target
     // workspace in one aggregated run (matches the scheduled behavior); a specific
     // name scans just that one.
@@ -440,6 +442,7 @@ export function EnforcementSentinel() {
                                 <th className="p-3 pl-4">Run Date</th>
                                 <th className="p-3">Status</th>
                                 <th className="p-3">Found</th>
+                                <th className="p-3">Issues</th>
                                 <th className="p-3">Workspace</th>
                                 <th className="p-3 text-right"></th>
                             </tr>
@@ -447,7 +450,7 @@ export function EnforcementSentinel() {
                         <tbody className="divide-y divide-gray-100">
                             {sentinelRuns.length === 0 ? (
                                 <tr>
-                                    <td colSpan={5} className="p-6 text-center text-gray-500">
+                                    <td colSpan={6} className="p-6 text-center text-gray-500">
                                         No Sentinel runs found.
                                     </td>
                                 </tr>
@@ -487,6 +490,24 @@ export function EnforcementSentinel() {
                                                 ) : (
                                                     <span className="text-green-600">0</span>
                                                 )}
+                                            </td>
+                                            <td className="p-3">
+                                                {(() => {
+                                                    const failures: any[] = Array.isArray(ctx.workspace_failures) ? ctx.workspace_failures : [];
+                                                    const hard = failures.filter((f: any) => !f.partial).length;
+                                                    const partial = failures.filter((f: any) => f.partial).length;
+                                                    if (hard === 0 && partial === 0) {
+                                                        return <span className="text-gray-300">&mdash;</span>;
+                                                    }
+                                                    return (
+                                                        <span className="inline-flex items-center gap-1">
+                                                            <AlertTriangle className={`w-3.5 h-3.5 ${hard > 0 ? 'text-red-500' : 'text-amber-500'}`} />
+                                                            <span className={`text-xs font-semibold ${hard > 0 ? 'text-red-600' : 'text-amber-600'}`}>
+                                                                {hard > 0 ? `${hard} failed` : `${partial} partial`}
+                                                            </span>
+                                                        </span>
+                                                    );
+                                                })()}
                                             </td>
                                             <td className="p-3 text-gray-500">
                                                 {(() => {
@@ -561,7 +582,7 @@ export function EnforcementSentinel() {
                                     {((selectedRun as any).stateContext || selectedRun.metadata || (selectedRun as any).state_context || {}).workspace || 'ws-enterprise-prod'}
                                 </p>
                             </div>
-                            <Button variant="ghost" size="sm" onClick={() => { setSelectedRunId(null); setActiveTab('all'); setReportView('violations'); }} className="rounded-full hover:bg-gray-100">
+                            <Button variant="ghost" size="sm" onClick={() => { setSelectedRunId(null); setActiveTab('all'); setReportView('violations'); setShowScanIssues(false); }} className="rounded-full hover:bg-gray-100">
                                 <X className="w-5 h-5 text-gray-500" />
                             </Button>
                         </div>
@@ -653,14 +674,17 @@ export function EnforcementSentinel() {
                                         </div>
                                     ) : (
                                         <>
-                                            {/* Workspace scan-failure banner: a workspace whose discovery
-                                                calls all failed reports "0" but is NOT confirmed clean.
-                                                Surfaces the definitive cause (auth / permission / network)
-                                                so the run isn't misread as all-clear. */}
-                                            {Array.isArray(ctx.workspace_failures) && ctx.workspace_failures.length > 0 && (() => {
-                                                const failures: any[] = ctx.workspace_failures;
+                                            {/* Scan issues: workspaces whose discovery failed (auth /
+                                                permission / network). A failed workspace reports "0" but is
+                                                NOT confirmed clean. Collapsed by default — a colored bar
+                                                indicates issues exist; click to view the definitive cause. */}
+                                            {(() => {
+                                                const failures: any[] = Array.isArray(ctx.workspace_failures) ? ctx.workspace_failures : [];
+                                                const scanError: string = typeof ctx.scan_error === 'string' ? ctx.scan_error : '';
+                                                if (failures.length === 0 && !scanError) return null;
                                                 const hard = failures.filter((f: any) => !f.partial);
                                                 const partial = failures.filter((f: any) => f.partial);
+                                                const isHard = hard.length > 0 || !!scanError;
                                                 const CATEGORY_LABEL: Record<string, string> = {
                                                     authentication: 'Authentication / credentials',
                                                     authorization: 'Permissions',
@@ -669,20 +693,35 @@ export function EnforcementSentinel() {
                                                     not_found: 'Missing API / endpoint',
                                                     unknown: 'Unclassified',
                                                 };
+                                                const headline = hard.length > 0
+                                                    ? `${hard.length} workspace(s) returned no data — not confirmed clean`
+                                                    : partial.length > 0
+                                                        ? `${partial.length} workspace(s) returned partial results`
+                                                        : 'Scan encountered errors';
                                                 return (
-                                                    <div className={`rounded-lg border p-4 ${hard.length > 0 ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
-                                                        <div className="flex items-start gap-3">
-                                                            <AlertTriangle className={`w-5 h-5 mt-0.5 flex-shrink-0 ${hard.length > 0 ? 'text-red-600' : 'text-amber-600'}`} />
+                                                    <div className={`rounded-lg border overflow-hidden ${isHard ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setShowScanIssues(v => !v)}
+                                                            className="w-full flex items-center gap-3 p-3 md:p-4 text-left hover:bg-black/5 transition-colors"
+                                                        >
+                                                            <AlertTriangle className={`w-5 h-5 flex-shrink-0 ${isHard ? 'text-red-600' : 'text-amber-600'}`} />
                                                             <div className="flex-1 min-w-0">
-                                                                <div className={`font-semibold ${hard.length > 0 ? 'text-red-900' : 'text-amber-900'}`}>
-                                                                    {hard.length > 0
-                                                                        ? `${hard.length} workspace(s) returned no data — not confirmed clean`
-                                                                        : `${partial.length} workspace(s) returned partial results`}
+                                                                <div className={`font-semibold ${isHard ? 'text-red-900' : 'text-amber-900'}`}>
+                                                                    Scan issues detected &mdash; {headline}
                                                                 </div>
-                                                                <p className={`text-sm mt-1 ${hard.length > 0 ? 'text-red-700' : 'text-amber-700'}`}>
+                                                                <div className={`text-xs mt-0.5 ${isHard ? 'text-red-700' : 'text-amber-700'}`}>
+                                                                    {showScanIssues ? 'Click to hide details' : 'Click to view details (auth / permission / network)'}
+                                                                </div>
+                                                            </div>
+                                                            <ChevronDown className={`w-4 h-4 flex-shrink-0 transition-transform ${isHard ? 'text-red-600' : 'text-amber-600'} ${showScanIssues ? '' : '-rotate-90'}`} />
+                                                        </button>
+                                                        {showScanIssues && (
+                                                            <div className="px-3 md:px-4 pb-4 pt-1 border-t border-black/5">
+                                                                <p className={`text-sm mb-3 ${isHard ? 'text-red-700' : 'text-amber-700'}`}>
                                                                     A scan that fails to authenticate or reach a workspace reports 0 findings, which does not mean the workspace is compliant. Resolve the cause below and re-run.
                                                                 </p>
-                                                                <div className="mt-3 flex flex-col gap-2">
+                                                                <div className="flex flex-col gap-2">
                                                                     {failures.map((f: any, i: number) => (
                                                                         <div key={i} className="text-sm bg-white/70 rounded-md border border-gray-200 p-2.5">
                                                                             <div className="flex flex-wrap items-center gap-2">
@@ -695,13 +734,26 @@ export function EnforcementSentinel() {
                                                                             <div className="text-xs text-gray-500 mt-1 space-y-0.5">
                                                                                 {f.host && <div>Host: <span className="font-mono">{f.host}</span></div>}
                                                                                 {f.credential_source && <div>Credentials: <span className="font-mono">{f.credential_source}</span></div>}
+                                                                                {typeof f.network_reachable === 'boolean' && (
+                                                                                    <div>
+                                                                                        Network reachable:{' '}
+                                                                                        <span className={f.network_reachable ? 'text-green-700 font-medium' : 'text-red-700 font-medium'}>
+                                                                                            {f.network_reachable ? 'yes — credentials/permissions issue' : 'no — network/connectivity issue'}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                )}
                                                                                 {f.example && <div className="text-gray-600 break-words">Error: {f.example}</div>}
                                                                             </div>
                                                                         </div>
                                                                     ))}
+                                                                    {scanError && (
+                                                                        <div className="text-xs text-gray-600 bg-white/70 rounded-md border border-gray-200 p-2.5 break-words">
+                                                                            <span className="font-semibold text-gray-800">Other scan errors: </span>{scanError}
+                                                                        </div>
+                                                                    )}
                                                                 </div>
                                                             </div>
-                                                        </div>
+                                                        )}
                                                     </div>
                                                 );
                                             })()}

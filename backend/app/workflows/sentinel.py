@@ -403,6 +403,41 @@ def _summarize_discovery_failures(
     return record
 
 
+async def _probe_workspace_auth(
+    workspace_client, ws_name: Optional[str], timeout: float = 10.0
+) -> Dict[str, Any]:
+    """Cheap auth + reachability probe for one workspace (``current_user.me()``).
+
+    This is the AUTHORITATIVE signal for whether a workspace's 0-result is real
+    or a failure: the resource handlers swallow their own discovery exceptions
+    (log + ``return []``), so an ``invalid_client`` / permission / network error
+    never reaches the scan loop. One canonical authenticated call surfaces it and
+    — like ``ping_workspaces`` — separates the two things people conflate:
+
+      * ``network_reachable`` — did we reach the control plane at all? A 401/403
+        (rejected creds) STILL proves the network path is open; only a
+        timeout/DNS/connection failure means it isn't.
+      * ``ok`` — did the resolved credentials actually authenticate?
+    """
+    try:
+        me = await asyncio.wait_for(
+            asyncio.to_thread(workspace_client.current_user.me), timeout=timeout
+        )
+        identity = getattr(me, "user_name", None) or getattr(me, "display_name", None)
+        return {"ok": True, "network_reachable": True, "category": None,
+                "identity": identity, "detail": "authenticated"}
+    except asyncio.TimeoutError:
+        return {"ok": False, "network_reachable": False, "category": "network",
+                "identity": None,
+                "detail": f"current_user.me() timed out after {timeout:.0f}s (no control-plane response)"}
+    except Exception as e:  # noqa: BLE001
+        category = _classify_databricks_error(e)
+        # Anything the control plane answered (auth/permission/rate/not_found)
+        # proves the network path is open; only a 'network' category did not.
+        return {"ok": False, "network_reachable": category != "network",
+                "category": category, "identity": None, "detail": str(e)}
+
+
 async def _scan_and_evaluate(
     *,
     db,
@@ -433,6 +468,49 @@ async def _scan_and_evaluate(
     ws_host = workspace_ctx.get("host")
     ws_env = workspace_ctx.get("environment")
     ws_cred_source = workspace_ctx.get("credential_source")
+
+    # Auth/reachability gate. The per-resource handlers swallow discovery errors
+    # (log + return []), so without this probe a workspace whose credentials are
+    # rejected reports a misleading "0 findings". A failed probe is authoritative:
+    # short-circuit with a structured failure that names the definitive cause
+    # (authentication vs permissions vs network) so 0 is never read as "clean".
+    probe = await _probe_workspace_auth(workspace_client, ws_name)
+    if not probe["ok"]:
+        attempted = len(handler_classes)
+        logger.error(
+            "Sentinel: workspace '%s' auth/connectivity probe FAILED "
+            "(host=%s, credentials=%s). Definitive cause: %s error; "
+            "network_reachable=%s. %s. Skipping scan — a 0 here is a FAILURE, "
+            "NOT a clean bill of health.",
+            ws_name, ws_host, ws_cred_source, probe["category"],
+            probe["network_reachable"],
+            ("The control plane responded but rejected the credentials, so the "
+             "network path is open and this is purely a credentials/permissions "
+             "problem." if probe["network_reachable"]
+             else "The control plane was never reached, so this is a network/"
+             "connectivity problem (DNS / VPC peering / PrivateLink / firewall), "
+             "not a credentials problem."),
+        )
+        ws_failure = {
+            "workspace": ws_name,
+            "host": ws_host,
+            "credential_source": ws_cred_source,
+            "category": probe["category"],
+            "network_reachable": probe["network_reachable"],
+            "failed": attempted,
+            "attempted": attempted,
+            "breakdown": {probe["category"]: attempted},
+            "example": probe["detail"],
+            "partial": False,
+            "stage": "auth_probe",
+        }
+        return [], [], 0, ws_failure
+    if probe.get("identity"):
+        logger.info(
+            "Sentinel: workspace '%s' authenticated as %s (host=%s, credentials=%s).",
+            ws_name, probe["identity"], ws_host, ws_cred_source,
+        )
+
     ws_type = "enterprise" if "enterprise" in (ws_name or "") else "domain"
     # Tag stored on every check/violation so the report + email can show which
     # workspace a finding came from. The OPA input keeps its historical shape
@@ -498,6 +576,17 @@ async def _scan_and_evaluate(
     ws_failure = _summarize_discovery_failures(
         ws_name, ws_host, ws_cred_source, discover_errors, len(handler_classes)
     )
+
+    # Backstop: auth succeeded (we got past the probe) and no handler errored, yet
+    # nothing came back. Confirm it's a genuinely empty workspace so a 0 is never
+    # left ambiguous in the logs.
+    if not discovered_resources and not discover_errors:
+        logger.info(
+            "Sentinel: workspace '%s' authenticated and returned 0 resources with NO "
+            "handler errors across %d handler(s) — treating as genuinely empty "
+            "(host=%s, credentials=%s).",
+            ws_name, len(handler_classes), ws_host, ws_cred_source,
+        )
 
     if record_certification:
         _refresh_data_asset_quality(db, discovered_resources, scan_time)
@@ -686,6 +775,29 @@ async def run_discovery(db, request) -> Dict[str, Any]:
             scan_ws = list(all_ws)
     else:
         scan_ws = list(all_ws)
+
+    # Consolidated pre-scan diagnostic: one line per workspace showing exactly
+    # which credentials it resolved to (dedicated SP vs the app's own SP) BEFORE
+    # any scanning, so a single run tells the whole story. 'global_default' here
+    # means this workspace fell back to the app's own SP — see the workspaces.py
+    # WARNING for the precise reason (missing scope / key name / unreadable secret).
+    logger.info(
+        "Sentinel: preparing to scan %d workspace(s). Credential resolution: %s",
+        len(scan_ws),
+        [
+            {"name": w.name, "host": w.host, "credentials": w.credential_source}
+            for w in scan_ws
+        ],
+    )
+    fallbacks = [w.name for w in scan_ws if w.credential_source == "global_default"]
+    if fallbacks:
+        logger.warning(
+            "Sentinel: %d workspace(s) resolved to the app's OWN service principal "
+            "(global_default): %s. If any of these are meant to use a dedicated SP, "
+            "auth there will fail — fix the secret scope / key names under "
+            "Admin -> Settings -> Target Workspaces.",
+            len(fallbacks), fallbacks,
+        )
 
     # The catalog/metastore-scoped data certification pass runs once. It uses the
     # configured certification workspace's client if set, else the app's home SP.

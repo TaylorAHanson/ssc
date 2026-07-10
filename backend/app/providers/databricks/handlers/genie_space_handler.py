@@ -19,7 +19,10 @@ class GenieSpaceResourceHandler(BaseResourceHandler):
                     "tags": {t.key: t.value for t in getattr(space, 'tags', [])} if getattr(space, 'tags', None) else {}
                 })
         except Exception as e:
+            # Re-raise so the Sentinel attributes this to the workspace + classifies
+            # it (auth / permission / network) instead of reporting a silent 0.
             logger.error(f"Failed to discover Genie spaces: {e}")
+            raise
         return resources
         
     async def kill(self, resource_id: str) -> bool:

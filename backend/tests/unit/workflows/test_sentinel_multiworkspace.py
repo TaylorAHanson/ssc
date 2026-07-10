@@ -9,7 +9,7 @@ Databricks/OPA boundaries stubbed, verifying that:
 """
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -92,6 +92,16 @@ def _patches(workspaces):
         # _new_workspace_client returns a per-host marker string used as the
         # "client" so we can assert which workspace each handler ran against.
         patch.object(sentinel, "_new_workspace_client", side_effect=lambda host=None: host or "home"),
+        # The marker-string "client" has no real SDK, so stub the auth probe as
+        # a success (probe wiring is covered by its own tests below).
+        patch.object(
+            sentinel,
+            "_probe_workspace_auth",
+            new=AsyncMock(return_value={
+                "ok": True, "network_reachable": True, "category": None,
+                "identity": "sp-test", "detail": "authenticated",
+            }),
+        ),
         patch.object(sentinel, "_workspace_scoped_handler_classes", return_value=[_FakeComputeHandler]),
         patch("app.providers.databricks.handlers.DatasetResourceHandler", _FakeDatasetHandler),
         patch("app.providers.opa.client.OpaProvider", _FakeOpa),
@@ -180,6 +190,67 @@ def test_prior_severity_is_scoped_by_workspace(db_session):
     # Legacy row (workspace NULL) still matches any workspace lookup.
     _audit("job-2", "p", "HIGH", None, "run-old")
     assert sentinel._prior_severity(db_session, "run-new", "job-2", "p", "ws-b") == "HIGH"
+
+
+def test_classify_databricks_error_categories():
+    """The classifier must definitively separate access from network problems."""
+    assert sentinel._classify_databricks_error(
+        Exception("invalid_client: Client authentication failed")
+    ) == "authentication"
+    assert sentinel._classify_databricks_error(
+        Exception("PERMISSION_DENIED: user does not have access")
+    ) == "authorization"
+    assert sentinel._classify_databricks_error(
+        Exception("Max retries exceeded: Failed to establish a new connection")
+    ) == "network"
+    assert sentinel._classify_databricks_error(
+        Exception("429 Too Many Requests")
+    ) == "rate_limited"
+    assert sentinel._classify_databricks_error(Exception("weird")) == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_auth_probe_failure_records_workspace_failure(db_session):
+    """A workspace whose auth probe fails must be recorded as a FAILURE (not a
+    clean 0) with the definitive category surfaced to the run summary — even
+    though the resource handlers would otherwise swallow the error."""
+    workspaces = [_ws("prod-domain-a", "https://a.databricks.net")]
+    req = _make_request(db_session, {})
+
+    failing_probe = AsyncMock(return_value={
+        "ok": False, "network_reachable": True, "category": "authentication",
+        "identity": None, "detail": "invalid_client: Client authentication failed",
+    })
+
+    plist = [
+        patch("app.core.workspaces.get_target_workspaces", return_value=workspaces),
+        patch.object(sentinel, "_new_workspace_client", side_effect=lambda host=None: host or "home"),
+        patch.object(sentinel, "_probe_workspace_auth", new=failing_probe),
+        patch.object(sentinel, "_workspace_scoped_handler_classes", return_value=[_FakeComputeHandler]),
+        patch("app.providers.databricks.handlers.DatasetResourceHandler", _FakeDatasetHandler),
+        patch("app.providers.opa.client.OpaProvider", _FakeOpa),
+    ]
+    for p in plist:
+        p.start()
+    try:
+        result = await sentinel.run_discovery(db_session, req)
+    finally:
+        for p in plist:
+            p.stop()
+
+    ctx = req.state_context
+    # No violations because auth failed — but it's flagged, not silently "clean".
+    assert result["violation_count"] == 0
+    # (The data-cert pass shares the failing probe, so it's flagged too; we assert
+    # on the workspace-scoped failure specifically.)
+    failures = {f["workspace"]: f for f in (ctx.get("workspace_failures") or [])}
+    assert "prod-domain-a" in failures
+    f = failures["prod-domain-a"]
+    assert f["category"] == "authentication"
+    assert f["network_reachable"] is True
+    assert f["partial"] is False
+    assert ctx["scan_stats"]["workspaces_failed"] >= 1
+    assert "NOT confirmed clean" in ctx["summary"]
 
 
 @pytest.mark.asyncio

@@ -49,8 +49,19 @@ def _read_secret(scope: Optional[str], key: Optional[str]) -> Optional[str]:
         secret = WorkspaceClient().secrets.get_secret(scope=scope, key=key)
         if secret and secret.value:
             value = base64.b64decode(secret.value).decode("utf-8").strip() or None
+        if value:
+            logger.debug("Secret %s/%s resolved (%d chars).", scope, key, len(value))
+        else:
+            logger.warning("Secret %s/%s exists but decoded to an EMPTY value.", scope, key)
     except Exception as e:  # noqa: BLE001 - never break workspace resolution on a secret read
-        logger.warning("Could not read secret %s/%s: %s", scope, key, e)
+        # The two common causes are (a) the key name is wrong / not in the scope,
+        # or (b) the app's own service principal lacks READ on the scope. Say both
+        # so a single run points straight at the fix.
+        logger.warning(
+            "Could not read secret %s/%s: %s — verify the key NAME exists in scope "
+            "'%s' AND that the app's own service principal has READ on that scope.",
+            scope, key, e, scope,
+        )
         value = None
 
     _secret_cache[cache_key] = value
@@ -78,23 +89,67 @@ def _resolve_credentials(
     names. A workspace that leaves them blank falls back to the app's own
     SP / PAT (``settings.DATABRICKS_*``).
     """
+    name = ws.get("name", "unknown")
     scope = _target_scope()
     cid_key = ws.get("client_id_key")
     csec_key = ws.get("client_secret_key")
 
-    if scope and cid_key:
-        cid = _read_secret(scope, cid_key)
-        csec = _read_secret(scope, csec_key) if csec_key else None
-        if cid:
-            return cid, csec, None, f"workspace_sp:{scope}"
+    def _global_default(reason: str):
+        """Fall back to the app's own SP / PAT, saying loudly WHY.
 
-    # Fall back to the app's own SP / PAT.
-    return (
-        settings.DATABRICKS_CLIENT_ID or None,
-        settings.DATABRICKS_CLIENT_SECRET or None,
-        settings.DATABRICKS_TOKEN or None,
-        "global_default",
+        This is the silent failure that burns diagnostic cycles: an operator
+        configures a dedicated SP for a target workspace, but a wrong key name /
+        missing scope / unreadable secret makes us quietly use the APP's SP
+        instead — which is valid only in the app's home account, so it fails auth
+        against the target with ``invalid_client``. The operator then chases a
+        "bad credentials" ghost when the target SP was never even used.
+        """
+        app_cid = settings.DATABRICKS_CLIENT_ID or None
+        logger.warning(
+            "Workspace '%s': falling back to the app's OWN service principal "
+            "(global_default) — %s. App client_id=%s. If this workspace needs its "
+            "OWN service principal, this will FAIL auth against a different "
+            "account/host; set client_id_key/client_secret_key + the secret scope "
+            "under Admin -> Settings -> Target Workspaces.",
+            name, reason, (app_cid[:4] + "***") if app_cid else "UNSET",
+        )
+        return (
+            app_cid,
+            settings.DATABRICKS_CLIENT_SECRET or None,
+            settings.DATABRICKS_TOKEN or None,
+            "global_default",
+        )
+
+    if not scope:
+        return _global_default("no TARGET_WORKSPACE_SP_SECRET_SCOPE is configured")
+    if not cid_key:
+        return _global_default(f"no client_id_key is set for this workspace (scope={scope})")
+
+    cid = _read_secret(scope, cid_key)
+    if not cid:
+        return _global_default(
+            f"secret {scope}/{cid_key} could not be read (wrong key name, or the app's "
+            f"SP lacks READ on scope '{scope}') — the target SP was NEVER used"
+        )
+
+    csec = _read_secret(scope, csec_key) if csec_key else None
+    if not csec_key:
+        logger.warning(
+            "Workspace '%s': client_id_key is set but client_secret_key is EMPTY — "
+            "OAuth requires a secret, so auth will fail.", name,
+        )
+    elif not csec:
+        logger.warning(
+            "Workspace '%s': client_id resolved but client_secret %s/%s could not be "
+            "read — auth will fail. Check the secret key name.", name, scope, csec_key,
+        )
+
+    logger.info(
+        "Workspace '%s': resolved a DEDICATED service principal from scope=%s "
+        "(client_id_key=%s -> client_id=%s***, client_secret_key=%s -> %s).",
+        name, scope, cid_key, cid[:4], csec_key, "present" if csec else "MISSING",
     )
+    return cid, csec, None, f"workspace_sp:{scope}"
 
 
 def get_target_workspaces() -> List[WorkspaceConfig]:

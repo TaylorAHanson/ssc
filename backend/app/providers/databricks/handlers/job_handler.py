@@ -18,7 +18,12 @@ class JobResourceHandler(BaseResourceHandler):
                     "tags": dict(job.settings.tags) if hasattr(job, 'settings') and isinstance(getattr(job.settings, 'tags', None), dict) else {getattr(t, 'key', ''): getattr(t, 'value', '') for t in getattr(job.settings, 'tags', [])} if hasattr(job, 'settings') and getattr(job.settings, 'tags', None) else {}
                 })
         except Exception as e:
+            # Re-raise so the Enforcement Sentinel can attribute this failure to
+            # the specific workspace and classify it (auth / permission / network)
+            # rather than silently reporting 0 jobs. .discover() is only called by
+            # the Sentinel, which handles per-handler failures.
             logger.error(f"Failed to discover jobs: {e}")
+            raise
         return resources
         
     async def kill(self, resource_id: str) -> bool:

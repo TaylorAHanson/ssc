@@ -20,7 +20,10 @@ class SqlWarehouseResourceHandler(BaseResourceHandler):
                     "tags": {t.key: t.value for t in (warehouse.tags.custom_tags if hasattr(warehouse, 'tags') and warehouse.tags and hasattr(warehouse.tags, 'custom_tags') else [])}
                 })
         except Exception as e:
+            # Re-raise so the Sentinel attributes this to the workspace + classifies
+            # it (auth / permission / network) instead of reporting a silent 0.
             logger.error(f"Failed to discover SQL warehouses: {e}")
+            raise
         return resources
         
     async def kill(self, resource_id: str) -> bool:
