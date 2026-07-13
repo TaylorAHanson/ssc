@@ -21,6 +21,7 @@ Environment (also loaded from backend/.env when present):
     CONFLUENCE_SPACE_KEY  Space key, e.g. ENG (preferred)
     CONFLUENCE_SPACE_ID   Numeric space id (optional if SPACE_KEY is set)
     CONFLUENCE_PARENT_PAGE_ID  Optional parent page for all synced docs
+    CONFLUENCE_VERIFY_SSL     Set to false behind corporate SSL inspection (default true)
 """
 from __future__ import annotations
 
@@ -67,17 +68,21 @@ class ConfluenceConfig:
     space_key: str | None
     space_id: str | None
     parent_page_id: str | None
+    verify_ssl: bool = True
 
 
 class ConfluenceClient:
     def __init__(self, config: ConfluenceConfig) -> None:
         self._config = config
         self._base = config.base_url.rstrip("/")
+        if not config.verify_ssl:
+            logger.warning("SSL certificate verification is DISABLED (corporate proxy / --insecure)")
         self._client = httpx.Client(
             base_url=self._base,
             auth=(config.email, config.api_token),
             headers={"Accept": "application/json"},
             timeout=60.0,
+            verify=config.verify_ssl,
         )
         self._space_id = config.space_id
 
@@ -176,6 +181,13 @@ def load_env() -> None:
         load_dotenv(env_path)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
 def parse_config(args: argparse.Namespace) -> ConfluenceConfig:
     base_url = (args.base_url or os.environ.get("CONFLUENCE_BASE_URL", "")).strip()
     email = (args.email or os.environ.get("CONFLUENCE_EMAIL", "")).strip()
@@ -185,6 +197,7 @@ def parse_config(args: argparse.Namespace) -> ConfluenceConfig:
     parent_page_id = (
         args.parent_page_id or os.environ.get("CONFLUENCE_PARENT_PAGE_ID", "")
     ).strip() or None
+    verify_ssl = not args.insecure and _env_bool("CONFLUENCE_VERIFY_SSL", default=True)
 
     missing = [
         name
@@ -211,6 +224,7 @@ def parse_config(args: argparse.Namespace) -> ConfluenceConfig:
         space_key=space_key,
         space_id=space_id,
         parent_page_id=parent_page_id,
+        verify_ssl=verify_ssl,
     )
 
 
@@ -410,6 +424,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--space-key", help="Override CONFLUENCE_SPACE_KEY")
     parser.add_argument("--space-id", help="Override CONFLUENCE_SPACE_ID")
     parser.add_argument("--parent-page-id", help="Override CONFLUENCE_PARENT_PAGE_ID")
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable SSL certificate verification (corporate proxy / self-signed chain)",
+    )
     return parser
 
 
