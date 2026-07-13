@@ -492,6 +492,9 @@ def run_full_sync(
         ):
             changed = True
     return changed
+
+
+def orphaned_manifest_entries(
     manifest: dict[str, Any],
     docs: list[Path],
 ) -> list[tuple[str, dict[str, Any]]]:
