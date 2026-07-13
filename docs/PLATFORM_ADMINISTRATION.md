@@ -21,7 +21,7 @@ Because workflows are data, you author and change them **without a deploy or a c
 
 ## 2. Two Ways to Author
 
-### 2a. Visual editor — *Admin → Workflows*
+### 2a. Visual editor — *Control Tower → Workflow Studio*
 
 The Workflows studio is the primary authoring surface:
 
@@ -156,7 +156,7 @@ Role scoping is enforced at the chat endpoint: tools tagged for admins are filte
 
 | Thing | Where |
 | :--- | :--- |
-| Visual workflow editor | App → **Admin → Workflows** |
+| Visual workflow editor | **Control Tower → Workflow Studio** |
 | Authoring building blocks (tools, gates, stage kinds) | `list_workflow_building_blocks` (in-chat, authoring studio) |
 | Live graph for a request | App → request detail → **Workflow** tab |
 | Workflow definitions (code catalog seed) | `backend/app/workflows/graphs/specs.py` |
@@ -165,5 +165,5 @@ Role scoping is enforced at the chat endpoint: tools tagged for admins are filte
 | Agent authoring tools | `backend/app/tools/authoring/workflow_authoring.py` |
 | OPA policies (Rego) | `backend/policies/` |
 | Eval harness + goldens | `backend/app/workflows/harness.py`, `backend/app/workflows/golden_transcripts.json` |
-| Governance posture / feature flags | `databricks.yml` variables, `configuration.yaml` |
+| Governance posture / feature flags | `databricks.yml` variables; live UI/catalog defaults via **Admin → Settings** and `default_config.py` |
 | Lock authoring in an environment | `databricks.yml` var `workflow_authoring_locked` (→ `WORKFLOW_AUTHORING_LOCKED`) |

@@ -335,7 +335,20 @@ def get_engine():
                 # across DST boundaries. Forcing UTC makes every write land as true
                 # UTC wall-clock, which is what the frontend assumes when it appends
                 # "Z" before rendering in Pacific time.
-                connect_args={"options": f"-csearch_path={_schema},public -ctimezone=UTC"},
+                connect_args={
+                    "options": f"-csearch_path={_schema},public -ctimezone=UTC",
+                    # TCP keepalives so a connection that sits idle during a long
+                    # unit of work (e.g. a multi-workspace Enforcement Sentinel
+                    # scan) isn't silently dropped by Lakebase / a NAT / firewall.
+                    # pool_pre_ping only validates a connection at *checkout*; it
+                    # can't save one that dies while already held, which surfaced
+                    # as "SSL connection has been closed unexpectedly" mid-scan.
+                    # Probe after 30s idle, every 10s, drop after 5 missed.
+                    "keepalives": 1,
+                    "keepalives_idle": 30,
+                    "keepalives_interval": 10,
+                    "keepalives_count": 5,
+                },
             )
 
             @event.listens_for(_engine, "connect")

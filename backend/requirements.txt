@@ -49,3 +49,5 @@ python-pptx==1.0.2
 openpyxl==3.1.5
 pypdf==5.1.0
 beautifulsoup4==4.12.3
+# Markdown → Confluence ADF for docs sync script (backend/scripts/sync_docs_to_confluence.py)
+marklassian==0.1.0

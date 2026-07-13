@@ -8,7 +8,7 @@ Self-Service Hub (Agentic Control Tower for Lakehouse Automation & Self-Service 
 
 To successfully deploy Self-Service Hub, you will need to complete three distinct phases:
 1. **Infrastructure Preparation:** Running an automated Databricks Notebook to create the required Unity Catalog volumes and secret scopes.
-2. **Configuration:** Customizing the application's appearance and enabling specific features via a configuration file.
+2. **Configuration:** Customizing branding, feature flags, and catalogs via **Admin → Settings** (live, no redeploy for most settings) plus deploy-time variables in `databricks.yml`.
 3. **CI/CD Deployment:** Configuring GitHub Actions to automatically securely deploy the application into your workspace.
 
 Once deployed, the Databricks App will automatically provision its own Service Principal to securely interact with your data and infrastructure.
@@ -41,22 +41,24 @@ Self-Service Hub requires a secret scope and a Unity Catalog Volume to store its
    - **GitHub PAT** (Optional: requires `repo` scope if using direct GitOps integrations). For the exact API-call-to-permission mapping, fine-grained alternatives, and a request message for your GitHub org admin, see [GITHUB_TOKEN_PERMISSIONS.md](./GITHUB_TOKEN_PERMISSIONS.md).
 6. Click **Run All**.
 
-The notebook will automatically create the infrastructure, securely store your secrets, and place a default `configuration.yaml` file into the new volume.
+The notebook will automatically create the secret scope, Unity Catalog infrastructure, and (optionally) store your GitHub PAT in the secret scope.
 
 ---
 
 ## 3. Configuration & Branding
 
-Self-Service Hub is highly customizable. You can control its features, UI tabs, and branding without modifying the core code.
+Self-Service Hub is highly customizable. Most day-to-day settings — branding, UI tabs, the Self-Service Center catalog, Community Links, embedded apps, target workspaces, and the system banner — are edited live under **Control Tower → Admin → Settings** and take effect immediately (persisted in the app database).
 
-### Step 3.1: Customize the Application
-1. Open the `configuration.yaml` file located in the root of your repository.
-2. Modify the `branding` section to include your company's name, logo URL, and corporate hex colors.
-3. Enable or disable specific `features` and `tools` as needed.
+Code defaults for those settings live in `backend/app/core/default_config.py`. Deploy-time infrastructure and governance posture variables live in `databricks.yml` (see Step 3.2).
 
-*Note: Request types/workflows are no longer toggled in `configuration.yaml`. They are data-driven — the source of truth is published workflows (database) plus the seed catalog under `backend/app/workflows/graphs/catalog`. To disable a workflow, unpublish it in the admin **Workflows** UI, or set `tools.execute_workflow: false` as a global kill switch.*
+### Step 3.1: Customize the application (Admin → Settings)
 
-*Note: If you are using GitHub Actions, you can push these changes to a dedicated configuration branch (e.g., the `lite` version) or modify them directly in your main branch.*
+1. Deploy the app (or run locally with `./dev.sh`).
+2. Sign in as a **Platform Admin**.
+3. Open **Control Tower → Admin → Settings**.
+4. Adjust **Branding & Appearance**, **Catalogs & Content** (Self-Service Center cards, Community Links, embedded apps), **Target Workspaces**, **Notifications & Governance**, and other groups as needed.
+
+*Note: Workflows are **data-driven** — the source of truth is published workflows in the database plus the seed catalog under `backend/app/workflows/graphs/catalog`. To disable a workflow, unpublish it in **Control Tower → Workflow Studio**, or set `execute_workflow: false` under the `tools` section in `default_config.py` (global kill switch — requires redeploy unless overridden via DB).*
 
 ### Step 3.2: Update databricks.yml
 Open `databricks.yml` in the root of your repository and update the `variables` block to match your environment:

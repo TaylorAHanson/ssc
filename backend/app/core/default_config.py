@@ -41,7 +41,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # defaults an unbranded deploy renders (env vars / DB overrides win).
     # -------------------------------------------------------------------
     "branding": {
-        "name": "Atlas",
+        "name": "Self-Service Hub",
         "logo_url": "",
         # Accent blue aligned with the companion Command Center app's tokens.
         "primary_color": "#007BFF",

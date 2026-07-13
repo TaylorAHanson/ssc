@@ -8,7 +8,7 @@ the app serves the MCP protocol over **Streamable HTTP** at ``/mcp``. This file 
 that server: a tiny, self-contained example you can deploy to validate the
 discovery + hosting pattern end-to-end before pointing real tools at it.
 
-It is intentionally independent of the main ATLAS backend — it only needs the
+It is intentionally independent of the main Self-Service Hub backend — it only needs the
 ``mcp`` SDK and ``uvicorn`` (see requirements.txt).
 
 Endpoint

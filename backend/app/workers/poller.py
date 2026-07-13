@@ -483,8 +483,15 @@ async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
                         pass
                     logger.debug(f"Stopped heartbeat for request {request_id}")
                 
-                # Always release lock
-                release_lock(db, request_id)
+                # Always release lock. Guard against a dead connection here (a
+                # long scan can outlive its Lakebase connection) so a failed
+                # release doesn't mask the real error or raise inside finally.
+                try:
+                    release_lock(db, request_id)
+                except Exception as rel_err:  # noqa: BLE001
+                    logger.warning(
+                        f"Could not release lock for {request_id}: {rel_err}"
+                    )
                 
         except Exception as e:
             logger.error(
@@ -530,6 +537,13 @@ async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
                     db.rollback()
                 except Exception:
                     pass
+                # The guard's own write failed too — almost always because the
+                # in-flight connection is dead (e.g. Lakebase dropped an idle SSL
+                # connection during a long scan). rollback()+recommit on the same
+                # session can't recover that, so persist the failure on a brand
+                # new connection instead of letting the request loop / surface a
+                # raw DB error to the UI.
+                _force_fail_on_fresh_session(request_id, e, _worker_id)
         finally:
             db.close()
             current_request_id.reset(req_id_token)
@@ -932,6 +946,64 @@ def _ensure_approval_task(db: Session, request: RequestModel, payload) -> None:
     except Exception as e:  # noqa: BLE001 - non-fatal; next tick retries
         logger.warning(f"[{request.id}] could not create approval task: {e}")
         db.rollback()
+
+
+def _force_fail_on_fresh_session(
+    request_id: str, error: Exception, worker_id: str
+) -> None:
+    """Persist a permanent FAILED status on a brand-new DB session.
+
+    Last-resort recovery for when the in-flight session's connection has died
+    (e.g. Lakebase dropped an idle SSL connection during a long scan), which
+    makes every write on the original session — including the critical-error
+    guard's own — fail. We dispose the pooled connection and retry on a fresh
+    session (which will re-auth + re-connect) so the request is durably failed
+    rather than looping forever or surfacing a raw DB error.
+    """
+    try:
+        reset_database_connection()
+    except Exception as reset_err:  # noqa: BLE001
+        logger.error(
+            f"Could not reset DB connection while force-failing {request_id}: {reset_err}"
+        )
+    db2 = get_lakebase_session()
+    try:
+        req = (
+            db2.query(RequestModel)
+            .filter(RequestModel.id == request_id)
+            .first()
+        )
+        if req is not None and req.status not in (
+            RequestStatus.COMPLETED.value,
+            RequestStatus.REJECTED.value,
+            RequestStatus.FAILED.value,
+        ):
+            req.status = RequestStatus.FAILED.value
+            req.retry_count = max(req.retry_count or 0, req.max_retries or 0)
+            req.last_failure = datetime.now(timezone.utc)
+            req.last_error = {
+                "error": str(error),
+                "traceback": traceback.format_exc(),
+                "permanent": True,
+                "worker_id": worker_id,
+                "note": "force-failed on a fresh session after connection loss",
+            }
+            db2.commit()
+            logger.error(
+                f"Force-failed request {request_id} on a fresh session after "
+                "the original connection was lost"
+            )
+    except Exception as fresh_err:  # noqa: BLE001
+        logger.error(
+            f"Fresh-session force-fail also failed for {request_id}: {fresh_err}",
+            exc_info=True,
+        )
+        try:
+            db2.rollback()
+        except Exception:
+            pass
+    finally:
+        db2.close()
 
 
 def _mark_request_failed(
