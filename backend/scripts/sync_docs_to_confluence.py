@@ -14,6 +14,10 @@ Usage:
     # Sync a single file
     python backend/scripts/sync_docs_to_confluence.py --file ARCHITECTURE.md
 
+    # Remove Confluence pages whose local .md file was deleted
+    python backend/scripts/sync_docs_to_confluence.py --prune
+    python backend/scripts/sync_docs_to_confluence.py --dry-run --prune  # preview deletions
+
 Environment (also loaded from backend/.env when present):
     CONFLUENCE_BASE_URL   e.g. https://your-org.atlassian.net/wiki
     CONFLUENCE_EMAIL      Atlassian account email
@@ -171,6 +175,10 @@ class ConfluenceClient:
         response = self._client.put(f"/api/v2/pages/{page_id}", json=payload)
         response.raise_for_status()
         return response.json()
+
+    def delete_page(self, page_id: str) -> None:
+        response = self._client.delete(f"/api/v2/pages/{page_id}")
+        response.raise_for_status()
 
 
 def load_env() -> None:
@@ -413,6 +421,52 @@ def run_sync_pass(
     return changed
 
 
+def orphaned_manifest_entries(
+    manifest: dict[str, Any],
+    docs: list[Path],
+) -> list[tuple[str, dict[str, Any]]]:
+    """Manifest pages with no matching local docs/*.md file."""
+    local_names = {path.name for path in docs}
+    pages: dict[str, Any] = manifest.get("pages", {})
+    return sorted(
+        (name, entry) for name, entry in pages.items() if name not in local_names
+    )
+
+
+def prune_orphaned_pages(
+    *,
+    client: ConfluenceClient | None,
+    manifest: dict[str, Any],
+    docs: list[Path],
+    dry_run: bool,
+) -> bool:
+    orphans = orphaned_manifest_entries(manifest, docs)
+    if not orphans:
+        return False
+
+    pages: dict[str, Any] = manifest.setdefault("pages", {})
+    for rel_name, entry in orphans:
+        page_id = entry.get("page_id")
+        title = entry.get("title", rel_name)
+        if not page_id:
+            logger.info("PRUNE manifest only (no page_id): %s", rel_name)
+            pages.pop(rel_name, None)
+            continue
+        logger.info("DELETE %s (page %s) -> %r", rel_name, page_id, title)
+        if dry_run:
+            continue
+        assert client is not None
+        try:
+            client.delete_page(str(page_id))
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                logger.warning("Page %s already gone in Confluence; dropping manifest entry", page_id)
+            else:
+                raise
+        pages.pop(rel_name, None)
+    return True
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="Preview sync without writing to Confluence")
@@ -424,6 +478,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--space-key", help="Override CONFLUENCE_SPACE_KEY")
     parser.add_argument("--space-id", help="Override CONFLUENCE_SPACE_ID")
     parser.add_argument("--parent-page-id", help="Override CONFLUENCE_PARENT_PAGE_ID")
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help="Delete Confluence pages (and manifest entries) for docs/*.md files that no longer exist",
+    )
     parser.add_argument(
         "--insecure",
         action="store_true",
@@ -440,62 +499,84 @@ def main(argv: list[str] | None = None) -> int:
     manifest = load_manifest()
 
     docs = discover_docs(args.file)
-    if not docs:
+    if not docs and not (args.prune and not args.file):
         logger.warning("No markdown files found in %s", DOCS_DIR)
         return 0
 
-    logger.info("Syncing %d doc(s) from %s", len(docs), DOCS_DIR)
+    if args.file and args.prune:
+        logger.warning("--prune ignored when syncing a single --file")
+
+    if docs:
+        logger.info("Syncing %d doc(s) from %s", len(docs), DOCS_DIR)
 
     strip_h1 = not args.keep_leading_h1
 
     try:
         if args.dry_run:
-            run_sync_pass(
-                docs,
-                client=None,
-                config=config,
-                manifest=manifest,
-                dry_run=True,
-                strip_h1=strip_h1,
-                rewrite_links=False,
-                only_with_links=False,
-            )
-            run_sync_pass(
-                docs,
-                client=None,
-                config=config,
-                manifest=manifest,
-                dry_run=True,
-                strip_h1=strip_h1,
-                rewrite_links=True,
-                only_with_links=True,
-            )
+            if docs:
+                run_sync_pass(
+                    docs,
+                    client=None,
+                    config=config,
+                    manifest=manifest,
+                    dry_run=True,
+                    strip_h1=strip_h1,
+                    rewrite_links=False,
+                    only_with_links=False,
+                )
+                run_sync_pass(
+                    docs,
+                    client=None,
+                    config=config,
+                    manifest=manifest,
+                    dry_run=True,
+                    strip_h1=strip_h1,
+                    rewrite_links=True,
+                    only_with_links=True,
+                )
+            if args.prune and not args.file:
+                all_docs = discover_docs(None)
+                prune_orphaned_pages(
+                    client=None,
+                    manifest=manifest,
+                    docs=all_docs,
+                    dry_run=True,
+                )
             return 0
 
         with ConfluenceClient(config) as client:
-            client.resolve_space_id()
-            run_sync_pass(
-                docs,
-                client=client,
-                config=config,
-                manifest=manifest,
-                dry_run=False,
-                strip_h1=strip_h1,
-                rewrite_links=False,
-                only_with_links=False,
-                space_key=client.space_key,
-            )
-            run_sync_pass(
-                docs,
-                client=client,
-                config=config,
-                manifest=manifest,
-                dry_run=False,
-                strip_h1=strip_h1,
-                rewrite_links=True,
-                only_with_links=True,
-                space_key=client.space_key,
-            )
+            if docs:
+                client.resolve_space_id()
+                run_sync_pass(
+                    docs,
+                    client=client,
+                    config=config,
+                    manifest=manifest,
+                    dry_run=False,
+                    strip_h1=strip_h1,
+                    rewrite_links=False,
+                    only_with_links=False,
+                    space_key=client.space_key,
+                )
+                run_sync_pass(
+                    docs,
+                    client=client,
+                    config=config,
+                    manifest=manifest,
+                    dry_run=False,
+                    strip_h1=strip_h1,
+                    rewrite_links=True,
+                    only_with_links=True,
+                    space_key=client.space_key,
+                )
+            if args.prune and not args.file:
+                all_docs = discover_docs(None)
+                prune_orphaned_pages(
+                    client=client,
+                    manifest=manifest,
+                    docs=all_docs,
+                    dry_run=False,
+                )
     except httpx.HTTPStatusError as exc:
         detail = exc.response.text
         logger.error("Confluence API error %s: %s", exc.response.status_code, detail)
@@ -504,8 +585,9 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("Confluence request failed: %s", exc)
         return 1
 
-    save_manifest(manifest)
-    logger.info("Wrote manifest %s", MANIFEST_PATH)
+    if docs or (args.prune and not args.file and not args.dry_run):
+        save_manifest(manifest)
+        logger.info("Wrote manifest %s", MANIFEST_PATH)
     return 0
 
 
