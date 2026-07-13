@@ -1,31 +1,61 @@
 """
-Sync local Markdown files in /docs to Confluence Cloud pages.
+Sync local Markdown files to Confluence Cloud pages (standalone CLI).
 
-Uses Confluence REST API v2 with Atlassian Document Format (ADF) bodies.
-Tracks page IDs in docs/.confluence-sync.json so re-runs update in place.
+No app server, database, or Databricks setup required — only this script,
+a folder of ``*.md`` files, and Confluence API credentials.
 
-Usage:
-    # Dry run (no API calls beyond optional space lookup)
-    python backend/scripts/sync_docs_to_confluence.py --dry-run
+Quick start (standalone)
+------------------------
+1. Install dependencies::
 
-    # First sync — set credentials via env or backend/.env
-    python backend/scripts/sync_docs_to_confluence.py
+       pip install httpx marklassian python-dotenv
 
-    # Sync a single file
-    python backend/scripts/sync_docs_to_confluence.py --file ARCHITECTURE.md
+2. Put markdown files in a folder (e.g. ``./docs``).
 
-    # Remove Confluence pages whose local .md file was deleted
-    python backend/scripts/sync_docs_to_confluence.py --prune
-    python backend/scripts/sync_docs_to_confluence.py --dry-run --prune  # preview deletions
+3. Set credentials (environment variables or a ``.env`` file next to the script
+   or in your current working directory)::
 
-Environment (also loaded from backend/.env when present):
-    CONFLUENCE_BASE_URL   e.g. https://your-org.atlassian.net/wiki
-    CONFLUENCE_EMAIL      Atlassian account email
-    CONFLUENCE_API_TOKEN  API token from https://id.atlassian.com/manage-profile/security/api-tokens
-    CONFLUENCE_SPACE_KEY  Space key, e.g. ENG (preferred)
-    CONFLUENCE_SPACE_ID   Numeric space id (optional if SPACE_KEY is set)
-    CONFLUENCE_PARENT_PAGE_ID  Optional parent page for all synced docs
-    CONFLUENCE_VERIFY_SSL     Set to false behind corporate SSL inspection (default true)
+       CONFLUENCE_BASE_URL=https://your-org.atlassian.net/wiki
+       CONFLUENCE_EMAIL=you@company.com
+       CONFLUENCE_API_TOKEN=your-api-token
+       CONFLUENCE_SPACE_KEY=EDH
+       CONFLUENCE_PARENT_PAGE_ID=123456789   # optional nest-under page
+       CONFLUENCE_VERIFY_SSL=false           # if corporate SSL inspection breaks TLS
+
+4. Run::
+
+       python sync_docs_to_confluence.py --docs-dir ./docs --dry-run
+       python sync_docs_to_confluence.py --docs-dir ./docs --insecure
+       python sync_docs_to_confluence.py --docs-dir ./docs --prune --insecure
+
+In this repository, you can omit ``--docs-dir`` (defaults to ``<repo>/docs``) and
+credentials may live in ``backend/.env``.
+
+What it does
+------------
+- Converts Markdown to Confluence ADF and creates/updates pages via REST API v2
+- Stores page IDs in ``<docs-dir>/.confluence-sync.json`` for idempotent re-runs
+- Rewrites relative ``./OTHER.md`` links to Confluence URLs when targets exist
+- ``--prune`` deletes Confluence pages whose local ``.md`` file was removed
+
+Examples
+--------
+    python sync_docs_to_confluence.py --dry-run
+    python sync_docs_to_confluence.py --insecure
+    python sync_docs_to_confluence.py --file ARCHITECTURE.md
+    python sync_docs_to_confluence.py --dry-run --prune
+    python sync_docs_to_confluence.py --docs-dir /path/to/markdown --space-key EDH
+
+Environment / CLI overrides
+---------------------------
+    CONFLUENCE_BASE_URL          Confluence wiki base URL (…/wiki)
+    CONFLUENCE_EMAIL             Atlassian account email
+    CONFLUENCE_API_TOKEN         API token (create via Confluence profile → Security)
+    CONFLUENCE_SPACE_KEY         Space key from URL (…/spaces/EDH/… → EDH)
+    CONFLUENCE_SPACE_ID          Numeric space id (optional if SPACE_KEY is set)
+    CONFLUENCE_PARENT_PAGE_ID    Parent page id to nest all synced pages under
+    CONFLUENCE_DOCS_DIR          Default folder of ``*.md`` files (overridden by --docs-dir)
+    CONFLUENCE_VERIFY_SSL        Set false behind corporate SSL inspection (or use --insecure)
 """
 from __future__ import annotations
 
@@ -46,7 +76,8 @@ try:
     from marklassian import markdown_to_adf
 except ImportError as exc:  # pragma: no cover - import guard for clearer CLI error
     raise SystemExit(
-        "marklassian is required. Install project deps: pip install -r backend/requirements.txt"
+        "Missing dependencies. Install with:\n"
+        "  pip install httpx marklassian python-dotenv"
     ) from exc
 
 try:
@@ -56,9 +87,30 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parents[2]
 DOCS_DIR = REPO_ROOT / "docs"
 MANIFEST_PATH = DOCS_DIR / ".confluence-sync.json"
+
+def default_docs_dir() -> Path:
+    """Prefer repo docs/, then ./docs from cwd, else cwd/docs."""
+    env_dir = os.environ.get("CONFLUENCE_DOCS_DIR", "").strip()
+    if env_dir:
+        return Path(env_dir).expanduser()
+    repo_docs = REPO_ROOT / "docs"
+    if repo_docs.is_dir():
+        return repo_docs
+    cwd_docs = Path.cwd() / "docs"
+    if cwd_docs.is_dir():
+        return cwd_docs
+    return repo_docs if (REPO_ROOT / "backend").is_dir() else cwd_docs
+
+
+def configure_paths(docs_dir: Path) -> None:
+    global DOCS_DIR, MANIFEST_PATH
+    DOCS_DIR = docs_dir.resolve()
+    MANIFEST_PATH = DOCS_DIR / ".confluence-sync.json"
+
 
 RELATIVE_MD_LINK = re.compile(r"\]\((\./)?([^)#]+\.md)(#[^)]+)?\)")
 LEADING_H1 = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
@@ -184,9 +236,14 @@ class ConfluenceClient:
 def load_env() -> None:
     if load_dotenv is None:
         return
-    env_path = REPO_ROOT / "backend" / ".env"
-    if env_path.is_file():
-        load_dotenv(env_path)
+    for env_path in (
+        Path.cwd() / ".env",
+        SCRIPT_PATH.parent / ".env",
+        REPO_ROOT / "backend" / ".env",
+    ):
+        if env_path.is_file():
+            load_dotenv(env_path)
+            return
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -541,7 +598,26 @@ def prune_orphaned_pages(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description="Sync local Markdown files to Confluence Cloud pages.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Standalone quick start:\n"
+            "  pip install httpx marklassian python-dotenv\n"
+            "  export CONFLUENCE_BASE_URL=... CONFLUENCE_EMAIL=... CONFLUENCE_API_TOKEN=...\n"
+            "  export CONFLUENCE_SPACE_KEY=EDH\n"
+            "  python %(prog)s --docs-dir ./docs --dry-run\n"
+            "  python %(prog)s --docs-dir ./docs --insecure\n"
+            "\n"
+            "Full guide: open sync_docs_to_confluence.py and read the module docstring at the top."
+        ),
+    )
+    parser.add_argument(
+        "--docs-dir",
+        type=Path,
+        default=None,
+        help="Folder of *.md files to sync (default: CONFLUENCE_DOCS_DIR, else <repo>/docs or ./docs)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Preview sync without writing to Confluence")
     parser.add_argument("--file", help="Sync only this file under docs/ (basename or path)")
     parser.add_argument("--keep-leading-h1", action="store_true", help="Keep the first # heading in page body")
@@ -568,6 +644,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     load_env()
     args = build_parser().parse_args(argv)
+    configure_paths(args.docs_dir or default_docs_dir())
     config = parse_config(args)
     manifest = load_manifest()
 
