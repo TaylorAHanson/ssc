@@ -317,6 +317,26 @@ def file_has_internal_links(path: Path) -> bool:
     return bool(RELATIVE_MD_LINK.search(text))
 
 
+def _internal_link_targets(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    return [Path(match.group(2)).name for match in RELATIVE_MD_LINK.finditer(text)]
+
+
+def file_needs_link_bootstrap(path: Path, manifest: dict[str, Any]) -> bool:
+    """True when this file links to a .md that is not yet in the manifest."""
+    if not file_has_internal_links(path):
+        return False
+    pages = manifest.get("pages", {})
+    return any(
+        not pages.get(name, {}).get("page_id")
+        for name in _internal_link_targets(path)
+    )
+
+
+def needs_link_bootstrap_pass(docs: list[Path], manifest: dict[str, Any]) -> bool:
+    return any(file_needs_link_bootstrap(path, manifest) for path in docs)
+
+
 def sync_file(
     path: Path,
     *,
@@ -421,7 +441,57 @@ def run_sync_pass(
     return changed
 
 
-def orphaned_manifest_entries(
+def run_full_sync(
+    docs: list[Path],
+    *,
+    client: ConfluenceClient | None,
+    config: ConfluenceConfig,
+    manifest: dict[str, Any],
+    dry_run: bool,
+    strip_h1: bool,
+    space_key: str | None = None,
+) -> bool:
+    """Sync all docs, using a two-pass link rewrite only on first-time bootstrap."""
+    if needs_link_bootstrap_pass(docs, manifest):
+        logger.info("Link bootstrap: syncing once without internal links, then rewriting links")
+        changed = run_sync_pass(
+            docs,
+            client=client,
+            config=config,
+            manifest=manifest,
+            dry_run=dry_run,
+            strip_h1=strip_h1,
+            rewrite_links=False,
+            only_with_links=False,
+            space_key=space_key,
+        )
+        changed = run_sync_pass(
+            docs,
+            client=client,
+            config=config,
+            manifest=manifest,
+            dry_run=dry_run,
+            strip_h1=strip_h1,
+            rewrite_links=True,
+            only_with_links=True,
+            space_key=space_key,
+        ) or changed
+        return changed
+
+    changed = False
+    for path in docs:
+        if sync_file(
+            path,
+            client=client,
+            config=config,
+            manifest=manifest,
+            dry_run=dry_run,
+            strip_h1=strip_h1,
+            rewrite_links=file_has_internal_links(path),
+            space_key=space_key,
+        ):
+            changed = True
+    return changed
     manifest: dict[str, Any],
     docs: list[Path],
 ) -> list[tuple[str, dict[str, Any]]]:
@@ -514,25 +584,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.dry_run:
             if docs:
-                run_sync_pass(
+                run_full_sync(
                     docs,
                     client=None,
                     config=config,
                     manifest=manifest,
                     dry_run=True,
                     strip_h1=strip_h1,
-                    rewrite_links=False,
-                    only_with_links=False,
-                )
-                run_sync_pass(
-                    docs,
-                    client=None,
-                    config=config,
-                    manifest=manifest,
-                    dry_run=True,
-                    strip_h1=strip_h1,
-                    rewrite_links=True,
-                    only_with_links=True,
                 )
             if args.prune and not args.file:
                 all_docs = discover_docs(None)
@@ -547,26 +605,13 @@ def main(argv: list[str] | None = None) -> int:
         with ConfluenceClient(config) as client:
             if docs:
                 client.resolve_space_id()
-                run_sync_pass(
+                run_full_sync(
                     docs,
                     client=client,
                     config=config,
                     manifest=manifest,
                     dry_run=False,
                     strip_h1=strip_h1,
-                    rewrite_links=False,
-                    only_with_links=False,
-                    space_key=client.space_key,
-                )
-                run_sync_pass(
-                    docs,
-                    client=client,
-                    config=config,
-                    manifest=manifest,
-                    dry_run=False,
-                    strip_h1=strip_h1,
-                    rewrite_links=True,
-                    only_with_links=True,
                     space_key=client.space_key,
                 )
             if args.prune and not args.file:
