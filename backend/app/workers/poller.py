@@ -488,10 +488,32 @@ async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
                 # Process the request
                 await _process_request_state_machine(db, request)
                 
-                # Reset retry count on success
+                # Reset retry count on success. Capture the terminal status into
+                # locals first so a late connection drop here can still be
+                # recovered on a fresh session without a lazy reload.
+                _ok_status = request.status
+                _ok_state = request.current_state
                 request.retry_count = 0
                 request.last_error = None
-                db.commit()
+                try:
+                    db.commit()
+                except Exception as commit_err:  # noqa: BLE001
+                    # The status was already persisted by the state-machine step;
+                    # this commit only clears retry bookkeeping. If the connection
+                    # died, re-persist status + clear the retry state on a fresh
+                    # session rather than letting a completed run fall into the
+                    # retry/force-fail path.
+                    logger.warning(
+                        f"Post-success commit failed for {request_id} ({commit_err}); "
+                        "clearing retry state on a fresh session"
+                    )
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                    _persist_status_on_fresh_session(
+                        request_id, _ok_status, _ok_state, clear_error=True
+                    )
                 
             except RetryableError as e:
                 # Retryable error - increment retry count
@@ -905,7 +927,29 @@ async def _process_request_state_machine(db, request: RequestModel):
         logger.info(f"[{request.id}] V2 status: {request.status} -> {new_status.value}")
         request.status = new_status.value
         request.current_state = result.current_node or result.status
-        db.commit()
+        # Capture the intended values into locals BEFORE committing so a dead
+        # connection can be recovered without a lazy attribute reload (which
+        # would itself hit the dead connection).
+        _final_status = new_status.value
+        _final_state = request.current_state
+        try:
+            db.commit()
+        except Exception as commit_err:  # noqa: BLE001
+            # A long scan can outlive its Lakebase connection; the terminal
+            # status write then fails on a dead session. Persist the real
+            # (often COMPLETED) status on a fresh session so a finished run is
+            # not misreported as failed. Only re-raise if that also fails.
+            logger.error(
+                f"[{request.id}] status commit failed ({commit_err}); "
+                "retrying on a fresh session",
+                exc_info=True,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            if not _persist_status_on_fresh_session(request.id, _final_status, _final_state):
+                raise
 
 
 # Gate types that route to a human approver (and therefore need an approval
@@ -1041,6 +1085,63 @@ def _force_fail_on_fresh_session(
             db2.rollback()
         except Exception:
             pass
+    finally:
+        db2.close()
+
+
+def _persist_status_on_fresh_session(
+    request_id: str,
+    status: str,
+    current_state: Optional[str] = None,
+    clear_error: bool = False,
+) -> bool:
+    """Persist a (usually terminal) status on a brand-new DB session.
+
+    Success-path analog of ``_force_fail_on_fresh_session``. A long
+    multi-workspace Enforcement Sentinel scan can outlive its Lakebase
+    connection; when the connection is dropped mid-run the *terminal* write
+    (e.g. status -> 'completed') fails on the dead session, and a run that
+    actually FINISHED would otherwise be reported as failed. We dispose the dead
+    pool and re-persist the real status on a fresh connection so the outcome is
+    recorded truthfully. Returns True iff the fresh-session write committed.
+    """
+    try:
+        reset_database_connection()
+    except Exception as reset_err:  # noqa: BLE001
+        logger.error(
+            f"Could not reset DB connection while persisting status for {request_id}: {reset_err}"
+        )
+    db2 = get_lakebase_session()
+    try:
+        req = (
+            db2.query(RequestModel)
+            .filter(RequestModel.id == request_id)
+            .first()
+        )
+        if req is None:
+            return False
+        req.status = status
+        if current_state is not None:
+            req.current_state = current_state
+        if clear_error:
+            req.retry_count = 0
+            req.last_error = None
+        db2.commit()
+        logger.warning(
+            f"Persisted status={status} for {request_id} on a fresh session after "
+            "a mid-run connection loss"
+        )
+        return True
+    except Exception as fresh_err:  # noqa: BLE001
+        logger.error(
+            f"Fresh-session status persist failed for {request_id}: {fresh_err}",
+            exc_info=True,
+        )
+        try:
+            db2.rollback()
+        except Exception:
+            pass
+        return False
     finally:
         db2.close()
 
