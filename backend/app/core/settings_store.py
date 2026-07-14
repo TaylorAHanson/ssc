@@ -75,6 +75,12 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Notifications & Governance", "key": "SENTINEL_SCAN_CONCURRENCY", "label": "Sentinel scan concurrency",
      "type": "int", "min": 1,
      "help": "Max concurrent units of work during a sentinel scan. 1 = fully serialized."},
+    {"group": "Notifications & Governance", "key": "SCAN_CATALOGS", "label": "Scanned catalogs",
+     "type": "string",
+     "help": "Comma-separated list of Unity Catalog catalogs to scan for governed data "
+             "(dataset-tag discovery + the data-asset cache sync), e.g. 'enterprise_prod, finance_prod'. "
+             "Spaces around each name are trimmed. Leave BLANK to scan every catalog the service "
+             "principal can see (excluding system/samples). Applies on the next scan/sync — no restart needed."},
 
     # --- Agent ----------------------------------------------------------
     {"group": "Agent", "key": "AGENT_MAX_ITERATIONS", "label": "Max tool iterations",
@@ -183,11 +189,6 @@ READONLY_FIELDS: List[Dict[str, Any]] = [
     {"group": "Databricks", "key": "AI_GATEWAY_ENDPOINT", "label": "AI Gateway endpoint"},
     {"group": "Databricks", "key": "DATA_QUALITY_TABLE", "label": "Data quality table",
      "help": "Fully-qualified table (catalog.schema.table) holding the ADOC data-quality history used for certification checks."},
-    {"group": "Databricks", "key": "SCAN_CATALOGS", "label": "Scanned catalogs",
-     "help": "Comma-separated list of Unity Catalog catalogs to scan for governed data "
-             "(dataset-tag discovery + the data-asset cache sync), e.g. 'enterprise_prod, finance_prod'. "
-             "Spaces around each name are trimmed. Leave BLANK to scan every catalog the service "
-             "principal can see (excluding system/samples)."},
     {"group": "Identity & Email", "key": "IDENTITY_PROVIDER", "label": "Identity provider"},
     {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_PROVIDER", "label": "Email provider"},
     {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_SES_REGION", "label": "SES region"},
