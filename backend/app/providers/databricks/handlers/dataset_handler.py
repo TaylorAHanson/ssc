@@ -1,5 +1,6 @@
 import os
 import glob
+import time
 import yaml
 import logging
 from typing import List, Dict, Any
@@ -14,9 +15,34 @@ logger = logging.getLogger(__name__)
 # appearing on a later run once the tag is added.
 DEFAULT_RELIABILITY_WINDOW_DAYS = 7
 
+# ADOC *_history tables that hold per-rule-item results. Each has a slightly
+# different `items` struct schema (nested columnMapping/thresholdLevel types
+# differ), so UNION-ing the raw `items` array fails with INCOMPATIBLE_COLUMN_TYPE.
+# We explode + project only the scalar fields we need inside each arm so the
+# unioned columns are all compatible scalar types.
+_ADOC_HISTORY_TABLES = [
+    "adoc_dq_history",
+    "adoc_freshness_history",
+    "adoc_data_drift_history",
+    "adoc_profile_anomaly_history",
+    "adoc_schema_drift_history",
+]
+_ADOC_ITEM_PROJECTION = (
+    "assetInfo.assetUid AS assetUid, assetInfo.assetName AS assetName, "
+    "execution.ruleName AS ruleName, execution.ruleType AS ruleType, processed_at, "
+    "item.ruleItemId AS ruleItemId, item.columnName AS columnName, "
+    "item.dimension AS dimension, item.resultPercent AS resultPercent, "
+    "item.threshold AS threshold, item.rowsFailed AS rowsFailed"
+)
+
+
 class DatasetResourceHandler(BaseResourceHandler):
     async def discover(self) -> List[Dict[str, Any]]:
         resources = []
+        # Registry of (asset_info, full_name, window_days) collected while walking
+        # every dataset, so the (expensive) ADOC data-quality history can be read
+        # in a few batched queries AFTER discovery rather than once per table.
+        dq_targets: List[tuple] = []
         try:
             from app.db.session import get_db
             from app.db.data_contract import DataContractModel
@@ -111,99 +137,19 @@ class DatasetResourceHandler(BaseResourceHandler):
                         # instead of all at once. When the tag is absent we fall back
                         # to a default lookback window; the missing tag is still
                         # reported separately by the reliability_window_tag rule.
+                        #
+                        # The actual ADOC *_history read is DEFERRED: instead of one
+                        # query per table (each re-scanning the large history tables),
+                        # we register this asset + its lookback window and fetch them
+                        # all in a few batched queries after discovery. Until then,
+                        # failed_rule_count stays -1 ("not fetched").
                         reliability_window = asset_info["tags"].get("reliability_window")
                         # Extract just the number from values like "7-days"; fall back
                         # to the default window when no reliability_window tag is set.
                         digits = "".join([c for c in str(reliability_window) if c.isdigit()]) if reliability_window else ""
                         window_days = int(digits) if digits else DEFAULT_RELIABILITY_WINDOW_DAYS
-                        if hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID:
-                            try:
-                                # Pull per-rule failure DETAILS (not just a count) so the
-                                # certification UI can surface actionable specifics: the rule
-                                # name/dimension, the score vs. threshold, and the column /
-                                # table impacted. We dedupe to the most recent occurrence per
-                                # rule-item (ruleItemId) inside the reliability window so a rule
-                                # that fails on every daily run is counted once, reflecting its
-                                # current state. failed_rule_count is then derived from this set.
-                                # The ADOC *_history tables live under a configurable
-                                # catalog.schema so the same code works against the real
-                                # customer environment (enterprise_stg.data_quality) and
-                                # local/dev workspaces where they live elsewhere.
-                                adoc_schema = settings.DATA_QUALITY_ADOC_SCHEMA or "enterprise_stg.data_quality"
-                                # NOTE: each ADOC *_history table has a slightly different
-                                # `items` struct schema (e.g. nested columnMapping/thresholdLevel
-                                # types differ), so UNION-ing the raw `items` array fails with
-                                # INCOMPATIBLE_COLUMN_TYPE. We instead explode + project only the
-                                # scalar fields we need inside each arm, so the unioned columns
-                                # are all compatible scalar types.
-                                item_projection = (
-                                    "assetInfo.assetUid AS assetUid, assetInfo.assetName AS assetName, "
-                                    "execution.ruleName AS ruleName, execution.ruleType AS ruleType, processed_at, "
-                                    "item.ruleItemId AS ruleItemId, item.columnName AS columnName, "
-                                    "item.dimension AS dimension, item.resultPercent AS resultPercent, "
-                                    "item.threshold AS threshold, item.rowsFailed AS rowsFailed"
-                                )
-                                adoc_tables = [
-                                    "adoc_dq_history",
-                                    "adoc_freshness_history",
-                                    "adoc_data_drift_history",
-                                    "adoc_profile_anomaly_history",
-                                    "adoc_schema_drift_history",
-                                ]
-                                arms = "\n    UNION ALL\n    ".join(
-                                    f"SELECT {item_projection} FROM {adoc_schema}.{t} LATERAL VIEW explode(items) exploded AS item"
-                                    for t in adoc_tables
-                                )
-                                query = f"""
-WITH exploded AS (
-    {arms}
-)
-SELECT ruleName, ruleType, assetName, columnName, dimension, resultPercent, threshold, rowsFailed
-FROM exploded
-WHERE assetUid LIKE '%{full_name}%'
-  AND cast(processed_at AS date) >= date_sub(current_date(), {window_days})
-  AND resultPercent < threshold
-QUALIFY ROW_NUMBER() OVER (PARTITION BY ruleItemId ORDER BY processed_at DESC) = 1
-ORDER BY resultPercent ASC
-"""
-                                logger.info(
-                                    f"Fetching failed data quality rules for asset '{full_name}' "
-                                    f"(reliability_window={window_days} days"
-                                    f"{'' if reliability_window else ', default - no tag'})."
-                                )
-                                response = self.workspace_client.statement_execution.execute_statement(
-                                    statement=query,
-                                    warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
-                                    wait_timeout="30s"
-                                )
+                        dq_targets.append((asset_info, full_name, window_days))
 
-                                if response.status.state.value in ("FAILED", "CANCELED", "CLOSED"):
-                                    error_msg = response.status.error.message if response.status.error else "Unknown SQL error"
-                                    logger.error(f"SQL execution failed when fetching failed rules for {full_name}. Query: {query} | Error: {error_msg}")
-                                else:
-                                    rows = response.result.data_array if (response.result and response.result.data_array) else []
-                                    failed_rules = []
-                                    for r in rows:
-                                        # Pad short rows so unpacking is safe; column order
-                                        # matches the SELECT list above. The statement API
-                                        # returns all values as strings.
-                                        r = list(r) + [None] * (8 - len(r))
-                                        rule_name, rule_type, asset_name, column_name, dimension, result_percent, threshold, rows_failed = r[:8]
-                                        failed_rules.append({
-                                            "rule": rule_name or "Unnamed rule",
-                                            "rule_type": rule_type,
-                                            "table": asset_name or full_name,
-                                            "column": column_name,
-                                            "dimension": dimension,
-                                            "score": float(result_percent) if result_percent not in (None, "") else None,
-                                            "threshold": float(threshold) if threshold not in (None, "") else None,
-                                            "rows_failed": int(rows_failed) if rows_failed not in (None, "") else None,
-                                        })
-                                    asset_info["failed_rules"] = failed_rules
-                                    asset_info["failed_rule_count"] = len(failed_rules)
-                            except Exception as e:
-                                logger.error(f"Failed to fetch failed rules for {full_name} via SQL. Query: {query if 'query' in locals() else 'Unknown'} | Exception: {e}")
-                        
                         # Fetch metadata from Unity Catalog
                         try:
                             catalog_info = self.workspace_client.catalogs.get(name=catalog)
@@ -262,7 +208,15 @@ ORDER BY resultPercent ASC
                     
                 except Exception as e:
                     logger.error(f"Failed to process dataset {dp_name}: {e}")
-                    
+
+            # Now that every asset is collected, read the ADOC data-quality
+            # history in a handful of batched queries (one per distinct lookback
+            # window) instead of one query per table.
+            try:
+                self._populate_failed_rules_batched(dq_targets)
+            except Exception as e:  # noqa: BLE001 - never fail discovery on the DQ batch
+                logger.error(f"Batched data-quality fetch failed: {e}", exc_info=True)
+
         except Exception as e:
             logger.error(f"Failed during dataset discovery: {e}")
             
@@ -271,7 +225,177 @@ ORDER BY resultPercent ASC
                 db.close()
                 
         return resources
-        
+
+    def _build_failed_rules_query(self, adoc_schema: str, window_days: int, full_names: List[str]) -> str:
+        """Build ONE query returning the latest failed rule-item per asset for a
+        given lookback window, across all ADOC *_history tables.
+
+        Mirrors the previous per-table query (explode + project scalars, keep the
+        most recent occurrence per rule-item, only rows where score < threshold)
+        but covers every ``full_name`` at once via an OR of ``assetUid LIKE`` so a
+        single warehouse scan serves the whole group.
+        """
+        arms = "\n    UNION ALL\n    ".join(
+            f"SELECT {_ADOC_ITEM_PROJECTION} FROM {adoc_schema}.{t} "
+            "LATERAL VIEW explode(items) exploded AS item"
+            for t in _ADOC_HISTORY_TABLES
+        )
+        # Match any requested asset (assetUid contains the full dotted name), same
+        # semantics as the old per-asset LIKE '%full_name%'. Single-quotes in a UC
+        # name are not valid, so no escaping is required.
+        likes = " OR ".join(f"assetUid LIKE '%{fn}%'" for fn in full_names)
+        asset_filter = f"      AND ({likes})\n" if likes else ""
+        return f"""
+WITH exploded AS (
+    {arms}
+),
+ranked AS (
+    SELECT assetUid, assetName, ruleName, ruleType, columnName, dimension,
+           resultPercent, threshold, rowsFailed, processed_at,
+           ROW_NUMBER() OVER (PARTITION BY assetUid, ruleItemId ORDER BY processed_at DESC) AS rn
+    FROM exploded
+    WHERE cast(processed_at AS date) >= date_sub(current_date(), {window_days})
+      AND resultPercent < threshold
+{asset_filter}
+)
+SELECT assetUid, assetName, ruleName, ruleType, columnName, dimension, resultPercent, threshold, rowsFailed
+FROM ranked
+WHERE rn = 1
+ORDER BY resultPercent ASC
+"""
+
+    def _run_dq_statement(self, query: str) -> tuple:
+        """Execute a DQ statement, poll to completion, and collect ALL chunks.
+
+        Returns ``(state, rows)``. Two correctness guarantees the naive
+        "execute + read data_array" pattern misses — and that batching makes
+        important:
+
+        * **Only SUCCEEDED yields rows.** ``execute_statement`` only blocks up to
+          its ``wait_timeout`` (max 50s); a heavy batched scan can return still
+          RUNNING. We poll ``get_statement`` to a terminal state instead of
+          reading an empty first chunk and mistaking an unfinished query for a
+          clean (zero-failure) result. Any non-SUCCEEDED state returns ``[]`` with
+          that state so the caller leaves the affected assets "not fetched" (-1).
+        * **All chunks, not just the first.** A large batched result spans
+          multiple chunks; we follow ``next_chunk_index`` so failures aren't
+          silently truncated (which would under-report / falsely clear assets).
+        """
+        resp = self.workspace_client.statement_execution.execute_statement(
+            statement=query,
+            warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
+            wait_timeout="50s",
+        )
+        statement_id = resp.statement_id
+
+        deadline = time.monotonic() + 300  # overall poll budget
+        while True:
+            state = resp.status.state.value if (resp.status and resp.status.state) else "UNKNOWN"
+            if state in ("SUCCEEDED", "FAILED", "CANCELED", "CLOSED"):
+                break
+            if time.monotonic() >= deadline:
+                logger.error("Batched DQ query still %s after poll budget; treating as not fetched.", state)
+                break
+            time.sleep(2)
+            resp = self.workspace_client.statement_execution.get_statement(statement_id)
+
+        state = resp.status.state.value if (resp.status and resp.status.state) else "UNKNOWN"
+        if state != "SUCCEEDED":
+            return state, []
+
+        rows: List[Any] = []
+        result = resp.result
+        while result is not None:
+            if result.data_array:
+                rows.extend(result.data_array)
+            next_idx = getattr(result, "next_chunk_index", None)
+            if next_idx is None or next_idx < 0:
+                break
+            result = self.workspace_client.statement_execution.get_statement_result_chunk_n(
+                statement_id, next_idx
+            )
+        return state, rows
+
+    def _populate_failed_rules_batched(self, dq_targets: List[tuple]) -> None:
+        """Fill in each asset's failed DQ rules with one query per distinct window.
+
+        The ADOC *_history tables are large; the previous approach re-scanned them
+        once per table (N warehouse round-trips, each waiting up to 30s). Assets
+        that share a reliability window can be served by a single scan, so this
+        cuts the DQ cost from O(tables) to O(distinct windows) — usually 1–3
+        queries for an entire run. Assets in a group whose query fails keep
+        failed_rule_count = -1 ("not fetched"); a successful query that returns no
+        rows for an asset yields 0 (fetched, clean).
+        """
+        if not dq_targets:
+            return
+        if not (hasattr(settings, "DATABRICKS_WAREHOUSE_ID") and settings.DATABRICKS_WAREHOUSE_ID):
+            logger.warning("No warehouse configured — skipping data-quality fetch for %d asset(s).", len(dq_targets))
+            return
+
+        adoc_schema = settings.DATA_QUALITY_ADOC_SCHEMA or "enterprise_stg.data_quality"
+
+        # Group assets by lookback window so each query applies the right filter.
+        by_window: Dict[int, List[tuple]] = {}
+        for asset_info, full_name, window_days in dq_targets:
+            by_window.setdefault(window_days, []).append((asset_info, full_name))
+
+        logger.info(
+            "Batched data-quality fetch: %d asset(s) across %d distinct window(s) %s.",
+            len(dq_targets), len(by_window), sorted(by_window.keys()),
+        )
+
+        for window_days, group in by_window.items():
+            full_names = [fn for _, fn in group]
+            query = self._build_failed_rules_query(adoc_schema, window_days, full_names)
+            try:
+                state, rows = self._run_dq_statement(query)
+            except Exception as e:  # noqa: BLE001
+                logger.error(
+                    "Batched DQ query raised for window=%dd (%d asset(s)): %s",
+                    window_days, len(full_names), e,
+                )
+                continue  # leave failed_rule_count = -1 for this group
+
+            if state != "SUCCEEDED":
+                logger.error(
+                    "Batched DQ query ended in state=%s for window=%dd (%d asset(s)); "
+                    "leaving those assets as not-fetched.",
+                    state, window_days, len(full_names),
+                )
+                continue  # leave failed_rule_count = -1 for this group
+
+            # The query succeeded → every asset in this group is now "fetched".
+            for asset_info, _ in group:
+                asset_info["failed_rules"] = []
+                asset_info["failed_rule_count"] = 0
+
+            for r in rows:
+                # Pad short rows so unpacking is safe; column order matches the
+                # SELECT list. The statement API returns all values as strings.
+                r = list(r) + [None] * (9 - len(r))
+                asset_uid, asset_name, rule_name, rule_type, column_name, dimension, result_percent, threshold, rows_failed = r[:9]
+                uid = asset_uid or ""
+                for asset_info, full_name in group:
+                    # Attribute the row exactly like the old per-asset query did:
+                    # assetUid LIKE '%full_name%'. (No assetName fallback — the SQL
+                    # already filters on assetUid, and matching assetName too could
+                    # misattribute a row to a second asset.)
+                    if full_name in uid:
+                        asset_info["failed_rules"].append({
+                            "rule": rule_name or "Unnamed rule",
+                            "rule_type": rule_type,
+                            "table": asset_name or full_name,
+                            "column": column_name,
+                            "dimension": dimension,
+                            "score": float(result_percent) if result_percent not in (None, "") else None,
+                            "threshold": float(threshold) if threshold not in (None, "") else None,
+                            "rows_failed": int(rows_failed) if rows_failed not in (None, "") else None,
+                        })
+
+            for asset_info, _ in group:
+                asset_info["failed_rule_count"] = len(asset_info["failed_rules"])
+
     def _resolve_physical_tables(self, resource_id: str) -> List[str]:
         """Resolve the fully-qualified physical tables backing a data product.
 
