@@ -236,20 +236,21 @@ ORDER BY resultPercent ASC
                                 asset_info["type"] = "view"
                             
                         # RBAC verification via the Unity Catalog Grants API
-                        # (SHOW GRANTS). Reading grants requires MANAGE / ownership /
-                        # workspace-admin on the object; when we CAN'T read them we
-                        # must not assume "no access controls" (that would false-flag
-                        # every table), so we record rbac_readable=False and the policy
-                        # skips the check rather than failing it.
+                        # (SHOW GRANTS). Reading grants on a UC object requires MANAGE
+                        # on the securable, object ownership, or metastore admin
+                        # (workspace admin is NOT sufficient for UC objects). When we
+                        # CAN'T read them we must not assume "no access controls" (that
+                        # would false-flag every table), so we record rbac_readable=False
+                        # and the policy skips the check rather than failing it.
                         try:
                             grants = self.workspace_client.grants.get(securable_type="table", full_name=full_name)
                             asset_info["rbac_defined"] = len(grants.privilege_assignments or []) > 0
                             asset_info["rbac_readable"] = True
                         except Exception as e:
                             logger.warning(
-                                "Could not read grants for %s (need MANAGE/owner/workspace "
-                                "admin to SHOW GRANTS) — skipping the RBAC check for this "
-                                "asset: %s",
+                                "Could not read grants for %s (need MANAGE on the catalog/"
+                                "schema, object ownership, or metastore admin to SHOW GRANTS) "
+                                "— skipping the RBAC check for this asset: %s",
                                 full_name, e,
                             )
                             asset_info["rbac_defined"] = False

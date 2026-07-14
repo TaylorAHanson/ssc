@@ -95,9 +95,10 @@ Additionally, the SP for the **data-certification workspace** (`SENTINEL_DATA_CE
 GRANT BROWSE, USE CATALOG, APPLY TAG ON CATALOG <catalog> TO `<cert-sp>`;
 GRANT USE SCHEMA ON CATALOG <catalog> TO `<cert-sp>`;       -- or per-schema
 GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<cert-sp>`;
--- Only if the RBAC / access-controls check is enabled (SHOW GRANTS needs MANAGE,
--- ownership, or workspace admin — the cert SP is already workspace admin, so this
--- is usually covered; MANAGE at catalog level is the least-privilege alternative):
+-- Only if the RBAC / access-controls check is enabled. Reading a table/view's
+-- grants (SHOW GRANTS) requires MANAGE on the securable, ownership, or metastore
+-- admin — workspace admin is NOT sufficient for arbitrary UC objects. Grant MANAGE
+-- at catalog (or schema) level so it inherits down:
 -- GRANT MANAGE ON CATALOG <catalog> TO `<cert-sp>`;
 ```
 
@@ -114,7 +115,7 @@ GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<
 | `USE SCHEMA` | schema/catalog | ‡ | ✓† | Required for tag writes (certification) |
 | `APPLY TAG` | catalog/schema/table | ‡ | ✓† | Authorizes `ALTER TABLE/VIEW … SET TAGS` (certification) |
 | `SELECT` | `DATA_QUALITY_ADOC_SCHEMA` | ‡ | ✓† | Read ADOC data-quality history |
-| `MANAGE` (RBAC check only) | catalog | ‡* | ✓*† | Read grants (`SHOW GRANTS`) for the access-controls check; workspace admin also satisfies this |
+| `MANAGE` (RBAC check only) | catalog / schema (inherits) | ‡* | ✓*† | Read grants (`SHOW GRANTS`) for the access-controls check. Requires `MANAGE`, object ownership, or metastore admin — **workspace admin is not sufficient** for UC objects |
 | `CAN USE` | SQL warehouse | ✓ | ✓ | Runs each SP's SQL (discovery for the App SP; tagging/DQ for the cert SP) |
 | `CAN QUERY` | model-serving endpoint | ✓ | — | Assistant + ODCS drafting (app only) |
 | `READ` | target-SP secret scope | ✓ | — | App loads each target SP's credentials |
@@ -134,6 +135,7 @@ GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<
 - **Views need the tag too.** The certifier issues `ALTER VIEW … SET TAGS` for views (falling back from `ALTER TABLE`), so `APPLY TAG` must cover views as well as tables — a catalog- or schema-level grant covers both.
 - **`system.certification_status` is a Databricks-managed tag.** It's a built-in system tag, not a customer-defined governed tag, so `APPLY TAG` (+ `USE CATALOG`/`USE SCHEMA`) is all that's needed to set it — no `ASSIGN` grant required.
 - **`information_schema` is metadata-filtered.** A table appears there only if the SP can see it — and `BROWSE` on the catalog is sufficient for that (no `SELECT`/`USE`/ownership on the table required). Row-/column-level security filters *rows*, not table visibility.
-- **RBAC / access-controls check is NOT an account-API call.** It reads a table's grants via the Unity Catalog **Grants API** (`SHOW GRANTS`), which is metastore/workspace-scoped. Reading all grants requires `MANAGE`, ownership, or workspace admin — `BROWSE`/`APPLY TAG` are not enough. The `information_schema.table_privileges` view is **not** a reliable substitute: without ownership/metastore-admin it only returns the SP's *own* grants, so it can't tell whether other principals have access. When the SP can't read grants the check is **skipped** (logged), never failed, so a permission gap can't false-flag every table.
+- **RBAC / access-controls check is NOT an account-API call.** It reads a table's grants via the Unity Catalog **Grants API** (`SHOW GRANTS`), which is metastore-scoped. Reading all grants on an existing UC object requires one of: `MANAGE` on the securable, the object's owner (or the owner of its parent catalog/schema), or a metastore admin. **Workspace admin is NOT sufficient** for arbitrary UC objects — that provision applies to legacy Hive metastore objects, not Unity Catalog tables/views. `BROWSE`/`APPLY TAG` are not enough either. The practical recommendation is to grant `MANAGE` at the catalog (or schema) level so it inherits down. The `information_schema.table_privileges` view is **not** a reliable substitute: without ownership/metastore-admin it only returns the SP's *own* grants. When the SP can't read grants the check is **skipped** (logged), never failed, so a permission gap can't false-flag every table.
+- **ABAC policies are a separate, tighter check (not currently evaluated).** This check only inspects classic RBAC grants. If you later validate ABAC policies, note that `SHOW EFFECTIVE POLICIES` (which surfaces inherited catalog/schema policies too) is also a *managed* operation requiring `MANAGE`/ownership, and ABAC cannot be attached directly to a view — it's enforced on the view's underlying base tables, so a validator must inspect those, not the view.
 - **Fallback = failure across accounts.** If a target workspace has no `client_id_key`/`client_secret_key`, or the App SP can't read the scope, the app uses the App SP against the target host. That only works inside the App SP's own account; cross-account targets will fail with `invalid_client`. Always configure a dedicated SP per target.
 - **Where these settings live:** `TARGET_WORKSPACE_SP_SECRET_SCOPE`, `DATABRICKS_WAREHOUSE_ID`, `DATA_QUALITY_ADOC_SCHEMA`, `SENTINEL_DATA_CERT_WORKSPACE`, and the target-workspace list are all in Admin → Settings (or `databricks.yml`).
