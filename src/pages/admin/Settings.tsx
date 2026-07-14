@@ -335,6 +335,15 @@ function FieldRow({
           rows={3}
           className="w-full px-3 py-2 border rounded-md text-sm resize-y focus:outline-none focus:ring-2 focus:ring-primary/20 border-gray-200"
         />
+      ) : field.type === 'cron' ? (
+        <input
+          type="text"
+          value={String(value ?? '')}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="*/30 * * * *  (blank = disabled)"
+          spellCheck={false}
+          className="w-64 px-3 py-2 border rounded-md text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/20 border-gray-200"
+        />
       ) : (
         <input
           type="text"

@@ -218,6 +218,136 @@ def _handlers_by_type(workspace_client) -> Dict[str, Any]:
     }
 
 
+async def revalidate_violation(
+    *,
+    workspace_client,
+    host: Optional[str],
+    resource_type: str,
+    resource_id: str,
+    policy_name: str,
+) -> Dict[str, Any]:
+    """Re-discover ONE resource and re-evaluate a single policy against it.
+
+    Called immediately before a manual *destructive* action (e.g. ``kill``) so a
+    user who has already remediated the finding is never punished for a stale
+    violation. It mirrors the discovery + OPA-evaluation the scheduled scan does,
+    but for the single target resource.
+
+    Returns a dict:
+      * ``still_violates`` — ``True`` (confirmed still violating), ``False``
+        (fixed / resource gone / suppressed by an allowlist entry), or ``None``
+        (could not determine — no handler, discovery error, or the policy
+        produced no result). Callers should treat ``None`` as "do not proceed".
+      * ``found`` — whether the resource was located in the workspace.
+      * ``reason`` / ``violation_reasons`` — the fresh policy result, for display.
+      * ``detail`` — human-readable context (esp. for the ``None`` case).
+    """
+    from app.providers.opa.client import OpaProvider
+
+    handler = _handlers_by_type(workspace_client).get(resource_type)
+    if handler is None:
+        return {
+            "still_violates": None, "found": False, "reason": "no_handler",
+            "violation_reasons": [],
+            "detail": f"No handler is registered for resource_type '{resource_type}'.",
+        }
+
+    # Re-discover the CURRENT resources of this type and locate the target.
+    try:
+        resources = list(await handler.discover() or [])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Re-validation discovery failed for %s/%s: %s", resource_type, resource_id, e)
+        return {
+            "still_violates": None, "found": False, "reason": "discovery_failed",
+            "violation_reasons": [],
+            "detail": f"Could not re-scan the workspace to re-validate: {e}",
+        }
+
+    match = next(
+        (r for r in resources if r.get("id") == resource_id or r.get("dataset_id") == resource_id),
+        None,
+    )
+    if match is None:
+        # Gone from the workspace → there is nothing left to remediate.
+        return {
+            "still_violates": False, "found": False, "reason": "resource_not_found",
+            "violation_reasons": [],
+            "detail": "The resource no longer exists in the workspace.",
+        }
+
+    # Resolve workspace context (name/type/environment) exactly as the scan does,
+    # so the .rego policies see the same input shape.
+    ws_name = ws_env = None
+    if host:
+        try:
+            from app.core.workspaces import get_workspace_config
+
+            cfg = get_workspace_config(host)
+            if cfg is not None:
+                ws_name, ws_env = cfg.name, cfg.environment
+        except Exception:  # noqa: BLE001
+            pass
+    opa_ws = {
+        "name": ws_name,
+        "type": "enterprise" if "enterprise" in (ws_name or "") else "domain",
+        "environment": ws_env,
+    }
+
+    # An active allowlist entry for this workspace must suppress the violation
+    # here too, so a granted exception doesn't get killed manually.
+    allowlist_records: List[Dict[str, Any]] = []
+    try:
+        from app.db.allowlist import AllowlistModel
+        from app.db.session import get_lakebase_session
+
+        _db = get_lakebase_session()
+        try:
+            for entry in _db.query(AllowlistModel).filter(AllowlistModel.workspace == ws_name).all():
+                allowlist_records.append({
+                    "resource_id": entry.resource_id,
+                    "status": entry.status,
+                    "expires_at": entry.expires_at.isoformat() if entry.expires_at else None,
+                    "justification": entry.justification,
+                })
+        finally:
+            _db.close()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Re-validation could not load allowlist for %s: %s", ws_name, e)
+
+    input_data = {
+        "workspace": opa_ws,
+        "resource": match,
+        "request_time": datetime.now(timezone.utc).isoformat(),
+        "allowlist_records": allowlist_records,
+    }
+    try:
+        opa_provider = OpaProvider(settings.opa_provider_config())
+        namespace_results = await opa_provider.evaluate_namespace(input_data)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Re-validation OPA evaluation failed for %s: %s", resource_id, e)
+        return {
+            "still_violates": None, "found": True, "reason": "evaluation_failed",
+            "violation_reasons": [],
+            "detail": f"Could not evaluate policy '{policy_name}': {e}",
+        }
+
+    result = (namespace_results or {}).get(policy_name)
+    if result is None:
+        return {
+            "still_violates": None, "found": True, "reason": "policy_not_evaluated",
+            "violation_reasons": [],
+            "detail": f"Policy '{policy_name}' produced no result for this resource.",
+        }
+
+    return {
+        "still_violates": bool(result.get("is_violation")),
+        "found": True,
+        "reason": result.get("reason", ""),
+        "violation_reasons": result.get("violation_reasons", []),
+        "detail": "",
+    }
+
+
 def _new_workspace_client(host: Optional[str] = None):
     """Build a Databricks workspace client for a target workspace.
 

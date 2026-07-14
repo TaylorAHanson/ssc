@@ -81,6 +81,34 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "(dataset-tag discovery + the data-asset cache sync), e.g. 'enterprise_prod, finance_prod'. "
              "Spaces around each name are trimmed. Leave BLANK to scan every catalog the service "
              "principal can see (excluding system/samples). Applies on the next scan/sync — no restart needed."},
+    {"group": "Notifications & Governance", "key": "DATA_QUALITY_TABLE", "label": "Data quality table",
+     "type": "string",
+     "help": "Fully-qualified table (catalog.schema.table) holding the ADOC data-quality history used "
+             "for certification checks. Applies on the next scan — no restart needed."},
+
+    # --- Scheduling -----------------------------------------------------
+    # All schedules are standard 5-field cron in UTC and applied by the in-process
+    # poller thread, which re-reads them every cycle — edits take effect on the
+    # next poll (no redeploy). Blank disables a schedule. A bad expression is
+    # rejected on save so a typo can't silently break a schedule.
+    {"group": "Scheduling", "key": "ENFORCEMENT_SENTINEL_CRON", "label": "Sentinel scan cron",
+     "type": "cron",
+     "help": "How often the Enforcement Sentinel scans every target workspace (5-field cron, UTC). "
+             "Leave BLANK to disable the scheduled scan — manual runs still work. Requires the Sentinel feature."},
+    {"group": "Scheduling", "key": "DATA_ASSET_SYNC_CRON", "label": "Data asset sync cron",
+     "type": "cron",
+     "help": "How often the local data-asset cache is refreshed from Unity Catalog (5-field cron, UTC). "
+             "Leave BLANK to disable. Requires the Data Discovery feature."},
+    {"group": "Scheduling", "key": "CONTRACT_SYNC_CRON", "label": "Data contract sync cron",
+     "type": "cron",
+     "help": "Auto-rediscovers 'dataset'-tagged tables and redrafts their ODCS contracts on this schedule "
+             "(5-field cron, UTC). Leave BLANK to disable (contracts then only refresh when you click "
+             "'Sync Data Contracts'). This drafts a contract per dataset via the LLM, so prefer an off-peak, "
+             "low frequency such as '0 6 * * *' (daily 06:00 UTC). Requires the Data Discovery feature."},
+    {"group": "Scheduling", "key": "EVENT_SYNC_CRON", "label": "Calendar sync cron",
+     "type": "cron",
+     "help": "How often calendar/events are synced (5-field cron, UTC). Leave BLANK to disable. "
+             "Requires the Calendar feature."},
 
     # --- Agent ----------------------------------------------------------
     {"group": "Agent", "key": "AGENT_MAX_ITERATIONS", "label": "Max tool iterations",
@@ -187,20 +215,10 @@ READONLY_FIELDS: List[Dict[str, Any]] = [
     {"group": "Databricks", "key": "DATABRICKS_JOB_CLUSTER_ID", "label": "Job cluster id"},
     {"group": "Databricks", "key": "MODEL_SERVING_AGENT_LLM_ENDPOINT", "label": "Model serving endpoint"},
     {"group": "Databricks", "key": "AI_GATEWAY_ENDPOINT", "label": "AI Gateway endpoint"},
-    {"group": "Databricks", "key": "DATA_QUALITY_TABLE", "label": "Data quality table",
-     "help": "Fully-qualified table (catalog.schema.table) holding the ADOC data-quality history used for certification checks."},
     {"group": "Identity & Email", "key": "IDENTITY_PROVIDER", "label": "Identity provider"},
     {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_PROVIDER", "label": "Email provider"},
     {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_SES_REGION", "label": "SES region"},
     {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_SES_SOURCE", "label": "SES source address"},
-    {"group": "Scheduling", "key": "EVENT_SYNC_CRON", "label": "Calendar sync cron"},
-    {"group": "Scheduling", "key": "DATA_ASSET_SYNC_CRON", "label": "Data asset sync cron"},
-    {"group": "Scheduling", "key": "CONTRACT_SYNC_CRON", "label": "Data contract sync cron",
-     "help": "Auto-rediscovers 'dataset'-tagged tables and redrafts their ODCS contracts on this schedule "
-             "(standard 5-field cron, UTC). Leave BLANK to disable (contracts then only refresh when you click "
-             "'Sync Data Contracts'). This drafts a contract per dataset via the LLM, so prefer an off-peak, "
-             "low frequency such as '0 6 * * *' (daily 06:00 UTC). Requires the Data Discovery feature to be on."},
-    {"group": "Scheduling", "key": "ENFORCEMENT_SENTINEL_CRON", "label": "Sentinel cron"},
     {"group": "GitOps", "key": "GITOPS_MODE", "label": "GitOps mode"},
     {"group": "GitOps", "key": "INFRA_REPO_URL", "label": "Infra repo URL"},
     {"group": "GitOps", "key": "INFRA_REPO_BRANCH", "label": "Infra repo branch"},
@@ -223,6 +241,11 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "from the menu — it does not disable the underlying capability (use Features for that)."
     ),
     "Notifications & Governance": "Where governance alerts go and when the daily Enforcement Sentinel digest is sent.",
+    "Scheduling": (
+        "How often the background jobs run — the Sentinel scan, data-asset cache sync, data-contract "
+        "redraft, and calendar sync. All are standard 5-field cron in UTC; leave a field blank to disable "
+        "that job. Edits are picked up by the poller on its next cycle — no redeploy needed."
+    ),
     "Agent": "Guardrails and behavior for the AI agent — iteration/timeout limits, tool-policy enforcement, and authoring locks.",
     "Data & AI": "Data-answer experience: Genie deep links and Ask Your Data behavior.",
     "System Banner": "A site-wide message shown at the top of every page — handy for maintenance windows, policy notices, or outages. Turn it off to hide it entirely.",
@@ -567,6 +590,19 @@ def _coerce(field: Dict[str, Any], value: Any) -> Any:
         if options and sval not in options:
             raise ValueError(f"{field.get('label', field['key'])} must be one of: {', '.join(options)}")
         return sval
+    if ftype == "cron":
+        # Blank is allowed and disables the schedule; a non-blank value must be a
+        # valid 5-field cron expression so a typo can't silently break a schedule.
+        sval = "" if value is None else str(value).strip()
+        if sval:
+            from croniter import croniter
+
+            if not croniter.is_valid(sval):
+                raise ValueError(
+                    f"{field.get('label', field['key'])} is not a valid cron expression "
+                    "(expected 5 fields, e.g. '*/30 * * * *'). Leave blank to disable."
+                )
+        return sval
     # string / color / textarea
     return "" if value is None else str(value)
 
@@ -591,6 +627,40 @@ def _validate_key(key: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Apply / read
 # ---------------------------------------------------------------------------
+
+# Cron settings whose scheduler caches a "next run" time. When the expression is
+# edited we invalidate that cache so the new schedule is honored on the very next
+# poll cycle instead of only after the currently-scheduled run fires. Maps the
+# setting key to the (module, module-global) holding the cached next-run.
+_CRON_SCHEDULE_TARGETS: Dict[str, tuple] = {
+    "ENFORCEMENT_SENTINEL_CRON": ("app.workers.poller", "_next_sentinel_time"),
+    "DATA_ASSET_SYNC_CRON": ("app.workers.tasks.sync_data_assets", "_next_sync_time"),
+    "EVENT_SYNC_CRON": ("app.workers.tasks.sync_calendar", "_next_sync_time"),
+    "CONTRACT_SYNC_CRON": ("app.workers.tasks.sync_contracts", "_next_contract_sync_time"),
+}
+
+
+def _reset_cron_schedule(key: str) -> None:
+    """Invalidate a scheduler's cached next-run so an edited cron applies now.
+
+    Only touches modules already imported (the poller thread is running by the
+    time settings are edited); a not-yet-imported module has no cached value to
+    clear, and would recompute correctly on first use anyway.
+    """
+    target = _CRON_SCHEDULE_TARGETS.get(key)
+    if not target:
+        return
+    import sys
+
+    mod_name, attr = target
+    mod = sys.modules.get(mod_name)
+    if mod is not None:
+        try:
+            setattr(mod, attr, None)
+            logger.info("Cron schedule '%s' changed — next run will be recomputed immediately.", key)
+        except Exception as e:  # noqa: BLE001 - best effort; applies after next fire regardless
+            logger.debug("Could not reset cron schedule cache for %s: %s", key, e)
+
 
 def _apply(key: str, coerced: Any) -> None:
     """Apply a coerced value to the live in-process config so it takes effect."""
@@ -621,6 +691,7 @@ def _apply(key: str, coerced: Any) -> None:
         return
     # Plain Settings attribute.
     setattr(settings, key, coerced)
+    _reset_cron_schedule(key)
 
 
 def _current_value(key: str) -> Any:

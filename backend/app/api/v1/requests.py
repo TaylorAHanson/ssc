@@ -683,7 +683,7 @@ async def execute_enforcement_action(
     )
     from app.providers.databricks.handlers.dataset_handler import DatasetResourceHandler
     from app.db.enforcement_audit import EnforcementAuditModel
-    from app.workflows.sentinel import _new_workspace_client
+    from app.workflows.sentinel import _new_workspace_client, revalidate_violation
     import uuid
 
     host = (body.workspace_host or "").strip() or None
@@ -726,6 +726,64 @@ async def execute_enforcement_action(
 
     action_to_take = body.action.upper()
     executed_action = f"manual_{action_to_take.lower()}"
+
+    # Before a DESTRUCTIVE action, re-validate that the violation still exists.
+    # A user may have already remediated it since the scan; we must not punish
+    # them for a stale finding. Safe/reversible actions (certify/uncertify/warn)
+    # are not gated. We only proceed on a POSITIVE confirmation that it still
+    # violates — "fixed", "gone", or "couldn't determine" all abort.
+    if action_to_take == "KILL":
+        recheck = await revalidate_violation(
+            workspace_client=workspace_client,
+            host=host,
+            resource_type=body.resource_type,
+            resource_id=body.resource_id,
+            policy_name=body.policy_name,
+        )
+        if recheck.get("still_violates") is False:
+            logger.info(
+                "Aborting manual KILL on %s (%s): re-validation shows the violation "
+                "is no longer present (%s).",
+                body.resource_id, body.policy_name, recheck.get("reason"),
+            )
+            # Record an audit row so the abort is visible in history.
+            try:
+                db.add(EnforcementAuditModel(
+                    id=str(uuid.uuid4()),
+                    request_id=request_id,
+                    resource_id=body.resource_id,
+                    resource_type=body.resource_type,
+                    workspace=workspace_name,
+                    policy_name=body.policy_name,
+                    severity="MANUAL",
+                    intended_action=action_to_take,
+                    executed_action="aborted_revalidated",
+                    reason=(
+                        f"KILL aborted by {current_user.email}: violation no longer present "
+                        f"on re-validation ({recheck.get('detail') or recheck.get('reason')})."
+                    ),
+                ))
+                db.commit()
+            except Exception as audit_err:  # noqa: BLE001
+                logger.warning(f"Could not record re-validation abort audit: {audit_err}")
+                db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This violation is no longer present — it appears to have already been "
+                    "remediated, so the action was not executed. Re-run the scan to refresh."
+                ),
+            )
+        if recheck.get("still_violates") is None:
+            # Couldn't confirm (no handler / discovery or evaluation error). Do NOT
+            # kill on uncertainty — surface the reason and let the admin retry.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Could not re-validate that this violation still exists, so the destructive "
+                    f"action was aborted for safety. {recheck.get('detail') or ''} Please retry."
+                ).strip(),
+            )
 
     try:
         if action_to_take == "KILL":

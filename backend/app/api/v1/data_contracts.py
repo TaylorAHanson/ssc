@@ -540,6 +540,31 @@ def certification_report(db: Session = Depends(get_db)):
             return "BDQ"
         return "Other"
 
+    def _dq_split_counts(asset):
+        """Split cached DQ failures into (state, tdq_fails, bdq_fails).
+
+        Drives the two overview columns that replace the single "Data Quality"
+        column. ``state`` is ``"na"`` when there is no DQ data for the dataset or
+        the DQ history could not be fetched (``failed_rule_count`` is ``-1``) — in
+        which case we show n/a rather than a misleading ``0`` — otherwise ``"ok"``
+        with the per-group failure counts (by the tdq_/bdq_ naming convention).
+        """
+        dq = getattr(asset, "data_quality", None) if asset else None
+        if isinstance(dq, str):
+            try:
+                dq = json.loads(dq)
+            except Exception:
+                dq = None
+        if not isinstance(dq, dict):
+            return ("na", 0, 0)
+        frc = dq.get("failed_rule_count")
+        if frc is None or (isinstance(frc, (int, float)) and frc < 0):
+            return ("na", 0, 0)
+        failed = dq.get("failed_rules") or []
+        tdq = sum(1 for fr in failed if _rule_group((fr or {}).get("rule")) == "TDQ")
+        bdq = sum(1 for fr in failed if _rule_group((fr or {}).get("rule")) == "BDQ")
+        return ("ok", tdq, bdq)
+
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="374151", end_color="374151", fill_type="solid")
     pass_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
@@ -555,7 +580,15 @@ def certification_report(db: Session = Depends(get_db)):
     # --- Sheet 1: Overview (exec) ---
     ws = wb.active
     ws.title = "Overview"
-    overview_headers = ["Dataset", "Status"] + _REPORT_CATEGORY_ORDER
+    # The single "Data Quality" column is split into TDQ / BDQ failure counts
+    # (by the tdq_/bdq_ rule-name convention); the other categories keep their
+    # single pass/fail cell.
+    overview_non_dq_categories = [c for c in _REPORT_CATEGORY_ORDER if c != "Data Quality"]
+    overview_headers = (
+        ["Dataset", "Status"] + overview_non_dq_categories + ["TDQ Fails", "BDQ Fails"]
+    )
+    # Number of colored status columns (all category cells + the two DQ columns).
+    num_status_cols = len(overview_non_dq_categories) + 2
     last_col = len(overview_headers)
 
     # Metadata block (environment + generation time) above the table. Written at
@@ -587,15 +620,24 @@ def certification_report(db: Session = Depends(get_db)):
         name = (asset.table_name if asset and asset.table_name else c.dataset_id)
         status = "Certified" if (asset and asset.certified) else "Uncertified"
         row = [name, status]
-        for cat in _REPORT_CATEGORY_ORDER:
+        for cat in overview_non_dq_categories:
             row.append(_category_status(rule_results, cat))
+        # Data Quality split: show the failed-rule count per group, or n/a when
+        # DQ data is unavailable / history couldn't be fetched.
+        dq_state, tdq_fails, bdq_fails = _dq_split_counts(asset)
+        if dq_state == "na":
+            row.append("n/a")
+            row.append("n/a")
+        else:
+            row.append(tdq_fails)
+            row.append(bdq_fails)
         ws.append(row)
         r = ws.max_row
         status_cell = ws.cell(row=r, column=2)
         status_cell.alignment = center
         if status == "Certified":
             status_cell.font = pass_font
-        for i, cat in enumerate(_REPORT_CATEGORY_ORDER):
+        for i in range(num_status_cols):
             cell = ws.cell(row=r, column=3 + i)
             cell.alignment = center
             val = cell.value
@@ -603,6 +645,12 @@ def certification_report(db: Session = Depends(get_db)):
                 cell.fill, cell.font = pass_fill, pass_font
             elif val == "fail":
                 cell.fill, cell.font = fail_fill, fail_font
+            elif isinstance(val, (int, float)):
+                # DQ count cell: red when there are failures, green when clean.
+                if val > 0:
+                    cell.fill, cell.font = fail_fill, fail_font
+                else:
+                    cell.fill, cell.font = pass_fill, pass_font
             else:
                 cell.value = "n/a"
                 cell.fill, cell.font = na_fill, na_font
@@ -638,7 +686,7 @@ def certification_report(db: Session = Depends(get_db)):
     ws.auto_filter.ref = f"A{header_row}:{get_column_letter(len(overview_headers))}{ws.max_row}"
     ws.column_dimensions["A"].width = 34
     ws.column_dimensions["B"].width = 14
-    for i in range(len(_REPORT_CATEGORY_ORDER)):
+    for i in range(num_status_cols):
         ws.column_dimensions[get_column_letter(3 + i)].width = 16
 
     # --- Sheet 2: Details ---
