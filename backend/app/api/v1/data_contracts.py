@@ -46,6 +46,48 @@ class DataContractCreate(BaseModel):
     dataset_id: str
     yaml_content: str
 
+
+def _split_dataset_tag(tag_value) -> list:
+    """Split a (possibly comma-separated) ``dataset`` tag value into names.
+
+    A table can belong to several data sets by tagging it
+    ``dataset='demand-planning, sales-forecast'``. Each comma-separated member is
+    trimmed; blanks are dropped and duplicates removed (order preserved). Returns
+    an empty list when the tag has no usable value.
+    """
+    if tag_value is None:
+        return []
+    names: list = []
+    for part in str(tag_value).split(","):
+        name = part.strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _add_table_to_groups(dataset_groups: dict, catalog_name, schema_name, table_name, tag_value) -> int:
+    """Add a table to EACH data set named in its (comma-separated) tag.
+
+    Returns the number of data sets the table was added to (0 when the tag is
+    empty). A shared table is a ``+1`` member of every named data set — it never
+    forms its own combined group — so if it fails validation every data set it
+    belongs to is uncertified.
+    """
+    names = _split_dataset_tag(tag_value)
+    if not names:
+        logger.warning(
+            "Skipping table %s.%s.%s: 'dataset' tag has an empty value",
+            catalog_name, schema_name, table_name,
+        )
+        return 0
+    full_name = f"{catalog_name}.{schema_name}.{table_name}"
+    for name in names:
+        members = dataset_groups.setdefault(name, [])
+        if full_name not in members:
+            members.append(full_name)
+    return len(names)
+
+
 def discover_dataset_groups(dataset_id: Optional[str] = None) -> dict:
     """Discover ``dataset``-tagged tables grouped by their tag value.
 
@@ -109,17 +151,8 @@ def discover_dataset_groups(dataset_id: Optional[str] = None) -> dict:
                 )
                 if response.result and response.result.data_array:
                     for row in response.result.data_array:
-                        catalog_name, schema_name, table_name, dataset_name = row
-                        if not dataset_name or not str(dataset_name).strip():
-                            logger.warning(
-                                f"Skipping table {catalog_name}.{schema_name}.{table_name}: "
-                                f"'dataset' tag has an empty value"
-                            )
-                            continue
-                        full_name = f"{catalog_name}.{schema_name}.{table_name}"
-                        if dataset_name not in dataset_groups:
-                            dataset_groups[dataset_name] = []
-                        dataset_groups[dataset_name].append(full_name)
+                        catalog_name, schema_name, table_name, tag_value = row
+                        _add_table_to_groups(dataset_groups, catalog_name, schema_name, table_name, tag_value)
                 else:
                     # If not found in table_tags, maybe it's the dataset_name itself
                     pass
@@ -127,9 +160,13 @@ def discover_dataset_groups(dataset_id: Optional[str] = None) -> dict:
                 logger.warning(f"Could not query information_schema for {dataset_id}: {e}")
 
         # If we didn't find it by table name, maybe dataset_id is the tag value
+        # (a data set NAME). We can't match with a SQL equality because a table
+        # may carry a comma-separated tag (e.g. 'demand-planning, sales-forecast');
+        # instead fetch every 'dataset'-tagged row and keep those whose split tag
+        # includes this data set name.
         if not dataset_groups:
             for cat_name in _catalog_names_to_scan():
-                query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {cat_name}.information_schema.table_tags WHERE tag_name = 'dataset' AND tag_value = '{dataset_id}'"
+                query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {cat_name}.information_schema.table_tags WHERE tag_name = 'dataset'"
                 try:
                     response = provider.client.statement_execution.execute_statement(
                         statement=query,
@@ -138,17 +175,12 @@ def discover_dataset_groups(dataset_id: Optional[str] = None) -> dict:
                     )
                     if response.result and response.result.data_array:
                         for row in response.result.data_array:
-                            catalog_name, schema_name, table_name, dataset_name = row
-                            if not dataset_name or not str(dataset_name).strip():
-                                logger.warning(
-                                    f"Skipping table {catalog_name}.{schema_name}.{table_name}: "
-                                    f"'dataset' tag has an empty value"
-                                )
-                                continue
-                            full_name = f"{catalog_name}.{schema_name}.{table_name}"
-                            if dataset_name not in dataset_groups:
-                                dataset_groups[dataset_name] = []
-                            dataset_groups[dataset_name].append(full_name)
+                            catalog_name, schema_name, table_name, tag_value = row
+                            if dataset_id in _split_dataset_tag(tag_value):
+                                full_name = f"{catalog_name}.{schema_name}.{table_name}"
+                                members = dataset_groups.setdefault(dataset_id, [])
+                                if full_name not in members:
+                                    members.append(full_name)
                 except Exception as e:
                     logger.warning(f"Could not query information_schema for catalog {cat_name}: {e}")
     else:
@@ -168,17 +200,8 @@ def discover_dataset_groups(dataset_id: Optional[str] = None) -> dict:
                 if response.result and response.result.data_array:
                     logger.info(f"Found {len(response.result.data_array)} tagged tables in catalog {cat_name}")
                     for row in response.result.data_array:
-                        catalog_name, schema_name, table_name, dataset_name = row
-                        if not dataset_name or not str(dataset_name).strip():
-                            logger.warning(
-                                f"Skipping table {catalog_name}.{schema_name}.{table_name}: "
-                                f"'dataset' tag has an empty value"
-                            )
-                            continue
-                        full_name = f"{catalog_name}.{schema_name}.{table_name}"
-                        if dataset_name not in dataset_groups:
-                            dataset_groups[dataset_name] = []
-                        dataset_groups[dataset_name].append(full_name)
+                        catalog_name, schema_name, table_name, tag_value = row
+                        _add_table_to_groups(dataset_groups, catalog_name, schema_name, table_name, tag_value)
                 else:
                     logger.debug(f"No tables found with 'dataset' tag in catalog {cat_name}")
             except Exception as e:
@@ -256,9 +279,18 @@ async def run_sync_contracts_background(dataset_groups: dict, force: bool, speci
                     db.query(DataContractModel).filter(DataContractModel.dataset_id == contract.dataset_id).delete()
                     asset = db.query(DataAssetModel).filter(DataAssetModel.id == contract.dataset_id).first()
                     if asset:
-                        asset.contract_url = None
-                        asset.certified = False
-                        db.add(asset)
+                        # These dataset rows are synthetic (created from the
+                        # 'dataset' tag grouping). A data set that no longer exists
+                        # — e.g. a stale combined "a, b" group left over from before
+                        # comma-separated tags were split into their members —
+                        # should stop showing as a separate data set entirely, so
+                        # delete the row. Non-synthetic assets are only unlinked.
+                        if (asset.type or "").upper() == "DATA_PRODUCT":
+                            db.delete(asset)
+                        else:
+                            asset.contract_url = None
+                            asset.certified = False
+                            db.add(asset)
         db.commit()
 
         for dataset_name, table_ids in dataset_groups.items():
