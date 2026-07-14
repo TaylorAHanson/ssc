@@ -5,7 +5,7 @@ This is a **no-code, governed agentic platform**: administrators author workflow
 provider-backed tools to fulfill requests under a guardrail stack, with long-running work
 executed durably on a LangGraph + Lakebase (Postgres) runtime.
 
-## 1. Core Model: A Solution, Not a Framework
+## 1. Core Model: End State is a Solution, Not a Framework
 
 Adding a capability does **not** require a developer to write Python and redeploy. Three
 concepts make the platform configurable rather than coded:
@@ -42,33 +42,143 @@ property the platform needs is preserved** — not by a deterministic state mach
 | **Bounded blast radius** | Capability scoping per workflow + OPA approval gates (see below) |
 | Determinism of **path** | **Intentionally traded away** for no-code authoring + agentic flexibility |
 
-## 3. The Guardrail Stack
+## 3. Physical Architecture (Deployed Components)
+
+The diagram below shows **what actually runs in a Databricks workspace** — the real
+services, endpoints, and external integrations. For the logical layers inside the app,
+see [§6 Architecture Layers](#6-architecture-layers).
+
+```mermaid
+flowchart TB
+    User(["User browser<br/>Databricks SSO"])
+
+    subgraph Workspace["Databricks workspace"]
+        subgraph App["Databricks App (serverless)"]
+            direction TB
+            UI["React SPA"]
+            API["FastAPI<br/>REST + SSE"]
+            Agent["Agent runner<br/>LangGraph executor"]
+            Poller["Background poller"]
+            Exec["ToolExecutor + embedded OPA"]
+            MCP["In-app MCP server /mcp"]
+            UI --> API
+            API --> Agent
+            Poller --> Agent
+            Agent --> Exec
+            API --> MCP
+            MCP --> Exec
+        end
+
+        Lakebase[("Lakebase (Postgres)<br/>requests · events · approvals<br/>workflows · tool registry")]
+        Gateway["AI Gateway<br/>routing · rate/cost limits · input guardrails"]
+        LLM["Model Serving endpoint<br/>(foundation model)"]
+        UC["Unity Catalog<br/>tables · grants · tags · volumes"]
+        WH["Serverless SQL warehouse"]
+        Secrets[("Secret scopes<br/>GitHub · SES · SP creds")]
+        MLflow["MLflow<br/>tracing · inference tables · experiments"]
+        Jobs["Scheduled jobs<br/>LLM judge · Sentinel · sync crons"]
+        MCPApp["Optional MCP App<br/>(separate Databricks App)"]
+    end
+
+    subgraph External["External systems"]
+        GitHub["GitHub (GitOps)"]
+        TF["Terraform"]
+        IdP["LMWS / identity provider"]
+        SES["AWS SES (email)"]
+        CC["Command Center<br/>(Agent Studio — skills & profiles)"]
+    end
+
+    User -->|"SSO + OBO token"| UI
+    API <-->|"app state"| Lakebase
+    Poller <-->|"find work · lock · resume"| Lakebase
+    Exec <-->|"audit facts · idempotency"| Lakebase
+    Agent -->|"LLM calls"| Gateway
+    Gateway --> LLM
+    Agent -->|"trace per turn"| MLflow
+    Jobs --> MLflow
+    Exec -->|"reads · grants · files"| UC
+    Exec -->|"SQL (OBO or SP)"| WH
+    Exec --> Secrets
+    Exec --> GitHub
+    Exec --> TF
+    Exec --> IdP
+    Exec --> SES
+    Agent -.->|"load SKILL.md / AGENT.md (OBO)"| CC
+    MCPApp -.->|"registrable in AI Gateway → MCPs"| Gateway
+```
+
+**How to read it**
+
+| Component | Role |
+|---|---|
+| **Databricks App** | Single serverless host for the React UI, FastAPI API, agent loop, LangGraph executor, poller, `ToolExecutor`, embedded OPA, and the in-app `/mcp` server. User identity arrives as a forwarded OBO token (`X-Forwarded-Access-Token`). |
+| **Lakebase** | Postgres attached to the app bundle. System of record for requests, immutable events, approvals, workflows, and the tool registry. LangGraph checkpoints live here in deployed envs. |
+| **AI Gateway → Model Serving** | Every agent LLM call prefers the AI Gateway endpoint (`AI_GATEWAY_ENDPOINT`); the gateway routes to one or more served models (A/B traffic, guardrails, rate limits). Falls back to direct Model Serving when no gateway is configured. |
+| **Unity Catalog + SQL warehouse** | Data plane: UC enforces grants on reads (OBO); the warehouse executes SQL. UC Volumes hold GitOps config, training media, and shared skills/profiles. |
+| **Secret scopes** | GitHub PAT, SES keys, per-target-workspace SP credentials, LMWS secrets — read at runtime by the App SP. |
+| **MLflow + scheduled jobs** | Tracing per agent turn; inference-table capture from the gateway; a scheduled **LLM-as-a-judge** job scores production quality. Other crons drive Sentinel scans and catalog syncs. |
+| **Optional MCP App** | A separate Databricks App (`mcp_app/`) can be registered under **AI Gateway → MCPs** for external agent discovery; the main app also exposes governed tools at `/mcp`. |
+| **Command Center** | External authoring surface for `SKILL.md` folders and `AGENT.md` profiles on UC Volumes; this app loads them OBO at runtime. |
+
+## 4. The Guardrail Stack
 
 Governance is defense-in-depth around the agent, building on the three governance layers in
 [GOVERNANCE.md](./GOVERNANCE.md). Capability scoping + OPA gates inside the `ToolExecutor`
 provide deterministic *enforcement* without a deterministic *path*.
 
+Every tool call — from chat, a workflow graph node, or an external MCP client — passes
+through the same four stages:
+
 ```mermaid
-flowchart TD
-    User["User (chat)"] --> Agent["Agent loop (ReAct); durable workflows execute via LangGraph + Lakebase checkpointer"]
-    Agent --> Workflow["Active Workflow = allowed-tool set + policy ref + approval rules"]
-    Workflow --> Call["Tool call"]
-    Call --> Exec["ToolExecutor (shared by agent runner + /mcp server)"]
-    Exec --> Validate["Pydantic validate args"]
-    Validate --> Class{"is_mutating?"}
-    Class -->|no| RunRead["execute as OBO user"]
-    Class -->|yes| Scope{"tool in workflow capability scope?"}
-    Scope -->|no| Block["refuse: out of scope"]
-    Scope -->|yes| Policy{"OPA data.agent.tools decision"}
-    Policy -->|deny| Refuse["refuse + reason -> agent adapts/explains"]
-    Policy -->|requires_approval| HITL["interrupt() -> approval row + approval_received fact"]
-    Policy -->|allow| Idem{"idempotency key seen?"}
-    HITL --> Idem
-    Idem -->|yes| Cached["return prior result (no double-act)"]
-    Idem -->|no| RunWrite["execute (OBO user, or scoped SP)"]
-    RunWrite --> Prov["provider -> external system"]
-    RunWrite --> Fact["append immutable audit fact"]
+flowchart LR
+    subgraph S1["① Invoke"]
+        U[User] --> A[Agent]
+        A --> T[Tool call]
+    end
+
+    T --> X[ToolExecutor]
+
+    subgraph S2["② Validate"]
+        X --> V[Pydantic args]
+        V --> M{Mutating?}
+    end
+
+    M -->|no| R[Run as OBO]
+    R --> OUT[Provider]
+
+    M -->|yes| G
+
+    subgraph G["③ Govern"]
+        direction TB
+        SC{In allowed_tools?}
+        OP[OPA decision]
+        AP{Approval?}
+        SC -->|no| DENY[Refuse]
+        SC -->|yes| OP
+        OP -->|deny| DENY
+        OP --> AP
+        AP -->|yes| HITL[HITL interrupt]
+        AP -->|allow| E
+        HITL --> E
+    end
+
+    subgraph S4["④ Execute"]
+        E{Idempotent<br/>replay?}
+        E -->|yes| CACHED[Cached result]
+        E -->|no| RUN[Run OBO or SP]
+        RUN --> OUT
+        RUN --> FACT[Audit fact]
+    end
 ```
+
+**Mutating-tool detail** (stage ③ only applies when `is_mutating=true`):
+
+| Step | Check | On failure |
+|---|---|---|
+| Capability scope | Tool name ∈ active workflow's `allowed_tools` | Refuse — agent cannot call it |
+| OPA pre-flight | `data.agent.tools` Rego package | Refuse with reason, or route to HITL |
+| Human approval | LangGraph `interrupt()` → approval row in Lakebase | Graph pauses until `POST /approve` |
+| Idempotency | Key `(scope_id, tool_call_id)` already in events | Return prior result — no double-act |
 
 Guardrail layers, ranked by **worst-case** bounding power (not average-case):
 
@@ -80,7 +190,7 @@ Guardrail layers, ranked by **worst-case** bounding power (not average-case):
 6. **Least-privilege scoped credentials** — SP-privileged tools use narrowly scoped creds.
 7. **Eval / sandbox before publish** — a workflow is tested against a sandbox workspace before it can go live.
 
-## 4. Blast-Radius Model (Identity & Bounds)
+## 5. Blast-Radius Model (Identity & Bounds)
 
 A key finding from the provider audit: **OBO + Unity Catalog cannot be the primary safety
 bound**, because nearly every real mutation runs as a **service principal**, and
@@ -107,33 +217,54 @@ where the requester is already an owner. **`data_grant` stays SP-executed and is
 mandatory OPA approval gate plus capability scoping**, rather than relying on OBO+UC. OBO+UC
 remains the bound for `read` tools.
 
-## 5. Architecture Layers
+## 6. Architecture Layers
+
+Logical view of the same system (complements the physical diagram in [§3](#3-physical-architecture-deployed-components)):
 
 ```mermaid
-graph TD
-    UI["UI Layer (Web) + No-Code Workflow Authoring"]
-    API["API Layer (REST + SSE)"]
-    Agent["Agent Layer (LLM, ReAct)"]
-    Workflows[("Workflow Store (Lakebase)")]
-    Exec["ToolExecutor (guardrail chokepoint)"]
-    OPA["OPA (data.agent.tools)"]
-    Tools["Tools (read + mutating, provider-backed)"]
-    Providers["Providers (Databricks / Terraform / GitHub / LMWS / OPA / ...)"]
-    Engine["Durable Executor (LangGraph + Postgres checkpointer)"]
-    Poller["Poller (business-logic-ignorant)"]
-    DB[("Lakebase: requests / events / approvals")]
+flowchart TB
+    subgraph Presentation["Presentation"]
+        UI["React UI + Workflow Studio"]
+    end
 
-    UI --> API --> Agent
-    Agent -->|reads published workflows| Workflows
+    subgraph API["API & transport"]
+        REST["FastAPI REST + SSE"]
+    end
+
+    subgraph Intelligence["Agent & orchestration"]
+        Agent["ReAct agent + LLM (via AI Gateway)"]
+        Engine["LangGraph durable executor"]
+        Poller["Background poller"]
+    end
+
+    subgraph Governance["Governance chokepoint"]
+        Exec["ToolExecutor"]
+        OPA["OPA policy"]
+    end
+
+    subgraph Capabilities["Tools & providers"]
+        Tools["Tool catalog<br/>local · workflow · remote MCP"]
+        Prov["Providers<br/>Databricks · GitHub · Terraform · LMWS · …"]
+    end
+
+    subgraph Persistence["Persistence (Lakebase)"]
+        WF[("Workflows")]
+        DB[("Requests · events · approvals")]
+        CP[("LangGraph checkpoints")]
+    end
+
+    UI --> REST --> Agent
     Agent -->|tool calls| Exec
-    Exec -->|pre-flight| OPA
-    Exec --> Tools --> Providers
-    Exec -->|audit + idempotency facts| DB
-    Agent -->|execute_workflow start| DB
-    Poller -->|finds work, locks| DB
-    Poller -->|loads + steps the graph| Engine
-    Engine -->|interrupt = HITL| DB
+    Exec --> OPA
+    Exec --> Tools --> Prov
+    Exec -->|audit · idempotency| DB
+    Agent -->|load published workflows| WF
+    Agent -->|start workflow| DB
+    Poller -->|lock · resume| DB
+    Poller --> Engine
+    Engine -->|HITL interrupt| DB
     Engine --> Exec
+    Engine --> CP
 ```
 
 - **Agent Layer** — single unified ReAct agent. Its tool set per conversation is the active
@@ -142,7 +273,7 @@ graph TD
 - **Durable Executor** — the only execution engine. A LangGraph graph per workflow type,
   checkpointed to Lakebase, resumed by the poller.
 
-## 6. Component: The ToolExecutor (Interceptor)
+## 7. Component: The ToolExecutor (Interceptor)
 
 A single shared executor that both the agent runner and the embedded MCP server delegate to, so
 every tool call carries identity (OBO) and governance regardless of the entry path.
@@ -192,7 +323,7 @@ Wiring:
 - The MCP server registers a shim that also routes through `ToolExecutor`, so external MCP clients keep per-user permissions and the same guardrails.
 - An `agent_session_id` on the conversation request provides a `scope_id` for non-workflow tool calls; workflow tools reuse the `request.id` they create.
 
-## 7. Component: Tool Metadata + OPA Policy
+## 8. Component: Tool Metadata + OPA Policy
 
 ### `@tool` metadata
 
@@ -292,7 +423,7 @@ decision := d {
 }
 ```
 
-## 8. Component: The Workflow Object (No-Code Authoring)
+## 9. Component: The Workflow Object (No-Code Authoring)
 
 Workflows are DB-backed and admin-authored, modeled on the Context Catalog
 (domains/documents with draft→publish) — the proven precedent for admin-authored content the
@@ -315,14 +446,14 @@ class WorkflowModel(Base):
 
 - **Authoring UI**: a tree/list + markdown editor + a tool picker (from the live tool registry,
   so renames don't silently break a workflow) + a parameter-schema builder + an approval-rules
-  form, plus a visual graph studio (see §13).
+  form, plus a visual graph studio (see §14).
 - **Publication**: published workflows feed the capabilities index **live** (no redeploy); the
   agent loads a workflow's full instructions on demand and is bounded to its `allowed_tools` for
   that conversation.
 - **AI-assisted authoring**: the agent helps draft a workflow (instructions, suggested tools,
   parameter schema) from a natural-language description.
 
-## 9. Component: Durable Execution (LangGraph)
+## 10. Component: Durable Execution (LangGraph)
 
 Every workflow type runs as a LangGraph graph with an `AsyncPostgresSaver` checkpointer on
 Lakebase, keyed on `request.id` as the thread id. There is no other engine.
@@ -336,29 +467,44 @@ Lakebase, keyed on `request.id` as the thread id. There is no other engine.
 
 ### End-to-end: a data-access workflow
 
+Two phases — **chat submission** (synchronous) and **durable execution** (async, poller-driven):
+
 ```mermaid
 sequenceDiagram
-    participant U as User (chat)
-    participant A as Agent
-    participant X as ToolExecutor
-    participant P as Poller
-    participant G as LangGraph executor
-    participant DB as Lakebase
+    autonumber
+    box rgba(200,220,255,0.3) Chat (synchronous)
+        participant U as User
+        participant A as Agent
+        participant X as ToolExecutor
+        participant DB as Lakebase
+    end
 
-    U->>A: "Grant me read on sales.orders"
-    A->>A: load workflow -> bounded to allowed_tools
-    A->>X: get_table_list / search_user_entitlements (read, OBO)
-    A->>X: execute_workflow(data_access_request, params)
-    X->>DB: create request + add_fact(request_submitted)
-    P->>DB: find work, lock(request.id)
-    P->>G: load graph + step()
-    G->>X: grant tool -> OPA: requires_approval=data_owner
-    G->>DB: interrupt() -> approval row + status=data_owner_approval
+    U->>A: Grant read on sales.orders
+    A->>A: Load workflow → bounded allowed_tools
+    A->>X: Read tools (OBO): list tables, check entitlements
+    A->>X: execute_workflow(data_access_request)
+    X->>DB: Create request + request_submitted fact
+    A-->>U: Request submitted (request id)
+
+    box rgba(200,255,220,0.3) Durable execution (async)
+        participant P as Poller
+        participant G as LangGraph
+    end
+
+    loop Every poll cycle
+        P->>DB: Find pending work, lock request
+        P->>G: Load checkpoint, step graph
+    end
+
+    G->>X: grant tool → OPA: requires_approval
+    G->>DB: interrupt() → approval row (data_owner)
+
     Note over U,DB: Data owner approves via POST /approve
-    DB->>DB: add_fact(approval_received, data_owner)
-    P->>G: step() resumes from checkpoint
-    G->>X: grant_data_access (SP, idempotency-keyed)
-    X->>DB: add_fact(tool_call_executed) + status=completed
+
+    DB->>DB: approval_received fact
+    P->>G: Resume from checkpoint
+    G->>X: grant_data_access (SP, idempotent)
+    X->>DB: tool_call_executed + status completed
 ```
 
 What stays stable so the UI, approvals, and ops are uniform: the `requests` / `events` /
@@ -366,7 +512,7 @@ What stays stable so the UI, approvals, and ops are uniform: the `requests` / `e
 (`POST /requests/{id}/approve` → `approval_received` fact), poller locking/retry/heartbeat, and
 compound `parent_id` / `root_id` linkage.
 
-## 10. Eval & Sandbox Harness
+## 11. Eval & Sandbox Harness
 
 Before a workflow can be published it must pass an automated **pre-publish** harness that:
 - runs the workflow against a **sandbox workspace**;
@@ -374,11 +520,11 @@ Before a workflow can be published it must pass an automated **pre-publish** har
 - asserts OPA **approval gates fire** for the declared `side_effect_class`;
 - runs **regression checks** on agent behavior (golden transcripts) to catch prompt drift.
 
-This pre-publish harness is the *gate*; §11 Pillar 4 adds the **production** half of the loop
+This pre-publish harness is the *gate*; §12 Pillar 4 adds the **production** half of the loop
 (MLflow tracing, inference tables, and a scheduled LLM-as-a-judge job) so quality is measured
 continuously after publish, not just once before it.
 
-## 11. Databricks Platform Best Practices (North Star)
+## 12. Databricks Platform Best Practices (North Star)
 
 The platform adopts the full **"North Star"** best-practice set proven out in the reference
 template (`supply-chain-agent`), organized as four pillars. The goal is a copy-pasteable,
@@ -440,10 +586,10 @@ tools/workflows granted in Unity Catalog.
 - **LLM-as-a-judge.** A scheduled Databricks **job** reads recent traces/inference tables, runs
   `mlflow.evaluate` with a judge model (relevance, professionalism, tool accuracy), and writes
   scores to a Delta table for a dashboard (`evals/run_llm_judge.py`).
-- This **extends** §10 — the pre-publish harness is the gate; MLflow tracing + inference tables +
+- This **extends** §11 — the pre-publish harness is the gate; MLflow tracing + inference tables +
   the judge job are the **continuous, in-production** measurement.
 
-## 12. Open Decisions
+## 13. Open Decisions
 
 - **Self-healing reconcile**: add a node-level pre-check on resume (re-derive state from external
   truth, e.g. "Terraform actually succeeded → advance") rather than relying on checkpoint state
@@ -457,7 +603,7 @@ tools/workflows granted in Unity Catalog.
   `parameter_schema`, approval policy) vs. a hybrid that keeps structured metadata in Lakebase
   while instruction content is UC-Volume-governed.
 
-## 13. Implementation Status (living)
+## 14. Implementation Status (living)
 
 - **Foundations.**
   - Tool governance metadata on `McpTool` + `@tool`: `side_effect_class`

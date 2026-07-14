@@ -61,6 +61,7 @@ Pick the guide that matches what you're trying to do:
 * 🔑 **[Service Principals & Grants](./docs/SERVICE_PRINCIPALS.md)** — what the app's service principal and the Enforcement Sentinel's per-workspace service principals do, and the exact Unity Catalog / workspace grants each one needs.
 * 📕 **[Developer Quick Start](./docs/DEVELOPER_QUICK_START.md)** — for developers who want to run Self-Service Hub locally and contribute.
 * 📐 **[Architecture Deep Dive](./docs/ARCHITECTURE.md)** — a technical overview of how the system is built.
+* 🏗️ **[Terraform GitOps Integration](./docs/TERRAFORM_GITOPS.md)** — how infrastructure provisioning works via branching, plan/apply, and CI/CD callbacks.
 
 ---
 
