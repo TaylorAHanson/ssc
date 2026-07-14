@@ -15,6 +15,7 @@ class ScheduleInfo(BaseModel):
 class SystemSchedules(BaseModel):
     enforcement_sentinel: ScheduleInfo
     data_asset_sync: ScheduleInfo
+    contract_sync: ScheduleInfo
     event_sync: ScheduleInfo
 
 def get_next_run(cron_expr: str) -> Optional[str]:
@@ -45,6 +46,10 @@ async def get_schedules():
         data_asset_sync=ScheduleInfo(
             cron=getattr(settings, 'DATA_ASSET_SYNC_CRON', ''),
             next_run=get_next_run(getattr(settings, 'DATA_ASSET_SYNC_CRON', ''))
+        ),
+        contract_sync=ScheduleInfo(
+            cron=getattr(settings, 'CONTRACT_SYNC_CRON', ''),
+            next_run=get_next_run(getattr(settings, 'CONTRACT_SYNC_CRON', ''))
         ),
         event_sync=ScheduleInfo(
             cron=getattr(settings, 'EVENT_SYNC_CRON', ''),

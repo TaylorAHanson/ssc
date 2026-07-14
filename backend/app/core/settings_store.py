@@ -181,13 +181,24 @@ READONLY_FIELDS: List[Dict[str, Any]] = [
     {"group": "Databricks", "key": "DATABRICKS_JOB_CLUSTER_ID", "label": "Job cluster id"},
     {"group": "Databricks", "key": "MODEL_SERVING_AGENT_LLM_ENDPOINT", "label": "Model serving endpoint"},
     {"group": "Databricks", "key": "AI_GATEWAY_ENDPOINT", "label": "AI Gateway endpoint"},
-    {"group": "Databricks", "key": "DATA_QUALITY_TABLE", "label": "Data quality table"},
+    {"group": "Databricks", "key": "DATA_QUALITY_TABLE", "label": "Data quality table",
+     "help": "Fully-qualified table (catalog.schema.table) holding the ADOC data-quality history used for certification checks."},
+    {"group": "Databricks", "key": "SCAN_CATALOGS", "label": "Scanned catalogs",
+     "help": "Comma-separated list of Unity Catalog catalogs to scan for governed data "
+             "(dataset-tag discovery + the data-asset cache sync), e.g. 'enterprise_prod, finance_prod'. "
+             "Spaces around each name are trimmed. Leave BLANK to scan every catalog the service "
+             "principal can see (excluding system/samples)."},
     {"group": "Identity & Email", "key": "IDENTITY_PROVIDER", "label": "Identity provider"},
     {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_PROVIDER", "label": "Email provider"},
     {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_SES_REGION", "label": "SES region"},
     {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_SES_SOURCE", "label": "SES source address"},
     {"group": "Scheduling", "key": "EVENT_SYNC_CRON", "label": "Calendar sync cron"},
     {"group": "Scheduling", "key": "DATA_ASSET_SYNC_CRON", "label": "Data asset sync cron"},
+    {"group": "Scheduling", "key": "CONTRACT_SYNC_CRON", "label": "Data contract sync cron",
+     "help": "Auto-rediscovers 'dataset'-tagged tables and redrafts their ODCS contracts on this schedule "
+             "(standard 5-field cron, UTC). Leave BLANK to disable (contracts then only refresh when you click "
+             "'Sync Data Contracts'). This drafts a contract per dataset via the LLM, so prefer an off-peak, "
+             "low frequency such as '0 6 * * *' (daily 06:00 UTC). Requires the Data Discovery feature to be on."},
     {"group": "Scheduling", "key": "ENFORCEMENT_SENTINEL_CRON", "label": "Sentinel cron"},
     {"group": "GitOps", "key": "GITOPS_MODE", "label": "GitOps mode"},
     {"group": "GitOps", "key": "INFRA_REPO_URL", "label": "Infra repo URL"},

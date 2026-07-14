@@ -376,7 +376,20 @@ class Settings(BaseSettings):
     EVENT_SYNC_CRON: str = "0 * * * *"
     
     # Data Asset Settings
+    # Comma-separated list of Unity Catalog catalogs to scan for governed data
+    # (dataset-tag discovery + the data-asset cache sync). BLANK = scan every
+    # catalog the service principal can see (minus system/samples), which is the
+    # historical behavior. Set this to pin scanning to specific catalogs, e.g.
+    # "enterprise_prod, finance_prod". Whitespace around each name is trimmed.
+    # Editable in Admin -> Settings.
+    SCAN_CATALOGS: str = os.getenv("SCAN_CATALOGS", "")
     DATA_ASSET_SYNC_CRON: str = "0 * * * *"
+    # Data contract (ODCS) sync. Rediscovers 'dataset'-tagged tables and redrafts
+    # their ODCS contracts. This calls the LLM once per dataset, so it is heavier
+    # than the data-asset cache sync — default OFF (empty = manual "Sync Data
+    # Contracts" button only). Set a cron (e.g. "0 6 * * *" for daily 6am UTC) to
+    # keep contracts fresh automatically. Editable in Admin -> Settings.
+    CONTRACT_SYNC_CRON: str = os.getenv("CONTRACT_SYNC_CRON", "")
     
     # Sentinel Settings
     ENFORCEMENT_SENTINEL_CRON: str = "*/30 * * * *"  # Cron schedule to automatically run sentinel (empty = disabled)
@@ -754,4 +767,16 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def get_scan_catalogs() -> list:
+    """Parse ``SCAN_CATALOGS`` into a clean list of catalog names.
+
+    Splits on commas and trims surrounding whitespace, dropping empties. Returns
+    ``[]`` when unset/blank — callers treat that as "scan everything the service
+    principal can see". Read at call time so Admin -> Settings overrides take
+    effect without a restart.
+    """
+    raw = getattr(settings, "SCAN_CATALOGS", "") or ""
+    return [c.strip() for c in raw.split(",") if c.strip()]
 

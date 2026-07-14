@@ -31,6 +31,7 @@ rule_metadata := {
 	"schema_description": "Schema has a description",
 	"column_descriptions": "All columns have descriptions",
 	"required_tags": "Required tags present (dataset, reliability_window, data_owner, approver_group, access_group)",
+	"access_controls_defined": "Tables have access controls (grants) defined",
 }
 
 # === Rule -> category map (single source of truth for the exec report + UI) ===
@@ -45,6 +46,7 @@ rule_category := {
 	"column_descriptions": "Metadata",
 	"required_tags": "Tagging",
 	"reliability_window_tag": "Tagging",
+	"access_controls_defined": "Access Control",
 	"dq_history_fetched": "Data Quality",
 	"dq_zero_failed": "Data Quality",
 }
@@ -58,6 +60,34 @@ applies contains rule_id if {
 	some rule_id, _ in rule_metadata
 }
 
+# === Bronze-layer exemption ===
+# Bronze (raw/landing) tables are part of a data product but are intentionally
+# NOT subject to certification checks. A table is treated as bronze when its
+# bare table name (the last dotted segment of the fully-qualified name) starts
+# with one of these prefixes, case-insensitively. Edit this set to change what
+# counts as bronze (e.g. add "raw_").
+bronze_table_prefixes := {"bronze_"}
+
+# Bare table name (last dotted segment of catalog.schema.table), lower-cased.
+_bare_table_name(asset) := name if {
+	parts := split(asset.name, ".")
+	name := lower(parts[count(parts) - 1])
+}
+
+is_bronze(asset) if {
+	some prefix in bronze_table_prefixes
+	startswith(_bare_table_name(asset), prefix)
+}
+
+# The assets certification actually evaluates: every product asset EXCEPT
+# bronze-layer tables. All per-asset rules below iterate this set so bronze is
+# uniformly exempt from every certification violation while still being part of
+# the data product.
+certifiable_assets contains asset if {
+	some asset in input.resource.assets
+	not is_bronze(asset)
+}
+
 # === Per-rule violation conditions ===
 
 violations["yaml_valid"] contains msg if {
@@ -68,14 +98,14 @@ violations["yaml_valid"] contains msg if {
 
 violations["table_exists"] contains msg if {
 	applies["table_exists"]
-	some asset in input.resource.assets
+	some asset in certifiable_assets
 	asset.table_exists == false
 	msg := sprintf("Table or view '%v' does not exist or cannot be accessed.", [asset.name])
 }
 
 violations["reliability_window_tag"] contains msg if {
 	applies["reliability_window_tag"]
-	some asset in input.resource.assets
+	some asset in certifiable_assets
 	asset.table_exists != false
 	asset.type == "table"
 	not asset.tags["reliability_window"]
@@ -89,7 +119,7 @@ violations["reliability_window_tag"] contains msg if {
 # tag itself is still reported separately by the reliability_window_tag rule.
 violations["dq_history_fetched"] contains msg if {
 	applies["dq_history_fetched"]
-	some asset in input.resource.assets
+	some asset in certifiable_assets
 	asset.table_exists != false
 	asset.type == "table"
 	asset.failed_rule_count < 0
@@ -98,7 +128,7 @@ violations["dq_history_fetched"] contains msg if {
 
 violations["dq_zero_failed"] contains msg if {
 	applies["dq_zero_failed"]
-	some asset in input.resource.assets
+	some asset in certifiable_assets
 	asset.table_exists != false
 	asset.type == "table"
 	asset.failed_rule_count > 0
@@ -107,7 +137,7 @@ violations["dq_zero_failed"] contains msg if {
 
 violations["catalog_description"] contains msg if {
 	applies["catalog_description"]
-	some asset in input.resource.assets
+	some asset in certifiable_assets
 	asset.table_exists != false
 	not asset.catalog_description
 	msg := sprintf("Catalog description is missing for %v '%v'.", [asset.type, asset.name])
@@ -115,7 +145,7 @@ violations["catalog_description"] contains msg if {
 
 violations["schema_description"] contains msg if {
 	applies["schema_description"]
-	some asset in input.resource.assets
+	some asset in certifiable_assets
 	asset.table_exists != false
 	not asset.schema_description
 	msg := sprintf("Schema description is missing for %v '%v'.", [asset.type, asset.name])
@@ -123,7 +153,7 @@ violations["schema_description"] contains msg if {
 
 violations["column_descriptions"] contains msg if {
 	applies["column_descriptions"]
-	some asset in input.resource.assets
+	some asset in certifiable_assets
 	asset.table_exists != false
 	asset.all_columns_have_descriptions == false
 	missing_cols_str := concat(", ", asset.missing_column_descriptions)
@@ -134,12 +164,26 @@ required_tags := {"dataset", "reliability_window", "data_owner", "approver_group
 
 violations["required_tags"] contains msg if {
 	applies["required_tags"]
-	some asset in input.resource.assets
+	some asset in certifiable_assets
 	asset.table_exists != false
 	asset.type == "table"
 	tag := required_tags[_]
 	not asset.tags[tag]
 	msg := sprintf("Required tag '%v' is missing from %v '%v'.", [tag, asset.type, asset.name])
+}
+
+# Access controls (RBAC) must be defined on each table. We only flag this when
+# the grants were actually READABLE (asset.rbac_readable == true); if the SP
+# lacked MANAGE/ownership/workspace-admin to run SHOW GRANTS the check is skipped
+# rather than failed, so a permission gap never false-flags every table.
+violations["access_controls_defined"] contains msg if {
+	applies["access_controls_defined"]
+	some asset in certifiable_assets
+	asset.table_exists != false
+	asset.type == "table"
+	asset.rbac_readable == true
+	asset.rbac_defined == false
+	msg := sprintf("No access controls (grants) are defined on %v '%v'.", [asset.type, asset.name])
 }
 
 # === Structured per-rule results (consumed by the checklist UI) ===

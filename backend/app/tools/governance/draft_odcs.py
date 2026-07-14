@@ -11,6 +11,39 @@ from app.core.exceptions import RetryableError
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_odcs_yaml(content: str) -> str:
+    """Strip code fences and any leading prose so we hand clean YAML to the parser.
+
+    LLMs frequently wrap the contract in ```yaml fences or prepend a sentence of
+    explanation; both break ``yaml.safe_load``. We drop the fences and trim
+    anything before the document actually starts (``apiVersion:``).
+    """
+    content = content.replace("```yaml", "").replace("```yml", "").replace("```", "").strip()
+    idx = content.find("apiVersion:")
+    if idx > 0:
+        content = content[idx:]
+    return content
+
+
+def _yaml_error_context(content: str, ye: Exception, radius: int = 3) -> str:
+    """Render the lines around a YAML parse error (using its ``problem_mark``).
+
+    This is what turns an opaque "could not find expected ':'" into an
+    actionable log line showing exactly which generated line is malformed.
+    """
+    mark = getattr(ye, "problem_mark", None)
+    lines = content.splitlines()
+    if mark is None:
+        return "\n".join(f"  {i + 1:4d}| {ln}" for i, ln in enumerate(lines[:12]))
+    lo = max(0, mark.line - radius)
+    hi = min(len(lines), mark.line + radius + 1)
+    out = []
+    for i in range(lo, hi):
+        prefix = ">>" if i == mark.line else "  "
+        out.append(f"{prefix} {i + 1:4d}| {lines[i]}")
+    return "\n".join(out)
+
 async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]]:
     provider = DatabricksProvider(
         host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
@@ -323,49 +356,77 @@ slaProperties:
                 
                 logger.info(f"Received response from LLM for datasets: {dataset_ids} (Attempt {attempt + 1})")
                 
-                content = content.replace("```yaml", "").replace("```yml", "").replace("```", "").strip()
-                
+                content = _extract_odcs_yaml(content)
+
                 if "apiVersion:" in content and "kind: DataContract" in content:
-                    # Post-LLM Pruning: Ensure the LLM didn't hallucinate or re-add tables from upstream/downstream lists
+                    # Step 1: parse. On failure, log the EXACT offending line(s) so a
+                    # bad generation can be diagnosed from logs alone (see screenshot
+                    # bug reports), then re-prompt the model with that context.
                     try:
                         final_yaml = yaml.safe_load(content)
-                        if "schema" in final_yaml and isinstance(final_yaml["schema"], list):
+                    except yaml.YAMLError as ye:
+                        logger.error(
+                            "ODCS YAML parse failed on attempt %d for %s: %s\nOffending YAML context:\n%s",
+                            attempt + 1, dataset_ids, ye, _yaml_error_context(content, ye),
+                        )
+                        logger.debug("ODCS raw LLM content (attempt %d):\n%s", attempt + 1, content)
+                        if attempt == max_retries - 1:
+                            raise ValueError(f"LLM generated invalid YAML after {max_retries} attempts: {ye}")
+                        messages.append({"role": "assistant", "content": content})
+                        messages.append({"role": "user", "content": (
+                            f"The YAML you generated is invalid and failed to parse with this error:\n{ye}\n\n"
+                            f"The problem is around here:\n{_yaml_error_context(content, ye)}\n\n"
+                            "Return ONLY corrected, valid YAML (no prose, no code fences). "
+                            "Quote any string value that contains a colon, '#', '@', or other special "
+                            "characters, and use a block scalar ('|') for any multi-line description."
+                        )})
+                        continue
+
+                    # Step 2: post-LLM pruning — drop any table the model hallucinated
+                    # or re-added from upstream/downstream lists.
+                    try:
+                        if isinstance(final_yaml, dict) and "schema" in final_yaml and isinstance(final_yaml["schema"], list):
                             valid_names = {m["dataset_id"] for m in datasets_metadata}
-                            
+
                             filtered_schema = []
                             for table_def in final_yaml["schema"]:
                                 phys_name = table_def.get("physicalName", "")
                                 table_catalog = table_def.get("catalog", "")
                                 table_schema = table_def.get("schema", "")
-                                
+
                                 if table_catalog and table_schema and "." not in phys_name:
                                     full_name = f"{table_catalog}.{table_schema}.{phys_name}"
                                 else:
                                     full_name = phys_name
-                                    
+
                                 if full_name in valid_names or phys_name in valid_names:
                                     filtered_schema.append(table_def)
                                 else:
                                     logger.info(f"Post-LLM Pruning: Removing invalid/hallucinated table {full_name} from final YAML.")
-                                    
+
                             final_yaml["schema"] = filtered_schema
                             # Dump with sort_keys=False to preserve order, and default_flow_style=False for block format
                             content = yaml.dump(final_yaml, sort_keys=False, default_flow_style=False)
                         return content
-                    except yaml.YAMLError as ye:
-                        logger.error(f"LLM generated invalid YAML on attempt {attempt + 1}: {ye}")
-                        if attempt == max_retries - 1:
-                            raise ValueError(f"LLM generated invalid YAML after {max_retries} attempts: {ye}")
-                        # Add the error to the messages to prompt the LLM to fix it
-                        messages.append({"role": "assistant", "content": content})
-                        messages.append({"role": "user", "content": f"The YAML you generated is invalid and failed to parse with this error: {ye}\n\nPlease fix the syntax error and return ONLY the corrected YAML."})
-                        continue
                     except Exception as e:
                         logger.warning(f"Failed to post-prune LLM YAML: {e}")
                         return content
-                    
+
+                # Markers missing — the model returned prose or a wrong shape.
+                # Re-prompt with explicit feedback instead of silently re-calling
+                # with the same messages (which tended to reproduce the failure).
+                logger.warning(
+                    "LLM response missing ODCS markers (apiVersion/kind) on attempt %d for %s. Head: %r",
+                    attempt + 1, dataset_ids, content[:200],
+                )
                 if attempt == max_retries - 1:
                     raise ValueError("LLM generated invalid ODCS format.")
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": (
+                    "Your response was not a valid ODCS contract. It MUST be pure YAML that begins with "
+                    "'apiVersion:' and includes 'kind: DataContract'. Return ONLY the YAML — no prose, no code fences."
+                )})
+                continue
             except Exception as e:
                 if attempt == max_retries - 1:
                     raise e

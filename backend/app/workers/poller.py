@@ -27,6 +27,7 @@ from app.core.config import settings, _yaml_config
 from app.core.exceptions import RetryableError, PermanentError
 from app.workers.tasks.sync_calendar import sync_calendar_task
 from app.workers.tasks.sync_data_assets import sync_data_assets_task
+from app.workers.tasks.sync_contracts import sync_contracts_task
 import traceback
 
 logger = logging.getLogger(__name__)
@@ -150,12 +151,35 @@ async def start_poller():
     # Get polling interval from config (default 5 seconds)
     poll_interval = getattr(settings, 'POLLER_INTERVAL_SECONDS', 5)
     logger.info(f"Poller configured with interval: {poll_interval} seconds")
+
+    # Log which scheduled sync features are ON at startup. A common "why is my
+    # data stale?" cause is the data_discovery feature being off — in which case
+    # the poller never triggers the data-asset sync at all. Surfacing this once
+    # here (rather than silently skipping every cycle) makes it obvious.
+    _feat = _yaml_config.get("features", {}) or {}
+    _contract_cron = (getattr(settings, "CONTRACT_SYNC_CRON", "") or "").strip()
+    logger.info(
+        "Poller sync features: calendar=%s, data_discovery=%s (asset_cron=%s, contract_cron=%s), sentinel=%s. "
+        "Contract sync is %s — %s.",
+        _feat.get("calendar", False),
+        _feat.get("data_discovery", False),
+        getattr(settings, "DATA_ASSET_SYNC_CRON", ""),
+        _contract_cron or "(disabled)",
+        _feat.get("sentinel", False),
+        "SCHEDULED" if _contract_cron else "MANUAL-only",
+        "runs on contract_cron above" if _contract_cron
+        else "ODCS contracts refresh only when 'Sync Data Contracts' is clicked (set CONTRACT_SYNC_CRON to automate)",
+    )
     
     poll_count = 0
     consecutive_db_errors = 0
     
     # Use a semaphore to limit concurrent asset sync tasks if they run long
     sync_semaphore = asyncio.Semaphore(1)
+    # Contract sync is heavier (LLM per dataset) and can run for minutes; its own
+    # semaphore keeps a slow run from overlapping itself without blocking the
+    # lightweight data-asset sync.
+    contract_sync_semaphore = asyncio.Semaphore(1)
 
     # Elect a single active poller cluster-wide (no-op on SQLite). Replicas that
     # aren't the leader idle here so we don't run N copies of the poll cycle.
@@ -195,6 +219,21 @@ async def start_poller():
                             logger.error(f"Error in background data asset sync: {e}", exc_info=True)
                 
                 asyncio.create_task(safe_sync_data_assets())
+
+                # Scheduled ODCS contract sync (cron-gated inside the task;
+                # no-op unless CONTRACT_SYNC_CRON is set). Shares the
+                # data_discovery feature gate since it operates on the same
+                # governed data assets.
+                async def safe_sync_contracts():
+                    if contract_sync_semaphore.locked():
+                        return  # Already syncing contracts
+                    async with contract_sync_semaphore:
+                        try:
+                            await sync_contracts_task()
+                        except Exception as e:
+                            logger.error(f"Error in background contract sync: {e}", exc_info=True)
+
+                asyncio.create_task(safe_sync_contracts())
 
             if _yaml_config.get("features", {}).get("sentinel", False):
                 await process_enforcement_sentinel_cron()

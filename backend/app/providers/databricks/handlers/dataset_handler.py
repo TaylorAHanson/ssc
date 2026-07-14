@@ -90,6 +90,7 @@ class DatasetResourceHandler(BaseResourceHandler):
                             "schema_description": None,
                             "all_columns_have_descriptions": False,
                             "rbac_defined": False,
+                            "rbac_readable": False,
                             "table_exists": True,
                             "missing_column_descriptions": []
                         }
@@ -234,11 +235,25 @@ ORDER BY resultPercent ASC
                             if full_name.endswith("_v") or full_name.endswith("_view"):
                                 asset_info["type"] = "view"
                             
+                        # RBAC verification via the Unity Catalog Grants API
+                        # (SHOW GRANTS). Reading grants requires MANAGE / ownership /
+                        # workspace-admin on the object; when we CAN'T read them we
+                        # must not assume "no access controls" (that would false-flag
+                        # every table), so we record rbac_readable=False and the policy
+                        # skips the check rather than failing it.
                         try:
                             grants = self.workspace_client.grants.get(securable_type="table", full_name=full_name)
                             asset_info["rbac_defined"] = len(grants.privilege_assignments or []) > 0
-                        except Exception:
+                            asset_info["rbac_readable"] = True
+                        except Exception as e:
+                            logger.warning(
+                                "Could not read grants for %s (need MANAGE/owner/workspace "
+                                "admin to SHOW GRANTS) — skipping the RBAC check for this "
+                                "asset: %s",
+                                full_name, e,
+                            )
                             asset_info["rbac_defined"] = False
+                            asset_info["rbac_readable"] = False
                         
                         resource["assets"].append(asset_info)
                         
@@ -317,6 +332,53 @@ ORDER BY resultPercent ASC
 
         return tables
 
+    def _apply_certification_tag(self, full_name: str, certified: bool) -> bool:
+        """Set/unset ``system.certification_status`` on ONE object, handling both
+        tables and views.
+
+        Databricks requires ``ALTER VIEW`` (not ``ALTER TABLE``) to tag a view;
+        an ``ALTER TABLE`` against a view fails, which is why views were silently
+        left un-tagged. We try ``ALTER TABLE`` first and, on failure, fall back to
+        ``ALTER VIEW`` so every object in the product gets tagged regardless of
+        type. Returns True only when a statement actually succeeds.
+        """
+        if certified:
+            table_sql = f"ALTER TABLE {full_name} SET TAGS ('system.certification_status' = 'certified')"
+            view_sql = f"ALTER VIEW {full_name} SET TAGS ('system.certification_status' = 'certified')"
+        else:
+            table_sql = f"ALTER TABLE {full_name} UNSET TAGS ('system.certification_status')"
+            view_sql = f"ALTER VIEW {full_name} UNSET TAGS ('system.certification_status')"
+
+        def _run(sql: str):
+            res = self.workspace_client.statement_execution.execute_statement(
+                statement=sql,
+                warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
+                wait_timeout="30s",
+            )
+            state = res.status.state.value if (res.status and res.status.state) else "UNKNOWN"
+            err = res.status.error.message if (res.status and res.status.error) else None
+            return state, err
+
+        state, err = _run(table_sql)
+        if state not in ("FAILED", "CANCELED", "CLOSED"):
+            return True
+
+        # ALTER TABLE failed — most commonly because the object is a VIEW. Retry
+        # as a view before giving up.
+        logger.info(
+            "Certification tag via ALTER TABLE failed for %s (%s); retrying as ALTER VIEW.",
+            full_name, err,
+        )
+        v_state, v_err = _run(view_sql)
+        if v_state not in ("FAILED", "CANCELED", "CLOSED"):
+            return True
+
+        logger.error(
+            "Failed to %s %s as both table and view (table_err=%s | view_err=%s)",
+            "certify" if certified else "uncertify", full_name, err, v_err,
+        )
+        return False
+
     async def certify(self, resource_id: str) -> bool:
         logger.info(f"Certifying data product {resource_id}")
         try:
@@ -326,22 +388,16 @@ ORDER BY resultPercent ASC
 
             tables = self._resolve_physical_tables(resource_id)
             if not tables:
+                logger.warning(f"Certify {resource_id}: contract resolved 0 physical tables — nothing tagged.")
                 return False
 
-            success = True
-            for full_name in tables:
-                query = f"ALTER TABLE {full_name} SET TAGS ('system.certification_status' = 'certified')"
-                res = self.workspace_client.statement_execution.execute_statement(
-                    statement=query,
-                    warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
-                    wait_timeout="30s"
-                )
-                if res.status.state.value in ("FAILED", "CANCELED", "CLOSED"):
-                    error_msg = res.status.error.message if res.status.error else "Unknown SQL error"
-                    logger.error(f"SQL execution failed to certify {full_name}: {error_msg}")
-                    success = False
-
-            return success
+            failed = [t for t in tables if not self._apply_certification_tag(t, certified=True)]
+            logger.info(
+                "Certify %s: tagged %d/%d object(s) as certified%s.",
+                resource_id, len(tables) - len(failed), len(tables),
+                f" (failed: {failed})" if failed else "",
+            )
+            return not failed
         except Exception as e:
             logger.error(f"Failed to certify dataset {resource_id}: {e}")
             return False
@@ -355,22 +411,16 @@ ORDER BY resultPercent ASC
 
             tables = self._resolve_physical_tables(resource_id)
             if not tables:
+                logger.warning(f"Uncertify {resource_id}: contract resolved 0 physical tables — nothing changed.")
                 return False
 
-            success = True
-            for full_name in tables:
-                query = f"ALTER TABLE {full_name} UNSET TAGS ('system.certification_status')"
-                res = self.workspace_client.statement_execution.execute_statement(
-                    statement=query,
-                    warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
-                    wait_timeout="30s"
-                )
-                if res.status.state.value in ("FAILED", "CANCELED", "CLOSED"):
-                    error_msg = res.status.error.message if res.status.error else "Unknown SQL error"
-                    logger.error(f"SQL execution failed to uncertify {full_name}: {error_msg}")
-                    success = False
-
-            return success
+            failed = [t for t in tables if not self._apply_certification_tag(t, certified=False)]
+            logger.info(
+                "Uncertify %s: cleared tag on %d/%d object(s)%s.",
+                resource_id, len(tables) - len(failed), len(tables),
+                f" (failed: {failed})" if failed else "",
+            )
+            return not failed
         except Exception as e:
             logger.error(f"Failed to un-certify dataset {resource_id}: {e}")
             return False

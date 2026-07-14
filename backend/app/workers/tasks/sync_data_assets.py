@@ -36,9 +36,13 @@ async def sync_data_assets_task(force: bool = False):
                 return
                 
         if now < _next_sync_time:
+            logger.debug(
+                "Data asset sync skipped — next scheduled run at %s (cron=%s).",
+                _next_sync_time.isoformat(), cron_expr,
+            )
             return # Too soon to sync again
             
-    logger.info("Starting data assets sync...")
+    logger.info("Starting data assets sync%s...", " (forced)" if force else "")
     
     # Calculate next time for the future
     if cron_expr:
@@ -60,9 +64,30 @@ async def sync_data_assets_task(force: bool = False):
             client_id=client_id,
             client_secret=client_secret
         )
+
+        # Log the identity we sync as — like the contract sync, what shows up in
+        # system.information_schema.tables is filtered to this principal's grants,
+        # so a "missing assets" complaint traces back to this SP's SELECT grants.
+        try:
+            _me = provider.client.current_user.me()
+            _identity = getattr(_me, "user_name", None) or getattr(_me, "display_name", None) or "unknown"
+            logger.info(f"Data asset sync running as identity: {_identity}")
+        except Exception as _e:  # noqa: BLE001 - diagnostic only
+            logger.warning(f"Could not resolve data asset sync identity: {_e}")
         
+        # Restrict to configured catalogs when SCAN_CATALOGS is set; otherwise
+        # scan every catalog (minus system/samples) as before.
+        from app.core.config import get_scan_catalogs
+        _catalogs = get_scan_catalogs()
+        if _catalogs:
+            _in_list = ", ".join("'" + c.replace("'", "''") + "'" for c in _catalogs)
+            catalog_filter = f"t.table_catalog IN ({_in_list})"
+            logger.info("Data asset sync restricted to configured catalogs: %s", _catalogs)
+        else:
+            catalog_filter = "t.table_catalog NOT IN ('system', 'samples')"
+
         # Query information schema for tables and their tags
-        query = """
+        query = f"""
             SELECT 
                 t.table_catalog as catalog,
                 t.table_schema as schema,
@@ -77,7 +102,7 @@ async def sync_data_assets_task(force: bool = False):
               ON t.table_catalog = tt.catalog_name 
              AND t.table_schema = tt.schema_name 
              AND t.table_name = tt.table_name
-            WHERE t.table_catalog NOT IN ('system', 'samples')
+            WHERE {catalog_filter}
             GROUP BY 1, 2, 3, 4, 5, 6, 7
         """
         
@@ -147,10 +172,17 @@ async def sync_data_assets_task(force: bool = False):
                     asset.last_synced_at = now
                     
                 # Delete physical table assets that no longer exist in Databricks
-                db.query(DataAssetModel).filter(DataAssetModel.id.notin_(synced_ids), DataAssetModel.type != 'DATA_PRODUCT').delete()
+                deleted = db.query(DataAssetModel).filter(
+                    DataAssetModel.id.notin_(synced_ids), DataAssetModel.type != 'DATA_PRODUCT'
+                ).delete(synchronize_session=False)
                 
                 db.commit()
-                logger.info(f"Successfully synced {len(rows)} data assets to Lakebase")
+                logger.info(
+                    "Successfully synced %d data assets to Lakebase (removed %d stale asset(s)). "
+                    "Next scheduled sync: %s.",
+                    len(rows), deleted or 0,
+                    _next_sync_time.isoformat() if _next_sync_time else "n/a",
+                )
             except Exception as e:
                 db.rollback()
                 logger.error(f"Database error during data asset sync: {e}", exc_info=True)

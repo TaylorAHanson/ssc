@@ -290,6 +290,12 @@ export function DataCertification() {
       return 0;
     });
 
+  // Summary counts across ALL datasets (not just the filtered view), so the
+  // header reflects the true inventory regardless of the active search/filter.
+  const certifiedCount = datasets.filter(d => getStatus(d) === 'certified').length;
+  const awaitingCount = datasets.filter(d => getStatus(d) === 'awaiting').length;
+  const uncertifiedCount = datasets.length - certifiedCount - awaitingCount;
+
   return (
     <div className="space-y-6">
       <Card>
@@ -359,6 +365,21 @@ export function DataCertification() {
               <span className="text-sm font-medium">{syncMessage.text}</span>
             </div>
           )}
+
+          <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600">
+            <span>
+              <span className="font-semibold text-gray-900">{datasets.length}</span>{' '}
+              dataset{datasets.length === 1 ? '' : 's'}
+            </span>
+            <span className="text-green-700">{certifiedCount} certified</span>
+            <span className="text-gray-500">{uncertifiedCount} uncertified</span>
+            {awaitingCount > 0 && (
+              <span className="text-yellow-700">{awaitingCount} awaiting scan</span>
+            )}
+            {processedDatasets.length !== datasets.length && (
+              <span className="text-gray-400">· showing {processedDatasets.length}</span>
+            )}
+          </div>
 
           <div className="overflow-x-auto rounded-lg border border-gray-200">
             <table className="w-full text-sm text-left">

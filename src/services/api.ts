@@ -1646,6 +1646,7 @@ export interface ScheduleInfo {
 export interface SystemSchedules {
   enforcement_sentinel: ScheduleInfo;
   data_asset_sync: ScheduleInfo;
+  contract_sync: ScheduleInfo;
   event_sync: ScheduleInfo;
 }
 

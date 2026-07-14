@@ -46,6 +46,162 @@ class DataContractCreate(BaseModel):
     dataset_id: str
     yaml_content: str
 
+def discover_dataset_groups(dataset_id: Optional[str] = None) -> dict:
+    """Discover ``dataset``-tagged tables grouped by their tag value.
+
+    Builds the Databricks provider from settings, queries each catalog's
+    ``information_schema.table_tags`` and returns
+    ``{dataset_tag_value: [full_table_name, ...]}``. Shared by the manual
+    ``POST /sync`` endpoint and the scheduled poller task so both use the exact
+    same discovery + diagnostics. Contains no awaits (the Databricks SDK calls
+    are synchronous), so it is safe to call from either context.
+    """
+    from app.providers.databricks import DatabricksProvider
+    from app.core.config import settings, get_scan_catalogs
+
+    # 1. Query Databricks for tables with the 'dataset' tag
+    provider = DatabricksProvider(
+        host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
+        token=settings.DATABRICKS_TOKEN,
+        client_id=settings.DATABRICKS_CLIENT_ID,
+        client_secret=settings.DATABRICKS_CLIENT_SECRET,
+        config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID}
+    )
+
+    # Resolve WHICH principal we're scanning as. This is the identity whose
+    # Unity Catalog grants determine what information_schema returns, so log
+    # it up front - a "missing tables" report almost always traces back to
+    # this SP lacking SELECT on those tables.
+    _scan_identity = "unknown"
+    try:
+        _me = provider.client.current_user.me()
+        _scan_identity = getattr(_me, "user_name", None) or getattr(_me, "display_name", None) or "unknown"
+    except Exception as _e:  # noqa: BLE001 - diagnostic only
+        logger.warning(f"Could not resolve scanning identity for contract sync: {_e}")
+    logger.info(f"Contract sync running as identity: {_scan_identity}")
+
+    # Resolve which catalogs to scan. When SCAN_CATALOGS is configured we scan
+    # exactly those (comma-separated, trimmed); otherwise we enumerate every
+    # catalog the SP can see (minus system/samples) as before.
+    _configured_catalogs = get_scan_catalogs()
+
+    def _catalog_names_to_scan():
+        if _configured_catalogs:
+            logger.info("Scanning configured catalogs (SCAN_CATALOGS): %s", _configured_catalogs)
+            return list(_configured_catalogs)
+        names = [c.name for c in provider.client.catalogs.list() if c.name not in ("system", "samples")]
+        logger.info("SCAN_CATALOGS blank — scanning all %d visible catalog(s).", len(names))
+        return names
+
+    dataset_groups = {}
+
+    if dataset_id:
+        # Sync a specific dataset
+        parts = dataset_id.split(".")
+        if len(parts) == 3:
+            catalog_name, schema_name, table_name = parts
+            query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {catalog_name}.information_schema.table_tags WHERE tag_name = 'dataset' AND catalog_name = '{catalog_name}' AND schema_name = '{schema_name}' AND table_name = '{table_name}'"
+            try:
+                response = provider.client.statement_execution.execute_statement(
+                    statement=query,
+                    warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
+                    wait_timeout="30s"
+                )
+                if response.result and response.result.data_array:
+                    for row in response.result.data_array:
+                        catalog_name, schema_name, table_name, dataset_name = row
+                        if not dataset_name or not str(dataset_name).strip():
+                            logger.warning(
+                                f"Skipping table {catalog_name}.{schema_name}.{table_name}: "
+                                f"'dataset' tag has an empty value"
+                            )
+                            continue
+                        full_name = f"{catalog_name}.{schema_name}.{table_name}"
+                        if dataset_name not in dataset_groups:
+                            dataset_groups[dataset_name] = []
+                        dataset_groups[dataset_name].append(full_name)
+                else:
+                    # If not found in table_tags, maybe it's the dataset_name itself
+                    pass
+            except Exception as e:
+                logger.warning(f"Could not query information_schema for {dataset_id}: {e}")
+
+        # If we didn't find it by table name, maybe dataset_id is the tag value
+        if not dataset_groups:
+            for cat_name in _catalog_names_to_scan():
+                query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {cat_name}.information_schema.table_tags WHERE tag_name = 'dataset' AND tag_value = '{dataset_id}'"
+                try:
+                    response = provider.client.statement_execution.execute_statement(
+                        statement=query,
+                        warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
+                        wait_timeout="30s"
+                    )
+                    if response.result and response.result.data_array:
+                        for row in response.result.data_array:
+                            catalog_name, schema_name, table_name, dataset_name = row
+                            if not dataset_name or not str(dataset_name).strip():
+                                logger.warning(
+                                    f"Skipping table {catalog_name}.{schema_name}.{table_name}: "
+                                    f"'dataset' tag has an empty value"
+                                )
+                                continue
+                            full_name = f"{catalog_name}.{schema_name}.{table_name}"
+                            if dataset_name not in dataset_groups:
+                                dataset_groups[dataset_name] = []
+                            dataset_groups[dataset_name].append(full_name)
+                except Exception as e:
+                    logger.warning(f"Could not query information_schema for catalog {cat_name}: {e}")
+    else:
+        # Fetch every catalog to scan (configured list or all visible ones).
+        for cat_name in _catalog_names_to_scan():
+            # Query the local information_schema for each catalog
+            query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {cat_name}.information_schema.table_tags WHERE tag_name = 'dataset'"
+            logger.info(f"Querying information_schema for catalog {cat_name}")
+
+            try:
+                response = provider.client.statement_execution.execute_statement(
+                    statement=query,
+                    warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
+                    wait_timeout="30s"
+                )
+
+                if response.result and response.result.data_array:
+                    logger.info(f"Found {len(response.result.data_array)} tagged tables in catalog {cat_name}")
+                    for row in response.result.data_array:
+                        catalog_name, schema_name, table_name, dataset_name = row
+                        if not dataset_name or not str(dataset_name).strip():
+                            logger.warning(
+                                f"Skipping table {catalog_name}.{schema_name}.{table_name}: "
+                                f"'dataset' tag has an empty value"
+                            )
+                            continue
+                        full_name = f"{catalog_name}.{schema_name}.{table_name}"
+                        if dataset_name not in dataset_groups:
+                            dataset_groups[dataset_name] = []
+                        dataset_groups[dataset_name].append(full_name)
+                else:
+                    logger.debug(f"No tables found with 'dataset' tag in catalog {cat_name}")
+            except Exception as e:
+                logger.warning(f"Could not query information_schema for catalog {cat_name}: {e}")
+
+    logger.info(
+        "Discovery complete. Found %d unique data set(s). Per-dataset member counts: %s",
+        len(dataset_groups),
+        {k: len(v) for k, v in sorted(dataset_groups.items())},
+    )
+    # Completeness caveat, logged so a "missing tables" report is self-diagnosing.
+    logger.info(
+        "NOTE on completeness: information_schema is metadata-filtered to the objects the scanning "
+        "principal (%s) can see. BROWSE on the catalog is SUFFICIENT to surface a table and its tags "
+        "here - USE CATALOG / USE SCHEMA / SELECT are NOT required for metadata discovery. Row-/column-"
+        "level security (RLS/masks) filter ROWS, not table visibility. If a dataset shows fewer members "
+        "than expected, the usual causes are: the catalog isn't in SCAN_CATALOGS, the tables aren't "
+        "tagged (or use a different tag name), or the SP lacks BROWSE on that catalog.",
+        _scan_identity,
+    )
+    return dataset_groups
+
+
 @router.post("/sync")
 async def sync_contracts(
     background_tasks: BackgroundTasks,
@@ -54,122 +210,9 @@ async def sync_contracts(
     current_user = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    from app.tools.governance.draft_odcs import draft_odcs_contract
-    from app.tools.execute_workflow import execute_workflow
-    from app.providers.databricks import DatabricksProvider
-    from app.core.config import settings
-    
     try:
-        # 1. Query Databricks for tables with the 'dataset' tag
-        provider = DatabricksProvider(
-            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-            token=settings.DATABRICKS_TOKEN,
-            client_id=settings.DATABRICKS_CLIENT_ID,
-            client_secret=settings.DATABRICKS_CLIENT_SECRET,
-            config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID}
-        )
-        
-        dataset_groups = {}
-        
-        if dataset_id:
-            # Sync a specific dataset
-            parts = dataset_id.split(".")
-            if len(parts) == 3:
-                catalog_name, schema_name, table_name = parts
-                query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {catalog_name}.information_schema.table_tags WHERE tag_name = 'dataset' AND catalog_name = '{catalog_name}' AND schema_name = '{schema_name}' AND table_name = '{table_name}'"
-                try:
-                    response = provider.client.statement_execution.execute_statement(
-                        statement=query,
-                        warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
-                        wait_timeout="30s"
-                    )
-                    if response.result and response.result.data_array:
-                        for row in response.result.data_array:
-                            catalog_name, schema_name, table_name, dataset_name = row
-                            if not dataset_name or not str(dataset_name).strip():
-                                logger.warning(
-                                    f"Skipping table {catalog_name}.{schema_name}.{table_name}: "
-                                    f"'dataset' tag has an empty value"
-                                )
-                                continue
-                            full_name = f"{catalog_name}.{schema_name}.{table_name}"
-                            if dataset_name not in dataset_groups:
-                                dataset_groups[dataset_name] = []
-                            dataset_groups[dataset_name].append(full_name)
-                    else:
-                        # If not found in table_tags, maybe it's the dataset_name itself
-                        pass
-                except Exception as e:
-                    logger.warning(f"Could not query information_schema for {dataset_id}: {e}")
-            
-            # If we didn't find it by table name, maybe dataset_id is the tag value
-            if not dataset_groups:
-                catalogs = provider.client.catalogs.list()
-                for catalog in catalogs:
-                    if catalog.name in ("system", "samples"):
-                        continue
-                    query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {catalog.name}.information_schema.table_tags WHERE tag_name = 'dataset' AND tag_value = '{dataset_id}'"
-                    try:
-                        response = provider.client.statement_execution.execute_statement(
-                            statement=query,
-                            warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
-                            wait_timeout="30s"
-                        )
-                        if response.result and response.result.data_array:
-                            for row in response.result.data_array:
-                                catalog_name, schema_name, table_name, dataset_name = row
-                                if not dataset_name or not str(dataset_name).strip():
-                                    logger.warning(
-                                        f"Skipping table {catalog_name}.{schema_name}.{table_name}: "
-                                        f"'dataset' tag has an empty value"
-                                    )
-                                    continue
-                                full_name = f"{catalog_name}.{schema_name}.{table_name}"
-                                if dataset_name not in dataset_groups:
-                                    dataset_groups[dataset_name] = []
-                                dataset_groups[dataset_name].append(full_name)
-                    except Exception as e:
-                        logger.warning(f"Could not query information_schema for catalog {catalog.name}: {e}")
-        else:
-            # Fetch all catalogs the SP has access to
-            catalogs = provider.client.catalogs.list()
-            
-            for catalog in catalogs:
-                if catalog.name in ("system", "samples"):
-                    continue
-                    
-                # Query the local information_schema for each catalog
-                query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {catalog.name}.information_schema.table_tags WHERE tag_name = 'dataset'"
-                logger.info(f"Querying information_schema for catalog {catalog.name}")
-                
-                try:
-                    response = provider.client.statement_execution.execute_statement(
-                        statement=query,
-                        warehouse_id=settings.DATABRICKS_WAREHOUSE_ID,
-                        wait_timeout="30s"
-                    )
-                    
-                    if response.result and response.result.data_array:
-                        logger.info(f"Found {len(response.result.data_array)} tagged tables in catalog {catalog.name}")
-                        for row in response.result.data_array:
-                            catalog_name, schema_name, table_name, dataset_name = row
-                            if not dataset_name or not str(dataset_name).strip():
-                                logger.warning(
-                                    f"Skipping table {catalog_name}.{schema_name}.{table_name}: "
-                                    f"'dataset' tag has an empty value"
-                                )
-                                continue
-                            full_name = f"{catalog_name}.{schema_name}.{table_name}"
-                            if dataset_name not in dataset_groups:
-                                dataset_groups[dataset_name] = []
-                            dataset_groups[dataset_name].append(full_name)
-                    else:
-                        logger.debug(f"No tables found with 'dataset' tag in catalog {catalog.name}")
-                except Exception as e:
-                    logger.warning(f"Could not query information_schema for catalog {catalog.name}: {e}")
-                    
-        logger.info(f"Discovery complete. Found {len(dataset_groups)} unique data sets.")
-        
+        dataset_groups = discover_dataset_groups(dataset_id)
+
         if not dataset_groups:
             if dataset_id:
                 # Still run background to clean up if it was deleted
@@ -178,10 +221,11 @@ async def sync_contracts(
 
         background_tasks.add_task(run_sync_contracts_background, dataset_groups, force, dataset_id)
         return {"status": "success", "message": f"Sync started in the background for {len(dataset_groups)} data sets. This may take a few minutes."}
-        
+
     except Exception as e:
         logger.error(f"Failed to sync contracts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 async def run_sync_contracts_background(dataset_groups: dict, force: bool, specific_dataset_id: Optional[str] = None):
     from app.db.session import get_lakebase_session
@@ -417,7 +461,7 @@ def list_contracts(db: Session = Depends(get_db)):
 # Category display order for the exec report. Mirrors the buckets defined in
 # ``policies/data_certification.rego`` (rule_category); "Other" catches any rule
 # not yet mapped so a new rego rule never silently drops out of the report.
-_REPORT_CATEGORY_ORDER = ["Structure", "Metadata", "Tagging", "Data Quality"]
+_REPORT_CATEGORY_ORDER = ["Structure", "Metadata", "Tagging", "Access Control", "Data Quality"]
 
 
 def _category_status(rule_results: list, category: str) -> str:
@@ -465,6 +509,37 @@ def certification_report(db: Session = Depends(get_db)):
                 rr = None
         return rr or []
 
+    def _dq_failed_rules(asset) -> list:
+        """Individual failed ADOC data-quality rules cached on the asset.
+
+        These are the granular per-rule failures (rule name, table, dimension,
+        score/threshold) — distinct from the OPA checklist in
+        ``certification_rule_results``.
+        """
+        dq = getattr(asset, "data_quality", None) if asset else None
+        if isinstance(dq, str):
+            try:
+                dq = json.loads(dq)
+            except Exception:
+                dq = None
+        if not isinstance(dq, dict):
+            return []
+        fr = dq.get("failed_rules")
+        return fr if isinstance(fr, list) else []
+
+    def _rule_group(rule_name: str) -> str:
+        """Split failed rules by naming convention: ``tdq_*`` vs ``bdq_*``.
+
+        Governance wants technical (TDQ) and business (BDQ) data-quality rules
+        reported separately. Classification is purely the rule-name prefix.
+        """
+        n = (rule_name or "").strip().lower()
+        if n.startswith("tdq_"):
+            return "TDQ"
+        if n.startswith("bdq_"):
+            return "BDQ"
+        return "Other"
+
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="374151", end_color="374151", fill_type="solid")
     pass_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
@@ -503,6 +578,7 @@ def certification_report(db: Session = Depends(get_db)):
         cell.alignment = center
 
     detail_rows = []  # collected for sheet 2
+    dq_rows = []  # collected for sheet 3 (TDQ/BDQ failed rules)
 
     sorted_contracts = sorted(contracts, key=lambda c: (c.dataset_id or "").lower())
     for c in sorted_contracts:
@@ -544,6 +620,20 @@ def certification_report(db: Session = Depends(get_db)):
             else:
                 detail_rows.append([name, category, check, "Failed"])
 
+        # Collect granular failed DQ rules for the TDQ/BDQ split sheet.
+        for fr in _dq_failed_rules(asset):
+            rule_name = fr.get("rule") or "Unnamed rule"
+            dq_rows.append([
+                _rule_group(rule_name),
+                name,
+                fr.get("table") or "",
+                rule_name,
+                fr.get("dimension") or fr.get("rule_type") or "",
+                fr.get("score"),
+                fr.get("threshold"),
+                fr.get("rows_failed"),
+            ])
+
     ws.freeze_panes = f"A{header_row + 1}"
     ws.auto_filter.ref = f"A{header_row}:{get_column_letter(len(overview_headers))}{ws.max_row}"
     ws.column_dimensions["A"].width = 34
@@ -571,6 +661,46 @@ def certification_report(db: Session = Depends(get_db)):
     ws2.column_dimensions["B"].width = 16
     ws2.column_dimensions["C"].width = 44
     ws2.column_dimensions["D"].width = 80
+
+    # --- Sheet 3: Failed DQ Rules (split TDQ / BDQ) ---
+    ws3 = wb.create_sheet("Failed DQ Rules")
+    dq_headers = ["Rule Type", "Dataset", "Table", "Rule", "Dimension", "Score", "Threshold", "Rows Failed"]
+    ws3.append(dq_headers)
+    for col in range(1, len(dq_headers) + 1):
+        cell = ws3.cell(row=1, column=col)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center
+
+    # Group so TDQ rows come first, then BDQ, then anything else; within a group
+    # order by dataset then rule for a stable, readable split.
+    group_order = {"TDQ": 0, "BDQ": 1, "Other": 2}
+    dq_rows.sort(key=lambda r: (group_order.get(r[0], 3), (r[1] or "").lower(), (r[3] or "").lower()))
+
+    tdq_fill = PatternFill(start_color="DBEAFE", end_color="DBEAFE", fill_type="solid")
+    bdq_fill = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid")
+    if dq_rows:
+        for dr in dq_rows:
+            ws3.append(dr)
+            r = ws3.max_row
+            type_cell = ws3.cell(row=r, column=1)
+            type_cell.alignment = center
+            type_cell.font = Font(bold=True)
+            if dr[0] == "TDQ":
+                type_cell.fill = tdq_fill
+            elif dr[0] == "BDQ":
+                type_cell.fill = bdq_fill
+    else:
+        ws3.append(["", "No failed data quality rules recorded.", "", "", "", "", "", ""])
+    ws3.freeze_panes = "A2"
+    ws3.auto_filter.ref = f"A1:{get_column_letter(len(dq_headers))}{ws3.max_row}"
+    ws3.column_dimensions["A"].width = 11
+    ws3.column_dimensions["B"].width = 34
+    ws3.column_dimensions["C"].width = 40
+    ws3.column_dimensions["D"].width = 40
+    ws3.column_dimensions["E"].width = 16
+    for c in ("F", "G", "H"):
+        ws3.column_dimensions[c].width = 12
 
     buf = BytesIO()
     wb.save(buf)
