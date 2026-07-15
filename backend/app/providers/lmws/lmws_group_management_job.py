@@ -3,9 +3,9 @@
 #
 # Manages Qualcomm LMWS/FWS-API groups via parameterized job runs. This notebook
 # is the "engine" behind `app.providers.lmws.client.LmwsProvider`: the app uploads
-# and submits it as a one-time job (classic compute), passing the action and its
-# arguments as notebook widgets, and reads the JSON result back via
-# `dbutils.notebook.exit(...)`.
+# and submits it as a one-time job (serverless by default, or classic compute
+# when LMWS_USE_SERVERLESS is off), passing the action and its arguments as
+# notebook widgets, and reads the JSON result back via `dbutils.notebook.exit(...)`.
 #
 # ---------------------------------------------------------------------------
 # Prerequisites (per the LMWS service docs):
@@ -14,7 +14,8 @@
 #   * The four LMWS/FWS-API base URLs, passed in as widgets by the app
 #     (LmwsProvider.build_parameters) from config/databricks.yml — never
 #     hardcoded here.
-#   * Classic compute cluster (any size — purely API calls, no Spark).
+#   * Serverless compute by default (purely API calls, no Spark); classic
+#     compute (any size) also works when LMWS_USE_SERVERLESS is disabled.
 #   * Service account must be a list-supervisor of target lists for membership ops.
 #
 # NOTE: TLS verification is disabled (verify=False) to match the production

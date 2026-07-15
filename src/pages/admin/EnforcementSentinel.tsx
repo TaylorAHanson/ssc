@@ -54,6 +54,15 @@ const resolveOwner = (v: any): string =>
 const resolveWorkspace = (v: any): string =>
     (v?.workspace?.name || v?.input_context?.workspace?.name || '').toString().trim();
 
+// Friendly display label for a resource type. The backend calls certified data
+// products "data_product"; governance/business users know these as "Dataset".
+// Unknown types fall back to their raw value (styling may upper/capitalize it).
+const resourceTypeLabel = (type: any): string => {
+    const t = (type || '').toString().trim().toLowerCase();
+    if (t === 'data_product') return 'Dataset';
+    return (type || '').toString();
+};
+
 // Render an owner as an email (verbatim) or a service-principal id behind an
 // "SP" chip; muted "Unknown" when unresolved.
 const OwnerCell = ({ owner }: { owner: string }) => {
@@ -249,7 +258,7 @@ export function EnforcementSentinel() {
     };
 
     const handleExecuteAction = async (runId: string, v: any) => {
-        if (!confirm(`Are you sure you want to manually execute the '${v.action}' action on ${v.resource_type} ${v.resource_id}?`)) return;
+        if (!confirm(`Are you sure you want to manually execute the '${v.action}' action on ${resourceTypeLabel(v.resource_type)} ${v.resource_id}?`)) return;
         
         setActionLoading(v.resource_id);
         try {
@@ -944,7 +953,7 @@ export function EnforcementSentinel() {
                                                                     <tr key={idx} className="hover:bg-gray-50">
                                                                         <td className="p-3 px-4 font-mono text-xs text-gray-900">
                                                                             <div className="flex flex-col">
-                                                                                <span className="text-[10px] text-gray-700 font-semibold uppercase tracking-wider font-sans mb-0.5">{v.resource_type}</span>
+                                                                                <span className="text-[10px] text-gray-700 font-semibold uppercase tracking-wider font-sans mb-0.5">{resourceTypeLabel(v.resource_type)}</span>
                                                                                 <span className="break-all">{v.resource_id}</span>
                                                                                 <span className="mt-1 flex items-center gap-1 font-sans text-[10px] text-gray-500">
                                                                                     <span className="uppercase tracking-wider">Owner</span>
@@ -1042,7 +1051,7 @@ export function EnforcementSentinel() {
                         </div>
                         <div className="p-6 overflow-y-auto flex-1 space-y-6">
                             <div className="grid grid-cols-2 gap-4 text-sm bg-gray-50 p-4 rounded-lg border border-gray-100">
-                                <div><span className="font-semibold text-gray-500 block mb-1">Resource Type</span> {selectedViolation.resource_type}</div>
+                                <div><span className="font-semibold text-gray-500 block mb-1">Resource Type</span> {resourceTypeLabel(selectedViolation.resource_type)}</div>
                                 <div><span className="font-semibold text-gray-500 block mb-1">Policy</span> {selectedViolation.policy}</div>
                                 <div><span className="font-semibold text-gray-500 block mb-1">Workspace</span> {resolveWorkspace(selectedViolation) || <span className="text-gray-400">Unknown</span>}</div>
                                 <div>

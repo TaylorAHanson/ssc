@@ -111,6 +111,16 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "Requires the Calendar feature."},
 
     # --- Agent ----------------------------------------------------------
+    {"group": "Agent", "key": "MODEL_SERVING_AGENT_LLM_ENDPOINT", "label": "Model serving endpoint",
+     "type": "string",
+     "help": "The Databricks Model Serving endpoint (the underlying LLM) the agent calls directly. Used "
+             "when no AI Gateway endpoint is set below and an agent profile hasn't pinned its own model. "
+             "Read per turn — a change applies to the next agent request, no restart needed."},
+    {"group": "Agent", "key": "AI_GATEWAY_ENDPOINT", "label": "AI Gateway endpoint",
+     "type": "string",
+     "help": "Optional. Route agent LLM calls through this AI Gateway endpoint instead of the model serving "
+             "endpoint above (for model routing / A-B split, rate + cost limits, and input guardrails). Leave "
+             "BLANK to call Model Serving directly. Read per turn — applies to the next agent request."},
     {"group": "Agent", "key": "AGENT_MAX_ITERATIONS", "label": "Max tool iterations",
      "type": "int", "min": 1, "help": "Max reasoning/tool loops the agent runs per turn."},
     {"group": "Agent", "key": "AGENT_TIMEOUT_SECONDS", "label": "Turn timeout (seconds)",
@@ -122,6 +132,14 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Agent", "key": "WORKFLOW_AUTHORING_LOCKED", "label": "Lock workflow authoring",
      "type": "bool",
      "help": "On = no in-place workflow editing; workflows change only via bundle import. Usually locked in prod."},
+
+    # --- Group Management (LMWS) ----------------------------------------
+    {"group": "Group Management (LMWS)", "key": "LMWS_USE_SERVERLESS", "label": "Run LMWS jobs on serverless",
+     "type": "bool",
+     "help": "On (recommended) = LMWS group/user jobs run on serverless compute — cheaper and no cold-start, "
+             "since the notebook is API-only (no Spark). Off = run on classic compute using the Databricks "
+             "Job settings (cluster id / instance pool / node type) — use this only if the LMWS/FWS-API "
+             "gateway is reachable solely from a network-pinned classic cluster. Applies to the next LMWS run."},
 
     # --- Data & AI ------------------------------------------------------
     {"group": "Data & AI", "key": "yaml:links.genie_full_experience_url", "label": "Genie full-experience URL",
@@ -213,8 +231,6 @@ READONLY_FIELDS: List[Dict[str, Any]] = [
     {"group": "Databricks", "key": "DATABRICKS_HOST", "label": "Databricks host"},
     {"group": "Databricks", "key": "DATABRICKS_WAREHOUSE_ID", "label": "SQL warehouse id"},
     {"group": "Databricks", "key": "DATABRICKS_JOB_CLUSTER_ID", "label": "Job cluster id"},
-    {"group": "Databricks", "key": "MODEL_SERVING_AGENT_LLM_ENDPOINT", "label": "Model serving endpoint"},
-    {"group": "Databricks", "key": "AI_GATEWAY_ENDPOINT", "label": "AI Gateway endpoint"},
     {"group": "Identity & Email", "key": "IDENTITY_PROVIDER", "label": "Identity provider"},
     {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_PROVIDER", "label": "Email provider"},
     {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_SES_REGION", "label": "SES region"},
@@ -247,6 +263,11 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "that job. Edits are picked up by the poller on its next cycle — no redeploy needed."
     ),
     "Agent": "Guardrails and behavior for the AI agent — iteration/timeout limits, tool-policy enforcement, and authoring locks.",
+    "Group Management (LMWS)": (
+        "How the app runs LMWS/FWS-API group & user management jobs. These operations run as a Databricks "
+        "job against a vendored notebook (API-only, no Spark). Choose serverless for speed and cost, or "
+        "classic compute when the gateway is only reachable from a network-pinned cluster. Applies to the next run."
+    ),
     "Data & AI": "Data-answer experience: Genie deep links and Ask Your Data behavior.",
     "System Banner": "A site-wide message shown at the top of every page — handy for maintenance windows, policy notices, or outages. Turn it off to hide it entirely.",
     "Target Workspaces": (

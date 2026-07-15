@@ -3,11 +3,14 @@ LMWS / FWS-API group & user management provider.
 
 Replaces ``EntraIdProvider``. Unlike Entra ID (which the app called directly
 over Microsoft Graph), LMWS group/user operations cannot run in-process: they
-require the Qualcomm FWS-API, a service account whose credentials live in the
-``lmws`` Databricks secret scope, and a classic-compute cluster. So every
-operation runs **as a Databricks job** against the vendored notebook
-(``lmws_group_management_job.py``), reusing the same ``DatabricksProvider``
-submit/poll primitives that back ``DatabricksJobStepMixin``.
+require the Qualcomm FWS-API and a service account whose credentials live in
+the ``lmws`` Databricks secret scope. So every operation runs **as a Databricks
+job** against the vendored notebook (``lmws_group_management_job.py``), reusing
+the same ``DatabricksProvider`` submit/poll primitives that back
+``DatabricksJobStepMixin``. The notebook is API-only (no Spark), so it runs on
+serverless compute by default; set ``LMWS_USE_SERVERLESS=False`` (runtime-
+editable) to force classic compute when the gateway is only reachable from a
+network-pinned cluster.
 
 Two execution paths share one action/parameter contract:
 
@@ -141,7 +144,17 @@ class LmwsProvider(BaseProvider):
         return candidates[0]
 
     def compute(self) -> ComputeSpec:
-        """Classic compute target (API-only, no Spark). Honors DATABRICKS_JOB_* settings."""
+        """Compute target for LMWS jobs (API-only, no Spark).
+
+        Serverless by default (``LMWS_USE_SERVERLESS``) since the notebook only
+        makes API calls — cheaper and no cold-start. The toggle is read at call
+        time so an Admin -> Settings change applies to the next run without a
+        restart. When disabled, fall back to classic compute honoring the
+        ``DATABRICKS_JOB_*`` settings.
+        """
+        if getattr(settings, "LMWS_USE_SERVERLESS", True):
+            # An empty ComputeSpec (no cluster fields) => serverless.
+            return ComputeSpec()
         return default_classic_compute(
             spark_version=settings.DATABRICKS_JOB_SPARK_VERSION,
             node_type_id=settings.DATABRICKS_JOB_NODE_TYPE_ID,

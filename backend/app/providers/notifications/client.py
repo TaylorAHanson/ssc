@@ -207,6 +207,9 @@ class NotificationProvider(BaseProvider):
     </style>
 </head>
 <body>
+    <!--[if mso]>
+    <table role="presentation" align="center" width="800" cellpadding="0" cellspacing="0" border="0" style="width:800px;"><tr><td>
+    <![endif]-->
     <div class="container">
         <div class="header">
             {logo_html}
@@ -219,6 +222,9 @@ class NotificationProvider(BaseProvider):
             {details_html}
         </div>
     </div>
+    <!--[if mso]>
+    </td></tr></table>
+    <![endif]-->
     <div class="footer">
         Automated notification from {brand_name}
     </div>

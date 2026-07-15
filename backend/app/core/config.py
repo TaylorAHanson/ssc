@@ -486,6 +486,13 @@ class Settings(BaseSettings):
     LMWS_REST_URL: str = ""    # e.g. https://<gateway>/iam/v1/lmws-rest/publicAPIrest
     LMWS_CACHE_URL: str = ""   # e.g. https://<gateway>/iam/v1/lmws-rest/listCacheInfo
     LMWS_FWS_URL: str = ""     # e.g. https://<gateway>/iam/v1/fws-api/entitlement
+    # Compute target for LMWS jobs. The notebook is API-only (no Spark), so
+    # serverless is the cheaper, faster default and avoids classic cold-starts.
+    # Flip to False (runtime-editable in Admin -> Settings) to force classic
+    # compute — e.g. if the LMWS/FWS-API gateway is only reachable from a
+    # network-pinned classic cluster. When False, the DATABRICKS_JOB_* settings
+    # (cluster id / instance pool / node type) select the classic target.
+    LMWS_USE_SERVERLESS: bool = True
     LMWS_JOB_TIMEOUT_SECONDS: int = 1800  # Job-level timeout for an LMWS action run
     LMWS_DEFAULT_JUSTIFICATION: str = "Automated via Databricks job"
     LMWS_DEFAULT_CLONE_SOURCE: str = ""  # Default clone source for createSPGroup (set per-deployment)

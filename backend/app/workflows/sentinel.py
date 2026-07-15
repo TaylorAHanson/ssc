@@ -1668,6 +1668,18 @@ def _owner_html(owner: Any, *, small: bool = False) -> str:
     )
 
 
+def _resource_type_label(resource_type: Any) -> str:
+    """Friendly display label for a resource type.
+
+    The engine calls certified data products "data_product"; governance readers
+    know these as "Dataset". Everything else is shown as-is (the caller may
+    capitalize it)."""
+    t = ("" if resource_type is None else str(resource_type)).strip().lower()
+    if t == "data_product":
+        return "Dataset"
+    return "" if resource_type is None else str(resource_type)
+
+
 def _workspace_html(name: Any) -> str:
     """Render a workspace name as a small muted pill; em-dash when unknown."""
     n = ("" if name is None else str(name)).strip()
@@ -1711,16 +1723,28 @@ def _violations_table_html(rows: List[Dict[str, Any]], cap: Optional[int] = None
             f'{text}</th>'
         )
 
+    # Column widths (px). Every column — INCLUDING Reason — gets an explicit width.
+    # Outlook's Word engine collapses a fixed-layout column that has no width to
+    # near-zero when space is tight (that's the "one character per line" squish),
+    # so leaving Reason blank is exactly what broke it there.
+    col_w = {"sev": 66, "ws": 86, "policy": 92, "res": 132, "owner": 112, "reason": 224}
     header = (
         "<tr>"
-        + _th("Severity", "72", "border-top-left-radius:10px;")
-        + _th("Workspace", "96")
-        + _th("Policy", "100")
-        + _th("Resource", "140")
-        + _th("Owner", "120")
-        + _th("Reason", "", "border-top-right-radius:10px;")
+        + _th("Severity", str(col_w["sev"]), "border-top-left-radius:10px;")
+        + _th("Workspace", str(col_w["ws"]))
+        + _th("Policy", str(col_w["policy"]))
+        + _th("Resource", str(col_w["res"]))
+        + _th("Owner", str(col_w["owner"]))
+        + _th("Reason", str(col_w["reason"]), "border-top-right-radius:10px;")
         + "</tr>"
     )
+
+    # A <colgroup> with explicit widths is the most reliable way to pin column
+    # widths in Outlook/Word (it honors these even when it ignores CSS on cells).
+    colgroup = "<colgroup>" + "".join(
+        f'<col width="{w}" style="width:{w}px;">'
+        for w in (col_w["sev"], col_w["ws"], col_w["policy"], col_w["res"], col_w["owner"], col_w["reason"])
+    ) + "</colgroup>"
 
     total = len(rows)
     shown = rows[:cap] if cap else rows
@@ -1743,7 +1767,7 @@ def _violations_table_html(rows: List[Dict[str, Any]], cap: Optional[int] = None
             f'<td style="{cell}font-size:12px;color:#334155;">{_workspace_html(r.get("workspace"))}</td>'
             f'<td style="{cell}font-size:13px;color:#0f172a;font-weight:600;">{_esc(r.get("policy"))}</td>'
             f'<td style="{cell}font-size:12px;color:#334155;">'
-            f'<div style="font-weight:600;color:#64748b;text-transform:capitalize;margin-bottom:3px;">{_esc(r.get("resource_type"))}</div>'
+            f'<div style="font-weight:600;color:#64748b;text-transform:capitalize;margin-bottom:3px;">{_esc(_resource_type_label(r.get("resource_type")))}</div>'
             f'<code style="font-size:12px;color:#0f172a;background:#f1f5f9;padding:2px 6px;border-radius:4px;word-break:break-all;">{_esc(r.get("resource_id"))}</code>'
             '</td>'
             f'<td style="{cell}font-size:12px;color:#334155;">{_owner_html(r.get("owner"))}</td>'
@@ -1763,7 +1787,7 @@ def _violations_table_html(rows: List[Dict[str, Any]], cap: Optional[int] = None
         '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" '
         'style="border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;'
         'border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin:0;">'
-        f"<thead>{header}</thead><tbody>{''.join(body_rows)}</tbody></table>"
+        f"{colgroup}<thead>{header}</thead><tbody>{''.join(body_rows)}</tbody></table>"
     )
 
 
@@ -1797,6 +1821,11 @@ def _severity_summary_table_html(rows: List[Dict[str, Any]]) -> str:
         + _th("Count", "right", "border-top-right-radius:10px;")
         + "</tr>"
     )
+    # Explicit column widths so Outlook doesn't squish a column (see the HIGH table).
+    sum_col_w = (150, 250, 118, 74)
+    colgroup = "<colgroup>" + "".join(
+        f'<col width="{w}" style="width:{w}px;">' for w in sum_col_w
+    ) + "</colgroup>"
     body = []
     for i, ((workspace, policy, sev), count) in enumerate(items):
         bg = "#ffffff" if i % 2 == 0 else "#f8fafc"
@@ -1813,7 +1842,7 @@ def _severity_summary_table_html(rows: List[Dict[str, Any]]) -> str:
         '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" '
         'style="border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;'
         'border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin:0;">'
-        f"<thead>{header}</thead><tbody>{''.join(body)}</tbody></table>"
+        f"{colgroup}<thead>{header}</thead><tbody>{''.join(body)}</tbody></table>"
     )
 
 

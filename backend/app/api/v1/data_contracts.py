@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import threading
 from typing import List, Optional
 import uuid
 import yaml
@@ -15,6 +17,35 @@ from app.api.deps import get_current_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Guards the manual "Sync Data Contracts" job so repeated clicks can't stack up
+# multiple concurrent syncs (each of which drives the LLM + many Databricks SDK
+# calls). Held for the lifetime of one manual run.
+_manual_sync_lock = threading.Lock()
+
+
+def _spawn_contract_sync_thread(dataset_groups: dict, force: bool, dataset_id: Optional[str]) -> bool:
+    """Run the contract-sync job on a DEDICATED daemon thread (its own event loop).
+
+    Critically this keeps the sync OFF the request-serving event loop. The job
+    makes blocking Databricks SDK calls and synchronous DB writes and drives the
+    LLM per dataset; running it as a FastAPI BackgroundTask (which executes on the
+    main loop) froze the whole app for the duration. Returns False when a manual
+    sync is already in progress.
+    """
+    if not _manual_sync_lock.acquire(blocking=False):
+        return False
+
+    def _runner():
+        try:
+            asyncio.run(run_sync_contracts_background(dataset_groups, force, dataset_id))
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Manual contract sync failed: {e}")
+        finally:
+            _manual_sync_lock.release()
+
+    threading.Thread(target=_runner, daemon=True, name="ContractSyncManual").start()
+    return True
 
 class DataContractResponse(BaseModel):
     id: str
@@ -227,22 +258,28 @@ def discover_dataset_groups(dataset_id: Optional[str] = None) -> dict:
 
 @router.post("/sync")
 async def sync_contracts(
-    background_tasks: BackgroundTasks,
     force: bool = False,
     dataset_id: Optional[str] = None,
     current_user = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     try:
-        dataset_groups = discover_dataset_groups(dataset_id)
+        # Discovery makes blocking Databricks SDK calls (execute_statement,
+        # catalogs.list, ...). Run it in a worker thread so it never blocks the
+        # request-serving event loop while the user waits for the response.
+        dataset_groups = await asyncio.to_thread(discover_dataset_groups, dataset_id)
+
+        busy_msg = "A contract sync is already running — please wait for it to finish before starting another."
 
         if not dataset_groups:
             if dataset_id:
-                # Still run background to clean up if it was deleted
-                background_tasks.add_task(run_sync_contracts_background, dataset_groups, force, dataset_id)
+                # Still run in the background to clean up if it was deleted.
+                if not _spawn_contract_sync_thread(dataset_groups, force, dataset_id):
+                    return {"status": "success", "message": busy_msg}
             return {"status": "success", "message": "No tables found with 'dataset' tag."}
 
-        background_tasks.add_task(run_sync_contracts_background, dataset_groups, force, dataset_id)
+        if not _spawn_contract_sync_thread(dataset_groups, force, dataset_id):
+            return {"status": "success", "message": busy_msg}
         return {"status": "success", "message": f"Sync started in the background for {len(dataset_groups)} data sets. This may take a few minutes."}
 
     except Exception as e:
