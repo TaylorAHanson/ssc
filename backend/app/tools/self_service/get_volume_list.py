@@ -18,19 +18,21 @@ class GetVolumeListInput(BaseModel):
     description="Lists all volumes within a specified catalog and schema in Unity Catalog for a specific workspace. You can optionally filter by a specific name or pattern to check if a volume exists.",
     args_schema=GetVolumeListInput
 )
-def get_volume_list(target_host: str, catalog_name: str, schema_name: str, name_pattern: Optional[str] = None) -> Dict[str, Any]:
+def get_volume_list(target_host: str, catalog_name: str, schema_name: str, name_pattern: Optional[str] = None, _obo_token: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetch the list of volumes for a schema along with their descriptions.
     """
     try:
-        # Unity Catalog is metastore-global (account-level), so always read it
-        # from the LOCAL/home workspace — never the target host, which may be
-        # network-unreachable / fail cert validation from here. target_host is
-        # accepted for context but intentionally not used to pick the connection.
-        from app.core.workspaces import get_uc_provider
-        provider = get_uc_provider()
+        # Run On-Behalf-Of the user so the listing reflects the USER's own Unity
+        # Catalog grants (a permission error here means the USER lacks access,
+        # not the app). UC is metastore-global, so we always read from the
+        # LOCAL/home workspace — never the target host, which may be network-
+        # unreachable / fail cert validation. target_host is accepted for
+        # context but intentionally not used to pick the connection.
+        from app.core.workspaces import uc_client_for
+        _provider, client = uc_client_for(_obo_token)
         
-        volumes = provider.client.volumes.list(catalog_name=catalog_name, schema_name=schema_name)
+        volumes = client.volumes.list(catalog_name=catalog_name, schema_name=schema_name)
         
         volume_list = []
         for volume in volumes:

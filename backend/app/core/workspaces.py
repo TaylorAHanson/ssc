@@ -240,6 +240,37 @@ def get_uc_provider():
     )
 
 
+def uc_client_for(obo_token: Optional[str]):
+    """Resolve ``(provider, client)`` for Unity Catalog reads, pinned to home.
+
+    UC discovery/metadata tools must run **On-Behalf-Of the signed-in user** so
+    the result reflects the USER's own grants — this is how the app confirms a
+    user does (or does not) have access to a catalog/schema/table/volume. Only
+    the local data-asset cache (``search_data_assets``) is trusted to the app
+    SP's broad BROWSE; every live listing tool is OBO.
+
+    Returns the home-workspace :class:`DatabricksProvider` (for ``execute_sql``)
+    plus a ``WorkspaceClient`` bound to the user's identity. Falls back to the
+    app SP ONLY in local dev; on any deployed target a missing user token raises
+    rather than silently answering an access question under the wrong identity.
+    """
+    provider = get_uc_provider()
+    if obo_token:
+        return provider, provider.get_workspace_client(token=obo_token)
+
+    from app.providers.databricks_mcp import sp_fallback_allowed
+
+    if sp_fallback_allowed():
+        return provider, provider.client
+
+    raise PermissionError(
+        "This Unity Catalog lookup must run as the signed-in user, but no user "
+        "token was forwarded (X-Forwarded-Access-Token). Refusing to fall back "
+        "to the app service principal outside local dev — it would answer the "
+        "access question under the wrong identity."
+    )
+
+
 def get_workspace_config(host_or_name: str) -> Optional[WorkspaceConfig]:
     """
     Get the configuration for a specific workspace by host URL or name.

@@ -20,22 +20,24 @@ class GetTableListInput(BaseModel):
     description="Lists all tables within a specified catalog and schema in Unity Catalog for a specific workspace. You can optionally filter by a specific name or pattern to check if a table exists. NEXT STEP: If the user needs access, proceed to the 'Request Data Access' workflow.",
     args_schema=GetTableListInput
 )
-async def get_table_list(target_host: str, catalog_name: str, schema_name: str, name_pattern: Optional[str] = None) -> Dict[str, Any]:
+async def get_table_list(target_host: str, catalog_name: str, schema_name: str, name_pattern: Optional[str] = None, _obo_token: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetch the list of tables for a schema along with their descriptions.
     """
     try:
-        # Unity Catalog is metastore-global (account-level), so always read it
-        # from the LOCAL/home workspace — never the target host, which may be
-        # network-unreachable / fail cert validation from here. target_host is
-        # accepted for context but intentionally not used to pick the connection.
-        from app.core.workspaces import get_uc_provider
-        provider = get_uc_provider()
+        # Run On-Behalf-Of the user so the listing reflects the USER's own Unity
+        # Catalog grants (a permission error here means the USER lacks access,
+        # not the app). UC is metastore-global, so we always read from the
+        # LOCAL/home workspace — never the target host, which may be network-
+        # unreachable / fail cert validation. target_host is accepted for
+        # context but intentionally not used to pick the connection.
+        from app.core.workspaces import uc_client_for
+        provider, client = uc_client_for(_obo_token)
         
         # tables.list() returns a lazy pager; materialize it in a worker thread so
         # the paging API calls don't block the event loop.
         tables = await asyncio.to_thread(
-            lambda: list(provider.client.tables.list(catalog_name=catalog_name, schema_name=schema_name))
+            lambda: list(client.tables.list(catalog_name=catalog_name, schema_name=schema_name))
         )
         
         # Fetch tags for all tables in this schema in one query
@@ -47,7 +49,7 @@ async def get_table_list(target_host: str, catalog_name: str, schema_name: str, 
             WHERE catalog_name = {quote_literal(catalog_name)} 
               AND schema_name = {quote_literal(schema_name)}
             """
-            tag_results = await provider.execute_sql(query)
+            tag_results = await provider.execute_sql(query, obo_token=_obo_token)
             for row in tag_results.get("rows", []):
                 if isinstance(row, dict):
                     t_name = row.get("table_name")
