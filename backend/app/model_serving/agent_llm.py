@@ -75,11 +75,29 @@ class AgentLLMClient:
         
         if tools:
             inputs["tools"] = tools
-        
+
+        # Reasoning models (e.g. gpt-5-6-luna) reject function tools combined
+        # with a non-"none" reasoning_effort on chat/completions. Pass it
+        # explicitly only when configured (set "none" for gpt-5-6-luna); blank
+        # omits it so non-reasoning models (Claude, Llama) aren't sent an
+        # unexpected parameter they'd reject.
+        effort = (settings.AGENT_LLM_REASONING_EFFORT or "").strip()
+        if effort:
+            inputs["reasoning_effort"] = effort
+
+        # Route through the AI Gateway's MLflow chat/completions route when a
+        # gateway model is configured (the non-deprecated method): the model is
+        # named in the request body, not baked into a /serving-endpoints/ path.
+        endpoint_url: Optional[str] = None
+        if self.via_gateway:
+            inputs["model"] = self.endpoint_name
+            endpoint_url = "/ai-gateway/mlflow/v1/chat/completions"
+
         try:
             response = await self.client.invoke_endpoint(
                 self.endpoint_name, 
                 inputs,
+                endpoint_url=endpoint_url,
                 use_foundation_model_format=True
             )
         except Exception as e:

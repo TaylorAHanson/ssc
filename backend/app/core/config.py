@@ -285,7 +285,19 @@ class Settings(BaseSettings):
     # (PII/safety) are configured by an admin -- no app code change to swap models.
     # NOTE: output guardrails are intentionally NOT used so SSE token streaming
     # stays always-on (a blocking output filter would buffer the stream).
+    # When set, this is the model reference sent (in the request body) to the
+    # AI Gateway's MLflow chat/completions route -- e.g. "system.ai.gpt-5-6-luna".
+    # Prefer the "system.ai.*" model references over the legacy pay-per-token
+    # "databricks-*" serving-endpoint names.
     AI_GATEWAY_ENDPOINT: str = ""
+
+    # Reasoning effort for the agent LLM (reasoning models only, e.g. gpt-5-*).
+    # Reasoning models reject function tools combined with a non-"none"
+    # reasoning_effort on /v1/chat/completions -- set this to "none" for
+    # gpt-5-6-luna so the agent's tool calls work. Blank => the parameter is
+    # omitted entirely, which is correct for non-reasoning models (e.g. Claude,
+    # Llama) that would 400 on an unexpected reasoning_effort.
+    AGENT_LLM_REASONING_EFFORT: str = ""  # "" | none | low | medium | high
 
     # MLflow tracing / observability (best practice).
     MLFLOW_TRACING_ENABLED: bool = False

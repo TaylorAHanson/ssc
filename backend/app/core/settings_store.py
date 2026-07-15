@@ -116,11 +116,17 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "The Databricks Model Serving endpoint (the underlying LLM) the agent calls directly. Used "
              "when no AI Gateway endpoint is set below and an agent profile hasn't pinned its own model. "
              "Read per turn — a change applies to the next agent request, no restart needed."},
-    {"group": "Agent", "key": "AI_GATEWAY_ENDPOINT", "label": "AI Gateway endpoint",
+    {"group": "Agent", "key": "AI_GATEWAY_ENDPOINT", "label": "AI Gateway model",
      "type": "string",
-     "help": "Optional. Route agent LLM calls through this AI Gateway endpoint instead of the model serving "
-             "endpoint above (for model routing / A-B split, rate + cost limits, and input guardrails). Leave "
-             "BLANK to call Model Serving directly. Read per turn — applies to the next agent request."},
+     "help": "Optional. When set, agent LLM calls are routed through the AI Gateway's chat/completions route "
+             "(/ai-gateway/mlflow/v1/chat/completions) with this value sent as the model — use a 'system.ai.*' "
+             "reference such as 'system.ai.gpt-5-6-luna' (preferred over the legacy 'databricks-*' names). Leave "
+             "BLANK to call the Model serving endpoint above directly. Read per turn — applies to the next request."},
+    {"group": "Agent", "key": "AGENT_LLM_REASONING_EFFORT", "label": "Reasoning effort",
+     "type": "select", "options": ["", "none", "low", "medium", "high"],
+     "help": "For reasoning models only (e.g. gpt-5-6-luna). Set to 'none' so the agent's function tools work — "
+             "these models reject tools combined with any other reasoning effort on chat/completions. Leave BLANK "
+             "for non-reasoning models (Claude, Llama), which would error on an unexpected reasoning_effort."},
     {"group": "Agent", "key": "AGENT_MAX_ITERATIONS", "label": "Max tool iterations",
      "type": "int", "min": 1, "help": "Max reasoning/tool loops the agent runs per turn."},
     {"group": "Agent", "key": "AGENT_TIMEOUT_SECONDS", "label": "Turn timeout (seconds)",

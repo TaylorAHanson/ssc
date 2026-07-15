@@ -71,8 +71,11 @@ resources:
             value: "${var.databricks_job_cluster_id}"
           - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
             value: "${var.model_serving_endpoint}"
-          # AI Gateway endpoint (optional). Omitted when blank — Apps reject empty
-          # env values. Set var.ai_gateway_endpoint and uncomment to enable:
+          # AI Gateway model (optional). When set, agent LLM calls go through the
+          # gateway's /ai-gateway/mlflow/v1/chat/completions route with this value
+          # sent as the model (use a "system.ai.*" reference, e.g.
+          # system.ai.gpt-5-6-luna). Omitted when blank — Apps reject empty env
+          # values. Set var.ai_gateway_endpoint and uncomment to enable:
           # - name: AI_GATEWAY_ENDPOINT
           #   value: "${var.ai_gateway_endpoint}"
           - name: MLFLOW_TRACING_ENABLED
@@ -307,7 +310,7 @@ variables:
     description: "Model Serving Endpoint for Agent LLM"
     default: "databricks-claude-sonnet-4-6"
   ai_gateway_endpoint:
-    description: "AI Gateway serving endpoint for agent LLM (blank = call model_serving_endpoint directly)."
+    description: "AI Gateway model reference for the agent LLM, sent to /ai-gateway/mlflow/v1/chat/completions (e.g. system.ai.gpt-5-6-luna). Blank = call model_serving_endpoint directly."
     default: ""
   mlflow_tracing_enabled:
     description: "Enable MLflow tracing for the agent (true/false)"
