@@ -6,13 +6,11 @@ import asyncio
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.tools.sql_safety import quote_literal
-from app.providers.databricks import DatabricksProvider
-from app.core.config import settings
 from app.core.exceptions import RetryableError
 import fnmatch
 
 class GetTableListInput(BaseModel):
-    target_host: str = Field(..., description="The host URL of the target Databricks workspace.")
+    target_host: str = Field(..., description="Workspace host for context only. Unity Catalog is account-global, so tables are always read from the local workspace regardless of this value.")
     catalog_name: str = Field(..., description="Name of the parent catalog")
     schema_name: str = Field(..., description="Name of the schema to list tables for")
     name_pattern: Optional[str] = Field(None, description="Optional. Exact name or glob pattern (e.g. '*dev*') to filter for a specific table.")
@@ -27,18 +25,12 @@ async def get_table_list(target_host: str, catalog_name: str, schema_name: str, 
     Fetch the list of tables for a schema along with their descriptions.
     """
     try:
-        from app.core.workspaces import get_workspace_config
-        ws_config = get_workspace_config(target_host)
-        if not ws_config:
-            raise ValueError(f"Target host {target_host} not found in configuration.")
-            
-        provider = DatabricksProvider(
-            host=ws_config.host,
-            token=ws_config.token,
-            client_id=ws_config.client_id,
-            client_secret=ws_config.client_secret,
-            config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID}
-        )
+        # Unity Catalog is metastore-global (account-level), so always read it
+        # from the LOCAL/home workspace — never the target host, which may be
+        # network-unreachable / fail cert validation from here. target_host is
+        # accepted for context but intentionally not used to pick the connection.
+        from app.core.workspaces import get_uc_provider
+        provider = get_uc_provider()
         
         # tables.list() returns a lazy pager; materialize it in a worker thread so
         # the paging API calls don't block the event loop.

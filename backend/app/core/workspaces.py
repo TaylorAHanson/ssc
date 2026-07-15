@@ -200,6 +200,46 @@ def get_target_workspaces() -> List[WorkspaceConfig]:
     return workspaces
 
 
+def get_home_workspace_config() -> WorkspaceConfig:
+    """The app's LOCAL / home workspace (app service principal + home host).
+
+    Unity Catalog is metastore-global (account-level), so ALL UC metadata reads
+    and queries must run against THIS workspace — never a target workspace host.
+    A cross-workspace host may be unreachable or fail TLS certificate validation
+    from here (the "Cert validation failed" error seen when a UC tool is pointed
+    at a target host), and there is no UC benefit since the metastore is shared.
+    """
+    return WorkspaceConfig(
+        name="home",
+        host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL or "",
+        environment=settings.ENVIRONMENT,
+        client_id=settings.DATABRICKS_CLIENT_ID or None,
+        client_secret=settings.DATABRICKS_CLIENT_SECRET or None,
+        token=settings.DATABRICKS_TOKEN or None,
+        credential_source="home",
+    )
+
+
+def get_uc_provider():
+    """A ``DatabricksProvider`` pinned to the home workspace for Unity Catalog.
+
+    Use this for every UC read (catalog/schema/table/volume/credential listing,
+    ``information_schema`` / tag queries). Because UC is account-level, the home
+    workspace can see the whole metastore, and we avoid connecting to a target
+    host that may be network-unreachable from the app.
+    """
+    from app.providers.databricks import DatabricksProvider
+
+    home = get_home_workspace_config()
+    return DatabricksProvider(
+        host=home.host,
+        token=home.token,
+        client_id=home.client_id,
+        client_secret=home.client_secret,
+        config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID},
+    )
+
+
 def get_workspace_config(host_or_name: str) -> Optional[WorkspaceConfig]:
     """
     Get the configuration for a specific workspace by host URL or name.
