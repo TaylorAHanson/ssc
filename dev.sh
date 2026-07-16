@@ -73,10 +73,18 @@ else
     echo -e "${GREEN}✓ Ports available${NC}\n"
 fi
 
-# Check if backend/.env exists
+# Check if backend/.env exists; bootstrap it from the template if not so a fresh
+# clone runs without a manual copy step (the preflight below then fills in your
+# Databricks creds from your CLI login).
 if [ ! -f "backend/.env" ]; then
-    echo -e "${YELLOW}⚠ Warning: backend/.env file not found.${NC}"
-    echo -e "${YELLOW}  Please create backend/.env with your configuration.${NC}\n"
+    if [ -f "backend/.env.example" ]; then
+        cp "backend/.env.example" "backend/.env"
+        echo -e "${GREEN}✓ Created backend/.env from backend/.env.example${NC}"
+        echo -e "${YELLOW}  Review backend/.env and fill in any secrets (tokens, DB, SMTP/SES) as needed.${NC}\n"
+    else
+        echo -e "${YELLOW}⚠ Warning: neither backend/.env nor backend/.env.example was found.${NC}"
+        echo -e "${YELLOW}  Create backend/.env with your configuration before the app can run.${NC}\n"
+    fi
 fi
 
 # Determine Python and uvicorn commands
