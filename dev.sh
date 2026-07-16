@@ -301,6 +301,19 @@ else
     LOCAL_PYTHON_CMD="$PYTHON_CMD"
 fi
 
+# Local-dev preflight (IDE/local only): validate required config and, if the
+# Databricks creds are missing from backend/.env, resolve them from your own
+# Databricks CLI login (`databricks auth login` / .databrickscfg) and export
+# them so the backend runs as you — no need to hand-copy a token. This writes
+# nothing to disk and hard no-ops on any deployed Databricks Apps runtime.
+# stdout carries `export KEY=...` lines (eval'd here); the report is on stderr.
+if [ -f "scripts/local_dev_preflight.py" ]; then
+    PREFLIGHT_EXPORTS=$($LOCAL_PYTHON_CMD scripts/local_dev_preflight.py --export)
+    if [ ! -z "$PREFLIGHT_EXPORTS" ]; then
+        eval "$PREFLIGHT_EXPORTS"
+    fi
+fi
+
 if [ "$DEBUG_MODE" = true ]; then
     echo -e "${GREEN}→ Starting backend API with debugger on port 5678...${NC}"
     $LOCAL_PYTHON_CMD -m debugpy --listen 0.0.0.0:5678 -m uvicorn app.main:app --reload --port 8000 >> ../backend.log 2>&1 &
@@ -322,6 +335,29 @@ if ! kill -0 $BACKEND_PID 2>/dev/null; then
     fi
     exit 1
 fi
+
+# Ensure frontend dependencies are installed (mirrors the backend dep check).
+# On a fresh clone node_modules won't exist, so `npm run dev` fails with
+# "'vite' is not recognized / vite: not found".
+if [ ! -d "node_modules" ] || [ ! -e "node_modules/.bin/vite" ]; then
+    echo -e "${YELLOW}Frontend dependencies not found. Running npm install...${NC}"
+    echo -e "${CYAN}(This can take a minute the first time.)${NC}"
+    npm install
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}✗ npm install failed.${NC}"
+        echo -e "${YELLOW}  If you're behind a corporate proxy / TLS inspection (e.g. Netskope),${NC}"
+        echo -e "${YELLOW}  npm likely can't validate the registry's certificate. Point npm at the${NC}"
+        echo -e "${YELLOW}  corporate root CA, e.g.:${NC}"
+        echo -e "${BLUE}    npm config set cafile \"/path/to/corporate-root-ca.pem\"${NC}"
+        echo -e "${YELLOW}  or set NODE_EXTRA_CA_CERTS to that file, then re-run ./dev.sh${NC}"
+        kill $BACKEND_PID 2>/dev/null || true
+        exit 1
+    fi
+    echo -e "${GREEN}✓ Frontend dependencies installed${NC}"
+else
+    echo -e "${GREEN}✓ Frontend dependencies present${NC}"
+fi
+echo ""
 
 # Start frontend (Vite)
 echo -e "${GREEN}→ Starting frontend...${NC}"
