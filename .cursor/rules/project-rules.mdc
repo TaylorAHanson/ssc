@@ -5,17 +5,19 @@ alwaysApply: true
 
 # Project Rules
 
-## Context
-- When a new context or conversation is started, review `docs/ARCHITECTURE.md` for a detailed explanation on how the backend works. If any significant changes are needed to this file, make sure to include that as part of the implementation plan. There are other important docs in the docs folder, so check there as needed.
+The canonical, tool-agnostic agent guide for this repo lives in **`AGENTS.md`**
+at the repo root, with nested `backend/AGENTS.md`, `src/AGENTS.md`, and
+`mcp_app/AGENTS.md` for area-specific detail. **Read the nearest `AGENTS.md`
+before working**, plus `docs/ARCHITECTURE.md` before backend changes.
 
-## Instructions
-- Use logging library, not print statements.
+Quick reminders (see `AGENTS.md` for the full context):
 
-## Development and Troubleshooting Tools
-- Debugpy is enabled when running via `./dev.sh --debug` but the user needs to click the green play button labelled "Attach to Backend" in the debugging panel. The agent can either do this themselves ask the user to do this to capture variable output rather than inserting debug statements everywhere.
-- In local development, we store a sqllite database at `backend/app_hub.db`. You may execute queries on the local database as needed.
-- For troubleshooting, you may tail the logs at `backend.log` or `frontend.log`. This is especially helpful for python errors or for getting log statements. Always check `backend.log` before finishing up changes that would reload FastAPI, since there may be errors preventing fastApi from starting.
-
-## Gotchas
-- If you create temporary scripts to test things or check things, remember this project runs inside a venv and most libraries aren't natively installed.
-- Don't hardcode the app name or use the app name in any variable naming. Use the branding settings instead: in-code defaults live in `backend/app/core/default_config.py` and are exposed via `settings.BRAND_*` in `backend/app/core/config.py` (a Platform Admin can override them live under Admin -> Settings).
+- Use the logging library, not `print`.
+- Don't hardcode the app/brand name — use `settings.BRAND_*` (defaults in
+  `backend/app/core/default_config.py`); admins override under Admin -> Settings.
+- Scratch scripts run inside `backend/venv`; most libs aren't globally installed.
+- Local DB is SQLite at `backend/app_hub.db`; you may query it directly.
+- Tail `backend.log` / `frontend.log` for errors, and always check `backend.log`
+  before finishing a change that reloads FastAPI.
+- `./dev.sh --debug` enables debugpy — attach via the "Attach to Backend" config
+  rather than scattering debug statements.

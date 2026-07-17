@@ -546,7 +546,8 @@ def certification_report(db: Session = Depends(get_db)):
     """Download an XLSX certification report for leadership.
 
     Sheet 1 (Overview): one row per dataset with a green ``pass`` / red ``fail``
-    cell per high-level category (Structure, Metadata, Tagging, Data Quality).
+    cell per high-level category (Metadata, Tagging, Access Control) plus split
+    TDQ/BDQ data-quality failure counts.
     Sheet 2 (Details): one row per exact failure (dataset x failed check x
     message) for the teams that need to remediate.
     """
@@ -651,8 +652,11 @@ def certification_report(db: Session = Depends(get_db)):
     ws.title = "Overview"
     # The single "Data Quality" column is split into TDQ / BDQ failure counts
     # (by the tdq_/bdq_ rule-name convention); the other categories keep their
-    # single pass/fail cell.
-    overview_non_dq_categories = [c for c in _REPORT_CATEGORY_ORDER if c != "Data Quality"]
+    # single pass/fail cell. "Structure" is intentionally omitted from the
+    # overview columns (still tracked in the rego buckets + Failure Details).
+    overview_non_dq_categories = [
+        c for c in _REPORT_CATEGORY_ORDER if c not in ("Data Quality", "Structure")
+    ]
     overview_headers = (
         ["Dataset", "Status"] + overview_non_dq_categories + ["TDQ Fails", "BDQ Fails"]
     )
