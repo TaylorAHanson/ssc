@@ -370,7 +370,13 @@ class GroupMembershipInput(BaseModel):
 
 
 @tool(name="add_group_membership", args_schema=GroupMembershipInput, side_effect_class="membership",
-      description="Add members to an identity group (Entra/Okta/SCIM/LMWS-backed).")
+      description=(
+          "Add members to an identity group/list (Entra/Okta/SCIM/LMWS-backed). "
+          "To verify before adding, look up the USER with member_lookup — do NOT "
+          "call group_lookup first: restricted / N2K lists reject that lookup even "
+          "when the add is valid, so gating on it wrongly blocks the request. The "
+          "membership backend authorizes the write itself; if the caller isn't "
+          "entitled, this tool surfaces that error."))
 async def add_group_membership(group: str, members: List[str], **kwargs) -> Dict[str, Any]:
     provider = _get_identity_provider()
     result = await provider.list_members_add(group, members)
