@@ -298,6 +298,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "search_requests": True,
         "group_lookup": True,
         "member_lookup": True,
+        "group_lookup_native": True,
+        "member_lookup_native": True,
         "check_resource_access": True,
         "search_approvals": True,
         "search_user_entitlements": True,

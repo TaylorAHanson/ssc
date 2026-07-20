@@ -513,6 +513,25 @@ class Settings(BaseSettings):
     # giving up. State-machine writes poll across ticks instead.
     LMWS_INLINE_POLL_INTERVAL_SECONDS: int = 5
     LMWS_INLINE_MAX_WAIT_SECONDS: int = 300
+
+    # --- Native (in-app) LMWS read path (experimental) ------------------
+    # When the LMWS/FWS-API gateway is reachable directly from the app's
+    # runtime (not only from a job cluster), the read-only lookup tools can
+    # call it in-process instead of submitting a Databricks job. This removes
+    # the job cold-start/poll latency for `member_lookup` / `group_lookup`.
+    # The service-account username matches the vendored notebook; the password
+    # is NOT read from the Databricks secret scope by the app (the REST Secrets
+    # API doesn't return secret values), so inject it into the app environment
+    # (e.g. a databricks.yml app resource secret binding the `lmws` scope key
+    # `edhapisvc`). Blank password => the native tools fail with a clear
+    # "not configured" error and callers should keep using the serverless path.
+    LMWS_SERVICE_USERNAME: str = os.getenv("LMWS_SERVICE_USERNAME", "edhapisvc")
+    LMWS_SERVICE_PASSWORD: str = os.getenv("LMWS_SERVICE_PASSWORD", "")
+    # TLS verification for the direct calls. Defaults to False to match the
+    # vendored notebook (the internal Qualcomm gateway presents an internal CA);
+    # flip on where the gateway chain is trusted by the app runtime.
+    LMWS_NATIVE_VERIFY_TLS: bool = False
+    LMWS_NATIVE_TIMEOUT_SECONDS: int = 30  # Per-request HTTP timeout for direct calls
     
     # Notification Settings
     GOVERNANCE_EMAIL_GROUP: str = _notifications.get("governance_email_group", os.getenv("GOVERNANCE_EMAIL_GROUP", "data-governance@example.com"))

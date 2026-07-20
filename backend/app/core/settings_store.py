@@ -165,6 +165,19 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "type": "string",
      "help": "FWS-API entitlement base URL "
              "(e.g. https://<gateway>/iam/v1/fws-api/entitlement). Applies to the next LMWS run."},
+    {"group": "Group Management (LMWS)", "key": "LMWS_SERVICE_USERNAME", "label": "Native lookup service account",
+     "type": "string",
+     "help": "Service-account username used by the experimental native (in-app) lookup tools "
+             "(member_lookup_native / group_lookup_native), which call the gateway directly instead of "
+             "submitting a Databricks job. The matching password is NOT set here — inject it into the app "
+             "environment as LMWS_SERVICE_PASSWORD (the REST Secrets API can't return secret values), e.g. a "
+             "databricks.yml app-resource secret bound to the 'lmws' scope. Blank password = native tools fail "
+             "with a clear 'not configured' error and you should keep using the serverless lookup."},
+    {"group": "Group Management (LMWS)", "key": "LMWS_NATIVE_VERIFY_TLS", "label": "Verify TLS for native lookup",
+     "type": "bool",
+     "help": "On = verify the gateway's TLS certificate for the native (in-app) lookup calls. Off (default) "
+             "matches the vendored notebook, which trusts the internal gateway CA without verification. Turn on "
+             "where the app runtime trusts the gateway's certificate chain."},
 
     # --- Data & AI ------------------------------------------------------
     {"group": "Data & AI", "key": "yaml:links.genie_full_experience_url", "label": "Genie full-experience URL",
