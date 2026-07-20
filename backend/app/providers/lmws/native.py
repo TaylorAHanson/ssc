@@ -12,12 +12,16 @@ gateway, ``verify`` off by default for the internal CA, and the body-level
 ``errorInfos`` check) so a native lookup returns the same result shape as the
 job-backed path (see ``LmwsProvider.parse_output`` and the notebook handlers).
 
-The service-account password is read from the app environment
-(``settings.LMWS_SERVICE_PASSWORD``), NOT from the Databricks secret scope — the
-REST Secrets API doesn't return secret values, so it must be injected as an app
-env var (e.g. a databricks.yml app-resource secret bound to the ``lmws`` scope
-key ``edhapisvc``). This client is only used by the ``*_native`` tools; the
-serverless path stays the default until it's explicitly swapped over.
+The service-account password is resolved at runtime from the SAME Databricks
+secret scope the vendored notebook uses (``LMWS_SECRET_SCOPE`` / key
+``LMWS_PASSWORD_SECRET_KEY``) via the app's own service principal — the exact
+pattern already used for the GitHub PAT and SES creds
+(``app.core.workspaces._read_secret``). So there's no plaintext injection and no
+new secret; the app SP just needs READ on that scope (which it already has).
+``settings.LMWS_SERVICE_PASSWORD`` is an optional override (e.g. local dev where
+the scope isn't reachable) and wins when set. This client is only used by the
+``*_native`` tools; the serverless path stays the default until it's explicitly
+swapped over.
 """
 from __future__ import annotations
 
@@ -37,16 +41,35 @@ class LmwsNativeClient:
 
     def __init__(self) -> None:
         self.username = (settings.LMWS_SERVICE_USERNAME or "").strip()
-        self.password = settings.LMWS_SERVICE_PASSWORD or ""
+        self.password = self._resolve_password()
         self.verify_tls = bool(getattr(settings, "LMWS_NATIVE_VERIFY_TLS", False))
         self.timeout = float(getattr(settings, "LMWS_NATIVE_TIMEOUT_SECONDS", 30) or 30)
+
+    @staticmethod
+    def _resolve_password() -> str:
+        """Password from the same secret scope the notebook uses; env override wins.
+
+        Mirrors the app's GitHub-PAT / SES pattern: read the value at runtime from
+        ``LMWS_SECRET_SCOPE`` / ``LMWS_PASSWORD_SECRET_KEY`` with the app's own SP.
+        ``LMWS_SERVICE_PASSWORD`` is an optional escape hatch (local dev) and wins.
+        """
+        override = settings.LMWS_SERVICE_PASSWORD or ""
+        if override:
+            return override
+        from app.core.workspaces import _read_secret
+
+        return _read_secret(
+            settings.LMWS_SECRET_SCOPE, settings.LMWS_PASSWORD_SECRET_KEY
+        ) or ""
 
     def _require_creds(self) -> None:
         if not self.username or not self.password:
             raise PermanentError(
-                "Native LMWS lookup is not configured: set LMWS_SERVICE_USERNAME and "
-                "LMWS_SERVICE_PASSWORD (inject the service-account password into the app "
-                "environment). Until then, use the serverless (job-backed) lookup."
+                "Native LMWS lookup is not configured: the service-account password could "
+                f"not be resolved from secret scope '{settings.LMWS_SECRET_SCOPE}' "
+                f"(key '{settings.LMWS_PASSWORD_SECRET_KEY}'). Verify the key exists and the "
+                "app's service principal has READ on that scope (or set LMWS_SERVICE_PASSWORD "
+                "for local dev). Until then, use the serverless (job-backed) lookup."
             )
 
     @staticmethod

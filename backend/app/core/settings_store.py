@@ -169,10 +169,13 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "type": "string",
      "help": "Service-account username used by the experimental native (in-app) lookup tools "
              "(member_lookup_native / group_lookup_native), which call the gateway directly instead of "
-             "submitting a Databricks job. The matching password is NOT set here — inject it into the app "
-             "environment as LMWS_SERVICE_PASSWORD (the REST Secrets API can't return secret values), e.g. a "
-             "databricks.yml app-resource secret bound to the 'lmws' scope. Blank password = native tools fail "
-             "with a clear 'not configured' error and you should keep using the serverless lookup."},
+             "submitting a Databricks job. The matching password is read at runtime from the same secret scope "
+             "the notebook uses (below) via the app's own service principal — no plaintext, no separate secret."},
+    {"group": "Group Management (LMWS)", "key": "LMWS_PASSWORD_SECRET_KEY", "label": "Native lookup password key",
+     "type": "string",
+     "help": "Key name (within the LMWS secret scope, LMWS_SECRET_SCOPE) holding the service-account password "
+             "the native lookup tools read at runtime. Defaults to 'edhapisvc' to match the vendored notebook. "
+             "The app's service principal needs READ on that scope; nothing is injected as plaintext."},
     {"group": "Group Management (LMWS)", "key": "LMWS_NATIVE_VERIFY_TLS", "label": "Verify TLS for native lookup",
      "type": "bool",
      "help": "On = verify the gateway's TLS certificate for the native (in-app) lookup calls. Off (default) "

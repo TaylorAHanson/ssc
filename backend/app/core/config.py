@@ -519,14 +519,18 @@ class Settings(BaseSettings):
     # runtime (not only from a job cluster), the read-only lookup tools can
     # call it in-process instead of submitting a Databricks job. This removes
     # the job cold-start/poll latency for `member_lookup` / `group_lookup`.
-    # The service-account username matches the vendored notebook; the password
-    # is NOT read from the Databricks secret scope by the app (the REST Secrets
-    # API doesn't return secret values), so inject it into the app environment
-    # (e.g. a databricks.yml app resource secret binding the `lmws` scope key
-    # `edhapisvc`). Blank password => the native tools fail with a clear
-    # "not configured" error and callers should keep using the serverless path.
+    #
+    # Credentials: the username matches the vendored notebook; the PASSWORD is
+    # read at runtime from the SAME Databricks secret scope the notebook uses
+    # (``LMWS_SECRET_SCOPE`` / key ``LMWS_PASSWORD_SECRET_KEY``) via the app's
+    # own service principal — the exact pattern already used for the GitHub PAT
+    # and SES creds (see ``app.core.workspaces._read_secret``). So no plaintext
+    # injection and no new secret: the app SP just needs READ on that scope
+    # (which it already has). ``LMWS_SERVICE_PASSWORD`` is an OPTIONAL escape
+    # hatch (e.g. local dev where the scope isn't reachable); when set it wins.
     LMWS_SERVICE_USERNAME: str = os.getenv("LMWS_SERVICE_USERNAME", "edhapisvc")
-    LMWS_SERVICE_PASSWORD: str = os.getenv("LMWS_SERVICE_PASSWORD", "")
+    LMWS_PASSWORD_SECRET_KEY: str = os.getenv("LMWS_PASSWORD_SECRET_KEY", "edhapisvc")
+    LMWS_SERVICE_PASSWORD: str = os.getenv("LMWS_SERVICE_PASSWORD", "")  # optional override
     # TLS verification for the direct calls. Defaults to False to match the
     # vendored notebook (the internal Qualcomm gateway presents an internal CA);
     # flip on where the gateway chain is trusted by the app runtime.
