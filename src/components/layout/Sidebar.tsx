@@ -221,6 +221,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const isDevMode = useUserStore((state) => state.isDevMode);
   const activeRoleOverride = useUserStore((state) => state.activeRoleOverride);
   const toggleDevMode = useUserStore((state) => state.toggleDevMode);
+  const disableDevMode = useUserStore((state) => state.disableDevMode);
   const setRoleOverride = useUserStore((state) => state.setRoleOverride);
 
   const pendingCount = useRequestStore((state) =>
@@ -233,6 +234,20 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const databricksWorkspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
   const embeddedApps = useBrandingStore((s) => s.embeddedApps);
   const features = useBrandingStore((s) => s.features);
+  // "Dev Persona Mode" is a local/dev-only convenience; the backend ignores the
+  // role-override header outside dev envs, so hide the toggle everywhere else.
+  const devFeaturesEnabled = useBrandingStore((s) => s.devFeaturesEnabled);
+  const brandingLoaded = useBrandingStore((s) => s.hasLoaded);
+
+  // Once branding confirms this is a non-dev environment, clear any stale
+  // dev-mode override persisted in localStorage (e.g. carried over from a lower
+  // env) so the client stops sending the now-ignored role-override header and
+  // the displayed persona reverts to the user's real roles.
+  useEffect(() => {
+    if (brandingLoaded && !devFeaturesEnabled) {
+      void disableDevMode();
+    }
+  }, [brandingLoaded, devFeaturesEnabled, disableDevMode]);
 
   // User menu (account dropdown) is click-to-toggle for accessibility.
   // Close on outside click and on Escape.
@@ -716,6 +731,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 </p>
               </div>
 
+              {devFeaturesEnabled && (
               <div className="px-4 py-3 border-b border-gray-100 bg-gray-50/50">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -782,6 +798,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   </div>
                 )}
               </div>
+              )}
 
               <div className="px-2 pt-2">
                 {uiTabs?.feedback !== false && (

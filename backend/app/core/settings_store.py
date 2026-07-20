@@ -146,6 +146,23 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "since the notebook is API-only (no Spark). Off = run on classic compute using the Databricks "
              "Job settings (cluster id / instance pool / node type) — use this only if the LMWS/FWS-API "
              "gateway is reachable solely from a network-pinned classic cluster. Applies to the next LMWS run."},
+    {"group": "Group Management (LMWS)", "key": "LMWS_AUTHN_URL", "label": "LMWS authn URL",
+     "type": "string",
+     "help": "FWS-API authentication base URL passed into the LMWS job "
+             "(e.g. https://<gateway>/iam/v1/lmwsrest-authn). Blank = LMWS actions fail with a clear "
+             "'not configured' error. Read per run, so a change here applies to the next LMWS run without a redeploy."},
+    {"group": "Group Management (LMWS)", "key": "LMWS_REST_URL", "label": "LMWS REST URL",
+     "type": "string",
+     "help": "FWS-API REST base URL for list/member operations "
+             "(e.g. https://<gateway>/iam/v1/lmws-rest/publicAPIrest). Applies to the next LMWS run."},
+    {"group": "Group Management (LMWS)", "key": "LMWS_CACHE_URL", "label": "LMWS list-cache URL",
+     "type": "string",
+     "help": "FWS-API list-cache-info base URL "
+             "(e.g. https://<gateway>/iam/v1/lmws-rest/listCacheInfo). Applies to the next LMWS run."},
+    {"group": "Group Management (LMWS)", "key": "LMWS_FWS_URL", "label": "LMWS FWS entitlement URL",
+     "type": "string",
+     "help": "FWS-API entitlement base URL "
+             "(e.g. https://<gateway>/iam/v1/fws-api/entitlement). Applies to the next LMWS run."},
 
     # --- Data & AI ------------------------------------------------------
     {"group": "Data & AI", "key": "yaml:links.genie_full_experience_url", "label": "Genie full-experience URL",

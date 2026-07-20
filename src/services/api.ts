@@ -510,6 +510,7 @@ export async function getBranding(): Promise<{
   community_links?: CommunityLinksConfig;
   workflow_authoring_locked?: boolean;
   system_banner?: { active?: boolean; type?: 'info' | 'alert' | 'warning' | 'success'; message?: string };
+  dev_features_enabled?: boolean;
 }> {
   const response = await fetch(`${API_BASE_URL}/branding`, {
     headers: getHeaders()

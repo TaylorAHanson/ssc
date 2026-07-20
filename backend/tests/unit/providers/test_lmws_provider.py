@@ -84,7 +84,7 @@ def test_parse_output_raises_on_empty():
 # build_step_kwargs — kwargs for DatabricksJobStepMixin
 # ---------------------------------------------------------------------------
 
-def test_build_step_kwargs_targets_vendored_notebook_on_classic_compute():
+def test_build_step_kwargs_targets_vendored_notebook_serverless_by_default():
     provider = LmwsProvider()
     kwargs = provider.build_step_kwargs(
         LmwsAction.LIST_MEMBERS_ADD,
@@ -96,7 +96,22 @@ def test_build_step_kwargs_targets_vendored_notebook_on_classic_compute():
     assert kwargs["notebook_path"] == LmwsProvider.notebook_path()
     assert os.path.basename(kwargs["notebook_path"]) == "lmws_group_management_job.py"
     assert kwargs["parameters"]["action"] == "list_members_add"
-    # classic compute (not serverless) for control-plane reachability
+    # LMWS jobs run on serverless by default (notebook is API-only, no Spark).
+    assert kwargs["compute"] is not None
+    assert kwargs["compute"].is_serverless
+
+
+def test_build_step_kwargs_uses_classic_compute_when_serverless_disabled():
+    # LMWS_USE_SERVERLESS is a runtime toggle read at call time; off => classic
+    # compute for gateways only reachable from a network-pinned cluster.
+    provider = LmwsProvider()
+    with patch.object(settings, "LMWS_USE_SERVERLESS", False):
+        kwargs = provider.build_step_kwargs(
+            LmwsAction.LIST_MEMBERS_ADD,
+            step_id="lmws_add_x",
+            list_name="x",
+            members=["u"],
+        )
     assert kwargs["compute"] is not None
     assert not kwargs["compute"].is_serverless
 

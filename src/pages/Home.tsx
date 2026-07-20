@@ -216,7 +216,7 @@ export function Home() {
     );
 
     return (
-        <div className="px-6 py-4 h-[calc(100vh-3rem)] flex flex-col">
+        <div className="px-6 py-4 h-full min-h-0 flex flex-col">
             {/* Branded header (logo + short name) and the Assistant /
                 Self-Service Center toggle. This whole block is part of the
                 "enhanced landing page" and is hidden by default so the landing

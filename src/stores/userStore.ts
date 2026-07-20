@@ -21,6 +21,8 @@ interface UserState {
     isDevMode: boolean;
     activeRoleOverride: string | null;
     toggleDevMode: () => void;
+    /** Force dev mode off (e.g. when the backend reports a non-dev environment). */
+    disableDevMode: () => Promise<void>;
     setRoleOverride: (role: string | null) => Promise<void>;
     hydrated: boolean;
     setHydrated: (val: boolean) => void;
@@ -68,6 +70,15 @@ export const useUserStore = create<UserState>()(
                 }
 
                 set({ isDevMode: nextIsDevMode, activeRoleOverride: nextRoleOverride });
+                await get().fetchCurrentUser();
+            },
+
+            disableDevMode: async () => {
+                // Clear any stale persisted override so the client stops sending
+                // X-Dev-Role-Override (the backend already ignores it outside dev
+                // envs) and the displayed persona reverts to the user's real roles.
+                if (!get().isDevMode && !get().activeRoleOverride) return;
+                set({ isDevMode: false, activeRoleOverride: null });
                 await get().fetchCurrentUser();
             },
 

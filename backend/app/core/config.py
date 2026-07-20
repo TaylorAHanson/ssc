@@ -788,6 +788,26 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+# Environments where dev-only conveniences (the "Dev Persona Mode" role override,
+# mock entitlements, auto Platform-Admin fallback) are permitted. This is an
+# ALLOWLIST of local/dev-flavored names, NOT a denylist of prod spellings: a
+# denylist misses the many prod tokens in the wild ("prod", "prd", "production"),
+# which is exactly how role override once leaked into a prod deploy. Anything not
+# listed here (incl. stage/prod and any unknown value) is treated as non-dev.
+DEV_FEATURE_ENVIRONMENTS = frozenset({"development", "dev", "local", "test", "testing"})
+
+
+def dev_features_allowed() -> bool:
+    """True only in an explicitly local/dev-flavored ``ENVIRONMENT``.
+
+    Single source of truth for gating dev-only conveniences (role override,
+    mock/admin fallbacks, and hiding the frontend toggle) so they can never fire
+    in stage/prod regardless of how the environment token is spelled. Read at
+    call time so an Admin -> Settings override takes effect without a restart.
+    """
+    return (settings.ENVIRONMENT or "").strip().lower() in DEV_FEATURE_ENVIRONMENTS
+
+
 def get_scan_catalogs() -> list:
     """Parse ``SCAN_CATALOGS`` into a clean list of catalog names.
 

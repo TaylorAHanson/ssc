@@ -1157,23 +1157,67 @@ class DatabricksProvider(BaseProvider):
         try:
             run_id_int = int(run_id)
             run = await asyncio.to_thread(self.client.jobs.get_run, run_id_int)
-            
+
+            # The Jobs API exposes two state models that coexist on every run:
+            #   * legacy ``run.state`` (RunState: life_cycle_state + result_state)
+            #   * newer  ``run.status`` (RunStatus: state + termination_details),
+            #     which is what SERVERLESS runs populate reliably.
+            # Reading ONLY the legacy model made terminal serverless runs look
+            # "not completed" forever, hanging inline pollers until their max-wait
+            # (and then reporting a misleading timeout instead of the real cause).
+            # So derive completion/success from whichever model reports terminal.
             state = run.state
-            status = {
-                "life_cycle_state": state.life_cycle_state.value,
-                "result_state": state.result_state.value if state.result_state else None,
-                "state_message": state.state_message,
-                "is_active": state.life_cycle_state in [
+            legacy_lc = state.life_cycle_state if state else None
+            legacy_result = state.result_state if state else None
+            state_message = (state.state_message if state else None) or None
+
+            new_status = getattr(run, "status", None)
+            new_state = getattr(new_status, "state", None) if new_status else None
+            new_state_val = getattr(new_state, "value", None)
+            term = getattr(new_status, "termination_details", None) if new_status else None
+            term_type = getattr(getattr(term, "type", None), "value", None)
+            if term is not None and not state_message:
+                state_message = getattr(term, "message", None)
+
+            legacy_terminal = legacy_lc in (
+                jobs.RunLifeCycleState.TERMINATED,
+                jobs.RunLifeCycleState.INTERNAL_ERROR,
+                jobs.RunLifeCycleState.SKIPPED,
+            )
+            # New model is terminal at state==TERMINATED, or once termination
+            # details are attached (only present on a finished run).
+            new_terminal = (new_state_val == "TERMINATED") or (term is not None)
+
+            is_completed = bool(legacy_terminal or new_terminal or legacy_result is not None)
+
+            if legacy_result is not None:
+                is_successful = legacy_result == jobs.RunResultState.SUCCESS
+            elif term_type is not None:
+                is_successful = term_type == "SUCCESS"
+            else:
+                is_successful = False
+
+            is_active = (not is_completed) and (
+                legacy_lc in (
                     jobs.RunLifeCycleState.PENDING,
                     jobs.RunLifeCycleState.RUNNING,
                     jobs.RunLifeCycleState.BLOCKED,
-                    jobs.RunLifeCycleState.QUEUED
-                ],
-                "is_completed": state.life_cycle_state == jobs.RunLifeCycleState.TERMINATED,
-                "is_successful": state.result_state == jobs.RunResultState.SUCCESS if state.result_state else False
+                    jobs.RunLifeCycleState.QUEUED,
+                    jobs.RunLifeCycleState.TERMINATING,
+                    jobs.RunLifeCycleState.WAITING_FOR_RETRY,
+                )
+                or new_state_val in ("PENDING", "RUNNING", "BLOCKED", "QUEUED", "TERMINATING", "WAITING")
+            )
+
+            return {
+                "life_cycle_state": (legacy_lc.value if legacy_lc else new_state_val),
+                "result_state": (legacy_result.value if legacy_result else term_type),
+                "state_message": state_message,
+                "termination_type": term_type,
+                "is_active": is_active,
+                "is_completed": is_completed,
+                "is_successful": is_successful,
             }
-            
-            return status
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Failed to get run status for {run_id}: {error_msg}")

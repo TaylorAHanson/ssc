@@ -2,7 +2,7 @@ import re
 from typing import Any, Dict, List
 
 from fastapi import APIRouter
-from app.core.config import settings, _yaml_config
+from app.core.config import settings, _yaml_config, dev_features_allowed
 
 router = APIRouter()
 
@@ -147,4 +147,8 @@ async def get_branding():
         # Global site-wide banner ({active, type, message}). Edited live under
         # Admin -> Settings -> System Banner; the frontend shows it when active.
         "system_banner": _yaml_config.get("banner") or {},
+        # True only in local/dev-flavored envs. Gates the "Dev Persona Mode"
+        # role-override toggle in the UI (defense-in-depth; the real boundary is
+        # backend deps.py, which ignores X-Dev-Role-Override outside dev envs).
+        "dev_features_enabled": dev_features_allowed(),
     }

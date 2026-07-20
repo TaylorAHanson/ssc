@@ -327,14 +327,37 @@ class LmwsProvider(BaseProvider):
                 break
             if waited >= max_wait:
                 raise RetryableError(
-                    f"LMWS {action} (run {run_id}) did not finish within {max_wait}s"
+                    f"LMWS {action} (run {run_id}) did not finish within {max_wait}s "
+                    f"(last state={status.get('life_cycle_state')})"
                 )
+            # Log progress so a long-running (or stuck) inline run is visible in
+            # the app logs instead of going silent after submission.
+            logger.debug(
+                "LMWS %s (run %s) still running after %ss: state=%s",
+                action, run_id, waited, status.get("life_cycle_state"),
+            )
             await asyncio.sleep(interval)
             waited += interval
 
+        logger.info(
+            "LMWS %s (run %s) finished in ~%ss: state=%s successful=%s",
+            action, run_id, waited, status.get("life_cycle_state"), status.get("is_successful"),
+        )
+
         if not status["is_successful"]:
+            # Surface the notebook-level error (e.g. "LMWS base URL 'authn_url' is
+            # not configured") rather than a generic job-failed message, so the
+            # agent can tell the user exactly what to fix.
+            detail = status.get("state_message") or ""
+            try:
+                out = await db.get_run_output(run_id)
+                nb_err = (out or {}).get("error") or (out or {}).get("error_trace")
+                if nb_err:
+                    detail = f"{detail}: {nb_err}" if detail else str(nb_err)
+            except Exception:  # best-effort enrichment; never mask the failure
+                logger.debug("Could not fetch run output for failed LMWS run %s", run_id, exc_info=True)
             raise PermanentError(
-                f"LMWS {action} (run {run_id}) failed: {status.get('state_message')}"
+                f"LMWS {action} (run {run_id}) failed: {detail or 'unknown error'}"
             )
 
         output = await db.get_run_output(run_id)

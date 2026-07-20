@@ -5,7 +5,7 @@ from fastapi import Depends, HTTPException, status, Header, Request
 from typing import Generator, Optional, List, Dict
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.core.config import settings
+from app.core.config import settings, dev_features_allowed as _dev_features_allowed
 import uuid
 import logging
 from app.models.user import User
@@ -18,12 +18,13 @@ logger = logging.getLogger(__name__)
 
 MOCK_USER_EMAIL = "admin@example.com"
 
+
 def _get_user_entitlements(user_email: str, obo_token: Optional[str] = None) -> List[str]:
     """Fetch SCIM entitlements (groups/roles) using Databricks SDK."""
     entitlements = [user_email]
     
     # Local dev mock fallback: return 'users' per instructions
-    if user_email == MOCK_USER_EMAIL and settings.ENVIRONMENT != "production":
+    if user_email == MOCK_USER_EMAIL and _dev_features_allowed():
         entitlements.append("users")
         return entitlements
 
@@ -100,14 +101,20 @@ def get_current_user(
     calculated_roles = _calculate_roles(db, entitlements)
     
     # Local dev mock fallback: if 'users' in entitlements and local dev, ensure 'Platform Admin' or 'User' is present.
-    if settings.ENVIRONMENT != "production" and "users" in entitlements and not calculated_roles:
+    if _dev_features_allowed() and "users" in entitlements and not calculated_roles:
         # Fallback to giving Platform Admin to the mock user if no DB seeding occurred yet
         calculated_roles = ["Platform Admin"]
     
-    # DEV FEATURE: Role Override
-    if x_dev_role_override and settings.ENVIRONMENT != "production":
+    # DEV FEATURE: Role Override (local/dev-flavored envs only; never stage/prod)
+    if x_dev_role_override and _dev_features_allowed():
         logger.info(f"DEV: Overriding role for user {user_email} to {x_dev_role_override}")
         calculated_roles = [x_dev_role_override]
+    elif x_dev_role_override:
+        logger.warning(
+            "Ignoring X-Dev-Role-Override=%r for %s: ENVIRONMENT=%r is not a "
+            "dev-flavored environment.",
+            x_dev_role_override, user_email, settings.ENVIRONMENT,
+        )
             
     user = User(
         id=user_email,
