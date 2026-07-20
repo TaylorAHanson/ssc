@@ -142,6 +142,13 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "On = no in-place workflow editing; workflows change only via bundle import. Usually locked in prod."},
 
     # --- Group Management (LMWS) ----------------------------------------
+    {"group": "Group Management (LMWS)", "key": "LMWS_NATIVE", "label": "Run LMWS natively (in-app)",
+     "type": "bool",
+     "help": "On (recommended) = all LMWS operations (lookups, membership add/remove/update, and group/SPAC "
+             "lifecycle) call the FWS-API gateway directly from the app — no Databricks job, lower latency. "
+             "Off = fall back to the serverless (job-backed) notebook harness, for gateways only reachable from a "
+             "network-pinned cluster. Read per call, so a change here applies immediately without a redeploy. "
+             "When off, the 'Run LMWS jobs on serverless' setting below selects the job's compute."},
     {"group": "Group Management (LMWS)", "key": "LMWS_USE_SERVERLESS", "label": "Run LMWS jobs on serverless",
      "type": "bool",
      "help": "On (recommended) = LMWS group/user jobs run on serverless compute — cheaper and no cold-start, "
@@ -165,20 +172,19 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "type": "string",
      "help": "FWS-API entitlement base URL "
              "(e.g. https://<gateway>/iam/v1/fws-api/entitlement). Applies to the next LMWS run."},
-    {"group": "Group Management (LMWS)", "key": "LMWS_SERVICE_USERNAME", "label": "Native lookup service account",
+    {"group": "Group Management (LMWS)", "key": "LMWS_SERVICE_USERNAME", "label": "Native LMWS service account",
      "type": "string",
-     "help": "Service-account username used by the experimental native (in-app) lookup tools "
-             "(member_lookup_native / group_lookup_native), which call the gateway directly instead of "
-             "submitting a Databricks job. The matching password is read at runtime from the same secret scope "
-             "the notebook uses (below) via the app's own service principal — no plaintext, no separate secret."},
-    {"group": "Group Management (LMWS)", "key": "LMWS_PASSWORD_SECRET_KEY", "label": "Native lookup password key",
+     "help": "Service-account username used when LMWS runs natively (in-app) — see 'Run LMWS natively' above. "
+             "The matching password is read at runtime from the same secret scope the notebook uses (below) via "
+             "the app's own service principal — no plaintext, no separate secret."},
+    {"group": "Group Management (LMWS)", "key": "LMWS_PASSWORD_SECRET_KEY", "label": "Native LMWS password key",
      "type": "string",
      "help": "Key name (within the LMWS secret scope, LMWS_SECRET_SCOPE) holding the service-account password "
-             "the native lookup tools read at runtime. Defaults to 'edhapisvc' to match the vendored notebook. "
+             "the native LMWS path reads at runtime. Defaults to 'edhapisvc' to match the vendored notebook. "
              "The app's service principal needs READ on that scope; nothing is injected as plaintext."},
-    {"group": "Group Management (LMWS)", "key": "LMWS_NATIVE_VERIFY_TLS", "label": "Verify TLS for native lookup",
+    {"group": "Group Management (LMWS)", "key": "LMWS_NATIVE_VERIFY_TLS", "label": "Verify TLS for native LMWS",
      "type": "bool",
-     "help": "On = verify the gateway's TLS certificate for the native (in-app) lookup calls. Off (default) "
+     "help": "On = verify the gateway's TLS certificate for the native (in-app) LMWS calls. Off (default) "
              "matches the vendored notebook, which trusts the internal gateway CA without verification. Turn on "
              "where the app runtime trusts the gateway's certificate chain."},
 

@@ -1,16 +1,17 @@
-"""Native (in-app) LMWS/FWS-API read client.
+"""Native (in-app) LMWS/FWS-API client.
 
-An experimental alternative to the job-backed :class:`LmwsProvider` for the
-read-only lookup actions (``member_retrieve`` / ``list_retrieve``). Where the
-serverless path submits the vendored notebook as a Databricks job — needed when
-the LMWS/FWS-API gateway is only reachable from a network-pinned cluster — this
-client calls the gateway directly from the app's runtime, removing the job
+The direct, in-process implementation of the full LMWS/FWS-API surface — reads,
+membership writes, and group/SPAC lifecycle actions. Where the job-backed
+:class:`LmwsProvider` submits the vendored notebook as a Databricks job (needed
+when the gateway is only reachable from a network-pinned cluster), this client
+calls the gateway directly from the app's runtime, removing the job
 cold-start/poll latency.
 
-It intentionally mirrors the notebook's HTTP contract (basic auth against the
-gateway, ``verify`` off by default for the internal CA, and the body-level
-``errorInfos`` check) so a native lookup returns the same result shape as the
-job-backed path (see ``LmwsProvider.parse_output`` and the notebook handlers).
+It mirrors the vendored notebook's HTTP contract one-for-one (basic auth against
+the gateway, ``verify`` off by default for the internal CA, the body-level
+``errorInfos`` check, and the same paths/params/payloads) so each action returns
+the same result shape as the job-backed path (see ``LmwsProvider.parse_output``
+and the notebook handlers).
 
 The service-account password is resolved at runtime from the SAME Databricks
 secret scope the vendored notebook uses (``LMWS_SECRET_SCOPE`` / key
@@ -19,31 +20,38 @@ pattern already used for the GitHub PAT and SES creds
 (``app.core.workspaces._read_secret``). So there's no plaintext injection and no
 new secret; the app SP just needs READ on that scope (which it already has).
 ``settings.LMWS_SERVICE_PASSWORD`` is an optional override (e.g. local dev where
-the scope isn't reachable) and wins when set. This client is only used by the
-``*_native`` tools; the serverless path stays the default until it's explicitly
-swapped over.
+the scope isn't reachable) and wins when set.
+
+This is the active LMWS path when ``settings.LMWS_NATIVE`` is on (the default);
+the ``LmwsProvider`` job harness remains as a runtime-toggleable fallback.
 """
 from __future__ import annotations
 
+import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
 from app.core.config import settings
 from app.core.exceptions import PermanentError, RetryableError
+from app.providers.lmws.client import _csv
 
 logger = logging.getLogger(__name__)
 
 
 class LmwsNativeClient:
-    """Direct, in-process LMWS/FWS-API reads (no Databricks job)."""
+    """Direct, in-process LMWS/FWS-API calls (no Databricks job)."""
 
     def __init__(self) -> None:
         self.username = (settings.LMWS_SERVICE_USERNAME or "").strip()
         self.password = self._resolve_password()
         self.verify_tls = bool(getattr(settings, "LMWS_NATIVE_VERIFY_TLS", False))
         self.timeout = float(getattr(settings, "LMWS_NATIVE_TIMEOUT_SECONDS", 30) or 30)
+
+    # ------------------------------------------------------------------
+    # Credentials & HTTP plumbing (mirrors the notebook)
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _resolve_password() -> str:
@@ -65,19 +73,23 @@ class LmwsNativeClient:
     def _require_creds(self) -> None:
         if not self.username or not self.password:
             raise PermanentError(
-                "Native LMWS lookup is not configured: the service-account password could "
-                f"not be resolved from secret scope '{settings.LMWS_SECRET_SCOPE}' "
+                "Native LMWS is not configured: the service-account password could not be "
+                f"resolved from secret scope '{settings.LMWS_SECRET_SCOPE}' "
                 f"(key '{settings.LMWS_PASSWORD_SECRET_KEY}'). Verify the key exists and the "
                 "app's service principal has READ on that scope (or set LMWS_SERVICE_PASSWORD "
-                "for local dev). Until then, use the serverless (job-backed) lookup."
+                "for local dev). Until then, fall back to the serverless (job-backed) path."
             )
+
+    def _requester(self, requester: Optional[str] = None, owner: Optional[str] = None) -> str:
+        """FWS-API requester: explicit, else the list owner, else the service account."""
+        return (requester or "").strip() or (owner or "").strip() or self.username
 
     @staticmethod
     def _require_url(base: str, name: str) -> str:
         if not base:
             raise PermanentError(
                 f"LMWS base URL '{name}' is not configured. Set it in Admin -> Settings "
-                f"(Group Management) or databricks.yml before using the native lookup."
+                f"(Group Management) or databricks.yml before using native LMWS."
             )
         return base.rstrip("/")
 
@@ -95,12 +107,27 @@ class LmwsNativeClient:
             raise PermanentError(f"LMWS API error from {where}: {msgs}")
         return data
 
-    async def _get(self, base: str, name: str, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _request(
+        self,
+        method: str,
+        base: str,
+        name: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        json_body: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         self._require_creds()
         url = f"{self._require_url(base, name)}/{path}"
         try:
             async with httpx.AsyncClient(verify=self.verify_tls, timeout=self.timeout) as client:
-                resp = await client.get(url, params=params, auth=(self.username, self.password))
+                resp = await client.request(
+                    method,
+                    url,
+                    params=params,
+                    json=json_body,
+                    auth=(self.username, self.password),
+                )
                 resp.raise_for_status()
                 return self._check_body(resp.json(), f"{name}/{path}")
         except httpx.HTTPStatusError as e:
@@ -113,6 +140,16 @@ class LmwsNativeClient:
         except httpx.RequestError as e:
             # Reachability/timeout — retryable so a transient blip doesn't hard-fail.
             raise RetryableError(f"LMWS {name}/{path} unreachable: {e}")
+
+    async def _get(self, base: str, name: str, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        return await self._request("GET", base, name, path, params=params)
+
+    async def _post(self, base: str, name: str, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return await self._request("POST", base, name, path, json_body=payload)
+
+    # ------------------------------------------------------------------
+    # Core reads
+    # ------------------------------------------------------------------
 
     async def member_retrieve(self, member: str) -> Dict[str, Any]:
         """All group memberships for a user (mirrors the notebook memberRetrieve)."""
@@ -133,3 +170,165 @@ class LmwsNativeClient:
             "listMembers": resp.get("listMembers", []),
             "raw": resp,
         }
+
+    # ------------------------------------------------------------------
+    # Membership writes
+    # ------------------------------------------------------------------
+
+    async def add_members(
+        self,
+        list_name: str,
+        members: Union[str, List[str]],
+        justification: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Add members to a list (mirrors the notebook listMembersAdd)."""
+        resp = await self._get(settings.LMWS_AUTHN_URL, "authn_url", "listMembersAdd", {
+            "listName": list_name,
+            "listMembers": _csv(members),
+            "justification": justification or settings.LMWS_DEFAULT_JUSTIFICATION,
+        })
+        return {"Result": "SUCCESS", "workflowInfos": resp.get("workflowInfos", []), "raw": resp}
+
+    async def remove_members(
+        self,
+        list_name: str,
+        members: Union[str, List[str]],
+        justification: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Remove members from a list (mirrors the notebook listMembersRemove)."""
+        resp = await self._get(settings.LMWS_AUTHN_URL, "authn_url", "listMembersRemove", {
+            "listName": list_name,
+            "listMembers": _csv(members),
+            "justification": justification or settings.LMWS_DEFAULT_JUSTIFICATION,
+        })
+        return {"Result": "SUCCESS", "removed": _csv(members).split(",") if members else [], "raw": resp}
+
+    async def update_members(
+        self,
+        list_name: str,
+        members: Union[str, List[str]],
+        justification: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Set list membership to exactly ``members`` (mirrors listMembersUpdate)."""
+        resp = await self._get(settings.LMWS_AUTHN_URL, "authn_url", "listMembersUpdate", {
+            "listName": list_name,
+            "listMembers": _csv(members),
+            "justification": justification or settings.LMWS_DEFAULT_JUSTIFICATION,
+        })
+        return {"Result": "SUCCESS", "members": _csv(members).split(",") if members else [], "raw": resp}
+
+    # ------------------------------------------------------------------
+    # Group / SPAC lifecycle
+    # ------------------------------------------------------------------
+
+    async def list_create_new(
+        self,
+        list_name: str,
+        owner: str,
+        *,
+        description: Optional[str] = None,
+        supervisors: Union[str, List[str], None] = None,
+        qc_list_types: Union[str, List[str], None] = None,
+    ) -> Dict[str, Any]:
+        """Create a new list (mirrors the notebook listCreateNew)."""
+        types = [t for t in _csv(qc_list_types).split(",") if t] or ["qgroup", "email"]
+        qc_json = json.dumps(
+            {"qcListTypeInfos": {"qcListTypeInfo": [{"qcListType": t} for t in types]}}
+        )
+        resp = await self._get(settings.LMWS_REST_URL, "rest_url", "listCreateNew", {
+            "listName": list_name,
+            "description": description or "",
+            "listOwner": owner,
+            "listSupervisors": _csv(supervisors),
+            "qcListTypeInfos": qc_json,
+        })
+        return {"Result": "SUCCESS", "listName": list_name, "raw": resp}
+
+    async def create_sp_group(
+        self,
+        list_name: str,
+        owner: str,
+        *,
+        description: Optional[str] = None,
+        supervisors: Union[str, List[str], None] = None,
+        clone_source: Optional[str] = None,
+        requester: Optional[str] = None,
+        cci_classification: str = "1",
+    ) -> Dict[str, Any]:
+        """Create a security (SP) group (mirrors the notebook createSPGroup)."""
+        req = self._requester(requester, owner)
+        resp = await self._post(settings.LMWS_FWS_URL, "fws_url", "createSPGroup", {
+            "actor": self.username,
+            "listName": list_name,
+            "requester": req,
+            "systemEndpoint": "Azure",
+            "cloneListName": clone_source or settings.LMWS_DEFAULT_CLONE_SOURCE,
+            "description": description or "",
+            "owner": owner,
+            "supervisors": _csv(supervisors),
+            "type": "SECURITY",
+            "CCIClassification": cci_classification or "1",
+            "notificationCallBack": f"{req}@qualcomm.com",
+            "accessRequested": "on-prem-windowsbased",
+        })
+        return {
+            "Result": "SUCCESS",
+            "listName": list_name,
+            "requestId": resp.get("requestId", resp.get("requestid")),
+            "raw": resp,
+        }
+
+    async def process_spac_policy(
+        self,
+        list_name: str,
+        spac_policies: Union[str, List[str]],
+        *,
+        request_type: str = "ADD",
+        requester: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Add/remove SPAC policies on a list (mirrors the notebook processSpacPolicy)."""
+        req_type = (request_type or "ADD").strip().upper() or "ADD"
+        policies = [
+            {"policyType": "SPAC", "policyName": p}
+            for p in _csv(spac_policies).split(",") if p
+        ]
+        key = "addPolicies" if req_type == "ADD" else "removePolicies"
+        resp = await self._post(settings.LMWS_FWS_URL, "fws_url", "processSpacPolicy", {
+            "actor": self.username,
+            "requester": self._requester(requester),
+            "systemEndpoint": "Azure",
+            "listName": list_name,
+            "requestType": req_type,
+            key: policies,
+        })
+        return {"Result": "SUCCESS", "listName": list_name, "requestType": req_type, "raw": resp}
+
+    async def get_spac_policy(
+        self,
+        list_name: str,
+        *,
+        requester: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Read the SPAC policies on a list (mirrors the notebook getSpacPolicy)."""
+        resp = await self._post(settings.LMWS_FWS_URL, "fws_url", "getSpacPolicy", {
+            "actor": self.username,
+            "requester": self._requester(requester),
+            "systemEndpoint": "Azure",
+            "listName": list_name,
+        })
+        return {"Result": "SUCCESS", "listName": list_name, "policies": resp.get("policies", resp), "raw": resp}
+
+    async def request_confirmation(
+        self,
+        request_id: str,
+        *,
+        requester: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Confirm the status of a prior request (mirrors the notebook requestConfirmation)."""
+        resp = await self._post(settings.LMWS_FWS_URL, "fws_url", "requestConfirmation", {
+            "actor": self.username,
+            "requester": self._requester(requester),
+            "systemEndpoint": "Azure",
+            "requestid": request_id,
+        })
+        return {"Result": "SUCCESS", "requestId": request_id, "status": resp.get("status", resp), "raw": resp}

@@ -95,7 +95,10 @@ class ToolRegistryService:
         tools (``origin='workflow'``) via :mod:`app.tools.catalog`. Idempotent:
         inserts rows for newly-added code tools and refreshes their description/
         schema/mutating metadata, but never overrides an admin's usage/role/identity
-        choices on an existing row. Returns the number of rows inserted.
+        choices on an existing row. Also prunes local/workflow rows whose code tool
+        was removed (the catalog is authoritative for those origins; MCP-discovered
+        rows are never touched) so a renamed/deleted tool can't linger as a phantom
+        duplicate. Returns the number of rows inserted.
         """
         from app.tools import catalog
 
@@ -107,9 +110,11 @@ class ToolRegistryService:
             .all()
         }
         inserted = 0
+        catalog_names: set[str] = set()
         for name, tool, catalog_origin in catalog.all_tools():
             if not name:
                 continue
+            catalog_names.add(name)
             schema = tool.input_schema if isinstance(getattr(tool, "input_schema", None), dict) else None
             role = _normalize_role(getattr(tool, "required_role", None))
             is_workflow_tool = catalog_origin == TOOL_ORIGIN_WORKFLOW
@@ -164,9 +169,21 @@ class ToolRegistryService:
                 # Keep origin in sync if a tool moved definition sites.
                 if row.origin != catalog_origin:
                     row.origin = catalog_origin
+
+        # Prune orphans: local/workflow rows whose code tool no longer exists
+        # (renamed or deleted). Safe because the catalog is authoritative for
+        # these origins; remote MCP rows (origin='mcp') were never in `existing`.
+        pruned = 0
+        for name, row in existing.items():
+            if name not in catalog_names:
+                db.delete(row)
+                pruned += 1
+
         db.commit()
         if inserted:
             logger.info("ToolRegistry: seeded %d local tool(s)", inserted)
+        if pruned:
+            logger.info("ToolRegistry: pruned %d orphaned tool(s) removed from code", pruned)
         return inserted
 
     @staticmethod

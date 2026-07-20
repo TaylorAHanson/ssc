@@ -528,6 +528,13 @@ class Settings(BaseSettings):
     # injection and no new secret: the app SP just needs READ on that scope
     # (which it already has). ``LMWS_SERVICE_PASSWORD`` is an OPTIONAL escape
     # hatch (e.g. local dev where the scope isn't reachable); when set it wins.
+    # Master switch (runtime-editable): when True (default), ALL LMWS operations
+    # — reads (member/list retrieve), membership writes (add/remove/update), and
+    # the group/SPAC lifecycle actions — run via the in-app native client
+    # (direct HTTP to the gateway) instead of submitting a Databricks job. Flip
+    # to False to fall back to the serverless (job-backed) harness — no redeploy,
+    # instant revert — for gateways only reachable from a network-pinned cluster.
+    LMWS_NATIVE: bool = True
     LMWS_SERVICE_USERNAME: str = os.getenv("LMWS_SERVICE_USERNAME", "edhapisvc")
     LMWS_PASSWORD_SECRET_KEY: str = os.getenv("LMWS_PASSWORD_SECRET_KEY", "edhapisvc")
     LMWS_SERVICE_PASSWORD: str = os.getenv("LMWS_SERVICE_PASSWORD", "")  # optional override
