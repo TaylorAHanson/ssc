@@ -77,9 +77,11 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "Max concurrent units of work during a sentinel scan. 1 = fully serialized."},
     {"group": "Notifications & Governance", "key": "SCAN_CATALOGS", "label": "Scanned catalogs",
      "type": "string",
-     "help": "Comma-separated list of Unity Catalog catalogs to scan for governed data "
-             "(dataset-tag discovery + the data-asset cache sync), e.g. 'enterprise_prod, finance_prod'. "
-             "Spaces around each name are trimmed. Leave BLANK to scan every catalog the service "
+     "help": "Comma-separated Unity Catalog allowlist that scopes governed data, "
+             "e.g. 'enterprise_prod, finance_prod'. This one list drives data certification "
+             "(dataset-tag discovery) AND the data-asset cache sync that powers the Discover page — "
+             "so only these catalogs' assets show up in Discover. "
+             "Spaces around each name are trimmed. Leave BLANK to include every catalog the service "
              "principal can see (excluding system/samples). Applies on the next scan/sync — no restart needed."},
     {"group": "Notifications & Governance", "key": "DATA_QUALITY_TABLE", "label": "Data quality table",
      "type": "string",

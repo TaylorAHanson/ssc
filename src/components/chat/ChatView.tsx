@@ -29,11 +29,12 @@ import {
     streamAgentConversation,
     type AgentChatMessage,
     type AgentEvent,
-    type PendingPollEvent,
 } from '../../lib/agentStream';
 import { usePendingPoll } from '../../hooks/usePendingPoll';
 import { useBrandingStore } from '../../stores/brandingStore';
-import { ToolCallPill, type ToolCallStatus } from './ToolCallPill';
+import { useChatSession } from '../../stores/chatSessionStore';
+import type { ChatRouteInfo, DisplayMessage } from './chatTypes';
+import { ToolCallPill } from './ToolCallPill';
 import { GenieDetailsPanel } from './GenieDetailsPanel';
 import { ToolRawOutputPanel } from './ToolRawOutputPanel';
 import { ChartPanel } from './ChartPanel';
@@ -41,79 +42,6 @@ import { VegaLiteChart } from './VegaLiteChart';
 import { datasetFromGenieResult, findLastDataset, parseToolChart } from './toolChart';
 import { renderMarkdownSafe } from '../../lib/markdown';
 import type { ChartEncoding, Dataset } from '../../lib/charting';
-
-// Each chat surface holds its own UI-side message log. Tool
-// invocations and pending polls live as first-class entries here so
-// the timeline reads naturally (user msg -> tool pill -> agent
-// summary). They round-trip back to the backend via the stream's
-// final `done` event in the form the runner expects.
-type DisplayMessage =
-    | {
-        kind: 'user';
-        id: string;
-        content: string;
-        timestamp: string;
-    }
-    | {
-        kind: 'agent';
-        id: string;
-        content: string;
-        timestamp: string;
-    }
-    | {
-        kind: 'tool';
-        id: string;
-        toolCallId: string;
-        toolName: string;
-        label: string;
-        detail?: string;
-        status: ToolCallStatus;
-        startedAt: number;
-        completedAt?: number;
-        errorMessage?: string;
-        /**
-         * Raw arguments the LLM produced for the call. Persisted so we
-         * can synthesize the matching ``assistant.tool_calls`` block
-         * when replaying this tool result on a continuation turn —
-         * without it the model serving endpoint rejects the request
-         * with ``role 'tool' must be a response to a preceding
-         * message with 'tool_calls'``.
-         */
-        toolArguments?: Record<string, unknown>;
-        /**
-         * Raw, JSON-serializable payload the tool returned. Captured
-         * from the ``tool_result`` SSE event for synchronous tools so
-         * the UI can render a "Raw output" expander under every pill.
-         * For pending-poll handoffs (Genie) the analogous structured
-         * data lives on ``genieResult`` and is rendered via
-         * ``GenieDetailsPanel``.
-         */
-        toolResult?: unknown;
-        /**
-         * Raw structured payload from a completed Genie poll. Surfaces
-         * the SQL, result rows, chart spec, and per-conversation deep
-         * link via `<GenieDetailsPanel>`. Set on the tool pill's
-         * resolution; absent until `pollResolution === 'complete'`.
-         */
-        genieResult?: Record<string, unknown>;
-        /**
-         * Resolved chart payload for tools that produce a chart (the
-         * ``render_chart`` agent tool, or any tool returning tabular data /
-         * a Vega-Lite spec). Bound at event-handle time: when the tool asks
-         * to re-graph the last answer, the dataset is filled in from the
-         * conversation's most recent Genie result so the chart is
-         * self-contained for rendering.
-         */
-        chart?: { dataset?: Dataset; spec?: Record<string, unknown>; encoding?: Partial<ChartEncoding> };
-        /** When set, this tool call was a pending-poll handoff. */
-        poll?: PendingPollEvent;
-        pollResolution?: 'complete' | 'failed' | 'cancelled' | 'timeout';
-    }
-    | {
-        kind: 'reasoning';
-        id: string;
-        text: string;
-    };
 
 export interface ChatModeOption {
     /** Mode id passed back to onModeChange and forwarded to the runner. */
@@ -124,10 +52,10 @@ export interface ChatModeOption {
     icon?: React.ReactNode;
 }
 
-export interface ChatRouteInfo {
-    path: string;
-    title: string;
-}
+// `ChatRouteInfo` and `DisplayMessage` now live in `./chatTypes` (shared with
+// the chat session store); re-exported here so existing importers of ChatView
+// (e.g. Home.tsx) keep resolving the type from this module.
+export type { ChatRouteInfo, DisplayMessage } from './chatTypes';
 
 export interface ChatViewProps {
     /**
@@ -226,29 +154,33 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     },
     ref,
 ) {
-    const [messages, setMessages] = useState<DisplayMessage[]>(() => {
-        if (!storageKey) return [];
-        if (typeof window === 'undefined') return [];
-        try {
-            const raw = window.localStorage.getItem(storageKey);
-            if (!raw) return [];
-            const parsed = JSON.parse(raw) as DisplayMessage[];
-            if (!Array.isArray(parsed)) return [];
-            // Drop any in-flight tool entries from a previous tab —
-            // they're stale and will never resolve.
-            return parsed
-                .filter((m) => !(m.kind === 'tool' && m.status !== 'success' && m.status !== 'error'))
-                .map((m) => (m.kind === 'reasoning' ? { ...m } : m));
-        } catch {
-            return [];
-        }
-    });
-    const [statusLabel, setStatusLabel] = useState<string | null>(null);
-    const [isStreaming, setIsStreaming] = useState(false);
+    // The message log, streaming flags, pending poll, route CTA, AND the
+    // non-reactive "internals" (AbortController, event-gate clock, tool-name /
+    // tool-arg maps, dedup signature) all live in a store keyed by `storageKey`
+    // — NOT in this component. That's what lets an in-flight turn survive in-app
+    // navigation: when the router unmounts ChatView, the async stream loop keeps
+    // writing to the store, and a remounted ChatView simply re-subscribes to the
+    // same live session (see stores/chatSessionStore.ts). `internals` replaces
+    // what used to be a set of `useRef`s.
+    const sessionKey = storageKey || `ephemeral:${mode}`;
+    const {
+        messages,
+        setMessages,
+        isStreaming,
+        setIsStreaming,
+        statusLabel,
+        setStatusLabel,
+        pendingPoll,
+        setPendingPoll,
+        routeCta,
+        setRouteCta,
+        resetSession,
+        getPendingPoll,
+        internals,
+    } = useChatSession(sessionKey, storageKey);
+
     const [draft, setDraft] = useState('');
-    const [pendingPoll, setPendingPoll] = useState<PendingPollEvent | null>(null);
     const [showThinking, setShowThinking] = useState(false);
-    const [routeCta, setRouteCta] = useState<ChatRouteInfo | null>(null);
     const [showModeDropdown, setShowModeDropdown] = useState(false);
     // When true, feed Genie's answer back through the agent for a final
     // summarization turn instead of surfacing its ``final_answer`` verbatim.
@@ -260,52 +192,16 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     // via tools.ask_your_data.poll_timeout_seconds (not a Databricks limit).
     const geniePollTimeoutSeconds = useBrandingStore((s) => s.geniePollTimeoutSeconds);
     const messagesEndRef = useRef<HTMLDivElement | null>(null);
-    const abortRef = useRef<AbortController | null>(null);
     const modeDropdownRef = useRef<HTMLDivElement | null>(null);
-    // Mirror of `pendingPoll` for use inside in-flight async closures
-    // (e.g. submitTurn's finally block) so they always see the latest
-    // value rather than the stale one captured at bind time. Without
-    // this the input bar gets stuck disabled after a Genie poll
-    // resolves and the continuation turn finishes streaming. Updated
-    // synchronously during render to avoid any stale-effect race.
-    const pendingPollRef = useRef<PendingPollEvent | null>(null);
-    pendingPollRef.current = pendingPoll;
-
-    // Map tool_call id -> tool name and raw arguments so we can report both to
-    // `onToolResult` (the tool_result event carries only the id + result). The
-    // arguments matter for authoring tools where the useful payload (the drafted
-    // graph_spec) lives in the *call*, not the result.
-    const toolNamesRef = useRef<Record<string, string>>({});
-    const toolArgsRef = useRef<Record<string, Record<string, unknown> | undefined>>({});
-
-    // Whitespace-normalized signature of the most recently *applied* agent
-    // message. Backs a hard guard against rendering the same bubble twice:
-    // the `message` apply runs inside a deferred `setTimeout` (the tool-pill
-    // gate), and at temperature 0.0 the model can re-emit byte-for-byte (or
-    // whitespace-different) identical text on a follow-up iteration. The
-    // in-`prev` compare can miss those, so we also short-circuit here.
-    const lastAgentSigRef = useRef<string>('');
-
-    // Persist messages so users don't lose context on refresh. Skip
-    // any in-flight pills (they re-render as cancelled instead of
-    // hung).
-    useEffect(() => {
-        if (!storageKey || typeof window === 'undefined') return;
-        try {
-            window.localStorage.setItem(storageKey, JSON.stringify(messages));
-        } catch {
-            /* storage quota / disabled — non-fatal */
-        }
-    }, [messages, storageKey]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages, statusLabel]);
 
-    // Abort any in-flight agent stream when the chat unmounts, so we don't keep
-    // the SSE connection open (and don't setState on an unmounted component) when
-    // the user navigates away mid-response.
-    useEffect(() => () => abortRef.current?.abort(), []);
+    // NOTE: deliberately NO abort-on-unmount here. A running turn must outlive a
+    // route change (the whole point of lifting state into the store); the loop
+    // is torn down explicitly via the Stop / New Chat control or superseded when
+    // the next turn starts. Persistence is handled by the store's setMessages.
 
     // Per-second tick to drive the elapsed-time label inside running
     // tool pills. The label is computed at render time as
@@ -353,7 +249,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             // us to silently mark the wrong pill, or none at all).
             const settledToolCallId = settledEvent.tool_call_id;
             const isCurrent =
-                pendingPollRef.current?.tool_call_id === settledToolCallId;
+                getPendingPoll()?.tool_call_id === settledToolCallId;
 
             // Reflect the final state in the matching tool pill.
             setMessages((prev) =>
@@ -592,8 +488,8 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         } = {},
     ) => {
         const controller = new AbortController();
-        abortRef.current?.abort();
-        abortRef.current = controller;
+        internals.abortController?.abort();
+        internals.abortController = controller;
 
         setIsStreaming(true);
         setStatusLabel('Thinking...');
@@ -601,12 +497,12 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         // New turn, new gate — stale "minimum tool-pill duration"
         // bookkeeping from a prior stream shouldn't delay the first
         // event of this one.
-        eventGateRef.current = 0;
+        internals.eventGate = 0;
         // Scope the same-message guard to this turn only. A later,
         // unrelated turn that legitimately produces the same short reply
         // (e.g. "Done.") should still render; we only want to swallow a
         // duplicate emitted *within* a single turn.
-        lastAgentSigRef.current = '';
+        internals.lastAgentSig = '';
         // Stale form-route CTAs from a prior turn shouldn't survive a
         // new question — the agent may pick a different form, or no
         // form at all. The continuation path skips this clear so the
@@ -693,26 +589,24 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         } finally {
             // Don't clear streaming state if a pending poll is still
             // running; the poll's onSettled will own that. Read the
-            // ref (not the closure) so we see the latest state — the
+            // store (not the closure) so we see the latest state — the
             // closure value is stale once a continuation turn fires
             // after `setPendingPoll(null)`.
-            if (!pendingPollRef.current) {
+            if (!getPendingPoll()) {
                 setIsStreaming(false);
                 setStatusLabel(null);
             }
         }
     };
 
-    // Earliest wall-clock time at which the next agent event may
-    // visually apply. Used to enforce ordering between tool pills
-    // and the agent message that follows them: when a synchronous
-    // tool resolves in under MIN_RUNNING_MS we delay its visible
-    // settle, and we likewise delay the agent's `message` event so
-    // it never renders before the pill it depends on. Without this
-    // the user reported "everything pops in at once" — the message
-    // would show while the pill was still spinning on fast tools.
-    const eventGateRef = useRef<number>(0);
-
+    // The event-gate clock (`internals.eventGate`) is the earliest wall-clock
+    // time at which the next agent event may visually apply. It enforces
+    // ordering between tool pills and the agent message that follows them: when
+    // a synchronous tool resolves in under MIN_RUNNING_MS we delay its visible
+    // settle, and we likewise delay the agent's `message` event so it never
+    // renders before the pill it depends on. Without this the user reported
+    // "everything pops in at once" — the message would show while the pill was
+    // still spinning on fast tools.
     const handleStreamEvent = (event: AgentEvent) => {
         switch (event.type) {
             case 'status': {
@@ -726,8 +620,8 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             }
             case 'tool_call': {
                 setStatusLabel(event.friendly_label);
-                toolNamesRef.current[event.id] = event.name;
-                toolArgsRef.current[event.id] = event.arguments;
+                internals.toolNames[event.id] = event.name;
+                internals.toolArgs[event.id] = event.arguments;
                 setMessages((prev) => [
                     ...prev,
                     {
@@ -749,10 +643,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 // (independent of the pill's delayed visual settle below) so
                 // it can react to agent side effects without waiting.
                 onToolResult?.(
-                    toolNamesRef.current[event.id] || '',
+                    internals.toolNames[event.id] || '',
                     event.result,
                     event.ok,
-                    toolArgsRef.current[event.id],
+                    internals.toolArgs[event.id],
                 );
                 // Detect chart-renderable output (the render_chart tool, or any
                 // tool returning tabular data / a spec). When the tool asks to
@@ -809,8 +703,8 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                         ? Date.now() - pill.startedAt
                         : MIN_RUNNING_MS;
                     const delay = Math.max(0, MIN_RUNNING_MS - elapsed);
-                    eventGateRef.current = Math.max(
-                        eventGateRef.current,
+                    internals.eventGate = Math.max(
+                        internals.eventGate,
                         Date.now() + delay,
                     );
                     if (delay === 0) {
@@ -893,7 +787,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                         //      message — covers the deferred `apply` path
                         //      where the in-`prev` compare can race.
                         //   2. the most recent agent bubble in `prev`.
-                        if (incomingSig && incomingSig === lastAgentSigRef.current) {
+                        if (incomingSig && incomingSig === internals.lastAgentSig) {
                             return prev;
                         }
                         // Find the most recent *conversational* bubble (ignore
@@ -916,7 +810,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                         ) {
                             return prev;
                         }
-                        lastAgentSigRef.current = incomingSig;
+                        internals.lastAgentSig = incomingSig;
                         return [
                             ...prev,
                             {
@@ -929,7 +823,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     });
                 // Honor the tool-pill gate so messages never render
                 // before their preceding tool resolves visually.
-                const wait = Math.max(0, eventGateRef.current - Date.now());
+                const wait = Math.max(0, internals.eventGate - Date.now());
                 if (wait === 0) {
                     apply();
                     setStatusLabel(null);
@@ -1097,19 +991,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     );
 
     const handleClear = () => {
-        abortRef.current?.abort();
-        setMessages([]);
-        setPendingPoll(null);
-        setStatusLabel(null);
-        setIsStreaming(false);
-        setRouteCta(null);
-        if (storageKey && typeof window !== 'undefined') {
-            try {
-                window.localStorage.removeItem(storageKey);
-            } catch {
-                /* swallow */
-            }
-        }
+        // Aborts any in-flight turn, clears the internals, resets the reactive
+        // state, and removes the persisted log — all in the store.
+        resetSession();
+        setDraft('');
     };
 
     // Live elapsed string for the active pending poll, if any.
