@@ -8,6 +8,7 @@ import {
   Loader2,
   Save,
   Upload,
+  Download,
   FileText,
   FolderTree,
   Search,
@@ -31,6 +32,7 @@ import type {
   ContextDocumentSummary,
   ContextSearchResult,
 } from '../../services/api';
+import { ImportContextCatalogModal } from '../../components/admin/ImportContextCatalogModal';
 
 const inputClass =
   'w-full border border-gray-300 rounded-md h-10 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent';
@@ -156,6 +158,7 @@ export function ContextCatalog() {
   const [isSearching, setIsSearching] = useState(false);
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [showImport, setShowImport] = useState(false);
 
   // ---------------------------------------------------------------- load data
 
@@ -406,6 +409,36 @@ export function ContextCatalog() {
     }
   };
 
+  // ------------------------------------------------------------- export/import
+
+  const exportBundle = async (opts: { domainIds?: string[]; publishedOnly?: boolean } = {}) => {
+    setMessage(null);
+    try {
+      const bundle = await api.exportContextCatalogBundle(opts);
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const scope = opts.domainIds?.length ? 'domain' : 'catalog';
+      a.download = `context-${scope}-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to export catalog' });
+    }
+  };
+
+  const handleImported = async () => {
+    await loadDomains(selectedId ?? undefined);
+    if (selectedId) {
+      try {
+        setDetail(await api.getContextDomain(selectedId));
+      } catch {
+        /* selection may have changed shape; list reload above is enough */
+      }
+    }
+  };
+
   // ------------------------------------------------------------------- search
 
   const runSearch = async () => {
@@ -427,14 +460,37 @@ export function ContextCatalog() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-heading">
-            <Library className="w-6 h-6 text-accent" /> Context Catalog
-          </CardTitle>
-          <CardDescription>
-            Curate the knowledge the agent retrieves from. Organize context into domains and author
-            markdown or upload documents (docx, pptx, pdf). Published documents become searchable by
-            the agent.
-          </CardDescription>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2 text-heading">
+                <Library className="w-6 h-6 text-accent" /> Context Catalog
+              </CardTitle>
+              <CardDescription>
+                Curate the knowledge the agent retrieves from. Organize context into domains and author
+                markdown or upload documents (docx, pptx, pdf). Published documents become searchable by
+                the agent.
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => exportBundle()}
+                disabled={domains.length === 0}
+                title="Export the whole catalog as a portable bundle"
+              >
+                <Download className="w-4 h-4 mr-1" /> Export
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowImport(true)}
+                title="Import a bundle from another environment"
+              >
+                <Upload className="w-4 h-4 mr-1" /> Import
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="flex flex-col sm:flex-row gap-2">
@@ -671,6 +727,14 @@ export function ContextCatalog() {
                       )}
                     </div>
                     <div className="flex gap-2 shrink-0">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => exportBundle({ domainIds: [detail.id] })}
+                        title="Export this domain and its sub-domains"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </Button>
                       <Button size="sm" variant="outline" onClick={openEditDomain}>
                         <Pencil className="w-3.5 h-3.5" />
                       </Button>
@@ -869,6 +933,13 @@ export function ContextCatalog() {
           )}
         </div>
       </div>
+
+      {showImport && (
+        <ImportContextCatalogModal
+          onClose={() => setShowImport(false)}
+          onImported={handleImported}
+        />
+      )}
     </div>
   );
 }

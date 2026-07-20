@@ -1927,6 +1927,18 @@ export interface ContextDocumentInput {
   tags?: string[];
 }
 
+export interface ContextCatalogBundle {
+  format: string;
+  exported_at?: string;
+  domains: Record<string, unknown>[];
+}
+
+export interface ContextImportReport {
+  domains: { created: string[]; updated: string[]; skipped: string[] };
+  documents: { created: string[]; updated: string[]; skipped: string[] };
+  errors: { domain: string | null; error: string }[];
+}
+
 export interface ContextSearchResult {
   document_id: string;
   document_title: string;
@@ -2083,6 +2095,48 @@ export async function searchContextCatalog(
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
     throw new Error(error.detail || `Failed to search context catalog: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/** Export context domains + documents as a portable bundle for promotion to
+ *  another environment. Pass `domainIds` to export a subtree; omit for all. */
+export async function exportContextCatalogBundle(
+  opts: { domainIds?: string[]; publishedOnly?: boolean } = {},
+): Promise<ContextCatalogBundle> {
+  const params = new URLSearchParams();
+  if (opts.domainIds?.length) params.set('domain_ids', opts.domainIds.join(','));
+  if (opts.publishedOnly) params.set('published_only', 'true');
+  const qs = params.toString();
+  const response = await fetch(`${API_BASE_URL}/context/export/bundle${qs ? `?${qs}` : ''}`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to export catalog: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+/** Import a bundle into this environment: upsert domains by slug and documents
+ *  by title within a domain. `docStatus` 'keep' preserves each doc's exported
+ *  status; 'draft'/'published' forces it. */
+export async function importContextCatalogBundle(
+  bundle: ContextCatalogBundle,
+  opts: { docStatus?: 'keep' | 'draft' | 'published'; overwrite?: boolean } = {},
+): Promise<ContextImportReport> {
+  const response = await fetch(`${API_BASE_URL}/context/import/bundle`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({
+      bundle,
+      doc_status: opts.docStatus ?? 'keep',
+      overwrite: opts.overwrite ?? true,
+    }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to import catalog: ${response.statusText}`);
   }
   return response.json();
 }
@@ -2778,6 +2832,8 @@ export const api = {
   updateContextDocument,
   deleteContextDocument,
   searchContextCatalog,
+  exportContextCatalogBundle,
+  importContextCatalogBundle,
   getAgentSuggestions,
   submitFeedback,
   listFeedback,

@@ -6,7 +6,7 @@ with the agent tools. Writes require Platform/Governance Admin; reads and search
 are available to any authenticated user (and, via the tools, to the agent).
 """
 import logging
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel, Field
@@ -82,6 +82,15 @@ class SearchRequest(BaseModel):
     query: str = Field(..., min_length=2, description="Search query")
     domain_slug: Optional[str] = Field(default=None, description="Restrict to a domain (and its sub-domains)")
     limit: Optional[int] = Field(default=None, description="Max results")
+
+
+class ContextImportRequest(BaseModel):
+    bundle: Dict[str, Any]
+    doc_status: str = Field(
+        default="keep",
+        description="keep (preserve exported status) | draft | published",
+    )
+    overwrite: bool = True
 
 
 # --- Domain endpoints ---
@@ -302,3 +311,43 @@ def search_catalog(
         db, body.query, domain_slug=body.domain_slug, limit=body.limit
     )
     return {"query": body.query, "results": results}
+
+
+# --- Export / import (promote the catalog across environments) ---
+
+@router.get("/export/bundle")
+def export_context_bundle(
+    domain_ids: Optional[str] = None,
+    published_only: bool = False,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    _: None = Depends(_require_feature),
+) -> Any:
+    """Export domains + documents as a portable, env-agnostic JSON bundle.
+
+    Pass ``domain_ids`` (comma-separated) to export only those domains and their
+    descendants; omit it to export the whole catalog.
+    """
+    id_list = [i for i in (domain_ids.split(",") if domain_ids else []) if i.strip()]
+    return ContextCatalogService.export_bundle(
+        db, domain_ids=id_list or None, published_only=published_only
+    )
+
+
+@router.post("/import/bundle")
+def import_context_bundle(
+    *,
+    body: ContextImportRequest,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    _: None = Depends(_require_feature),
+) -> Any:
+    """Import a bundle into this environment (upsert domains by slug, documents by title)."""
+    try:
+        return ContextCatalogService.import_bundle(
+            db, body.bundle,
+            doc_status=body.doc_status, overwrite=body.overwrite,
+            created_by=current_user.email,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

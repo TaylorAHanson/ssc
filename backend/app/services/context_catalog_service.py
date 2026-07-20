@@ -28,6 +28,10 @@ from app.db.context_catalog import (
 
 logger = logging.getLogger(__name__)
 
+# Portable bundle format tag (bumped if the export shape changes). Mirrors the
+# workflow bundle convention so domains/documents promote cleanly across envs.
+CONTEXT_BUNDLE_FORMAT = "selfservice.context_catalog/v1"
+
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
@@ -382,6 +386,235 @@ class ContextCatalogService:
         except Exception as e:  # noqa: BLE001 - usage signal is non-critical
             logger.warning("Context Catalog: failed to record retrieval usage: %s", e)
             db.rollback()
+
+    # ------------------------------------------------------- export / import (envs)
+
+    @staticmethod
+    def export_bundle(
+        db: Session,
+        *,
+        domain_ids: Optional[List[str]] = None,
+        published_only: bool = False,
+    ) -> Dict[str, Any]:
+        """Build a portable, env-agnostic bundle of context domains + documents.
+
+        Domains are keyed by ``slug`` and reference their parent via
+        ``parent_slug`` (not the env-specific UUID) so the tree re-links on
+        import. Documents nest under their owning domain and are matched by title
+        within that domain. When ``domain_ids`` is given, the export includes
+        those domains **and all their descendants** so parent refs stay
+        resolvable; otherwise every domain is exported. ``published_only`` limits
+        the exported documents to published ones (domains are always included).
+        """
+        from datetime import datetime as _dt
+
+        all_domains = db.query(ContextDomainModel).all()
+        by_id = {d.id: d for d in all_domains}
+
+        if domain_ids:
+            selected: set = set()
+            for did in domain_ids:
+                selected.update(ContextCatalogService._descendant_ids(db, did))
+            domains = [d for d in all_domains if d.id in selected]
+        else:
+            domains = list(all_domains)
+
+        domains.sort(key=lambda d: (d.name or "").lower())
+
+        out_domains: List[Dict[str, Any]] = []
+        for d in domains:
+            docs_q = db.query(ContextDocumentModel).filter(
+                ContextDocumentModel.domain_id == d.id
+            )
+            if published_only:
+                docs_q = docs_q.filter(ContextDocumentModel.status == "published")
+            docs = docs_q.order_by(ContextDocumentModel.title.asc()).all()
+            parent = by_id.get(d.parent_id) if d.parent_id else None
+            out_domains.append({
+                "slug": d.slug,
+                "name": d.name,
+                "description": d.description,
+                "parent_slug": parent.slug if parent else None,
+                "domain_type": d.domain_type,
+                "primary_owner": d.primary_owner,
+                "secondary_owner": d.secondary_owner,
+                "reviewers": d.reviewers or [],
+                "categories": d.categories or [],
+                "documents": [
+                    {
+                        "title": doc.title,
+                        "doc_type": doc.doc_type,
+                        "source_url": doc.source_url,
+                        "source_filename": doc.source_filename,
+                        "status": doc.status,
+                        "tags": doc.tags or [],
+                        "body_markdown": doc.body_markdown,
+                    }
+                    for doc in docs
+                ],
+            })
+
+        return {
+            "format": CONTEXT_BUNDLE_FORMAT,
+            "exported_at": _dt.utcnow().isoformat(),
+            "domains": out_domains,
+        }
+
+    @staticmethod
+    def import_bundle(
+        db: Session,
+        bundle: Dict[str, Any],
+        *,
+        doc_status: str = "keep",
+        overwrite: bool = True,
+        created_by: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Upsert domains (by slug) and their documents (by title within a domain).
+
+        - ``doc_status``: ``keep`` preserves each document's exported status;
+          ``draft`` / ``published`` forces all imported docs to that status.
+        - ``overwrite``: when True, existing domains/documents are updated in
+          place; when False they're left untouched and reported as skipped.
+
+        Parent links are resolved by ``parent_slug`` in a second pass after all
+        domains exist, so ordering within the bundle doesn't matter. Chunks are
+        rebuilt for every created/updated document. Commits once at the end.
+        """
+        if not isinstance(bundle, dict) or bundle.get("format") != CONTEXT_BUNDLE_FORMAT:
+            raise ValueError(
+                f"Unrecognized bundle format (expected {CONTEXT_BUNDLE_FORMAT})"
+            )
+        entries = bundle.get("domains")
+        if not isinstance(entries, list):
+            raise ValueError("Bundle 'domains' must be a list")
+        if doc_status not in ("keep", "draft", "published"):
+            raise ValueError("doc_status must be 'keep', 'draft', or 'published'")
+
+        report: Dict[str, Any] = {
+            "domains": {"created": [], "updated": [], "skipped": []},
+            "documents": {"created": [], "updated": [], "skipped": []},
+            "errors": [],
+        }
+
+        # Pass 1: upsert domains (without parent), building a slug -> model map.
+        slug_map: Dict[str, ContextDomainModel] = {}
+        parent_by_slug: Dict[str, Optional[str]] = {}
+        for entry in entries:
+            entry = entry or {}
+            slug = (entry.get("slug") or _slugify(entry.get("name") or "")).strip()
+            name = entry.get("name") or slug
+            if not slug:
+                report["errors"].append({"domain": None, "error": "missing slug/name"})
+                continue
+            parent_by_slug[slug] = entry.get("parent_slug")
+            fields = {
+                "name": name,
+                "description": entry.get("description"),
+                "domain_type": entry.get("domain_type") or "community",
+                "primary_owner": entry.get("primary_owner"),
+                "secondary_owner": entry.get("secondary_owner"),
+                "reviewers": entry.get("reviewers") or [],
+                "categories": entry.get("categories") or [],
+            }
+            existing = ContextCatalogService.get_domain_by_slug(db, slug)
+            if existing:
+                slug_map[slug] = existing
+                if overwrite:
+                    for key, value in fields.items():
+                        setattr(existing, key, value)
+                    db.add(existing)
+                    report["domains"]["updated"].append(slug)
+                else:
+                    report["domains"]["skipped"].append(slug)
+            else:
+                domain = ContextDomainModel(
+                    id=str(uuid.uuid4()),
+                    slug=slug,
+                    created_by=created_by,
+                    **fields,
+                )
+                db.add(domain)
+                slug_map[slug] = domain
+                report["domains"]["created"].append(slug)
+        db.flush()
+
+        # Pass 2: resolve parent links by slug (guard self-parent).
+        for slug, domain in slug_map.items():
+            parent_slug = parent_by_slug.get(slug)
+            if not parent_slug:
+                continue
+            parent = slug_map.get(parent_slug) or ContextCatalogService.get_domain_by_slug(
+                db, parent_slug
+            )
+            if parent and parent.id != domain.id:
+                domain.parent_id = parent.id
+                db.add(domain)
+            else:
+                report["errors"].append({
+                    "domain": slug,
+                    "error": f"parent '{parent_slug}' not found; imported at top level",
+                })
+        db.flush()
+
+        # Pass 3: upsert documents within each domain (by title).
+        for entry in entries:
+            entry = entry or {}
+            slug = (entry.get("slug") or _slugify(entry.get("name") or "")).strip()
+            domain = slug_map.get(slug)
+            if not domain:
+                continue
+            for doc in entry.get("documents") or []:
+                doc = doc or {}
+                title = doc.get("title")
+                if not title:
+                    report["errors"].append({"domain": slug, "error": "document missing title"})
+                    continue
+                status = doc.get("status") or "published"
+                if doc_status != "keep":
+                    status = doc_status
+                key = f"{slug}/{title}"
+                existing_doc = (
+                    db.query(ContextDocumentModel)
+                    .filter(
+                        ContextDocumentModel.domain_id == domain.id,
+                        ContextDocumentModel.title == title,
+                    )
+                    .first()
+                )
+                if existing_doc:
+                    if not overwrite:
+                        report["documents"]["skipped"].append(key)
+                        continue
+                    existing_doc.body_markdown = doc.get("body_markdown")
+                    existing_doc.doc_type = doc.get("doc_type") or "markdown"
+                    existing_doc.source_url = doc.get("source_url")
+                    existing_doc.source_filename = doc.get("source_filename")
+                    existing_doc.status = status
+                    existing_doc.tags = doc.get("tags") or []
+                    db.add(existing_doc)
+                    db.flush()
+                    ContextCatalogService._rebuild_chunks(db, existing_doc)
+                    report["documents"]["updated"].append(key)
+                else:
+                    new_doc = ContextDocumentModel(
+                        id=str(uuid.uuid4()),
+                        domain_id=domain.id,
+                        title=title,
+                        doc_type=doc.get("doc_type") or "markdown",
+                        source_url=doc.get("source_url"),
+                        source_filename=doc.get("source_filename"),
+                        body_markdown=doc.get("body_markdown"),
+                        status=status,
+                        tags=doc.get("tags") or [],
+                        created_by=created_by,
+                    )
+                    db.add(new_doc)
+                    db.flush()
+                    ContextCatalogService._rebuild_chunks(db, new_doc)
+                    report["documents"]["created"].append(key)
+
+        db.commit()
+        return report
 
     # ------------------------------------------------------------ serialization
 
