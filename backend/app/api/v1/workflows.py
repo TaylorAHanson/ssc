@@ -94,6 +94,10 @@ class ImportRequest(BaseModel):
     bundle: Dict[str, Any]
     as_status: str = Field(default="draft", description="draft or published")
     overwrite: bool = True
+    prune: bool = Field(
+        default=False,
+        description="Also DELETE workflows not present in the bundle (propagates source-env deletions).",
+    )
 
 
 def _validate_graph_spec(spec: Optional[Dict[str, Any]]) -> None:
@@ -452,11 +456,15 @@ def import_workflows(
     This is intentionally NOT blocked by the authoring lock: in a locked
     environment (prod) an all-or-nothing bundle import is the *only* sanctioned
     way to change workflows. Promote vetted bundles here as ``published``.
+
+    With ``prune=true`` the import also deletes authored/promoted workflows not in
+    the bundle (code-seeded ones are protected), so a deletion in the source env
+    propagates here. This is destructive and confirmed in the UI before sending.
     """
     try:
         return WorkflowService.import_bundle(
             db, body.bundle, as_status=body.as_status,
-            overwrite=body.overwrite, created_by=current_user.email,
+            overwrite=body.overwrite, prune=body.prune, created_by=current_user.email,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -423,12 +423,20 @@ class WorkflowService:
         *,
         as_status: str = "draft",
         overwrite: bool = True,
+        prune: bool = False,
         created_by: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Upsert workflows from a bundle (by key). Returns a per-workflow report.
 
         Defaults to importing as **draft** so a promoted workflow is reviewed and
         tested in the target env before it is published.
+
+        When ``prune`` is True, this also DELETES workflows in the target whose
+        ``key`` is not present in the bundle — the way to make a deletion in a
+        source env (dev) propagate to a locked target (prod), where manual delete
+        is blocked. Code-seeded workflows (``source == 'seed'``) are never pruned
+        (they are re-seeded on boot); only authored/promoted rows are removed.
+        Destructive, so it is opt-in and surfaced with a confirmation in the UI.
         """
         from app.workflows.spec_loader import SpecError, validate_spec_dict
 
@@ -440,12 +448,14 @@ class WorkflowService:
         if as_status not in ("draft", "published"):
             raise ValueError("as_status must be 'draft' or 'published'")
 
-        report: Dict[str, Any] = {"created": [], "updated": [], "skipped": [], "errors": []}
+        report: Dict[str, Any] = {"created": [], "updated": [], "skipped": [], "errors": [], "pruned": []}
+        bundle_keys: set = set()
         for entry in entries:
             key = (entry or {}).get("key")
             if not key:
                 report["errors"].append({"key": None, "error": "missing key"})
                 continue
+            bundle_keys.add(key)
             try:
                 spec = entry.get("graph_spec")
                 if spec is not None:
@@ -491,6 +501,27 @@ class WorkflowService:
                     created_by=created_by,
                 ))
                 report["created"].append(key)
+
+        if prune and bundle_keys:
+            # Delete authored/promoted workflows the bundle no longer contains so a
+            # source-env deletion propagates here. Never prune code-seeded rows
+            # (source='seed') — they'd just be re-seeded on the next boot. Guarded
+            # by a non-empty bundle so an empty/garbled import can't wipe everything.
+            orphans = (
+                db.query(WorkflowModel)
+                .filter(
+                    WorkflowModel.source != "seed",
+                    WorkflowModel.key.notin_(bundle_keys),
+                )
+                .all()
+            )
+            for wf in orphans:
+                db.query(WorkflowVersionModel).filter(
+                    WorkflowVersionModel.workflow_id == wf.id
+                ).delete(synchronize_session=False)
+                db.delete(wf)
+                report["pruned"].append(wf.key)
+
         db.commit()
         return report
 

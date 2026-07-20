@@ -2481,6 +2481,7 @@ export interface ImportReport {
   created: string[];
   updated: string[];
   skipped: string[];
+  pruned?: string[];
   errors: { key: string | null; error: string }[];
 }
 
@@ -2731,7 +2732,7 @@ export async function exportWorkflowsBundle(
 /** Import a bundle into this environment (upsert by key). Defaults to drafts. */
 export async function importWorkflowsBundle(
   bundle: WorkflowBundle,
-  opts: { asStatus?: 'draft' | 'published'; overwrite?: boolean } = {},
+  opts: { asStatus?: 'draft' | 'published'; overwrite?: boolean; prune?: boolean } = {},
 ): Promise<ImportReport> {
   const response = await fetch(`${API_BASE_URL}/workflows/import/bundle`, {
     method: 'POST',
@@ -2740,6 +2741,7 @@ export async function importWorkflowsBundle(
       bundle,
       as_status: opts.asStatus ?? 'draft',
       overwrite: opts.overwrite ?? true,
+      prune: opts.prune ?? false,
     }),
   });
   if (!response.ok) {
