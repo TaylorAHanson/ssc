@@ -330,6 +330,49 @@ def unpublish_workflow(
     return WorkflowService.to_dict(workflow)
 
 
+def _set_disabled(db: Session, workflow_id: str, *, disabled: bool, actor: str) -> Any:
+    try:
+        workflow = WorkflowService.set_disabled(db, workflow_id, disabled)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    logger.info(
+        "Workflow '%s' (%s) %s by %s",
+        workflow.key, workflow.id, "disabled" if disabled else "enabled", actor,
+    )
+    return WorkflowService.to_dict(workflow)
+
+
+@router.post("/{workflow_id}/disable")
+def disable_workflow(
+    *,
+    workflow_id: str,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    _: None = Depends(_require_feature),
+) -> Any:
+    """Turn a workflow off (operational kill switch).
+
+    Hides the workflow from the agent (capabilities, instructions, execution)
+    without changing its definition or version. Deliberately NOT gated by
+    ``_require_authoring_unlocked``: turning a workflow off is an operational
+    safety action that must stay available even when authoring is locked (prod),
+    where unpublish/edit are blocked. Fully reversible via ``/enable``.
+    """
+    return _set_disabled(db, workflow_id, disabled=True, actor=current_user.email)
+
+
+@router.post("/{workflow_id}/enable")
+def enable_workflow(
+    *,
+    workflow_id: str,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    _: None = Depends(_require_feature),
+) -> Any:
+    """Turn a previously-disabled workflow back on (see :func:`disable_workflow`)."""
+    return _set_disabled(db, workflow_id, disabled=False, actor=current_user.email)
+
+
 @router.delete("/{workflow_id}")
 def delete_workflow(
     *,

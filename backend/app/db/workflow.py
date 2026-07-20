@@ -14,7 +14,7 @@ its parameter schema — alongside the human-facing instructions markdown.
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Column, String, DateTime, Text, Integer, JSON
+from sqlalchemy import Column, String, DateTime, Text, Integer, JSON, Boolean
 from sqlalchemy.orm import Mapped
 
 from app.db.base import Base
@@ -64,6 +64,16 @@ class WorkflowModel(Base):
     status: Mapped[str] = Column(
         String, nullable=False, default="draft", index=True,
         comment="draft | published (only published workflows are visible to the agent)",
+    )
+    disabled: Mapped[bool] = Column(
+        Boolean, nullable=False, default=False, index=True,
+        comment=(
+            "Operational kill switch: when true the workflow is hidden from the "
+            "agent (capabilities list, instructions lookup, and execution) even if "
+            "status='published'. Unlike unpublish/edit this is an OPERATIONAL toggle "
+            "that stays available when authoring is locked (prod), and is fully "
+            "reversible — it never touches the workflow's definition or version."
+        ),
     )
     version: Mapped[int] = Column(Integer, nullable=False, default=1, comment="Bumped on each publish")
     source: Mapped[str] = Column(

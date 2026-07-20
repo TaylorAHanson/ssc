@@ -2442,6 +2442,10 @@ export interface Workflow {
   graph_spec?: WorkflowGraphSpec | null;
   request_type: string | null;
   status: string;
+  /** Operational kill switch: when true the workflow is turned OFF (hidden from
+   *  the agent) even if `status === 'published'`. Toggling this stays available
+   *  when authoring is locked (prod) and never changes the definition/version. */
+  disabled?: boolean;
   version: number;
   source: string;
   created_by: string | null;
@@ -2542,6 +2546,19 @@ export async function unpublishWorkflow(workflowId: string): Promise<Workflow> {
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`Failed to unpublish workflow: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function setWorkflowDisabled(workflowId: string, disabled: boolean): Promise<Workflow> {
+  const action = disabled ? 'disable' : 'enable';
+  const response = await fetch(`${API_BASE_URL}/workflows/${workflowId}/${action}`, {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to ${action} workflow: ${response.status} ${errorText}`);
   }
   return response.json();
 }
@@ -2773,6 +2790,7 @@ export const api = {
   updateWorkflow,
   publishWorkflow,
   unpublishWorkflow,
+  setWorkflowDisabled,
   deleteWorkflow,
   validateSpec,
   evaluateSpec,

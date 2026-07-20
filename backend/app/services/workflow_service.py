@@ -79,8 +79,19 @@ class WorkflowService:
         return q.order_by(WorkflowModel.key.asc()).all()
 
     @staticmethod
-    def list_published(db: Session) -> List[WorkflowModel]:
-        return WorkflowService.list_workflows(db, include_drafts=False)
+    def list_published(db: Session, *, include_disabled: bool = False) -> List[WorkflowModel]:
+        """Published workflows the agent can see.
+
+        Excludes operationally *disabled* workflows by default (the "turn off"
+        kill switch), so a disabled workflow disappears from the agent's
+        capabilities list and request-type routing while its published
+        definition/version is left untouched. Pass ``include_disabled=True`` for
+        admin/inventory views that need to show and re-enable them.
+        """
+        q = db.query(WorkflowModel).filter(WorkflowModel.status == "published")
+        if not include_disabled:
+            q = q.filter(WorkflowModel.disabled.isnot(True))
+        return q.order_by(WorkflowModel.key.asc()).all()
 
     @staticmethod
     def get(db: Session, workflow_id: str) -> Optional[WorkflowModel]:
@@ -90,7 +101,12 @@ class WorkflowService:
     def get_by_key(db: Session, key: str, *, published_only: bool = False) -> Optional[WorkflowModel]:
         q = db.query(WorkflowModel).filter(WorkflowModel.key == key)
         if published_only:
-            q = q.filter(WorkflowModel.status == "published")
+            # "published_only" is the agent-facing lookup (e.g. instructions), so a
+            # disabled workflow is treated as not-published (turned off).
+            q = q.filter(
+                WorkflowModel.status == "published",
+                WorkflowModel.disabled.isnot(True),
+            )
         return q.first()
 
     # ------------------------------------------------- type registry / lookup
@@ -120,6 +136,24 @@ class WorkflowService:
             logger.debug("known_request_types: catalog load failed: %s", e)
         from app.models.request import RequestType
         known.update(rt.value for rt in RequestType)
+        # Honor the operational kill switch: a disabled published workflow is
+        # "off", so drop its key/request_type from the routable set even when the
+        # same string is also a bundled catalog spec or enum value. Without this a
+        # disabled catalog-backed workflow would still validate as a known type.
+        try:
+            disabled = (
+                db.query(WorkflowModel)
+                .filter(
+                    WorkflowModel.status == "published",
+                    WorkflowModel.disabled.is_(True),
+                )
+                .all()
+            )
+            for wf in disabled:
+                known.discard(wf.request_type)
+                known.discard(wf.key)
+        except Exception as e:  # noqa: BLE001 - never hard-fail validation on a read
+            logger.debug("known_request_types: disabled-filter lookup failed: %s", e)
         return known
 
     @staticmethod
@@ -144,8 +178,18 @@ class WorkflowService:
                 )
                 .first()
             )
-            if wf and wf.graph_spec:
-                return wf.graph_spec
+            if wf is not None:
+                # An operationally disabled workflow is turned off: return no spec
+                # rather than silently falling back to the bundled catalog graph,
+                # so the kill switch actually stops execution for its type.
+                if bool(getattr(wf, "disabled", False)):
+                    logger.info(
+                        "effective_spec: workflow '%s' (type=%s) is disabled; "
+                        "returning no spec.", wf.key, request_type,
+                    )
+                    return None
+                if wf.graph_spec:
+                    return wf.graph_spec
         except Exception as e:  # noqa: BLE001
             logger.debug("effective_spec: DB lookup failed for %s: %s", request_type, e)
         from app.workflows.graphs.specs import SPECS
@@ -290,6 +334,24 @@ class WorkflowService:
     @staticmethod
     def unpublish(db: Session, workflow_id: str) -> WorkflowModel:
         return WorkflowService.update(db, workflow_id, status="draft")
+
+    @staticmethod
+    def set_disabled(db: Session, workflow_id: str, disabled: bool) -> WorkflowModel:
+        """Flip the operational kill switch on a workflow (turn off / back on).
+
+        This is deliberately NOT routed through :meth:`update`: it's an
+        operational toggle, not an authoring edit. It never bumps the version,
+        never forks a seed workflow to ``source="user"``, and never touches the
+        definition — so it stays safe (and, at the API layer, lock-exempt) to use
+        in a locked prod environment.
+        """
+        workflow = WorkflowService.get(db, workflow_id)
+        if not workflow:
+            raise ValueError("Workflow not found")
+        workflow.disabled = bool(disabled)
+        db.commit()
+        db.refresh(workflow)
+        return workflow
 
     # ----------------------------------------------------- version history
     @staticmethod
@@ -668,6 +730,7 @@ class WorkflowService:
             "params_schema": workflow.params_schema,
             "request_type": workflow.request_type,
             "status": workflow.status,
+            "disabled": bool(workflow.disabled),
             "version": workflow.version,
             "source": workflow.source,
             "created_by": workflow.created_by,

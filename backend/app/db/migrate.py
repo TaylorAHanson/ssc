@@ -88,6 +88,12 @@ def run_startup_migrations(engine: Engine) -> None:
         _rename_table(engine, "skill_versions", "workflow_versions")
         _rename_column(engine, "workflow_versions", "skill_id", "workflow_id")
         _rename_column(engine, "workflow_versions", "skill_key", "workflow_key")
+        # Workflows: operational "turn off" kill switch (hides a published workflow
+        # from the agent without unpublishing/editing — the only lock-exempt way to
+        # disable a workflow in a locked prod env).
+        _bool_ddl = "BOOLEAN DEFAULT FALSE" if engine.dialect.name == "postgresql" else "INTEGER DEFAULT 0"
+        _add_column(engine, "workflows", "disabled", _bool_ddl)
+        _add_index(engine, "ix_workflows_disabled", "workflows", ["disabled"])
         # Context Catalog retrieval-usage signal columns.
         _add_column(engine, "context_documents", "retrieval_count", "INTEGER DEFAULT 0")
         _add_column(engine, "context_documents", "last_retrieved_at", "TIMESTAMP")

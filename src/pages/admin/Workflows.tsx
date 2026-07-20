@@ -27,6 +27,8 @@ import {
   Upload,
   ArrowLeft,
   Layers,
+  Power,
+  PowerOff,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import type { Workflow, WorkflowInput, WorkflowGraphSpec, WorkflowListEvaluation, WorkflowTool } from '../../services/api';
@@ -556,6 +558,22 @@ export function Workflows() {
     }
   };
 
+  // Operational kill switch: turn a workflow off/on without editing or
+  // unpublishing it. Stays available even when authoring is locked (prod), so we
+  // don't touch the form definition here — just reload so badges reflect state.
+  const toggleDisabled = async (workflow: Workflow) => {
+    setBusyId(workflow.id);
+    setError(null);
+    try {
+      await api.setWorkflowDisabled(workflow.id, !workflow.disabled);
+      await loadList();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to change workflow state');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const clone = async (workflow: Workflow) => {
     setBusyId(workflow.id);
     setError(null);
@@ -662,7 +680,10 @@ export function Workflows() {
             Workflows are read-only here — you can inspect, dry-run, and export them, but
             creating, editing, publishing, and deleting are disabled. To change a workflow,
             build and publish it in a lower environment, then promote it as an all-or-nothing
-            bundle via <span className="font-medium">Import</span>.
+            bundle via <span className="font-medium">Import</span>. You can still{' '}
+            <span className="font-medium">turn individual workflows on/off</span> here — an
+            operational switch that hides a workflow from the agent without changing its
+            definition.
           </div>
         </div>
       )}
@@ -721,7 +742,14 @@ export function Workflows() {
                         <Layers className="w-3 h-3" /> compound
                       </span>
                     )}
-                    {s.status === 'published' ? (
+                    {s.disabled ? (
+                      <span
+                        className="inline-flex items-center gap-1 text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded px-1.5 py-0.5"
+                        title="Turned off — hidden from the agent (definition preserved)"
+                      >
+                        <PowerOff className="w-3 h-3" /> off
+                      </span>
+                    ) : s.status === 'published' ? (
                       <span className="inline-flex items-center gap-1 text-[11px] text-green-700">
                         <CheckCircle2 className="w-3 h-3" /> live
                       </span>
@@ -730,6 +758,33 @@ export function Workflows() {
                         <Circle className="w-3 h-3" /> draft
                       </span>
                     )}
+                    {/* On/off kill switch — available even when authoring is locked. */}
+                    <button
+                      type="button"
+                      title={
+                        s.disabled
+                          ? 'Turn on — show this workflow to the agent'
+                          : 'Turn off — hide this workflow from the agent (keeps the definition)'
+                      }
+                      className={`p-0.5 ${
+                        s.disabled
+                          ? 'text-amber-500 hover:text-green-600'
+                          : 'text-green-500 hover:text-amber-600'
+                      }`}
+                      disabled={busyId === s.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleDisabled(s);
+                      }}
+                    >
+                      {busyId === s.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : s.disabled ? (
+                        <PowerOff className="w-3.5 h-3.5" />
+                      ) : (
+                        <Power className="w-3.5 h-3.5" />
+                      )}
+                    </button>
                     {!authoringLocked && (
                       <button
                         type="button"
@@ -785,6 +840,14 @@ export function Workflows() {
                       >
                         {form.status === 'published' ? 'live' : 'draft'}
                       </span>
+                      {selectedWorkflow?.disabled && (
+                        <span
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] bg-amber-50 text-amber-700"
+                          title="Turned off — hidden from the agent (definition preserved)"
+                        >
+                          <PowerOff className="w-3 h-3" /> off
+                        </span>
+                      )}
                       <span
                         className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] ${
                           specComposition(form.graph_spec) === 'compound'
@@ -826,6 +889,29 @@ export function Workflows() {
               </div>
               {form.id && (
                 <div className="flex items-center gap-1 shrink-0">
+                  {selectedWorkflow && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busyId === selectedWorkflow.id}
+                      onClick={() => toggleDisabled(selectedWorkflow)}
+                      title={
+                        selectedWorkflow.disabled
+                          ? 'Turn this workflow on (show it to the agent)'
+                          : 'Turn this workflow off (hide it from the agent; keeps the definition)'
+                      }
+                      className={selectedWorkflow.disabled ? 'text-green-700' : 'text-amber-700'}
+                    >
+                      {busyId === selectedWorkflow.id ? (
+                        <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                      ) : selectedWorkflow.disabled ? (
+                        <Power className="w-4 h-4 mr-1" />
+                      ) : (
+                        <PowerOff className="w-4 h-4 mr-1" />
+                      )}
+                      {selectedWorkflow.disabled ? 'Turn on' : 'Turn off'}
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="sm"
