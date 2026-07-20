@@ -211,7 +211,7 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Target Workspaces", "key": "SENTINEL_DATA_CERT_WORKSPACE",
      "label": "Data certification workspace",
      "type": "string",
-     "help": "The Enforcement Sentinel scans every target workspace for compute/apps/jobs, but data certification is Unity Catalog (metastore) scoped, so it runs ONCE against a single workspace. Enter the NAME of the target workspace that should run it, or leave blank to use the app's own home workspace. The DQ warehouse + ADOC schema always come from the global settings."},
+     "help": "The Enforcement Sentinel scans every target workspace for compute/apps/jobs, but data certification is Unity Catalog (metastore) scoped, so it runs ONCE against a single workspace. Enter the NAME of the target workspace that should run it, or leave blank to use the app's own home workspace. This workspace's service principal is ALSO the governance identity for other metastore-global reads — notably the data-asset cache sync that powers Discover — so it must have BROWSE on the scanned catalogs and CAN USE on the SQL warehouse. The DQ warehouse + ADOC schema always come from the global settings."},
 
     # --- Web Lookup -----------------------------------------------------
     {"group": "Web Lookup", "key": "yaml:web_search.allowed_domains", "label": "Allowed domains",
@@ -703,7 +703,7 @@ def _reset_cron_schedule(key: str) -> None:
     if mod is not None:
         try:
             setattr(mod, attr, None)
-            logger.info("Cron schedule '%s' changed — next run will be recomputed immediately.", key)
+            logger.info("Cron schedule '%s' changed. The next run will be recomputed immediately.", key)
         except Exception as e:  # noqa: BLE001 - best effort; applies after next fire regardless
             logger.debug("Could not reset cron schedule cache for %s: %s", key, e)
 

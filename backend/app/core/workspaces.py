@@ -240,6 +240,55 @@ def get_uc_provider():
     )
 
 
+def get_governance_uc_provider():
+    """A ``DatabricksProvider`` for metastore-global UC reads run as the *app's*
+    **governance service principal** — the background data-asset cache sync and
+    (optionally) contract discovery.
+
+    Unity Catalog is account-level, so these jobs aren't tied to a workspace, but
+    they DO need an identity that holds ``BROWSE`` on the governed catalogs.
+    That identity is the same one used for data certification: the SP of the
+    ``SENTINEL_DATA_CERT_WORKSPACE`` target workspace. We authenticate as that SP
+    but stay pinned to the **home host + home warehouse** (the home workspace can
+    see the whole metastore and is where ``DATABRICKS_WAREHOUSE_ID`` lives).
+
+    Falls back to the app's own SP when no certification/governance workspace is
+    configured (or it can't be resolved), preserving the previous behavior. The
+    governance SP therefore needs ``CAN USE`` on the home warehouse and
+    ``BROWSE`` on each governed catalog.
+    """
+    from app.providers.databricks import DatabricksProvider
+
+    home = get_home_workspace_config()
+    client_id, client_secret, token = home.client_id, home.client_secret, home.token
+    source = "home_sp"
+
+    cert_name = (getattr(settings, "SENTINEL_DATA_CERT_WORKSPACE", "") or "").strip()
+    if cert_name:
+        cfg = get_workspace_config(cert_name)
+        if cfg is not None and (cfg.client_id or cfg.token):
+            client_id, client_secret, token = cfg.client_id, cfg.client_secret, cfg.token
+            source = f"cert_workspace:{cfg.name} ({cfg.credential_source})"
+        else:
+            logger.warning(
+                "Governance UC provider: SENTINEL_DATA_CERT_WORKSPACE=%r did not "
+                "resolve to a usable service principal; using the app's own SP.",
+                cert_name,
+            )
+
+    logger.info(
+        "Governance UC provider: authenticating as %s against home host %s.",
+        source, home.host,
+    )
+    return DatabricksProvider(
+        host=home.host,
+        token=token,
+        client_id=client_id,
+        client_secret=client_secret,
+        config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID},
+    )
+
+
 def uc_client_for(obo_token: Optional[str]):
     """Resolve ``(provider, client)`` for Unity Catalog reads, pinned to home.
 

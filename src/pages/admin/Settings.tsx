@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import cronstrue from 'cronstrue';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { Loader2, Save, RotateCcw, Lock, Info, Plus, Trash2 } from 'lucide-react';
+import { ExternalLink, Loader2, Save, RotateCcw, Lock, Info, Plus, Trash2 } from 'lucide-react';
 import { getSettings, updateSettings } from '../../services/api';
 import type {
   SettingsState,
@@ -258,6 +259,54 @@ export const Settings = () => {
   );
 };
 
+// Live, plain-English translation of a 5-field cron expression, so an admin
+// doesn't have to parse a raw expression in their head. Blank = disabled; an
+// unparseable value is flagged inline. Always offers a link to crontab.guru for
+// building/verifying expressions.
+function CronHint({ value }: { value: string }) {
+  const trimmed = value.trim();
+
+  // Resolve to a plain string + tone first; building JSX inside the try/catch
+  // trips react-hooks/error-boundaries (render errors aren't caught there).
+  let text: string;
+  let tone: 'muted' | 'normal' | 'error';
+  if (!trimmed) {
+    text = 'Disabled — no scheduled runs.';
+    tone = 'muted';
+  } else {
+    try {
+      text = `${cronstrue.toString(trimmed, { throwExceptionOnParseError: true })} (UTC)`;
+      tone = 'normal';
+    } catch {
+      text = 'Not a valid 5-field cron expression.';
+      tone = 'error';
+    }
+  }
+
+  const toneClass =
+    tone === 'error'
+      ? 'text-red-500'
+      : tone === 'muted'
+        ? 'text-gray-400 italic'
+        : 'text-gray-600';
+
+  return (
+    <p className="text-xs flex items-center gap-1.5 flex-wrap">
+      <span className={toneClass}>{text}</span>
+      <span className="text-gray-300">·</span>
+      <a
+        href="https://crontab.guru/"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-0.5 text-blue-600 hover:underline"
+      >
+        build/verify a cron
+        <ExternalLink className="w-3 h-3" />
+      </a>
+    </p>
+  );
+}
+
 function FieldRow({
   field,
   value,
@@ -336,14 +385,17 @@ function FieldRow({
           className="w-full px-3 py-2 border rounded-md text-sm resize-y focus:outline-none focus:ring-2 focus:ring-primary/20 border-gray-200"
         />
       ) : field.type === 'cron' ? (
-        <input
-          type="text"
-          value={String(value ?? '')}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="*/30 * * * *  (blank = disabled)"
-          spellCheck={false}
-          className="w-64 px-3 py-2 border rounded-md text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/20 border-gray-200"
-        />
+        <div className="space-y-1.5">
+          <input
+            type="text"
+            value={String(value ?? '')}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="*/30 * * * *  (blank = disabled)"
+            spellCheck={false}
+            className="w-64 px-3 py-2 border rounded-md text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/20 border-gray-200"
+          />
+          <CronHint value={String(value ?? '')} />
+        </div>
       ) : (
         <input
           type="text"

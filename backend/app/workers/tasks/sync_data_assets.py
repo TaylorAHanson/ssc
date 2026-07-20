@@ -2,7 +2,6 @@ import logging
 import asyncio
 from datetime import datetime, timezone
 from croniter import croniter, CroniterBadCronError
-from app.providers.databricks.client import DatabricksProvider
 from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
 from app.core.config import settings
@@ -53,21 +52,17 @@ async def sync_data_assets_task(force: bool = False):
             pass
     
     try:
-        host = settings.DATABRICKS_HOST
-        token = settings.DATABRICKS_TOKEN
-        client_id = settings.DATABRICKS_CLIENT_ID
-        client_secret = settings.DATABRICKS_CLIENT_SECRET
-        
-        provider = DatabricksProvider(
-            host=host,
-            token=token,
-            client_id=client_id,
-            client_secret=client_secret
-        )
+        # Run as the governance SP (the SENTINEL_DATA_CERT_WORKSPACE target
+        # workspace's service principal) rather than the app's own SP. Unity
+        # Catalog is metastore-global, so this is the identity that holds BROWSE
+        # on the governed catalogs; the app's own SP typically does not. Falls
+        # back to the app SP when no governance workspace is configured.
+        from app.core.workspaces import get_governance_uc_provider
+        provider = get_governance_uc_provider()
 
         # Log the identity we sync as — like the contract sync, what shows up in
         # system.information_schema.tables is filtered to this principal's grants,
-        # so a "missing assets" complaint traces back to this SP's SELECT grants.
+        # so a "missing assets" complaint traces back to this SP's BROWSE grants.
         try:
             _me = provider.client.current_user.me()
             _identity = getattr(_me, "user_name", None) or getattr(_me, "display_name", None) or "unknown"
@@ -190,7 +185,28 @@ async def sync_data_assets_task(force: bool = False):
                 db.close()
         else:
             logger.warning("No data assets fetched from Databricks")
-            _last_sync_time = now
+            # When restricted to specific catalogs and we got nothing, log the
+            # catalogs THIS identity can actually see so a zero-row run tells you
+            # whether it's a name mismatch in SCAN_CATALOGS or a missing BROWSE
+            # grant for the governance SP — instead of a silent empty result.
+            if _catalogs:
+                try:
+                    diag = await provider.execute_sql(
+                        "SELECT DISTINCT table_catalog FROM system.information_schema.tables ORDER BY 1",
+                        warehouse=settings.DATABRICKS_WAREHOUSE_ID,
+                    )
+                    visible = [r.get("table_catalog") for r in diag.get("rows", [])]
+                    logger.warning(
+                        "Data asset sync saw 0 rows for configured catalogs %s. "
+                        "Catalogs visible to the sync identity: %s. If your catalog "
+                        "isn't listed, it's either a name mismatch in SCAN_CATALOGS "
+                        "or the sync SP lacks BROWSE on it.",
+                        _catalogs, visible or "(none)",
+                    )
+                except Exception as _diag_e:  # noqa: BLE001 - diagnostic only
+                    logger.warning(
+                        "Data asset sync diagnostic (visible catalogs) failed: %s", _diag_e
+                    )
             
     except AuthenticationError as e:
         # Expected environmental condition (e.g. the workspace IP access list is
