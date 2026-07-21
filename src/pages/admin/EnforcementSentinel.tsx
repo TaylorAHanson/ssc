@@ -1,9 +1,9 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { ShieldAlert, AlertTriangle, Search, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, ClipboardList, SlidersHorizontal, Mail, Send, Clock } from 'lucide-react';
+import { ShieldAlert, AlertTriangle, Search, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, ClipboardList, SlidersHorizontal, Mail, Send, Clock, Trash2 } from 'lucide-react';
 import { api, type TargetWorkspace } from '../../services/api';
 import { CertificationChecklist } from '../../components/admin/CertificationChecklist';
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { parseISO } from 'date-fns';
 
 // The backend serializes naive UTC datetimes (no timezone suffix). Treat any
@@ -147,6 +147,35 @@ export function EnforcementSentinel() {
         }
     };
 
+    // "Clear old runs": sheds accumulated Sentinel history (the main thing slowing
+    // the runs list) by keeping only the most recent few and deleting the rest,
+    // including their joined findings. Platform-admin gated on the server.
+    const [purging, setPurging] = useState(false);
+    const handlePurgeOldRuns = async () => {
+        const keepRaw = window.prompt(
+            'Delete old Sentinel runs to speed up this page.\n\n' +
+            'How many of the MOST RECENT runs should be kept? ' +
+            'Everything older (and its findings) is permanently deleted. Active runs are never touched.',
+            '5',
+        );
+        if (keepRaw === null) return; // cancelled
+        const keepLast = Math.max(0, parseInt(keepRaw, 10) || 0);
+        if (!window.confirm(`Keep the ${keepLast} most recent run(s) and permanently delete the rest? This cannot be undone.`)) {
+            return;
+        }
+        setPurging(true);
+        try {
+            const res = await api.purgeSentinelRuns(keepLast);
+            setPage(1);
+            await fetchSentinelRuns();
+            window.alert(`Deleted ${res.deleted} old run(s); kept the ${res.kept} most recent.`);
+        } catch (e: any) {
+            window.alert(e?.message || 'Failed to clear old runs.');
+        } finally {
+            setPurging(false);
+        }
+    };
+
     const handleSendDigest = async () => {
         setDigestSending(true);
         setDigestResult(null);
@@ -181,7 +210,15 @@ export function EnforcementSentinel() {
         setPage(1);
     }, [debouncedSearch]);
 
+    // Guard against overlapping list requests. The list can be slow while the
+    // table still holds a lot of history; without this, the 3s poll fires new
+    // requests on top of in-flight ones and they stack up (all pending, each
+    // >15s). Skip a fetch if one is already running.
+    const runsFetchInFlight = useRef(false);
+
     const fetchSentinelRuns = useCallback(async (isPolling = false) => {
+        if (runsFetchInFlight.current) return;
+        runsFetchInFlight.current = true;
         if (!isPolling) setIsLoadingRuns(true);
         try {
             const skip = (page - 1) * pageSize;
@@ -199,6 +236,7 @@ export function EnforcementSentinel() {
         } catch(e) {
             console.error('Failed to fetch sentinel runs:', e);
         } finally {
+            runsFetchInFlight.current = false;
             if (!isPolling) setIsLoadingRuns(false);
         }
     }, [page, pageSize, debouncedSearch]);
@@ -365,6 +403,18 @@ export function EnforcementSentinel() {
                         </div>
 
                         <div className="flex items-center gap-2 self-start sm:self-auto">
+                            {/* "Secret" maintenance action: shed accumulated run history
+                                that slows this list. Deliberately understated (ghost). */}
+                            <Button
+                                variant="ghost"
+                                onClick={handlePurgeOldRuns}
+                                disabled={purging}
+                                title="Clear old Sentinel runs to speed up this page"
+                                className="h-9 whitespace-nowrap text-gray-400 hover:text-red-600"
+                            >
+                                {purging ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}
+                                Clear old runs
+                            </Button>
                             <Button
                                 variant="outline"
                                 onClick={openDigestModal}

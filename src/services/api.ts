@@ -690,6 +690,22 @@ export async function sendDigestNow(
   return response.json();
 }
 
+/** Delete old Sentinel runs, keeping the most recent `keepLast` terminal runs. */
+export async function purgeSentinelRuns(
+  keepLast: number
+): Promise<{ deleted: number; kept: number; requested_keep_last: number }> {
+  const response = await fetch(`${API_BASE_URL}/governance/sentinel/runs/purge`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ keep_last: keepLast }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to purge Sentinel runs: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export interface TargetWorkspace {
   name: string;
   environment: string;
@@ -2812,6 +2828,7 @@ export const api = {
   getSystemSchedules,
   getDigestInfo,
   sendDigestNow,
+  purgeSentinelRuns,
   getTargetWorkspaces,
   getDatabricksDashboards,
   getDatabricksJobs,

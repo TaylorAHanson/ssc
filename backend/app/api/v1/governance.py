@@ -127,6 +127,72 @@ async def send_digest_now(
     }
 
 
+class PurgeSentinelRunsRequest(BaseModel):
+    #: Keep the most recent N terminal runs; delete the older terminal ones.
+    keep_last: int = 5
+
+
+@router.post("/sentinel/runs/purge")
+async def purge_sentinel_runs(
+    body: PurgeSentinelRunsRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete old Enforcement Sentinel runs (and their joined findings).
+
+    Keeps the most recent ``keep_last`` terminal runs and deletes the rest — a
+    fast way to shed accumulated history that's slowing the runs list. Active
+    (pending/running) runs are never touched. Platform Admin only.
+
+    Deletion is per-run via the ORM (so approvals/events/failures cascade) with
+    the heavy ``sentinel_findings`` rows bulk-deleted first, committed in small
+    batches so a large cleanup can't blow up one transaction.
+    """
+    if not current_user.has_role("Platform Admin"):
+        raise HTTPException(status_code=403, detail="Not authorized to purge Sentinel runs")
+
+    from app.db.sentinel_finding import SentinelFindingModel
+
+    keep_last = max(0, body.keep_last)
+    terminal = {
+        RequestStatus.COMPLETED.value,
+        RequestStatus.FAILED.value,
+        RequestStatus.REJECTED.value,
+    }
+
+    # Newest-first ids so we can keep the most recent N and only delete terminal
+    # runs beyond that window.
+    rows = (
+        db.query(RequestModel.id, RequestModel.status)
+        .filter(RequestModel.type == RequestType.ENFORCEMENT_SENTINEL.value)
+        .order_by(RequestModel.created_at.desc())
+        .all()
+    )
+    keep_ids = {r.id for r in rows[:keep_last]}
+    to_delete = [r.id for r in rows[keep_last:] if r.status in terminal and r.id not in keep_ids]
+
+    deleted = 0
+    batch = 25
+    for i in range(0, len(to_delete), batch):
+        chunk = to_delete[i : i + batch]
+        db.query(SentinelFindingModel).filter(
+            SentinelFindingModel.request_id.in_(chunk)
+        ).delete(synchronize_session=False)
+        for rid in chunk:
+            obj = db.get(RequestModel, rid)
+            if obj is not None:
+                db.delete(obj)
+                deleted += 1
+        db.commit()
+
+    logger.info(
+        "Purged %d Sentinel run(s) by %s (kept most recent %d, %d skipped as active).",
+        deleted, current_user.email, len(keep_ids),
+        len(rows) - len(keep_ids) - deleted,
+    )
+    return {"deleted": deleted, "kept": len(keep_ids), "requested_keep_last": keep_last}
+
+
 @router.get("/target-workspaces")
 async def list_target_workspaces(
     current_user: User = Depends(get_current_user),
