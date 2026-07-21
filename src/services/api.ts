@@ -692,7 +692,8 @@ export async function sendDigestNow(
 
 /** Delete old Sentinel runs, keeping the most recent `keepLast` terminal runs. */
 export async function purgeSentinelRuns(
-  keepLast: number
+  keepLast: number,
+  force: boolean = false
 ): Promise<{
   deleted: number;
   stuck_cleared: number;
@@ -703,7 +704,7 @@ export async function purgeSentinelRuns(
   const response = await fetch(`${API_BASE_URL}/governance/sentinel/runs/purge`, {
     method: 'POST',
     headers: getHeaders(),
-    body: JSON.stringify({ keep_last: keepLast }),
+    body: JSON.stringify({ keep_last: keepLast, force }),
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));

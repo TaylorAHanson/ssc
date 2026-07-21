@@ -165,15 +165,25 @@ export function EnforcementSentinel() {
         if (!window.confirm(`Keep the ${keepLast} most recent run(s), clear any hung runs, and permanently delete the rest? This cannot be undone.`)) {
             return;
         }
+        // A run wedged in-progress (e.g. stuck in "discovering" while a worker
+        // keeps renewing its lock) won't be removed by the normal sweep. Offer to
+        // force-clear those too — this is exactly the "it's still stuck" case.
+        const force = window.confirm(
+            'Also FORCE-clear runs that appear stuck in progress (e.g. stuck in "discovering")?\n\n' +
+            'OK = force-clear them too. Cancel = leave any actively-locked run alone.'
+        );
         setPurging(true);
         try {
-            const res = await api.purgeSentinelRuns(keepLast);
+            const res = await api.purgeSentinelRuns(keepLast, force);
             setPage(1);
             await fetchSentinelRuns();
             const hung = res.stuck_cleared
                 ? ` (including ${res.stuck_cleared} hung run${res.stuck_cleared === 1 ? '' : 's'})`
                 : '';
-            window.alert(`Deleted ${res.deleted} run(s)${hung}; kept the ${res.kept} most recent.`);
+            const skipped = res.skipped_active
+                ? ` ${res.skipped_active} run(s) left in progress — re-run with force to clear them.`
+                : '';
+            window.alert(`Deleted ${res.deleted} run(s)${hung}; kept the ${res.kept} most recent.${skipped}`);
         } catch (e: any) {
             window.alert(e?.message || 'Failed to clear old runs.');
         } finally {

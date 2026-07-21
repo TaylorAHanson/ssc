@@ -3,7 +3,8 @@ Request API endpoints.
 """
 from fastapi import APIRouter, HTTPException, Depends, status, Request as FastAPIRequest
 import fastapi
-from fastapi.responses import JSONResponse, ORJSONResponse
+from fastapi.responses import JSONResponse, Response
+import orjson
 from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 from app.models.request import Request, RequestCreate, RequestUpdate, StateMachineState, RequestStatus, RequestType
@@ -24,6 +25,18 @@ from app.services.state_summary import summarize_state_context
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _orjson_response(data: Any) -> Response:
+    """A JSON response encoded with orjson inside the (sync, threadpool) handler.
+
+    Serializing a large payload (e.g. a Sentinel run's full findings) this way
+    keeps the encode off the event loop and releases the GIL. Returning a bare
+    Pydantic model instead would make FastAPI re-serialize on the loop — the very
+    stall we're avoiding. This replaces the now-deprecated ``ORJSONResponse``
+    class while preserving that off-loop behavior.
+    """
+    return Response(content=orjson.dumps(data), media_type="application/json")
 
 
 def _summary_metadata(req: RequestModel) -> Dict[str, Any]:
@@ -186,7 +199,7 @@ def get_requests(
     
     requests = query.offset(skip).limit(limit).all()
     formatted = _format_requests_bulk(requests, db)
-    return ORJSONResponse([r.model_dump(mode="json") for r in formatted])
+    return _orjson_response([r.model_dump(mode="json") for r in formatted])
 
 
 from pydantic import BaseModel as _PydanticBase
@@ -256,7 +269,7 @@ def get_paginated_requests(
     # Sync handler + orjson => formatting/encoding happen in the threadpool, off
     # the event loop (see get_requests). Return the ready Response so FastAPI
     # doesn't re-serialize on the loop.
-    return ORJSONResponse(payload.model_dump(mode="json"))
+    return _orjson_response(payload.model_dump(mode="json"))
 
 
 @router.get("/{request_id}", response_model=Request)
@@ -312,7 +325,7 @@ def get_request(
             meta["checks"] = load_run_checks(db, request_model)
             formatted.metadata = meta
 
-    return ORJSONResponse(formatted.model_dump(mode="json"))
+    return _orjson_response(formatted.model_dump(mode="json"))
 
 
 @router.get("/{request_id}/status")

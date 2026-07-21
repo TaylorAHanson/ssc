@@ -8,7 +8,7 @@ recipient on demand — useful for testing the layout or sharing a snapshot
 without waiting for the scheduled send.
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -130,15 +130,21 @@ async def send_digest_now(
 
 
 class PurgeSentinelRunsRequest(BaseModel):
-    #: Keep the most recent N terminal runs; delete the older terminal ones.
+    #: Keep the most recent N **terminal** runs; delete older terminal ones. This
+    #: never protects a non-terminal (e.g. stuck "discovering") run — a hung run
+    #: is not history worth keeping.
     keep_last: int = 5
-    #: Also delete hung/orphaned non-terminal runs (e.g. stuck in "discovering"
-    #: because the worker died mid-scan). Uses the same staleness definition the
-    #: poller does, so a genuinely in-progress scan is never touched.
+    #: Delete orphaned non-terminal runs — ones no worker is currently holding
+    #: (no live lock). Covers the common case of a run stuck in "discovering"
+    #: because the worker died mid-scan.
     clear_stuck: bool = True
-    #: A non-terminal run counts as "stuck" once it hasn't been updated for this
-    #: many minutes AND holds no live lock. Defaults to the poller's
-    #: ENFORCEMENT_SENTINEL_STALE_MINUTES so both agree on what's orphaned.
+    #: Also delete non-terminal runs that STILL hold a live lock. A genuinely
+    #: hung run whose worker keeps heartbeating the lock (so it never looks
+    #: orphaned) can only be cleared this way. Use when a run is wedged in
+    #: "discovering" and ``clear_stuck`` alone didn't remove it.
+    force: bool = False
+    #: Retained for API compatibility; no longer used for the stuck decision
+    #: (lock liveness is the signal, not update recency).
     stuck_after_minutes: Optional[int] = None
 
 
@@ -150,16 +156,17 @@ async def purge_sentinel_runs(
 ):
     """Delete old and/or hung Enforcement Sentinel runs (and their findings).
 
-    Two things get cleared, Platform Admin only:
+    Platform Admin only. What gets cleared:
 
-    * **Old history** — keeps the most recent ``keep_last`` terminal runs and
-      deletes the terminal ones older than that (sheds accumulated history that
-      slows the runs list).
-    * **Hung runs** — when ``clear_stuck`` is set, also deletes non-terminal runs
-      that are orphaned (stuck in e.g. "discovering" because the worker died):
-      not updated for ``stuck_after_minutes`` AND holding no live lock. This is
-      the exact staleness the poller uses, so a genuinely in-progress scan is
-      never deleted.
+    * **Old history** — keeps the most recent ``keep_last`` *terminal* runs and
+      deletes older terminal ones (sheds history that slows the runs list).
+      ``keep_last`` never protects a non-terminal run.
+    * **Orphaned runs** — with ``clear_stuck`` (default), non-terminal runs that
+      no worker currently holds (no live lock) are deleted. This covers a run
+      stuck in "discovering" after its worker died.
+    * **Wedged runs** — with ``force``, non-terminal runs that STILL hold a live
+      lock are deleted too. A run whose worker keeps heartbeating the lock never
+      looks orphaned, so ``force`` is the only way to shed it.
 
     Deletion is per-run via the ORM (so approvals/events/failures cascade) with
     the heavy ``sentinel_findings`` rows bulk-deleted first, committed in small
@@ -177,48 +184,43 @@ async def purge_sentinel_runs(
         RequestStatus.REJECTED.value,
     }
 
-    now_naive = datetime.utcnow()  # updated_at / locked_until are naive UTC
-    stale_minutes = body.stuck_after_minutes
-    if stale_minutes is None:
-        stale_minutes = getattr(settings, "ENFORCEMENT_SENTINEL_STALE_MINUTES", 45)
-    stale_cutoff = now_naive - timedelta(minutes=max(0, stale_minutes))
+    now_naive = datetime.utcnow()  # locked_until is naive UTC
 
-    # Newest-first so we can keep the most recent N terminal runs. Pull the fields
-    # needed to judge staleness in the same query.
     rows = (
         db.query(
             RequestModel.id,
             RequestModel.status,
-            RequestModel.updated_at,
             RequestModel.locked_until,
         )
         .filter(RequestModel.type == RequestType.ENFORCEMENT_SENTINEL.value)
         .order_by(RequestModel.created_at.desc())
         .all()
     )
-    keep_ids = {r.id for r in rows[:keep_last]}
-
-    def _is_stuck(r) -> bool:
-        """Non-terminal, not updated recently, and no live lock (orphaned)."""
-        if r.status in terminal:
-            return False
-        recently_updated = r.updated_at is not None and r.updated_at >= stale_cutoff
-        live_lock = r.locked_until is not None and r.locked_until > now_naive
-        return not recently_updated and not live_lock
+    # keep_last protects only the most recent TERMINAL runs — a hung, non-terminal
+    # run (the thing we're usually trying to shed) is never kept as "history".
+    terminal_ids_newest_first = [r.id for r in rows if r.status in terminal]
+    keep_ids = set(terminal_ids_newest_first[:keep_last])
 
     to_delete: list[str] = []
     stuck_count = 0
     skipped_active = 0
-    for idx, r in enumerate(rows):
+    for r in rows:
         if r.id in keep_ids:
             continue
         if r.status in terminal:
             to_delete.append(r.id)
-        elif body.clear_stuck and _is_stuck(r):
+            continue
+        # Non-terminal run: decide whether it's safe/desired to remove.
+        live_lock = r.locked_until is not None and r.locked_until > now_naive
+        if body.force:
+            to_delete.append(r.id)
+            stuck_count += 1
+        elif body.clear_stuck and not live_lock:
+            # Orphaned: no worker is holding it right now.
             to_delete.append(r.id)
             stuck_count += 1
         else:
-            # Non-terminal and still being worked (fresh update or live lock).
+            # A worker currently holds a live lock and force wasn't requested.
             skipped_active += 1
 
     deleted = 0
