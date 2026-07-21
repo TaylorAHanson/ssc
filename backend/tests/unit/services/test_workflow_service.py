@@ -160,6 +160,38 @@ def test_seed_specs_from_catalog_backfills_and_is_idempotent(db_session):
     assert WorkflowService.seed_specs_from_catalog(db_session) == 0
 
 
+def test_deleting_seeded_workflow_is_not_re_seeded(db_session):
+    """A deleted catalog/bundled workflow stays gone across the next boot's seed."""
+    WorkflowService.seed_specs_from_catalog(db_session)
+    ws = WorkflowService.get_by_key(db_session, "workspace_access")
+    assert ws is not None
+
+    WorkflowService.delete(db_session, ws.id, deleted_by="admin@example.com")
+    assert WorkflowService.get_by_key(db_session, "workspace_access") is None
+
+    # Simulate the next deploy re-running the seeders.
+    WorkflowService.seed_specs_from_catalog(db_session)
+    WorkflowService.seed_from_filesystem(db_session)
+    assert WorkflowService.get_by_key(db_session, "workspace_access") is None
+
+
+def test_recreating_deleted_key_clears_tombstone(db_session):
+    """Re-creating a deleted key revives it and lets the catalog seed it again."""
+    WorkflowService.seed_specs_from_catalog(db_session)
+    ws = WorkflowService.get_by_key(db_session, "workspace_access")
+    WorkflowService.delete(db_session, ws.id)
+    assert WorkflowService.get_by_key(db_session, "workspace_access") is None
+
+    WorkflowService.create(
+        db_session, key="workspace_access", name="WS",
+        request_type="workspace_access", status="published",
+    )
+    # Tombstone cleared, so a subsequent catalog seed backfills its graph again.
+    WorkflowService.seed_specs_from_catalog(db_session)
+    revived = WorkflowService.get_by_key(db_session, "workspace_access")
+    assert revived is not None and revived.graph_spec
+
+
 def test_seed_specs_does_not_clobber_existing_graph(db_session):
     custom = {"name": "workspace_access", "stages": []}
     WorkflowService.create(db_session, key="workspace_access", name="WS",

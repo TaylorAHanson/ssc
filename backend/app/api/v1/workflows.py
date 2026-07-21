@@ -387,7 +387,7 @@ def delete_workflow(
     __: None = Depends(_require_authoring_unlocked),
 ) -> Any:
     try:
-        WorkflowService.delete(db, workflow_id)
+        WorkflowService.delete(db, workflow_id, deleted_by=current_user.email)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"success": True}

@@ -26,10 +26,20 @@ router = APIRouter()
 
 
 #: Large, list-view-irrelevant arrays stripped from ``metadata`` in summary mode.
-#: These grow unbounded (e.g. a Sentinel run's per-violation records) and blow up
-#: the list payload, but the list only needs aggregate counts — the full arrays
-#: are fetched on demand via ``GET /requests/{id}`` when a row is opened.
-_HEAVY_METADATA_KEYS = ("violations", "resources", "scan_results", "assets")
+#: These grow unbounded (e.g. a Sentinel run's per-violation records and its
+#: ``checks`` checklist — EVERY pass/fail evaluation, which dwarfs violations) and
+#: blow up the list payload (seen at 200MB+), but the list only needs aggregate
+#: counts — the full arrays are fetched on demand via ``GET /requests/{id}``.
+_HEAVY_METADATA_KEYS = ("violations", "checks", "resources", "scan_results", "assets")
+
+#: List fields the list rows DO read; kept even though they're arrays (bounded by
+#: the workspace count, so small). Everything else large is dropped defensively.
+_KEEP_LIST_KEYS = ("workspaces_scanned", "workspace_failures")
+
+#: Any other top-level array longer than this is replaced with a compact marker in
+#: summary mode — a backstop so a newly-added big field can't silently bloat the
+#: list again.
+_MAX_SUMMARY_LIST = 250
 
 
 def _summarize_metadata(state_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -58,6 +68,14 @@ def _summarize_metadata(state_context: Optional[Dict[str, Any]]) -> Dict[str, An
 
     for key in _HEAVY_METADATA_KEYS:
         meta.pop(key, None)
+
+    # Backstop: drop any other oversized top-level array (keep the small
+    # list-view fields) so a future big field can't re-bloat the list payload.
+    for key, val in list(meta.items()):
+        if key in _KEEP_LIST_KEYS:
+            continue
+        if isinstance(val, list) and len(val) > _MAX_SUMMARY_LIST:
+            meta[key] = {"_omitted": True, "count": len(val)}
     return meta
 
 

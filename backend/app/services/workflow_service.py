@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from app.db.workflow import WorkflowModel, WorkflowVersionModel
+from app.db.workflow import WorkflowModel, WorkflowVersionModel, WorkflowTombstoneModel
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +239,9 @@ class WorkflowService:
             created_by=created_by,
         )
         db.add(workflow)
+        # Re-creating a previously-deleted key is a deliberate revival: clear its
+        # tombstone so it behaves normally (and re-seeds if it's a catalog key).
+        WorkflowService._clear_tombstone(db, key)
         db.commit()
         db.refresh(workflow)
         return workflow
@@ -465,6 +468,9 @@ class WorkflowService:
                 continue
 
             body = {f: entry.get(f) for f in _BODY_FIELDS}
+            # An imported key is deliberately present — revive it by clearing any
+            # tombstone so it's treated normally (and re-seeds if it's a catalog key).
+            WorkflowService._clear_tombstone(db, key)
             existing = WorkflowService.get_by_key(db, key)
             if existing:
                 if not overwrite:
@@ -519,19 +525,45 @@ class WorkflowService:
                 db.query(WorkflowVersionModel).filter(
                     WorkflowVersionModel.workflow_id == wf.id
                 ).delete(synchronize_session=False)
+                pruned_key = wf.key
                 db.delete(wf)
-                report["pruned"].append(wf.key)
+                # Tombstone pruned keys too: a catalog key (present in SPECS) would
+                # otherwise be re-seeded on the next boot, undoing the prune.
+                if pruned_key and db.get(WorkflowTombstoneModel, pruned_key) is None:
+                    db.add(WorkflowTombstoneModel(key=pruned_key))
+                report["pruned"].append(pruned_key)
 
         db.commit()
         return report
 
     @staticmethod
-    def delete(db: Session, workflow_id: str) -> None:
+    def delete(db: Session, workflow_id: str, *, deleted_by: Optional[str] = None) -> None:
         workflow = WorkflowService.get(db, workflow_id)
         if not workflow:
             raise ValueError("Workflow not found")
+        key = workflow.key
         db.delete(workflow)
+        # Tombstone the key so the startup seeders don't re-create a
+        # bundled/catalog workflow the admin intentionally deleted (otherwise it
+        # "pops back in" on the next deploy). Re-creating the key (UI create or
+        # bundle import) clears the tombstone. Idempotent upsert.
+        if key and db.get(WorkflowTombstoneModel, key) is None:
+            db.add(WorkflowTombstoneModel(key=key, deleted_by=deleted_by))
         db.commit()
+
+    @staticmethod
+    def _tombstoned_keys(db: Session) -> set:
+        """Keys the admin deleted that must not be re-seeded on boot."""
+        return {row.key for row in db.query(WorkflowTombstoneModel.key).all()}
+
+    @staticmethod
+    def _clear_tombstone(db: Session, key: str) -> None:
+        """Drop a key's tombstone so a re-created/imported workflow seeds again."""
+        if not key:
+            return
+        row = db.get(WorkflowTombstoneModel, key)
+        if row is not None:
+            db.delete(row)
 
     # --------------------------------------------------------------- seeding
     @staticmethod
@@ -553,12 +585,16 @@ class WorkflowService:
         if not os.path.isdir(instructions_dir):
             return 0
         existing = {w.key: w for w in db.query(WorkflowModel).all()}
+        tombstoned = WorkflowService._tombstoned_keys(db)
         inserted = 0
         updated = 0
         for filename in sorted(os.listdir(instructions_dir)):
             if not filename.endswith(".md"):
                 continue
             key = filename[:-3]
+            # Respect an intentional deletion — don't re-seed a tombstoned key.
+            if key in tombstoned and key not in existing:
+                continue
             try:
                 with open(os.path.join(instructions_dir, filename), "r") as f:
                     content = f.read()
@@ -606,10 +642,14 @@ class WorkflowService:
         """
         from app.workflows.graphs.specs import SPECS
 
+        tombstoned = WorkflowService._tombstoned_keys(db)
         inserted = 0
         updated = 0
         for rt, spec in SPECS.items():
             existing = WorkflowService.get_by_key(db, rt)
+            # Respect an intentional deletion — don't re-seed a tombstoned key.
+            if not existing and rt in tombstoned:
+                continue
             if existing:
                 touched = False
                 if not existing.graph_spec:

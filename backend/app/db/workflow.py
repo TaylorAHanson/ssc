@@ -85,6 +85,29 @@ class WorkflowModel(Base):
     updated_at: Mapped[datetime] = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class WorkflowTombstoneModel(Base):
+    """A record that a seedable workflow ``key`` was intentionally deleted.
+
+    The startup seeders (``seed_from_filesystem`` / ``seed_specs_from_catalog``)
+    re-create any bundled/catalog workflow whose ``key`` is missing from the DB.
+    Without a tombstone, deleting such a workflow only lasts until the next
+    deploy — it "pops back in". Recording the key here lets the seeders skip it,
+    so a deletion sticks across deploys. Re-creating the same key (in the UI or
+    via a bundle import) clears its tombstone, so this never traps a key forever.
+    """
+
+    __tablename__ = "workflow_tombstones"
+
+    key: Mapped[str] = Column(
+        String, primary_key=True,
+        comment="Workflow key that was deleted and must not be re-seeded",
+    )
+    deleted_at: Mapped[datetime] = Column(DateTime, default=datetime.utcnow, nullable=False)
+    deleted_by: Mapped[Optional[str]] = Column(
+        String, nullable=True, comment="Email of the admin who deleted it",
+    )
+
+
 class WorkflowVersionModel(Base):
     """An immutable snapshot of a Workflow captured each time it is published.
 
