@@ -279,6 +279,14 @@ _DETACHED_REQUEST_TYPES = {RequestType.ENFORCEMENT_SENTINEL.value}
 # doesn't launch a duplicate.
 _inflight_detached: set = set()
 
+# Strong references to the in-flight detached Task objects. asyncio keeps only a
+# WEAK reference to a task, so a fire-and-forget task tracked solely by its
+# request-id string (in _inflight_detached) can be garbage-collected mid-run and
+# silently cancelled — the run then freezes in its last-written status (e.g.
+# 'discovering') with no exception and no logs. Holding the Task here until it
+# finishes prevents that. See docs/SENTINEL_TROUBLESHOOTING.md (Finding 1).
+_detached_tasks: set = set()
+
 
 def _launch_detached(request_id: str) -> None:
     """Process a long-running request off the awaited batch (fire-and-forget).
@@ -305,7 +313,11 @@ def _launch_detached(request_id: str) -> None:
         finally:
             _inflight_detached.discard(request_id)
 
-    asyncio.create_task(_run())
+    # Keep a STRONG reference to the task until it completes; asyncio only holds a
+    # weak one, so without this the task can be GC'd mid-flight and silently die.
+    task = asyncio.create_task(_run(), name=f"sentinel-detached-{request_id}")
+    _detached_tasks.add(task)
+    task.add_done_callback(_detached_tasks.discard)
 
 
 async def process_open_requests():

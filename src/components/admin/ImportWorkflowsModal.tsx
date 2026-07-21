@@ -138,8 +138,9 @@ export function ImportWorkflowsModal({ onImported, onClose, locked }: Props) {
               <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <span>
                 <strong>Destructive.</strong> Every workflow in <em>this</em> environment whose key is not in the
-                bundle will be permanently deleted (built-in seeded workflows are protected). Use this only to
-                propagate deletions from the source environment, and make sure this bundle is the full export.
+                bundle will be permanently deleted — <strong>including built-in seeded workflows</strong>, which are
+                also tombstoned so they don't get re-created on the next restart. Use this only to propagate
+                deletions from the source environment, and make sure this bundle is the full export.
               </span>
             </div>
           )}
@@ -208,12 +209,12 @@ export function ImportWorkflowsModal({ onImported, onClose, locked }: Props) {
             <div className="px-5 py-4 text-sm text-gray-700 space-y-2">
               <p>
                 You enabled <strong>Delete workflows not in this bundle</strong>. Importing will
-                permanently delete every authored/promoted workflow in this environment whose key is
-                not in the bundle. This cannot be undone.
+                permanently delete every workflow in this environment whose key is not in the bundle
+                — <strong>including built-in seeded workflows</strong> (they're tombstoned so a restart
+                won't re-create them). This cannot be undone.
               </p>
               <p className="text-xs text-gray-500">
-                Built-in seeded workflows are protected. Make sure this bundle is the complete export
-                from the source environment.
+                Make sure this bundle is the complete export from the source environment.
               </p>
             </div>
             <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-200">
