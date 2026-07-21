@@ -220,10 +220,20 @@ def _workspace_scoped_handler_classes():
     Everything except :class:`DatasetResourceHandler`, which is Unity Catalog
     (metastore) scoped and handled once by the data-certification pass rather
     than per target workspace.
-    """
-    from app.providers.databricks.handlers import DatasetResourceHandler
 
-    return [hc for hc in _all_handler_classes() if hc is not DatasetResourceHandler]
+    :class:`NotebookResourceHandler` is excluded by default: its full recursive
+    workspace-tree walk is the dominant cost of a scan. It's re-enabled only when
+    ``SENTINEL_SCAN_NOTEBOOKS`` is set (Admin -> Settings, no redeploy).
+    """
+    from app.providers.databricks.handlers import (
+        DatasetResourceHandler,
+        NotebookResourceHandler,
+    )
+
+    handlers = [hc for hc in _all_handler_classes() if hc is not DatasetResourceHandler]
+    if not bool(getattr(settings, "SENTINEL_SCAN_NOTEBOOKS", False)):
+        handlers = [hc for hc in handlers if hc is not NotebookResourceHandler]
+    return handlers
 
 
 def _handlers_by_type(workspace_client) -> Dict[str, Any]:
@@ -862,8 +872,13 @@ async def _scan_and_evaluate(
     # We offload each to a worker thread (running its own loop) so the network
     # I/O genuinely overlaps; concurrency is bounded by SENTINEL_SCAN_CONCURRENCY.
     def _discover_one(handler_class):
+        # Returns (resources, error_or_None, elapsed_seconds). Per-handler timing
+        # is what lets us see which handler dominates a workspace's discovery so
+        # we optimize the right one instead of guessing.
+        _h_start = datetime.utcnow()
         try:
-            return list(asyncio.run(handler_class(workspace_client).discover()) or []), None
+            resources = list(asyncio.run(handler_class(workspace_client).discover()) or [])
+            return resources, None, (datetime.utcnow() - _h_start).total_seconds()
         except Exception as e:  # noqa: BLE001 - one handler failing shouldn't abort the scan
             category = _classify_databricks_error(e)
             # Per-handler WARNING tagged with the definitive category (auth vs
@@ -874,7 +889,11 @@ async def _scan_and_evaluate(
                 "(host=%s, credentials=%s): %s",
                 handler_class.__name__, ws_name, category, ws_host, ws_cred_source, e,
             )
-            return [], {"handler": handler_class.__name__, "category": category, "error": str(e)}
+            return (
+                [],
+                {"handler": handler_class.__name__, "category": category, "error": str(e)},
+                (datetime.utcnow() - _h_start).total_seconds(),
+            )
 
     logger.info(
         "Sentinel: workspace '%s' discovering resources across %d handler(s)...",
@@ -889,7 +908,7 @@ async def _scan_and_evaluate(
     discovered_resources: List[Dict[str, Any]] = []
     discover_errors: List[Dict[str, Any]] = []
     per_handler_counts: List[str] = []
-    for handler_class, (resources, err) in zip(handler_classes, handler_results):
+    for handler_class, (resources, err, elapsed) in zip(handler_classes, handler_results):
         if err:
             discover_errors.append(err)
         if dataset_id and handler_class is DatasetResourceHandler:
@@ -898,7 +917,7 @@ async def _scan_and_evaluate(
                 for r in resources
                 if r.get("dataset_id") == dataset_id or r.get("id") == dataset_id
             ]
-        per_handler_counts.append(f"{handler_class.__name__}={len(resources)}")
+        per_handler_counts.append(f"{handler_class.__name__}={len(resources)} in {elapsed:.1f}s")
         discovered_resources.extend(resources)
 
     logger.info(
@@ -1253,7 +1272,20 @@ async def run_discovery(db, request) -> Dict[str, Any]:
         ws_handler_classes = _workspace_scoped_handler_classes()
         ws_timeout = getattr(settings, "SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS", 0)
         total_ws = len(scan_ws)
-        for idx, w in enumerate(scan_ws, start=1):
+        ws_limit = max(1, int(getattr(settings, "SENTINEL_WORKSPACE_CONCURRENCY", 1) or 1))
+
+        async def _scan_one_workspace(idx: int, w) -> Dict[str, Any]:
+            """Scan ONE workspace and return aggregatable result parts.
+
+            Never raises: a single workspace failing / timing out / being
+            unreachable must not abort the whole run — which matters even more now
+            that workspaces run concurrently (an uncaught raise would fail the
+            entire ``gather`` batch, losing every other workspace's results too).
+            """
+            out: Dict[str, Any] = {
+                "violations": [], "checks": [], "resources": 0,
+                "ws_failures": [], "scan_errors": [],
+            }
             ws_ctx = {
                 "name": w.name,
                 "host": w.host,
@@ -1269,14 +1301,14 @@ async def run_discovery(db, request) -> Dict[str, Any]:
                     "(host=%s, credentials=%s): %s",
                     w.name, category, w.host, w.credential_source, e,
                 )
-                scan_errors.append(f"{w.name} ({category}): {e}")
-                ws_failures.append({
+                out["scan_errors"].append(f"{w.name} ({category}): {e}")
+                out["ws_failures"].append({
                     "workspace": w.name, "host": w.host,
                     "credential_source": w.credential_source, "category": category,
                     "failed": 1, "attempted": 1, "breakdown": {category: 1},
                     "example": str(e), "partial": False, "stage": "client_init",
                 })
-                continue
+                return out
             logger.info(
                 "Sentinel: scanning workspace '%s' (%d/%d, host=%s)...",
                 w.name, idx, total_ws, w.host,
@@ -1302,21 +1334,55 @@ async def run_discovery(db, request) -> Dict[str, Any]:
                     "not a clean result.",
                     w.name, ws_timeout, w.host, w.credential_source,
                 )
-                scan_errors.append(f"{w.name} (timeout): exceeded {ws_timeout}s")
-                ws_failures.append(
+                out["scan_errors"].append(f"{w.name} (timeout): exceeded {ws_timeout}s")
+                out["ws_failures"].append(
                     _timeout_failure(w.name, w.host, w.credential_source, ws_timeout, "workspace_scan")
                 )
-                continue
+                return out
+            except Exception as e:  # noqa: BLE001 - defensive: isolate a workspace's failure
+                category = _classify_databricks_error(e)
+                logger.error(
+                    "Sentinel: workspace '%s' scan failed [%s] (host=%s, credentials=%s): %s",
+                    w.name, category, w.host, w.credential_source, e, exc_info=True,
+                )
+                out["scan_errors"].append(f"{w.name} ({category}): {e}")
+                out["ws_failures"].append({
+                    "workspace": w.name, "host": w.host,
+                    "credential_source": w.credential_source, "category": category,
+                    "failed": 1, "attempted": 1, "breakdown": {category: 1},
+                    "example": str(e), "partial": False, "stage": "scan",
+                })
+                return out
             _elapsed = (datetime.utcnow() - _ws_start).total_seconds()
             logger.info(
                 "Sentinel: finished workspace '%s' (%d/%d): %d resource(s) in %.1fs.",
                 w.name, idx, total_ws, n, _elapsed,
             )
-            violations += v
-            checks += c
-            total_resources += n
+            out["violations"] = v
+            out["checks"] = c
+            out["resources"] = n
             if wf:
-                ws_failures.append(wf)
+                out["ws_failures"].append(wf)
+            return out
+
+        if ws_limit > 1 and total_ws > 1:
+            logger.info(
+                "Sentinel: scanning %d workspace(s), up to %d concurrently.",
+                total_ws, ws_limit,
+            )
+        else:
+            logger.info("Sentinel: scanning %d workspace(s) serially.", total_ws)
+
+        ws_results = await _gather_bounded(
+            [(lambda i=i, w=w: _scan_one_workspace(i, w)) for i, w in enumerate(scan_ws, start=1)],
+            ws_limit,
+        )
+        for r in ws_results:
+            violations += r["violations"]
+            checks += r["checks"]
+            total_resources += r["resources"]
+            scan_errors.extend(r["scan_errors"])
+            ws_failures.extend(r["ws_failures"])
 
     # 2. Data certification pass (once, Unity Catalog / metastore scoped).
     try:

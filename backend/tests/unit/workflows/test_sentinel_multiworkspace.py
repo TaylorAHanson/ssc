@@ -85,8 +85,23 @@ def _ws(name, host, env="prod"):
     return WorkspaceConfig(name=name, host=host, environment=env)
 
 
-def _patches(workspaces):
-    """Common patch set: workspace list, client factory, handlers, OPA."""
+def _keep_open(session):
+    """Return the test session with a no-op ``close()``.
+
+    ``run_discovery`` and ``_scan_and_evaluate`` do their allowlist read,
+    certification writes, and final persist on a FRESH ``get_lakebase_session()``
+    — in production that sees the already-committed request row. The in-memory
+    test DB lives on a different engine, so we point that fresh session at the
+    test's own session. We neutralize ``close()`` because run_discovery closes the
+    session it obtains, which would otherwise detach the very ``request`` row the
+    assertions read back.
+    """
+    session.close = lambda: None  # type: ignore[method-assign]
+    return session
+
+
+def _patches(workspaces, session):
+    """Common patch set: workspace list, client factory, handlers, OPA, DB."""
     return [
         patch("app.core.workspaces.get_target_workspaces", return_value=workspaces),
         # _new_workspace_client returns a per-host marker string used as the
@@ -105,6 +120,7 @@ def _patches(workspaces):
         patch.object(sentinel, "_workspace_scoped_handler_classes", return_value=[_FakeComputeHandler]),
         patch("app.providers.databricks.handlers.DatasetResourceHandler", _FakeDatasetHandler),
         patch("app.providers.opa.client.OpaProvider", _FakeOpa),
+        patch("app.db.session.get_lakebase_session", side_effect=lambda: _keep_open(session)),
     ]
 
 
@@ -117,7 +133,7 @@ async def test_scans_all_configured_workspaces(db_session):
     req = _make_request(db_session, {})  # empty => scan all
 
     ctx = None
-    plist = _patches(workspaces)
+    plist = _patches(workspaces, db_session)
     for p in plist:
         p.start()
     try:
@@ -144,7 +160,7 @@ async def test_requested_subset_scopes_the_scan(db_session):
     ]
     req = _make_request(db_session, {"workspaces": ["prod-domain-b"]})
 
-    plist = _patches(workspaces)
+    plist = _patches(workspaces, db_session)
     for p in plist:
         p.start()
     try:
@@ -276,6 +292,7 @@ async def test_auth_probe_failure_records_workspace_failure(db_session):
         patch.object(sentinel, "_workspace_scoped_handler_classes", return_value=[_FakeComputeHandler]),
         patch("app.providers.databricks.handlers.DatasetResourceHandler", _FakeDatasetHandler),
         patch("app.providers.opa.client.OpaProvider", _FakeOpa),
+        patch("app.db.session.get_lakebase_session", side_effect=lambda: _keep_open(db_session)),
     ]
     for p in plist:
         p.start()
@@ -305,7 +322,7 @@ async def test_active_violations_surfaces_workspace(db_session):
     workspaces = [_ws("prod-domain-a", "https://a.databricks.net")]
     req = _make_request(db_session, {})
 
-    plist = _patches(workspaces)
+    plist = _patches(workspaces, db_session)
     for p in plist:
         p.start()
     try:

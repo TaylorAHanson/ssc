@@ -74,7 +74,20 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "A stuck sentinel run older than this no longer blocks the schedule."},
     {"group": "Notifications & Governance", "key": "SENTINEL_SCAN_CONCURRENCY", "label": "Sentinel scan concurrency",
      "type": "int", "min": 1,
-     "help": "Max concurrent units of work during a sentinel scan. 1 = fully serialized."},
+     "help": "Max concurrent units of work WITHIN one workspace scan (resource "
+             "handlers + per-resource OPA evaluation). 1 = fully serialized."},
+    {"group": "Notifications & Governance", "key": "SENTINEL_WORKSPACE_CONCURRENCY", "label": "Sentinel workspace concurrency",
+     "type": "int", "min": 1,
+     "help": "How many target workspaces to scan at the SAME TIME. Higher makes a "
+             "run's wall-clock closer to the slowest single workspace instead of "
+             "the sum of all of them, at the cost of more peak memory and "
+             "simultaneous Databricks API load. 1 = scan workspaces one at a time."},
+    {"group": "Notifications & Governance", "key": "SENTINEL_SCAN_NOTEBOOKS", "label": "Scan notebooks",
+     "type": "bool",
+     "help": "OFF by default. Notebook discovery recursively walks the entire "
+             "workspace tree (/Users + /Shared) and is by far the most expensive "
+             "part of a scan. Turn on only if you have policies that evaluate "
+             "notebooks; expect substantially longer scans."},
     {"group": "Notifications & Governance", "key": "SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS", "label": "Per-workspace scan timeout (sec)",
      "type": "int", "min": 0,
      "help": "Wall-clock cap (seconds) on one workspace's scan before it's "

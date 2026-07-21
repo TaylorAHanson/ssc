@@ -434,6 +434,19 @@ class Settings(BaseSettings):
     # an unbounded number of OPA subprocesses / SDK calls at once. Set to 1 to
     # fully serialize (the pre-parallelization behavior).
     SENTINEL_SCAN_CONCURRENCY: int = int(os.getenv("SENTINEL_SCAN_CONCURRENCY", "5"))
+    # How many target workspaces to scan CONCURRENTLY. Workspaces are independent
+    # (own client, own dedicated thread pool), so scanning them in parallel makes
+    # a run's wall-clock ~= the slowest workspace instead of the SUM of all of
+    # them. Kept modest by default to bound peak memory (findings from several
+    # workspaces held at once) and simultaneous SDK load. 1 = serial (old
+    # behavior).
+    SENTINEL_WORKSPACE_CONCURRENCY: int = int(os.getenv("SENTINEL_WORKSPACE_CONCURRENCY", "3"))
+    # Notebook discovery walks the ENTIRE workspace tree (/Users + /Shared,
+    # recursive) — by far the most expensive handler on a large workspace and,
+    # in practice, the dominant cost of a whole scan. OFF by default: the scan
+    # skips the notebook handler entirely. A Platform Admin can flip this on under
+    # Admin -> Settings (no redeploy) if notebook-targeting policies are needed.
+    SENTINEL_SCAN_NOTEBOOKS: bool = os.getenv("SENTINEL_SCAN_NOTEBOOKS", "false").lower() == "true"
     # Hard cap on how long a SINGLE workspace's scan (auth probe + resource
     # discovery + OPA evaluation) may run before the sentinel gives up on it,
     # records a structured "timeout" failure, and moves on to the next workspace.
