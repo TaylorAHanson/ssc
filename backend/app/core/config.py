@@ -423,6 +423,15 @@ class Settings(BaseSettings):
     # an unbounded number of OPA subprocesses / SDK calls at once. Set to 1 to
     # fully serialize (the pre-parallelization behavior).
     SENTINEL_SCAN_CONCURRENCY: int = int(os.getenv("SENTINEL_SCAN_CONCURRENCY", "5"))
+    # Hard cap on how long a SINGLE workspace's scan (auth probe + resource
+    # discovery + OPA evaluation) may run before the sentinel gives up on it,
+    # records a structured "timeout" failure, and moves on to the next workspace.
+    # Without this, one slow/unreachable workspace or a huge recursive listing
+    # (e.g. notebooks) hangs the whole run indefinitely with no further logs. 0
+    # disables the timeout (unbounded, the old behavior).
+    SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS: int = int(
+        os.getenv("SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS", "600")
+    )
     # A single sentinel run scans every configured target workspace for
     # workspace-scoped resources (compute, jobs, apps, ...). Data certification is
     # catalog/metastore-scoped (Unity Catalog is not workspace-specific), so it

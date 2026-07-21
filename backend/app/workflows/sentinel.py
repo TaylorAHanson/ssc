@@ -997,6 +997,38 @@ async def _scan_and_evaluate(
     return violations, checks, len(discovered_resources), ws_failure
 
 
+async def _scan_and_evaluate_guarded(**kwargs) -> tuple:
+    """``_scan_and_evaluate`` with a per-workspace wall-clock cap.
+
+    A single workspace's discovery makes blocking Databricks calls (auth probe,
+    resource listing, OPA eval). Without a cap, one slow/unreachable workspace —
+    or a huge recursive listing — hangs the entire run indefinitely with no
+    further logs. This enforces ``SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS`` and
+    raises ``asyncio.TimeoutError`` on breach so the caller records a structured
+    failure and moves on. ``timeout <= 0`` disables the cap (old behavior).
+    """
+    timeout = getattr(settings, "SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS", 0)
+    if timeout and timeout > 0:
+        return await asyncio.wait_for(_scan_and_evaluate(**kwargs), timeout=timeout)
+    return await _scan_and_evaluate(**kwargs)
+
+
+def _timeout_failure(ws_name, ws_host, ws_cred_source, timeout_s, stage) -> Dict[str, Any]:
+    """Structured ws_failure record for a workspace that blew its scan timeout."""
+    return {
+        "workspace": ws_name,
+        "host": ws_host,
+        "credential_source": ws_cred_source,
+        "category": "timeout",
+        "failed": 1,
+        "attempted": 1,
+        "breakdown": {"timeout": 1},
+        "example": f"Workspace scan exceeded {timeout_s}s and was abandoned.",
+        "partial": False,
+        "stage": stage,
+    }
+
+
 async def run_discovery(db, request) -> Dict[str, Any]:
     """Discover resources across all target workspaces and evaluate OPA policies.
 
@@ -1114,7 +1146,9 @@ async def run_discovery(db, request) -> Dict[str, Any]:
     # 1. Workspace-scoped scans (skipped for a single-dataset certification request).
     if not dataset_id:
         ws_handler_classes = _workspace_scoped_handler_classes()
-        for w in scan_ws:
+        ws_timeout = getattr(settings, "SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS", 0)
+        total_ws = len(scan_ws)
+        for idx, w in enumerate(scan_ws, start=1):
             ws_ctx = {
                 "name": w.name,
                 "host": w.host,
@@ -1138,17 +1172,40 @@ async def run_discovery(db, request) -> Dict[str, Any]:
                     "example": str(e), "partial": False, "stage": "client_init",
                 })
                 continue
-            v, c, n, wf = await _scan_and_evaluate(
-                db=db,
-                opa_provider=opa_provider,
-                allowed_policy_names=allowed_policy_names,
-                workspace_ctx=ws_ctx,
-                workspace_client=client,
-                handler_classes=ws_handler_classes,
-                dataset_id=None,
-                scan_time=scan_time,
-                limit=limit,
-                record_certification=False,
+            logger.info(
+                "Sentinel: scanning workspace '%s' (%d/%d, host=%s)...",
+                w.name, idx, total_ws, w.host,
+            )
+            _ws_start = datetime.utcnow()
+            try:
+                v, c, n, wf = await _scan_and_evaluate_guarded(
+                    db=db,
+                    opa_provider=opa_provider,
+                    allowed_policy_names=allowed_policy_names,
+                    workspace_ctx=ws_ctx,
+                    workspace_client=client,
+                    handler_classes=ws_handler_classes,
+                    dataset_id=None,
+                    scan_time=scan_time,
+                    limit=limit,
+                    record_certification=False,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Sentinel: workspace '%s' scan exceeded %ss and was abandoned "
+                    "(host=%s, credentials=%s); moving on. A 0 here is a TIMEOUT, "
+                    "not a clean result.",
+                    w.name, ws_timeout, w.host, w.credential_source,
+                )
+                scan_errors.append(f"{w.name} (timeout): exceeded {ws_timeout}s")
+                ws_failures.append(
+                    _timeout_failure(w.name, w.host, w.credential_source, ws_timeout, "workspace_scan")
+                )
+                continue
+            _elapsed = (datetime.utcnow() - _ws_start).total_seconds()
+            logger.info(
+                "Sentinel: finished workspace '%s' (%d/%d): %d resource(s) in %.1fs.",
+                w.name, idx, total_ws, n, _elapsed,
             )
             violations += v
             checks += c
@@ -1159,18 +1216,44 @@ async def run_discovery(db, request) -> Dict[str, Any]:
     # 2. Data certification pass (once, Unity Catalog / metastore scoped).
     try:
         cert_client = _new_workspace_client(cert_host)
-        v, c, n, wf = await _scan_and_evaluate(
-            db=db,
-            opa_provider=opa_provider,
-            allowed_policy_names=allowed_policy_names,
-            workspace_ctx=cert_ctx,
-            workspace_client=cert_client,
-            handler_classes=[DatasetResourceHandler],
-            dataset_id=dataset_id,
-            scan_time=scan_time,
-            limit=limit,
-            record_certification=True,
+        logger.info(
+            "Sentinel: running data certification pass (workspace='%s', host=%s)...",
+            cert_ctx.get("name"), cert_ctx.get("host"),
         )
+        _cert_start = datetime.utcnow()
+        try:
+            v, c, n, wf = await _scan_and_evaluate_guarded(
+                db=db,
+                opa_provider=opa_provider,
+                allowed_policy_names=allowed_policy_names,
+                workspace_ctx=cert_ctx,
+                workspace_client=cert_client,
+                handler_classes=[DatasetResourceHandler],
+                dataset_id=dataset_id,
+                scan_time=scan_time,
+                limit=limit,
+                record_certification=True,
+            )
+        except asyncio.TimeoutError:
+            _cert_timeout = getattr(settings, "SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS", 0)
+            logger.error(
+                "Sentinel: data certification pass exceeded %ss and was abandoned "
+                "(workspace='%s', host=%s); continuing without it.",
+                _cert_timeout, cert_ctx.get("name"), cert_ctx.get("host"),
+            )
+            scan_errors.append(f"data_certification (timeout): exceeded {_cert_timeout}s")
+            ws_failures.append(
+                _timeout_failure(
+                    cert_ctx.get("name"), cert_ctx.get("host"),
+                    cert_ctx.get("credential_source"), _cert_timeout, "data_certification",
+                )
+            )
+            v, c, n, wf = [], [], 0, None
+        else:
+            logger.info(
+                "Sentinel: data certification pass finished: %d resource(s) in %.1fs.",
+                n, (datetime.utcnow() - _cert_start).total_seconds(),
+            )
         violations += v
         checks += c
         total_resources += n

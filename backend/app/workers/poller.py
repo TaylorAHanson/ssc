@@ -268,6 +268,45 @@ async def start_poller():
         await asyncio.sleep(poll_interval)
 
 
+# Request types whose single processing step can run for a long time (a Sentinel
+# run scans every target workspace inside one step). These are processed detached
+# from the awaited batch so a slow/hung one can't freeze the whole poll loop.
+_DETACHED_REQUEST_TYPES = {RequestType.ENFORCEMENT_SENTINEL.value}
+
+# Ids currently being processed by a detached task — guards the brief window
+# between launching the task and its DB lock being set, so a fast next cycle
+# doesn't launch a duplicate.
+_inflight_detached: set = set()
+
+
+def _launch_detached(request_id: str) -> None:
+    """Process a long-running request off the awaited batch (fire-and-forget).
+
+    Concurrency is bounded per-run; the DB lock inside ``process_single_request``
+    is the real duplicate-pickup guard, with ``_inflight_detached`` covering the
+    pre-lock window. Exceptions are logged by the wrapper so a detached failure is
+    never swallowed silently.
+    """
+    if request_id in _inflight_detached:
+        return
+    _inflight_detached.add(request_id)
+
+    async def _run() -> None:
+        try:
+            await process_single_request(
+                asyncio.Semaphore(settings.POLLER_MAX_CONCURRENT), request_id
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "Detached processing of request %s failed: %s", request_id, e,
+                exc_info=True,
+            )
+        finally:
+            _inflight_detached.discard(request_id)
+
+    asyncio.create_task(_run())
+
+
 async def process_open_requests():
     """Find and process all open requests in parallel."""
     db = get_lakebase_session()
@@ -307,26 +346,35 @@ async def process_open_requests():
             return  # No work to do
         
         logger.debug(f"Found {len(requests)} request(s) to process: {[f'{r.id} ({r.current_state})' for r in requests]}")
-        
-        # Process in parallel with concurrency limit
+
+        # Long-running request types (a Sentinel scan processes its whole
+        # multi-workspace discovery inside ONE step) are launched DETACHED so they
+        # never hold up the awaited batch below. Awaiting them here means a single
+        # slow/hung scan blocks ``asyncio.gather``, which stops the poll loop from
+        # cycling, which freezes EVERY other request — the "nothing moves" failure.
+        # The per-request DB lock still prevents duplicate pickup across cycles;
+        # ``_inflight_detached`` guards the brief window before that lock is set.
         semaphore = asyncio.Semaphore(settings.POLLER_MAX_CONCURRENT)
-        
-        tasks = [
-            process_single_request(semaphore, request.id)
-            for request in requests
-        ]
-        
-        # Wait for all tasks to complete, allowing exceptions
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Log any exceptions that occurred
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(
-                    f"Error processing request {requests[i].id}: {result}",
-                    exc_info=result
-                )
-                
+
+        batch = []
+        for request in requests:
+            if request.type in _DETACHED_REQUEST_TYPES:
+                _launch_detached(request.id)
+            else:
+                batch.append(request)
+
+        if batch:
+            tasks = [process_single_request(semaphore, request.id) for request in batch]
+            # Wait for all tasks to complete, allowing exceptions
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Log any exceptions that occurred
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.error(
+                        f"Error processing request {batch[i].id}: {result}",
+                        exc_info=result
+                    )
+
     finally:
         db.close()
 

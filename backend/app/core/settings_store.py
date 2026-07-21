@@ -75,6 +75,11 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Notifications & Governance", "key": "SENTINEL_SCAN_CONCURRENCY", "label": "Sentinel scan concurrency",
      "type": "int", "min": 1,
      "help": "Max concurrent units of work during a sentinel scan. 1 = fully serialized."},
+    {"group": "Notifications & Governance", "key": "SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS", "label": "Per-workspace scan timeout (sec)",
+     "type": "int", "min": 0,
+     "help": "Max seconds a single workspace's scan may run before it's abandoned "
+             "(recorded as a timeout failure) and the run moves on. Prevents one "
+             "slow/unreachable workspace from hanging the whole scan. 0 = no limit."},
     {"group": "Notifications & Governance", "key": "SCAN_CATALOGS", "label": "Scanned catalogs",
      "type": "string",
      "help": "Comma-separated Unity Catalog allowlist that scopes governed data, "
