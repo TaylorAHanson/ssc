@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import socket
+import time
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -1088,16 +1089,16 @@ def _force_fail_on_fresh_session(
     Last-resort recovery for when the in-flight session's connection has died
     (e.g. Lakebase dropped an idle SSL connection during a long scan), which
     makes every write on the original session — including the critical-error
-    guard's own — fail. We dispose the pooled connection and retry on a fresh
-    session (which will re-auth + re-connect) so the request is durably failed
-    rather than looping forever or surfacing a raw DB error.
+    guard's own — fail. A fresh session (pool_pre_ping re-validates / replaces the
+    dead connection on checkout) lets the request be durably failed rather than
+    looping forever or surfacing a raw DB error.
     """
-    try:
-        reset_database_connection()
-    except Exception as reset_err:  # noqa: BLE001
-        logger.error(
-            f"Could not reset DB connection while force-failing {request_id}: {reset_err}"
-        )
+    # Do NOT dispose the global engine pool here (reset_database_connection): that
+    # yanks connections out from under every OTHER in-flight request. The
+    # Enforcement Sentinel now runs DETACHED (concurrently with the poll loop), so
+    # a global dispose during its recovery cascades "transaction has been rolled
+    # back" failures across unrelated requests. pool_pre_ping already self-heals
+    # just the one dead connection on a fresh checkout.
     db2 = get_lakebase_session()
     try:
         req = (
@@ -1146,10 +1147,9 @@ def _clear_retry_state_on_fresh_session(request_id: str) -> bool:
     Re-fetches the row (never reads the possibly-expired original instance) so a
     dead connection can't cause a lazy-reload failure. Returns True iff committed.
     """
-    try:
-        reset_database_connection()
-    except Exception:  # noqa: BLE001
-        pass
+    # No global pool dispose (see _force_fail_on_fresh_session): pool_pre_ping
+    # re-validates the connection on this fresh checkout without disrupting other
+    # concurrent (detached) requests.
     db2 = get_lakebase_session()
     try:
         req = db2.query(RequestModel).filter(RequestModel.id == request_id).first()
@@ -1185,48 +1185,55 @@ def _persist_status_on_fresh_session(
     connection; when the connection is dropped mid-run the *terminal* write
     (e.g. status -> 'completed') fails on the dead session, and a run that
     actually FINISHED would otherwise be reported as failed. We dispose the dead
-    pool and re-persist the real status on a fresh connection so the outcome is
-    recorded truthfully. Returns True iff the fresh-session write committed.
+    re-persist the real status on a fresh connection so the outcome is recorded
+    truthfully. Returns True iff the fresh-session write committed.
+
+    This is the load-bearing guard against a COMPLETED run being force-failed: if
+    the terminal-status write here fails, the caller re-raises and the run drops
+    into the force-fail path (a run that actually finished reported as FAILED). So
+    we do NOT dispose the global pool (which, with the sentinel now DETACHED, only
+    invites more cross-request connection churn) and we retry a few times — each
+    attempt takes a brand-new pre-pinged connection, so a single dead/expired
+    connection self-heals rather than losing the result.
     """
-    try:
-        reset_database_connection()
-    except Exception as reset_err:  # noqa: BLE001
-        logger.error(
-            f"Could not reset DB connection while persisting status for {request_id}: {reset_err}"
-        )
-    db2 = get_lakebase_session()
-    try:
-        req = (
-            db2.query(RequestModel)
-            .filter(RequestModel.id == request_id)
-            .first()
-        )
-        if req is None:
-            return False
-        req.status = status
-        if current_state is not None:
-            req.current_state = current_state
-        if clear_error:
-            req.retry_count = 0
-            req.last_error = None
-        db2.commit()
-        logger.warning(
-            f"Persisted status={status} for {request_id} on a fresh session after "
-            "a mid-run connection loss"
-        )
-        return True
-    except Exception as fresh_err:  # noqa: BLE001
-        logger.error(
-            f"Fresh-session status persist failed for {request_id}: {fresh_err}",
-            exc_info=True,
-        )
+    attempts = 3
+    for attempt in range(1, attempts + 1):
+        db2 = get_lakebase_session()
         try:
-            db2.rollback()
-        except Exception:
-            pass
-        return False
-    finally:
-        db2.close()
+            req = (
+                db2.query(RequestModel)
+                .filter(RequestModel.id == request_id)
+                .first()
+            )
+            if req is None:
+                return False
+            req.status = status
+            if current_state is not None:
+                req.current_state = current_state
+            if clear_error:
+                req.retry_count = 0
+                req.last_error = None
+            db2.commit()
+            logger.warning(
+                f"Persisted status={status} for {request_id} on a fresh session after "
+                f"a mid-run connection loss (attempt {attempt})"
+            )
+            return True
+        except Exception as fresh_err:  # noqa: BLE001
+            logger.error(
+                f"Fresh-session status persist failed for {request_id} "
+                f"(attempt {attempt}/{attempts}): {fresh_err}",
+                exc_info=(attempt == attempts),
+            )
+            try:
+                db2.rollback()
+            except Exception:
+                pass
+            if attempt < attempts:
+                time.sleep(0.5)
+        finally:
+            db2.close()
+    return False
 
 
 def _mark_request_failed(
