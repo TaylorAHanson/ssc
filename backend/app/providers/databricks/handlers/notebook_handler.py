@@ -15,7 +15,13 @@ class NotebookResourceHandler(BaseResourceHandler):
             for base_path in base_paths:
                 try:
                     for obj in self.workspace_client.workspace.list(base_path, recursive=True):
-                        if obj.object_type.value == "NOTEBOOK":
+                        # ``object_type`` can be None for some workspace entries; a raw
+                        # ``.value`` access there throws 'NoneType' has no attribute
+                        # 'value' and aborts the whole listing (both paths fail => the
+                        # handler reports a systemic failure and the scan goes partial).
+                        # Read it defensively and skip anything that isn't a notebook.
+                        obj_type = getattr(getattr(obj, "object_type", None), "value", None)
+                        if obj_type == "NOTEBOOK":
                             resources.append({
                             "id": obj.path,
                             "type": "notebook",
