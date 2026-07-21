@@ -535,33 +535,34 @@ async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
             try:
                 # Process the request
                 await _process_request_state_machine(db, request)
-                
-                # Reset retry count on success. Capture the terminal status into
-                # locals first so a late connection drop here can still be
-                # recovered on a fresh session without a lazy reload.
-                _ok_status = request.status
-                _ok_state = request.current_state
-                request.retry_count = 0
-                request.last_error = None
+
+                # Post-success bookkeeping: clear the retry counters. This must
+                # NEVER turn a run the graph just COMPLETED into a FAILED one.
+                # The terminal status was already persisted by the state-machine
+                # step (on a fresh session if the held connection died), so this
+                # block only clears retry bookkeeping. Crucially we do NOT read
+                # request.status/current_state here: if the held connection died
+                # and the state-machine step rolled it back, the instance is
+                # expired and a plain attribute *read* would trigger a lazy reload
+                # on the dead connection — throwing OUTSIDE the commit guard and
+                # dropping a completed run into the retry/force-fail path (a run
+                # that succeeded reported as failed). Setting columns doesn't
+                # reload; on any failure we recover on a fresh session and
+                # deliberately swallow it rather than re-raising.
                 try:
+                    request.retry_count = 0
+                    request.last_error = None
                     db.commit()
                 except Exception as commit_err:  # noqa: BLE001
-                    # The status was already persisted by the state-machine step;
-                    # this commit only clears retry bookkeeping. If the connection
-                    # died, re-persist status + clear the retry state on a fresh
-                    # session rather than letting a completed run fall into the
-                    # retry/force-fail path.
                     logger.warning(
-                        f"Post-success commit failed for {request_id} ({commit_err}); "
+                        f"Post-success bookkeeping failed for {request_id} ({commit_err}); "
                         "clearing retry state on a fresh session"
                     )
                     try:
                         db.rollback()
                     except Exception:
                         pass
-                    _persist_status_on_fresh_session(
-                        request_id, _ok_status, _ok_state, clear_error=True
-                    )
+                    _clear_retry_state_on_fresh_session(request_id)
                 
             except RetryableError as e:
                 # Retryable error - increment retry count
@@ -1133,6 +1134,40 @@ def _force_fail_on_fresh_session(
             db2.rollback()
         except Exception:
             pass
+    finally:
+        db2.close()
+
+
+def _clear_retry_state_on_fresh_session(request_id: str) -> bool:
+    """Clear retry_count/last_error on a fresh session WITHOUT touching status.
+
+    Used by the post-success path when the held connection died: the terminal
+    status is already persisted, so we only need to clear the retry bookkeeping.
+    Re-fetches the row (never reads the possibly-expired original instance) so a
+    dead connection can't cause a lazy-reload failure. Returns True iff committed.
+    """
+    try:
+        reset_database_connection()
+    except Exception:  # noqa: BLE001
+        pass
+    db2 = get_lakebase_session()
+    try:
+        req = db2.query(RequestModel).filter(RequestModel.id == request_id).first()
+        if req is None:
+            return False
+        req.retry_count = 0
+        req.last_error = None
+        db2.commit()
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            f"Fresh-session retry-state clear failed for {request_id}: {e}"
+        )
+        try:
+            db2.rollback()
+        except Exception:
+            pass
+        return False
     finally:
         db2.close()
 

@@ -775,6 +775,7 @@ async def _scan_and_evaluate(
     # rejected reports a misleading "0 findings". A failed probe is authoritative:
     # short-circuit with a structured failure that names the definitive cause
     # (authentication vs permissions vs network) so 0 is never read as "clean".
+    logger.info("Sentinel: workspace '%s' authenticating (host=%s)...", ws_name, ws_host)
     probe = await _probe_workspace_auth(
         workspace_client, ws_name,
         host=ws_host or (settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL),
@@ -865,6 +866,11 @@ async def _scan_and_evaluate(
             )
             return [], {"handler": handler_class.__name__, "category": category, "error": str(e)}
 
+    logger.info(
+        "Sentinel: workspace '%s' discovering resources across %d handler(s)...",
+        ws_name, len(handler_classes),
+    )
+    _disc_start = datetime.utcnow()
     handler_results = await _gather_bounded(
         [(lambda hc=hc: _to_sentinel_thread(_discover_one, hc)) for hc in handler_classes],
         limit,
@@ -872,6 +878,7 @@ async def _scan_and_evaluate(
 
     discovered_resources: List[Dict[str, Any]] = []
     discover_errors: List[Dict[str, Any]] = []
+    per_handler_counts: List[str] = []
     for handler_class, (resources, err) in zip(handler_classes, handler_results):
         if err:
             discover_errors.append(err)
@@ -881,7 +888,16 @@ async def _scan_and_evaluate(
                 for r in resources
                 if r.get("dataset_id") == dataset_id or r.get("id") == dataset_id
             ]
+        per_handler_counts.append(f"{handler_class.__name__}={len(resources)}")
         discovered_resources.extend(resources)
+
+    logger.info(
+        "Sentinel: workspace '%s' discovered %d resource(s) in %.1fs [%s]; "
+        "evaluating against %d policy file(s)...",
+        ws_name, len(discovered_resources),
+        (datetime.utcnow() - _disc_start).total_seconds(),
+        ", ".join(per_handler_counts), len(allowed_policy_names),
+    )
 
     ws_failure = _summarize_discovery_failures(
         ws_name, ws_host, ws_cred_source, discover_errors, len(handler_classes)
@@ -924,9 +940,16 @@ async def _scan_and_evaluate(
             )
             return resource, input_data, None
 
+    _eval_start = datetime.utcnow()
     eval_results = await _gather_bounded(
         [(lambda r=r: _eval(r)) for r in discovered_resources], limit
     )
+    if discovered_resources:
+        logger.info(
+            "Sentinel: workspace '%s' evaluated %d resource(s) in %.1fs.",
+            ws_name, len(discovered_resources),
+            (datetime.utcnow() - _eval_start).total_seconds(),
+        )
 
     violations: List[Dict[str, Any]] = []
     checks: List[Dict[str, Any]] = []
@@ -1111,7 +1134,10 @@ async def run_discovery(db, request) -> Dict[str, Any]:
     scan_time = getattr(request, "created_at", None) or datetime.utcnow()
 
     # Resolve the workspace set. get_target_workspaces() already falls back to
-    # the app's home workspace when none are configured.
+    # the app's home workspace when none are configured. This reads per-workspace
+    # SP secrets (SDK calls), so it can take a moment — log first so 'discovering'
+    # isn't silent while credentials resolve.
+    logger.info("Sentinel: resolving target workspaces and credentials...")
     all_ws = get_target_workspaces()
     if requested_workspaces:
         req = {str(x) for x in requested_workspaces}
