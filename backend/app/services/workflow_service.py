@@ -437,8 +437,10 @@ class WorkflowService:
         When ``prune`` is True, this also DELETES workflows in the target whose
         ``key`` is not present in the bundle — the way to make a deletion in a
         source env (dev) propagate to a locked target (prod), where manual delete
-        is blocked. Code-seeded workflows (``source == 'seed'``) are never pruned
-        (they are re-seeded on boot); only authored/promoted rows are removed.
+        is blocked. This includes code-seeded rows (``source == 'seed'``): each
+        pruned key is tombstoned so the startup seeders don't re-create it. A full
+        export contains all surviving workflows (seeds included), so only the ones
+        actually deleted in the source env are removed here.
         Destructive, so it is opt-in and surfaced with a confirmation in the UI.
         """
         from app.workflows.spec_loader import SpecError, validate_spec_dict
@@ -509,16 +511,16 @@ class WorkflowService:
                 report["created"].append(key)
 
         if prune and bundle_keys:
-            # Delete authored/promoted workflows the bundle no longer contains so a
-            # source-env deletion propagates here. Never prune code-seeded rows
-            # (source='seed') — they'd just be re-seeded on the next boot. Guarded
-            # by a non-empty bundle so an empty/garbled import can't wipe everything.
+            # Delete every workflow the bundle no longer contains so a source-env
+            # deletion propagates here — INCLUDING code-seeded rows. Pruned keys are
+            # tombstoned below so the startup seeders don't just re-create them on
+            # the next boot (that's why we can safely prune seeds now; before the
+            # tombstone existed we had to skip source='seed'). Guarded by a
+            # non-empty bundle so an empty/garbled import can't wipe everything, and
+            # a full export always contains the surviving seeds (so they're kept).
             orphans = (
                 db.query(WorkflowModel)
-                .filter(
-                    WorkflowModel.source != "seed",
-                    WorkflowModel.key.notin_(bundle_keys),
-                )
+                .filter(WorkflowModel.key.notin_(bundle_keys))
                 .all()
             )
             for wf in orphans:

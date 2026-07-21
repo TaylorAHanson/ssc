@@ -1,7 +1,7 @@
 """
 Request database models (SQLAlchemy).
 """
-from sqlalchemy import Column, String, DateTime, JSON, Integer, Boolean, ForeignKey, Text
+from sqlalchemy import Column, String, DateTime, JSON, Integer, Boolean, ForeignKey, Text, Index
 from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql import func
 from app.db.base import Base
@@ -10,13 +10,24 @@ from app.db.base import Base
 class RequestModel(Base):
     """Request database model."""
     __tablename__ = "requests"
-    
+
+    # Composite index for the paginated list query (filter by type, sort by
+    # created_at desc) so it doesn't seq-scan + sort the whole table.
+    __table_args__ = (
+        Index("ix_requests_type_created_at", "type", "created_at"),
+    )
+
     id = Column(String, primary_key=True)
-    type = Column(String)  # RequestType enum
+    type = Column(String, index=True)  # RequestType enum
     title = Column(String)
     status = Column(String, index=True)  # Current state (State Machine reads/writes this)
     requester_email = Column(String, nullable=True, index=True)  # Who created the request
     state_context = Column(JSON)  # Stores variables (workspace_name, config, etc.)
+    # Compact, list-view projection of state_context (see app.services.state_summary).
+    # The full state_context can be hundreds of MB (a Sentinel run's violations +
+    # checks); the list reads THIS small column instead so the big blob is never
+    # fetched. Written whenever state_context is persisted; backfilled on startup.
+    state_summary = Column(JSON, nullable=True)
     
     # State locking for idempotency
     locked_by = Column(String, nullable=True)  # Worker ID (e.g., 'poll-worker-hostname-12345')

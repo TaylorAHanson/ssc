@@ -16,7 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy.orm import Session
 from app.db.session import get_lakebase_session
-from app.db import RequestModel, ApprovalModel, EventModel, FailureModel
+from app.db import RequestModel, ApprovalModel, EventModel, FailureModel, SentinelFindingModel
 from app.models.request import RequestCreate, Environment
 from app.services.request_service import RequestService
 
@@ -27,6 +27,7 @@ def clear_data(db: Session):
     """Delete all request-related data."""
     try:
         print("Clearing all request data...")
+        db.query(SentinelFindingModel).delete()
         db.query(FailureModel).delete()
         db.query(EventModel).delete()
         db.query(ApprovalModel).delete()

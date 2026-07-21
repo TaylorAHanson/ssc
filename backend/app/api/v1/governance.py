@@ -52,10 +52,11 @@ async def get_digest_info(
     """Schedule + default recipient + latest-run summary for the digest modal."""
     _require_governance_admin(current_user)
     from app.workflows.sentinel import _active_violations, digest_schedule_info
+    from app.services.sentinel_findings import load_run_violations
 
     info = digest_schedule_info()
     run = _latest_completed_run(db)
-    rows = _active_violations(run.state_context or {}) if run else []
+    rows = _active_violations(load_run_violations(db, run)) if run else []
     return {
         **info,
         "default_recipient": (getattr(settings, "GOVERNANCE_EMAIL_GROUP", "") or ""),
@@ -84,6 +85,7 @@ async def send_digest_now(
     _require_governance_admin(current_user)
     from app.providers.notifications.client import NotificationProvider
     from app.workflows.sentinel import _active_violations, render_digest_html
+    from app.services.sentinel_findings import load_run_violations
 
     email = (body.email or "").strip()
     if not email or "@" not in email:
@@ -96,7 +98,7 @@ async def send_digest_now(
             detail="No completed Sentinel run found to build a digest from. Run a scan first.",
         )
 
-    rows = _active_violations(run.state_context or {})
+    rows = _active_violations(load_run_violations(db, run))
     brand_color = (getattr(settings, "BRAND_COLOR_PRIMARY", "") or "#2563eb").strip() or "#2563eb"
     app_url = (getattr(settings, "APP_BASE_URL", "") or "").strip()
     body_html = render_digest_html(rows, brand_color, app_url)

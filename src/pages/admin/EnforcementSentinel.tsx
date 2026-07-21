@@ -893,7 +893,13 @@ export function EnforcementSentinel() {
                                                 {vCount > 0 && (
                                                     <div className="grid grid-cols-3 gap-4">
                                                         {['HIGH', 'MEDIUM', 'LOW'].map(sev => {
-                                                            const count = violations.filter((v: any) => v.severity === sev).length;
+                                                            // Prefer the true breakdown from scan_stats (accurate even when
+                                                            // the stored violation detail was truncated for very large runs);
+                                                            // fall back to counting the loaded records for older runs.
+                                                            const sevCounts = ctx.scan_stats?.severity_counts;
+                                                            const count = (sevCounts && typeof sevCounts[sev] === 'number')
+                                                                ? sevCounts[sev]
+                                                                : violations.filter((v: any) => v.severity === sev).length;
                                                             const colors = sev === 'HIGH' && count > 0 ? 'bg-orange-50/30 border-orange-100' :
                                                                            sev === 'MEDIUM' && count > 0 ? 'bg-yellow-50/30 border-yellow-100' :
                                                                            sev === 'LOW' && count > 0 ? 'bg-gray-50/50 border-gray-200' :

@@ -390,9 +390,15 @@ def _persist_state_context(db, request, updates: Dict[str, Any]) -> None:
     ctx = dict(request.state_context or {})
     ctx.update(updates)
     request.state_context = ctx
+    # Keep the compact list-view projection in lockstep with the full context so
+    # the Sentinel list never has to load the (huge) state_context column.
+    from app.services.state_summary import summarize_state_context
+
+    request.state_summary = summarize_state_context(ctx)
     from sqlalchemy.orm.attributes import flag_modified
 
     flag_modified(request, "state_context")
+    flag_modified(request, "state_summary")
     db.add(request)
     try:
         db.commit()
@@ -1203,9 +1209,23 @@ async def run_discovery(db, request) -> Dict[str, Any]:
     if partial_fail and not full_fail:
         summary += f" {len(partial_fail)} workspace(s) returned partial results."
 
+    # True severity breakdown (kept in scan_stats so the UI severity cards are
+    # accurate without loading every violation record).
+    severity_counts: Dict[str, int] = {}
+    for _v in violations:
+        _sv = str((_v or {}).get("severity") or "").upper()
+        if _sv:
+            severity_counts[_sv] = severity_counts.get(_sv, 0) + 1
+
+    # Persistence split: high-level counts/summary go in state_context (small, so
+    # the run list stays fast); the full per-record detail (ALL violations + ALL
+    # checks — we never drop findings) goes into the joined ``sentinel_findings``
+    # table as many small rows. Writing the detail inline as one multi-hundred-MB
+    # JSON column was dropping the DB connection ("SSL connection has been closed
+    # unexpectedly") on large runs; batched row inserts do not.
+    from app.services.sentinel_findings import replace_run_findings
+
     persist: Dict[str, Any] = {
-        "violations": violations,
-        "checks": checks,
         "summary": summary,
         "workspaces_scanned": scanned_names,
         "scan_stats": {
@@ -1218,6 +1238,10 @@ async def run_discovery(db, request) -> Dict[str, Any]:
             "workspaces_scanned": len(scanned_names),
             "workspaces_failed": len(full_fail),
             "workspaces_partial": len(partial_fail),
+            "severity_counts": severity_counts,
+            # Detail-record totals (the detail view pages these from the table).
+            "violation_records_total": len(violations),
+            "check_records_total": len(checks),
         },
     }
     if ws_failures:
@@ -1227,6 +1251,10 @@ async def run_discovery(db, request) -> Dict[str, Any]:
     if scan_errors:
         persist["scan_error"] = "; ".join(scan_errors)
     _persist_state_context(db, request, persist)
+    # Persist the full detail into the joined table (committed there). Keep the
+    # in-memory lists on the return so the immediate poller steps below don't need
+    # to re-read the DB.
+    replace_run_findings(db, request.id, violations=violations, checks=checks)
 
     return {
         "violations": violations,
@@ -1355,8 +1383,11 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
     """
     from app.db.enforcement_audit import EnforcementAuditModel
 
+    from app.services.sentinel_findings import load_run_violations
+
     state_ctx = request.state_context or {}
-    violations = state_ctx.get("violations", []) or []
+    # Full detail lives in the joined findings table (not state_context).
+    violations = load_run_violations(db, request)
     scan_summary = state_ctx.get("summary", "")
 
     def _combined(enforce_summary: str) -> str:
@@ -1502,13 +1533,14 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Notification (governance)
 # ---------------------------------------------------------------------------
-def _active_violations(state_ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _active_violations(violations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Current-run violations that warrant a governance signal (severity != NONE).
 
+    Takes the full violation list (loaded from the joined findings table).
     ``CERTIFY`` outcomes resolve to severity NONE and are intentionally excluded
     (they're good news, not something to alert on)."""
     out = []
-    for v in state_ctx.get("violations", []) or []:
+    for v in (violations or []):
         sev = normalize_severity(v.get("severity"))
         if sev == "NONE":
             continue
@@ -1979,9 +2011,10 @@ async def run_notify(db, request) -> Dict[str, Any]:
         violations, emailed to the governance group.
     """
     from app.providers.notifications.client import NotificationProvider
+    from app.services.sentinel_findings import load_run_violations
 
     state_ctx = request.state_context or {}
-    rows = _active_violations(state_ctx)
+    rows = _active_violations(load_run_violations(db, request))
     recipient = getattr(settings, "GOVERNANCE_EMAIL_GROUP", "") or ""
     if not recipient:
         logger.warning("Sentinel notify: GOVERNANCE_EMAIL_GROUP is unset; skipping governance emails.")

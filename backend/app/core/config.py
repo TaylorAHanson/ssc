@@ -431,7 +431,7 @@ class Settings(BaseSettings):
     # blank = the app's own home workspace (settings.DATABRICKS_*). The DQ
     # warehouse + ADOC schema always come from the global settings.
     SENTINEL_DATA_CERT_WORKSPACE: str = os.getenv("SENTINEL_DATA_CERT_WORKSPACE", "")
-    
+
     # Retry Settings
     DEFAULT_MAX_RETRIES: int = 3
     TERRAFORM_MAX_RETRIES: int = 2

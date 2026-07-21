@@ -314,5 +314,7 @@ async def test_active_violations_surfaces_workspace(db_session):
         for p in plist:
             p.stop()
 
-    rows = sentinel._active_violations(req.state_context)
+    from app.services.sentinel_findings import load_run_violations
+
+    rows = sentinel._active_violations(load_run_violations(db_session, req))
     assert rows and rows[0]["workspace"] == "prod-domain-a"

@@ -15,6 +15,7 @@ from app.db.training import (
 )
 from app.db.allowlist import AllowlistModel
 from app.db.enforcement_audit import EnforcementAuditModel
+from app.db.sentinel_finding import SentinelFindingModel
 from app.db.data_asset import DataAssetModel
 from app.db.data_contract import DataContractModel
 from app.db.context_catalog import ContextDomainModel, ContextDocumentModel, ContextChunkModel

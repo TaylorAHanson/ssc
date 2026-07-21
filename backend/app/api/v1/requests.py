@@ -19,64 +19,24 @@ import logging
 
 from app.api.deps import get_current_user
 from app.models.user import User
+from app.services.state_summary import summarize_state_context
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-#: Large, list-view-irrelevant arrays stripped from ``metadata`` in summary mode.
-#: These grow unbounded (e.g. a Sentinel run's per-violation records and its
-#: ``checks`` checklist — EVERY pass/fail evaluation, which dwarfs violations) and
-#: blow up the list payload (seen at 200MB+), but the list only needs aggregate
-#: counts — the full arrays are fetched on demand via ``GET /requests/{id}``.
-_HEAVY_METADATA_KEYS = ("violations", "checks", "resources", "scan_results", "assets")
+def _summary_metadata(req: RequestModel) -> Dict[str, Any]:
+    """The compact list-view metadata for a request.
 
-#: List fields the list rows DO read; kept even though they're arrays (bounded by
-#: the workspace count, so small). Everything else large is dropped defensively.
-_KEEP_LIST_KEYS = ("workspaces_scanned", "workspace_failures")
-
-#: Any other top-level array longer than this is replaced with a compact marker in
-#: summary mode — a backstop so a newly-added big field can't silently bloat the
-#: list again.
-_MAX_SUMMARY_LIST = 250
-
-
-def _summarize_metadata(state_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Trim heavy arrays out of a request's metadata for list (summary) responses.
-
-    Preserves the small summary fields the list rows use (``scan_stats``,
-    ``workspace_failures``, ``workspaces_scanned``, scalars) and drops the large
-    arrays. Ensures a ``scan_stats.violation_count`` survives so a Sentinel row
-    still shows the right count without shipping every violation record.
+    Prefers the persisted ``state_summary`` column (so the huge ``state_context``
+    is never loaded for the list). Falls back to summarizing ``state_context`` for
+    rows written before the column existed / were backfilled — rare, and the
+    startup backfill covers existing Sentinel runs.
     """
-    if not isinstance(state_context, dict):
-        return {}
-    meta = dict(state_context)
-
-    violations = meta.get("violations")
-    if isinstance(violations, list):
-        stats = dict(meta.get("scan_stats") or {})
-        if "violation_count" not in stats:
-            # Mirror the UI's per-rule count: sum violation_reasons (>=1 each).
-            stats["violation_count"] = sum(
-                (len(v.get("violation_reasons") or []) or 1)
-                for v in violations
-                if isinstance(v, dict)
-            )
-        meta["scan_stats"] = stats
-
-    for key in _HEAVY_METADATA_KEYS:
-        meta.pop(key, None)
-
-    # Backstop: drop any other oversized top-level array (keep the small
-    # list-view fields) so a future big field can't re-bloat the list payload.
-    for key, val in list(meta.items()):
-        if key in _KEEP_LIST_KEYS:
-            continue
-        if isinstance(val, list) and len(val) > _MAX_SUMMARY_LIST:
-            meta[key] = {"_omitted": True, "count": len(val)}
-    return meta
+    if req.state_summary is not None:
+        return req.state_summary
+    return summarize_state_context(req.state_context)
 
 
 def _format_request(
@@ -92,9 +52,10 @@ def _format_request(
     list endpoints (see :func:`_format_requests_bulk`) to avoid per-request
     fact + spec queries.
 
-    ``summary`` trims the response for list views: heavy ``metadata`` arrays are
-    dropped (see :func:`_summarize_metadata`) and the ``conversation`` transcript
-    is omitted. Row-level counts are preserved; the full record is available via
+    ``summary`` trims the response for list views: ``metadata`` comes from the
+    compact ``state_summary`` column (see :func:`_summary_metadata`) instead of
+    the huge ``state_context``, and the ``conversation`` transcript is omitted.
+    Row-level counts are preserved; the full record is available via
     ``GET /requests/{id}``.
     """
     r_type = req.type
@@ -154,7 +115,7 @@ def _format_request(
         environment=req.environment,
         requester_email=req.requester_email,
         lastError=req.last_error,
-        metadata=_summarize_metadata(req.state_context) if summary else (req.state_context or {}),
+        metadata=_summary_metadata(req) if summary else (req.state_context or {}),
         conversation=None if summary else req.conversation,
         approvals=approvals
     )
@@ -252,9 +213,15 @@ def get_paginated_requests(
     growing table. Open a row to fetch its full record via ``GET /requests/{id}``.
     """
     from sqlalchemy import or_
-    
+    from sqlalchemy.orm import defer
+
     query = db.query(RequestModel).options(selectinload(RequestModel.approvals))
-    
+    # In summary mode never fetch the (potentially hundreds-of-MB) state_context
+    # or conversation columns — the list reads the compact state_summary instead.
+    # This is what makes the list fast regardless of run size.
+    if summary:
+        query = query.options(defer(RequestModel.state_context), defer(RequestModel.conversation))
+
     if not current_user.has_role("platform_admin"):
         query = query.filter(RequestModel.requester_email == current_user.email)
         
@@ -263,17 +230,19 @@ def get_paginated_requests(
         
     if search:
         search_term = f"%{search}%"
-        # Search in title, status, environment, ID, or workspace/environment in metadata
+        # Search title, status, environment, ID, and the metadata JSON. In summary
+        # mode search the compact state_summary column, NOT state_context: casting
+        # the big blob to text would detoast every row (defeating the whole point).
         from sqlalchemy import cast, String
-        
-        # Check if state_context is actually JSONB or just JSON
+
+        meta_col = RequestModel.state_summary if summary else RequestModel.state_context
         query = query.filter(
             or_(
                 RequestModel.title.ilike(search_term),
                 RequestModel.status.ilike(search_term),
                 RequestModel.environment.ilike(search_term),
                 RequestModel.id.ilike(search_term),
-                cast(RequestModel.state_context, String).ilike(search_term)
+                cast(meta_col, String).ilike(search_term)
             )
         )
         
@@ -326,6 +295,22 @@ def get_request(
     formatted = _format_request(request_model, db)
     if not formatted:
         raise HTTPException(status_code=500, detail="Failed to format request")
+
+    # Sentinel runs keep only counts/summary in state_context; the full per-record
+    # detail (all violations + checks) lives in the joined ``sentinel_findings``
+    # table. Rehydrate it here so the detail view has the complete set to search /
+    # scroll. This is the on-demand detail path (already off the event loop +
+    # orjson), so building the big payload here doesn't stall the app.
+    if request_model.type == "enforcement_sentinel":
+        from app.services.sentinel_findings import (
+            has_findings, load_run_checks, load_run_violations,
+        )
+
+        if has_findings(db, request_id):
+            meta = dict(formatted.metadata or {})
+            meta["violations"] = load_run_violations(db, request_model)
+            meta["checks"] = load_run_checks(db, request_model)
+            formatted.metadata = meta
 
     return ORJSONResponse(formatted.model_dump(mode="json"))
 
@@ -594,7 +579,15 @@ async def delete_request(
     # Only admins or owner can delete
     if not current_user.has_role("platform_admin") and request.requester_email != current_user.email:
         raise HTTPException(status_code=403, detail="Not authorized to delete this request")
-    
+
+    # Explicitly clear the run's joined findings. The DB-level FK cascades on
+    # Postgres, but SQLite (local dev) doesn't enforce it by default, so do it
+    # here to avoid orphaned rows regardless of dialect.
+    from app.db.sentinel_finding import SentinelFindingModel
+
+    db.query(SentinelFindingModel).filter(
+        SentinelFindingModel.request_id == request_id
+    ).delete(synchronize_session=False)
     db.delete(request)
     db.commit()
     return None

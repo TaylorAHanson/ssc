@@ -80,6 +80,47 @@ def _add_index(engine: Engine, index_name: str, table: str, columns: list[str]) 
     logger.info("Migration: created index %s on %s(%s)", index_name, table, cols)
 
 
+def _backfill_request_state_summary(engine: Engine) -> None:
+    """Populate ``requests.state_summary`` for existing Sentinel rows (Postgres).
+
+    Extracts just the small list-view subpaths server-side (``jsonb_build_object``
+    over ``state_context``), so the huge blob is never transferred to the app.
+    Only Sentinel rows carry a large ``state_context``, so we scope the (one-time,
+    per-row detoast) update to them. SQLite (local dev) has tiny data and relies on
+    the read-path fallback + new writes instead. Idempotent via the NULL guard.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    insp = inspect(engine)
+    if "requests" not in set(insp.get_table_names()):
+        return
+    cols = {c["name"] for c in insp.get_columns("requests")}
+    if "state_summary" not in cols:
+        return
+    sql = text(
+        """
+        UPDATE requests
+        SET state_summary = jsonb_build_object(
+            'scan_stats',          state_context::jsonb -> 'scan_stats',
+            'workspaces_scanned',  state_context::jsonb -> 'workspaces_scanned',
+            'workspace_failures',  state_context::jsonb -> 'workspace_failures',
+            'workspace',           state_context::jsonb -> 'workspace',
+            'summary',             state_context::jsonb -> 'summary',
+            'scan_error',          state_context::jsonb -> 'scan_error'
+        )
+        WHERE type = 'enforcement_sentinel'
+          AND state_summary IS NULL
+          AND state_context IS NOT NULL
+        """
+    )
+    with engine.begin() as conn:
+        result = conn.execute(sql)
+    logger.info(
+        "Migration: backfilled requests.state_summary for %s row(s)",
+        getattr(result, "rowcount", "?"),
+    )
+
+
 def run_startup_migrations(engine: Engine) -> None:
     """Apply in-place schema renames. Safe to call on every startup."""
     try:
@@ -105,6 +146,14 @@ def run_startup_migrations(engine: Engine) -> None:
         # Enforcement Sentinel: marks the scheduled run that emitted the daily
         # governance digest (anchored once-per-local-day dispatch).
         _add_column(engine, "requests", "digest_emitted_at", "TIMESTAMP")
+        # List-view performance: a compact projection of state_context so the
+        # requests list never loads the (hundreds-of-MB) blob, plus the composite
+        # index the paginated list query needs (filter by type, sort by created_at).
+        _req_json_ddl = "JSONB" if engine.dialect.name == "postgresql" else "TEXT"
+        _add_column(engine, "requests", "state_summary", _req_json_ddl)
+        _add_index(engine, "ix_requests_type", "requests", ["type"])
+        _add_index(engine, "ix_requests_type_created_at", "requests", ["type", "created_at"])
+        _backfill_request_state_summary(engine)
         # Multi-workspace Enforcement Sentinel: which workspace an audited
         # resource lives in, so the immediate-HIGH dedup can distinguish the same
         # resource_id across workspaces (job IDs / notebook paths repeat).
