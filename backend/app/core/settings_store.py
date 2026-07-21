@@ -77,9 +77,11 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "Max concurrent units of work during a sentinel scan. 1 = fully serialized."},
     {"group": "Notifications & Governance", "key": "SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS", "label": "Per-workspace scan timeout (sec)",
      "type": "int", "min": 0,
-     "help": "Max seconds a single workspace's scan may run before it's abandoned "
-             "(recorded as a timeout failure) and the run moves on. Prevents one "
-             "slow/unreachable workspace from hanging the whole scan. 0 = no limit."},
+     "help": "Backstop cap (seconds) on total runtime for one workspace's scan "
+             "before it's abandoned as a timeout failure. True hangs are already "
+             "bounded per-call by the sentinel SDK timeout, so keep this generous "
+             "(default 1800) — too low ABANDONS healthy, still-progressing scans of "
+             "large workspaces and reports a false timeout. 0 = no limit."},
     {"group": "Notifications & Governance", "key": "SENTINEL_SDK_HTTP_TIMEOUT_SECONDS", "label": "Sentinel per-call SDK timeout (sec)",
      "type": "int", "min": 0,
      "help": "Per-HTTP-call timeout for the sentinel's own workspace clients — "

@@ -830,10 +830,18 @@ async def _scan_and_evaluate(
     opa_ws = {"name": ws_name, "type": ws_type, "environment": ws_env}
 
     # Allowlist context for THIS workspace (exceptions that suppress violations).
+    # Use a SHORT-LIVED session, never the long-held ``db`` passed in: that
+    # connection sits idle for the minutes of discovery/eval below and Lakebase
+    # drops it (OAuth token expiry / idle SSL close), so reading through it here
+    # raised "SSL connection has been closed unexpectedly". A fresh session gets a
+    # live, pre-pinged connection, does the tiny read, and is closed immediately.
     allowlist_records: List[Dict[str, Any]] = []
+    from app.db.session import get_lakebase_session
+
+    _al_db = get_lakebase_session()
     try:
         for entry in (
-            db.query(AllowlistModel).filter(AllowlistModel.workspace == ws_name).all()
+            _al_db.query(AllowlistModel).filter(AllowlistModel.workspace == ws_name).all()
         ):
             allowlist_records.append(
                 {
@@ -845,6 +853,8 @@ async def _scan_and_evaluate(
             )
     except Exception as e:  # noqa: BLE001
         logger.warning("Sentinel: failed to load allowlist for %s: %s", ws_name, e)
+    finally:
+        _al_db.close()
 
     # Discover each resource type concurrently. The handler ``.discover()``
     # methods are async but wrap *blocking* SDK calls (no internal to_thread), so
@@ -914,13 +924,12 @@ async def _scan_and_evaluate(
             ws_name, len(handler_classes), ws_host, ws_cred_source,
         )
 
-    if record_certification:
-        _refresh_data_asset_quality(db, discovered_resources, scan_time)
-        try:
-            db.commit()
-        except Exception as e:  # noqa: BLE001
-            logger.error("Sentinel: failed to commit DataAsset quality updates: %s", e)
-            db.rollback()
+    # Certification writes to the local DataAsset cache are DEFERRED to a single
+    # short-lived session AFTER the eval loop (see below). Writing them here on
+    # the long-held ``db`` — then leaving that connection idle through discovery
+    # and evaluation — is exactly what dropped the SSL connection on long runs.
+    # We collect the per-resource certification results during the loop instead.
+    cert_records: List[tuple] = []
 
     def _input_for(resource: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -971,7 +980,7 @@ async def _scan_and_evaluate(
                 and policy_name == "data_certification"
                 and resource.get("type") == "data_product"
             ):
-                _record_certification_violations(db, resource, result, scan_time)
+                cert_records.append((resource, result))
 
             rule_results_raw = result.get("rule_results", []) or []
             if not rule_results_raw and not result.get("is_violation"):
@@ -1060,11 +1069,26 @@ async def _scan_and_evaluate(
                         violation_record["severity"],
                     )
 
-    try:
-        db.commit()
-    except Exception as e:  # noqa: BLE001
-        logger.error("Sentinel: failed to commit certification updates: %s", e)
-        db.rollback()
+    # Certification cache writes happen HERE, on ONE fresh short-lived session —
+    # never the long-held ``db``, which has been idle through discovery + eval and
+    # may be a dead (SSL-closed) connection by now. This is the only place a cert
+    # pass updates DataAsset rows, so the connection is checked out just for the
+    # brief batch of upserts and closed immediately. Non-cert workspace scans make
+    # no DB writes at all, so they skip this entirely.
+    if record_certification and (discovered_resources or cert_records):
+        from app.db.session import get_lakebase_session
+
+        cert_db = get_lakebase_session()
+        try:
+            _refresh_data_asset_quality(cert_db, discovered_resources, scan_time)
+            for _res, _result in cert_records:
+                _record_certification_violations(cert_db, _res, _result, scan_time)
+            cert_db.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Sentinel: failed to persist certification cache updates: %s", e)
+            cert_db.rollback()
+        finally:
+            cert_db.close()
 
     return violations, checks, len(discovered_resources), ws_failure
 

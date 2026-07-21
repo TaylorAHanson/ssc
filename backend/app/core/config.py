@@ -437,11 +437,15 @@ class Settings(BaseSettings):
     # Hard cap on how long a SINGLE workspace's scan (auth probe + resource
     # discovery + OPA evaluation) may run before the sentinel gives up on it,
     # records a structured "timeout" failure, and moves on to the next workspace.
-    # Without this, one slow/unreachable workspace or a huge recursive listing
-    # (e.g. notebooks) hangs the whole run indefinitely with no further logs. 0
-    # disables the timeout (unbounded, the old behavior).
+    # This is a *backstop*, NOT the primary hang guard: true infinite hangs are
+    # already prevented by SENTINEL_SDK_HTTP_TIMEOUT_SECONDS (each SDK call is
+    # bounded), so this only needs to catch pathological total runtime. Keep it
+    # generously large — a big workspace (many notebooks/jobs) can legitimately
+    # take many minutes, and too tight a cap ABANDONS a healthy, still-progressing
+    # scan and reports it as a false "timeout" failure. 0 disables it entirely
+    # (unbounded, the original behavior; safe now that per-call timeouts exist).
     SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS: int = int(
-        os.getenv("SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS", "600")
+        os.getenv("SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS", "1800")
     )
     # Per-HTTP-call timeout for the sentinel's OWN workspace clients — separate
     # from (and longer than) the app-wide DATABRICKS_HTTP_TIMEOUT_SECONDS. A
