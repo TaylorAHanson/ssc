@@ -80,6 +80,13 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "Max seconds a single workspace's scan may run before it's abandoned "
              "(recorded as a timeout failure) and the run moves on. Prevents one "
              "slow/unreachable workspace from hanging the whole scan. 0 = no limit."},
+    {"group": "Notifications & Governance", "key": "SENTINEL_SDK_HTTP_TIMEOUT_SECONDS", "label": "Sentinel per-call SDK timeout (sec)",
+     "type": "int", "min": 0,
+     "help": "Per-HTTP-call timeout for the sentinel's own workspace clients — "
+             "longer than the app-wide Databricks SDK timeout because remote "
+             "workspaces can be slow. Bounds ONE call, not the whole scan (that's "
+             "the per-workspace timeout above). Safe because sentinel runs on its "
+             "own thread pool. 0 = use the app-wide default."},
     {"group": "Notifications & Governance", "key": "SCAN_CATALOGS", "label": "Scanned catalogs",
      "type": "string",
      "help": "Comma-separated Unity Catalog allowlist that scopes governed data, "
@@ -283,6 +290,16 @@ READONLY_FIELDS: List[Dict[str, Any]] = [
     {"group": "Databricks", "key": "DATABRICKS_HOST", "label": "Databricks host"},
     {"group": "Databricks", "key": "DATABRICKS_WAREHOUSE_ID", "label": "SQL warehouse id"},
     {"group": "Databricks", "key": "DATABRICKS_JOB_CLUSTER_ID", "label": "Job cluster id"},
+    {"group": "Databricks", "key": "DATABRICKS_HTTP_TIMEOUT_SECONDS", "label": "SDK HTTP timeout (sec)",
+     "type": "int", "min": 0,
+     "help": "Per-request timeout applied to every Databricks SDK call. The SDK "
+             "has no default, so a stalled connection otherwise hangs forever and "
+             "can exhaust the worker pool, freezing the whole app. 0 = SDK default "
+             "(unbounded); 60 is a safe value."},
+    {"group": "Databricks", "key": "DATABRICKS_RETRY_TIMEOUT_SECONDS", "label": "SDK retry timeout (sec)",
+     "type": "int", "min": 0,
+     "help": "Max total seconds the SDK will keep retrying a transient failure "
+             "before giving up. 0 = SDK default."},
     {"group": "Identity & Email", "key": "IDENTITY_PROVIDER", "label": "Identity provider"},
     {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_PROVIDER", "label": "Email provider"},
     {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_SES_REGION", "label": "SES region"},

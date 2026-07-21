@@ -252,6 +252,17 @@ class Settings(BaseSettings):
     DATABRICKS_CLIENT_ID: str = ""  # SECRET: Set in .env - Service principal client ID for MWS
     DATABRICKS_CLIENT_SECRET: str = ""  # SECRET: Set in .env - Service principal client secret for MWS
 
+    # Hard timeouts applied to EVERY Databricks SDK WorkspaceClient. The SDK
+    # ships with NO default http_timeout_seconds, so a stalled connection to an
+    # unreachable/slow workspace (PrivateLink/VPC/firewall hiccup) hangs the call
+    # *forever*. Because every SDK call runs in a shared thread-pool worker
+    # (asyncio.to_thread), enough infinite hangs exhaust the pool and freeze the
+    # WHOLE app — sentinel scans AND ordinary state-machine requests — with no
+    # further logs. A bounded timeout turns those hangs into fast, retryable
+    # errors so a worker thread is always returned to the pool.
+    DATABRICKS_HTTP_TIMEOUT_SECONDS: int = int(os.getenv("DATABRICKS_HTTP_TIMEOUT_SECONDS", "60"))
+    DATABRICKS_RETRY_TIMEOUT_SECONDS: int = int(os.getenv("DATABRICKS_RETRY_TIMEOUT_SECONDS", "120"))
+
     # The single, install-wide secret scope holding every target-workspace SP's
     # credentials. Each target workspace names its own SP key pair inline (see
     # target_workspaces in Admin -> Settings). Settable in databricks.yml or
@@ -431,6 +442,18 @@ class Settings(BaseSettings):
     # disables the timeout (unbounded, the old behavior).
     SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS: int = int(
         os.getenv("SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS", "600")
+    )
+    # Per-HTTP-call timeout for the sentinel's OWN workspace clients — separate
+    # from (and longer than) the app-wide DATABRICKS_HTTP_TIMEOUT_SECONDS. A
+    # sentinel scan runs many calls against remote/locked-down workspaces where a
+    # single list/get can legitimately be slow, so it gets more headroom. This is
+    # safe ONLY because sentinel discovery runs on its OWN dedicated thread pool
+    # (see sentinel.py) — a slow sentinel call can't starve the shared pool that
+    # ordinary state-machine requests use. This bounds ONE call; the whole
+    # workspace scan is still capped by SENTINEL_WORKSPACE_SCAN_TIMEOUT_SECONDS.
+    # 0 = fall back to the app-wide default.
+    SENTINEL_SDK_HTTP_TIMEOUT_SECONDS: int = int(
+        os.getenv("SENTINEL_SDK_HTTP_TIMEOUT_SECONDS", "300")
     )
     # A single sentinel run scans every configured target workspace for
     # workspace-scoped resources (compute, jobs, apps, ...). Data certification is
@@ -825,6 +848,52 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def _install_sdk_timeout_defaults() -> None:
+    """Give EVERY Databricks SDK ``Config`` a default HTTP + retry timeout.
+
+    The SDK ships no default ``http_timeout_seconds``, so a stalled connection to
+    an unreachable/slow workspace hangs the call *forever*. Every SDK call runs in
+    a shared ``asyncio.to_thread`` worker; enough infinite hangs exhaust the pool
+    and freeze the WHOLE app (sentinel scans AND ordinary state-machine requests)
+    with no further logs.
+
+    There is no env var for these attributes and there are many bare
+    ``WorkspaceClient()`` call sites (secret reads, deps, DB bootstrap) — some of
+    which run synchronously on the event loop — so the single robust fix is to
+    default the timeout on ``Config`` construction. We only set values the caller
+    left unset, and read them live from ``settings`` so Admin -> Settings tuning
+    applies without a code change. A non-positive setting leaves the SDK default
+    (unbounded) as an intentional escape hatch. Idempotent.
+    """
+    try:
+        from databricks.sdk.core import Config
+    except Exception:  # noqa: BLE001 - SDK optional at import time
+        return
+    if getattr(Config, "_ssc_timeout_patched", False):
+        return
+    _orig_init = Config.__init__
+
+    def _patched_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        _orig_init(self, *args, **kwargs)
+        try:
+            if getattr(self, "http_timeout_seconds", None) is None:
+                http_t = int(getattr(settings, "DATABRICKS_HTTP_TIMEOUT_SECONDS", 60) or 0)
+                if http_t > 0:
+                    self.http_timeout_seconds = http_t
+            if getattr(self, "retry_timeout_seconds", None) is None:
+                retry_t = int(getattr(settings, "DATABRICKS_RETRY_TIMEOUT_SECONDS", 120) or 0)
+                if retry_t > 0:
+                    self.retry_timeout_seconds = retry_t
+        except Exception:  # noqa: BLE001 - never let defaulting break client init
+            pass
+
+    Config.__init__ = _patched_init  # type: ignore[assignment]
+    Config._ssc_timeout_patched = True
+
+
+_install_sdk_timeout_defaults()
 
 
 # Environments where dev-only conveniences (the "Dev Persona Mode" role override,

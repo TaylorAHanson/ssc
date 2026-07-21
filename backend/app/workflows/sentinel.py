@@ -27,11 +27,14 @@ Pipeline:
 """
 
 import asyncio
+import functools
 import glob
 import html
 import logging
 import os
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
@@ -40,6 +43,42 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
+
+
+# Dedicated thread pool for the sentinel's *blocking* Databricks SDK calls
+# (auth probe, resource discovery, OAuth diagnostic). Isolating these from the
+# default asyncio ``to_thread`` executor is what makes a longer sentinel per-call
+# timeout SAFE: even if several sentinel calls stall for their full timeout, they
+# consume threads HERE, never the shared pool that ordinary state-machine
+# requests rely on — so a slow/unreachable workspace can't freeze the whole app.
+_sentinel_executor: Optional[ThreadPoolExecutor] = None
+_sentinel_executor_lock = threading.Lock()
+
+
+def _get_sentinel_executor() -> ThreadPoolExecutor:
+    """Lazily build the sentinel's dedicated thread pool.
+
+    Sized to the scan concurrency plus headroom for the serial probe/diagnostic
+    calls, so bounded fan-out (``SENTINEL_SCAN_CONCURRENCY``) never queues behind
+    itself. Rebuilt if a prior pool was shut down.
+    """
+    global _sentinel_executor
+    if _sentinel_executor is not None:
+        return _sentinel_executor
+    with _sentinel_executor_lock:
+        if _sentinel_executor is None:
+            workers = max(2, int(getattr(settings, "SENTINEL_SCAN_CONCURRENCY", 5) or 5) + 2)
+            _sentinel_executor = ThreadPoolExecutor(
+                max_workers=workers, thread_name_prefix="sentinel-scan"
+            )
+    return _sentinel_executor
+
+
+async def _to_sentinel_thread(func: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
+    """``asyncio.to_thread`` equivalent that runs on the dedicated sentinel pool."""
+    loop = asyncio.get_running_loop()
+    call = functools.partial(func, *args, **kwargs)
+    return await loop.run_in_executor(_get_sentinel_executor(), call)
 
 
 async def _gather_bounded(factories: List[Callable[[], Awaitable[_T]]], limit: int) -> List[_T]:
@@ -359,6 +398,14 @@ def _new_workspace_client(host: Optional[str] = None):
     """
     from app.providers.databricks.client import DatabricksProvider
 
+    # Sentinel clients get a longer per-call HTTP timeout than the rest of the app
+    # (remote/locked-down workspaces can be slow), which is safe because sentinel
+    # discovery runs on its own dedicated thread pool (see _to_sentinel_thread) so
+    # a slow call can't starve the shared pool used by ordinary requests.
+    sentinel_http_timeout = (
+        int(getattr(settings, "SENTINEL_SDK_HTTP_TIMEOUT_SECONDS", 0) or 0) or None
+    )
+
     if host:
         from app.core.workspaces import get_workspace_config
 
@@ -369,6 +416,7 @@ def _new_workspace_client(host: Optional[str] = None):
                 token=cfg.token,
                 client_id=cfg.client_id,
                 client_secret=cfg.client_secret,
+                http_timeout_seconds=sentinel_http_timeout,
             )
             return provider.client
 
@@ -376,6 +424,7 @@ def _new_workspace_client(host: Optional[str] = None):
         host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
         client_id=settings.DATABRICKS_CLIENT_ID,
         client_secret=settings.DATABRICKS_CLIENT_SECRET,
+        http_timeout_seconds=sentinel_http_timeout,
     )
     return provider.client
 
@@ -625,7 +674,7 @@ async def _probe_workspace_auth(
     """
     try:
         me = await asyncio.wait_for(
-            asyncio.to_thread(workspace_client.current_user.me), timeout=timeout
+            _to_sentinel_thread(workspace_client.current_user.me), timeout=timeout
         )
         identity = getattr(me, "user_name", None) or getattr(me, "display_name", None)
         return {"ok": True, "network_reachable": True, "category": None,
@@ -645,7 +694,7 @@ async def _probe_workspace_auth(
         }
         # Enrich auth-class failures with the precise OAuth reason.
         if network_reachable and host and client_id and client_secret:
-            diag = await asyncio.to_thread(
+            diag = await _to_sentinel_thread(
                 _oauth_token_diagnostic, host, client_id, client_secret, timeout
             )
             if diag is not None and diag.get("ok"):
@@ -817,7 +866,7 @@ async def _scan_and_evaluate(
             return [], {"handler": handler_class.__name__, "category": category, "error": str(e)}
 
     handler_results = await _gather_bounded(
-        [(lambda hc=hc: asyncio.to_thread(_discover_one, hc)) for hc in handler_classes],
+        [(lambda hc=hc: _to_sentinel_thread(_discover_one, hc)) for hc in handler_classes],
         limit,
     )
 
@@ -1044,6 +1093,12 @@ async def run_discovery(db, request) -> Dict[str, Any]:
     from app.providers.databricks.handlers import DatasetResourceHandler
     from app.providers.opa.client import OpaProvider
 
+    # Capture the id up front (a plain string) so the final persistence never has
+    # to touch the possibly-expired ``request`` instance: intermediate commits
+    # during the scan expire it, and a multi-minute scan can outlive its DB
+    # connection / have its row purged — either turns a later ``request.id`` /
+    # ``request.state_context`` access into an ObjectDeletedError or SSL error.
+    request_id = request.id
     state_ctx = request.state_context or {}
     dataset_id = state_ctx.get("dataset_id")
     requested_policies = state_ctx.get("policies", []) or []
@@ -1333,11 +1388,38 @@ async def run_discovery(db, request) -> Dict[str, Any]:
         persist["workspace_failures"] = ws_failures
     if scan_errors:
         persist["scan_error"] = "; ".join(scan_errors)
-    _persist_state_context(db, request, persist)
-    # Persist the full detail into the joined table (committed there). Keep the
-    # in-memory lists on the return so the immediate poller steps below don't need
-    # to re-read the DB.
-    replace_run_findings(db, request.id, violations=violations, checks=checks)
+
+    # Persist on a FRESH session, not the one held open across the whole scan.
+    # The scan can run for minutes with no DB activity, so the original
+    # connection may be dead (Lakebase drops idle/expired-token SSL connections)
+    # and the original ``request`` instance is expired by intermediate commits.
+    # A fresh session gets a live, pre-pinged connection and a live instance;
+    # ``expire_on_commit=False`` keeps the re-fetched row usable across the two
+    # commits below. If the run was deleted mid-scan (e.g. an admin purge of a
+    # "stuck" run), we detect the missing row and discard results cleanly instead
+    # of crashing with ObjectDeletedError (which previously poisoned the session
+    # and cascaded into the poller's error path).
+    from app.db import RequestModel
+    from app.db.session import get_lakebase_session
+
+    write_db = get_lakebase_session()
+    write_db.expire_on_commit = False
+    try:
+        fresh_request = (
+            write_db.query(RequestModel).filter(RequestModel.id == request_id).first()
+        )
+        if fresh_request is None:
+            logger.warning(
+                "Sentinel: request %s no longer exists (deleted mid-scan); "
+                "discarding %d violation(s)/%d check(s) without persisting.",
+                request_id, len(violations), len(checks),
+            )
+        else:
+            _persist_state_context(write_db, fresh_request, persist)
+            # Persist the full detail into the joined table (committed there).
+            replace_run_findings(write_db, request_id, violations=violations, checks=checks)
+    finally:
+        write_db.close()
 
     return {
         "violations": violations,

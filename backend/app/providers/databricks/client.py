@@ -19,6 +19,38 @@ from databricks.sdk.service import jobs, workspace, compute as compute_svc
 logger = logging.getLogger(__name__)
 
 
+def _build_workspace_client(**auth: Any) -> WorkspaceClient:
+    """Build a WorkspaceClient with bounded HTTP + retry timeouts baked into its Config.
+
+    The Databricks SDK has no default ``http_timeout_seconds``; without this a
+    stalled connection hangs the SDK call forever, permanently consuming the
+    ``asyncio.to_thread`` worker that made it. Enough of those exhaust the shared
+    thread pool and freeze the WHOLE app — sentinel scans AND ordinary
+    state-machine requests — with no further logs. Timeouts turn those hangs into
+    fast, retryable errors so a worker thread is always returned to the pool.
+
+    ``WorkspaceClient.__init__`` doesn't accept the timeout attributes directly,
+    so they must be set on a ``Config`` object. Values are read live from settings
+    (tunable no-code under Admin -> Settings); a non-positive value leaves the SDK
+    default (unbounded) as an intentional escape hatch.
+    """
+    cfg_kwargs: Dict[str, Any] = {k: v for k, v in auth.items() if v is not None}
+    try:
+        from app.core.config import settings
+
+        http_t = int(getattr(settings, "DATABRICKS_HTTP_TIMEOUT_SECONDS", 60) or 0)
+        retry_t = int(getattr(settings, "DATABRICKS_RETRY_TIMEOUT_SECONDS", 120) or 0)
+    except Exception:  # noqa: BLE001 - never let config lookup break client init
+        http_t, retry_t = 60, 120
+    # An explicit http_timeout_seconds passed by the caller (e.g. the sentinel's
+    # longer per-call timeout) always wins over the app-wide default.
+    if "http_timeout_seconds" not in cfg_kwargs and http_t > 0:
+        cfg_kwargs["http_timeout_seconds"] = http_t
+    if "retry_timeout_seconds" not in cfg_kwargs and retry_t > 0:
+        cfg_kwargs["retry_timeout_seconds"] = retry_t
+    return WorkspaceClient(config=Config(**cfg_kwargs))
+
+
 class DatabricksProvider(BaseProvider):
     """Databricks provider for workspace and catalog operations."""
     
@@ -28,11 +60,15 @@ class DatabricksProvider(BaseProvider):
         token: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
         client_id: Optional[str] = None,
-        client_secret: Optional[str] = None
+        client_secret: Optional[str] = None,
+        http_timeout_seconds: Optional[int] = None,
     ):
         super().__init__(config)
         self.host = host
         self.token = token
+        # Optional per-call HTTP timeout override (e.g. the sentinel's longer
+        # timeout). None => app-wide DATABRICKS_HTTP_TIMEOUT_SECONDS default.
+        _to = {"http_timeout_seconds": http_timeout_seconds} if http_timeout_seconds else {}
         
         # Validate that we have required credentials
         if not host:
@@ -49,17 +85,19 @@ class DatabricksProvider(BaseProvider):
             if has_sp:
                 # Service Principal Auth
                 logger.info(f"Initializing DatabricksProvider with Service Principal: client_id={client_id[:4]}*** host={host}")
-                self.client = WorkspaceClient(
+                self.client = _build_workspace_client(
                     host=host,
                     client_id=client_id,
-                    client_secret=client_secret
+                    client_secret=client_secret,
+                    **_to,
                 )
             else:
                 # Token Auth
                 logger.info(f"Initializing DatabricksProvider with Token: host={host}")
-                self.client = WorkspaceClient(
+                self.client = _build_workspace_client(
                     host=host,
-                    token=token
+                    token=token,
+                    **_to,
                 )
         except Exception as e:
             raise ValueError(f"Databricks client initialization failed: {str(e)}") from e
@@ -80,10 +118,10 @@ class DatabricksProvider(BaseProvider):
         if token:
             # Create a new client with the provided token
             # Note: We use auth_type="pat" as often required when passing token explicitly
-            return WorkspaceClient(
+            return _build_workspace_client(
                 host=self.host,
                 token=token,
-                auth_type="pat"
+                auth_type="pat",
             )
         return self.client
 
