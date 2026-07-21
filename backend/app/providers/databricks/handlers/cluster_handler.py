@@ -16,7 +16,9 @@ class ClusterResourceHandler(BaseResourceHandler):
                     "type": "cluster",
                     "owner": getattr(cluster, 'creator_user_name', 'unknown'),
                     "state": getattr(cluster.state, 'value', 'UNKNOWN') if hasattr(cluster, 'state') else 'UNKNOWN',
-                    "tags": {k: v for k, v in getattr(cluster, 'custom_tags', {}).items()} if hasattr(cluster, 'custom_tags') else {}
+                    # custom_tags can be present-but-None (hasattr is True, value is
+                    # None), so `or {}` guards against .items() on None.
+                    "tags": dict((getattr(cluster, 'custom_tags', None) or {}).items()),
                 })
         except Exception as e:
             # Re-raise so the Sentinel attributes this to the workspace + classifies

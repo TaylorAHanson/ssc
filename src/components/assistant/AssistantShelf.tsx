@@ -18,6 +18,13 @@ interface AssistantShelfProps {
   headerActions?: React.ReactNode;
   /** Label for the floating launcher button (defaults to "Assistant"). */
   launcherLabel?: string;
+  /**
+   * Collapse the shelf when the user clicks the page underneath. Default true.
+   * Set false when the parent wants the shelf to stay open across in-page work
+   * (e.g. the Workflow Studio, where you hop between the editor and the chat)
+   * and manages collapsing itself (on navigation away).
+   */
+  closeOnClickOutside?: boolean;
   /** The shelf body — typically a <ChatView />. */
   children: React.ReactNode;
 }
@@ -40,6 +47,7 @@ export function AssistantShelf({
   subtitle,
   headerActions,
   launcherLabel = 'Assistant',
+  closeOnClickOutside = true,
   children,
 }: AssistantShelfProps) {
   const [width, setWidth] = useState<number>(() => {
@@ -85,9 +93,10 @@ export function AssistantShelf({
 
   // Collapse when the user clicks outside the shelf (but not while dragging the
   // resize handle). The shelf is an overlay, so a click on the page underneath
-  // means "I'm done with the assistant".
+  // means "I'm done with the assistant". Opt out via `closeOnClickOutside` when
+  // the parent wants the shelf sticky (it collapses it on navigation instead).
   useEffect(() => {
-    if (!open) return;
+    if (!open || !closeOnClickOutside) return;
     const onPointerDown = (e: MouseEvent) => {
       if (resizingRef.current) return;
       const el = asideRef.current;
@@ -95,7 +104,7 @@ export function AssistantShelf({
     };
     document.addEventListener('mousedown', onPointerDown);
     return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [open, onClose]);
+  }, [open, onClose, closeOnClickOutside]);
 
   return (
     <>

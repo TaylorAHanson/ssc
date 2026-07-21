@@ -378,9 +378,18 @@ class GroupMembershipInput(BaseModel):
           "membership backend authorizes the write itself; if the caller isn't "
           "entitled, this tool surfaces that error."))
 async def add_group_membership(group: str, members: List[str], **kwargs) -> Dict[str, Any]:
+    # Normalize member identifiers the same way member_lookup does: the directory
+    # keys on the corporate username (local part of the email), so a raw
+    # 'user@domain' is rejected as an invalid member. Accept either form.
+    from app.tools.self_service.identity_groups import _normalize_member
+
+    normalized = [_normalize_member(m) for m in members]
+    normalized = [m for m in normalized if m]
+    if normalized != members:
+        logger.info("add_group_membership: normalized members %r -> %r", members, normalized)
     provider = _get_identity_provider()
-    result = await provider.list_members_add(group, members)
-    return {"group": group, "members": members, "result": result}
+    result = await provider.list_members_add(group, normalized)
+    return {"group": group, "members": normalized, "result": result}
 
 
 # --------------------------------------------------------------------------

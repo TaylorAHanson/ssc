@@ -41,6 +41,7 @@ import { Lock, Sparkles, RefreshCw } from 'lucide-react';
 import { LabelWithHelp, AskAgentHint } from '../../components/ui/help-tip';
 import { ChatView } from '../../components/chat/ChatView';
 import { AssistantShelf } from '../../components/assistant/AssistantShelf';
+import { ErrorBoundary } from '../../components/ErrorBoundary';
 
 const inputClass =
   'w-full border border-gray-300 rounded-md h-10 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent';
@@ -182,6 +183,15 @@ export function Workflows() {
   // leaving the page.
   const [showAssistant, setShowAssistant] = useState(false);
 
+  // Collapse the authoring assistant when the user leaves the studio for the
+  // workflows list (no workflow open). Staying within the studio — hopping
+  // between the Details/Graph tabs or clicking into the editor — keeps it open
+  // (click-outside close is disabled on the shelf); leaving the page entirely
+  // unmounts the shelf.
+  useEffect(() => {
+    if (!editing && showAssistant) setShowAssistant(false);
+  }, [editing, showAssistant]);
+
   // React to the authoring assistant's tool calls so the editor on the left
   // mirrors what the agent is doing on the right:
   //   * validate / preview / save / publish all carry the drafted `graph_spec`
@@ -216,9 +226,17 @@ export function Workflows() {
     const rawSpec = args?.graph_spec ?? null;
     // The model occasionally emits ``graph_spec`` as a JSON string instead of an
     // object; parse it so the live preview (and the open-on-save below) still work.
-    const spec = (typeof rawSpec === 'string'
+    let spec = (typeof rawSpec === 'string'
       ? safeParseJson(rawSpec)
       : rawSpec) as WorkflowGraphSpec | null;
+    // The model also sometimes emits a hole in ``stages`` (a null/undefined or
+    // non-object entry). The editor and graph preview read ``stage.kind``
+    // directly, so a hole throws "Cannot read properties of undefined (reading
+    // 'kind')" mid-render and blanks the whole page. Drop invalid entries before
+    // anything downstream touches them.
+    if (spec && typeof spec === 'object' && Array.isArray(spec.stages)) {
+      spec = { ...spec, stages: spec.stages.filter((s) => !!s && typeof s === 'object') };
+    }
     const specHasStages =
       !!spec &&
       typeof spec === 'object' &&
@@ -1119,12 +1137,17 @@ export function Workflows() {
             {tab === 'workflow' && (
               <div>
                 {form.graph_spec ? (
-                  <WorkflowEditor
-                    spec={form.graph_spec}
-                    tools={tools}
-                    onChange={(graph_spec) => setForm({ ...form, graph_spec })}
-                    onAskAgent={() => setShowAssistant(true)}
-                  />
+                  <ErrorBoundary
+                    label="the workflow editor"
+                    resetKeys={[workflowParam, searchParams.get('new')]}
+                  >
+                    <WorkflowEditor
+                      spec={form.graph_spec}
+                      tools={tools}
+                      onChange={(graph_spec) => setForm({ ...form, graph_spec })}
+                      onAskAgent={() => setShowAssistant(true)}
+                    />
+                  </ErrorBoundary>
                 ) : (
                   <div className="text-center py-10 border border-dashed border-gray-200 rounded-lg">
                     <WorkflowIcon className="w-8 h-8 text-gray-300 mx-auto mb-3" />
@@ -1263,6 +1286,11 @@ export function Workflows() {
         open={showAssistant}
         onOpen={() => setShowAssistant(true)}
         onClose={() => setShowAssistant(false)}
+        // Keep the shelf open while co-authoring — clicking into the editor on
+        // the left shouldn't collapse it. We collapse it ourselves when the user
+        // leaves the studio (see the effect above); leaving the page entirely
+        // unmounts it.
+        closeOnClickOutside={false}
         title="Authoring assistant"
         widthStorageKey="authoring_assistant_width"
         subtitle="Ask me to explain a field, or to draft / edit this workflow. When I save a draft, it opens automatically in the editor on the left."

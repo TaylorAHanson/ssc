@@ -3,8 +3,8 @@ Request API endpoints.
 """
 from fastapi import APIRouter, HTTPException, Depends, status, Request as FastAPIRequest
 import fastapi
-from fastapi.responses import JSONResponse
-from typing import List, Optional
+from fastapi.responses import JSONResponse, ORJSONResponse
+from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 from app.models.request import Request, RequestCreate, RequestUpdate, StateMachineState, RequestStatus, RequestType
 from app.services.request_service import RequestService
@@ -25,7 +25,45 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _format_request(req: RequestModel, db: Session, facts=None, spec_dict=None) -> Optional[Request]:
+#: Large, list-view-irrelevant arrays stripped from ``metadata`` in summary mode.
+#: These grow unbounded (e.g. a Sentinel run's per-violation records) and blow up
+#: the list payload, but the list only needs aggregate counts — the full arrays
+#: are fetched on demand via ``GET /requests/{id}`` when a row is opened.
+_HEAVY_METADATA_KEYS = ("violations", "resources", "scan_results", "assets")
+
+
+def _summarize_metadata(state_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Trim heavy arrays out of a request's metadata for list (summary) responses.
+
+    Preserves the small summary fields the list rows use (``scan_stats``,
+    ``workspace_failures``, ``workspaces_scanned``, scalars) and drops the large
+    arrays. Ensures a ``scan_stats.violation_count`` survives so a Sentinel row
+    still shows the right count without shipping every violation record.
+    """
+    if not isinstance(state_context, dict):
+        return {}
+    meta = dict(state_context)
+
+    violations = meta.get("violations")
+    if isinstance(violations, list):
+        stats = dict(meta.get("scan_stats") or {})
+        if "violation_count" not in stats:
+            # Mirror the UI's per-rule count: sum violation_reasons (>=1 each).
+            stats["violation_count"] = sum(
+                (len(v.get("violation_reasons") or []) or 1)
+                for v in violations
+                if isinstance(v, dict)
+            )
+        meta["scan_stats"] = stats
+
+    for key in _HEAVY_METADATA_KEYS:
+        meta.pop(key, None)
+    return meta
+
+
+def _format_request(
+    req: RequestModel, db: Session, facts=None, spec_dict=None, summary: bool = False
+) -> Optional[Request]:
     """Format a RequestModel into a Request Pydantic model.
 
     The request ``type`` is a free, data-driven string (it names a workflow in
@@ -35,6 +73,11 @@ def _format_request(req: RequestModel, db: Session, facts=None, spec_dict=None) 
     ``facts``/``spec_dict`` are optional pre-fetched inputs supplied by the
     list endpoints (see :func:`_format_requests_bulk`) to avoid per-request
     fact + spec queries.
+
+    ``summary`` trims the response for list views: heavy ``metadata`` arrays are
+    dropped (see :func:`_summarize_metadata`) and the ``conversation`` transcript
+    is omitted. Row-level counts are preserved; the full record is available via
+    ``GET /requests/{id}``.
     """
     r_type = req.type
 
@@ -93,12 +136,14 @@ def _format_request(req: RequestModel, db: Session, facts=None, spec_dict=None) 
         environment=req.environment,
         requester_email=req.requester_email,
         lastError=req.last_error,
-        metadata=req.state_context or {},
-        conversation=req.conversation,
+        metadata=_summarize_metadata(req.state_context) if summary else (req.state_context or {}),
+        conversation=None if summary else req.conversation,
         approvals=approvals
     )
 
-def _format_requests_bulk(requests: List[RequestModel], db: Session) -> List[Request]:
+def _format_requests_bulk(
+    requests: List[RequestModel], db: Session, summary: bool = False
+) -> List[Request]:
     """Format a page of requests with O(1) fact + spec queries (no N+1).
 
     A naive loop over ``_format_request`` issues, per request, a fact query, a
@@ -129,7 +174,8 @@ def _format_requests_bulk(requests: List[RequestModel], db: Session) -> List[Req
         if req.type not in spec_cache:
             spec_cache[req.type] = _resolve_spec_dict(req, db)
         formatted = _format_request(
-            req, db, facts=facts_by_req.get(req.id, []), spec_dict=spec_cache[req.type]
+            req, db, facts=facts_by_req.get(req.id, []), spec_dict=spec_cache[req.type],
+            summary=summary,
         )
         if formatted:
             out.append(formatted)
@@ -137,13 +183,21 @@ def _format_requests_bulk(requests: List[RequestModel], db: Session) -> List[Req
 
 
 @router.get("", response_model=List[Request])
-async def get_requests(
+def get_requests(
     skip: int = 0,
     limit: int = 100,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all requests."""
+    """Get all requests.
+
+    Defined as a *sync* handler so Starlette runs it in the worker threadpool:
+    formatting + JSON encoding a large page (e.g. a Sentinel run with tens of
+    thousands of violations) is CPU-bound and would otherwise block the single
+    event loop, starving every other in-flight request. We also serialize with
+    orjson here (fast, releases the GIL) and return the ready Response so FastAPI
+    doesn't re-encode it back on the loop.
+    """
     # Build query; eager-load approvals to avoid a per-request lazy load.
     query = db.query(RequestModel).options(selectinload(RequestModel.approvals))
     
@@ -152,7 +206,8 @@ async def get_requests(
         query = query.filter(RequestModel.requester_email == current_user.email)
     
     requests = query.offset(skip).limit(limit).all()
-    return _format_requests_bulk(requests, db)
+    formatted = _format_requests_bulk(requests, db)
+    return ORJSONResponse([r.model_dump(mode="json") for r in formatted])
 
 
 from pydantic import BaseModel as _PydanticBase
@@ -162,15 +217,22 @@ class PaginatedRequestsResponse(_PydanticBase):
     total: int
 
 @router.get("/paginated", response_model=PaginatedRequestsResponse)
-async def get_paginated_requests(
+def get_paginated_requests(
     skip: int = 0,
     limit: int = 10,
     type: Optional[str] = None,
     search: Optional[str] = None,
+    summary: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get paginated requests with optional filtering and search."""
+    """Get paginated requests with optional filtering and search.
+
+    ``summary=true`` returns list-optimized rows: heavy ``metadata`` arrays (e.g.
+    a Sentinel run's full violation records) and the conversation transcript are
+    omitted while aggregate counts are preserved — much smaller payloads for a
+    growing table. Open a row to fetch its full record via ``GET /requests/{id}``.
+    """
     from sqlalchemy import or_
     
     query = db.query(RequestModel).options(selectinload(RequestModel.approvals))
@@ -202,17 +264,29 @@ async def get_paginated_requests(
     
     # Order by newest first
     requests = query.order_by(RequestModel.created_at.desc()).offset(skip).limit(limit).all()
-    response_list = _format_requests_bulk(requests, db)
-    return PaginatedRequestsResponse(items=response_list, total=total)
+    response_list = _format_requests_bulk(requests, db, summary=summary)
+    payload = PaginatedRequestsResponse(items=response_list, total=total)
+    # Sync handler + orjson => formatting/encoding happen in the threadpool, off
+    # the event loop (see get_requests). Return the ready Response so FastAPI
+    # doesn't re-serialize on the loop.
+    return ORJSONResponse(payload.model_dump(mode="json"))
 
 
 @router.get("/{request_id}", response_model=Request)
-async def get_request(
+def get_request(
     request_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get a specific request by ID."""
+    """Get a specific request by ID.
+
+    Sync handler on purpose: a single request can carry a very large
+    ``state_context`` (e.g. a Sentinel run with tens of thousands of violation
+    records). Formatting + JSON-encoding that on the event loop would freeze the
+    whole app (other tabs, the context catalog, etc.) until it finished. Running
+    in the threadpool and encoding with orjson (which releases the GIL) keeps the
+    app responsive while the big payload is built.
+    """
     from app.db.session import get_database_url
     db_url = get_database_url()
     logger.info(f"[GET /requests/{request_id}] Using database: {db_url[:50]}...")
@@ -234,8 +308,8 @@ async def get_request(
     formatted = _format_request(request_model, db)
     if not formatted:
         raise HTTPException(status_code=500, detail="Failed to format request")
-        
-    return formatted
+
+    return ORJSONResponse(formatted.model_dump(mode="json"))
 
 
 @router.get("/{request_id}/status")

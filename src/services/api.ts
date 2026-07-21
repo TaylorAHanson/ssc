@@ -260,7 +260,7 @@ export async function getRequests(): Promise<Request[]> {
   return response.json();
 }
 
-export async function getPaginatedRequests(params: { skip: number, limit: number, type?: string, search?: string }): Promise<{ items: Request[], total: number }> {
+export async function getPaginatedRequests(params: { skip: number, limit: number, type?: string, search?: string, summary?: boolean }): Promise<{ items: Request[], total: number }> {
   const url = new URL(`${API_BASE_URL}/requests/paginated`, window.location.origin);
   Object.entries(params).forEach(([k, v]) => {
     if (v !== undefined) {

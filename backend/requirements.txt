@@ -1,5 +1,9 @@
 fastapi==0.135.2
 uvicorn[standard]==0.42.0
+# Fast JSON (de)serialization; used for large read responses (e.g. Sentinel runs
+# with tens of thousands of violations) so encoding runs off the event loop and
+# releases the GIL. Was previously only a transitive dependency.
+orjson==3.11.9
 python-statemachine==3.0.0
 pydantic==2.12.5
 pydantic-settings==2.13.1

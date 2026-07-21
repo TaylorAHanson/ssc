@@ -27,6 +27,11 @@ const formatPacific = (value: string, opts?: Intl.DateTimeFormatOptions): string
     ...opts,
   });
 
+// How many violation rows to render per "page" in the detail table. A completed
+// run can hold tens of thousands of violations; rendering them all at once
+// freezes the tab, so we render this many and grow on demand ("Load more").
+const VIOLATION_PAGE_SIZE = 50;
+
 const formatReason = (v: any) => {
     if (v.violation_reasons && Array.isArray(v.violation_reasons) && v.violation_reasons.length > 0) {
         if (v.violation_reasons.length === 1) {
@@ -98,6 +103,18 @@ export function EnforcementSentinel() {
     const [actionLoading, setActionLoading] = useState<string | null>(null);
     const [selectedViolation, setSelectedViolation] = useState<any | null>(null);
     const [executedActions, setExecutedActions] = useState<Record<string, { at: string }>>({});
+
+    // In-report search + severity filter (on top of the policy-group tabs) and
+    // incremental rendering. A completed run can carry tens of thousands of
+    // violations; rendering them all at once hangs the tab, so we render a
+    // growing window ("Load more") and let search/severity narrow the set first.
+    const [violationSearch, setViolationSearch] = useState('');
+    const [severityFilter, setSeverityFilter] = useState<string>('all');
+    const [visibleCount, setVisibleCount] = useState<number>(VIOLATION_PAGE_SIZE);
+    // Reset the render window whenever the visible set changes (run, tab, or filter).
+    useEffect(() => {
+        setVisibleCount(VIOLATION_PAGE_SIZE);
+    }, [selectedRunId, activeTab, violationSearch, severityFilter]);
 
     // Server-side pagination and search states
     const [sentinelRuns, setSentinelRuns] = useState<any[]>([]);
@@ -172,7 +189,10 @@ export function EnforcementSentinel() {
                 skip,
                 limit: pageSize,
                 type: 'enforcement_sentinel',
-                search: debouncedSearch || undefined
+                search: debouncedSearch || undefined,
+                // List rows only need aggregate counts; the full violation records
+                // are fetched on demand when a run is opened (see selectedRun below).
+                summary: true,
             });
             setSentinelRuns(res.items);
             setTotalRuns(res.total);
@@ -187,7 +207,25 @@ export function EnforcementSentinel() {
         fetchSentinelRuns();
     }, [fetchSentinelRuns]);
 
-    const selectedRun = useMemo(() => sentinelRuns.find(r => r.id === selectedRunId), [sentinelRuns, selectedRunId]);
+    // Full run records (with violations) fetched on demand when a row is opened.
+    // The list itself is a lightweight summary, so we hydrate the selected run's
+    // full payload here and cache it per id (immune to summary-list re-polling).
+    const [fullRuns, setFullRuns] = useState<Record<string, any>>({});
+    useEffect(() => {
+        if (!selectedRunId || fullRuns[selectedRunId]) return;
+        let cancelled = false;
+        api.getRequest(selectedRunId)
+            .then(full => { if (!cancelled) setFullRuns(prev => ({ ...prev, [selectedRunId]: full })); })
+            .catch(e => console.error('Failed to load full sentinel run:', e));
+        return () => { cancelled = true; };
+    }, [selectedRunId, fullRuns]);
+
+    // Prefer the hydrated full record; fall back to the light list row so the
+    // panel opens instantly and upgrades once the full payload arrives.
+    const selectedRun = useMemo(
+        () => (selectedRunId ? fullRuns[selectedRunId] : undefined) || sentinelRuns.find(r => r.id === selectedRunId),
+        [sentinelRuns, selectedRunId, fullRuns],
+    );
 
     // Durably rehydrate the "Executed" state for a run from the server-side
     // audit records, so a page refresh doesn't lose the fact that an admin
@@ -657,7 +695,26 @@ export function EnforcementSentinel() {
                                 return sevB - sevA;
                             });
 
-                            const activeViolations = sortViolations(activeTab === 'all' ? violations : (violationsByPolicy[activeTab] || []));
+                            // Base set = the selected policy tab, then narrowed by the
+                            // severity filter and free-text search (resource, policy,
+                            // workspace, owner, action, severity, and reason text).
+                            const baseViolations: any[] = activeTab === 'all' ? violations : (violationsByPolicy[activeTab] || []);
+                            const q = violationSearch.trim().toLowerCase();
+                            const matchesSearch = (v: any): boolean => {
+                                if (!q) return true;
+                                const reasons = Array.isArray(v.violation_reasons) ? v.violation_reasons.join(' ') : (v.reason || '');
+                                const hay = [
+                                    v.resource_id, resourceTypeLabel(v.resource_type), v.policy, v.action,
+                                    v.severity, resolveWorkspace(v), resolveOwner(v), reasons,
+                                ].filter(Boolean).join(' ').toLowerCase();
+                                return hay.includes(q);
+                            };
+                            const filteredViolations = baseViolations.filter((v: any) =>
+                                (severityFilter === 'all' || v.severity === severityFilter) && matchesSearch(v)
+                            );
+                            const filtersActive = q.length > 0 || severityFilter !== 'all';
+                            const activeViolations = sortViolations(filteredViolations);
+                            const visibleViolations = activeViolations.slice(0, visibleCount);
 
                             return (
                                 <div className="flex-1 overflow-y-auto bg-gray-50/50 p-4 md:p-6 flex flex-col gap-6">
@@ -831,18 +888,19 @@ export function EnforcementSentinel() {
                                                     </Card>
                                                 </div>
                                                 
-                                                {/* Severity Breakdown */}
+                                                {/* Severity Breakdown. CRITICAL was collapsed out of the
+                                                    policy rules, so severities are now HIGH / MEDIUM / LOW. */}
                                                 {vCount > 0 && (
-                                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                                        {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(sev => {
+                                                    <div className="grid grid-cols-3 gap-4">
+                                                        {['HIGH', 'MEDIUM', 'LOW'].map(sev => {
                                                             const count = violations.filter((v: any) => v.severity === sev).length;
-                                                            const colors = sev === 'CRITICAL' && count > 0 ? 'bg-red-50/30 border-red-100' :
-                                                                           sev === 'HIGH' && count > 0 ? 'bg-orange-50/30 border-orange-100' :
+                                                            const colors = sev === 'HIGH' && count > 0 ? 'bg-orange-50/30 border-orange-100' :
                                                                            sev === 'MEDIUM' && count > 0 ? 'bg-yellow-50/30 border-yellow-100' :
+                                                                           sev === 'LOW' && count > 0 ? 'bg-gray-50/50 border-gray-200' :
                                                                            'bg-white border-gray-200 opacity-60';
-                                                            const textColors = sev === 'CRITICAL' && count > 0 ? 'text-red-600' :
-                                                                               sev === 'HIGH' && count > 0 ? 'text-orange-600' :
+                                                            const textColors = sev === 'HIGH' && count > 0 ? 'text-orange-600' :
                                                                                sev === 'MEDIUM' && count > 0 ? 'text-yellow-600' :
+                                                                               sev === 'LOW' && count > 0 ? 'text-gray-700' :
                                                                                'text-gray-400';
                                                             return (
                                                                 <Card key={sev} className={`shadow-sm ${colors}`}>
@@ -923,16 +981,61 @@ export function EnforcementSentinel() {
                                                     )}
                                                 </div>
                                                 {reportView === 'violations' && (<>
+                                                {/* Search + severity filter (narrows within the active policy tab). */}
+                                                <div className="flex items-center gap-2 border-b border-gray-100 bg-white px-2 py-2">
+                                                    <div className="relative flex-1 min-w-0">
+                                                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                                                        <input
+                                                            type="text"
+                                                            value={violationSearch}
+                                                            onChange={(e) => setViolationSearch(e.target.value)}
+                                                            placeholder="Search resource, owner, workspace, reason…"
+                                                            className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                                        />
+                                                    </div>
+                                                    <select
+                                                        value={severityFilter}
+                                                        onChange={(e) => setSeverityFilter(e.target.value)}
+                                                        className="text-sm border border-gray-200 rounded-md px-2 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400 flex-shrink-0"
+                                                    >
+                                                        <option value="all">All severities</option>
+                                                        <option value="HIGH">High</option>
+                                                        <option value="MEDIUM">Medium</option>
+                                                        <option value="LOW">Low</option>
+                                                    </select>
+                                                    {filtersActive && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => { setViolationSearch(''); setSeverityFilter('all'); }}
+                                                            className="text-xs text-gray-500 hover:text-gray-800 px-2 py-1 rounded-md hover:bg-gray-100 whitespace-nowrap flex-shrink-0"
+                                                        >
+                                                            Clear
+                                                        </button>
+                                                    )}
+                                                    <span className="text-xs text-gray-400 whitespace-nowrap flex-shrink-0">
+                                                        {filtersActive
+                                                            ? `${activeViolations.length} of ${baseViolations.length}`
+                                                            : `${baseViolations.length}`} shown
+                                                    </span>
+                                                </div>
                                                 {/* Tab Content */}
                                                 <div className="p-0 overflow-y-auto flex-1 max-h-[50vh]">
                                                     {activeViolations.length === 0 ? (
                                                         <div className="flex flex-col items-center justify-center h-full p-12 text-center">
-                                                            <CheckCircle2 className="w-12 h-12 text-green-400 mb-4" />
-                                                            <h3 className="text-lg font-medium text-gray-900">No violations found</h3>
+                                                            {filtersActive ? (
+                                                                <Search className="w-12 h-12 text-gray-300 mb-4" />
+                                                            ) : (
+                                                                <CheckCircle2 className="w-12 h-12 text-green-400 mb-4" />
+                                                            )}
+                                                            <h3 className="text-lg font-medium text-gray-900">
+                                                                {filtersActive ? 'No matching violations' : 'No violations found'}
+                                                            </h3>
                                                             <p className="text-gray-500 text-sm mt-1 max-w-sm">
-                                                                {activeTab === 'all' 
-                                                                    ? 'All scanned resources are compliant with current policies.'
-                                                                    : `No resources violated the ${activeTab.replace(/_/g, ' ')} policy group.`}
+                                                                {filtersActive
+                                                                    ? 'No violations match your search / severity filter. Try clearing the filters.'
+                                                                    : activeTab === 'all'
+                                                                        ? 'All scanned resources are compliant with current policies.'
+                                                                        : `No resources violated the ${activeTab.replace(/_/g, ' ')} policy group.`}
                                                             </p>
                                                         </div>
                                                     ) : (
@@ -949,7 +1052,7 @@ export function EnforcementSentinel() {
                                                                 </tr>
                                                             </thead>
                                                             <tbody className="divide-y divide-gray-100">
-                                                                {activeViolations.map((v: any, idx: number) => (
+                                                                {visibleViolations.map((v: any, idx: number) => (
                                                                     <tr key={idx} className="hover:bg-gray-50">
                                                                         <td className="p-3 px-4 font-mono text-xs text-gray-900">
                                                                             <div className="flex flex-col">
@@ -1024,6 +1127,29 @@ export function EnforcementSentinel() {
                                                                 ))}
                                                             </tbody>
                                                         </table>
+                                                    )}
+                                                    {activeViolations.length > visibleViolations.length && (
+                                                        <div className="sticky bottom-0 flex items-center justify-center gap-3 p-2.5 border-t border-gray-100 bg-gray-50/90 backdrop-blur-sm">
+                                                            <span className="text-xs text-gray-500">
+                                                                Showing {visibleViolations.length} of {activeViolations.length}
+                                                            </span>
+                                                            <Button
+                                                                size="sm"
+                                                                variant="outline"
+                                                                className="text-xs h-7 px-3"
+                                                                onClick={() => setVisibleCount(c => c + VIOLATION_PAGE_SIZE)}
+                                                            >
+                                                                Load more
+                                                            </Button>
+                                                            <Button
+                                                                size="sm"
+                                                                variant="ghost"
+                                                                className="text-xs h-7 px-3 text-gray-500"
+                                                                onClick={() => setVisibleCount(activeViolations.length)}
+                                                            >
+                                                                Show all ({activeViolations.length})
+                                                            </Button>
+                                                        </div>
                                                     )}
                                                 </div>
                                                 </>)}

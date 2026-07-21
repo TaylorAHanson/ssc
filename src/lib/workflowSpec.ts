@@ -239,7 +239,12 @@ export function specToFlow(spec: WorkflowGraphSpec): { nodes: FlowNode[]; edges:
   const nodes: FlowNode[] = [];
   const edges: FlowEdge[] = [];
 
-  const stages = spec.stages || [];
+  // Drop null/undefined/non-object entries: an agent-drafted (or imported) spec
+  // can carry a hole in ``stages``; reading ``s.kind`` on it throws and blanks
+  // the whole screen (uncaught render error). Filtering keeps the preview robust.
+  const stages = (spec.stages || []).filter(
+    (s): s is WorkflowStage => !!s && typeof s === 'object',
+  );
   let row = 0;
   nodes.push({ id: 'pending', label: 'Submitted', kind: 'start', x: COL_X, y: row * ROW });
   let prev = 'pending';
@@ -336,6 +341,7 @@ function collectFromNode(node: unknown, out: Set<string>): void {
 export function collectVarPaths(spec: WorkflowGraphSpec): string[] {
   const out = new Set<string>();
   for (const s of spec.stages || []) {
+    if (!s || typeof s !== 'object') continue; // tolerate holes in stages
     if (s.kind === 'gate') {
       collectFromNode(s.auto_approve, out);
     } else if (s.kind === 'subworkflow') {
