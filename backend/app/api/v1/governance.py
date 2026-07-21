@@ -8,10 +8,12 @@ recipient on demand — useful for testing the layout or sharing a snapshot
 without waiting for the scheduled send.
 """
 import logging
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -130,6 +132,14 @@ async def send_digest_now(
 class PurgeSentinelRunsRequest(BaseModel):
     #: Keep the most recent N terminal runs; delete the older terminal ones.
     keep_last: int = 5
+    #: Also delete hung/orphaned non-terminal runs (e.g. stuck in "discovering"
+    #: because the worker died mid-scan). Uses the same staleness definition the
+    #: poller does, so a genuinely in-progress scan is never touched.
+    clear_stuck: bool = True
+    #: A non-terminal run counts as "stuck" once it hasn't been updated for this
+    #: many minutes AND holds no live lock. Defaults to the poller's
+    #: ENFORCEMENT_SENTINEL_STALE_MINUTES so both agree on what's orphaned.
+    stuck_after_minutes: Optional[int] = None
 
 
 @router.post("/sentinel/runs/purge")
@@ -138,11 +148,18 @@ async def purge_sentinel_runs(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Delete old Enforcement Sentinel runs (and their joined findings).
+    """Delete old and/or hung Enforcement Sentinel runs (and their findings).
 
-    Keeps the most recent ``keep_last`` terminal runs and deletes the rest — a
-    fast way to shed accumulated history that's slowing the runs list. Active
-    (pending/running) runs are never touched. Platform Admin only.
+    Two things get cleared, Platform Admin only:
+
+    * **Old history** — keeps the most recent ``keep_last`` terminal runs and
+      deletes the terminal ones older than that (sheds accumulated history that
+      slows the runs list).
+    * **Hung runs** — when ``clear_stuck`` is set, also deletes non-terminal runs
+      that are orphaned (stuck in e.g. "discovering" because the worker died):
+      not updated for ``stuck_after_minutes`` AND holding no live lock. This is
+      the exact staleness the poller uses, so a genuinely in-progress scan is
+      never deleted.
 
     Deletion is per-run via the ORM (so approvals/events/failures cascade) with
     the heavy ``sentinel_findings`` rows bulk-deleted first, committed in small
@@ -160,16 +177,49 @@ async def purge_sentinel_runs(
         RequestStatus.REJECTED.value,
     }
 
-    # Newest-first ids so we can keep the most recent N and only delete terminal
-    # runs beyond that window.
+    now_naive = datetime.utcnow()  # updated_at / locked_until are naive UTC
+    stale_minutes = body.stuck_after_minutes
+    if stale_minutes is None:
+        stale_minutes = getattr(settings, "ENFORCEMENT_SENTINEL_STALE_MINUTES", 45)
+    stale_cutoff = now_naive - timedelta(minutes=max(0, stale_minutes))
+
+    # Newest-first so we can keep the most recent N terminal runs. Pull the fields
+    # needed to judge staleness in the same query.
     rows = (
-        db.query(RequestModel.id, RequestModel.status)
+        db.query(
+            RequestModel.id,
+            RequestModel.status,
+            RequestModel.updated_at,
+            RequestModel.locked_until,
+        )
         .filter(RequestModel.type == RequestType.ENFORCEMENT_SENTINEL.value)
         .order_by(RequestModel.created_at.desc())
         .all()
     )
     keep_ids = {r.id for r in rows[:keep_last]}
-    to_delete = [r.id for r in rows[keep_last:] if r.status in terminal and r.id not in keep_ids]
+
+    def _is_stuck(r) -> bool:
+        """Non-terminal, not updated recently, and no live lock (orphaned)."""
+        if r.status in terminal:
+            return False
+        recently_updated = r.updated_at is not None and r.updated_at >= stale_cutoff
+        live_lock = r.locked_until is not None and r.locked_until > now_naive
+        return not recently_updated and not live_lock
+
+    to_delete: list[str] = []
+    stuck_count = 0
+    skipped_active = 0
+    for idx, r in enumerate(rows):
+        if r.id in keep_ids:
+            continue
+        if r.status in terminal:
+            to_delete.append(r.id)
+        elif body.clear_stuck and _is_stuck(r):
+            to_delete.append(r.id)
+            stuck_count += 1
+        else:
+            # Non-terminal and still being worked (fresh update or live lock).
+            skipped_active += 1
 
     deleted = 0
     batch = 25
@@ -186,11 +236,17 @@ async def purge_sentinel_runs(
         db.commit()
 
     logger.info(
-        "Purged %d Sentinel run(s) by %s (kept most recent %d, %d skipped as active).",
-        deleted, current_user.email, len(keep_ids),
-        len(rows) - len(keep_ids) - deleted,
+        "Purged %d Sentinel run(s) by %s (kept most recent %d, cleared %d hung, "
+        "%d skipped as active).",
+        deleted, current_user.email, len(keep_ids), stuck_count, skipped_active,
     )
-    return {"deleted": deleted, "kept": len(keep_ids), "requested_keep_last": keep_last}
+    return {
+        "deleted": deleted,
+        "stuck_cleared": stuck_count,
+        "kept": len(keep_ids),
+        "skipped_active": skipped_active,
+        "requested_keep_last": keep_last,
+    }
 
 
 @router.get("/target-workspaces")

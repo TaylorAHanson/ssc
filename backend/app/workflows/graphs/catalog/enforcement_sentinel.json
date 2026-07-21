@@ -8,7 +8,7 @@
       "name": "discover",
       "tool": "sentinel_discover",
       "success_fact": "discover_completed",
-      "writes_context": ["violations", "checks", "summary"],
+      "writes_context": ["summary"],
       "args": {}
     },
     {

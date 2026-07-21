@@ -461,7 +461,22 @@ async def sentinel_discover(**kwargs) -> Dict[str, Any]:
                 (request.state_context or {}).get("workspaces") or "all")
     try:
         from app.workflows.sentinel import run_discovery
-        return await run_discovery(db, request)
+        result = await run_discovery(db, request)
+        # IMPORTANT: run_discovery already persisted every violation and check to
+        # the ``sentinel_findings`` table, and downstream steps (enforce/notify)
+        # reload them from there. Return ONLY the compact counts + summary — never
+        # the full lists. The graph engine persists a step's tool result in three
+        # places (the ``discover_completed`` fact/event row, the LangGraph
+        # checkpoint, and — via ``writes_context`` — state_context); carrying tens
+        # of thousands of records through all of them spiked memory (OOM-killing
+        # the app mid-scan) and re-bloated the very columns the findings table
+        # exists to keep small.
+        return {
+            "summary": result.get("summary", ""),
+            "violation_count": result.get("violation_count", 0),
+            "pass_count": result.get("pass_count", 0),
+            "total_resources_scanned": result.get("total_resources_scanned", 0),
+        }
     finally:
         db.close()
 

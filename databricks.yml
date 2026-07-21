@@ -511,3 +511,11 @@ targets:
       data_asset_sync_cron: "0 * * * *"
       enforcement_sentinel_cron: "*/30 * * * *"
       workflow_authoring_locked: "true"
+    resources:
+      apps:
+        edh-ssc:
+          # Prod runs on LARGE (4 vCPU / 12 GB) instead of the default MEDIUM
+          # (2 vCPU / 6 GB): the Enforcement Sentinel holds a full multi-workspace
+          # scan's findings in memory before persisting, and prod scans are the
+          # largest. dev/stage stay MEDIUM.
+          compute_size: LARGE

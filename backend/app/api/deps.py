@@ -107,7 +107,7 @@ def get_current_user(
     
     # DEV FEATURE: Role Override (local/dev-flavored envs only; never stage/prod)
     if x_dev_role_override and _dev_features_allowed():
-        logger.info(f"DEV: Overriding role for user {user_email} to {x_dev_role_override}")
+        logger.debug(f"DEV: Overriding role for user {user_email} to {x_dev_role_override}")
         calculated_roles = [x_dev_role_override]
     elif x_dev_role_override:
         logger.warning(

@@ -125,7 +125,7 @@ class AuthMiddleware:
 
                 obo_token = headers.get("x-forwarded-access-token")
                 if obo_token:
-                    logger.info(
+                    logger.debug(
                         "AuthMiddleware [%s %s]: OBO token present (len=%d, "
                         "starts='%s')",
                         method, path, len(obo_token), obo_token[:10],
@@ -136,7 +136,7 @@ class AuthMiddleware:
                         k: v[:30] for k, v in headers.items()
                         if k.startswith("x-forwarded") or k.startswith("x-databricks")
                     }
-                    logger.info(
+                    logger.debug(
                         "AuthMiddleware [%s %s]: OBO token MISSING. "
                         "Forwarded headers: %s",
                         method, path, fwd_headers,
@@ -168,7 +168,7 @@ class AuthMiddleware:
                                 payload_data.get("scp")
                                 or payload_data.get("scope")
                             )
-                            logger.info(f"DEBUG AUTH: OBO Token Scopes: {scopes}")
+                            logger.debug(f"DEBUG AUTH: OBO Token Scopes: {scopes}")
                     except Exception as e:
                         logger.error(
                             f"DEBUG AUTH: Failed to decode token scopes: {e}"
@@ -199,7 +199,7 @@ class AuthMiddleware:
             try:
                 await self.app(scope, receive, send_wrapper)
                 process_time = time.time() - start_time
-                logger.info(
+                logger.debug(
                     "HTTP_REQUEST: "
                     f"status_code={status_code[0]} "
                     f"duration_ms={round(process_time * 1000, 2)} "

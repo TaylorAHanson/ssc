@@ -101,18 +101,45 @@ def replace_run_findings(
         db.query(SentinelFindingModel).filter(
             SentinelFindingModel.request_id == request_id
         ).delete(synchronize_session=False)
+        db.flush()
 
-        rows: List[Dict[str, Any]] = []
-        rows.extend(_to_row(request_id, "violation", v) for v in (violations or []) if isinstance(v, dict))
-        rows.extend(_to_row(request_id, "check", c) for c in (checks or []) if isinstance(c, dict))
+        # Stream row-mappings into the DB one batch at a time instead of
+        # materializing the full ``rows`` list. A large run can hold hundreds of
+        # thousands of checks; building a second complete copy here (each with an
+        # extra ``search_text`` string) on top of the caller's in-memory
+        # violations+checks was doubling peak memory right at the end of the scan
+        # and OOM-killing the app. Peak extra is now bounded to one batch.
+        batch: List[Dict[str, Any]] = []
+        total = 0
+        v_count = 0
+        c_count = 0
 
-        for i in range(0, len(rows), _INSERT_BATCH):
-            db.bulk_insert_mappings(SentinelFindingModel, rows[i : i + _INSERT_BATCH])
+        def _flush_batch() -> None:
+            nonlocal total
+            if not batch:
+                return
+            db.bulk_insert_mappings(SentinelFindingModel, batch)
             db.flush()
+            total += len(batch)
+            batch.clear()
+
+        for kind, recs in (("violation", violations), ("check", checks)):
+            for rec in (recs or []):
+                if not isinstance(rec, dict):
+                    continue
+                batch.append(_to_row(request_id, kind, rec))
+                if kind == "violation":
+                    v_count += 1
+                else:
+                    c_count += 1
+                if len(batch) >= _INSERT_BATCH:
+                    _flush_batch()
+        _flush_batch()
+
         db.commit()
         logger.info(
             "Sentinel: persisted %d finding rows (%d violations, %d checks) for run %s",
-            len(rows), len(violations or []), len(checks or []), request_id,
+            total, v_count, c_count, request_id,
         )
     except Exception as e:  # noqa: BLE001
         logger.error("Sentinel: failed to persist findings for %s: %s", request_id, e)

@@ -149,18 +149,20 @@ export function EnforcementSentinel() {
 
     // "Clear old runs": sheds accumulated Sentinel history (the main thing slowing
     // the runs list) by keeping only the most recent few and deleting the rest,
-    // including their joined findings. Platform-admin gated on the server.
+    // including their joined findings. Also clears hung runs orphaned mid-scan
+    // (e.g. stuck in "discovering" after a worker died). Platform-admin gated.
     const [purging, setPurging] = useState(false);
     const handlePurgeOldRuns = async () => {
         const keepRaw = window.prompt(
             'Delete old Sentinel runs to speed up this page.\n\n' +
             'How many of the MOST RECENT runs should be kept? ' +
-            'Everything older (and its findings) is permanently deleted. Active runs are never touched.',
+            'Everything older (and its findings) is permanently deleted. ' +
+            'Hung runs stuck mid-scan are also cleared; a genuinely in-progress scan is never touched.',
             '5',
         );
         if (keepRaw === null) return; // cancelled
         const keepLast = Math.max(0, parseInt(keepRaw, 10) || 0);
-        if (!window.confirm(`Keep the ${keepLast} most recent run(s) and permanently delete the rest? This cannot be undone.`)) {
+        if (!window.confirm(`Keep the ${keepLast} most recent run(s), clear any hung runs, and permanently delete the rest? This cannot be undone.`)) {
             return;
         }
         setPurging(true);
@@ -168,7 +170,10 @@ export function EnforcementSentinel() {
             const res = await api.purgeSentinelRuns(keepLast);
             setPage(1);
             await fetchSentinelRuns();
-            window.alert(`Deleted ${res.deleted} old run(s); kept the ${res.kept} most recent.`);
+            const hung = res.stuck_cleared
+                ? ` (including ${res.stuck_cleared} hung run${res.stuck_cleared === 1 ? '' : 's'})`
+                : '';
+            window.alert(`Deleted ${res.deleted} run(s)${hung}; kept the ${res.kept} most recent.`);
         } catch (e: any) {
             window.alert(e?.message || 'Failed to clear old runs.');
         } finally {
