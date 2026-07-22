@@ -183,7 +183,10 @@ export function EnforcementSentinel() {
             const skipped = res.skipped_active
                 ? ` ${res.skipped_active} run(s) left in progress — re-run with force to clear them.`
                 : '';
-            window.alert(`Deleted ${res.deleted} run(s)${hung}; kept the ${res.kept} most recent.${skipped}`);
+            const failed = res.failed
+                ? ` ${res.failed} run(s) could not be deleted — see the server log for details.`
+                : '';
+            window.alert(`Deleted ${res.deleted} run(s)${hung}; kept the ${res.kept} most recent.${skipped}${failed}`);
         } catch (e: any) {
             window.alert(e?.message || 'Failed to clear old runs.');
         } finally {

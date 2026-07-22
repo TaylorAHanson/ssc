@@ -245,6 +245,7 @@ export function ContextCatalog() {
   // ---------------------------------------------------------------- domain ops
 
   const openCreateDomain = () => {
+    setDocForm(null);
     setEditingDomain(false);
     setDomainForm({ ...emptyDomainForm, parent_id: selectedId || '' });
     setShowDomainForm(true);
@@ -252,6 +253,7 @@ export function ContextCatalog() {
 
   const openEditDomain = () => {
     if (!detail) return;
+    setDocForm(null);
     setEditingDomain(true);
     setDomainForm({
       name: detail.name,
@@ -331,9 +333,13 @@ export function ContextCatalog() {
     await loadDomains(selectedId);
   };
 
-  const openNewDoc = () => setDocForm({ ...emptyDocForm });
+  const openNewDoc = () => {
+    setShowDomainForm(false);
+    setDocForm({ ...emptyDocForm });
+  };
 
   const openEditDoc = async (summary: ContextDocumentSummary) => {
+    setShowDomainForm(false);
     try {
       const full: ContextDocument = await api.getContextDocument(summary.id);
       setDocForm({
@@ -563,9 +569,9 @@ export function ContextCatalog() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
         {/* Domain tree */}
-        <Card className="lg:col-span-1 h-fit">
+        <Card className="lg:col-start-1 lg:row-start-1 h-fit">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base flex items-center gap-2">
@@ -612,10 +618,10 @@ export function ContextCatalog() {
           </CardContent>
         </Card>
 
-        {/* Detail */}
-        <div className="lg:col-span-2 space-y-6">
+        {/* On desktop, selectors stay in the left rail and editors occupy the right pane. */}
+        <div className="space-y-6 lg:contents">
           {showDomainForm && (
-            <Card>
+            <Card className="lg:col-start-2 lg:col-span-2 lg:row-start-1">
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">{editingDomain ? 'Edit Domain' : 'New Domain'}</CardTitle>
               </CardHeader>
@@ -704,20 +710,20 @@ export function ContextCatalog() {
           )}
 
           {!selectedId ? (
-            <Card>
+            <Card className="lg:col-start-2 lg:col-span-2 lg:row-start-1">
               <CardContent className="py-12 text-center text-gray-500 text-sm">
                 Select a domain to view its documents, or create a new one.
               </CardContent>
             </Card>
           ) : isLoadingDetail || !detail ? (
-            <Card>
+            <Card className="lg:col-start-2 lg:col-span-2 lg:row-start-1">
               <CardContent className="py-12 flex justify-center">
                 <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
               </CardContent>
             </Card>
           ) : (
             <>
-              <Card>
+              <Card className="lg:col-start-1 lg:row-start-2">
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between gap-2">
                     <div>
@@ -764,7 +770,7 @@ export function ContextCatalog() {
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card className="lg:col-start-1 lg:row-start-3">
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-base flex items-center gap-2">
@@ -875,7 +881,7 @@ export function ContextCatalog() {
               </Card>
 
               {docForm && (
-                <Card>
+                <Card className="lg:col-start-2 lg:col-span-2 lg:row-start-1">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-base">
                       {docForm.id ? 'Edit Document' : 'New Document'}

@@ -699,6 +699,7 @@ export async function purgeSentinelRuns(
   stuck_cleared: number;
   kept: number;
   skipped_active: number;
+  failed?: number;
   requested_keep_last: number;
 }> {
   const response = await fetch(`${API_BASE_URL}/governance/sentinel/runs/purge`, {

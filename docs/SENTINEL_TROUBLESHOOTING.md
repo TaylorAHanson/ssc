@@ -1,9 +1,16 @@
 # Enforcement Sentinel — Troubleshooting & Regression Log (2026‑07‑21)
 
 Working record of the day's Enforcement Sentinel debugging: the symptom, every
-change we made, what we tried, and two concrete suspected root causes. The plan
-is to **revert to a known‑good state and re‑apply the performance work carefully**
-— correctness first, speed second.
+change we made, what we tried, and the root causes we found and fixed.
+
+> ✅ **RESOLVED (2026‑07‑21 ~15:40 PDT).** A full run **completed end‑to‑end** on
+> the air‑gapped env with detection restored: **45,833 checks · 19,404 pass ·
+> 26,429 violations (2,532 HIGH / 11,949 MEDIUM) · 14,481 violations listed** for
+> `ws-enterprise-prod`. This confirms the two fixes below (Finding 1 + Finding 3).
+> A revert to the known‑good baseline was **not** needed — the day's payload/perf
+> work is retained and the detached execution model was fixed in place rather than
+> reverted. **Not yet committed.** Remaining follow‑up is **speed only** (Section 8),
+> not correctness.
 
 > ⚠️ **Environment caveat (read first).** The real system is an **air‑gapped
 > deployed Databricks App** backed by **Lakebase/Postgres**. Nothing checked
@@ -240,7 +247,8 @@ timeout. Both are today‑only regressions.
 
 | Date/time | Change | Commit | Verified on air‑gapped env? |
 |-----------|--------|--------|------------------------------|
-| 2026‑07‑21 16:3x | **Finding 1 fix:** `poller.py` now keeps a **strong reference** to each detached Sentinel task (`_detached_tasks` set + `add_done_callback` to discard) so the loop can't GC it mid‑run. Task also named `sentinel-detached-<id>`. Timeout left at `0` on purpose (see below). | _pending commit_ | ⏳ **NOT yet verified** — deploy to the air‑gapped env and confirm |
+| 2026‑07‑21 16:3x | **Finding 1 fix:** `poller.py` now keeps a **strong reference** to each detached Sentinel task (`_detached_tasks` set + `add_done_callback` to discard) so the loop can't GC it mid‑run. Task also named `sentinel-detached-<id>`. Timeout left at `0` on purpose (see below). | _pending commit_ | ✅ **Confirmed** — logs + per‑handler timing now flow, tasks survive (see next row for the duplicate this exposed) |
+| 2026‑07‑21 16:4x | **Finding 3 fix (strict one‑at‑a‑time):** (1) cron now marks **all** orphaned/stale non‑terminal Sentinel runs **FAILED** (clears lock, sets `last_error`) before spawning a fresh one; (2) `process_open_requests` launches **at most one** Sentinel scan cluster‑wide — extra non‑terminal rows are **deferred** (logged), never run concurrently. User chose strict semantics (one Sentinel scan cluster‑wide at any time; manual and scheduled do not overlap). | _pending commit_ | ✅ **Confirmed** — subsequent run completed as a single scan (no duplicate) |
 
 **Why Finding 1 only, first:** it's the primary suspect and the lowest‑risk,
 highest‑signal change. We deliberately did **not** also re‑enable the timeout
@@ -258,29 +266,151 @@ before), the task is no longer dying before discovery.
 
 ---
 
-## 6. Recommended path (correctness first)
+## 5b. Finding 3 — duplicate concurrent scans ("why do I see 2?") — surfaced, NOT fixed
 
-1. **Revert Sentinel runtime to the known‑good baseline `11e7ce8`** for the
-   *execution path* — i.e. run Sentinel **inline / awaited** as it did yesterday
-   (slow but reliable), rather than detached.
-2. **Retain the non‑Sentinel work** (Section 3C) and the **schema/payload**
-   improvements (Section 3A: `sentinel_findings`, `state_summary`, trimmed
-   `state_context`, ORJSON, LARGE compute, polling guard, purge button) — these
-   reduce payload/OOM and are not implicated in the hang.
-3. **Re‑apply the concurrency/durability work (Section 3B) incrementally**, each
-   verified on the air‑gapped env before the next:
-   - If keeping the detached model, **first** fix Finding 1 (strong task
-     reference) — otherwise it will re‑introduce the silent death.
-   - Re‑introduce a **non‑zero backstop timeout** (Finding 2) tuned so it doesn't
-     abandon large workspaces but still breaks a true hang.
-4. **Verify only on the deployed air‑gapped env** (see the caveat at the top).
-   Watch for the first expected INFO line — `"Sentinel: resolving target
-   workspaces and credentials..."` (`sentinel.py:1183`) — to confirm the run
-   actually entered discovery rather than dying before it.
+After the Finding 1 fix, logs flow and scans run — but **two** scans ran in
+parallel with **different `req_id`s** (same workspace, same ~1003 resources, same
+handler timings). Root cause is two compounding gaps:
+
+1. **Cron spawns a fresh run but never terminates the stale one it ignores.**
+   `process_enforcement_sentinel_cron` (`poller.py:93‑120`): when it finds a
+   non‑terminal run that's *stale* (no recent `updated_at`, expired `locked_until`)
+   it logs `"...appears stale...; spawning a fresh scheduled run"` and creates a
+   new PENDING request — but leaves the stale row **non‑terminal**. All day, runs
+   were getting orphaned (the Finding‑1 GC death), so each cron tick left the old
+   orphan and added a new row.
+2. **`process_open_requests` runs every non‑terminal Sentinel row concurrently.**
+   The pickup query (`poller.py:335‑355`) returns *all* non‑terminal, unlocked
+   requests up to `POLLER_BATCH_SIZE`, and the detached branch launches a task per
+   row. There is **no "one Sentinel scan at a time" guard**. So the accumulated
+   orphan + the fresh run both execute at once → doubled Databricks API load and
+   peak memory (a real OOM risk).
+
+Why it only showed up now: before the Finding‑1 fix those orphaned runs' tasks
+died silently, so they never actually *ran*. Fixing Finding 1 made the latent
+duplicate rows execute.
+
+**Proposed fix (awaiting your call on semantics):**
+- In the cron, when a stale run is detected, **mark it FAILED (terminal)** before
+  spawning the fresh one, so it can't be re‑picked.
+- Add a **single‑active‑Sentinel guard**: `process_open_requests` (and/or
+  `_launch_detached`) launches at most one `ENFORCEMENT_SENTINEL` at a time;
+  additional non‑terminal Sentinel rows are skipped (or failed as duplicates).
+- Open question for the user: should a **manual** run be allowed to coexist with a
+  scheduled one, or is it strictly one Sentinel scan cluster‑wide at any time?
+
+Status: ✅ **implemented** (see Section 5a, second row). User chose **strict
+one‑at‑a‑time**: (1) cron fails orphaned/stale runs before spawning; (2) the
+poller launches at most one Sentinel scan cluster‑wide and defers the rest. A
+healthy long run renews its lock via the heartbeat, so it's treated as active and
+never failed.
+
+**Clearing the already‑duplicated state on the deployed env:** the extra orphan
+row(s) already present will be marked FAILED automatically by the next cron tick
+that finds no active run (or once the current run finishes), or you can clear them
+now with the admin **"Clear old runs"** (force) button.
 
 ---
 
-## 7. Quick reference — files most in play
+## 5c. Finding 4 — `'home'` shows as a separate target (observation, awaiting decision)
+
+The Sentinel runs a **Unity Catalog data‑certification pass** *once* per run,
+separate from the per‑target workspace scans, because UC is **account‑global**
+(shared metastore) — scanning data products per‑target would be redundant and can
+fail cross‑workspace TLS. This pass runs only `DatasetResourceHandler`, pinned to
+the home host, and is labeled `workspace='home'`. In dev it returns 0 (no data
+products). **It does NOT re‑scan the home target's workspace‑scoped resources.**
+
+It shows as `'home'` (not the user's target name) because the cert→target mapping
+uses **exact host string equality**:
+
+```1221:1222:backend/app/workflows/sentinel.py
+    home_host = settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL
+    home_match = next((w for w in all_ws if w.host == home_host), None)
+```
+
+`home_match` was `None`, so it fell back to the synthetic `'home'` + the app's own
+SP (`global_default`). The user states the home workspace **is** a defined target,
+so this is most likely a **host normalization mismatch** (scheme / trailing slash /
+case) rather than a genuinely extra workspace.
+
+**Options (pending user decision):**
+- **B — normalize host matching (code):** compare hosts after stripping
+  scheme/trailing slash/case so a defined target equal to the home host is
+  recognized, labeled by its target name, and uses its SP. Robust, low‑risk.
+- **A — no‑code:** set `SENTINEL_DATA_CERT_WORKSPACE` (Admin → Settings) to the
+  home target's name so the cert pass explicitly runs under that defined target.
+- **C — gate the dataset/cert pass** behind a setting (like `SENTINEL_SCAN_NOTEBOOKS`)
+  for envs with no data products to govern.
+
+Status: ✅ **Resolved — working as intended, no change.** Confirmed with the user:
+the data‑certification pass should always run against the local/home workspace
+(UC is account‑global). The `'home'` label is expected; it is not an extra target
+and does not re‑scan the home target's workspace‑scoped resources.
+
+---
+
+## 6. Path actually taken (updated — no revert needed)
+
+The original plan was a full revert to `11e7ce8` + careful re‑apply. That turned
+out to be unnecessary: once Finding 1 was identified, fixing the detached model
+**in place** restored a working run without giving up the day's payload/perf work.
+
+1. ~~Revert Sentinel runtime to `11e7ce8` (inline/awaited).~~ **Not done** — the
+   detached model was fixed in place (Finding 1) instead. Kept detached so a slow
+   scan can't freeze the poll loop.
+2. **Retained** the non‑Sentinel work (Section 3C) and the schema/payload
+   improvements (Section 3A: `sentinel_findings`, `state_summary`, trimmed
+   `state_context`, ORJSON, LARGE compute, polling guard, purge button).
+3. **Kept** the concurrency/durability work (Section 3B) with the Finding 1 +
+   Finding 3 fixes layered on top.
+4. **Finding 2 (backstop timeout) still open by choice:** left at `0` (disabled)
+   so it can't abandon large workspaces. Revisit only if a real hang recurs; a
+   re‑introduced value must be generous enough not to abandon the biggest
+   workspace (`enterprise-us-dev`‑class) yet still break a true stall.
+5. **Verify only on the deployed air‑gapped env.** First expected INFO line:
+   `"Sentinel: resolving target workspaces and credentials..."` (`sentinel.py:1183`).
+
+---
+
+## 7. Execution model & speed (answering "did we reintroduce blocking?")
+
+**No — the app‑wide freeze was NOT reintroduced.** The Sentinel still runs
+**detached**, and every blocking piece is offloaded off the event loop:
+
+- **Detached launch** — `_launch_detached` fires the run as its own task (now with
+  a strong reference, Finding 1). It is *not* `await`ed inside the poll loop, so
+  the poll loop keeps cycling and other requests process normally. The old
+  "nothing moves" freeze came specifically from `await asyncio.gather(<sentinel>)`
+  in `process_open_requests`; that is gone and was not restored.
+- **Discovery** (Databricks SDK calls) runs on the dedicated `_sentinel_executor`
+  thread pool via `_to_sentinel_thread` — off the event loop.
+- **OPA evaluation** never blocks the loop: remote mode uses async `httpx`
+  (`_evaluate_remote`); local CLI mode offloads `subprocess.run` via
+  `asyncio.to_thread` (`opa/client.py:315`).
+
+Net: the event loop stays responsive during a scan. "Moving it to the main thread"
+did **not** happen.
+
+### Speed status
+- **Correctness: solved.** Full detection restored (45,833 checks on the
+  completing run).
+- **Tier 1 speed work already in:** parallel workspace scans
+  (`SENTINEL_WORKSPACE_CONCURRENCY`, default 3), notebook discovery **off** by
+  default (`SENTINEL_SCAN_NOTEBOOKS=false` — was the single most expensive step),
+  in‑workspace concurrency (`SENTINEL_SCAN_CONCURRENCY`), and **per‑handler timing
+  logs** now emitted (e.g. `ClusterResourceHandler=100 in 2.6s`).
+- **Next (Tier 2), evidence‑driven:** read the per‑handler timing lines from the
+  completed run to find the dominant cost (handler discovery vs. OPA eval of ~46k
+  checks vs. findings persistence), then target that specifically. Candidates:
+  raise `SENTINEL_WORKSPACE_CONCURRENCY` / `SENTINEL_SCAN_CONCURRENCY`, batch/tune
+  OPA evaluation, or cache discovery. **No speed change made yet** — pending the
+  timing evidence from the deployed env (local numbers are not representative; see
+  the environment caveat).
+
+---
+
+## 8. Quick reference — files most in play
 
 - `backend/app/workers/poller.py` — detached processing, locks, recovery helpers.
 - `backend/app/workflows/sentinel.py` — discovery, per‑workspace scan, timeouts,

@@ -89,19 +89,32 @@ async def process_enforcement_sentinel_cron():
                 ),
             ).first()
 
-            # Surface orphaned runs that we're intentionally ignoring, so a stuck
-            # request is visible in logs rather than silently unblocking.
+            # No live run? Then any non-terminal Sentinel rows are orphaned/stale
+            # (dead worker, killed process, an old GC'd task). FAIL them before
+            # spawning, so they can't be re-picked and run concurrently with the
+            # fresh one — the "why do I see 2?" duplicate (docs/SENTINEL_TROUBLESHOOTING.md,
+            # Finding 3). A genuinely healthy long run renews its lock via the
+            # heartbeat, so it registers as active_run above and is never touched here.
             if not active_run:
-                stale_run = db.query(RequestModel).filter(
+                stale_runs = db.query(RequestModel).filter(
                     RequestModel.type == RequestType.ENFORCEMENT_SENTINEL.value,
                     RequestModel.status.notin_(terminal_statuses),
-                ).first()
-                if stale_run:
+                ).all()
+                for sr in stale_runs:
                     logger.warning(
                         "Enforcement Sentinel run %s appears stale (status=%s, updated_at=%s, "
-                        "locked_until=%s); ignoring it and spawning a fresh scheduled run.",
-                        stale_run.id, stale_run.status, stale_run.updated_at, stale_run.locked_until,
+                        "locked_until=%s); marking FAILED before spawning a fresh scheduled run.",
+                        sr.id, sr.status, sr.updated_at, sr.locked_until,
                     )
+                    sr.status = RequestStatus.FAILED.value
+                    sr.current_state = "failed"
+                    sr.locked_by = None
+                    sr.locked_until = None
+                    sr.last_failure = now_naive
+                    sr.last_error = {
+                        "error": "Superseded by a fresh scheduled run (orphaned/stale)."
+                    }
+                    sr.updated_at = now
 
             if not active_run:
                 req_id = f"req-{uuid.uuid4()}"
@@ -370,9 +383,24 @@ async def process_open_requests():
         semaphore = asyncio.Semaphore(settings.POLLER_MAX_CONCURRENT)
 
         batch = []
+        # Strict single-active guard for detached Sentinel scans: at most ONE runs
+        # cluster-wide at a time. ``_inflight_detached`` only ever holds Sentinel
+        # ids (the sole detached type), so a non-empty set means one is already
+        # running from a prior cycle. Together with leader election (one leader)
+        # and the per-request DB lock, this prevents the duplicate concurrent scans
+        # in docs/SENTINEL_TROUBLESHOOTING.md (Finding 3). Extra non-terminal rows
+        # are deferred, not run in parallel; the cron fails genuinely stale ones.
+        sentinel_inflight = bool(_inflight_detached)
         for request in requests:
             if request.type in _DETACHED_REQUEST_TYPES:
+                if sentinel_inflight:
+                    logger.info(
+                        "Deferring Sentinel run %s: another Sentinel scan is already in "
+                        "flight (strict one-at-a-time).", request.id,
+                    )
+                    continue
                 _launch_detached(request.id)
+                sentinel_inflight = True
             else:
                 batch.append(request)
 

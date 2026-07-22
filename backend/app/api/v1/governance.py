@@ -169,12 +169,17 @@ async def purge_sentinel_runs(
       looks orphaned, so ``force`` is the only way to shed it.
 
     Deletion is per-run via the ORM (so approvals/events/failures cascade) with
-    the heavy ``sentinel_findings`` rows bulk-deleted first, committed in small
-    batches so a large cleanup can't blow up one transaction.
+    the dependent ``sentinel_findings`` and ``enforcement_audit`` rows
+    bulk-deleted first, committed in small batches so a large cleanup can't blow
+    up one transaction. If a batch fails (e.g. an unexpected dependent row on
+    one run), we retry that batch one run at a time so a single bad run can't
+    sink the whole purge; any runs that still can't be deleted are reported back
+    in ``failed`` rather than failing the request.
     """
     if not current_user.has_role("Platform Admin"):
         raise HTTPException(status_code=403, detail="Not authorized to purge Sentinel runs")
 
+    from app.db.enforcement_audit import EnforcementAuditModel
     from app.db.sentinel_finding import SentinelFindingModel
 
     keep_last = max(0, body.keep_last)
@@ -223,30 +228,65 @@ async def purge_sentinel_runs(
             # A worker currently holds a live lock and force wasn't requested.
             skipped_active += 1
 
-    deleted = 0
-    batch = 25
-    for i in range(0, len(to_delete), batch):
-        chunk = to_delete[i : i + batch]
-        db.query(SentinelFindingModel).filter(
-            SentinelFindingModel.request_id.in_(chunk)
-        ).delete(synchronize_session=False)
-        for rid in chunk:
+    def _delete_runs(ids: list[str]) -> int:
+        """Delete a set of runs + all their dependent rows in one transaction.
+
+        Bulk-deletes ``sentinel_findings`` and ``enforcement_audit`` explicitly
+        rather than relying on a DB-level ``ON DELETE CASCADE``: this schema
+        evolves via ``db/migrate.py`` (no Alembic), so the cascade declared on
+        the model may not exist on the live FK constraint for tables created
+        before it was added — leaving the parent delete to fail with a foreign
+        key violation. ``approvals``/``events``/``failures`` still cascade via
+        their ORM relationships. Raises on failure so the caller can retry.
+        """
+        for model in (SentinelFindingModel, EnforcementAuditModel):
+            db.query(model).filter(model.request_id.in_(ids)).delete(
+                synchronize_session=False
+            )
+        n = 0
+        for rid in ids:
             obj = db.get(RequestModel, rid)
             if obj is not None:
                 db.delete(obj)
-                deleted += 1
+                n += 1
         db.commit()
+        return n
+
+    deleted = 0
+    failed_ids: list[str] = []
+    batch = 25
+    for i in range(0, len(to_delete), batch):
+        chunk = to_delete[i : i + batch]
+        try:
+            deleted += _delete_runs(chunk)
+        except Exception as exc:  # noqa: BLE001 — degrade to per-run below
+            db.rollback()
+            logger.warning(
+                "Batch purge of %d Sentinel run(s) failed (%s); retrying one at a time.",
+                len(chunk), exc,
+            )
+            # One problematic run shouldn't abort the whole cleanup — retry each
+            # on its own so the rest still get cleared, and report the stragglers.
+            for rid in chunk:
+                try:
+                    deleted += _delete_runs([rid])
+                except Exception as exc2:  # noqa: BLE001
+                    db.rollback()
+                    failed_ids.append(rid)
+                    logger.warning("Failed to purge Sentinel run %s: %s", rid, exc2)
 
     logger.info(
         "Purged %d Sentinel run(s) by %s (kept most recent %d, cleared %d hung, "
-        "%d skipped as active).",
+        "%d skipped as active, %d failed).",
         deleted, current_user.email, len(keep_ids), stuck_count, skipped_active,
+        len(failed_ids),
     )
     return {
         "deleted": deleted,
         "stuck_cleared": stuck_count,
         "kept": len(keep_ids),
         "skipped_active": skipped_active,
+        "failed": len(failed_ids),
         "requested_keep_last": keep_last,
     }
 
