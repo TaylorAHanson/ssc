@@ -1677,9 +1677,41 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
     if not violations:
         summary = _combined("No policy violations required enforcement.")
         _persist_state_context(
-            db, request, {"enforcement_actions": [], "summary": summary}
+            db,
+            request,
+            {
+                "enforcement_stats": {"processed": 0, "executed_count": 0, "manual_required": 0},
+                "summary": summary,
+            },
         )
-        return {"enforced": True, "actions": [], "executed_count": 0, "summary": summary}
+        return {
+            "enforced": True,
+            "executed_count": 0,
+            "manual_required": 0,
+            "processed": 0,
+            "summary": summary,
+        }
+
+    # Idempotent re-run guard. Automated enforcement re-processes the FULL
+    # violation set on every pass, and audit rows below are committed in batches
+    # (not one final commit), so a retried run — e.g. after a transient mid-run
+    # error — could otherwise leave duplicate automated rows from a partial prior
+    # pass. Clear this run's *automated* audit rows first; manual "Review & Act"
+    # rows (``manual_*``) and revalidation aborts are preserved. Mirrors how
+    # ``replace_run_findings`` deletes a run's prior findings before re-inserting.
+    try:
+        db.query(EnforcementAuditModel).filter(
+            EnforcementAuditModel.request_id == request.id,
+            ~EnforcementAuditModel.executed_action.like("manual_%"),
+            EnforcementAuditModel.executed_action != "aborted_revalidated",
+        ).delete(synchronize_session=False)
+        db.commit()
+    except Exception as e:  # noqa: BLE001 - non-fatal; worst case is duplicate rows
+        logger.error(
+            "Sentinel: failed to clear prior enforcement audit rows for %s: %s",
+            request.id, e,
+        )
+        db.rollback()
 
     # Violations can span multiple workspaces (each carries a ``workspace`` tag).
     # Build and cache one typed-handler map per workspace host so each resource is
@@ -1698,8 +1730,29 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
                 _handlers_cache[key] = None
         return _handlers_cache[key]
 
-    actions: List[Dict[str, Any]] = []
+    # Per-action detail is persisted to the ``enforcement_audit`` table (one row
+    # each) — the same source the ``/enforcement-actions`` API reads — so we do
+    # NOT accumulate a full per-violation list here or write it back into
+    # ``state_context``. A large run (tens of thousands of violations) that wrote
+    # that list inline produced a multi-MB single-row JSON UPDATE that dropped the
+    # Lakebase connection ("SSL connection has been closed unexpectedly"),
+    # poisoning the session and failing the run's terminal status write — the
+    # exact failure the ``sentinel_findings`` table was introduced to avoid.
+    _AUDIT_COMMIT_BATCH = 1000
     executed_count = 0
+    manual_required = 0
+    pending = 0
+
+    def _commit_audit_batch() -> None:
+        nonlocal pending
+        if not pending:
+            return
+        try:
+            db.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Sentinel: failed to commit enforcement audit batch: %s", e)
+            db.rollback()
+        pending = 0
 
     for violation in violations:
         action = violation.get("action", "KILL")
@@ -1752,16 +1805,8 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
             logger.error("Enforcement action %s failed for %s: %s", step, resource_id, e)
             executed_action = "error_execution"
 
-        actions.append(
-            {
-                "resource_id": resource_id,
-                "resource_type": resource_type,
-                "policy": violation.get("policy", "unknown"),
-                "severity": normalize_severity(severity),
-                "intended_action": intended,
-                "executed_action": executed_action,
-            }
-        )
+        if intended != executed_action:
+            manual_required += 1
 
         try:
             db.add(
@@ -1778,16 +1823,17 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
                     reason=violation.get("reason", ""),
                 )
             )
+            pending += 1
+            # Commit periodically so a huge run is never one giant transaction and
+            # the connection isn't left idle for the whole (minutes-long) loop —
+            # both of which risk Lakebase dropping the connection mid-run.
+            if pending >= _AUDIT_COMMIT_BATCH:
+                _commit_audit_batch()
         except Exception as e:  # noqa: BLE001
             logger.error("Failed to log enforcement audit: %s", e)
 
-    try:
-        db.commit()
-    except Exception as e:  # noqa: BLE001
-        logger.error("Sentinel: failed to commit enforcement audit logs: %s", e)
-        db.rollback()
+    _commit_audit_batch()
 
-    manual_required = sum(1 for a in actions if a["intended_action"] != a["executed_action"])
     enforce_summary = (
         f"Processed {len(violations)} violation(s); executed {executed_count} automated "
         f"action(s) (certify/uncertify/warn)."
@@ -1799,14 +1845,25 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
     )
     summary = _combined(enforce_summary)
 
+    # Persist only compact counts (never the full per-action list — see above).
     _persist_state_context(
-        db, request, {"enforcement_actions": actions, "summary": summary}
+        db,
+        request,
+        {
+            "enforcement_stats": {
+                "processed": len(violations),
+                "executed_count": executed_count,
+                "manual_required": manual_required,
+            },
+            "summary": summary,
+        },
     )
 
     return {
         "enforced": True,
-        "actions": actions,
         "executed_count": executed_count,
+        "manual_required": manual_required,
+        "processed": len(violations),
         "summary": summary,
     }
 
