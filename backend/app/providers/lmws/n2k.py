@@ -482,9 +482,20 @@ class LmwsN2kProbeClient(LmwsNativeClient):
         result["metadata"] = metadata
         result["is_n2k"] = bool(result.get("ok"))
         result["jqs_form"] = jqs_form
-        result["requires_jqs"] = bool(jqs_form)
+        # Only claim "no JQS form" when the metadata actually parsed. An empty
+        # dict means the response shape changed, not that the list is free of a
+        # justification form — reporting False there would greenlight automation
+        # against a list that cannot be automated.
+        result["requires_jqs"] = bool(jqs_form) if metadata else None
         if result.get("ok"):
-            if jqs_form:
+            if not metadata:
+                result["detail"] = (
+                    f"'{list_name}' is an N2K list, but no metadata entries could be "
+                    "parsed from the response, so whether it requires a JQS "
+                    "justification form is UNKNOWN. Inspect the raw body before "
+                    "assuming a free-text justification will be accepted."
+                )
+            elif jqs_form:
                 result["detail"] = (
                     f"'{list_name}' is an N2K list and requires JQS form '{jqs_form}'. "
                     "The justification on an add must be a JQS answer id in the form "
@@ -774,33 +785,39 @@ def _diagnose_scope(scope: str, key: str) -> Dict[str, Any]:
 def _metadata_infos(body: Any) -> Dict[str, str]:
     """Flatten ``n2kListMetadataGet``'s nested key/label/value array into a dict.
 
-    The response nests the interesting fields several levels down::
+    Two shapes are handled, because the live gateway does not match the docs. The
+    documented form is a single ``metadataInfos`` array::
 
         {"namespaceMetadata": {"metadata": {"metadataInfos": [
             {"key": "justQuestFormName", "label": "...", "value": "iamqa.bigform.hasexp"},
-            ...
         ]}}}
+
+    What the gateway actually returns is one numbered sibling key per entry —
+    ``metadataInfos0``, ``metadataInfos1``, … — each a single object rather than
+    a list. Matching on the ``metadataInfo`` prefix covers both, plus the
+    singular ``metadataInfo`` spelling.
     """
     if not isinstance(body, dict):
         return {}
-    infos = (
-        body.get("namespaceMetadata", {})
-        .get("metadata", {})
-        .get("metadataInfos", [])
-        if isinstance(body.get("namespaceMetadata"), dict)
-        else []
-    )
+    container: Dict[str, Any] = body
+    ns = body.get("namespaceMetadata")
+    if isinstance(ns, dict):
+        container = ns.get("metadata") if isinstance(ns.get("metadata"), dict) else ns
+
     out: Dict[str, str] = {}
-    if isinstance(infos, dict):
-        infos = [infos]
-    if not isinstance(infos, list):
-        return out
-    for info in infos:
-        if not isinstance(info, dict):
+
+    def _add(entry: Any) -> None:
+        if isinstance(entry, dict) and entry.get("key"):
+            out[str(entry["key"])] = str(entry.get("value") or "")
+
+    for name, value in (container or {}).items():
+        if not str(name).startswith("metadataInfo"):
             continue
-        key = info.get("key")
-        if key:
-            out[str(key)] = str(info.get("value") or "")
+        if isinstance(value, list):
+            for entry in value:
+                _add(entry)
+        else:
+            _add(value)
     return out
 
 

@@ -407,11 +407,72 @@ async def test_probe_config_flags_a_blank_rest_url_as_blocking(client):
 # ---------------------------------------------------------------------------
 
 def _metadata_body(*infos):
+    """The shape the LMWS docs describe: one metadataInfos array."""
     return {
         "Result": "SUCCESS",
         "namespaceMetadata": {"metadata": {"metadataInfos": list(infos)}},
         "errorInfos": [],
     }
+
+
+def _numbered_metadata_body(*infos):
+    """The shape the gateway actually returns: metadataInfos0, metadataInfos1, …
+
+    Numbered sibling keys, each holding a single object rather than a list.
+    """
+    metadata = {f"metadataInfos{i}": info for i, info in enumerate(infos)}
+    return {
+        "Result": "SUCCESS",
+        "namespaceMetadata": {"metadata": metadata},
+        "errorInfos": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_metadata_parses_the_numbered_keys_the_gateway_really_sends(client):
+    # Observed live response: numbered keys, not the documented array.
+    body = _numbered_metadata_body(
+        {"key": "listType", "label": "listType", "value": "Entitlement"},
+        {"key": "allowServiceAccounts", "label": "allowServiceAccounts", "value": "Yes"},
+        {"key": "managerApprovalRequired", "label": "...", "value": "No"},
+        {"key": "cciClassification", "label": "cciClassification", "value": "3"},
+    )
+    with _transport(lambda m, u, p: httpx.Response(200, json=body)):
+        result = await client.probe_list_metadata("edh_dbx_enterprise_deng")
+
+    assert result["is_n2k"] is True
+    assert result["metadata"]["allowServiceAccounts"] == "Yes"
+    assert result["metadata"]["cciClassification"] == "3"
+    assert result["requires_jqs"] is False
+    assert "free-text" in result["detail"]
+
+
+@pytest.mark.asyncio
+async def test_metadata_finds_jqs_among_numbered_keys(client):
+    body = _numbered_metadata_body(
+        {"key": "listType", "label": "listType", "value": "Entitlement"},
+        {"key": "justQuestFormName", "label": "...", "value": "iamqa.bigform.hasexp"},
+    )
+    with _transport(lambda m, u, p: httpx.Response(200, json=body)):
+        result = await client.probe_list_metadata("n2k_list")
+    assert result["requires_jqs"] is True
+    assert result["jqs_form"] == "iamqa.bigform.hasexp"
+
+
+@pytest.mark.asyncio
+async def test_unparseable_metadata_reports_jqs_as_unknown_not_false(client):
+    """An empty parse must never be read as 'no JQS form required'.
+
+    Reporting False here would greenlight unattended adds against a list that
+    actually needs a browser-obtained JQS answer id.
+    """
+    body = {"Result": "SUCCESS", "namespaceMetadata": {"metadata": {}}, "errorInfos": []}
+    with _transport(lambda m, u, p: httpx.Response(200, json=body)):
+        result = await client.probe_list_metadata("n2k_list")
+
+    assert result["is_n2k"] is True
+    assert result["requires_jqs"] is None
+    assert "UNKNOWN" in result["detail"]
 
 
 @pytest.mark.asyncio
