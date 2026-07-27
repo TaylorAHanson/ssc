@@ -322,6 +322,78 @@ async def test_probe_config_reports_unreadable_scope_as_a_grant_problem(client):
 
 
 @pytest.mark.asyncio
+async def test_probe_config_refresh_evicts_the_cached_secret_miss():
+    """A negatively-cached secret must not survive an explicit refresh.
+
+    ``_read_secret`` caches misses as well as hits, so after granting the app SP
+    READ on the scope the process would keep reporting the old failure. Refresh
+    is what makes the fix observable without a restart.
+    """
+    import base64
+
+    from app.core import workspaces
+
+    scope, key = "controltower_secret_scope_tst", "edhapisvc"
+
+    class _Secret:
+        value = base64.b64encode(b"now-readable").decode()
+
+    class _NowGranted:
+        class secrets:  # noqa: N801 - mirrors the SDK's attribute shape
+            @staticmethod
+            def get_secret(scope, key):
+                return _Secret()
+
+            @staticmethod
+            def list_secrets(scope):
+                return [_Secret()]
+
+    # Exercise the real _read_secret so the cache logic actually runs; only the
+    # SDK call underneath is faked, standing in for the ACL having been granted.
+    with patch.object(settings, "LMWS_SECRET_SCOPE", scope), \
+         patch.object(settings, "LMWS_PASSWORD_SECRET_KEY", key), \
+         patch.object(settings, "LMWS_SERVICE_PASSWORD", ""), \
+         patch.object(settings, "LMWS_SERVICE_USERNAME", "edhapisvc"), \
+         patch.object(settings, "LMWS_REST_URL", REST), \
+         patch.dict(workspaces._secret_cache, {(scope, key): None}, clear=False), \
+         patch.dict("sys.modules", {"databricks.sdk": type("m", (), {"WorkspaceClient": _NowGranted})}):
+
+        # The cached miss is served even though the grant is now in place.
+        probe = LmwsN2kProbeClient()
+        assert probe.password == ""
+        stale = await probe.probe_config()
+        assert stale["password_resolved"] is False
+        assert any("refresh=true" in p for p in stale["problems"])
+
+        # Refresh evicts it and re-reads.
+        fresh = await probe.probe_config(refresh=True)
+
+        assert fresh["refreshed"] is True
+        assert fresh["password_resolved"] is True
+        assert fresh["password_length"] == len("now-readable")
+        assert fresh["ready"] is True
+        assert fresh["problems"] == []
+        # The good value is now cached for every subsequent LMWS call in the
+        # process (asserted inside the block: patch.dict restores on exit).
+        assert workspaces._secret_cache[(scope, key)] == "now-readable"
+
+
+@pytest.mark.asyncio
+async def test_probe_config_points_at_refresh_when_the_secret_is_missing(client):
+    client.password = ""
+
+    class _Boom:
+        class secrets:  # noqa: N801
+            @staticmethod
+            def list_secrets(scope):
+                raise PermissionError("no READ")
+
+    with patch.dict("sys.modules", {"databricks.sdk": type("m", (), {"WorkspaceClient": _Boom})}):
+        result = await client.probe_config()
+    assert any("refresh=true" in p for p in result["problems"])
+
+
+@pytest.mark.asyncio
 async def test_probe_config_flags_a_blank_rest_url_as_blocking(client):
     with patch.object(settings, "LMWS_REST_URL", ""):
         result = await client.probe_config()

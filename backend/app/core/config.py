@@ -922,7 +922,9 @@ _install_sdk_timeout_defaults()
 # denylist misses the many prod tokens in the wild ("prod", "prd", "production"),
 # which is exactly how role override once leaked into a prod deploy. Anything not
 # listed here (incl. stage/prod and any unknown value) is treated as non-dev.
-DEV_FEATURE_ENVIRONMENTS = frozenset({"development", "dev", "local", "test", "testing"})
+DEV_FEATURE_ENVIRONMENTS = frozenset(
+    {"development", "dev", "local", "test", "testing", "tst"}
+)
 
 
 def dev_features_allowed() -> bool:

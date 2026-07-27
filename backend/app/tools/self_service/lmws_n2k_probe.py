@@ -29,7 +29,16 @@ logger = logging.getLogger(__name__)
 
 
 class LmwsProbeConfigInput(BaseModel):
-    pass
+    refresh: bool = Field(
+        default=False,
+        description=(
+            "Re-read the LMWS service-account password instead of using the cached "
+            "value. Set true right after granting the app's service principal READ on "
+            "the secret scope: failed secret reads are cached for the life of the "
+            "process, so the app would otherwise keep reporting the old failure until "
+            "it restarts. Only the LMWS credential is refreshed."
+        ),
+    )
 
 
 @tool(
@@ -41,8 +50,10 @@ class LmwsProbeConfigInput(BaseModel):
         "which of the three independent causes applies: the app's service principal "
         "cannot read the secret scope (a Databricks grant), the scope is readable but "
         "the password key is missing (an IAM request), or a base URL is blank (a "
-        "deployment/settings change). Also reports the service account and which base "
-        "URLs are set. Never returns the password itself."
+        "deployment/settings change). Pass refresh=true to re-read the credential "
+        "after fixing a secret-scope grant, which avoids needing an app restart. Also "
+        "reports the service account and which base URLs are set. Never returns the "
+        "password itself."
     ),
     args_schema=LmwsProbeConfigInput,
     side_effect_class="read",
@@ -50,11 +61,12 @@ class LmwsProbeConfigInput(BaseModel):
     feature_flag="core",
     friendly_label="Checking LMWS configuration...",
 )
-async def lmws_probe_config(**kwargs) -> Dict[str, Any]:
-    result = await LmwsN2kProbeClient().probe_config()
+async def lmws_probe_config(refresh: bool = False, **kwargs) -> Dict[str, Any]:
+    result = await LmwsN2kProbeClient().probe_config(refresh=refresh)
     logger.info(
-        "lmws_probe_config: ready=%s password_resolved=%s missing_urls=%s",
-        result.get("ready"), result.get("password_resolved"), result.get("missing_base_urls"),
+        "lmws_probe_config: refresh=%s ready=%s password_resolved=%s missing_urls=%s",
+        refresh, result.get("ready"), result.get("password_resolved"),
+        result.get("missing_base_urls"),
     )
     return result
 

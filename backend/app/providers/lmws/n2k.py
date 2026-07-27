@@ -418,6 +418,12 @@ class LmwsN2kProbeClient(LmwsNativeClient):
                 f"The password did not resolve from {result['password_source']} — "
                 + str(result.get("scope_diagnosis", {}).get("detail", ""))
             )
+            if not refresh:
+                problems.append(
+                    "Note: failed secret reads are cached for the life of the process, "
+                    "so if you just granted access, re-run this with refresh=true "
+                    "rather than waiting for a restart."
+                )
         # Only the REST base blocks N2K work — every n2k*/listAny* endpoint lives
         # there. A blank authn/cache/fws URL just narrows which comparison probes
         # can run, so it is a note rather than a problem.
