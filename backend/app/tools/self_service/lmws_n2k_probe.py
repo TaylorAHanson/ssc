@@ -21,6 +21,7 @@ from app.providers.lmws.n2k import (
     ADD_ENDPOINTS,
     MEMBER_STYLES,
     READ_ENDPOINTS,
+    SYSTEM_ENDPOINTS,
     LmwsN2kProbeClient,
 )
 from app.tools.mcp import tool
@@ -209,6 +210,28 @@ class LmwsProbeAddInput(BaseModel):
             "an endpoint rejects the members argument itself."
         ),
     )
+    system_endpoint: str = Field(
+        default="auto",
+        description=(
+            "FWS 'addMembers' only; ignored by the LMWS endpoints. Which directory "
+            "backs the list: 'ActiveDirectory' for traditional ListManager lists, "
+            "'Azure' for Saviynt-created ones (names starting Sav_Azure_ / Sav_Auto_). "
+            "'auto' (default) guesses from the list name and, on a 404, retries once "
+            "with the other value — a 404 means the list was not found in the "
+            "directory tried, not that it does not exist."
+        ),
+    )
+    requester: Optional[str] = Field(
+        default=None,
+        description=(
+            "FWS 'addMembers' only; ignored by the LMWS endpoints. The CN this add is "
+            "made ON BEHALF OF, sent alongside actor (the service account). This is "
+            "the delegation field no LMWS add endpoint has, so it is the one lever "
+            "that may work when the service account is not a list supervisor — set it "
+            "to a user who IS entitled on the list. Blank sends the service account "
+            "as its own requester."
+        ),
+    )
     dry_run: bool = Field(
         default=True,
         description=(
@@ -233,12 +256,20 @@ class LmwsProbeAddInput(BaseModel):
         "Platform-admin diagnostic: probe the LMWS membership-ADD endpoints for a list "
         "to determine which ones the service account can use — specifically for N2K "
         "(need-to-know) lists that the production listMembersAdd endpoint refuses. "
-        "Leave 'endpoint' blank to compare all candidates in one run. The outcome "
-        "distinguishes the two failure modes that need opposite fixes: 'acl_missing' "
-        "means the service account lacks the lmws.rest / listmanager-n2k-admins ACL, "
-        "while 'supervisor_required' means the ACL passed but the account is not a "
-        "supervisor of that specific list (which must be granted per-list by the list "
-        "owner — no API exists for it). Defaults to dry_run=true, returning the exact "
+        "Leave 'endpoint' blank to compare all candidates in one run. Candidates span "
+        "two different services: the LMWS endpoints (GET) and the FWS-API 'addMembers' "
+        "(POST), which has its own ACLs and, uniquely, a 'requester' field for acting "
+        "on behalf of an entitled user. How to read each outcome: 'acl_missing' means "
+        "the account lacks an ACL group — the detail names which one, and the FWS ACLs "
+        "are ordinary join requests needing no N2K Director approval; "
+        "'supervisor_required' means the ACL passed but the account is not a supervisor "
+        "of that specific list, which only the list owner can grant per-list and has NO "
+        "API, so stop and tell the user to contact the owner rather than retrying; "
+        "'wrong_list_type' means that endpoint does not apply to this list, so ignore "
+        "it and read the others; 'list_not_found' (FWS) means the wrong systemEndpoint "
+        "directory. If every endpoint returns 'supervisor_required', retrying will not "
+        "help — the next thing to try is the FWS endpoint with an entitled 'requester'. "
+        "Defaults to dry_run=true, returning the exact "
         "request without calling the gateway; dry_run=false performs a REAL membership "
         "change and may file an approval request, so only do that when explicitly "
         "asked. This is a diagnostic — route genuine access requests through the "
@@ -256,6 +287,8 @@ async def lmws_probe_membership_add(
     endpoint: Optional[str] = None,
     justification: Optional[str] = None,
     member_style: str = "auto",
+    system_endpoint: str = "auto",
+    requester: Optional[str] = None,
     dry_run: bool = True,
     base_url: Optional[str] = None,
     timeout_seconds: Optional[float] = None,
@@ -265,6 +298,13 @@ async def lmws_probe_membership_add(
         return {
             "status": "error",
             "detail": f"member_style must be one of {', '.join(MEMBER_STYLES)}.",
+        }
+    if system_endpoint != "auto" and system_endpoint not in SYSTEM_ENDPOINTS:
+        return {
+            "status": "error",
+            "detail": (
+                f"system_endpoint must be 'auto' or one of {', '.join(SYSTEM_ENDPOINTS)}."
+            ),
         }
 
     # Match the normalization the production membership path applies, so a probe
@@ -287,6 +327,8 @@ async def lmws_probe_membership_add(
             normalized,
             justification=justification,
             member_style=member_style,
+            system_endpoint=system_endpoint,
+            requester=requester,
             base_url=base_url,
             dry_run=dry_run,
             timeout_seconds=timeout_seconds,
@@ -302,6 +344,8 @@ async def lmws_probe_membership_add(
         normalized,
         justification=justification,
         member_style=member_style,
+        system_endpoint=system_endpoint,
+        requester=requester,
         base_url=base_url,
         dry_run=dry_run,
         timeout_seconds=timeout_seconds,

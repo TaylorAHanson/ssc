@@ -13,8 +13,13 @@ from app.providers.lmws.n2k import (
     ADD_ENDPOINTS,
     READ_ENDPOINTS,
     LmwsN2kProbeClient,
+    _classify_error,
+    default_system_endpoint,
     encode_members,
+    other_system_endpoint,
 )
+from app.core.exceptions import PermanentError
+from app.providers.lmws.native import LmwsNativeClient, fws_error_messages
 
 REST = "https://gw.example.com/iam/v1/lmws-rest/publicAPIrest"
 AUTHN = "https://gw.example.com/iam/v1/lmwsrest-authn"
@@ -428,6 +433,22 @@ def _numbered_metadata_body(*infos):
     }
 
 
+@pytest.mark.parametrize(
+    "message, expected",
+    [
+        # Observed live from n2kAdminListMembershipAdd against a plain N2K list.
+        ("List must be an N2K admin list", "wrong_list_type"),
+        ("List is not N2K", "wrong_list_type"),
+        # Observed live from listAnyMembershipAdd / n2kListMembershipAdd.
+        ("edhapisvc is not a supervisor of this list", "supervisor_required"),
+        # Observed live from listMembersAdd.
+        ("Not authorized to modify N2K list", "supervisor_required"),
+    ],
+)
+def test_live_gateway_messages_classify_correctly(message, expected):
+    assert _classify_error([message])[0] == expected
+
+
 @pytest.mark.asyncio
 async def test_metadata_parses_the_numbered_keys_the_gateway_really_sends(client):
     # Observed live response: numbered keys, not the documented array.
@@ -575,3 +596,225 @@ async def test_matrix_honors_endpoint_subset_and_dry_run(client):
     assert result["endpoints_probed"] == ["listAnyMembershipAdd"]
     assert result["endpoints_succeeded"] == []
     assert "Dry run" in result["summary"]
+
+
+# ---------------------------------------------------------------------------
+# FWS-API addMembers — a different service: POST, JSON body, own error envelope
+# ---------------------------------------------------------------------------
+
+FWS = "https://tst.apigw-op.qualcomm.com/iam/v1/fws-api/entitlement"
+
+
+@pytest.fixture
+def fws_client():
+    with patch.object(LmwsN2kProbeClient, "_resolve_password", staticmethod(lambda: "pw")), \
+         patch.object(settings, "LMWS_SERVICE_USERNAME", "edhapisvc"), \
+         patch.object(settings, "LMWS_FWS_URL", FWS):
+        yield LmwsN2kProbeClient()
+
+
+def _recording_transport(handler):
+    """Transport that captures the JSON body of each request."""
+    sent = []
+
+    async def _request(self, method, url, params=None, auth=None, json=None, **kwargs):
+        sent.append({"method": method, "url": url, "json": json})
+        return handler(method, url, json)
+
+    return patch.object(httpx.AsyncClient, "request", _request), sent
+
+
+def _fws_ok():
+    return {"responseMessage": "OK", "responseStatusCode": 200, "responseValue": {}}
+
+
+# --- the envelope, which shares no keys with LMWS ---------------------------
+
+def test_fws_errors_are_detected_where_errorinfos_parsing_sees_nothing():
+    """The exact 200-with-errorDetails shape from the Swagger example."""
+    body = {
+        "errorDetails": {
+            "code": 4001,
+            "errors": [{"field": "members", "message": "user not found"}],
+            "message": "Validation failed",
+        },
+        "responseMessage": "Bad Request",
+        "responseStatusCode": 400,
+    }
+    # The LMWS-only parser finds nothing here — that is the silent-success bug.
+    assert body.get("errorInfos") is None
+
+    messages = fws_error_messages(body)
+    assert "members: user not found" in messages
+    assert "Validation failed" in messages
+    assert any("responseStatusCode=400" in m for m in messages)
+
+
+def test_fws_success_is_not_misreported_as_an_error():
+    assert fws_error_messages(_fws_ok()) == []
+    # Absent, null, and empty errorDetails must all read as "no error".
+    assert fws_error_messages({"responseStatusCode": 200}) == []
+    assert fws_error_messages({"errorDetails": None, "responseStatusCode": 200}) == []
+    assert fws_error_messages({"errorDetails": {}, "responseStatusCode": 200}) == []
+
+
+def test_native_check_body_now_raises_on_the_fws_envelope():
+    """The four existing production FWS calls run through _check_body."""
+    body = {"errorDetails": {"errors": [{"field": "listName", "message": "no such list"}]}}
+    with pytest.raises(PermanentError) as exc:
+        LmwsNativeClient._check_body(body, "fws_url/createSPGroup")
+    assert "no such list" in str(exc.value)
+
+    # And a genuine success still passes straight through.
+    assert LmwsNativeClient._check_body(_fws_ok(), "fws_url/createSPGroup") == _fws_ok()
+
+
+# --- the request the probe actually builds ----------------------------------
+
+@pytest.mark.asyncio
+async def test_fws_add_posts_the_documented_payload(fws_client):
+    transport, sent = _recording_transport(lambda m, u, j: httpx.Response(200, json=_fws_ok()))
+    with transport:
+        result = await fws_client.probe_membership_add(
+            "addMembers", "edh_dbx_enterprise_deng", ["taylhans"], dry_run=False
+        )
+
+    assert result["ok"] is True
+    assert sent[0]["method"] == "POST"
+    assert sent[0]["url"] == f"{FWS}/addMembers"
+
+    payload = sent[0]["json"]
+    assert payload["actor"] == "edhapisvc"
+    assert payload["members"] == ["taylhans"]          # JSON array, not CSV
+    assert payload["requestType"] == "ADD"
+    assert payload["listName"] == "edh_dbx_enterprise_deng"
+    # metaClass is modeled as an empty object, so it is deliberately not sent.
+    assert "metaClass" not in payload
+
+
+@pytest.mark.asyncio
+async def test_fws_add_sends_requester_for_delegation(fws_client):
+    transport, sent = _recording_transport(lambda m, u, j: httpx.Response(200, json=_fws_ok()))
+    with transport:
+        result = await fws_client.probe_membership_add(
+            "addMembers", "n2k_list", ["someone"], requester="entitled_human", dry_run=False
+        )
+    assert sent[0]["json"]["requester"] == "entitled_human"
+    assert sent[0]["json"]["actor"] == "edhapisvc"
+    assert result["delegated"] is True
+
+
+@pytest.mark.asyncio
+async def test_fws_add_defaults_requester_to_the_service_account(fws_client):
+    transport, sent = _recording_transport(lambda m, u, j: httpx.Response(200, json=_fws_ok()))
+    with transport:
+        result = await fws_client.probe_membership_add(
+            "addMembers", "n2k_list", ["someone"], dry_run=False
+        )
+    assert sent[0]["json"]["requester"] == "edhapisvc"
+    assert result["delegated"] is False
+
+
+# --- systemEndpoint, which the API cannot discover for itself ---------------
+
+def test_system_endpoint_guess_follows_the_list_naming_convention():
+    assert default_system_endpoint("edh_dbx_enterprise_deng") == "ActiveDirectory"
+    assert default_system_endpoint("Sav_Azure_something") == "Azure"
+    assert default_system_endpoint("Sav_Auto_something") == "Azure"
+    assert other_system_endpoint("ActiveDirectory") == "Azure"
+    assert other_system_endpoint("Azure") == "ActiveDirectory"
+
+
+@pytest.mark.asyncio
+async def test_fws_add_retries_the_other_directory_on_404(fws_client):
+    """A 404 means 'not in the directory I asked', so try the other one."""
+    def handler(method, url, body):
+        if body["systemEndpoint"] == "ActiveDirectory":
+            return httpx.Response(404, json={"responseMessage": "not found"})
+        return httpx.Response(200, json=_fws_ok())
+
+    transport, sent = _recording_transport(handler)
+    with transport:
+        result = await fws_client.probe_membership_add(
+            "addMembers", "edh_dbx_enterprise_deng", ["taylhans"], dry_run=False
+        )
+
+    assert [s["json"]["systemEndpoint"] for s in sent] == ["ActiveDirectory", "Azure"]
+    assert result["ok"] is True
+    assert result["system_endpoint"] == "Azure"
+    assert result["system_endpoint_first_tried"] == "ActiveDirectory"
+
+
+@pytest.mark.asyncio
+async def test_explicit_system_endpoint_does_not_retry(fws_client):
+    transport, sent = _recording_transport(
+        lambda m, u, j: httpx.Response(404, json={"responseMessage": "not found"})
+    )
+    with transport:
+        result = await fws_client.probe_membership_add(
+            "addMembers", "n2k_list", ["x"], system_endpoint="Azure", dry_run=False
+        )
+    assert len(sent) == 1
+    assert result["outcome"] == "list_not_found"
+    assert "other systemEndpoint" in result["detail"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_system_endpoint_is_rejected_before_sending(fws_client):
+    with _transport(lambda m, u, p: pytest.fail("must not send")):
+        result = await fws_client.probe_membership_add(
+            "addMembers", "n2k_list", ["x"], system_endpoint="LDAP", dry_run=False
+        )
+    assert result["outcome"] == "rejected"
+    assert result["sent"] is False
+
+
+# --- FWS ACL layers are distinguishable by status code ----------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, expected_group",
+    [(401, "fws.axway.acl"), (403, "azure.sws-api.addMembers.group")],
+)
+async def test_fws_acl_failures_name_the_group_to_request(fws_client, status, expected_group):
+    transport, _ = _recording_transport(lambda m, u, j: httpx.Response(status, json={}))
+    with transport:
+        result = await fws_client.probe_membership_add(
+            "addMembers", "n2k_list", ["x"], dry_run=False
+        )
+    assert result["outcome"] == "acl_missing"
+    assert expected_group in result["detail"]
+    assert "N2K Director approval" in result["detail"]
+
+
+@pytest.mark.asyncio
+async def test_fws_add_reports_missing_base_url_rather_than_guessing(client):
+    # `client` fixture sets only LMWS_REST_URL, so the FWS base is blank.
+    with patch.object(settings, "LMWS_FWS_URL", ""):
+        result = await client.probe_membership_add(
+            "addMembers", "n2k_list", ["x"], dry_run=False
+        )
+    assert result["outcome"] == "not_configured"
+    assert "LMWS_FWS_URL" in result["detail"]
+
+
+@pytest.mark.asyncio
+async def test_actor_outside_the_schema_bounds_is_rejected_before_sending():
+    """actor is required and bounded 3..20; a violation reads like a 403 otherwise."""
+    with patch.object(LmwsN2kProbeClient, "_resolve_password", staticmethod(lambda: "pw")), \
+         patch.object(settings, "LMWS_SERVICE_USERNAME", "ab"), \
+         patch.object(settings, "LMWS_FWS_URL", FWS):
+        probe = LmwsN2kProbeClient()
+    with _transport(lambda m, u, p: pytest.fail("must not send")):
+        result = await probe.probe_membership_add(
+            "addMembers", "n2k_list", ["x"], dry_run=False
+        )
+    assert result["outcome"] == "rejected"
+    assert "3-20" in result["detail"]
+
+
+@pytest.mark.asyncio
+async def test_matrix_includes_the_fws_endpoint(fws_client):
+    with _transport(lambda m, u, p: pytest.fail("dry run must not send")):
+        result = await fws_client.probe_add_matrix("n2k_list", ["x"])
+    assert "addMembers" in result["endpoints_probed"]

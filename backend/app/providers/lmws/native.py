@@ -40,6 +40,52 @@ from app.providers.lmws.client import _csv
 logger = logging.getLogger(__name__)
 
 
+def fws_error_messages(body: Any) -> List[str]:
+    """Pull failure messages out of an FWS-API response body.
+
+    The FWS-API shares no error keys with LMWS: it answers HTTP 200 carrying
+    ``errorDetails`` (with a nested ``errors`` array of ``{field, message}``)
+    plus ``responseStatusCode`` / ``responseMessage``. Anything keying off
+    ``errorInfos`` therefore reads an FWS failure as a success.
+
+    Only a real signal counts as a failure — a message, or a ``responseStatusCode``
+    of 400+. An ``errorDetails`` that is absent, null, or empty means no error, so
+    a success response is never misreported as one.
+    """
+    if not isinstance(body, dict):
+        return []
+
+    messages: List[str] = []
+    details = body.get("errorDetails")
+    if isinstance(details, dict):
+        errors = details.get("errors")
+        if isinstance(errors, dict):
+            errors = [errors]
+        if isinstance(errors, list):
+            for e in errors:
+                if not isinstance(e, dict):
+                    if e:
+                        messages.append(str(e))
+                    continue
+                msg = str(e.get("message") or "").strip()
+                field = str(e.get("field") or "").strip()
+                if msg:
+                    messages.append(f"{field}: {msg}" if field else msg)
+        top = str(details.get("message") or "").strip()
+        if top:
+            messages.append(top)
+
+    code = body.get("responseStatusCode")
+    if isinstance(code, int) and code >= 400:
+        response_message = str(body.get("responseMessage") or "").strip()
+        messages.append(
+            f"responseStatusCode={code}: {response_message}"
+            if response_message
+            else f"responseStatusCode={code} with no responseMessage."
+        )
+    return messages
+
+
 class LmwsNativeClient:
     """Direct, in-process LMWS/FWS-API calls (no Databricks job)."""
 
@@ -95,7 +141,15 @@ class LmwsNativeClient:
 
     @staticmethod
     def _check_body(data: Any, where: str) -> Any:
-        """Raise on a body-level LMWS/FWS-API error (HTTP 200 with ``errorInfos``)."""
+        """Raise on a body-level error returned with an HTTP 200.
+
+        Two different services answer here and they do not share error keys. LMWS
+        uses ``errorInfos``; the FWS-API endpoints (``createSPGroup``,
+        ``processSpacPolicy``, ``getSpacPolicy``, ``requestConfirmation``) instead
+        return ``errorDetails`` with a nested ``errors`` array, alongside
+        ``responseStatusCode``. Checking only ``errorInfos`` silently accepts every
+        FWS failure as a success.
+        """
         if not isinstance(data, dict):
             return data
         errs = data.get("errorInfos") or data.get("errorInfo")
@@ -105,6 +159,10 @@ class LmwsNativeClient:
             else:
                 msgs = str(errs)
             raise PermanentError(f"LMWS API error from {where}: {msgs}")
+
+        fws = fws_error_messages(data)
+        if fws:
+            raise PermanentError(f"FWS-API error from {where}: {'; '.join(fws)}")
         return data
 
     async def _request(

@@ -60,7 +60,7 @@ import httpx
 
 from app.core.config import settings
 from app.providers.lmws.client import _csv
-from app.providers.lmws.native import LmwsNativeClient
+from app.providers.lmws.native import LmwsNativeClient, fws_error_messages
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,50 @@ ADD_ENDPOINTS: Dict[str, str] = {
     # The current production endpoint — hardcoded to reject N2K lists. Kept here
     # so a probe can reproduce the known failure alongside the alternatives.
     "listMembersAdd": "authn",
+    # FWS-API. A different service from the LMWS methods above, not just another
+    # path: POST with a JSON body, its own error envelope, and its own ACLs
+    # (``fws.axway.acl`` gateway-wide plus ``azure.sws-api.addMembers.group`` for
+    # this method). Neither ACL needs N2K Director approval, and the payload
+    # carries a ``requester`` distinct from ``actor`` — so unlike every LMWS
+    # endpoint here, this one can act on behalf of an entitled human and may work
+    # where the supervisor check blocks the rest.
+    "addMembers": "fws",
 }
+
+#: Endpoints that take a JSON request body instead of query parameters.
+POST_JSON_ENDPOINTS = frozenset({"addMembers"})
+
+#: Which directory backs a list. The FWS-API needs this named explicitly and
+#: gives no way to discover it, so it has to be established empirically: lists
+#: from the traditional ListManager path are ``ActiveDirectory``, and the newer
+#: Saviynt/Azure flow produces ``Azure`` ones.
+SYSTEM_ENDPOINTS = ("ActiveDirectory", "Azure")
+
+#: Name prefixes produced by the Saviynt/Azure flow, used to pick the starting
+#: ``systemEndpoint`` guess. Only a heuristic — a 404 is the real answer, which
+#: is why the probe retries with the other value.
+_SAVIYNT_PREFIXES = ("sav_azure_", "sav_auto_")
+
+
+def default_system_endpoint(list_name: str) -> str:
+    """Best initial guess at a list's ``systemEndpoint``."""
+    if (list_name or "").strip().lower().startswith(_SAVIYNT_PREFIXES):
+        return "Azure"
+    return "ActiveDirectory"
+
+
+def other_system_endpoint(current: str) -> str:
+    """The value to retry with when the first guess 404s."""
+    return "Azure" if current == "ActiveDirectory" else "ActiveDirectory"
+
+
+#: ``requestType`` enum on UpdateMembersRequest.
+FWS_REQUEST_TYPES = ("ADD", "CREATE", "REMOVE", "UPDATE")
+
+#: ``actor`` is the only required field on UpdateMembersRequest and is bounded
+#: 3..20 characters. Checked before sending: an out-of-range actor comes back as
+#: a generic validation failure that reads like a permissions problem.
+_ACTOR_MIN, _ACTOR_MAX = 3, 20
 
 #: How to encode the ``listMembers`` parameter.
 #:   ``auto``      -> ``u1`` for one member, ``[u1,u2]`` for several. Matches the
@@ -153,7 +196,16 @@ _SUPERVISOR_MARKERS = (
 
 #: Gateway text for calling an N2K-only endpoint on a non-N2K list (or the
 #: reverse, e.g. listMembersAdd against an N2K list).
-_LIST_TYPE_MARKERS = ("is not n2k", "should be n2k", "not an n2k")
+#: ``must be an n2k`` covers the admin-list variant the gateway returns for
+#: n2kAdminListMembershipAdd ("List must be an N2K admin list"), which is a
+#: list-type mismatch rather than the generic API error it used to fall through
+#: to — N2K and N2K-*admin* are distinct list families.
+_LIST_TYPE_MARKERS = (
+    "is not n2k",
+    "should be n2k",
+    "not an n2k",
+    "must be an n2k",
+)
 
 
 class LmwsN2kProbeClient(LmwsNativeClient):
@@ -185,6 +237,7 @@ class LmwsN2kProbeClient(LmwsNativeClient):
         params: Optional[Dict[str, Any]] = None,
         *,
         method: str = "GET",
+        json_body: Optional[Dict[str, Any]] = None,
         base_url: Optional[str] = None,
         dry_run: bool = False,
         timeout_seconds: Optional[float] = None,
@@ -208,6 +261,7 @@ class LmwsN2kProbeClient(LmwsNativeClient):
             "method": method.upper(),
             "url": url,
             "params": sent_params,
+            "json_body": json_body,
             "service_account": self.username or None,
             "verify_tls": self.verify_tls,
             "sent": False,
@@ -258,7 +312,8 @@ class LmwsN2kProbeClient(LmwsNativeClient):
                 resp = await client.request(
                     method.upper(),
                     url,
-                    params=sent_params,
+                    params=sent_params or None,
+                    json=json_body,
                     auth=(self.username, self.password),
                 )
             result["latency_ms"] = round((time.monotonic() - start) * 1000)
@@ -270,16 +325,42 @@ class LmwsN2kProbeClient(LmwsNativeClient):
                 body = (resp.text or "")[:2000]
             result["body"] = body
 
+            is_fws = endpoint in POST_JSON_ENDPOINTS
             if resp.status_code in (401, 403):
                 result["errors"] = _error_messages(body) or [str(body)[:500]]
                 result["outcome"] = "acl_missing"
+                if is_fws:
+                    # FWS has two independent ACL layers and the status code says
+                    # which one refused, so name the group to request.
+                    needed = (
+                        "'fws.axway.acl' (gateway-level, covers every FWS-API endpoint)"
+                        if resp.status_code == 401
+                        else f"'azure.sws-api.{endpoint}.group' (method-level ACL for {endpoint})"
+                    )
+                    result["detail"] = (
+                        f"HTTP {resp.status_code} — the FWS-API rejected the service "
+                        f"account at the ACL layer. Missing: {needed}. Both FWS ACLs are "
+                        "ordinary join requests and do NOT need N2K Director approval, so "
+                        "this is a request-and-wait fix, not a list-permission problem."
+                    )
+                else:
+                    result["detail"] = (
+                        f"HTTP {resp.status_code} — reached the gateway but the service "
+                        "account was rejected before the endpoint's own logic ran. That is "
+                        "the ACL layer: the account is not in the required ACL group "
+                        "('lmws.rest' for the REST methods, 'listmanager-n2k-admins' for "
+                        "the n2k* methods). Fix by requesting the ACL, not by changing "
+                        "list permissions."
+                    )
+                return result
+            if resp.status_code == 404 and is_fws:
+                result["errors"] = _error_messages(body)
+                result["outcome"] = "list_not_found"
                 result["detail"] = (
-                    f"HTTP {resp.status_code} — reached the gateway but the service "
-                    "account was rejected before the endpoint's own logic ran. That is "
-                    "the ACL layer: the account is not in the required ACL group "
-                    "('lmws.rest' for the REST methods, 'listmanager-n2k-admins' for "
-                    "the n2k* methods). Fix by requesting the ACL, not by changing "
-                    "list permissions."
+                    f"HTTP 404 — the FWS-API could not find this list under "
+                    f"systemEndpoint='{(json_body or {}).get('systemEndpoint')}'. That "
+                    "usually means the list lives in the other directory rather than "
+                    "that it does not exist; retry with the other systemEndpoint value."
                 )
                 return result
             if resp.status_code >= 400:
@@ -570,6 +651,8 @@ class LmwsN2kProbeClient(LmwsNativeClient):
         *,
         justification: Optional[str] = None,
         member_style: str = "auto",
+        system_endpoint: str = "auto",
+        requester: Optional[str] = None,
         base_url: Optional[str] = None,
         dry_run: bool = True,
         timeout_seconds: Optional[float] = None,
@@ -580,6 +663,9 @@ class LmwsN2kProbeClient(LmwsNativeClient):
         and may file an approval request, so the caller opts in to actually
         sending. When the list uses a JQS justification form, ``justification``
         must be the form response id; check ``n2kListMetadataGet`` first.
+
+        ``system_endpoint`` and ``requester`` apply only to the FWS ``addMembers``
+        endpoint and are ignored by the LMWS ones, which have no equivalent.
         """
         if endpoint not in ADD_ENDPOINTS:
             return {
@@ -592,6 +678,19 @@ class LmwsN2kProbeClient(LmwsNativeClient):
                     f"{', '.join(sorted(ADD_ENDPOINTS))}."
                 ),
             }
+
+        if endpoint in POST_JSON_ENDPOINTS:
+            return await self._probe_fws_add(
+                endpoint,
+                list_name,
+                members,
+                justification=justification,
+                system_endpoint=system_endpoint,
+                requester=requester,
+                base_url=base_url,
+                dry_run=dry_run,
+                timeout_seconds=timeout_seconds,
+            )
         try:
             encoded = encode_members(members, member_style)
         except ValueError as e:
@@ -618,6 +717,102 @@ class LmwsN2kProbeClient(LmwsNativeClient):
         out["member_style"] = member_style
         return out
 
+    async def _probe_fws_add(
+        self,
+        endpoint: str,
+        list_name: str,
+        members: Union[str, List[str]],
+        *,
+        justification: Optional[str] = None,
+        system_endpoint: str = "auto",
+        requester: Optional[str] = None,
+        base_url: Optional[str] = None,
+        dry_run: bool = True,
+        timeout_seconds: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Probe the FWS-API ``addMembers`` endpoint (POST + JSON body).
+
+        Differs from the LMWS adds in three ways that matter: members go as a JSON
+        array (so the ``member_style`` encodings do not apply), the call names a
+        ``systemEndpoint`` that the API cannot discover for itself, and it carries
+        a ``requester`` separate from ``actor`` — the on-behalf-of field no LMWS
+        add endpoint offers.
+
+        With ``system_endpoint='auto'`` a 404 triggers one retry against the other
+        directory, since a wrong guess and a genuinely missing list are
+        indistinguishable from the status code alone.
+        """
+        actor = (self.username or "").strip()
+        if not (_ACTOR_MIN <= len(actor) <= _ACTOR_MAX):
+            return {
+                "endpoint": endpoint,
+                "outcome": "rejected",
+                "ok": False,
+                "sent": False,
+                "detail": (
+                    f"actor '{actor}' is {len(actor)} characters; UpdateMembersRequest "
+                    f"requires {_ACTOR_MIN}-{_ACTOR_MAX}. Sending it would fail schema "
+                    "validation and look like a permissions error."
+                ),
+            }
+
+        if system_endpoint == "auto":
+            chosen = default_system_endpoint(list_name)
+            allow_retry = True
+        elif system_endpoint in SYSTEM_ENDPOINTS:
+            chosen = system_endpoint
+            allow_retry = False
+        else:
+            return {
+                "endpoint": endpoint,
+                "outcome": "rejected",
+                "ok": False,
+                "sent": False,
+                "detail": (
+                    f"Unknown system_endpoint {system_endpoint!r}; expected 'auto' or "
+                    f"one of {', '.join(SYSTEM_ENDPOINTS)}."
+                ),
+            }
+
+        member_list = [m for m in _csv(members).split(",") if m]
+
+        async def _attempt(which: str) -> Dict[str, Any]:
+            # metaClass is omitted: the schema models it as an empty object, so
+            # sending {} would assert a shape the API never defined.
+            payload = {
+                "actor": actor,
+                "listName": list_name,
+                "members": member_list,
+                "justification": justification or settings.LMWS_DEFAULT_JUSTIFICATION,
+                "requestType": "ADD",
+                "requester": (requester or "").strip() or actor,
+                "systemEndpoint": which,
+                "checksod": True,
+            }
+            out = await self.probe(
+                endpoint,
+                method="POST",
+                json_body=payload,
+                base_url=base_url,
+                dry_run=dry_run,
+                timeout_seconds=timeout_seconds,
+            )
+            out["system_endpoint"] = which
+            out["requester"] = payload["requester"]
+            out["delegated"] = payload["requester"] != actor
+            return out
+
+        result = await _attempt(chosen)
+        if allow_retry and result.get("outcome") == "list_not_found":
+            retry = await _attempt(other_system_endpoint(chosen))
+            retry["system_endpoint_first_tried"] = chosen
+            retry["detail"] = (
+                f"First tried systemEndpoint='{chosen}' (404), then "
+                f"'{retry['system_endpoint']}'. {retry.get('detail', '')}".strip()
+            )
+            return retry
+        return result
+
     async def probe_add_matrix(
         self,
         list_name: str,
@@ -626,6 +821,8 @@ class LmwsN2kProbeClient(LmwsNativeClient):
         justification: Optional[str] = None,
         endpoints: Optional[List[str]] = None,
         member_style: str = "auto",
+        system_endpoint: str = "auto",
+        requester: Optional[str] = None,
         base_url: Optional[str] = None,
         dry_run: bool = True,
         timeout_seconds: Optional[float] = None,
@@ -646,6 +843,8 @@ class LmwsN2kProbeClient(LmwsNativeClient):
                     members,
                     justification=justification,
                     member_style=member_style,
+                    system_endpoint=system_endpoint,
+                    requester=requester,
                     base_url=base_url,
                     dry_run=dry_run,
                     timeout_seconds=timeout_seconds,
@@ -703,6 +902,8 @@ def _error_messages(body: Any) -> List[str]:
     if status in {"EXCEPTION", "FAILED", "ERROR"} and not messages:
         detail = body.get("message") or body.get("Message") or body.get("description")
         messages.append(str(detail) if detail else f"Result={status} with no message.")
+
+    messages.extend(fws_error_messages(body))
     return messages
 
 
@@ -719,9 +920,11 @@ def _classify_error(messages: List[str]) -> tuple:
 
     if any(m in joined for m in _LIST_TYPE_MARKERS):
         return "wrong_list_type", (
-            f"The endpoint rejected the list as the wrong type: {text}. The n2k* "
-            "methods require an N2K list and listMembersAdd requires a non-N2K one, "
-            "so this says which family the list belongs to."
+            f"The endpoint rejected the list as the wrong type: {text}. This is not "
+            "an authorization problem — the endpoint simply does not apply to this "
+            "list, so rule it out and read the other endpoints' results instead. "
+            "n2kAdminListMembershipAdd in particular needs an N2K *admin* list, "
+            "which is a narrower family than N2K."
         )
     # Check the ACL markers before the supervisor ones: an ACL rejection can also
     # mention authorization, but "not a member of ... ACL" is the specific signal.
