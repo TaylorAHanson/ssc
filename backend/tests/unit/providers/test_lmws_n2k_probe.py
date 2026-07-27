@@ -437,7 +437,12 @@ def _numbered_metadata_body(*infos):
     "message, expected",
     [
         # Observed live from n2kAdminListMembershipAdd against a plain N2K list.
+        # The article varies by endpoint, and a literal-substring match missed the
+        # "a N2K" spellings, silently downgrading them to a generic api_error.
         ("List must be an N2K admin list", "wrong_list_type"),
+        ("List must be a N2K admin list", "wrong_list_type"),
+        ("Provided list is not a N2K Admin list", "wrong_list_type"),
+        ("List should be an N2K list", "wrong_list_type"),
         ("List is not N2K", "wrong_list_type"),
         # Observed live from listAnyMembershipAdd / n2kListMembershipAdd.
         ("edhapisvc is not a supervisor of this list", "supervisor_required"),
@@ -726,11 +731,22 @@ def test_system_endpoint_guess_follows_the_list_naming_convention():
 
 
 @pytest.mark.asyncio
-async def test_fws_add_retries_the_other_directory_on_404(fws_client):
-    """A 404 means 'not in the directory I asked', so try the other one."""
+@pytest.mark.parametrize("lookup_failed_status", [404, 412])
+async def test_fws_add_retries_the_other_directory_on_lookup_failure(
+    fws_client, lookup_failed_status
+):
+    """412 is what the gateway really returns; 404 is the intuitive case.
+
+    Observed live: 412 Precondition Failed / "Entitlement Type Not Found", raised
+    inside listNameValidator before any permission check. Treating it as a plain
+    http_error meant the automatic retry never fired.
+    """
     def handler(method, url, body):
         if body["systemEndpoint"] == "ActiveDirectory":
-            return httpx.Response(404, json={"responseMessage": "not found"})
+            return httpx.Response(
+                lookup_failed_status,
+                json={"responseMessage": "Entitlement Type Not Found"},
+            )
         return httpx.Response(200, json=_fws_ok())
 
     transport, sent = _recording_transport(handler)
@@ -748,7 +764,7 @@ async def test_fws_add_retries_the_other_directory_on_404(fws_client):
 @pytest.mark.asyncio
 async def test_explicit_system_endpoint_does_not_retry(fws_client):
     transport, sent = _recording_transport(
-        lambda m, u, j: httpx.Response(404, json={"responseMessage": "not found"})
+        lambda m, u, j: httpx.Response(412, json={"responseMessage": "not found"})
     )
     with transport:
         result = await fws_client.probe_membership_add(
@@ -757,6 +773,23 @@ async def test_explicit_system_endpoint_does_not_retry(fws_client):
     assert len(sent) == 1
     assert result["outcome"] == "list_not_found"
     assert "other systemEndpoint" in result["detail"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_failure_detail_rules_out_the_acl_layer(fws_client):
+    """The 412 must not be read as a permissions problem — auth already passed."""
+    transport, _ = _recording_transport(
+        lambda m, u, j: httpx.Response(412, json={"responseMessage": "Entitlement Type Not Found"})
+    )
+    with transport:
+        result = await fws_client.probe_membership_add(
+            "addMembers", "edh_dbx_enterprise_deng", ["x"],
+            system_endpoint="ActiveDirectory", dry_run=False,
+        )
+    assert result["outcome"] == "list_not_found"
+    assert "ACL layer passed" in result["detail"]
+    assert "edh_dbx_enterprise_deng" in result["detail"]
+    assert "ActiveDirectory" in result["detail"]
 
 
 @pytest.mark.asyncio

@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional, Union
 
@@ -115,6 +116,12 @@ ADD_ENDPOINTS: Dict[str, str] = {
 
 #: Endpoints that take a JSON request body instead of query parameters.
 POST_JSON_ENDPOINTS = frozenset({"addMembers"})
+
+#: FWS statuses meaning "I could not find this list in the directory you named".
+#: 404 is the intuitive one; 412 ("Precondition Failed / Entitlement Type Not
+#: Found") is what the gateway actually returns, raised inside its listNameValidator
+#: before any permission check. Both warrant retrying the other systemEndpoint.
+FWS_LOOKUP_FAILED_STATUSES = frozenset({404, 412})
 
 #: Which directory backs a list. The FWS-API needs this named explicitly and
 #: gives no way to discover it, so it has to be established empirically: lists
@@ -196,15 +203,13 @@ _SUPERVISOR_MARKERS = (
 
 #: Gateway text for calling an N2K-only endpoint on a non-N2K list (or the
 #: reverse, e.g. listMembersAdd against an N2K list).
-#: ``must be an n2k`` covers the admin-list variant the gateway returns for
-#: n2kAdminListMembershipAdd ("List must be an N2K admin list"), which is a
-#: list-type mismatch rather than the generic API error it used to fall through
-#: to — N2K and N2K-*admin* are distinct list families.
-_LIST_TYPE_MARKERS = (
-    "is not n2k",
-    "should be n2k",
-    "not an n2k",
-    "must be an n2k",
+#: Matched as a pattern rather than fixed substrings because the wording varies
+#: between endpoints and articles are inconsistent ("is not N2K", "must be a N2K
+#: admin list", "should be an N2K list"). A literal list missed the admin-list
+#: variant and fell through to a generic api_error, which reads as an unexplained
+#: failure instead of "this endpoint does not apply to this list".
+_LIST_TYPE_RE = re.compile(
+    r"(?:is\s+not|not|must\s+be|should\s+be)\s+(?:an?\s+)?n2k", re.IGNORECASE
 )
 
 
@@ -353,14 +358,20 @@ class LmwsN2kProbeClient(LmwsNativeClient):
                         "list permissions."
                     )
                 return result
-            if resp.status_code == 404 and is_fws:
+            if resp.status_code in FWS_LOOKUP_FAILED_STATUSES and is_fws:
                 result["errors"] = _error_messages(body)
                 result["outcome"] = "list_not_found"
+                tried = (json_body or {}).get("systemEndpoint")
+                # 412 is the one seen in practice: the entitlement lookup inside
+                # listNameValidator fails before any permission check, so it says
+                # "not in this directory", not "you may not do this".
                 result["detail"] = (
-                    f"HTTP 404 — the FWS-API could not find this list under "
-                    f"systemEndpoint='{(json_body or {}).get('systemEndpoint')}'. That "
-                    "usually means the list lives in the other directory rather than "
-                    "that it does not exist; retry with the other systemEndpoint value."
+                    f"HTTP {resp.status_code} — the FWS-API authenticated the call but "
+                    f"could not resolve '{(json_body or {}).get('listName')}' as an "
+                    f"entitlement under systemEndpoint='{tried}'. The ACL layer passed "
+                    "(that would be a 401/403), so this is a directory mismatch or a "
+                    "list the FWS-API does not front — retry with the other "
+                    "systemEndpoint before concluding the list is unreachable."
                 )
                 return result
             if resp.status_code >= 400:
@@ -918,7 +929,7 @@ def _classify_error(messages: List[str]) -> tuple:
     joined = " ".join(messages).lower()
     text = "; ".join(messages)
 
-    if any(m in joined for m in _LIST_TYPE_MARKERS):
+    if _LIST_TYPE_RE.search(joined):
         return "wrong_list_type", (
             f"The endpoint rejected the list as the wrong type: {text}. This is not "
             "an authorization problem — the endpoint simply does not apply to this "
