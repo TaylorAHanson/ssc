@@ -302,6 +302,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # The LMWS secret scope and the gateway network path only exist in the
         # app runtime, so these tools are the only way to exercise the endpoints
         # — hence enabled. The add probe is admin-only and defaults to dry_run.
+        "lmws_probe_config": True,
         "lmws_probe_read": True,
         "lmws_probe_membership_add": True,
         "check_resource_access": True,

@@ -28,6 +28,37 @@ from app.tools.mcp import tool
 logger = logging.getLogger(__name__)
 
 
+class LmwsProbeConfigInput(BaseModel):
+    pass
+
+
+@tool(
+    name="lmws_probe_config",
+    description=(
+        "Platform-admin diagnostic: report whether LMWS is CONFIGURED in this "
+        "environment, without contacting the gateway. Call this FIRST whenever any "
+        "LMWS operation fails with a 'not configured' or credential error — it says "
+        "which of the three independent causes applies: the app's service principal "
+        "cannot read the secret scope (a Databricks grant), the scope is readable but "
+        "the password key is missing (an IAM request), or a base URL is blank (a "
+        "deployment/settings change). Also reports the service account and which base "
+        "URLs are set. Never returns the password itself."
+    ),
+    args_schema=LmwsProbeConfigInput,
+    side_effect_class="read",
+    required_role="platform_admin",
+    feature_flag="core",
+    friendly_label="Checking LMWS configuration...",
+)
+async def lmws_probe_config(**kwargs) -> Dict[str, Any]:
+    result = await LmwsN2kProbeClient().probe_config()
+    logger.info(
+        "lmws_probe_config: ready=%s password_resolved=%s missing_urls=%s",
+        result.get("ready"), result.get("password_resolved"), result.get("missing_base_urls"),
+    )
+    return result
+
+
 class LmwsProbeReadInput(BaseModel):
     endpoint: str = Field(
         ...,

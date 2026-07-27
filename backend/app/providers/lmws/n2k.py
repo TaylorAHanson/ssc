@@ -51,6 +51,7 @@ the two admin-gated probe tools in
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Optional, Union
@@ -351,6 +352,101 @@ class LmwsN2kProbeClient(LmwsNativeClient):
             endpoint, params, base_url=base_url, timeout_seconds=timeout_seconds
         )
 
+    async def probe_config(self, *, refresh: bool = False) -> Dict[str, Any]:
+        """Report LMWS configuration health without calling the gateway.
+
+        Every LMWS failure surfaces to the user as one opaque sentence, and the
+        causes need different owners: an unreadable secret scope is a Databricks
+        grant, a missing key is an IAM request, a blank base URL is a bundle/env
+        change. This separates them in a single call, before any network probe.
+
+        ``refresh`` drops this one secret from ``workspaces._secret_cache`` and
+        re-resolves it. That cache stores misses as well as hits, so after
+        granting the app's service principal READ on the scope the process would
+        otherwise keep serving the cached failure until it restarts. Scoped to
+        the LMWS key alone, so no other credential's caching behaviour changes.
+
+        Never returns the password — only whether it resolved and its length.
+        """
+        scope = settings.LMWS_SECRET_SCOPE
+        key = settings.LMWS_PASSWORD_SECRET_KEY
+
+        if refresh:
+            from app.core import workspaces
+
+            evicted = workspaces._secret_cache.pop((scope, key), "__absent__")
+            self.password = self._resolve_password()
+            logger.info(
+                "LMWS config probe refreshed secret %s/%s (was %s, now %s)",
+                scope, key,
+                "cached-miss" if evicted is None else
+                "absent" if evicted == "__absent__" else "cached-hit",
+                "resolved" if self.password else "still unresolved",
+            )
+        urls = {
+            name: str(getattr(settings, attr, "") or "")
+            for name, attr in BASES.items()
+        }
+        missing_urls = [BASES[n] for n, v in urls.items() if not v]
+
+        result: Dict[str, Any] = {
+            "native_enabled": bool(getattr(settings, "LMWS_NATIVE", True)),
+            "service_account": self.username or None,
+            "secret_scope": scope,
+            "secret_key": key,
+            "password_resolved": bool(self.password),
+            "password_length": len(self.password) if self.password else 0,
+            "password_source": (
+                "LMWS_SERVICE_PASSWORD override" if settings.LMWS_SERVICE_PASSWORD
+                else f"secret scope {scope}/{key}"
+            ),
+            "base_urls": urls,
+            "missing_base_urls": missing_urls,
+            "verify_tls": self.verify_tls,
+            "refreshed": refresh,
+            "ready": bool(self.username and self.password and urls.get("rest")),
+        }
+
+        if not self.password:
+            result["scope_diagnosis"] = await asyncio.to_thread(_diagnose_scope, scope, key)
+
+        problems = []
+        if not self.username:
+            problems.append("LMWS_SERVICE_USERNAME is blank.")
+        if not self.password:
+            problems.append(
+                f"The password did not resolve from {result['password_source']} — "
+                + str(result.get("scope_diagnosis", {}).get("detail", ""))
+            )
+        # Only the REST base blocks N2K work — every n2k*/listAny* endpoint lives
+        # there. A blank authn/cache/fws URL just narrows which comparison probes
+        # can run, so it is a note rather than a problem.
+        if not urls.get("rest"):
+            problems.append(
+                "LMWS_REST_URL is blank, which blocks every N2K endpoint. It is set "
+                "per deployment target in databricks.yml (note the LMWS_*_URL env "
+                "entries are currently only wired into the dev target) or in "
+                "Admin -> Settings under Group Management."
+            )
+        optional_missing = [u for u in missing_urls if u != "LMWS_REST_URL"]
+        result["problems"] = problems
+        result["notes"] = (
+            [
+                "Also blank (not required for N2K, but these probes will report "
+                "not_configured): " + ", ".join(optional_missing)
+                + ". LMWS_AUTHN_URL is needed only to reproduce the failing "
+                "listMembersAdd baseline."
+            ]
+            if optional_missing
+            else []
+        )
+        result["detail"] = (
+            "LMWS looks configured; the gateway itself has not been contacted."
+            if not problems
+            else " ".join(problems)
+        )
+        return result
+
     async def probe_list_metadata(
         self,
         list_name: str,
@@ -628,6 +724,45 @@ def _classify_error(messages: List[str]) -> tuple:
     return "api_error", (
         f"HTTP 200 but the body reported a failure: {text}"
     )
+
+
+def _diagnose_scope(scope: str, key: str) -> Dict[str, Any]:
+    """Tell apart "no READ on the scope" from "the key isn't there".
+
+    ``_read_secret`` is deliberately fail-soft and returns ``None`` for both, but
+    they need different fixes — a Databricks permission grant versus asking the
+    credential owner to add the key. Listing the scope's secrets distinguishes
+    them: listing returns key names only, never values.
+    """
+    out: Dict[str, Any] = {"scope": scope, "key": key, "scope_readable": False,
+                           "key_present": None, "detail": ""}
+    try:
+        from databricks.sdk import WorkspaceClient
+
+        names = [s.key for s in WorkspaceClient().secrets.list_secrets(scope=scope)]
+        out["scope_readable"] = True
+        out["key_present"] = key in names
+        out["keys_in_scope"] = sorted(n for n in names if n)
+        if key in names:
+            out["detail"] = (
+                f"Scope '{scope}' is readable and key '{key}' exists, but the value came "
+                "back empty — the secret is likely set to an empty string."
+            )
+        else:
+            out["detail"] = (
+                f"Scope '{scope}' is readable but has no key named '{key}'. Available "
+                f"keys: {', '.join(out['keys_in_scope']) or '(none)'}. Either add the "
+                "key or point LMWS_PASSWORD_SECRET_KEY at the right one in "
+                "Admin -> Settings."
+            )
+    except Exception as e:  # noqa: BLE001 - diagnosis must never fail the caller
+        out["detail"] = (
+            f"Could not list secrets in scope '{scope}': {e}. The app's service "
+            "principal most likely lacks READ on that scope (or the scope does not "
+            "exist in this workspace). Grant the app SP READ on the scope."
+        )
+        logger.warning("LMWS scope diagnosis failed for %s: %s", scope, e)
+    return out
 
 
 def _metadata_infos(body: Any) -> Dict[str, str]:

@@ -254,6 +254,83 @@ async def test_add_probe_rejects_an_unknown_endpoint(client):
 
 
 # ---------------------------------------------------------------------------
+# Configuration health (no network)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_probe_config_reports_ready_without_leaking_the_password(client):
+    with patch.object(settings, "LMWS_AUTHN_URL", AUTHN), \
+         patch.object(settings, "LMWS_CACHE_URL", AUTHN), \
+         patch.object(settings, "LMWS_FWS_URL", AUTHN):
+        result = await client.probe_config()
+    assert result["ready"] is True
+    assert result["password_resolved"] is True
+    assert result["problems"] == []
+    # The value itself must never appear anywhere in the envelope.
+    assert "pw" not in str({k: v for k, v in result.items() if k != "password_length"})
+
+
+@pytest.mark.asyncio
+async def test_probe_config_treats_only_the_rest_url_as_blocking(client):
+    # authn/cache/fws are blank in the fixture; none of them gate N2K endpoints.
+    result = await client.probe_config()
+    assert result["ready"] is True
+    assert result["problems"] == []
+    assert result["notes"] and "LMWS_AUTHN_URL" in result["notes"][0]
+
+
+@pytest.mark.asyncio
+async def test_probe_config_distinguishes_missing_key_from_unreadable_scope(client):
+    client.password = ""
+
+    class _Secret:
+        def __init__(self, key):
+            self.key = key
+
+    class _FakeWorkspaceClient:
+        class secrets:  # noqa: N801 - mirrors the SDK's attribute shape
+            @staticmethod
+            def list_secrets(scope):
+                return [_Secret("ses_key"), _Secret("github_pat")]
+
+    with patch.dict("sys.modules", {"databricks.sdk": type("m", (), {"WorkspaceClient": _FakeWorkspaceClient})}):
+        result = await client.probe_config()
+
+    diag = result["scope_diagnosis"]
+    assert diag["scope_readable"] is True
+    assert diag["key_present"] is False
+    assert "no key named" in diag["detail"]
+    assert result["ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_probe_config_reports_unreadable_scope_as_a_grant_problem(client):
+    client.password = ""
+
+    class _Boom:
+        class secrets:  # noqa: N801
+            @staticmethod
+            def list_secrets(scope):
+                raise PermissionError("does not have READ on scope")
+
+    with patch.dict("sys.modules", {"databricks.sdk": type("m", (), {"WorkspaceClient": _Boom})}):
+        result = await client.probe_config()
+
+    diag = result["scope_diagnosis"]
+    assert diag["scope_readable"] is False
+    assert "READ" in diag["detail"]
+
+
+@pytest.mark.asyncio
+async def test_probe_config_flags_a_blank_rest_url_as_blocking(client):
+    with patch.object(settings, "LMWS_REST_URL", ""):
+        result = await client.probe_config()
+    assert "LMWS_REST_URL" in result["missing_base_urls"]
+    assert result["ready"] is False
+    assert any("LMWS_REST_URL is blank" in p for p in result["problems"])
+
+
+# ---------------------------------------------------------------------------
 # Interpreted reads: metadata + request status
 # ---------------------------------------------------------------------------
 
