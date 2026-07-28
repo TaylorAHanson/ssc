@@ -147,6 +147,12 @@ export interface StreamConversationRequest {
     query: string;
     conversation_history?: AgentChatMessage[];
     context?: Record<string, unknown>;
+    /**
+     * The server-side transcript this turn belongs to. We still send
+     * `conversation_history`, which the backend prefers; this lets the server
+     * fall back to the stored transcript and ties the turn to a session.
+     */
+    session_id?: string;
 }
 
 export interface StreamConversationOptions {

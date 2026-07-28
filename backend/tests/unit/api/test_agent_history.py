@@ -12,6 +12,7 @@ on a continuation, and we must round-trip ``tool_calls`` faithfully.
 """
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -27,6 +28,7 @@ def _fake_user(email: str = "user@example.com"):
     """Stand-in for the ``User`` dependency injected by FastAPI."""
     return SimpleNamespace(
         email=email,
+        full_name="Test User",
         roles=[],
         entitlements=[],
         has_role=lambda _r: True,
@@ -44,8 +46,11 @@ def _build(history: list[ChatMessage]):
     # ``_build_runner_and_history`` requires ``settings.AGENT_ENABLED``;
     # we trust the project default (``True``) to avoid monkeypatching
     # configuration at import time. ``db=None`` makes tool resolution fall back
-    # to the static gating (this test only cares about history translation).
-    _runner, wire_history, _mode = _build_runner_and_history(request, user, None)
+    # to the static gating, and makes the user-context lookup degrade to no
+    # block — this test only cares about history translation.
+    _runner, wire_history, _mode = asyncio.run(
+        _build_runner_and_history(request, user, None)
+    )
     return wire_history
 
 

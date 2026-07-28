@@ -29,6 +29,7 @@ from app.core.exceptions import RetryableError, PermanentError
 from app.workers.tasks.sync_calendar import sync_calendar_task
 from app.workers.tasks.sync_data_assets import sync_data_assets_task
 from app.workers.tasks.sync_contracts import sync_contracts_task
+from app.workers.tasks.user_context_maintenance import user_context_maintenance_task
 import traceback
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,11 @@ TERRAFORM_POLLING_STATES = {"terraform_planning", "awaiting_approval", "terrafor
 _worker_id = f"poll-worker-{socket.gethostname()}-{os.getpid()}"
 
 _next_sentinel_time = None
+
+# Strong references to detached upkeep tasks. asyncio holds only a weak
+# reference, so a fire-and-forget task can be garbage-collected mid-run and
+# silently cancelled (see the note on _detached_tasks below).
+_background_tasks: set = set()
 
 async def process_enforcement_sentinel_cron():
     """Check if it's time to run the enforcement sentinel and spawn it."""
@@ -251,6 +257,15 @@ async def start_poller():
 
             if _yaml_config.get("features", {}).get("sentinel", False):
                 await process_enforcement_sentinel_cron()
+
+            # Pre-warm user profiles + prune retained user data. Self-throttled
+            # (well below the poll interval) and detached, so a slow identity
+            # provider can't hold up request processing. Strong reference held
+            # for the same reason as _detached_tasks below: asyncio keeps only a
+            # weak one, and a GC'd task dies silently mid-run.
+            _maintenance_task = asyncio.create_task(user_context_maintenance_task())
+            _background_tasks.add(_maintenance_task)
+            _maintenance_task.add_done_callback(_background_tasks.discard)
 
             await process_open_requests()
             await process_scheduled_reports()

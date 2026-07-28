@@ -20,29 +20,11 @@ import { CatalogRails } from '../components/discover/CatalogRails';
 import { SelfServiceCenter } from '../components/discover/SelfServiceCenter';
 import { cn } from '../lib/utils';
 import { prefetchCatalog } from '../lib/catalogCache';
+import { getRecentUserTopics } from '../lib/chatPersistence';
 
 type LandingView = 'assistant' | 'center';
 
 const STORAGE_KEY = 'chatview_messages_unified';
-
-// Pull the user's most recent questions out of the persisted chat history so
-// the backend can personalize starting suggestions. Best-effort and bounded.
-function getRecentTopics(): string[] {
-    try {
-        const raw = window.localStorage.getItem(STORAGE_KEY);
-        if (!raw) return [];
-        const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) return [];
-        const texts = parsed
-            .filter((m: { kind?: string; content?: unknown }) => m?.kind === 'user' && typeof m.content === 'string')
-            .map((m: { content: string }) => m.content.trim())
-            .filter(Boolean)
-            .map((t: string) => t.slice(0, 140));
-        return Array.from(new Set(texts)).slice(-5);
-    } catch {
-        return [];
-    }
-}
 
 function getButtonLabel(path: string): string {
     if (!path) return 'Continue to form';
@@ -127,7 +109,11 @@ export function Home() {
             /* ignore cache read errors */
         }
 
-        api.getAgentSuggestions(getRecentTopics())
+        // Recent topics come from the server-side transcript (falling back to the
+        // local cache), so suggestions are personalized even on a device this
+        // user has never chatted from.
+        getRecentUserTopics(STORAGE_KEY)
+            .then((topics) => api.getAgentSuggestions(topics))
             .then((res) => {
                 if (cancelled) return;
                 const prompts = (res.suggestions || []).map((s) => s.prompt).filter(Boolean);

@@ -92,10 +92,29 @@ def get_current_user(
         user_email = request.state.user["email"]
         user_name = request.state.user.get("username", user_email)
         
+    # The auth middleware substitutes ``settings.MOCK_USER_EMAIL`` when the proxy
+    # sent no ``x-forwarded-email``, so both branches here mean the same thing:
+    # this request carries no real forwarded identity.
     if not user_email or user_email == settings.MOCK_USER_EMAIL:
-         user_email = MOCK_USER_EMAIL
-         user_name = "System Admin"
-         
+        if not _dev_features_allowed():
+            # Fail closed. Collapsing an unidentified caller onto the shared
+            # ``admin@example.com`` identity would hand them whatever
+            # ``role_mappings`` grants that address (Platform Admin, as seeded)
+            # *and* pool their chat transcripts and cached user context with
+            # every other unidentified caller.
+            logger.warning(
+                "Rejecting request with no forwarded identity: ENVIRONMENT=%r is "
+                "not dev-flavored, so the mock-user fallback is disabled.",
+                settings.ENVIRONMENT,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Unauthenticated: no user identity was forwarded with this request.",
+            )
+        user_email = MOCK_USER_EMAIL
+        user_name = "System Admin"
+
+
     obo_token = getattr(request.state, "token", None)
     entitlements = _get_user_entitlements(user_email, obo_token)
     calculated_roles = _calculate_roles(db, entitlements)

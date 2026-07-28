@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.db.session import get_db
 from app.db import ApprovalModel, RequestModel
-from sqlalchemy import or_
+from app.services.approval_scope import approval_visibility_filter, parse_csv
 
 class SearchApprovalsInput(BaseModel):
     approval_type: Optional[str] = Field(None, description="Filter by approval type: 'manager', 'data_owner', or 'platform_admin' (optional)")
@@ -31,36 +31,35 @@ def search_approvals(
     """
     Execute the search for approvals.
     """
+    # Fail closed. Without a caller identity there is no way to scope this to the
+    # approvals they may see, and the previous behavior — skip the filter — meant
+    # an unidentified caller received *every* approval in the system, complete
+    # with other users' request titles and requester addresses.
+    if not _user_email:
+        return {
+            "status": "error",
+            "error": "Cannot search approvals without a caller identity.",
+        }
+
     db = next(get_db())
     try:
         # Join with RequestModel to get titles
         sql_query = db.query(ApprovalModel, RequestModel).join(
             RequestModel, ApprovalModel.request_id == RequestModel.id
         )
-        
-        # Apply role-based filtering
-        if _user_email and _user_roles is not None:
-            roles_list = [r.strip().lower() for r in _user_roles.split(",")]
-            entitlements_list = [e.strip() for e in _user_entitlements.split(",")] if _user_entitlements else []
-            
-            allowed_types = []
-            if "platform admin" in roles_list:
-                allowed_types.extend(["platform_admin", "manager", "data_owner", "security", "security_admin", "finance_admin", "governance_admin"])
-            if "governance admin" in roles_list:
-                allowed_types.append("governance_admin")
-            if "security admin" in roles_list:
-                allowed_types.extend(["security", "security_admin"])
-            if "finance admin" in roles_list:
-                allowed_types.append("finance_admin")
-                
-            sql_query = sql_query.filter(
-                (ApprovalModel.assigned_to_email == _user_email) | 
-                (ApprovalModel.delegated_to_email == _user_email) |
-                (ApprovalModel.assigned_to_role.in_(entitlements_list)) |
-                (ApprovalModel.approval_type.in_(allowed_types))
-            )
 
-        
+        # Always scoped. Absent roles/entitlements this narrows to the approvals
+        # assigned or delegated to the caller personally, rather than widening to
+        # everyone's.
+        sql_query = sql_query.filter(
+            approval_visibility_filter(
+                _user_email,
+                roles=parse_csv(_user_roles),
+                entitlements=parse_csv(_user_entitlements),
+            )
+        )
+
+
         # Filter by status
         if status:
             sql_query = sql_query.filter(ApprovalModel.status == status.lower())

@@ -172,6 +172,7 @@ class AgentRunner:
         max_iterations: int = 5,
         mode: str = "self_service",
         model_endpoint: Optional[str] = None,
+        user_context_block: Optional[str] = None,
     ):
         self.llm_client = AgentLLMClient(endpoint_name=model_endpoint)
         self.tools = tools or []
@@ -189,6 +190,12 @@ class AgentRunner:
                 self.system_prompt += id_str
         else:
             self.system_prompt = system_prompt
+
+        # Appended outside the branch above on purpose: an agent profile supplies
+        # its own system prompt, and it needs to know who it is talking to just
+        # as much as the default prompt does.
+        if user_context_block:
+            self.system_prompt += user_context_block
 
     def _find_tool(self, name: str):
         return next((t for t in self.tools if t.name == name), None)

@@ -170,6 +170,41 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "type": "bool",
      "help": "On = no in-place workflow editing; workflows change only via bundle import. Usually locked in prod."},
 
+    # --- User context (the cached user model) ----------------------------
+    {"group": "Agent", "key": "USER_CONTEXT_SECTIONS", "label": "User context sections",
+     "type": "string",
+     "help": "Comma-separated sections of the user model to assemble and show the agent, in order. "
+             "'identity' (roles, persona) and 'activity' (open requests, pending approvals, recent asks) are "
+             "fast database reads; 'groups' calls the identity provider and is the slow one. Remove a section "
+             "to stop collecting it entirely."},
+    {"group": "Agent", "key": "USER_CONTEXT_TTL_MINUTES", "label": "User context TTL (minutes)",
+     "type": "int", "min": 1,
+     "help": "How long a cached user profile stays valid before it is rebuilt in the background."},
+    {"group": "Agent", "key": "USER_CONTEXT_REFRESH_AHEAD_PCT", "label": "Refresh-ahead (% of TTL)",
+     "type": "int", "min": 1, "max": 100,
+     "help": "Rebuild a profile once it is older than this share of the TTL instead of waiting for it to expire. "
+             "This is what lets a page load leave the profile fresh before the user's first message. "
+             "100 = only refresh after expiry."},
+    {"group": "Agent", "key": "USER_CONTEXT_MIN_REFRESH_SECONDS", "label": "Min seconds between refreshes",
+     "type": "int", "min": 0,
+     "help": "Floor between two rebuilds of the same profile. Warming fires from app boot, chat mount, and the "
+             "poller, so this stops a reload-happy user from hammering the identity provider."},
+    {"group": "Agent", "key": "USER_CONTEXT_PREWARM_DAYS", "label": "Pre-warm window (days)",
+     "type": "int", "min": 0,
+     "help": "The background poller refreshes profiles for users seen within this many days, so returning users "
+             "are already warm at login. 0 = no pre-warm sweep."},
+    {"group": "Agent", "key": "USER_CONTEXT_ACTIVITY_LIMIT", "label": "Activity items per section",
+     "type": "int", "min": 1,
+     "help": "How many recent requests, pending approvals, and recent chat topics to summarize for the agent."},
+    {"group": "Agent", "key": "USER_CONTEXT_MAX_CHARS", "label": "Max user context (chars)",
+     "type": "int", "min": 200,
+     "help": "Cap on the user-context block added to the system prompt, so a user in hundreds of groups can't "
+             "crowd out the rest of the prompt. Overflow is truncated and the agent is told to call "
+             "get_user_context for the full picture."},
+    {"group": "Agent", "key": "CHAT_SESSION_RETENTION_DAYS", "label": "Chat history retention (days)",
+     "type": "int", "min": 1,
+     "help": "Server-side chat transcripts older than this are pruned by the background poller."},
+
     # --- Group Management (LMWS) ----------------------------------------
     {"group": "Group Management (LMWS)", "key": "LMWS_NATIVE", "label": "Run LMWS natively (in-app)",
      "type": "bool",
@@ -417,6 +452,7 @@ FEATURE_DESCRIPTIONS: Dict[str, str] = {
     "context_catalog": "Context Catalog: a curated knowledge base the agent retrieves from.",
     "workflow_authoring": "No-code, database-backed workflow authoring in the admin Workflow Studio.",
     "onboarding_suggestions": "Personalized, clickable starter prompts on the home page at login.",
+    "user_context": "Tells the agent up front who the user is \u2014 their roles, open requests, pending approvals, and group memberships \u2014 so it asks fewer questions. Cached per user and refreshed in the background.",
     "web_search": "Lets the agent search and cite Databricks documentation (and any approved domains).",
     "feedback": "In-app feedback / feature-request / bug-report capture, triaged in the admin panel.",
     "tool_registry": "Data-driven agent-tool governance: enable tools per surface, set allowed roles, and pick SP/OBO identity.",

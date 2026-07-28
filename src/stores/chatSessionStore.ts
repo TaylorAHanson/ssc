@@ -13,14 +13,26 @@
  *     the view simply re-subscribes when it remounts.
  *
  * NOTE: this makes a running turn survive *route navigation*, not a full page
- * reload — on reload the store is empty and we re-hydrate messages from
- * localStorage, dropping any pill that was still in-flight (its stream is gone).
+ * reload — on reload the store is empty and we re-hydrate messages from the
+ * localStorage cache, dropping any pill that was still in-flight (its stream is
+ * gone).
+ *
+ * Durable storage is the server (see `lib/chatPersistence.ts`); localStorage is
+ * kept as a synchronous cache so first paint doesn't wait on a fetch.
  */
 import { useCallback, useEffect, useMemo } from 'react';
 import { create } from 'zustand';
 
 import type { PendingPollEvent } from '../lib/agentStream';
 import type { ChatRouteInfo, DisplayMessage } from '../components/chat/chatTypes';
+import {
+    discard as discardTranscript,
+    hydrateFromServer,
+    readCache,
+    scheduleSave,
+    writeCache,
+} from '../lib/chatPersistence';
+import { api } from '../services/api';
 
 // ---------------------------------------------------------------------------
 // Non-reactive per-session internals (the former `useRef`s). Kept in a module
@@ -81,23 +93,19 @@ function freshState(): ChatSessionState {
     };
 }
 
+/** Strip pills whose stream died with the previous page load. */
+function dropInFlight(messages: DisplayMessage[]): DisplayMessage[] {
+    // After a full reload an unfinished tool entry would spin forever. (On in-app
+    // navigation the session stays live in this store and is NOT re-hydrated, so
+    // genuinely-running pills are preserved.)
+    return messages.filter(
+        (m) => !(m.kind === 'tool' && m.status !== 'success' && m.status !== 'error'),
+    );
+}
+
 function hydrateMessages(persistKey: string): DisplayMessage[] {
-    if (!persistKey || typeof window === 'undefined') return EMPTY_MESSAGES;
-    try {
-        const raw = window.localStorage.getItem(persistKey);
-        if (!raw) return EMPTY_MESSAGES;
-        const parsed = JSON.parse(raw) as DisplayMessage[];
-        if (!Array.isArray(parsed)) return EMPTY_MESSAGES;
-        // Drop in-flight tool entries persisted from a previous *page load* —
-        // after a full reload their stream is gone and they'd spin forever.
-        // (On in-app navigation the session stays live in this store and is NOT
-        // re-hydrated, so genuinely-running pills are preserved.)
-        return parsed.filter(
-            (m) => !(m.kind === 'tool' && m.status !== 'success' && m.status !== 'error'),
-        );
-    } catch {
-        return EMPTY_MESSAGES;
-    }
+    const cached = readCache(persistKey);
+    return cached ? dropInFlight(cached) : EMPTY_MESSAGES;
 }
 
 type Updater<T> = T | ((prev: T) => T);
@@ -147,12 +155,11 @@ export const useChatSessionStore = create<ChatSessionStore>((set, get) => {
                 const cur = ensureSlot(s.sessions, key);
                 const messages = applyUpdater(updater, cur.messages);
                 const { persistKey } = getChatInternals(key);
-                if (persistKey && typeof window !== 'undefined') {
-                    try {
-                        window.localStorage.setItem(persistKey, JSON.stringify(messages));
-                    } catch {
-                        /* storage quota / disabled — non-fatal */
-                    }
+                if (persistKey) {
+                    // Cache synchronously (this runs on every streamed token, so
+                    // it has to be cheap) and let the server write debounce.
+                    writeCache(persistKey, messages);
+                    scheduleSave(persistKey, messages);
                 }
                 return { sessions: { ...s.sessions, [key]: { ...cur, messages } } };
             });
@@ -185,12 +192,10 @@ export const useChatSessionStore = create<ChatSessionStore>((set, get) => {
             internals.toolNames = {};
             internals.toolArgs = {};
             internals.lastAgentSig = '';
-            if (internals.persistKey && typeof window !== 'undefined') {
-                try {
-                    window.localStorage.removeItem(internals.persistKey);
-                } catch {
-                    /* swallow */
-                }
+            if (internals.persistKey) {
+                // Clears the cache, deletes the stored transcript, and mints a
+                // new session id so the next conversation starts clean.
+                discardTranscript(internals.persistKey);
             }
             set((s) => ({ sessions: { ...s.sessions, [key]: freshState() } }));
         },
@@ -223,7 +228,22 @@ export function useChatSession(sessionKey: string, persistKey: string) {
     // Create the store slot after mount (idempotent). Kept out of render to
     // avoid a Zustand `set` during another component's render.
     useEffect(() => {
-        useChatSessionStore.getState().ensureSession(sessionKey, persistKey);
+        const store = useChatSessionStore.getState();
+        store.ensureSession(sessionKey, persistKey);
+
+        // Pull the transcript from the server for the case localStorage can't
+        // cover: a different device, or a cleared cache. Only applies when there
+        // is nothing local, so it can never clobber a live conversation.
+        void hydrateFromServer(
+            persistKey,
+            store.sessions[sessionKey]?.messages ?? [],
+            (messages) => useChatSessionStore.getState().setMessages(sessionKey, messages),
+        );
+
+        // A tab open since this morning has long-stale user context. This is the
+        // last moment before a message can be sent, so re-warm it; the backend's
+        // minimum-refresh floor makes this free when boot already did the work.
+        void api.warmUserContext();
     }, [sessionKey, persistKey]);
 
     const setMessages = useCallback(

@@ -3,7 +3,7 @@ Agent API endpoints for conversation handling.
 """
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field as PydanticField
 from typing import List, Optional, Dict, Any, AsyncIterator
 from app.agents.events import (
     DoneEvent,
@@ -32,6 +32,13 @@ from app.services.tool_registry_service import (
     WORKFLOW_ONLY_TOOL_NAMES,
     ToolRegistryService,
 )
+from app.services.user_context import (
+    derive_persona,
+    get_user_context,
+    render_user_context_block,
+    warm_user_context,
+)
+from app.services import chat_session_service as chat_sessions
 from sqlalchemy.orm import Session
 import logging
 import json
@@ -165,6 +172,12 @@ class ConversationRequest(BaseModel):
     # identical governance (tool intersection + model allowlist). Takes
     # precedence over ``profile_ref`` when both are present.
     inline_profile: Optional[Dict[str, Any]] = None
+    # The server-side transcript this turn belongs to. When set and
+    # ``conversation_history`` is omitted, history is loaded from the stored
+    # session instead of being replayed by the client. ``conversation_history``
+    # still wins when both are present, so the frontend can adopt server-side
+    # sessions without the two sides having to deploy together.
+    session_id: Optional[str] = None
 
 class FollowUpQuestion(BaseModel):
     id: str
@@ -206,6 +219,125 @@ async def get_agent_prompt_endpoint(current_user: User = Depends(get_current_use
             "user_roles": [r.name for r in current_user.roles]
         }
     }
+
+
+@router.post("/user-context/warm", status_code=202)
+async def warm_user_context_endpoint(
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Pre-build the caller's context so their first message doesn't wait for it.
+
+    Called on app boot and when a chat surface mounts. The response is only a
+    freshness signal — the *point* is the background rebuild it schedules, which
+    is why this returns 202 immediately instead of waiting for the (slow)
+    identity-provider lookup. Failures are reported, never raised: warming is an
+    optimization and must not break page load.
+    """
+    try:
+        return await warm_user_context(db, current_user)
+    except Exception as e:  # noqa: BLE001 - warming must never break the client
+        logger.warning("Could not warm user context for %s: %s", current_user.email, e)
+        return {"enabled": True, "state": "error", "stale": True, "refreshed_at": None}
+
+
+@router.get("/user-context")
+async def get_user_context_endpoint(
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The caller's assembled context plus freshness metadata.
+
+    Scoped to the caller by construction — there is no way to ask for someone
+    else's profile. Useful for debugging what the agent was told, and for showing
+    a user what the assistant knows about them.
+    """
+    if not is_feature_enabled("user_context"):
+        raise HTTPException(status_code=404, detail="User context is not enabled")
+    payload = await get_user_context(db, current_user)
+    return {**payload, "prompt_block": render_user_context_block(payload)}
+
+
+# ---------------------------------------------------------------------------
+# Chat sessions (server-side transcripts)
+#
+# Every handler resolves a session through ``chat_sessions``, which filters on
+# the owner's email as part of the lookup — a session is never addressable by id
+# alone, so there is no path that returns someone else's conversation.
+# ---------------------------------------------------------------------------
+class ChatSessionUpsert(BaseModel):
+    # The client's DisplayMessage[] array, stored verbatim.
+    messages: List[Dict[str, Any]] = PydanticField(default_factory=list)
+    surface: Optional[str] = None
+    title: Optional[str] = None
+
+
+@router.get("/sessions")
+async def list_chat_sessions(
+    surface: Optional[str] = None,
+    limit: int = 20,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The caller's transcripts, newest first. Metadata only, no message bodies."""
+    sessions = chat_sessions.list_sessions(db, current_user.email, surface=surface, limit=limit)
+    return {"sessions": [chat_sessions.to_summary(s) for s in sessions], "count": len(sessions)}
+
+
+@router.get("/sessions/{session_id}")
+async def get_chat_session(
+    session_id: str,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """One of the caller's transcripts, with its messages."""
+    session = chat_sessions.get_session(db, current_user.email, session_id)
+    if session is None:
+        # 404 for both "no such session" and "not yours" — distinguishing them
+        # would confirm another user's session exists.
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    return chat_sessions.to_detail(session)
+
+
+@router.put("/sessions/{session_id}")
+async def put_chat_session(
+    session_id: str,
+    payload: ChatSessionUpsert,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create or replace one of the caller's transcripts."""
+    session = chat_sessions.upsert_session(
+        db,
+        current_user.email,
+        session_id,
+        messages=payload.messages,
+        surface=payload.surface,
+        title=payload.title,
+    )
+    return chat_sessions.to_summary(session)
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_chat_session(
+    session_id: str,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete one of the caller's transcripts."""
+    if not chat_sessions.delete_session(db, current_user.email, session_id):
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    return {"deleted": 1}
+
+
+@router.delete("/sessions")
+async def delete_chat_sessions(
+    surface: Optional[str] = None,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Clear the caller's transcripts, optionally just one surface's."""
+    return {"deleted": chat_sessions.delete_sessions(db, current_user.email, surface=surface)}
 
 # Process-wide profile metrics (cheap, in-memory). Surfaced via the structured
 # log line below and readable by tests / a future scrape endpoint. Keys:
@@ -477,7 +609,24 @@ def _apply_inline_profile(
     return _compose_profile(profile, visible_tools, user_identity, agent_mode)
 
 
-def _build_runner_and_history(
+async def _resolve_user_context_block(db: Session, current_user: User) -> Optional[str]:
+    """Render the cached user-context block, or nothing at all.
+
+    Deliberately swallows every failure: this is an enrichment, and a broken
+    identity provider or an empty profile must degrade to the old behavior
+    (an agent that asks more questions) rather than break the conversation.
+    """
+    if not is_feature_enabled("user_context"):
+        return None
+    try:
+        payload = await get_user_context(db, current_user)
+        return render_user_context_block(payload)
+    except Exception as e:  # noqa: BLE001 - never fail a turn over prompt enrichment
+        logger.warning("Could not build user context for %s: %s", current_user.email, e)
+        return None
+
+
+async def _build_runner_and_history(
     request: ConversationRequest,
     current_user: User,
     db: Session,
@@ -509,9 +658,17 @@ def _build_runner_and_history(
 
     user_identity = {
         "email": current_user.email,
+        # The display name was resolved by auth but never reached the agent, so
+        # it had to ask the user their own name.
+        "name": current_user.full_name,
         "roles": ", ".join(current_user.roles),
         "entitlements": ", ".join(current_user.entitlements),
     }
+
+    # Everything the agent already knows about this user (roles, open requests,
+    # approvals waiting on them, group memberships), so it stops asking. Served
+    # from cache and refreshed in the background, so this never blocks the turn.
+    user_context_block = await _resolve_user_context_block(db, current_user)
 
     # An agent profile (authored in the Command Center Agent Studio) can drive
     # this turn: it supplies the system prompt + skills, narrows the tool
@@ -539,7 +696,37 @@ def _build_runner_and_history(
         max_iterations=settings.AGENT_MAX_ITERATIONS,
         mode=agent_mode,
         model_endpoint=model_endpoint,
+        user_context_block=user_context_block,
     )
+
+    history = _resolve_history(request, current_user, db)
+
+    return runner, history, agent_mode
+
+
+def _resolve_history(
+    request: ConversationRequest,
+    current_user: User,
+    db: Session,
+) -> List[Dict[str, Any]]:
+    """Build the model's message history for this turn.
+
+    The client-replayed ``conversation_history`` takes precedence: it is still the
+    source of truth while the frontend adopts server-side sessions, so the two
+    sides can ship independently. A request carrying only ``session_id`` falls
+    back to the stored transcript.
+    """
+    if not request.conversation_history and request.session_id:
+        try:
+            session = chat_sessions.get_session(db, current_user.email, request.session_id)
+            if session is None:
+                # Unknown id, or someone else's — either way this user has no
+                # such history. Start clean rather than leaking its existence.
+                return []
+            return chat_sessions.transcript_to_history(session.messages or [])
+        except Exception as e:  # noqa: BLE001 - a bad transcript must not kill the turn
+            logger.warning("Could not load session %s history: %s", request.session_id, e)
+            return []
 
     history: List[Dict[str, Any]] = []
     if request.conversation_history:
@@ -573,7 +760,7 @@ def _build_runner_and_history(
                     entry["tool_calls"] = msg.tool_calls
                 history.append(entry)
 
-    return runner, history, agent_mode
+    return history
 
 
 def _extract_obo_token(req: Request) -> Optional[str]:
@@ -599,7 +786,7 @@ async def handle_conversation(
     """Handle a conversation turn with the agent."""
     try:
         obo_token = _extract_obo_token(req)
-        runner, history, _agent_mode = _build_runner_and_history(request, current_user, db, obo_token)
+        runner, history, _agent_mode = await _build_runner_and_history(request, current_user, db, obo_token)
 
         # Run agent
         result = await runner.run(
@@ -669,7 +856,7 @@ async def stream_conversation(
     obo_token = _extract_obo_token(req)
 
     try:
-        runner, history, _agent_mode = _build_runner_and_history(request, current_user, db, obo_token)
+        runner, history, _agent_mode = await _build_runner_and_history(request, current_user, db, obo_token)
     except HTTPException:
         raise
     except Exception as e:
@@ -738,12 +925,6 @@ async def stream_conversation(
 # ---------------------------------------------------------------------------
 
 _SUGGESTIONS_LIMIT = 4
-_PERSONA_PRIORITY = [
-    "Platform Admin",
-    "Governance Admin",
-    "Security Admin",
-    "Finance Admin",
-]
 
 
 class SuggestionItem(BaseModel):
@@ -765,12 +946,12 @@ class SuggestionsResponse(BaseModel):
 
 def _derive_persona(roles: Optional[List[str]]) -> str:
     """Map application roles to a single persona, mirroring the frontend's
-    ``derivePersona`` priority order."""
-    role_set = set(roles or [])
-    for persona in _PERSONA_PRIORITY:
-        if persona in role_set:
-            return persona
-    return "User"
+    ``derivePersona`` priority order.
+
+    The priority list lives in ``user_context`` because the agent's user-context
+    block reports the same persona; keeping one copy stops the two from drifting.
+    """
+    return derive_persona(roles)
 
 
 def _parse_suggestions(content: Optional[str], limit: int) -> List[Dict[str, str]]:

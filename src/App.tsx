@@ -16,6 +16,8 @@ import { Welcome } from './pages/Welcome';
 import { useBrandingStore } from './stores/brandingStore';
 import { useRequestStore } from './stores/requestStore';
 import { useUserStore } from './stores/userStore';
+import { api } from './services/api';
+import { reconcileCacheOwner } from './lib/chatPersistence';
 
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 
@@ -34,6 +36,7 @@ function App() {
   const { fetchBranding, hasLoaded, uiTabs } = useBrandingStore();
   const fetchCurrentUser = useUserStore((state) => state.fetchCurrentUser);
   const hydrated = useUserStore((state) => state.hydrated);
+  const currentUserEmail = useUserStore((state) => state.currentUser?.email);
 
   useEffect(() => {
     fetchBannerMessage();
@@ -43,8 +46,27 @@ function App() {
   useEffect(() => {
     if (hydrated) {
       fetchCurrentUser();
+      // Start assembling this user's agent context now. It involves a slow
+      // identity-provider lookup, so doing it at boot means it is ready by the
+      // time they type their first message instead of that message waiting on
+      // it. Fire-and-forget: `warmUserContext` never throws, and a failure just
+      // means the agent asks more questions.
+      void api.warmUserContext();
     }
   }, [fetchCurrentUser, hydrated]);
+
+  // Cached transcripts live in `localStorage`, which belongs to the browser
+  // rather than to a user. As soon as we know who is actually signed in, drop
+  // anything cached for somebody else — otherwise the next person on a shared
+  // machine inherits the previous one's conversation, and their first message
+  // would save it to the server under their own account. Reloading is the
+  // simplest way to be sure no component is still rendering what we just
+  // deleted; it terminates because the stamp now matches.
+  useEffect(() => {
+    if (currentUserEmail && reconcileCacheOwner(currentUserEmail)) {
+      window.location.reload();
+    }
+  }, [currentUserEmail]);
 
   if (!hasLoaded) {
     return null; // Don't render anything until branding is loaded to prevent flash

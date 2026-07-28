@@ -224,6 +224,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "context_catalog": True,
         "workflow_authoring": True,
         "onboarding_suggestions": True,
+        # Eagerly tells the agent who the caller is (roles, open requests,
+        # pending approvals, group memberships) so it stops asking.
+        "user_context": True,
         "web_search": True,
         "feedback": True,
         "tool_registry": True,
@@ -308,6 +311,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "check_resource_access": True,
         "search_approvals": True,
         "search_user_entitlements": True,
+        # Reads the caller's own cached profile. A summary is already injected
+        # into the prompt; this is the agent's escape hatch for a truncated list
+        # or a forced refresh.
+        "get_user_context": True,
         "check_tagging_compliance": True,
         "check_object_permissions": True,
         "audit_user_access": True,

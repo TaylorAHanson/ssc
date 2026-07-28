@@ -369,6 +369,47 @@ class Settings(BaseSettings):
             return set()
         return {m.strip() for m in raw.split(",") if m.strip()}
 
+    # --- User context ("the user model") -------------------------------
+    # The agent reads a cached per-user context blob on every turn so it doesn't
+    # have to ask who the caller is. Assembly is too slow to run inline (the
+    # identity-group lookup alone can take 30s+), so it is cached in
+    # ``user_profiles`` and served stale-while-revalidate.
+    USER_CONTEXT_TTL_MINUTES: int = 30
+    # Refresh once a row is older than this share of the TTL, rather than waiting
+    # for expiry. Without it, warming on page load would usually be a no-op (the
+    # row is still technically valid) and the user's first message would be the
+    # thing that triggers the refresh — exactly what we're trying to avoid.
+    USER_CONTEXT_REFRESH_AHEAD_PCT: int = 50
+    # Floor between two refreshes of the same profile. Warming fires from several
+    # places (app boot, chat mount, poller); this keeps a reload-mashing user from
+    # triggering one identity-provider round trip per page load.
+    USER_CONTEXT_MIN_REFRESH_SECONDS: int = 60
+    # A refresh that started longer ago than this is presumed dead (replica
+    # restarted mid-flight) and its lock is reclaimed.
+    USER_CONTEXT_REFRESH_LOCK_MINUTES: int = 10
+    # The poller pre-warms profiles for users seen within this many days, so a
+    # returning user is hot before they even open the app.
+    USER_CONTEXT_PREWARM_DAYS: int = 7
+    # Cap for the rendered prompt block. A user in hundreds of groups must not
+    # crowd out the rest of the system prompt.
+    USER_CONTEXT_MAX_CHARS: int = 2000
+    # How many recent requests / approvals / chat asks to summarize per section.
+    USER_CONTEXT_ACTIVITY_LIMIT: int = 5
+    # Which sections to assemble, in render order. Trim this to drop an expensive
+    # or irrelevant one without a code change.
+    USER_CONTEXT_SECTIONS: str = "identity,activity,groups"
+
+    @property
+    def user_context_sections(self) -> list:
+        raw = (self.USER_CONTEXT_SECTIONS or "").strip()
+        if not raw:
+            return []
+        return [s.strip() for s in raw.split(",") if s.strip()]
+
+    # Chat transcripts are persisted server-side (``chat_sessions``); prune rows
+    # older than this so the table doesn't grow without bound.
+    CHAT_SESSION_RETENTION_DAYS: int = 90
+
     # No-code workflow (Workflow) authoring lock. When True, all in-place authoring
     # of workflows is disabled — create/update/publish/unpublish/delete/rollback
     # via the API, and the agent's `save_workflow_draft`/`publish_workflow` tools.

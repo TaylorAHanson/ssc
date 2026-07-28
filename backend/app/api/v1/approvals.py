@@ -9,6 +9,7 @@ from app.db import ApprovalModel, RequestModel
 from app.models.request import Approval, ApprovalType
 from app.api.deps import get_current_user
 from app.models.user import User
+from app.services.approval_scope import approval_visibility_filter
 import logging
 
 logger = logging.getLogger(__name__)
@@ -81,25 +82,13 @@ async def get_approvals(
     instead of materializing every approval at once.
     """
     query = db.query(ApprovalModel, RequestModel).join(RequestModel, ApprovalModel.request_id == RequestModel.id)
-    
-    # Build list of role-based approval types the user can see
-    allowed_types = []
-    if current_user.has_role("Platform Admin"):
-        # Platform Admins can see all approvals
-        allowed_types.extend(["platform_admin", "manager", "data_owner", "security", "security_admin", "finance_admin", "governance_admin"])
-    if current_user.has_role("Governance Admin"):
-        allowed_types.append("governance_admin")
-    if current_user.has_role("Security Admin"):
-        allowed_types.append("security")
-        allowed_types.append("security_admin")
-    if current_user.has_role("Finance Admin"):
-        allowed_types.append("finance_admin")
-        
+
     query = query.filter(
-        (ApprovalModel.assigned_to_email == current_user.email) | 
-        (ApprovalModel.delegated_to_email == current_user.email) |
-        (ApprovalModel.assigned_to_role.in_(current_user.entitlements)) |
-        (ApprovalModel.approval_type.in_(allowed_types))
+        approval_visibility_filter(
+            current_user.email,
+            roles=current_user.roles,
+            entitlements=current_user.entitlements,
+        )
     )
     
     if status:

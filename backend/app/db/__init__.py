@@ -22,3 +22,5 @@ from app.db.context_catalog import ContextDomainModel, ContextDocumentModel, Con
 from app.db.feedback import FeedbackModel
 from app.db.workflow import WorkflowModel, WorkflowVersionModel, WorkflowTombstoneModel
 from app.db.tool_registry import McpSourceModel, ToolRegistryModel
+from app.db.user_profile import UserProfileModel
+from app.db.chat_session import ChatSessionModel

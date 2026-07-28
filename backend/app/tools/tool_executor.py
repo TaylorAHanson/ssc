@@ -255,7 +255,16 @@ class ToolExecutor:
         """Execute ``tool`` with ``args`` under the governance pipeline."""
         # 1. Inject identity context + caller-supplied extra args. The tool's
         #    own execute() filters by signature, so unused keys are harmless.
-        call_args = dict(args)
+        #
+        #    ``args`` is untrusted: it is the model's parsed tool-call arguments
+        #    (runner) or an external MCP client's payload. Injected identity keys
+        #    are dropped from it unconditionally rather than merely overwritten,
+        #    because the writes below are conditional — ``ctx.user_identity`` is
+        #    empty whenever the MCP request carries no forwarded-email header. In
+        #    that case a caller-supplied ``_user_email`` would otherwise survive
+        #    into the call and impersonate another user to every tool that scopes
+        #    its reads by it.
+        call_args = {k: v for k, v in args.items() if k not in _INJECTED_KEYS}
         call_args.update(ctx.injected_args)
         if ctx.obo_token:
             call_args["_obo_token"] = ctx.obo_token

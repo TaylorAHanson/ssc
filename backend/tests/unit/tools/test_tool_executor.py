@@ -121,3 +121,49 @@ async def test_capability_scope_refuses_out_of_scope_mutating_tool(monkeypatch):
     ctx_read = ToolContext(tool_call_id="t4", user_identity={"email": "u@corp.com"},
                            allowed_tools=["grant"])
     assert await executor.run(read, ctx_read, q="x") == {"ok": True}
+
+
+# --- Identity spoofing -----------------------------------------------------
+#
+# Many tools scope their reads by the injected ``_user_email`` (the user-context
+# profile, approvals, entitlements). ``args`` is untrusted — it is the model's
+# parsed tool-call arguments, or an external MCP client's payload — so it must
+# never be able to supply those keys itself.
+
+
+@pytest.mark.asyncio
+async def test_caller_cannot_override_the_injected_identity():
+    tool = _FakeTool("lookup", is_mutating=False, result={"ok": True})
+    ctx = ToolContext(tool_call_id="tc-1", user_identity={"email": "real@corp.com"})
+
+    await ToolExecutor().run(tool, ctx, q="x", _user_email="victim@corp.com")
+
+    assert tool.received_kwargs["_user_email"] == "real@corp.com"
+
+
+@pytest.mark.asyncio
+async def test_caller_supplied_identity_is_dropped_when_the_context_has_none():
+    """The dangerous case: nothing overwrites the spoofed value.
+
+    ``ToolContext.user_identity`` is empty whenever an MCP request arrives with no
+    forwarded-email header, so the executor's identity writes are skipped. A
+    spoofed ``_user_email`` must be stripped rather than left to pass through and
+    impersonate somebody — the receiving tool has no way to tell it apart from a
+    real injection.
+    """
+    tool = _FakeTool("lookup", is_mutating=False, result={"ok": True})
+    ctx = ToolContext(tool_call_id="tc-1", user_identity={})
+
+    await ToolExecutor().run(
+        tool,
+        ctx,
+        q="x",
+        _user_email="victim@corp.com",
+        _user_roles="Platform Admin",
+        _user_entitlements="admins",
+        _obo_token="stolen",
+    )
+
+    for key in ("_user_email", "_user_roles", "_user_entitlements", "_obo_token"):
+        assert key not in tool.received_kwargs, f"{key} was not stripped"
+    assert tool.received_kwargs["q"] == "x"

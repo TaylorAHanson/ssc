@@ -35,6 +35,7 @@ import { useBrandingStore } from '../../stores/brandingStore';
 import { useUserStore } from '../../stores/userStore';
 import { useRequestStore } from '../../stores/requestStore';
 import { genieHomeUrl, workspaceHomeUrl } from '../../lib/databricksLinks';
+import { api } from '../../services/api';
 import type { UserPersona } from '../../types';
 
 // Explicit render order for sidebar groups. Groups not listed here fall to
@@ -255,17 +256,24 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
-  // Wipe locally-stored personalization (chat history + cached suggestions).
-  // This data lives only in this browser profile; on a shared machine the next
-  // person would otherwise inherit it. Clears anything we persist, then reloads
-  // so the in-memory chat state resets too.
-  const handleClearMyData = useCallback(() => {
+  // Wipe the user's chat history and cached personalization. Transcripts are now
+  // stored server-side (so they follow the user across devices), so this deletes
+  // them there as well as in this browser — otherwise clearing on a shared
+  // machine would leave the history to reappear on the next load.
+  const handleClearMyData = useCallback(async () => {
     const confirmed = window.confirm(
-      'Clear locally stored data on this device?\n\n' +
-        'This removes your chat history and personalized suggestions saved in ' +
-        'this browser. It does not delete any server-side records.',
+      'Clear your chat history?\n\n' +
+        'This deletes your saved conversations and personalized suggestions, on ' +
+        'this device and on every device you use. Requests and approvals you have ' +
+        'submitted are not affected.',
     );
     if (!confirmed) return;
+    try {
+      await api.deleteChatSessions();
+    } catch {
+      // Still clear locally: a failed server delete shouldn't leave the user
+      // staring at history they just asked to remove.
+    }
     try {
       const prefixes = ['chatview_messages_', 'home_suggestions_'];
       for (const store of [window.localStorage, window.sessionStorage]) {
@@ -818,7 +826,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   type="button"
                   onClick={() => {
                     setUserMenuOpen(false);
-                    handleClearMyData();
+                    void handleClearMyData();
                   }}
                   className="w-full flex items-center gap-2 text-left px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-md transition-colors font-medium"
                 >

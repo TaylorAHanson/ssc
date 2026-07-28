@@ -31,6 +31,7 @@ import {
     type AgentEvent,
 } from '../../lib/agentStream';
 import { usePendingPoll } from '../../hooks/usePendingPoll';
+import { getSessionId } from '../../lib/chatPersistence';
 import { useBrandingStore } from '../../stores/brandingStore';
 import { useChatSession } from '../../stores/chatSessionStore';
 import type { ChatRouteInfo, DisplayMessage } from './chatTypes';
@@ -535,6 +536,9 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     query: opts.isContinuation ? '' : userText,
                     conversation_history: history,
                     context: { mode },
+                    // Ties the turn to the stored transcript. An ephemeral chat
+                    // (no storage key) has no session to tie it to.
+                    session_id: storageKey ? getSessionId(storageKey) : undefined,
                 },
                 { signal: controller.signal },
             )) {

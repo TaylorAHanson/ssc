@@ -2198,6 +2198,115 @@ export async function getAgentSuggestions(
   return response.json();
 }
 
+// --- User context (the cached user model) ---
+
+export interface UserContextWarmResponse {
+  enabled: boolean;
+  state?: string | null;
+  stale?: boolean;
+  refreshed_at?: string | null;
+}
+
+/**
+ * Ask the backend to pre-build this user's agent context.
+ *
+ * Assembling it involves a slow identity-provider lookup, so the work happens in
+ * the background and this returns immediately — the point is the refresh it
+ * schedules, not the response. Call it as early as possible (app boot, chat
+ * mount) so the context is warm before the user's first message.
+ *
+ * Never throws: warming is an optimization, and a failure just means the agent
+ * asks more questions.
+ */
+export async function warmUserContext(): Promise<UserContextWarmResponse | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/agent/user-context/warm`, {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+// --- Server-side chat transcripts ---
+
+export interface ChatSessionSummary {
+  id: string;
+  surface: string;
+  title: string | null;
+  message_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ChatSessionDetail extends ChatSessionSummary {
+  /** The DisplayMessage[] array as it was stored; typed loosely on purpose. */
+  messages: unknown[];
+}
+
+export async function listChatSessions(
+  surface?: string,
+  limit = 20
+): Promise<{ sessions: ChatSessionSummary[]; count: number }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (surface) params.set('surface', surface);
+  const response = await fetch(`${API_BASE_URL}/agent/sessions?${params}`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) throw new Error(`Failed to list chat sessions: ${response.statusText}`);
+  return response.json();
+}
+
+/** Load one transcript. Returns null when it doesn't exist (a fresh session). */
+export async function getChatSession(sessionId: string): Promise<ChatSessionDetail | null> {
+  const response = await fetch(`${API_BASE_URL}/agent/sessions/${encodeURIComponent(sessionId)}`, {
+    headers: getHeaders(),
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Failed to load chat session: ${response.statusText}`);
+  return response.json();
+}
+
+/** Replace a transcript. Transcripts are written whole, never appended to. */
+export async function putChatSession(
+  sessionId: string,
+  messages: unknown[],
+  surface?: string
+): Promise<ChatSessionSummary> {
+  const response = await fetch(`${API_BASE_URL}/agent/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify({ messages, surface: surface ?? null }),
+  });
+  if (!response.ok) throw new Error(`Failed to save chat session: ${response.statusText}`);
+  return response.json();
+}
+
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/agent/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`Failed to delete chat session: ${response.statusText}`);
+  }
+}
+
+/** Clear this user's transcripts, optionally just one surface's. */
+export async function deleteChatSessions(surface?: string): Promise<number> {
+  const params = surface ? `?surface=${encodeURIComponent(surface)}` : '';
+  const response = await fetch(`${API_BASE_URL}/agent/sessions${params}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) throw new Error(`Failed to clear chat sessions: ${response.statusText}`);
+  const body = await response.json().catch(() => ({ deleted: 0 }));
+  return body.deleted ?? 0;
+}
+
 // ---------------------------------------------------------------------------
 // Feedback / feature requests / bug reports
 // ---------------------------------------------------------------------------
@@ -2862,6 +2971,12 @@ export const api = {
   exportContextCatalogBundle,
   importContextCatalogBundle,
   getAgentSuggestions,
+  warmUserContext,
+  listChatSessions,
+  getChatSession,
+  putChatSession,
+  deleteChatSession,
+  deleteChatSessions,
   submitFeedback,
   listFeedback,
   getFeedback,
