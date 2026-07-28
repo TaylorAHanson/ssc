@@ -442,6 +442,36 @@ class GitHubProvider(BaseProvider):
             raise RetryableError(f"Request error: {str(e)}")
 
     @retry_on_retryable(max_attempts=3)
+    async def get_file_content(self, repo: str, path: str, ref: str) -> Optional[str]:
+        """Read a file's decoded text from ``ref``, or ``None`` if it isn't there.
+
+        A missing file is a legitimate answer (the caller decides whether that's
+        fatal), so it returns ``None`` rather than raising.
+        """
+        try:
+            repo_path = await self._resolve_repo_path(repo)
+            response = await self.client.get(
+                f"/repos/{repo_path}/contents/{path}", params={"ref": ref}
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            body = response.json()
+            if body.get("encoding") != "base64" or "content" not in body:
+                # Files over ~1MB come back with an empty content field and must
+                # be fetched via the blob API; we don't expect one here.
+                raise PermanentError(
+                    f"Cannot read '{path}': unexpected encoding {body.get('encoding')!r}"
+                )
+            return base64.b64decode(body["content"]).decode("utf-8")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            raise PermanentError(f"Failed to read file '{path}': {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
+    @retry_on_retryable(max_attempts=3)
     async def create_or_update_file(
         self,
         repo: str,

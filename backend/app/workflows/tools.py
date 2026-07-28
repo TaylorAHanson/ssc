@@ -454,6 +454,10 @@ async def open_tag_change_pr(dataset_name: str, tags_sql: str,
     # repo's validation workflow doesn't look — so it would merge unvalidated.
     prefix = (settings.GOVERNANCE_TAGS_PATH or "").strip().strip("/")
     path = f"{prefix}/{filename}" if prefix else filename
+    # The "tag-change/" prefix is contractual, not cosmetic: the governance repo
+    # only auto-closes a failed validation on branches matching it (its
+    # APP_BRANCH_PREFIX). Rename this and a rejected migration stays open instead,
+    # leaving the request waiting on a merge that will never come.
     branch = f"tag-change/{request_id}"
     title = pr_title or f"Tag change: {dataset_name}"
     content = build_migration_file(

@@ -32,9 +32,9 @@ CHANGES = [
 # rather than read across repos so this suite runs standalone; if the two drift,
 # that repo's parser is the one that decides, so update both together.
 VALID_BASIC = """\
--- Tag change request: req-1a2b3c4d
+-- Tag change request req-1a2b3c4d
 -- Dataset: customer_360
--- Requested by: Jane Doe <jane.doe@example.com>
+-- Requested by: jane.doe@example.com
 -- Generated: 2026-07-27T22:31:04+00:00
 
 ALTER TABLE main.sales.orders SET TAGS ('data_owner' = 'sales-eng', 'access_group' = 'sales-readers');
@@ -88,7 +88,12 @@ async def _run(provider, settings_overrides=None, **overrides):
 # ---------------------------------------------------------------------------
 
 def test_matches_the_governance_repo_fixture():
-    """Byte-for-byte equality with the fixture that repo's parser is tested on."""
+    """Byte-for-byte equality with the fixture that repo's parser is tested on.
+
+    Only the statements are load-bearing — that repo strips `--` comments before
+    parsing — so a failure in the header half is cosmetic drift, not breakage.
+    It's still worth catching: the two sides already diverged on it once.
+    """
     content = build_migration_file(
         request_id=REQUEST_ID,
         dataset_name="customer_360",
@@ -100,18 +105,33 @@ def test_matches_the_governance_repo_fixture():
     assert content == VALID_BASIC
 
 
-def test_requested_by_falls_back_to_the_email_alone():
-    """No display name must not yield a dangling '<...>' the parser chokes on."""
+def test_requested_by_falls_back_to_the_display_name():
+    """Requested by is one value; with no email, a name beats printing nothing."""
     content = build_migration_file(
         request_id=REQUEST_ID,
         dataset_name="d",
-        requested_by=None,
+        requested_by="Jane Doe",
+        requested_by_email=None,
+        generated_at=datetime(2026, 7, 27, tzinfo=timezone.utc),
+        sql="ALTER TABLE a.b.c SET TAGS ('k' = 'v');",
+    )
+    assert "-- Requested by: Jane Doe" in content
+
+
+def test_header_is_only_line_comments():
+    """Block comments are rejected outright — they can hide content from review."""
+    content = build_migration_file(
+        request_id=REQUEST_ID,
+        dataset_name="d",
+        requested_by="Jane Doe",
         requested_by_email="jane.doe@example.com",
         generated_at=datetime(2026, 7, 27, tzinfo=timezone.utc),
         sql="ALTER TABLE a.b.c SET TAGS ('k' = 'v');",
     )
-    assert "-- Requested by: jane.doe@example.com" in content
-    assert "<" not in content
+    assert "/*" not in content
+    header, _, statements = content.partition("\n\n")
+    assert all(line.startswith("-- ") for line in header.splitlines())
+    assert statements.startswith("ALTER TABLE")
 
 
 def test_migration_filename_sorts_by_submission_time():

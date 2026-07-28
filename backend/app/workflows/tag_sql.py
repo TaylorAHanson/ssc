@@ -49,14 +49,6 @@ def migration_filename(request_id: str, generated_at: datetime) -> str:
     return f"{generated_at.strftime('%Y%m%d%H%M%S')}-{request_id}.sql"
 
 
-def _requested_by_line(name: Optional[str], email: Optional[str]) -> str:
-    name = (name or "").strip()
-    email = (email or "").strip()
-    if name and email and name != email:
-        return f"{name} <{email}>"
-    return name or email or "unknown"
-
-
 def build_migration_file(
     request_id: str,
     dataset_name: str,
@@ -67,13 +59,17 @@ def build_migration_file(
 ) -> str:
     """Render the full migration file: provenance header, blank line, statements.
 
-    The header is `--` line comments only; the governance repo's parser rejects
-    `/* */` blocks because they can hide content from a reviewer skimming the diff.
+    The header is for whoever reads the diff — the governance repo's parser skips
+    every ``--`` comment before looking for statements, so nothing here is load-
+    bearing and the request id is tied to the migration by the *filename*. The
+    exact wording still matches that repo's fixtures so the two don't drift
+    cosmetically. Block comments are the one thing to avoid: they're rejected
+    outright, since they can hide content from a reviewer skimming the diff.
     """
     header = [
-        f"-- Tag change request: {request_id}",
+        f"-- Tag change request {request_id}",
         f"-- Dataset: {dataset_name}",
-        f"-- Requested by: {_requested_by_line(requested_by, requested_by_email)}",
+        f"-- Requested by: {(requested_by_email or requested_by or 'unknown').strip()}",
         f"-- Generated: {generated_at.isoformat()}",
     ]
     return "\n".join(header) + "\n\n" + sql.rstrip("\n") + "\n"

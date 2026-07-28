@@ -6,6 +6,7 @@ GitHub pull request (GitOps). The app never runs ``ALTER TABLE ... SET TAGS``
 directly; a GitHub Action in the configured tags repo applies the generated SQL
 per environment once a governance admin merges the PR.
 """
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -162,6 +163,31 @@ def _get_table_tags(provider, full_name: str) -> Dict[str, Optional[str]]:
     return tags
 
 
+def _check_tag_policy(changes: List[dict], resulting_counts: Dict[str, int]) -> List[str]:
+    """Run the governance repo's own policy against the change, before submitting.
+
+    Advisory by design: the repo re-runs this on the PR and is the real gate, so
+    a policy we can't read must not stop someone filing a request. What it buys
+    is the error landing in the UI while the user is still editing, rather than
+    as a failed check on a PR they aren't watching.
+    """
+    from app.workflows.tag_policy import load_policy
+    from app.workflows.tools import _get_github_provider
+
+    try:
+        policy = asyncio.run(
+            load_policy(
+                _get_github_provider(),
+                repo=settings.GOVERNANCE_TAGS_REPO,
+                ref=settings.GOVERNANCE_TAGS_BASE_BRANCH,
+            )
+        )
+    except Exception as e:  # noqa: BLE001 - never block a submit on the advisory check
+        logger.warning(f"Tag policy check skipped: {e}")
+        return []
+    return policy.check(changes, resulting_counts) if policy else []
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -248,6 +274,7 @@ def create_tag_change(
     provider = _get_provider()
 
     changes: List[dict] = []
+    resulting_counts: Dict[str, int] = {}
     for table_input in payload.tables:
         full_name = table_input.table
         desired = {
@@ -260,9 +287,21 @@ def create_tag_change(
 
         if set_tags or unset_tags:
             changes.append({"table": full_name, "set": set_tags, "unset": unset_tags})
+            # Undercounts by however many reserved tags the object carries, since
+            # those are filtered out of `current`. The repo re-checks against live
+            # state, so this only ever misses a violation, never invents one.
+            resulting_counts[full_name] = len(desired)
 
     if not changes:
         raise HTTPException(status_code=400, detail="No tag changes detected.")
+
+    violations = _check_tag_policy(changes, resulting_counts)
+    if violations:
+        raise HTTPException(
+            status_code=400,
+            detail="This change would be rejected by the tag policy:\n- "
+                   + "\n- ".join(violations),
+        )
 
     sql = build_tag_sql(changes)
     dataset_name = payload.dataset_name or payload.dataset_id
