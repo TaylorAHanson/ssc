@@ -284,6 +284,27 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Web Lookup", "key": "yaml:web_search.max_fetch_chars", "label": "Max fetch chars",
      "type": "int", "min": 1000, "help": "Cap on extracted page text handed to the model."},
 
+    # --- Governance Tags (GitOps) ----------------------------------------
+    {"group": "Governance Tags (GitOps)", "key": "GOVERNANCE_TAGS_REPO", "label": "Tag governance repo",
+     "type": "string",
+     "help": "Repository the app opens tag-change PRs against — 'owner/repo', or a bare name resolved "
+             "against the GitHub org. Blank = tag changes are rejected at submit with a clear "
+             "'not configured' error rather than half-opening a request."},
+    {"group": "Governance Tags (GitOps)", "key": "GOVERNANCE_TAGS_BASE_BRANCH", "label": "Base branch",
+     "type": "string",
+     "help": "Branch this deployment's PRs target. The governance repo keeps one long-lived branch per "
+             "environment (e.g. dev / test / stage / prod) and merging is what applies the tags, so this "
+             "must match the environment this app instance governs. There is no default."},
+    {"group": "Governance Tags (GitOps)", "key": "GOVERNANCE_TAGS_PATH", "label": "Migrations path",
+     "type": "string",
+     "help": "Directory in the repo where generated .sql migrations are committed. The repo's validation "
+             "workflow only looks at files under this path."},
+    {"group": "Governance Tags (GitOps)", "key": "GOVERNANCE_TAGS_LEDGER_TABLE", "label": "Apply ledger table",
+     "type": "string",
+     "help": "Fully-qualified Delta table (catalog.schema.table) the repo's apply job writes each migration's "
+             "outcome to. The app reads it after a merge to confirm the tags actually applied — a merge alone "
+             "only means the SQL was accepted for execution. Blank = requests complete at merge, unverified."},
+
     # --- Catalogs & Content ---------------------------------------------
     {"group": "Catalogs & Content", "key": "yaml:self_service_center", "label": "Self-Service Center",
      "type": "catalog", "kind": "self_service", "add_label": "Add category",
@@ -364,6 +385,12 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
     "Web Lookup": (
         "Controls the agent's documentation search & fetch tools: which domains it may read, the sitemaps "
         "used for discovery, optional Algolia DocSearch keys, and result/fetch guardrails."
+    ),
+    "Governance Tags (GitOps)": (
+        "Tag changes are not applied by this app directly — it commits the generated ALTER ... SET/UNSET "
+        "TAGS SQL to a governance repo and opens a PR, and a workflow in that repo applies it on merge. "
+        "These settings point the app at that repo, the branch for this environment, and the ledger table "
+        "it reads back to confirm the apply succeeded. Changes apply to the next request."
     ),
     "Catalogs & Content": (
         "The curated, data-driven content surfaces: the landing-page Self-Service Center cards, the "

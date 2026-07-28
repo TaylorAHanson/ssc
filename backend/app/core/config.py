@@ -642,8 +642,16 @@ class Settings(BaseSettings):
     # The app opens PRs against this repo; a GitHub Action in the repo runs the
     # generated ALTER...SET/UNSET TAGS SQL per environment on merge.
     GOVERNANCE_TAGS_REPO: str = ""  # "owner/repo" or bare repo name (resolved against GITHUB_ORG)
-    GOVERNANCE_TAGS_BASE_BRANCH: str = "main"  # base branch PRs target
+    # Base branch PRs target. The governance repo uses one branch per environment
+    # (dev / test / stage / prod) and has no 'main', so there is no safe default —
+    # a wrong value 404s at branch creation, which is harder to diagnose than a
+    # missing one. Set it per deployment.
+    GOVERNANCE_TAGS_BASE_BRANCH: str = ""
     GOVERNANCE_TAGS_PATH: str = "tags/migrations"  # path prefix for generated .sql files
+    # Delta table the governance repo's apply job writes each migration's outcome
+    # to. This is how the app learns whether a merged PR actually applied: merging
+    # only means the SQL was accepted for execution, not that it succeeded.
+    GOVERNANCE_TAGS_LEDGER_TABLE: str = ""
     
     # Mock User Settings (for local dev when auth headers are missing)
     MOCK_USER_EMAIL: str = "dev@example.com"

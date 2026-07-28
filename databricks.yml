@@ -64,6 +64,19 @@ resources:
             value: "${var.github_pat_secret_key}"
           - name: GITHUB_ORG
             value: "${var.github_org}"
+          # Governance tag GitOps: the app commits generated ALTER ... TAGS SQL to
+          # this repo/branch and a workflow there applies it on merge.
+          - name: GOVERNANCE_TAGS_REPO
+            value: "${var.governance_tags_repo}"
+          - name: GOVERNANCE_TAGS_BASE_BRANCH
+            value: "${var.governance_tags_base_branch}"
+          - name: GOVERNANCE_TAGS_PATH
+            value: "${var.governance_tags_path}"
+          # Apply-outcome ledger (optional; omitted when blank, same reason as the
+          # AI gateway below). Set var.governance_tags_ledger_table and uncomment
+          # to have the app verify the apply instead of trusting the merge:
+          # - name: GOVERNANCE_TAGS_LEDGER_TABLE
+          #   value: "${var.governance_tags_ledger_table}"
           - name: DATABRICKS_WAREHOUSE_ID
             value: "${var.sql_warehouse_id}"
           # Existing all-purpose cluster for classic-compute jobs; SP needs CAN_RESTART.
@@ -297,6 +310,25 @@ variables:
   github_org:
     description: "GitHub organization for repo/template operations (same across envs)"
     default: "databricks-field-eng"
+  governance_tags_repo:
+    description: "Repo the app opens UC tag-change PRs against ('owner/repo', or bare name resolved against github_org)"
+    default: "tag-manager"
+  governance_tags_base_branch:
+    description: >-
+      Branch tag-change PRs target. The governance repo keeps one long-lived
+      branch per environment and merging is what applies the tags, so this must
+      match the environment this app instance governs — hence per-target, no
+      shared default.
+    default: "dev"
+  governance_tags_path:
+    description: "Directory in the governance repo where generated .sql migrations are committed"
+    default: "tags/migrations"
+  governance_tags_ledger_table:
+    description: >-
+      Fully-qualified Delta table the governance repo's apply job writes each
+      migration's outcome to; the app reads it to confirm a merged PR actually
+      applied. The app SP needs SELECT on it. Blank = complete at merge, unverified.
+    default: ""
   databricks_job_cluster_id:
     description: >-
       Existing all-purpose cluster ID for classic-compute jobs; the app SP needs
@@ -437,6 +469,7 @@ targets:
       data_asset_sync_cron: "0 * * * *"
       enforcement_sentinel_cron: "*/30 * * * *"
       controltower_secret_scope: "controltower_secret_scope_dev"
+      governance_tags_base_branch: "dev"
       databricks_job_cluster_id: "REPLACE_WITH_DEV_CLUSTER_ID"
       # Fill in the real LMWS gateway URLs; placeholders are non-empty so deploy
       # won't fail, but LMWS actions error clearly until set.
@@ -490,6 +523,7 @@ targets:
       # `databricks-postgres` slug). Same underlying data.
       lakebase_database_id: "db-zm1o-5e047bf1j3"
       controltower_secret_scope: "controltower_secret_scope_stg"
+      governance_tags_base_branch: "stage"
 
   prod:
     mode: production
@@ -510,6 +544,7 @@ targets:
       event_sync_cron: "0 * * * *"
       data_asset_sync_cron: "0 * * * *"
       enforcement_sentinel_cron: "*/30 * * * *"
+      governance_tags_base_branch: "prod"
       workflow_authoring_locked: "true"
     resources:
       apps:

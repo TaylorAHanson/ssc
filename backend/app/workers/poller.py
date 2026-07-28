@@ -935,7 +935,57 @@ def _training_course_completed(db, request: RequestModel, course_code: str) -> b
         return False
 
 
-def _v2_resume_value(db, request, result):
+async def _pr_gate_from_github(db, request):
+    """Resolve a ``pr_merge`` gate by asking GitHub what happened to the PR.
+
+    Merging *is* the approval — it's what makes the governance repo apply the
+    change — so this gate can only advance by observing GitHub. Closing the PR
+    without merging is the reviewer declining, and rejects the request; anything
+    else (still open, or a lookup we couldn't complete) leaves it waiting.
+    """
+    from app.state_machines.facts import add_fact, get_latest_fact
+    from app.workflows.tools import _get_github_provider
+
+    fact = get_latest_fact(db, request.id, "pr_created")
+    data = (fact.event_data or {}) if fact else {}
+    repo, number = data.get("repo"), data.get("pr_number")
+    if not (repo and number):
+        logger.warning(
+            "[%s] pr_merge gate is waiting but no pr_created fact names a PR to poll; "
+            "the request will not advance until one exists", request.id,
+        )
+        return None
+
+    try:
+        pr = await _get_github_provider().get_pull_request(repo=repo, number=number)
+    except Exception as e:  # noqa: BLE001 - never fail a poll tick on GitHub being down
+        logger.warning("[%s] PR %s#%s state lookup failed: %s", request.id, repo, number, e)
+        return None
+
+    if pr.get("merged") or pr.get("merged_at"):
+        add_fact(db, request.id, "pr_merged", {
+            "repo": repo,
+            "pr_number": number,
+            "merged_at": pr.get("merged_at"),
+            "merged_by": ((pr.get("merged_by") or {}).get("login")),
+        }, actor="system")
+        db.commit()
+        return {"approved": True}
+
+    if pr.get("state") == "closed":
+        add_fact(db, request.id, "pr_closed_unmerged", {
+            "repo": repo,
+            "pr_number": number,
+            "closed_at": pr.get("closed_at"),
+        }, actor="system")
+        db.commit()
+        logger.info("[%s] PR %s#%s closed without merging; rejecting", request.id, repo, number)
+        return {"approved": False, "reason": "pull request closed without merging"}
+
+    return None
+
+
+async def _v2_resume_value(db, request, result):
     """Map approval/event facts to a gate resume value, or None if still waiting.
 
     Bridges the existing fact/approval API (``approval_received``,
@@ -977,7 +1027,11 @@ def _v2_resume_value(db, request, result):
             return {"approved": True}
         return None
     if gtype == "pr_merge":
-        return {"approved": True} if has_fact(db, request.id, "pr_merged") else None
+        # A manually written fact still wins (admin override); otherwise ask
+        # GitHub, mirroring how the training gate self-satisfies from the LMS.
+        if has_fact(db, request.id, "pr_merged"):
+            return {"approved": True}
+        return await _pr_gate_from_github(db, request)
     if gtype == "children":
         return {"approved": True} if has_fact(db, request.id, "all_children_completed") else None
     return None
@@ -1001,7 +1055,7 @@ async def _process_request_state_machine(db, request: RequestModel):
     # Resume as many satisfied gates as we can this tick (a gate may unblock the
     # next one, e.g. manager -> platform_admin in the same poll cycle).
     for _ in range(12):
-        resume_value = _v2_resume_value(db, request, result)
+        resume_value = await _v2_resume_value(db, request, result)
         if resume_value is None:
             break
         result = await v2_executor.resume(request, resume_value)

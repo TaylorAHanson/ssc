@@ -55,7 +55,10 @@ class _FakeProvider:
     async def add_team_member(self, *a, **k): return {"added": True}
     async def add_team_members(self, *a, **k): return [{"added": True}]
     async def list_teams(self, *a, **k): return [{"name": "demo", "slug": "demo-team"}]
-    async def create_pull_request(self, **k): return {"number": 1}
+    async def create_branch(self, **k): return {"ref": "refs/heads/fake"}
+    async def create_or_update_file(self, **k): return {"commit": {"sha": "abc123"}}
+    async def create_pull_request(self, **k):
+        return {"number": 1, "html_url": "https://github.test/o/r/pull/1"}
     async def list_members_add(self, *a, **k): return {"added": True}
     async def submit_job(self, *a, **k): return {"run_id": 1, "state": "SUCCESS"}
     async def send(self, **k): return {"sent": True}
@@ -79,6 +82,12 @@ def _install_fakes():
     async def _fake_run(self, *a, **k):
         return {"content": "<p>hermetic report content</p>"}
     runner_mod.AgentRunner.run = _fake_run
+
+    # The tag-change graph refuses to guess a GitOps target, so give it one —
+    # a local checkout has no governance repo configured.
+    from app.core.config import settings
+    settings.GOVERNANCE_TAGS_REPO = settings.GOVERNANCE_TAGS_REPO or "tag-manager"
+    settings.GOVERNANCE_TAGS_BASE_BRANCH = settings.GOVERNANCE_TAGS_BASE_BRANCH or "dev"
 
     fake = _FakeProvider()
     for getter in ("_get_databricks_provider", "_get_github_provider",
@@ -104,6 +113,10 @@ def _make_request(rtype_value: str):
             "name": "demo",
             "path": "/Shared/demo",
             "tag_key": "cost_center",
+            "dataset_name": "customer_360",
+            "changes": [{"table": "main.sales.orders",
+                         "set": {"data_owner": "sales-eng"}, "unset": []}],
+            "tags_sql": "ALTER TABLE main.sales.orders SET TAGS ('data_owner' = 'sales-eng');",
             "resource_id": "main.sales.orders",
             "justification": "needed for project",
             "subject": "hello", "body": "world", "to_email": "bob@corp.com",

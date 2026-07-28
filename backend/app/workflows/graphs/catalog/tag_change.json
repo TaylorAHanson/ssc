@@ -8,8 +8,13 @@
       "name": "open_pr",
       "tool": "open_tag_change_pr",
       "args": {
-        "title": {"$var": {"path": "title", "default": "Tag change"}},
-        "body": {"$var": {"path": "justification", "default": ""}}
+        "dataset_name": {"$var": {"path": "dataset_name", "default": ""}},
+        "tags_sql": {"$var": {"path": "tags_sql", "default": ""}},
+        "submitted_at": {"$var": {"path": "submitted_at", "default": null}},
+        "requested_by": {"$var": {"path": "requested_by", "default": null}},
+        "requested_by_email": {"$var": {"path": "requested_by_email", "default": null}},
+        "changes": {"$var": {"path": "changes", "default": []}},
+        "pr_title": {"$var": {"path": "pr_title", "default": null}}
       }
     },
     {

@@ -21,7 +21,7 @@ from app.db.data_contract import DataContractModel
 from app.db.request import RequestModel
 from app.db.session import get_db
 from app.models.request import RequestType
-from app.state_machines.facts import get_latest_fact
+from app.state_machines.facts import add_fact, get_latest_fact
 from app.workflows.tag_sql import build_tag_sql
 
 router = APIRouter()
@@ -227,10 +227,22 @@ def create_tag_change(
     current_user=Depends(require_any_role(["platform_admin", "governance_admin"])),
 ):
     """Diff desired vs current tags, generate SQL, and open a tracked PR."""
+    # Check the GitOps target up front: the request is worthless without a repo
+    # and branch to open the PR against, and failing here beats stranding it in
+    # 'pending' for an admin to untangle.
     if not settings.GOVERNANCE_TAGS_REPO:
         raise HTTPException(
             status_code=400,
             detail="GOVERNANCE_TAGS_REPO is not configured; tag changes cannot be submitted.",
+        )
+    if not settings.GOVERNANCE_TAGS_BASE_BRANCH:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "GOVERNANCE_TAGS_BASE_BRANCH is not configured. It must name the governance "
+                "repo branch for this environment, since merging into it is what applies "
+                "the tags."
+            ),
         )
 
     provider = _get_provider()
@@ -274,9 +286,16 @@ def create_tag_change(
             "changes": changes,
             "tags_sql": sql,
             "pr_title": payload.pr_title or f"Tag change: {dataset_name}",
+            # Names and orders the migration file in the governance repo. Stored
+            # rather than taken at PR time so a retried step rewrites the same
+            # file instead of adding a second migration.
+            "submitted_at": now.isoformat(),
         },
     )
     db.add(new_request)
+    # Without this fact the poller never picks the request up and it sits in
+    # 'pending' forever — no PR, no error.
+    add_fact(db, request_id, "request_submitted", {}, actor=current_user.email)
     db.commit()
 
     logger.info(

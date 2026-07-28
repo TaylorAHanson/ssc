@@ -347,17 +347,162 @@ async def github_add_team_members(team_slug: str, members: List[str],
 # (app.tools.self_service.request_github_access), not here.
 
 
-@tool(name="open_tag_change_pr", side_effect_class="infra",
-      description="Open a GitOps pull request that applies a UC tag change on merge.")
-async def open_tag_change_pr(**kwargs) -> Dict[str, Any]:
-    provider = _get_github_provider()
-    pr = await provider.create_pull_request(
-        title=kwargs.get("title", "Tag change"),
-        body=kwargs.get("body", ""),
-        head=kwargs.get("head", ""),
-        base=kwargs.get("base", "main"),
+class OpenTagChangePrInput(BaseModel):
+    dataset_name: str = Field(..., description="Dataset the tag change applies to")
+    tags_sql: str = Field(..., description="Generated ALTER ... SET/UNSET TAGS statements")
+    submitted_at: Optional[str] = Field(
+        default=None,
+        description="ISO-8601 submission time; orders the migration and stays stable on retry",
     )
-    return {"pull_request": pr}
+    requested_by: Optional[str] = Field(default=None, description="Requester display name")
+    requested_by_email: Optional[str] = Field(default=None, description="Requester email")
+    changes: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="Per-table {table, set, unset} diff, summarized in the PR body"
+    )
+    pr_title: Optional[str] = Field(default=None, description="PR title; defaults from dataset_name")
+
+
+def _parse_submitted_at(value: Optional[str]):
+    """Submission time for ordering/naming the migration; falls back to now."""
+    from datetime import datetime, timezone
+
+    if value:
+        try:
+            parsed = datetime.fromisoformat(value)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            logger.warning("Unparseable submitted_at %r; using current time", value)
+    return datetime.now(timezone.utc)
+
+
+def _tag_change_pr_body(request_id: str, dataset_name: str, requested_by: Optional[str],
+                        changes: List[Dict[str, Any]]) -> str:
+    lines = [
+        f"Tag change for **{dataset_name}**, requested by {requested_by or 'unknown'}.",
+        "",
+        f"Request: `{request_id}`",
+        "",
+        "| Table | Set | Unset |",
+        "| --- | --- | --- |",
+    ]
+    for change in changes:
+        set_tags = change.get("set") or {}
+        unset_tags = change.get("unset") or []
+        set_cell = ", ".join(f"`{k}` = `{v}`" for k, v in set_tags.items()) or "—"
+        unset_cell = ", ".join(f"`{k}`" for k in unset_tags) or "—"
+        lines.append(f"| `{change.get('table')}` | {set_cell} | {unset_cell} |")
+    lines += [
+        "",
+        "Merging this PR applies the tags to this environment. Opened automatically; "
+        "close it to reject the request.",
+    ]
+    return "\n".join(lines)
+
+
+@tool(name="open_tag_change_pr", args_schema=OpenTagChangePrInput, side_effect_class="infra",
+      description="Open a GitOps pull request that applies a UC tag change on merge.")
+async def open_tag_change_pr(dataset_name: str, tags_sql: str,
+                             submitted_at: Optional[str] = None,
+                             requested_by: Optional[str] = None,
+                             requested_by_email: Optional[str] = None,
+                             changes: Optional[List[Dict[str, Any]]] = None,
+                             pr_title: Optional[str] = None,
+                             **kwargs) -> Dict[str, Any]:
+    """Commit the generated tag SQL to the governance repo and open a PR for it.
+
+    The app never runs ``ALTER ... TAGS`` itself: merging the PR is what applies
+    the change, so this is the whole mutation. Branch, file, and PR creation are
+    each idempotent, and the filename is derived from the request's submission
+    time, so a replay updates the same migration rather than adding a second one.
+    """
+    from app.core.config import settings
+    from app.core.exceptions import PermanentError
+    from app.db.session import get_db
+    from app.state_machines.facts import add_fact
+    from app.workflows.tag_sql import build_migration_file, migration_filename
+
+    request_id = kwargs.get("_request_id")
+    if not request_id:
+        raise PermanentError(
+            "open_tag_change_pr must run inside a request workflow: the request id "
+            "names the branch and migration file, and there is no safe substitute."
+        )
+    repo = (settings.GOVERNANCE_TAGS_REPO or "").strip()
+    base = (settings.GOVERNANCE_TAGS_BASE_BRANCH or "").strip()
+    if not repo:
+        raise PermanentError(
+            "GOVERNANCE_TAGS_REPO is not set, so there is nowhere to open the tag-change "
+            "PR. Set it in Admin -> Settings (Governance Tags) or via databricks.yml."
+        )
+    if not base:
+        # The governance repo branches per environment and has no 'main', so
+        # guessing here would 404 at branch creation with a much vaguer message.
+        raise PermanentError(
+            "GOVERNANCE_TAGS_BASE_BRANCH is not set. It must name the governance repo "
+            f"branch for this environment (e.g. '{settings.ENVIRONMENT}'), because merging "
+            "into that branch is what applies the tags. Set it in Admin -> Settings."
+        )
+    if not (tags_sql or "").strip():
+        raise PermanentError(
+            "The tag change generated no SQL — nothing to apply. This means the desired "
+            "tags already match Unity Catalog; the request should not have been created."
+        )
+
+    generated_at = _parse_submitted_at(submitted_at)
+    filename = migration_filename(request_id, generated_at)
+    # A blank path would put the migration at the repo root, where the governance
+    # repo's validation workflow doesn't look — so it would merge unvalidated.
+    prefix = (settings.GOVERNANCE_TAGS_PATH or "").strip().strip("/")
+    path = f"{prefix}/{filename}" if prefix else filename
+    branch = f"tag-change/{request_id}"
+    title = pr_title or f"Tag change: {dataset_name}"
+    content = build_migration_file(
+        request_id=request_id,
+        dataset_name=dataset_name,
+        requested_by=requested_by,
+        requested_by_email=requested_by_email,
+        generated_at=generated_at,
+        sql=tags_sql,
+    )
+
+    provider = _get_github_provider()
+    await provider.create_branch(repo=repo, branch=branch, from_branch=base)
+    await provider.create_or_update_file(
+        repo=repo,
+        path=path,
+        content=content,
+        branch=branch,
+        message=f"Tag change: {dataset_name} ({request_id})",
+    )
+    pr = await provider.create_pull_request(
+        repo=repo,
+        title=title,
+        head=branch,
+        base=base,
+        body=_tag_change_pr_body(request_id, dataset_name, requested_by, changes or []),
+    )
+
+    pr_number = pr.get("number")
+    pr_url = pr.get("html_url")
+    result = {
+        "pr_number": pr_number,
+        "pr_url": pr_url,
+        "repo": repo,
+        "branch": branch,
+        "base": base,
+        "file_path": path,
+    }
+    # Written here rather than via the step's success_fact: the gate poller and
+    # the tag-change list endpoint both read these fields off a flat pr_created
+    # payload, and the generic step fact nests them under step/results.
+    db = next(get_db())
+    try:
+        add_fact(db, request_id, "pr_created", result, actor="system")
+    finally:
+        db.close()
+
+    logger.info("[%s] opened tag-change PR #%s (%s) on %s", request_id, pr_number, path, repo)
+    return result
 
 
 # --------------------------------------------------------------------------
