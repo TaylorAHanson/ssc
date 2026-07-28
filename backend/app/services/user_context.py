@@ -194,7 +194,11 @@ def _build_activity(db: Session, identity: UserIdentity) -> Dict[str, Any]:
                 "request_id": a.request_id,
                 "request_title": req.title,
                 "approval_type": a.approval_type,
-                "requested_by": a.requested_by,
+                # The approval's own copy of the requester is frequently null on
+                # real rows, which had the agent telling approvers that most of
+                # their queue came "from unknown". The joined request always knows
+                # who raised it.
+                "requested_by": a.requested_by or req.requester_email,
             }
             for a, req in pending_approvals
         ],

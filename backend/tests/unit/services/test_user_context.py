@@ -415,6 +415,53 @@ def test_group_names_are_extracted_from_every_provider_shape():
     assert uc._extract_group_names({"member": "x", "groups": []}) == []
 
 
+def test_a_missing_requester_falls_back_to_the_request(db_session):
+    """Approvals often have no ``requested_by`` of their own.
+
+    Without the fallback the agent told approvers most of their queue came "from
+    unknown", even though the joined request knows exactly who raised it.
+    """
+    from tests.factories.approval_factory import ApprovalFactory
+    from tests.factories.request_factory import RequestFactory
+
+    req = RequestFactory.create(
+        db_session, title="Needs a decision", requester_email="asker@corp.com"
+    )
+    ApprovalFactory.create(
+        db_session,
+        request_id=req.id,
+        approval_type="manager",
+        requested_by=None,
+        assigned_to_email="approver@corp.com",
+        status="pending",
+    )
+
+    activity = uc._build_activity(
+        db_session, uc.UserIdentity(email="approver@corp.com", display_name="A")
+    )
+
+    assert [a["requested_by"] for a in activity["pending_approvals"]] == ["asker@corp.com"]
+
+
+def test_the_users_own_email_is_not_reported_as_a_directory_group():
+    """``deps`` seeds the entitlement list with the caller's address.
+
+    That is how ``role_mappings`` grants a role to one person, but it is not a
+    group, and passing it through had the agent listing someone's email address
+    among their directory groups.
+    """
+    section = uc._build_identity(
+        None,
+        uc.UserIdentity(
+            email="Ada@Corp.com",
+            display_name="Ada",
+            entitlements=["ada@corp.com", "data-stewards", "users"],
+        ),
+    )
+
+    assert section["directory_groups"] == ["data-stewards", "users"]
+
+
 def test_persona_follows_the_role_priority():
     assert uc.derive_persona(["Finance Admin", "Platform Admin"]) == "Platform Admin"
     assert uc.derive_persona(["Finance Admin"]) == "Finance Admin"
