@@ -123,6 +123,15 @@ POST_JSON_ENDPOINTS = frozenset({"addMembers"})
 #: before any permission check. Both warrant retrying the other systemEndpoint.
 FWS_LOOKUP_FAILED_STATUSES = frozenset({404, 412})
 
+#: FWS resolves a list through Saviynt whichever directory is named, so both
+#: directories fail with a Saviynt lookup error for a list that was never
+#: imported there. Observed: 412 "Entitlement Type Not Found" (ActiveDirectory)
+#: and 400 "Invalid Instance" (Azure). Matched on text because the 400 is
+#: otherwise indistinguishable from a malformed payload.
+_SAVIYNT_LOOKUP_RE = re.compile(
+    r"entitlement type not found|invalid instance|saviynt", re.IGNORECASE
+)
+
 #: Which directory backs a list. The FWS-API needs this named explicitly and
 #: gives no way to discover it, so it has to be established empirically: lists
 #: from the traditional ListManager path are ``ActiveDirectory``, and the newer
@@ -358,7 +367,13 @@ class LmwsN2kProbeClient(LmwsNativeClient):
                         "list permissions."
                     )
                 return result
-            if resp.status_code in FWS_LOOKUP_FAILED_STATUSES and is_fws:
+            lookup_failed = is_fws and resp.status_code >= 400 and (
+                resp.status_code in FWS_LOOKUP_FAILED_STATUSES
+                or _SAVIYNT_LOOKUP_RE.search(
+                    " ".join(_error_messages(body)) or str(body)[:500]
+                )
+            )
+            if lookup_failed:
                 result["errors"] = _error_messages(body)
                 result["outcome"] = "list_not_found"
                 tried = (json_body or {}).get("systemEndpoint")
@@ -814,15 +829,42 @@ class LmwsN2kProbeClient(LmwsNativeClient):
             return out
 
         result = await _attempt(chosen)
-        if allow_retry and result.get("outcome") == "list_not_found":
-            retry = await _attempt(other_system_endpoint(chosen))
-            retry["system_endpoint_first_tried"] = chosen
+        if not (allow_retry and result.get("outcome") == "list_not_found"):
+            return result
+
+        retry = await _attempt(other_system_endpoint(chosen))
+        retry["system_endpoint_first_tried"] = chosen
+        retry["first_attempt"] = {
+            "system_endpoint": chosen,
+            "http_status": result.get("http_status"),
+            "errors": result.get("errors"),
+        }
+        if retry.get("outcome") != "list_not_found":
             retry["detail"] = (
-                f"First tried systemEndpoint='{chosen}' (404), then "
+                f"systemEndpoint='{chosen}' could not resolve the list "
+                f"(HTTP {result.get('http_status')}), so this retried with "
                 f"'{retry['system_endpoint']}'. {retry.get('detail', '')}".strip()
             )
             return retry
-        return result
+
+        # Both directories failed the same lookup. FWS resolves lists through
+        # Saviynt either way, so this is conclusive rather than a bad guess:
+        # the list is not in Saviynt and no argument to this endpoint will fix it.
+        retry["outcome"] = "not_in_saviynt"
+        retry["detail"] = (
+            f"Neither directory could resolve '{list_name}': "
+            f"{chosen} returned HTTP {result.get('http_status')} and "
+            f"{retry['system_endpoint']} returned HTTP {retry.get('http_status')}, "
+            "both failing the Saviynt entitlement lookup. FWS reaches lists through "
+            "Saviynt whichever systemEndpoint is named, so a list that was never "
+            "imported there is unreachable via addMembers — this is a dead end for "
+            "this list, not a wrong argument. Do NOT retry with other systemEndpoint "
+            "or requester values. Authentication and both FWS ACLs passed (an ACL "
+            "problem would be 401/403), so the remaining path is the LMWS endpoints, "
+            "which need the service account added as a list supervisor by the list "
+            "owner — there is no API for that."
+        )
+        return retry
 
     async def probe_add_matrix(
         self,

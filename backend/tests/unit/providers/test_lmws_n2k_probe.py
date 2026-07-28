@@ -776,6 +776,49 @@ async def test_explicit_system_endpoint_does_not_retry(fws_client):
 
 
 @pytest.mark.asyncio
+async def test_both_directories_failing_is_reported_as_conclusive(fws_client):
+    """The real outcome: 412 on ActiveDirectory, 400 'Invalid Instance' on Azure.
+
+    FWS resolves lists through Saviynt under either systemEndpoint, so failing
+    both is a verdict about the list, not a bad guess — and the tool must say so
+    rather than inviting another retry.
+    """
+    def handler(method, url, body):
+        if body["systemEndpoint"] == "ActiveDirectory":
+            return httpx.Response(412, json={"responseMessage": "Entitlement Type Not Found"})
+        return httpx.Response(400, json={"responseMessage": "Invalid Instance"})
+
+    transport, sent = _recording_transport(handler)
+    with transport:
+        result = await fws_client.probe_membership_add(
+            "addMembers", "edh_dbx_enterprise_deng", ["taylhans"], dry_run=False
+        )
+
+    assert [s["json"]["systemEndpoint"] for s in sent] == ["ActiveDirectory", "Azure"]
+    assert result["outcome"] == "not_in_saviynt"
+    assert result["ok"] is False
+    assert "dead end" in result["detail"]
+    assert "Do NOT retry" in result["detail"]
+    assert "supervisor" in result["detail"]
+    # Both attempts stay visible so the verdict can be checked.
+    assert result["first_attempt"]["http_status"] == 412
+    assert result["http_status"] == 400
+
+
+@pytest.mark.asyncio
+async def test_azure_invalid_instance_is_a_lookup_failure_not_a_bad_payload(fws_client):
+    """A bare 400 would otherwise read as a malformed request."""
+    transport, _ = _recording_transport(
+        lambda m, u, j: httpx.Response(400, json={"responseMessage": "Invalid Instance"})
+    )
+    with transport:
+        result = await fws_client.probe_membership_add(
+            "addMembers", "n2k_list", ["x"], system_endpoint="Azure", dry_run=False
+        )
+    assert result["outcome"] == "list_not_found"
+
+
+@pytest.mark.asyncio
 async def test_lookup_failure_detail_rules_out_the_acl_layer(fws_client):
     """The 412 must not be read as a permissions problem — auth already passed."""
     transport, _ = _recording_transport(
