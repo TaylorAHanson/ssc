@@ -112,6 +112,25 @@ DESTRUCTIVE_ACTIONS = frozenset(
     {"KILL", "DROP", "SUSPEND", "REVOKE_ADMIN", "ARCHIVE", "ARCHIVE_FLAG", "STOP_AND_RECONFIGURE"}
 )
 
+# current policy name -> names it used to be filed under. The multi-resource
+# .rego files were split one-per-resource-type, and `monitoring_and_logging` was
+# renamed to `resource_tags` to match what it actually contains. Audit rows keep
+# whatever name was current when they were written, so alert dedup has to look
+# under the old names too. Safe to prune once no audit rows predate the split.
+_LEGACY_POLICY_NAMES: Dict[str, List[str]] = {
+    "apps": ["apps_and_genie"],
+    "genie_spaces": ["apps_and_genie"],
+    "compute": ["compute_and_jobs"],
+    "jobs": ["compute_and_jobs"],
+    "dashboards": ["dashboards_and_sql"],
+    "sql_warehouses": ["dashboards_and_sql"],
+    "catalog_access": ["data_and_ai_governance"],
+    "storage": ["data_and_ai_governance"],
+    "personal_access_tokens": ["identity_and_access"],
+    "grants": ["identity_and_access"],
+    "resource_tags": ["monitoring_and_logging"],
+}
+
 
 def normalize_severity(raw: Any) -> str:
     """Normalize OPA severity to a known tier; missing values default to HIGH (fail-safe).
@@ -476,6 +495,51 @@ def _rule_outcomes(check: Dict[str, Any]) -> List[bool]:
     if rr:
         return [bool(r.get("passed")) for r in rr]
     return [check["result"] == "PASS"]
+
+
+def aggregate_check_counts(checks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Roll a run's checks up into the numbers the scan report shows.
+
+    Everything here is counted in ONE unit — the individual policy *rule* — so
+    the report's severity cards sum exactly to its violation total. A check is a
+    (resource, policy) evaluation that can fail several rules at once; counting
+    failures per rule but severity per check is what used to make HIGH+MEDIUM+LOW
+    come out lower than the headline number.
+
+    Failed rules on a resource with an approved allowlist exception are signed-off
+    risk rather than an open finding, so they're reported as ``exempt_count`` and
+    left out of both the total and the severity breakdown.
+
+    Invariants: ``total_checks == pass_count + violation_count + exempt_count``
+    and ``sum(severity_counts.values()) == violation_count``.
+    """
+    total_checks = 0
+    pass_count = 0
+    violation_count = 0
+    exempt_count = 0
+    severity_counts: Dict[str, int] = {}
+
+    for check in checks or []:
+        outcomes = _rule_outcomes(check)
+        failed = sum(1 for ok in outcomes if not ok)
+        total_checks += len(outcomes)
+        pass_count += len(outcomes) - failed
+        if not failed:
+            continue
+        if check.get("action") == "SKIPPED_ALLOWLIST":
+            exempt_count += failed
+            continue
+        violation_count += failed
+        sev = normalize_severity(check.get("severity"))
+        severity_counts[sev] = severity_counts.get(sev, 0) + failed
+
+    return {
+        "total_checks": total_checks,
+        "pass_count": pass_count,
+        "violation_count": violation_count,
+        "exempt_count": exempt_count,
+        "severity_counts": severity_counts,
+    }
 
 
 # Human-readable phrasing for each failure category, used in the workspace-level
@@ -1003,7 +1067,7 @@ async def _scan_and_evaluate(
 
             rule_results_raw = result.get("rule_results", []) or []
             if not rule_results_raw and not result.get("is_violation"):
-                # No applicable rules for this resource (e.g. compute_and_jobs vs a
+                # No applicable rules for this resource (e.g. the compute policy vs a
                 # data_product). Skip the vacuous PASS so we don't bloat the report.
                 continue
 
@@ -1435,18 +1499,23 @@ async def run_discovery(db, request) -> Dict[str, Any]:
         logger.error("Sentinel: data certification pass failed [%s]: %s", category, e)
         scan_errors.append(f"data_certification ({category}): {e}")
 
-    rule_outcomes = [passed for c in checks for passed in _rule_outcomes(c)]
-    pass_count = sum(1 for ok in rule_outcomes if ok)
-    violation_count = sum(1 for ok in rule_outcomes if not ok)
+    counts = aggregate_check_counts(checks)
+    total_checks = counts["total_checks"]
+    pass_count = counts["pass_count"]
+    violation_count = counts["violation_count"]
+    exempt_count = counts["exempt_count"]
+    severity_counts = counts["severity_counts"]
 
     scanned_names = [w.name for w in scan_ws] if not dataset_id else [cert_ctx["name"]]
     summary = (
         f"Sentinel scan across {len(scanned_names)} workspace(s) "
         f"({', '.join(scanned_names)}): scanned {total_resources} resource(s) across "
-        f"{len(policy_files)} policy file(s); {len(rule_outcomes)} checks "
+        f"{len(policy_files)} policy file(s); {total_checks} checks "
         f"({pass_count} passed, {violation_count} failed). "
         f"{len(violations)} policy violation(s) recorded."
     )
+    if exempt_count:
+        summary += f" {exempt_count} failed check(s) suppressed by approved exceptions."
     # Workspaces where EVERY discovery call failed produced a meaningless "0" —
     # call that out explicitly so the run isn't read as "all clear".
     full_fail = [f for f in ws_failures if not f.get("partial")]
@@ -1462,14 +1531,6 @@ async def run_discovery(db, request) -> Dict[str, Any]:
         summary += f" {len(scan_errors)} workspace(s) could not be fully scanned."
     if partial_fail and not full_fail:
         summary += f" {len(partial_fail)} workspace(s) returned partial results."
-
-    # True severity breakdown (kept in scan_stats so the UI severity cards are
-    # accurate without loading every violation record).
-    severity_counts: Dict[str, int] = {}
-    for _v in violations:
-        _sv = str((_v or {}).get("severity") or "").upper()
-        if _sv:
-            severity_counts[_sv] = severity_counts.get(_sv, 0) + 1
 
     # Persistence split: high-level counts/summary go in state_context (small, so
     # the run list stays fast); the full per-record detail (ALL violations + ALL
@@ -1487,12 +1548,18 @@ async def run_discovery(db, request) -> Dict[str, Any]:
             "pass_count": pass_count,
             "total_resources_scanned": total_resources,
             "policies_evaluated": len(policy_files),
-            "total_checks": len(rule_outcomes),
+            "total_checks": total_checks,
             "total_evaluations": len(checks),
             "workspaces_scanned": len(scanned_names),
             "workspaces_failed": len(full_fail),
             "workspaces_partial": len(partial_fail),
+            # Same unit as violation_count (failed rules), so the UI's
+            # HIGH+MEDIUM+LOW cards sum exactly to it.
             "severity_counts": severity_counts,
+            # Failed rules suppressed by an approved allowlist exception. Not in
+            # violation_count or severity_counts; total_checks == pass_count +
+            # violation_count + exempt_count.
+            "exempt_count": exempt_count,
             # Detail-record totals (the detail view pages these from the table).
             "violation_records_total": len(violations),
             "check_records_total": len(checks),
@@ -1885,8 +1952,13 @@ def _active_violations(violations: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         # Workspace is captured on newer (multi-workspace) records; fall back to
         # the OPA input snapshot for runs that predate the top-level field.
         ws = v.get("workspace") or (v.get("input_context") or {}).get("workspace") or {}
+        _res = (v.get("input_context") or {}).get("resource") or {}
+        _name = str(_res.get("name") or _res.get("title") or "").strip()
         out.append({
             "resource_id": v.get("resource_id"),
+            # Display name from the discovery snapshot. Blank when it just
+            # repeats the id, so the digest doesn't print the same string twice.
+            "resource_name": _name if _name != str(v.get("resource_id") or "").strip() else "",
             "resource_type": v.get("resource_type"),
             # Owner is captured on newer records; fall back to the OPA input
             # snapshot for runs that predate the top-level field.
@@ -1898,6 +1970,18 @@ def _active_violations(violations: List[Dict[str, Any]]) -> List[Dict[str, Any]]
             "severity": sev,
         })
     return out
+
+
+def _policy_name_history(policy_name: str) -> List[str]:
+    """Every name a policy has been known by, newest first.
+
+    The policy name is the .rego filename, and it is persisted on every audit
+    row. Splitting the multi-resource policies into one file per resource type
+    renamed them, which would make every existing finding look brand new to
+    ``_prior_severity`` and re-fire the whole backlog as HIGH alerts once.
+    Matching the old names too keeps that dedup intact across the rename.
+    """
+    return [policy_name] + _LEGACY_POLICY_NAMES.get(policy_name, [])
 
 
 def _prior_severity(
@@ -1918,7 +2002,7 @@ def _prior_severity(
 
     query = db.query(EnforcementAuditModel).filter(
         EnforcementAuditModel.resource_id == (resource_id or "unknown"),
-        EnforcementAuditModel.policy_name == policy_name,
+        EnforcementAuditModel.policy_name.in_(_policy_name_history(policy_name)),
         EnforcementAuditModel.request_id != request_id,
     )
     if workspace:
@@ -2138,7 +2222,11 @@ def _violations_table_html(rows: List[Dict[str, Any]], cap: Optional[int] = None
             f'<td style="{cell}font-size:13px;color:#0f172a;font-weight:600;">{_esc(r.get("policy"))}</td>'
             f'<td style="{cell}font-size:12px;color:#334155;">'
             f'<div style="font-weight:600;color:#64748b;text-transform:capitalize;margin-bottom:3px;">{_esc(_resource_type_label(r.get("resource_type")))}</div>'
-            f'<code style="font-size:12px;color:#0f172a;background:#f1f5f9;padding:2px 6px;border-radius:4px;word-break:break-all;">{_esc(r.get("resource_id"))}</code>'
+            + (
+                f'<div style="font-size:13px;color:#0f172a;font-weight:600;margin-bottom:3px;">{_esc(r.get("resource_name"))}</div>'
+                if r.get("resource_name") else ""
+            )
+            + f'<code style="font-size:12px;color:#0f172a;background:#f1f5f9;padding:2px 6px;border-radius:4px;word-break:break-all;">{_esc(r.get("resource_id"))}</code>'
             '</td>'
             f'<td style="{cell}font-size:12px;color:#334155;">{_owner_html(r.get("owner"))}</td>'
             f'<td style="{cell}font-size:13px;color:#475569;line-height:1.5;">{_esc(_truncate_reason(r.get("reason")))}{issue_badge}</td>'

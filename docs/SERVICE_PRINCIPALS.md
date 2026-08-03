@@ -19,9 +19,7 @@ A target workspace that has no dedicated SP configured falls back to the **App S
 
 - **Runs the backend** in its home workspace (the Databricks App identity).
 - **Reads secrets** from Databricks secret scopes — most importantly the target-workspace SP scope (`TARGET_WORKSPACE_SP_SECRET_SCOPE`), plus any email (SES) / GitHub scopes. This is how it hands the right credentials to each target workspace.
-- **Runs SQL on the warehouse** (`DATABRICKS_WAREHOUSE_ID`) for **read-only discovery**:
-  - the **data-asset cache sync** (reads `system.information_schema`),
-  - **data-contract discovery** (reads each catalog's `information_schema.table_tags` to find `dataset`-tagged tables).
+- **Hosts the warehouse and metastore access** used by governance discovery — but note that the discovery *identity* is the governance SP (§2), not the App SP. The data-asset cache sync, data-contract discovery, ODCS metadata drafting, and tag-manager discovery all authenticate as the certification workspace's SP against the **home** host and warehouse. The App SP only performs them when `SENTINEL_DATA_CERT_WORKSPACE` is blank and the governance provider falls back to it.
 - **Calls the model-serving endpoint** (`MODEL_SERVING_AGENT_LLM_ENDPOINT`) for the assistant and ODCS contract drafting.
 - **Reads/writes app state** in its Lakebase (Postgres) database.
 - **Is the Sentinel's fallback identity** for the home workspace and for any target workspace with no dedicated SP. Certification (tag writes, DQ-history reads, RBAC grants reads) actually runs as the **data-certification workspace SP** (§2); the App SP only performs it when `SENTINEL_DATA_CERT_WORKSPACE` is blank and it falls back to itself.
@@ -42,11 +40,12 @@ GRANT CAN USE ON WAREHOUSE <DATABRICKS_WAREHOUSE_ID> TO `<app-sp>`;
 GRANT CAN QUERY ON SERVING ENDPOINT <MODEL_SERVING_AGENT_LLM_ENDPOINT> TO `<app-sp>`;
 ```
 
-Unity Catalog (per governed catalog in the home metastore) — the App SP only needs **`BROWSE`** for its read-only discovery:
+Unity Catalog (per governed catalog in the home metastore) — the App SP needs **no** UC grants in the recommended setup, because governance discovery runs as the certification SP (§2). Grant `BROWSE` only if you have **no** dedicated certification SP (`SENTINEL_DATA_CERT_WORKSPACE` blank), so discovery falls back to the App SP:
 
 ```sql
+-- ONLY when the App SP is also the governance identity:
 -- Surfaces dataset-tagged tables + their tags in information_schema
-GRANT BROWSE ON CATALOG <catalog> TO `<app-sp>`;
+-- GRANT BROWSE ON CATALOG <catalog> TO `<app-sp>`;
 ```
 
 The certification-write grants (`USE CATALOG`, `USE SCHEMA`, `APPLY TAG`, `SELECT` on the DQ schema, and `MANAGE` for the RBAC check) belong to the **data-certification SP** (§2). Grant them to the App SP **only** if you have no dedicated certification-workspace SP (`SENTINEL_DATA_CERT_WORKSPACE` blank), so certification falls back to the App SP:
@@ -75,6 +74,8 @@ Workspace + database:
 
 - **Scans workspace-scoped resources** in that workspace and remediates them per policy (warn / kill / disable): jobs, clusters/compute, apps, SQL warehouses, notebooks, dashboards, volumes, Genie spaces, service principals, Lakebase.
 - **For the designated data-certification workspace only** (`SENTINEL_DATA_CERT_WORKSPACE` — data certification is metastore/Unity-Catalog scoped, so it runs once, not per workspace): discovers each data product's tables, reads their tags + DQ history, and applies/removes `system.certification_status`.
+
+This SP is also the app's **governance identity**: every metastore-global governance read runs as it, pinned to the home host + `DATABRICKS_WAREHOUSE_ID` (see `get_governance_uc_provider`). That covers the data-asset cache sync behind Discover, data-contract (`dataset` tag) discovery, ODCS metadata drafting, and tag-manager discovery. Grant it `BROWSE` on every governed catalog or those features quietly return nothing — Unity Catalog metadata is permission-filtered, so a missing grant looks like "no tagged tables" rather than an error.
 
 ### Grants for each Sentinel SP (in ITS target workspace)
 
@@ -110,20 +111,20 @@ GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<
 
 | Privilege | Granted on | App SP | Sentinel SP | Why |
 |---|---|:--:|:--:|---|
-| `BROWSE` | catalog | ✓ | ✓† | Surfaces tables + tags in `information_schema` for discovery |
+| `BROWSE` | catalog | ‡ | ✓† | Surfaces tables + tags in `information_schema` for discovery |
 | `USE CATALOG` | catalog | ‡ | ✓† | Required for tag writes (certification) |
 | `USE SCHEMA` | schema/catalog | ‡ | ✓† | Required for tag writes (certification) |
 | `APPLY TAG` | catalog/schema/table | ‡ | ✓† | Authorizes `ALTER TABLE/VIEW … SET TAGS` (certification) |
 | `SELECT` | `DATA_QUALITY_ADOC_SCHEMA` | ‡ | ✓† | Read ADOC data-quality history |
 | `MANAGE` (RBAC check only) | catalog / schema (inherits) | ‡* | ✓*† | Read grants (`SHOW GRANTS`) for the access-controls check. Requires `MANAGE`, object ownership, or metastore admin — **workspace admin is not sufficient** for UC objects |
-| `CAN USE` | SQL warehouse | ✓ | ✓ | Runs each SP's SQL (discovery for the App SP; tagging/DQ for the cert SP) |
+| `CAN USE` | SQL warehouse | ✓ | ✓ | Runs each SP's SQL. The cert SP needs `CAN USE` on the **home** warehouse too, since governance discovery runs there |
 | `CAN QUERY` | model-serving endpoint | ✓ | — | Assistant + ODCS drafting (app only) |
 | `READ` | target-SP secret scope | ✓ | — | App loads each target SP's credentials |
 | Workspace admin | target workspace | ✓ (home) | ✓ | Scan/remediate jobs, clusters, apps, warehouses, … |
 
 `✓*` = conditional (only when the RBAC / access-controls certification check is enabled).
 `✓†` = only the Sentinel SP for the data-certification workspace (`SENTINEL_DATA_CERT_WORKSPACE`) needs the Unity Catalog grants; SPs that only scan workspace resources don't.
-`‡` = the App SP needs these **only** when it is also the certification identity — i.e. no dedicated certification-workspace SP is configured (`SENTINEL_DATA_CERT_WORKSPACE` blank), so certification falls back to the App SP. In the recommended setup they live on the cert SP instead.
+`‡` = the App SP needs these **only** when it is also the governance/certification identity — i.e. no dedicated certification-workspace SP is configured (`SENTINEL_DATA_CERT_WORKSPACE` blank), so discovery and certification fall back to the App SP. In the recommended setup they live on the cert SP instead.
 
 **Never needed:** `SELECT` (or ownership) on the governed data tables/views. Discovery is covered by `BROWSE`; certification is covered by `APPLY TAG`.
 
@@ -138,4 +139,6 @@ GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<
 - **RBAC / access-controls check is NOT an account-API call.** It reads a table's grants via the Unity Catalog **Grants API** (`SHOW GRANTS`), which is metastore-scoped. Reading all grants on an existing UC object requires one of: `MANAGE` on the securable, the object's owner (or the owner of its parent catalog/schema), or a metastore admin. **Workspace admin is NOT sufficient** for arbitrary UC objects — that provision applies to legacy Hive metastore objects, not Unity Catalog tables/views. `BROWSE`/`APPLY TAG` are not enough either. The practical recommendation is to grant `MANAGE` at the catalog (or schema) level so it inherits down. The `information_schema.table_privileges` view is **not** a reliable substitute: without ownership/metastore-admin it only returns the SP's *own* grants. When the SP can't read grants the check is **skipped** (logged), never failed, so a permission gap can't false-flag every table.
 - **ABAC policies are a separate, tighter check (not currently evaluated).** This check only inspects classic RBAC grants. If you later validate ABAC policies, note that `SHOW EFFECTIVE POLICIES` (which surfaces inherited catalog/schema policies too) is also a *managed* operation requiring `MANAGE`/ownership, and ABAC cannot be attached directly to a view — it's enforced on the view's underlying base tables, so a validator must inspect those, not the view.
 - **Fallback = failure across accounts.** If a target workspace has no `client_id_key`/`client_secret_key`, or the App SP can't read the scope, the app uses the App SP against the target host. That only works inside the App SP's own account; cross-account targets will fail with `invalid_client`. Always configure a dedicated SP per target.
+- **`SCAN_CATALOGS` is the environment boundary, not the workspace.** Unity Catalog is metastore-global, so a stage deployment sharing a metastore with prod can *reach* prod catalogs; only the cert SP's grants and this allowlist stop it. Set `SCAN_CATALOGS` per target — it scopes discovery, the Discover asset cache, and is re-checked at the certification write, so an out-of-scope catalog can never be tagged. Leaving it blank means "every catalog this SP can see" and is logged as a warning on every certification run.
+- **`DATA_QUALITY_ADOC_SCHEMA` must match the environment you certify.** It has no default on purpose: pointing prod at another environment's ADOC history would certify prod tables on the wrong data. While blank, the DQ fetch is skipped, assets stay `failed_rule_count = -1`, and the `dq_history_fetched` policy rule keeps them uncertified.
 - **Where these settings live:** `TARGET_WORKSPACE_SP_SECRET_SCOPE`, `DATABRICKS_WAREHOUSE_ID`, `DATA_QUALITY_ADOC_SCHEMA`, `SENTINEL_DATA_CERT_WORKSPACE`, and the target-workspace list are all in Admin → Settings (or `databricks.yml`).

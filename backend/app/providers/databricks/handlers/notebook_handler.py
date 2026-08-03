@@ -24,6 +24,10 @@ class NotebookResourceHandler(BaseResourceHandler):
                         if obj_type == "NOTEBOOK":
                             resources.append({
                             "id": obj.path,
+                            # Workspace objects have no display name; the path
+                            # basename is what people call the notebook, with the
+                            # full path still available as the id.
+                            "name": obj.path.rsplit("/", 1)[-1] or obj.path,
                             "type": "notebook",
                             "owner": "unknown", # Hard to determine accurately without checking ACLs or inferring from /Users path
                             "tags": {}

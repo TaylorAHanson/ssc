@@ -52,9 +52,9 @@ class _FakeOpa:
 
     async def evaluate_namespace(self, input_data):
         # One HIGH violation under a real policy name so it survives the
-        # allowed_policy_names filter (compute_and_jobs.rego exists).
+        # allowed_policy_names filter (compute.rego exists).
         return {
-            "compute_and_jobs": {
+            "compute": {
                 "is_violation": True,
                 "action": "WARN",
                 "severity": "HIGH",

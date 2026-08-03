@@ -1,4 +1,8 @@
-package databricks.governance.monitoring_and_logging
+package databricks.governance.personal_access_tokens
+
+# Personal access tokens. Split out of the former `identity_and_access` policy
+# so each resource type has its own policy file (and therefore its own policy
+# name in findings, audit rows, and the scan filter).
 
 import data.databricks.governance.common
 import future.keywords.if
@@ -10,36 +14,23 @@ default is_violation := false
 default reason := "Resource complied with policies."
 default severity := "NONE"
 
-taggable_resources := {"job", "cluster", "warehouse", "app", "genie_space"}
-
 # === Rule catalog ===
-# Originally one rego rule covered both cost-center and owner with the same
-# message; we split them so each tag is a separately auditable rule.
 rule_metadata := {
-	"cost_center_tag": "Resource is tagged with 'cost-center' for cost attribution",
-	"owner_tag": "Resource is tagged with 'owner' for accountability",
+	"no_pat_prod": "Personal access tokens disabled in enterprise prod (break-glass excepted)",
 }
 
 # === Applicability ===
-applies contains "cost_center_tag" if {
-	input.resource.type in taggable_resources
-}
-
-applies contains "owner_tag" if {
-	input.resource.type in taggable_resources
+applies contains "no_pat_prod" if {
+	input.resource.type == "personal_access_token"
+	input.workspace.type == "enterprise"
+	input.workspace.environment == "prod"
 }
 
 # === Violations ===
-violations["cost_center_tag"] contains msg if {
-	applies["cost_center_tag"]
-	not input.resource.tags["cost-center"]
-	msg := "Jobs, clusters, warehouses, apps, and Genie spaces must be tagged with 'cost-center' for cost attribution."
-}
-
-violations["owner_tag"] contains msg if {
-	applies["owner_tag"]
-	not input.resource.tags["owner"]
-	msg := "Jobs, clusters, warehouses, apps, and Genie spaces must be tagged with 'owner' for accountability."
+violations["no_pat_prod"] contains msg if {
+	applies["no_pat_prod"]
+	not input.resource.is_break_glass
+	msg := "Personal access tokens (PATs) are disabled in enterprise prod except for break-glass use."
 }
 
 # === Structured per-rule results ===
@@ -68,4 +59,4 @@ has_pending_exception := common.has_pending_exception(input.allowlist_records, i
 
 action := common.resolve_action(is_violation, has_approved_exception, has_pending_exception, "KILL")
 reason := common.resolve_reason(is_violation, has_approved_exception, has_pending_exception, input.allowlist_records, input.resource.id, input.request_time, violation_reasons)
-severity := common.resolve_severity(is_violation, has_approved_exception, has_pending_exception, "MEDIUM")
+severity := common.resolve_severity(is_violation, has_approved_exception, has_pending_exception, "HIGH")

@@ -1,4 +1,8 @@
-package databricks.governance.compute_and_jobs
+package databricks.governance.apps
+
+# Databricks Apps. Split out of the former `apps_and_genie` policy so each
+# resource type has its own policy file (and therefore its own policy name in
+# findings, audit rows, and the scan filter).
 
 import data.databricks.governance.common
 import future.keywords.if
@@ -12,54 +16,31 @@ default severity := "NONE"
 
 # === Rule catalog ===
 rule_metadata := {
-	"no_shared_interactive_prod": "Shared interactive clusters disallowed in production",
-	"cluster_uses_policy": "Compute is created via a cluster/compute policy",
-	"job_not_long_failing": "Job has not failed consecutively for >30 days",
-	"job_not_idle": "Job has been run in the last 90 days",
+	"no_apps_enterprise_prod": "Apps not hosted in enterprise prod without allowlist",
+	"app_not_idle": "App has been accessed in the last 30 days",
 }
 
 # === Applicability ===
-applies contains "no_shared_interactive_prod" if {
-	input.resource.type == "cluster"
+applies contains "no_apps_enterprise_prod" if {
+	input.resource.type == "app"
+	input.workspace.type == "enterprise"
 	input.workspace.environment == "prod"
 }
 
-applies contains "cluster_uses_policy" if {
-	input.resource.type == "cluster"
-}
-
-applies contains "job_not_long_failing" if {
-	input.resource.type == "job"
-}
-
-applies contains "job_not_idle" if {
-	input.resource.type == "job"
+applies contains "app_not_idle" if {
+	input.resource.type == "app"
 }
 
 # === Violations ===
-violations["no_shared_interactive_prod"] contains msg if {
-	applies["no_shared_interactive_prod"]
-	input.resource.cluster_type == "interactive"
-	input.resource.access_mode == "shared"
-	msg := "Shared interactive clusters are disallowed in production; only single-user or job-only clusters are permitted."
+violations["no_apps_enterprise_prod"] contains msg if {
+	applies["no_apps_enterprise_prod"]
+	msg := "Apps must not be hosted in enterprise prod unless they are on a centrally managed allowlist with documented risk review."
 }
 
-violations["cluster_uses_policy"] contains msg if {
-	applies["cluster_uses_policy"]
-	not input.resource.policy_id
-	msg := "All clusters, warehouses, and serverless compute must be created via cluster/compute policies; unrestricted 'no policy' compute is disabled."
-}
-
-violations["job_not_long_failing"] contains msg if {
-	applies["job_not_long_failing"]
-	input.resource.failed_consecutively_days > 30
-	msg := "Job has failed consecutively for over 30 days."
-}
-
-violations["job_not_idle"] contains msg if {
-	applies["job_not_idle"]
-	input.resource.idle_days > 90
-	msg := "Job has not been run in over 90 days."
+violations["app_not_idle"] contains msg if {
+	applies["app_not_idle"]
+	input.resource.idle_days > 30
+	msg := "Apps must be stopped if no one has accessed the app in over 30 days."
 }
 
 # === Structured per-rule results ===

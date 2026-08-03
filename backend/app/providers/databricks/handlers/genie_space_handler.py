@@ -11,9 +11,19 @@ class GenieSpaceResourceHandler(BaseResourceHandler):
             response = self.workspace_client.genie.list_spaces()
             spaces = response.spaces if hasattr(response, 'spaces') and response.spaces is not None else []
             for space in spaces:
+                space_id = getattr(space, 'space_id', None) or getattr(space, 'id', None) or 'unknown'
+                # GenieSpace exposes the display name as `title`; `name` /
+                # `space_name` are only here for older/other SDK shapes. Fall
+                # back to the id rather than the literal string "unknown", which
+                # would render as the name of every space the SDK surprises us with.
                 resources.append({
-                    "id": getattr(space, 'space_id', getattr(space, 'id', 'unknown')),
-                    "name": getattr(space, 'name', getattr(space, 'title', getattr(space, 'space_name', 'unknown'))),
+                    "id": space_id,
+                    "name": (
+                        getattr(space, 'title', None)
+                        or getattr(space, 'name', None)
+                        or getattr(space, 'space_name', None)
+                        or space_id
+                    ),
                     "type": "genie_space",
                     "owner": getattr(space, 'creator', 'unknown'),
                     "tags": {t.key: t.value for t in getattr(space, 'tags', [])} if getattr(space, 'tags', None) else {}

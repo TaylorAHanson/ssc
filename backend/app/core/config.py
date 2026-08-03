@@ -242,9 +242,12 @@ class Settings(BaseSettings):
     DATA_QUALITY_TABLE: str = "" # Table with ADOC DQ history
     # catalog.schema that holds the ADOC `*_history` tables (adoc_dq_history,
     # adoc_freshness_history, adoc_data_drift_history, adoc_profile_anomaly_history,
-    # adoc_schema_drift_history). Defaults to the real customer environment; override
-    # via env (e.g. a personal build catalog) for local/dev where these live elsewhere.
-    DATA_QUALITY_ADOC_SCHEMA: str = "enterprise_stg.data_quality"
+    # adoc_schema_drift_history). Intentionally BLANK by default: this is an
+    # environment-specific catalog, and a shipped default (it used to be a stage
+    # catalog) silently makes every other environment certify against the wrong
+    # DQ history. Set it per target in databricks.yml or Admin -> Settings; while
+    # blank the DQ fetch is skipped and certification fails closed.
+    DATA_QUALITY_ADOC_SCHEMA: str = os.getenv("DATA_QUALITY_ADOC_SCHEMA", "")
     
     # Databricks MWS (Account-level) Settings for Workspace Provisioning
     # SECRET: Set in .env file

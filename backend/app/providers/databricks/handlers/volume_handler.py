@@ -18,6 +18,9 @@ class VolumeResourceHandler(BaseResourceHandler):
                     for volume in volumes:
                         resources.append({
                             "id": volume.full_name,
+                            # full_name (catalog.schema.volume) is already the
+                            # readable identifier, so name mirrors it.
+                            "name": volume.full_name,
                             "type": "storage",
                             "storage_type": "volume",
                             "owner": volume.owner,

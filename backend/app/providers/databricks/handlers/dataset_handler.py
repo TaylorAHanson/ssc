@@ -5,7 +5,7 @@ import yaml
 import logging
 from typing import List, Dict, Any
 from app.providers.databricks.handlers.base import BaseResourceHandler
-from app.core.config import settings
+from app.core.config import get_scan_catalogs, settings
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +333,21 @@ ORDER BY resultPercent ASC
             logger.warning("No warehouse configured — skipping data-quality fetch for %d asset(s).", len(dq_targets))
             return
 
-        adoc_schema = settings.DATA_QUALITY_ADOC_SCHEMA or "enterprise_stg.data_quality"
+        # No hardcoded default: guessing a catalog here silently pointed every
+        # environment at the same (stage) DQ history. Unset means "can't fetch",
+        # which leaves failed_rule_count = -1 and fails the dq_history_fetched
+        # policy rule — certification stays closed rather than passing on data
+        # from the wrong environment.
+        adoc_schema = (settings.DATA_QUALITY_ADOC_SCHEMA or "").strip()
+        if not adoc_schema:
+            logger.warning(
+                "DATA_QUALITY_ADOC_SCHEMA is not set — skipping the data-quality fetch "
+                "for %d asset(s). They stay 'not fetched', so certification will not "
+                "pass until Admin -> Settings -> ADOC history schema names the "
+                "catalog.schema holding this environment's ADOC *_history tables.",
+                len(dq_targets),
+            )
+            return
 
         # Group assets by lookback window so each query applies the right filter.
         by_window: Dict[int, List[tuple]] = {}
@@ -457,6 +471,32 @@ ORDER BY resultPercent ASC
 
         return tables
 
+    @staticmethod
+    def _catalog_in_scope(full_name: str) -> bool:
+        """Whether a fully-qualified object sits inside the governed catalogs.
+
+        Unity Catalog is metastore-global, so every deployment that shares a
+        metastore can *reach* every catalog — the only thing separating a stage
+        deployment from prod tables is UC grants. This re-checks the
+        ``SCAN_CATALOGS`` allowlist at the moment of the write so a contract that
+        somehow references an out-of-scope catalog (a stale row, a restored
+        backup, an allowlist tightened after discovery) can't be tagged.
+
+        A blank allowlist means "no scope configured" and permits everything,
+        preserving existing behaviour — but it is logged as the risk it is.
+        """
+        allowlist = get_scan_catalogs()
+        if not allowlist:
+            logger.warning(
+                "Certification is running WITHOUT a catalog allowlist: SCAN_CATALOGS "
+                "is blank, so any catalog this service principal can write to may be "
+                "tagged (including catalogs belonging to another environment). Set "
+                "Admin -> Settings -> Scanned catalogs to scope it."
+            )
+            return True
+        catalog = full_name.split(".")[0].strip("`")
+        return catalog in allowlist
+
     def _apply_certification_tag(self, full_name: str, certified: bool) -> bool:
         """Set/unset ``system.certification_status`` on ONE object, handling both
         tables and views.
@@ -466,7 +506,19 @@ ORDER BY resultPercent ASC
         left un-tagged. We try ``ALTER TABLE`` first and, on failure, fall back to
         ``ALTER VIEW`` so every object in the product gets tagged regardless of
         type. Returns True only when a statement actually succeeds.
+
+        This is the single chokepoint for every certification tag write, so the
+        catalog-scope check lives here rather than in ``certify``/``uncertify``.
         """
+        if not self._catalog_in_scope(full_name):
+            logger.error(
+                "Refusing to %s %s: its catalog is not in SCAN_CATALOGS (%s). A data "
+                "contract is referencing a catalog outside this deployment's governed "
+                "scope — investigate before widening the allowlist.",
+                "certify" if certified else "uncertify", full_name, get_scan_catalogs(),
+            )
+            return False
+
         if certified:
             table_sql = f"ALTER TABLE {full_name} SET TAGS ('system.certification_status' = 'certified')"
             view_sql = f"ALTER VIEW {full_name} SET TAGS ('system.certification_status' = 'certified')"

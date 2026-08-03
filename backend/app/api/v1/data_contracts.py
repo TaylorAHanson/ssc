@@ -119,27 +119,33 @@ def _add_table_to_groups(dataset_groups: dict, catalog_name, schema_name, table_
     return len(names)
 
 
-def discover_dataset_groups(dataset_id: Optional[str] = None) -> dict:
+def discover_dataset_groups(
+    dataset_id: Optional[str] = None,
+    diagnostics: Optional[dict] = None,
+) -> dict:
     """Discover ``dataset``-tagged tables grouped by their tag value.
 
-    Builds the Databricks provider from settings, queries each catalog's
-    ``information_schema.table_tags`` and returns
+    Queries each scanned catalog's ``information_schema.table_tags`` and returns
     ``{dataset_tag_value: [full_table_name, ...]}``. Shared by the manual
     ``POST /sync`` endpoint and the scheduled poller task so both use the exact
     same discovery + diagnostics. Contains no awaits (the Databricks SDK calls
     are synchronous), so it is safe to call from either context.
-    """
-    from app.providers.databricks import DatabricksProvider
-    from app.core.config import settings, get_scan_catalogs
 
-    # 1. Query Databricks for tables with the 'dataset' tag
-    provider = DatabricksProvider(
-        host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-        token=settings.DATABRICKS_TOKEN,
-        client_id=settings.DATABRICKS_CLIENT_ID,
-        client_secret=settings.DATABRICKS_CLIENT_SECRET,
-        config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID}
-    )
+    Pass a dict as ``diagnostics`` to collect why a scan came up short — it is
+    filled with ``identity``, ``scanned``, ``missing`` (configured catalogs the
+    scanning principal can't see) and ``failed`` (catalog -> error). Callers use
+    this to avoid reporting a permission failure as a clean "nothing found".
+    """
+    from app.core.config import settings
+    from app.core.workspaces import catalogs_to_scan, get_governance_uc_provider
+
+    # 1. Query Databricks for tables with the 'dataset' tag. This runs as the
+    # GOVERNANCE service principal (the certification workspace's SP), the same
+    # identity the data-asset cache sync and certification use — it is the one
+    # granted BROWSE on the governed catalogs. Using the app's own SP here made
+    # discovery silently return nothing whenever only the governance SP held the
+    # grant.
+    provider = get_governance_uc_provider()
 
     # Resolve WHICH principal we're scanning as. This is the identity whose
     # Unity Catalog grants determine what information_schema returns, so log
@@ -153,19 +159,11 @@ def discover_dataset_groups(dataset_id: Optional[str] = None) -> dict:
         logger.warning(f"Could not resolve scanning identity for contract sync: {_e}")
     logger.info(f"Contract sync running as identity: {_scan_identity}")
 
-    # Resolve which catalogs to scan. When SCAN_CATALOGS is configured we scan
-    # exactly those (comma-separated, trimmed); otherwise we enumerate every
-    # catalog the SP can see (minus system/samples) as before.
-    _configured_catalogs = get_scan_catalogs()
+    # Resolve which catalogs to scan (the SCAN_CATALOGS allowlist, else every
+    # catalog this principal can see) plus any configured-but-invisible ones.
+    _scan_catalogs, _missing_catalogs = catalogs_to_scan(provider.client)
 
-    def _catalog_names_to_scan():
-        if _configured_catalogs:
-            logger.info("Scanning configured catalogs (SCAN_CATALOGS): %s", _configured_catalogs)
-            return list(_configured_catalogs)
-        names = [c.name for c in provider.client.catalogs.list() if c.name not in ("system", "samples")]
-        logger.info("SCAN_CATALOGS blank — scanning all %d visible catalog(s).", len(names))
-        return names
-
+    _failed_catalogs: dict = {}
     dataset_groups = {}
 
     if dataset_id:
@@ -196,7 +194,7 @@ def discover_dataset_groups(dataset_id: Optional[str] = None) -> dict:
         # instead fetch every 'dataset'-tagged row and keep those whose split tag
         # includes this data set name.
         if not dataset_groups:
-            for cat_name in _catalog_names_to_scan():
+            for cat_name in _scan_catalogs:
                 query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {cat_name}.information_schema.table_tags WHERE tag_name = 'dataset'"
                 try:
                     response = provider.client.statement_execution.execute_statement(
@@ -213,10 +211,11 @@ def discover_dataset_groups(dataset_id: Optional[str] = None) -> dict:
                                 if full_name not in members:
                                     members.append(full_name)
                 except Exception as e:
+                    _failed_catalogs[cat_name] = str(e)
                     logger.warning(f"Could not query information_schema for catalog {cat_name}: {e}")
     else:
         # Fetch every catalog to scan (configured list or all visible ones).
-        for cat_name in _catalog_names_to_scan():
+        for cat_name in _scan_catalogs:
             # Query the local information_schema for each catalog
             query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {cat_name}.information_schema.table_tags WHERE tag_name = 'dataset'"
             logger.info(f"Querying information_schema for catalog {cat_name}")
@@ -236,6 +235,7 @@ def discover_dataset_groups(dataset_id: Optional[str] = None) -> dict:
                 else:
                     logger.debug(f"No tables found with 'dataset' tag in catalog {cat_name}")
             except Exception as e:
+                _failed_catalogs[cat_name] = str(e)
                 logger.warning(f"Could not query information_schema for catalog {cat_name}: {e}")
 
     logger.info(
@@ -253,7 +253,50 @@ def discover_dataset_groups(dataset_id: Optional[str] = None) -> dict:
         "tagged (or use a different tag name), or the SP lacks BROWSE on that catalog.",
         _scan_identity,
     )
+    if diagnostics is not None:
+        diagnostics.update({
+            "identity": _scan_identity,
+            "scanned": list(_scan_catalogs),
+            "missing": list(_missing_catalogs),
+            "failed": dict(_failed_catalogs),
+        })
     return dataset_groups
+
+
+def _empty_discovery_message(diagnostics: dict) -> str:
+    """Explain a zero-result discovery run, naming the likely cause.
+
+    Unity Catalog metadata is permission-filtered, so a principal with no grants
+    sees an empty ``information_schema`` rather than an error. That makes "no
+    tables are tagged" and "the scanning SP can't see the catalogs" look
+    identical to the user unless we spell out the difference here.
+    """
+    identity = diagnostics.get("identity") or "unknown"
+    missing = diagnostics.get("missing") or []
+    failed = diagnostics.get("failed") or {}
+    scanned = diagnostics.get("scanned") or []
+
+    if missing:
+        return (
+            f"No tables found. The scanning identity ({identity}) cannot see these "
+            f"configured catalogs: {', '.join(missing)}. Grant it BROWSE on them, or "
+            f"correct the names in Admin -> Settings -> Scanned catalogs."
+        )
+    if failed:
+        first = next(iter(failed.items()))
+        return (
+            f"No tables found. {len(failed)} catalog(s) could not be queried as "
+            f"{identity} — e.g. {first[0]}: {first[1]}"
+        )
+    if not scanned:
+        return (
+            f"No tables found. The scanning identity ({identity}) can see no catalogs "
+            f"at all — check its BROWSE grants and Admin -> Settings -> Scanned catalogs."
+        )
+    return (
+        f"Sync complete: no tables carry the 'dataset' tag in {len(scanned)} scanned "
+        f"catalog(s), scanned as {identity}."
+    )
 
 
 @router.post("/sync")
@@ -267,7 +310,8 @@ async def sync_contracts(
         # Discovery makes blocking Databricks SDK calls (execute_statement,
         # catalogs.list, ...). Run it in a worker thread so it never blocks the
         # request-serving event loop while the user waits for the response.
-        dataset_groups = await asyncio.to_thread(discover_dataset_groups, dataset_id)
+        diagnostics: dict = {}
+        dataset_groups = await asyncio.to_thread(discover_dataset_groups, dataset_id, diagnostics)
 
         busy_msg = "A contract sync is already running — please wait for it to finish before starting another."
 
@@ -276,7 +320,10 @@ async def sync_contracts(
                 # Still run in the background to clean up if it was deleted.
                 if not _spawn_contract_sync_thread(dataset_groups, force, dataset_id):
                     return {"status": "success", "message": busy_msg}
-            return {"status": "success", "message": "No tables found with 'dataset' tag."}
+            # An empty result can mean "nothing is tagged" OR "the scanning SP
+            # couldn't see anything". Reporting both as a green success is how a
+            # missing BROWSE grant stayed invisible, so say which one it was.
+            return {"status": "success", "message": _empty_discovery_message(diagnostics)}
 
         if not _spawn_contract_sync_thread(dataset_groups, force, dataset_id):
             return {"status": "success", "message": busy_msg}

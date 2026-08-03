@@ -289,6 +289,44 @@ def get_governance_uc_provider():
     )
 
 
+def catalogs_to_scan(client) -> Tuple[List[str], List[str]]:
+    """Resolve which catalogs a governance scan should walk.
+
+    Returns ``(catalogs, missing)``. When ``SCAN_CATALOGS`` is configured we scan
+    exactly that allowlist, and ``missing`` names the configured catalogs the
+    scanning principal cannot see — almost always a missing ``BROWSE`` grant or a
+    typo, and the single most common cause of a "found nothing" run. When the
+    allowlist is blank we fall back to every visible catalog (minus
+    system/samples) and ``missing`` is empty.
+
+    Every governance discovery path (contract sync, tag discovery) must go
+    through this so the allowlist means the same thing everywhere.
+    """
+    from app.core.config import get_scan_catalogs
+
+    try:
+        visible = [c.name for c in client.catalogs.list() if c.name not in ("system", "samples")]
+    except Exception as e:  # noqa: BLE001 - degrade to the configured list
+        logger.warning("Could not list catalogs for the scanning principal: %s", e)
+        visible = []
+
+    configured = get_scan_catalogs()
+    if not configured:
+        logger.info("SCAN_CATALOGS blank — scanning all %d visible catalog(s).", len(visible))
+        return visible, []
+
+    missing = [c for c in configured if visible and c not in visible]
+    if missing:
+        logger.warning(
+            "Configured catalogs not visible to the scanning principal: %s. "
+            "Visible catalogs: %s. This is normally a missing BROWSE grant or a "
+            "name typo in SCAN_CATALOGS.",
+            missing, visible or "(none)",
+        )
+    logger.info("Scanning configured catalogs (SCAN_CATALOGS): %s", configured)
+    return configured, missing
+
+
 def uc_client_for(obo_token: Optional[str]):
     """Resolve ``(provider, client)`` for Unity Catalog reads, pinned to home.
 

@@ -13,6 +13,9 @@ class AppResourceHandler(BaseResourceHandler):
             for app in apps:
                 resources.append({
                     "id": app.name,
+                    # `app.name` is the human-readable slug and also the id the
+                    # delete/kill API takes, so both fields intentionally use it.
+                    "name": getattr(app, 'display_name', None) or app.name,
                     "type": "app",
                     "owner": getattr(app, 'creator', 'unknown'),
                     "state": getattr(app.active_deployment, 'state', 'UNKNOWN') if getattr(app, 'active_deployment', None) else 'UNKNOWN',

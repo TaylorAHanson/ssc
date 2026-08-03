@@ -59,6 +59,23 @@ const resolveOwner = (v: any): string =>
 const resolveWorkspace = (v: any): string =>
     (v?.workspace?.name || v?.input_context?.workspace?.name || '').toString().trim();
 
+// Human-readable name for a finding's resource. Violations only carry the raw
+// `resource_id` at the top level — for Lakeview dashboards and Genie spaces
+// that's an opaque UUID — but the discovered resource (with its display name)
+// is kept in the OPA input snapshot. Checks carry the same thing as `resource`.
+// Returns '' when the id IS the name (jobs by path, apps by slug, UC tables)
+// so callers can render the id alone instead of printing it twice.
+const resolveResourceName = (v: any): string => {
+    const name = (
+        v?.resource?.name
+        || v?.input_context?.resource?.name
+        || v?.input_context?.resource?.title
+        || v?.input_context?.resource?.display_name
+        || ''
+    ).toString().trim();
+    return name && name !== (v?.resource_id || '').toString().trim() ? name : '';
+};
+
 // Friendly display label for a resource type. The backend calls certified data
 // products "data_product"; governance/business users know these as "Dataset".
 // Unknown types fall back to their raw value (styling may upper/capitalize it).
@@ -352,7 +369,8 @@ export function EnforcementSentinel() {
     };
 
     const handleExecuteAction = async (runId: string, v: any) => {
-        if (!confirm(`Are you sure you want to manually execute the '${v.action}' action on ${resourceTypeLabel(v.resource_type)} ${v.resource_id}?`)) return;
+        const label = resolveResourceName(v) ? `${resolveResourceName(v)} (${v.resource_id})` : v.resource_id;
+        if (!confirm(`Are you sure you want to manually execute the '${v.action}' action on ${resourceTypeLabel(v.resource_type)} ${label}?`)) return;
         
         setActionLoading(v.resource_id);
         try {
@@ -723,6 +741,7 @@ export function EnforcementSentinel() {
                                         resource_type: c.resource_type,
                                         resource: c.resource,
                                         policy: c.policy,
+                                        action: c.action,
                                         severity: rr.passed ? 'NONE' : c.severity,
                                     }));
                                 }
@@ -736,15 +755,29 @@ export function EnforcementSentinel() {
                                     resource_type: c.resource_type,
                                     resource: c.resource,
                                     policy: c.policy,
+                                    action: c.action,
                                     severity: c.severity,
                                 }];
                             });
 
-                            const assetsScanned = discoverFact?.data?.total_resources_scanned ?? '—';
-                            const policiesEvaluated = discoverFact?.data?.policies_evaluated ?? '—';
-                            const totalChecks = discoverFact?.data?.total_checks ?? ruleRows.length ?? '—';
-                            const vCount = discoverFact?.data?.violation_count ?? ruleRows.filter((r: any) => !r.passed).length;
-                            const passCount = discoverFact?.data?.pass_count ?? ruleRows.filter((r: any) => r.passed).length;
+                            // scan_stats is authoritative: it's computed over EVERY check, while
+                            // `checks` here may be a page of the findings table on large runs.
+                            // The discover fact carries the same numbers for runs that predate it.
+                            const stats = ctx.scan_stats || {};
+                            // A failed rule under an approved allowlist exception is signed-off
+                            // risk, not an open finding. It's excluded from the violation total
+                            // and the severity cards, which is what makes them agree.
+                            const failedRows = ruleRows.filter((r: any) => !r.passed);
+                            const openFailedRows = failedRows.filter((r: any) => r.action !== 'SKIPPED_ALLOWLIST');
+
+                            const assetsScanned = stats.total_resources_scanned ?? discoverFact?.data?.total_resources_scanned ?? '—';
+                            const policiesEvaluated = stats.policies_evaluated ?? discoverFact?.data?.policies_evaluated ?? '—';
+                            const totalChecks = stats.total_checks ?? discoverFact?.data?.total_checks ?? ruleRows.length ?? '—';
+                            const vCount = stats.violation_count ?? discoverFact?.data?.violation_count ?? openFailedRows.length;
+                            const passCount = stats.pass_count ?? discoverFact?.data?.pass_count ?? ruleRows.filter((r: any) => r.passed).length;
+                            // Only shown for runs that recorded it; older runs folded exempt
+                            // findings into the violation total and can't be split apart now.
+                            const exemptCount = typeof stats.exempt_count === 'number' ? stats.exempt_count : null;
 
                             // Group violations by policy
                             const violationsByPolicy = violations.reduce((acc: any, v: any) => {
@@ -772,7 +805,8 @@ export function EnforcementSentinel() {
                                 if (!q) return true;
                                 const reasons = Array.isArray(v.violation_reasons) ? v.violation_reasons.join(' ') : (v.reason || '');
                                 const hay = [
-                                    v.resource_id, resourceTypeLabel(v.resource_type), v.policy, v.action,
+                                    v.resource_id, resolveResourceName(v), resourceTypeLabel(v.resource_type),
+                                    v.policy, v.action,
                                     v.severity, resolveWorkspace(v), resolveOwner(v), reasons,
                                 ].filter(Boolean).join(' ').toLowerCase();
                                 return hay.includes(q);
@@ -957,17 +991,19 @@ export function EnforcementSentinel() {
                                                 </div>
                                                 
                                                 {/* Severity Breakdown. CRITICAL was collapsed out of the
-                                                    policy rules, so severities are now HIGH / MEDIUM / LOW. */}
+                                                    policy rules, so severities are now HIGH / MEDIUM / LOW.
+                                                    These are counted per failed RULE — the same unit as the
+                                                    Violation total above — so the three add up to it. */}
                                                 {vCount > 0 && (
                                                     <div className="grid grid-cols-3 gap-4">
                                                         {['HIGH', 'MEDIUM', 'LOW'].map(sev => {
-                                                            // Prefer the true breakdown from scan_stats (accurate even when
-                                                            // the stored violation detail was truncated for very large runs);
-                                                            // fall back to counting the loaded records for older runs.
-                                                            const sevCounts = ctx.scan_stats?.severity_counts;
+                                                            // Prefer the breakdown from scan_stats (computed over every
+                                                            // check, not just the page of findings loaded here); fall back
+                                                            // to counting the loaded rule rows for older runs.
+                                                            const sevCounts = stats.severity_counts;
                                                             const count = (sevCounts && typeof sevCounts[sev] === 'number')
                                                                 ? sevCounts[sev]
-                                                                : violations.filter((v: any) => v.severity === sev).length;
+                                                                : openFailedRows.filter((r: any) => (r.severity === sev || (sev === 'HIGH' && r.severity === 'CRITICAL'))).length;
                                                             const colors = sev === 'HIGH' && count > 0 ? 'bg-orange-50/30 border-orange-100' :
                                                                            sev === 'MEDIUM' && count > 0 ? 'bg-yellow-50/30 border-yellow-100' :
                                                                            sev === 'LOW' && count > 0 ? 'bg-gray-50/50 border-gray-200' :
@@ -987,6 +1023,17 @@ export function EnforcementSentinel() {
                                                                 </Card>
                                                             );
                                                         })}
+                                                    </div>
+                                                )}
+
+                                                {/* Accounts for the gap between Pass + Violation and Total
+                                                    checks, so a reader isn't left wondering where the
+                                                    remaining failed checks went. */}
+                                                {exemptCount !== null && exemptCount > 0 && (
+                                                    <div className="text-xs text-gray-500">
+                                                        <span className="font-semibold text-gray-600">{exemptCount}</span>
+                                                        {' '}failed check{exemptCount === 1 ? '' : 's'} suppressed by an approved
+                                                        allowlist exception, and excluded from the counts above.
                                                     </div>
                                                 )}
                                             </div>
@@ -1131,7 +1178,10 @@ export function EnforcementSentinel() {
                                                                         <td className="p-3 px-4 font-mono text-xs text-gray-900">
                                                                             <div className="flex flex-col">
                                                                                 <span className="text-[10px] text-gray-700 font-semibold uppercase tracking-wider font-sans mb-0.5">{resourceTypeLabel(v.resource_type)}</span>
-                                                                                <span className="break-all">{v.resource_id}</span>
+                                                                                {resolveResourceName(v) && (
+                                                                                    <span className="font-sans font-medium text-gray-900 break-words">{resolveResourceName(v)}</span>
+                                                                                )}
+                                                                                <span className={`break-all ${resolveResourceName(v) ? 'text-[10px] text-gray-500' : ''}`}>{v.resource_id}</span>
                                                                                 <span className="mt-1 flex items-center gap-1 font-sans text-[10px] text-gray-500">
                                                                                     <span className="uppercase tracking-wider">Owner</span>
                                                                                     <OwnerCell owner={resolveOwner(v)} />
@@ -1244,7 +1294,7 @@ export function EnforcementSentinel() {
                 <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in">
                     <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95">
                         <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-white">
-                            <h3 className="text-lg font-semibold text-gray-900">Review and Act: {selectedViolation.resource_id}</h3>
+                            <h3 className="text-lg font-semibold text-gray-900">Review and Act: {resolveResourceName(selectedViolation) || selectedViolation.resource_id}</h3>
                             <Button variant="ghost" size="sm" onClick={() => setSelectedViolation(null)} className="rounded-full hover:bg-gray-100">
                                 <X className="w-5 h-5 text-gray-500" />
                             </Button>

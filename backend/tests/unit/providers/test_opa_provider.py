@@ -17,8 +17,8 @@ async def test_opa_provider_local_eval():
     }
     
     result = await provider.evaluate(
-        policy_path="policies/apps_and_genie.rego",
-        query="data.databricks.governance.apps_and_genie",
+        policy_path="policies/apps.rego",
+        query="data.databricks.governance.apps",
         input_data=input_data
     )
     
@@ -36,8 +36,8 @@ async def test_opa_provider_local_eval():
     ]
     
     result = await provider.evaluate(
-        policy_path="policies/apps_and_genie.rego",
-        query="data.databricks.governance.apps_and_genie",
+        policy_path="policies/apps.rego",
+        query="data.databricks.governance.apps",
         input_data=input_data
     )
     
@@ -56,8 +56,8 @@ async def test_opa_provider_local_eval():
     ]
     
     result = await provider.evaluate(
-        policy_path="policies/apps_and_genie.rego",
-        query="data.databricks.governance.apps_and_genie",
+        policy_path="policies/apps.rego",
+        query="data.databricks.governance.apps",
         input_data=input_data
     )
     
@@ -84,8 +84,8 @@ async def test_genie_space_requires_allowlist_in_enterprise_prod():
     }
 
     result = await provider.evaluate(
-        policy_path="policies/apps_and_genie.rego",
-        query="data.databricks.governance.apps_and_genie",
+        policy_path="policies/genie_spaces.rego",
+        query="data.databricks.governance.genie_spaces",
         input_data=input_data,
     )
     assert result.get("is_violation") is True
@@ -97,8 +97,8 @@ async def test_genie_space_requires_allowlist_in_enterprise_prod():
         {"resource_id": "test-genie", "status": "approved", "justification": "Approved genie space"}
     ]
     result = await provider.evaluate(
-        policy_path="policies/apps_and_genie.rego",
-        query="data.databricks.governance.apps_and_genie",
+        policy_path="policies/genie_spaces.rego",
+        query="data.databricks.governance.genie_spaces",
         input_data=input_data,
     )
     assert result.get("is_violation") is True
@@ -111,8 +111,8 @@ async def test_genie_space_requires_allowlist_in_enterprise_prod():
         {"resource_id": "test-genie", "status": "pending", "justification": "Pending genie space"}
     ]
     result = await provider.evaluate(
-        policy_path="policies/apps_and_genie.rego",
-        query="data.databricks.governance.apps_and_genie",
+        policy_path="policies/genie_spaces.rego",
+        query="data.databricks.governance.genie_spaces",
         input_data=input_data,
     )
     assert result.get("is_violation") is True
@@ -135,8 +135,8 @@ async def test_genie_space_outside_enterprise_prod_is_allowed():
         "allowlist_records": [],
     }
     result = await provider.evaluate(
-        policy_path="policies/apps_and_genie.rego",
-        query="data.databricks.governance.apps_and_genie",
+        policy_path="policies/genie_spaces.rego",
+        query="data.databricks.governance.genie_spaces",
         input_data=input_data,
     )
     assert result.get("is_violation") is False

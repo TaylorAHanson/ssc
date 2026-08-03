@@ -1,4 +1,8 @@
-package databricks.governance.data_and_ai_governance
+package databricks.governance.grants
+
+# Unity Catalog grants. Split out of the former `identity_and_access` policy so
+# each resource type has its own policy file (and therefore its own policy name
+# in findings, audit rows, and the scan filter).
 
 import data.databricks.governance.common
 import future.keywords.if
@@ -12,31 +16,20 @@ default severity := "NONE"
 
 # === Rule catalog ===
 rule_metadata := {
-	"no_cross_env_catalog": "No cross-environment catalog access",
-	"no_dbfs_prod_storage": "Production data is not stored in DBFS or local volumes",
+	"no_direct_user_grants_prod": "No direct grants to individual users in production",
 }
 
 # === Applicability ===
-applies contains "no_cross_env_catalog" if {
-	input.resource.type == "catalog_access"
-}
-
-applies contains "no_dbfs_prod_storage" if {
-	input.resource.type == "storage"
+applies contains "no_direct_user_grants_prod" if {
+	input.resource.type == "grant"
 	input.workspace.environment == "prod"
 }
 
 # === Violations ===
-violations["no_cross_env_catalog"] contains msg if {
-	applies["no_cross_env_catalog"]
-	input.resource.catalog_environment != input.workspace.environment
-	msg := "Cross-environment access (e.g., dev accessing prod catalogs) is prohibited."
-}
-
-violations["no_dbfs_prod_storage"] contains msg if {
-	applies["no_dbfs_prod_storage"]
-	input.resource.storage_type in ["dbfs", "local_volume"]
-	msg := "Production data must not be stored in DBFS or local volumes; only approved external locations may hold prod data."
+violations["no_direct_user_grants_prod"] contains msg if {
+	applies["no_direct_user_grants_prod"]
+	input.resource.principal_type == "user"
+	msg := "All data access is granted to groups, not individual users. Direct object grants to individuals are disallowed in production catalogs."
 }
 
 # === Structured per-rule results ===
@@ -63,6 +56,6 @@ is_violation := common.is_violation(violation_reasons)
 has_approved_exception := common.has_approved_exception(input.allowlist_records, input.resource.id, is_violation, input.request_time)
 has_pending_exception := common.has_pending_exception(input.allowlist_records, input.resource.id, is_violation, has_approved_exception)
 
-action := common.resolve_action(is_violation, has_approved_exception, has_pending_exception, "BLOCK")
+action := common.resolve_action(is_violation, has_approved_exception, has_pending_exception, "KILL")
 reason := common.resolve_reason(is_violation, has_approved_exception, has_pending_exception, input.allowlist_records, input.resource.id, input.request_time, violation_reasons)
 severity := common.resolve_severity(is_violation, has_approved_exception, has_pending_exception, "HIGH")

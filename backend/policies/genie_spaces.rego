@@ -1,4 +1,8 @@
-package databricks.governance.dashboards_and_sql
+package databricks.governance.genie_spaces
+
+# Genie spaces. Split out of the former `apps_and_genie` policy so each resource
+# type has its own policy file (and therefore its own policy name in findings,
+# audit rows, and the scan filter).
 
 import data.databricks.governance.common
 import future.keywords.if
@@ -12,32 +16,20 @@ default severity := "NONE"
 
 # === Rule catalog ===
 rule_metadata := {
-	"embedded_creds_not_shared_all": "Dashboards with embedded credentials are not shared with ALL_USERS",
-	"prod_warehouse_uses_policy": "Production SQL warehouses use compute policies",
+	"no_genie_enterprise_prod": "Genie spaces not hosted in enterprise prod without allowlist",
 }
 
 # === Applicability ===
-applies contains "embedded_creds_not_shared_all" if {
-	input.resource.type == "dashboard"
-}
-
-applies contains "prod_warehouse_uses_policy" if {
-	input.resource.type == "sql_warehouse"
+applies contains "no_genie_enterprise_prod" if {
+	input.resource.type == "genie_space"
+	input.workspace.type == "enterprise"
 	input.workspace.environment == "prod"
 }
 
 # === Violations ===
-violations["embedded_creds_not_shared_all"] contains msg if {
-	applies["embedded_creds_not_shared_all"]
-	input.resource.uses_embedded_credentials == true
-	"ALL_USERS" in input.resource.shared_with
-	msg := "Dashboards with embedded credentials must not be shared with 'everyone' (ALL_USERS); they may only be shared with specific groups whose access matches the credential scope."
-}
-
-violations["prod_warehouse_uses_policy"] contains msg if {
-	applies["prod_warehouse_uses_policy"]
-	not input.resource.policy_id
-	msg := "Production SQL warehouses must use compute policies; ad-hoc personal warehouses are disabled in prod."
+violations["no_genie_enterprise_prod"] contains msg if {
+	applies["no_genie_enterprise_prod"]
+	msg := "Genie spaces must not be hosted in enterprise prod unless they are on a centrally managed allowlist with documented risk review."
 }
 
 # === Structured per-rule results ===

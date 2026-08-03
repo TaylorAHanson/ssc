@@ -1,4 +1,8 @@
-package databricks.governance.identity_and_access
+package databricks.governance.compute
+
+# Clusters / all-purpose + job compute. Split out of the former
+# `compute_and_jobs` policy so each resource type has its own policy file (and
+# therefore its own policy name in findings, audit rows, and the scan filter).
 
 import data.databricks.governance.common
 import future.keywords.if
@@ -12,34 +16,39 @@ default severity := "NONE"
 
 # === Rule catalog ===
 rule_metadata := {
-	"no_pat_prod": "Personal access tokens disabled in enterprise prod (break-glass excepted)",
-	"no_direct_user_grants_prod": "No direct grants to individual users in production",
+	"no_shared_interactive_prod": "Shared interactive clusters disallowed in production",
+	# DISABLED: "cluster_uses_policy" — flags every cluster created without a
+	# compute policy, which is most of the estate today and drowns out the rest
+	# of the findings. Re-enable once compute policies are rolled out; the rule
+	# body below is intact.
+	# "cluster_uses_policy": "Compute is created via a cluster/compute policy",
 }
 
 # === Applicability ===
-applies contains "no_pat_prod" if {
-	input.resource.type == "personal_access_token"
-	input.workspace.type == "enterprise"
+applies contains "no_shared_interactive_prod" if {
+	input.resource.type == "cluster"
 	input.workspace.environment == "prod"
 }
 
-applies contains "no_direct_user_grants_prod" if {
-	input.resource.type == "grant"
-	input.workspace.environment == "prod"
-}
+# DISABLED with the rule above.
+# applies contains "cluster_uses_policy" if {
+# 	input.resource.type == "cluster"
+# }
 
 # === Violations ===
-violations["no_pat_prod"] contains msg if {
-	applies["no_pat_prod"]
-	not input.resource.is_break_glass
-	msg := "Personal access tokens (PATs) are disabled in enterprise prod except for break-glass use."
+violations["no_shared_interactive_prod"] contains msg if {
+	applies["no_shared_interactive_prod"]
+	input.resource.cluster_type == "interactive"
+	input.resource.access_mode == "shared"
+	msg := "Shared interactive clusters are disallowed in production; only single-user or job-only clusters are permitted."
 }
 
-violations["no_direct_user_grants_prod"] contains msg if {
-	applies["no_direct_user_grants_prod"]
-	input.resource.principal_type == "user"
-	msg := "All data access is granted to groups, not individual users. Direct object grants to individuals are disallowed in production catalogs."
-}
+# DISABLED with the rule above.
+# violations["cluster_uses_policy"] contains msg if {
+# 	applies["cluster_uses_policy"]
+# 	not input.resource.policy_id
+# 	msg := "All clusters, warehouses, and serverless compute must be created via cluster/compute policies; unrestricted 'no policy' compute is disabled."
+# }
 
 # === Structured per-rule results ===
 rule_results contains result if {

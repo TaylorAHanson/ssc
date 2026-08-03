@@ -299,6 +299,19 @@ Each policy is enforced somewhere. In plain terms:
 
 > **Changing a policy** is an engineering change (the rules live in policy files the system reads on each run). If a rule needs to change, file that with the engineering team and test it in a lower environment first. A future release aims to make policy editing self-service in the UI.
 
+#### Temporarily disabled Sentinel rules
+
+These rules are commented out in the policy files rather than deleted, so the
+Sentinel does **not** currently report them. They each flag most of the estate
+today, which buried the findings that need attention. Re-enable them as the
+underlying rollouts land.
+
+| Rule | Policy file | Why it's off |
+| :--- | :--- | :--- |
+| Compute created via a cluster/compute policy | `compute.rego` | Fires on nearly every cluster until compute policies are rolled out. |
+| `cost-center` tag on jobs/clusters/warehouses/apps/Genie spaces | `resource_tags.rego` | Fires once per untagged resource across the whole estate. |
+| `owner` tag on jobs/clusters/warehouses/apps/Genie spaces | `resource_tags.rego` | Same as above. |
+
 ---
 
 ## 9. Runbooks: "How do I…?"

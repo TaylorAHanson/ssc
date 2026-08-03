@@ -5,7 +5,6 @@ import yaml
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.model_serving.agent_llm import AgentLLMClient
-from app.providers.databricks import DatabricksProvider
 from app.core.config import settings
 from app.core.exceptions import RetryableError
 
@@ -45,13 +44,13 @@ def _yaml_error_context(content: str, ye: Exception, radius: int = 3) -> str:
     return "\n".join(out)
 
 async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]]:
-    provider = DatabricksProvider(
-        host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-        token=settings.DATABRICKS_TOKEN,
-        client_id=settings.DATABRICKS_CLIENT_ID,
-        client_secret=settings.DATABRICKS_CLIENT_SECRET,
-        config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID}
-    )
+    # Runs as the governance SP, matching the discovery that produced these
+    # dataset ids — otherwise drafting would read metadata under an identity
+    # that may not even be able to see the tables discovery just found.
+    from app.core.workspaces import get_governance_uc_provider
+
+    provider = get_governance_uc_provider()
+
     
     datasets_metadata = []
     for dataset_id in dataset_ids:

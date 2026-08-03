@@ -99,15 +99,12 @@ class TagChangeResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _get_provider():
-    from app.providers.databricks import DatabricksProvider
+    # Tag management works over the same governed datasets as certification, so
+    # it reads UC as the governance SP — the identity holding BROWSE on those
+    # catalogs. (Writes still go through GitOps; nothing here alters tags.)
+    from app.core.workspaces import get_governance_uc_provider
 
-    return DatabricksProvider(
-        host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-        token=settings.DATABRICKS_TOKEN,
-        client_id=settings.DATABRICKS_CLIENT_ID,
-        client_secret=settings.DATABRICKS_CLIENT_SECRET,
-        config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID},
-    )
+    return get_governance_uc_provider()
 
 
 def _discover_dataset_tables(provider, dataset_id: str) -> List[str]:
@@ -116,20 +113,19 @@ def _discover_dataset_tables(provider, dataset_id: str) -> List[str]:
     ``dataset_id`` is the ``dataset`` tag value used to group tables into a data
     product (the same identifier the certification tab uses).
     """
+    from app.core.workspaces import catalogs_to_scan
+
     tables: List[str] = []
-    try:
-        catalogs = provider.client.catalogs.list()
-    except Exception as e:
-        logger.warning(f"Could not list catalogs while discovering dataset {dataset_id}: {e}")
-        return tables
+    # Honour the SCAN_CATALOGS allowlist exactly like contract discovery does —
+    # walking every visible catalog here would let this path reach governed data
+    # the operator deliberately scoped out.
+    catalog_names, _missing = catalogs_to_scan(provider.client)
 
     safe_id = dataset_id.replace("'", "''")
-    for catalog in catalogs:
-        if catalog.name in ("system", "samples"):
-            continue
+    for catalog_name in catalog_names:
         query = (
             f"SELECT catalog_name, schema_name, table_name "
-            f"FROM {catalog.name}.information_schema.table_tags "
+            f"FROM {catalog_name}.information_schema.table_tags "
             f"WHERE tag_name = 'dataset' AND tag_value = '{safe_id}'"
         )
         try:
@@ -142,7 +138,7 @@ def _discover_dataset_tables(provider, dataset_id: str) -> List[str]:
                 for row in response.result.data_array:
                     tables.append(f"{row[0]}.{row[1]}.{row[2]}")
         except Exception as e:
-            logger.warning(f"Could not query information_schema for catalog {catalog.name}: {e}")
+            logger.warning(f"Could not query information_schema for catalog {catalog_name}: {e}")
 
     return tables
 

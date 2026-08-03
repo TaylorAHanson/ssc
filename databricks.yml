@@ -143,8 +143,6 @@ resources:
             value: "${var.governance_email_group}"
           - name: DATA_QUALITY_TABLE
             value: "${var.data_quality_table}"
-          - name: DATA_QUALITY_ADOC_SCHEMA
-            value: "${var.data_quality_adoc_schema}"
           # AWS SES email. IAM creds read at runtime from the control-tower scope
           # by fixed key convention; only the scope is env-specific.
           - name: NOTIFICATION_EMAIL_PROVIDER
@@ -368,9 +366,12 @@ variables:
   data_quality_table:
     description: "Table where data quality results are stored"
     default: "edh-ssc_local_catalog.edh-ssc.data_quality_results"
-  data_quality_adoc_schema:
-    description: "catalog.schema holding the ADOC *_history tables"
-    default: "enterprise_stg.data_quality"
+  # NOTE: the ADOC history schema (DATA_QUALITY_ADOC_SCHEMA) and the governed
+  # catalog allowlist (SCAN_CATALOGS) are deliberately NOT deploy-time variables.
+  # Both are per-install governance scope that a Platform Admin owns in
+  # Admin -> Settings, where they apply on the next scan without a redeploy. A
+  # value here would only be a stale decoy, since DB overrides are applied over
+  # env at startup.
   event_sync_cron:
     description: "Cron schedule for syncing calendar events"
     default: "0 * * * *"
@@ -437,6 +438,10 @@ targets:
       event_sync_cron: "0 * * * *"
       data_asset_sync_cron: "0 * * * *"
       enforcement_sentinel_cron: "*/30 * * * *"
+      # Local dev normally runs from backend/.env, not this bundle; point at the
+      # dev scope so a local deploy can never read the prod control-tower scope
+      # (which the shared default names).
+      controltower_secret_scope: "controltower_secret_scope_dev"
     resources:
       apps:
         edh-ssc:
@@ -515,6 +520,8 @@ targets:
       app_name: "edh-ssc-stage"
       environment: "stage"
       source_code_path: "."
+      # NOTE: malformed (empty schema segment) — DATA_QUALITY_TABLE is currently
+      # read by nothing, which is why it went unnoticed. Fix or drop the setting.
       data_quality_table: "enterprise_stg..data_quality_results"
       event_sync_cron: "0 * * * *"
       data_asset_sync_cron: "0 * * * *"

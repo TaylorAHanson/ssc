@@ -116,6 +116,13 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "type": "string",
      "help": "Fully-qualified table (catalog.schema.table) holding the ADOC data-quality history used "
              "for certification checks. Applies on the next scan — no restart needed."},
+    {"group": "Notifications & Governance", "key": "DATA_QUALITY_ADOC_SCHEMA", "label": "ADOC history schema",
+     "type": "string",
+     "help": "The catalog.schema holding THIS environment's ADOC *_history tables (adoc_dq_history, "
+             "adoc_freshness_history, ...), e.g. 'enterprise_prod.data_quality'. Must point at the same "
+             "environment you are certifying — reading another environment's history would certify on the "
+             "wrong data. Leave BLANK to skip data-quality checks entirely; datasets then report DQ as "
+             "'not fetched' and cannot be certified. Applies on the next scan — no restart needed."},
 
     # --- Scheduling -----------------------------------------------------
     # All schedules are standard 5-field cron in UTC and applied by the in-process

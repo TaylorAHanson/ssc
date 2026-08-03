@@ -1,4 +1,9 @@
-package databricks.governance.apps_and_genie
+package databricks.governance.storage
+
+# Storage locations / UC volumes. Split out of the former
+# `data_and_ai_governance` policy so each resource type has its own policy file
+# (and therefore its own policy name in findings, audit rows, and the scan
+# filter).
 
 import data.databricks.governance.common
 import future.keywords.if
@@ -12,43 +17,20 @@ default severity := "NONE"
 
 # === Rule catalog ===
 rule_metadata := {
-	"no_apps_enterprise_prod": "Apps not hosted in enterprise prod without allowlist",
-	"no_genie_enterprise_prod": "Genie spaces not hosted in enterprise prod without allowlist",
-	"app_not_idle": "App has been accessed in the last 30 days",
+	"no_dbfs_prod_storage": "Production data is not stored in DBFS or local volumes",
 }
 
 # === Applicability ===
-applies contains "no_apps_enterprise_prod" if {
-	input.resource.type == "app"
-	input.workspace.type == "enterprise"
+applies contains "no_dbfs_prod_storage" if {
+	input.resource.type == "storage"
 	input.workspace.environment == "prod"
-}
-
-applies contains "no_genie_enterprise_prod" if {
-	input.resource.type == "genie_space"
-	input.workspace.type == "enterprise"
-	input.workspace.environment == "prod"
-}
-
-applies contains "app_not_idle" if {
-	input.resource.type == "app"
 }
 
 # === Violations ===
-violations["no_apps_enterprise_prod"] contains msg if {
-	applies["no_apps_enterprise_prod"]
-	msg := "Apps must not be hosted in enterprise prod unless they are on a centrally managed allowlist with documented risk review."
-}
-
-violations["no_genie_enterprise_prod"] contains msg if {
-	applies["no_genie_enterprise_prod"]
-	msg := "Genie spaces must not be hosted in enterprise prod unless they are on a centrally managed allowlist with documented risk review."
-}
-
-violations["app_not_idle"] contains msg if {
-	applies["app_not_idle"]
-	input.resource.idle_days > 30
-	msg := "Apps must be stopped if no one has accessed the app in over 30 days."
+violations["no_dbfs_prod_storage"] contains msg if {
+	applies["no_dbfs_prod_storage"]
+	input.resource.storage_type in ["dbfs", "local_volume"]
+	msg := "Production data must not be stored in DBFS or local volumes; only approved external locations may hold prod data."
 }
 
 # === Structured per-rule results ===
@@ -75,6 +57,6 @@ is_violation := common.is_violation(violation_reasons)
 has_approved_exception := common.has_approved_exception(input.allowlist_records, input.resource.id, is_violation, input.request_time)
 has_pending_exception := common.has_pending_exception(input.allowlist_records, input.resource.id, is_violation, has_approved_exception)
 
-action := common.resolve_action(is_violation, has_approved_exception, has_pending_exception, "KILL")
+action := common.resolve_action(is_violation, has_approved_exception, has_pending_exception, "BLOCK")
 reason := common.resolve_reason(is_violation, has_approved_exception, has_pending_exception, input.allowlist_records, input.resource.id, input.request_time, violation_reasons)
 severity := common.resolve_severity(is_violation, has_approved_exception, has_pending_exception, "HIGH")

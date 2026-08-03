@@ -43,7 +43,9 @@ class DashboardResourceHandler(BaseResourceHandler):
 
                 resources.append({
                     "id": dash.dashboard_id,
-                    "name": dash.display_name,
+                    # Lakeview ids are opaque UUIDs, so the display name is the
+                    # only thing that identifies the dashboard to a human.
+                    "name": getattr(dash, 'display_name', None) or dash.dashboard_id,
                     "type": "dashboard",
                     "owner": getattr(dash, 'creator_user_name', 'unknown'),
                     "uses_embedded_credentials": uses_embedded_credentials,
