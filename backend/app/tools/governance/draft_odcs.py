@@ -47,12 +47,21 @@ async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]
     # Runs as the governance SP, matching the discovery that produced these
     # dataset ids — otherwise drafting would read metadata under an identity
     # that may not even be able to see the tables discovery just found.
+    #
+    # Metadata comes from information_schema rather than the SDK's
+    # catalogs.get / schemas.get / tables.get, which demand SELECT (or
+    # ownership) on every table. BROWSE is enough for information_schema, and
+    # BROWSE is the right grant for a scanner that only ever describes data.
+    # See app.providers.databricks.uc_metadata.
     from app.core.workspaces import get_governance_uc_provider
+    from app.providers.databricks.uc_metadata import fetch_uc_metadata
 
     provider = get_governance_uc_provider()
 
-    
+    metadata_batch = fetch_uc_metadata(provider.client, dataset_ids, settings.DATABRICKS_WAREHOUSE_ID)
+
     datasets_metadata = []
+    inaccessible: List[str] = []
     for dataset_id in dataset_ids:
         parts = dataset_id.split(".")
         if len(parts) != 3:
@@ -60,48 +69,31 @@ async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]
             continue
             
         catalog_name, schema_name, table_name = parts
-        
-        # 1. Fetch Metadata
-        catalog_desc = "unknown"
-        schema_desc = "unknown"
-        tags = {}
-        
-        try:
-            catalog_info = provider.client.catalogs.get(name=catalog_name)
-            catalog_desc = catalog_info.comment or "unknown"
-        except Exception: pass
-            
-        try:
-            schema_info = provider.client.schemas.get(full_name=f"{catalog_name}.{schema_name}")
-            schema_desc = schema_info.comment or "unknown"
-        except Exception: pass
-        
-        table_desc = "unknown"
-        table_type = "TABLE"
-        columns = []
-        try:
-            table_info = provider.client.tables.get(full_name=dataset_id)
-            table_desc = table_info.comment or "unknown"
-            if hasattr(table_info, 'table_type') and table_info.table_type:
-                table_type = str(table_info.table_type.value) if hasattr(table_info.table_type, 'value') else str(table_info.table_type)
-            if table_info.columns:
-                for col in table_info.columns:
-                    columns.append({
-                        "name": col.name,
-                        "type": col.type_text,
-                        "description": col.comment or "No description"
-                    })
-        except Exception as e:
-            logger.warning(f"Skipping table {dataset_id} during metadata fetch because it could not be accessed: {e}")
+
+        table_meta = metadata_batch.get(dataset_id)
+        if table_meta is None:
+            logger.warning(
+                "Skipping table %s during metadata fetch: information_schema returned nothing "
+                "for it, so it either does not exist or the governance service principal lacks "
+                "BROWSE on %s.", dataset_id, catalog_name,
+            )
+            inaccessible.append(dataset_id)
             continue
-        
-        try:
-            uc_tags = provider.client.entity_tag_assignments.list(entity_type='tables', entity_name=dataset_id)
-            for tag_assign in uc_tags:
-                if tag_assign.tag_key:
-                    tags[tag_assign.tag_key] = tag_assign.tag_value
-        except Exception: pass
-        
+
+        catalog_desc = table_meta.catalog_description or "unknown"
+        schema_desc = table_meta.schema_description or "unknown"
+        tags = dict(table_meta.tags)
+        table_desc = table_meta.comment or "unknown"
+        table_type = table_meta.table_type or "TABLE"
+        columns = [
+            {
+                "name": col.name,
+                "type": col.data_type,
+                "description": col.comment or "No description",
+            }
+            for col in table_meta.columns
+        ]
+
         # 2. Fetch Lineage
         upstream_tables = set()
         downstream_tables = set()
@@ -137,7 +129,27 @@ async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]
             "upstream_tables": sorted(list(upstream_tables)),
             "downstream_tables": sorted(list(downstream_tables))
         })
-        
+
+    # Skipped tables are omitted from the drafted contract, and a contract that
+    # declares nothing is not a small problem — it's one that no certification
+    # rule can evaluate. Report the gap once, as an error, instead of leaving it
+    # as N per-table warnings that scan like routine noise.
+    if inaccessible:
+        shown = ", ".join(inaccessible[:10])
+        more = f" (+{len(inaccessible) - 10} more)" if len(inaccessible) > 10 else ""
+        logger.error(
+            "Contract metadata fetch: no metadata available for %d of %d table(s); they will be "
+            "OMITTED from the drafted contract. Grant the governance service principal BROWSE on "
+            "the parent catalog (GRANT BROWSE ON CATALOG <catalog> TO <sp>) if these tables exist: "
+            "%s%s", len(inaccessible), len(dataset_ids), shown, more,
+        )
+    if metadata_batch.failed_catalogs:
+        logger.error(
+            "Contract metadata fetch: information_schema query FAILED for catalog(s) %s. This is a "
+            "hard error rather than a visibility gap — the drafted contracts for anything in those "
+            "catalogs will be incomplete.", metadata_batch.failed_catalogs,
+        )
+
     return datasets_metadata
 
 class DraftOdcsInput(BaseModel):

@@ -43,6 +43,9 @@ class DatasetResourceHandler(BaseResourceHandler):
         # every dataset, so the (expensive) ADOC data-quality history can be read
         # in a few batched queries AFTER discovery rather than once per table.
         dq_targets: List[tuple] = []
+        # (asset_info, full_name) for every asset across every dataset, so Unity
+        # Catalog metadata is also read in one batch instead of per table.
+        pending_metadata: List[tuple] = []
         try:
             from app.db.session import get_db
             from app.db.data_contract import DataContractModel
@@ -120,94 +123,63 @@ class DatasetResourceHandler(BaseResourceHandler):
                             "table_exists": True,
                             "missing_column_descriptions": []
                         }
-                        
-                        # Get tags for this specific table
-                        try:
-                            uc_tags = self.workspace_client.entity_tag_assignments.list(entity_type='tables', entity_name=full_name)
-                            for tag_assign in uc_tags:
-                                if tag_assign.tag_key:
-                                    asset_info["tags"][tag_assign.tag_key] = tag_assign.tag_value
-                        except Exception as e:
-                            logger.error(f"Failed to fetch tags for {full_name}: {e}")
-                            
-                        # Evaluate data quality regardless of whether the
-                        # reliability_window tag is set. Gating the DQ fetch on the
-                        # tag meant DQ failures stayed hidden until someone added the
-                        # tag, so deficiencies dribbled out across multiple scans
-                        # instead of all at once. When the tag is absent we fall back
-                        # to a default lookback window; the missing tag is still
-                        # reported separately by the reliability_window_tag rule.
-                        #
-                        # The actual ADOC *_history read is DEFERRED: instead of one
-                        # query per table (each re-scanning the large history tables),
-                        # we register this asset + its lookback window and fetch them
-                        # all in a few batched queries after discovery. Until then,
-                        # failed_rule_count stays -1 ("not fetched").
-                        reliability_window = asset_info["tags"].get("reliability_window")
-                        # Extract just the number from values like "7-days"; fall back
-                        # to the default window when no reliability_window tag is set.
-                        digits = "".join([c for c in str(reliability_window) if c.isdigit()]) if reliability_window else ""
-                        window_days = int(digits) if digits else DEFAULT_RELIABILITY_WINDOW_DAYS
-                        dq_targets.append((asset_info, full_name, window_days))
-
-                        # Fetch metadata from Unity Catalog
-                        try:
-                            catalog_info = self.workspace_client.catalogs.get(name=catalog)
-                            asset_info["catalog_description"] = catalog_info.comment
-                        except Exception:
-                            asset_info["catalog_description"] = None
-                            
-                        try:
-                            schema_info = self.workspace_client.schemas.get(full_name=f"{catalog}.{schema}")
-                            asset_info["schema_description"] = schema_info.comment
-                        except Exception:
-                            asset_info["schema_description"] = None
-                            
-                        try:
-                            table_info = self.workspace_client.tables.get(full_name=full_name)
-                            if hasattr(table_info, 'table_type') and table_info.table_type:
-                                t_type = str(table_info.table_type.value) if hasattr(table_info.table_type, 'value') else str(table_info.table_type)
-                                asset_info["type"] = "view" if "VIEW" in t_type.upper() else "table"
-                            
-                            columns = table_info.columns or []
-                            missing_cols = [col.name for col in columns if not col.comment]
-                            asset_info["all_columns_have_descriptions"] = len(missing_cols) == 0
-                            asset_info["missing_column_descriptions"] = missing_cols
-                        except Exception as e:
-                            logger.warning(f"Failed to fetch table info for {full_name} from Unity Catalog: {e}")
-                            asset_info["all_columns_have_descriptions"] = False
-                            asset_info["table_exists"] = False
-                            # Fallback convention check
-                            if full_name.endswith("_v") or full_name.endswith("_view"):
-                                asset_info["type"] = "view"
-                            
-                        # RBAC verification via the Unity Catalog Grants API
-                        # (SHOW GRANTS). Reading grants on a UC object requires MANAGE
-                        # on the securable, object ownership, or metastore admin
-                        # (workspace admin is NOT sufficient for UC objects). When we
-                        # CAN'T read them we must not assume "no access controls" (that
-                        # would false-flag every table), so we record rbac_readable=False
-                        # and the policy skips the check rather than failing it.
-                        try:
-                            grants = self.workspace_client.grants.get(securable_type="table", full_name=full_name)
-                            asset_info["rbac_defined"] = len(grants.privilege_assignments or []) > 0
-                            asset_info["rbac_readable"] = True
-                        except Exception as e:
-                            logger.warning(
-                                "Could not read grants for %s (need MANAGE on the catalog/"
-                                "schema, object ownership, or metastore admin to SHOW GRANTS) "
-                                "— skipping the RBAC check for this asset: %s",
-                                full_name, e,
-                            )
-                            asset_info["rbac_defined"] = False
-                            asset_info["rbac_readable"] = False
-                        
+                        # Metadata (tags, columns, descriptions) is filled in
+                        # below from ONE batched information_schema read rather
+                        # than several SDK calls per table — see the note above
+                        # _apply_uc_metadata.
+                        pending_metadata.append((asset_info, full_name))
                         resource["assets"].append(asset_info)
                         
                     resources.append(resource)
                     
                 except Exception as e:
                     logger.error(f"Failed to process dataset {dp_name}: {e}")
+
+            # Every asset is known now, so read all of their Unity Catalog
+            # metadata in one batch and register the data-quality lookups (which
+            # depend on the reliability_window tag that batch provides).
+            self._apply_uc_metadata(pending_metadata)
+            for asset_info, full_name in pending_metadata:
+                # Evaluate data quality regardless of whether the
+                # reliability_window tag is set. Gating the DQ fetch on the
+                # tag meant DQ failures stayed hidden until someone added the
+                # tag, so deficiencies dribbled out across multiple scans
+                # instead of all at once. When the tag is absent we fall back
+                # to a default lookback window; the missing tag is still
+                # reported separately by the reliability_window_tag rule.
+                #
+                # The actual ADOC *_history read is DEFERRED: instead of one
+                # query per table (each re-scanning the large history tables),
+                # we register this asset + its lookback window and fetch them
+                # all in a few batched queries after discovery. Until then,
+                # failed_rule_count stays -1 ("not fetched").
+                reliability_window = asset_info["tags"].get("reliability_window")
+                # Extract just the number from values like "7-days"; fall back
+                # to the default window when no reliability_window tag is set.
+                digits = "".join([c for c in str(reliability_window) if c.isdigit()]) if reliability_window else ""
+                window_days = int(digits) if digits else DEFAULT_RELIABILITY_WINDOW_DAYS
+                dq_targets.append((asset_info, full_name, window_days))
+
+                # RBAC verification via the Unity Catalog Grants API
+                # (SHOW GRANTS). Reading grants on a UC object requires MANAGE
+                # on the securable, object ownership, or metastore admin
+                # (workspace admin is NOT sufficient for UC objects). When we
+                # CAN'T read them we must not assume "no access controls" (that
+                # would false-flag every table), so we record rbac_readable=False
+                # and the policy skips the check rather than failing it.
+                try:
+                    grants = self.workspace_client.grants.get(securable_type="table", full_name=full_name)
+                    asset_info["rbac_defined"] = len(grants.privilege_assignments or []) > 0
+                    asset_info["rbac_readable"] = True
+                except Exception as e:
+                    logger.warning(
+                        "Could not read grants for %s (need MANAGE on the catalog/"
+                        "schema, object ownership, or metastore admin to SHOW GRANTS) "
+                        "— skipping the RBAC check for this asset: %s",
+                        full_name, e,
+                    )
+                    asset_info["rbac_defined"] = False
+                    asset_info["rbac_readable"] = False
 
             # Now that every asset is collected, read the ADOC data-quality
             # history in a handful of batched queries (one per distinct lookback
@@ -409,6 +381,63 @@ ORDER BY resultPercent ASC
 
             for asset_info, _ in group:
                 asset_info["failed_rule_count"] = len(asset_info["failed_rules"])
+
+    def _apply_uc_metadata(self, pending: List[tuple]) -> None:
+        """Fill in tags, columns, and descriptions for every discovered asset.
+
+        Reads ``information_schema`` instead of the SDK's catalogs.get /
+        schemas.get / tables.get. Those require SELECT (or ownership) on each
+        table, which is a far larger grant than a governance scanner should
+        hold over production data; information_schema needs only BROWSE. See
+        :mod:`app.providers.databricks.uc_metadata`.
+
+        Assets with no metadata are marked ``table_exists = False``, which is
+        deliberately imprecise: information_schema filters silently, so a
+        missing row means "does not exist **or** not visible to this principal"
+        and the two cannot be told apart. The policy message for that rule says
+        exactly that, so a permission gap is never reported as a confident
+        "this table is missing".
+        """
+        if not pending:
+            return
+
+        from app.providers.databricks.uc_metadata import fetch_uc_metadata
+
+        try:
+            batch = fetch_uc_metadata(
+                self.workspace_client,
+                [full_name for _, full_name in pending],
+                settings.DATABRICKS_WAREHOUSE_ID,
+            )
+        except Exception as e:  # noqa: BLE001
+            # Without metadata every asset would look undocumented and
+            # non-existent, so say plainly that the scan is degraded instead of
+            # emitting a wall of confident-looking false violations.
+            logger.error(
+                "Unity Catalog metadata read failed for all %d asset(s); certification results "
+                "for this run will be incomplete: %s", len(pending), e,
+            )
+            for asset_info, _ in pending:
+                asset_info["table_exists"] = False
+            return
+
+        for asset_info, full_name in pending:
+            meta = batch.get(full_name)
+            if meta is None:
+                asset_info["all_columns_have_descriptions"] = False
+                asset_info["table_exists"] = False
+                # Fallback convention check
+                if full_name.endswith("_v") or full_name.endswith("_view"):
+                    asset_info["type"] = "view"
+                continue
+
+            asset_info["tags"] = dict(meta.tags)
+            asset_info["type"] = "view" if meta.is_view else "table"
+            asset_info["catalog_description"] = meta.catalog_description
+            asset_info["schema_description"] = meta.schema_description
+            missing_cols = meta.missing_column_descriptions
+            asset_info["all_columns_have_descriptions"] = not missing_cols
+            asset_info["missing_column_descriptions"] = missing_cols
 
     def _resolve_physical_tables(self, resource_id: str) -> List[str]:
         """Resolve the fully-qualified physical tables backing a data product.

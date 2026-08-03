@@ -29,13 +29,25 @@ has_pending_exception(allowlist_records, resource_id, is_viol, has_approved) = t
     exception.status == "pending"
 } else = false
 
+# "No expiry" reaches us two different ways: the key can be absent, or present
+# and null. The app always emits the key and sets it to null for a never-expiring
+# exception, so null is in fact the common case.
+#
+# These used to be `not exception.expires_at` plus a clause that required
+# `expires_at != null`. In Rego `not` only succeeds on an undefined (or false)
+# term, and null is neither — so a null expiry matched NEITHER clause,
+# is_valid_expiry came back undefined, and the approved exception was silently
+# discarded. Reading through object.get collapses absent and null into one case.
 is_valid_expiry(exception, current_time) if {
-    not exception.expires_at
+    object.get(exception, "expires_at", null) == null
 }
 
+# Compared as ISO-8601 strings, which sorts correctly because both sides are
+# produced by datetime.isoformat() and so share a layout.
 is_valid_expiry(exception, current_time) if {
-    exception.expires_at != null
-    exception.expires_at > current_time
+    expiry := object.get(exception, "expires_at", null)
+    expiry != null
+    expiry > current_time
 }
 
 # --- Final Actions ---

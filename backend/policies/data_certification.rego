@@ -23,7 +23,8 @@ default severity := "NONE"
 # === Rule catalog (id -> human-readable description) ===
 rule_metadata := {
 	"yaml_valid": "Data Contract YAML is valid and parseable",
-	"table_exists": "Referenced tables/views exist and are accessible",
+	"assets_declared": "Data Contract declares at least one table or view",
+	"table_exists": "Referenced tables/views are visible to the governance scanner",
 	"reliability_window_tag": "Tables carry a 'reliability_window' tag",
 	"dq_history_fetched": "Data quality rule history is fetchable within the reliability window",
 	"dq_zero_failed": "Zero failed data quality rules within the reliability window",
@@ -40,6 +41,7 @@ rule_metadata := {
 # governance tags present, and does the data pass its quality rules.
 rule_category := {
 	"yaml_valid": "Structure",
+	"assets_declared": "Structure",
 	"table_exists": "Structure",
 	"catalog_description": "Metadata",
 	"schema_description": "Metadata",
@@ -68,11 +70,34 @@ violations["yaml_valid"] contains msg if {
 	msg := "Data Contract YAML is invalid and could not be parsed."
 }
 
+# Every other rule below is scoped by `some asset in input.resource.assets`, so
+# a product with no assets can't fail any of them and would otherwise certify on
+# a vacuous 100%. That is not hypothetical: contract generation skips tables it
+# can't read (see draft_odcs.fetch_datasets_metadata) and emits an empty
+# `schema: []`, which discovery turns into an empty asset list. An empty
+# contract is the *least* verified thing here, so it must never be the
+# best-scoring one.
+#
+# Gated on valid YAML so an unparseable contract reports only the parse failure
+# rather than also reporting the empty asset list that failure necessarily implies.
+violations["assets_declared"] contains msg if {
+	applies["assets_declared"]
+	# Read both fields through object.get: a bare `input.resource.invalid_yaml`
+	# is *undefined* rather than false when the key is absent, which would make
+	# this whole body undefined and silently skip the rule.
+	object.get(input.resource, "invalid_yaml", false) != true
+	count(object.get(input.resource, "assets", [])) == 0
+	msg := "Data Contract declares no tables or views, so no certification checks could be performed against it."
+}
+
 violations["table_exists"] contains msg if {
 	applies["table_exists"]
 	some asset in input.resource.assets
 	asset.table_exists == false
-	msg := sprintf("Table or view '%v' does not exist or cannot be accessed.", [asset.name])
+	# Deliberately hedged: Unity Catalog's information_schema filters invisible
+	# objects out silently, so "absent" and "no BROWSE grant" are indistinguishable
+	# from here. Naming both keeps a permissions gap from reading as a missing table.
+	msg := sprintf("Table or view '%v' was not found in Unity Catalog — it either does not exist, or the governance service principal lacks BROWSE on its catalog.", [asset.name])
 }
 
 violations["reliability_window_tag"] contains msg if {

@@ -93,6 +93,7 @@ The heavy lifting is automated. Here is the flow and where you fit in:
 1. **Datasets are grouped into Data Products.** A background job looks for tables that share a `dataset` tag and groups them into one logical product. It also auto-fills missing table/column descriptions in Unity Catalog so documentation gaps close on their own.
 2. **A draft data contract is written for you.** The system generates an **ODCS** contract (Open Data Contract Standard — a structured description of the dataset: its fields, owners, quality expectations, and classification). It preserves any manual edits from previous versions.
 3. **The Sentinel checks the contract on its next run.** It pulls the latest metadata and the dataset's recent **data-quality history**, and checks everything against the certification checklist:
+   - **Contract completeness:** the contract names at least one table or view. Every other check below is evaluated *per table*, so a contract that lists nothing has nothing to check — it fails outright rather than passing by default.
    - **Data quality:** no failed quality rules within the dataset's reliability window.
    - **Metadata completeness:** catalog, schema, and *all* column descriptions exist.
    - **Access control:** role-based access is defined.
@@ -292,7 +293,8 @@ Each policy is enforced somewhere. In plain terms:
 | | App Idle Cleanup | Medium | Automation | Stopped after 30 days inactivity; archived after 60–90 days. |
 | | Genie Spaces Prod Data | High | Architecture | Linked to domain workspaces, owned by groups. |
 | | Conversational Data Export | Critical | Platform Config | Direct export of sensitive data blocked. |
-| **Data Certification** | Data Quality | High | OPA Sentinel | No failed quality rules within the reliability window. |
+| **Data Certification** | Contract Completeness | High | OPA Sentinel | The contract must declare at least one table or view; an empty contract cannot certify. |
+| | Data Quality | High | OPA Sentinel | No failed quality rules within the reliability window. |
 | | Metadata Completeness | High | OPA Sentinel | Catalog, schema, and all column descriptions must exist. |
 | | Access Control | High | OPA Sentinel | Role-based access always required; attribute-based access defined where needed. |
 | | Tagging & Classification | High | OPA Sentinel | Mandatory tags (Owner group, Approver group, Domain, SLO/SLA) and data classification (e.g. PII) applied. |
@@ -318,6 +320,15 @@ underlying rollouts land.
 
 **…certify a dataset that won't certify?**
 Open **Watch Tower → Data Certification**, find the dataset, and read the failed checklist item(s): missing descriptions, a failing data-quality rule, or a missing required tag. Route the specific gap to the owning team. Once fixed and tagged, the next Sentinel run certifies it automatically (in prod). In dev/test/stage, complete the human review step.
+
+**…figure out why a dataset's contract is empty?**
+An empty contract (subtitle "Multiple datasets", a `schema: []` block, "No datasets were provided") means contract generation couldn't see the tables. Metadata is read as the **governance service principal**, and tables it can't see are left out of the contract. Search the backend log for `no metadata available` — the drafting step reports how many tables it omitted and names them. The fix is a Unity Catalog grant, not an app change:
+
+```sql
+GRANT BROWSE ON CATALOG <catalog> TO `<service-principal>`;
+```
+
+`BROWSE` is all that's required. It is a metadata-only privilege — it lets the scanner see tables, columns, and tags, but **not read any data** — and it does not require `USE CATALOG` or `USE SCHEMA`. If you are ever asked for `SELECT` here, that's a bug: the platform reads `information_schema`, never the tables themselves. Such a contract also fails the **Contract completeness** check rather than certifying, so it shows as uncertified until the grant is in place.
 
 **…stop the Sentinel from flagging something that's actually fine?**
 Add an **approved Allowlist** entry (**Watch Tower → Allowlist**) with the resource, its workspace, a justification, and ideally an expiry. Only approved entries suppress findings.

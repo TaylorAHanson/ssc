@@ -22,10 +22,13 @@ class TestGetCatalogListTool:
     
     @pytest.fixture
     def mock_provider(self):
-        with patch("app.tools.self_service.get_catalog_list.DatabricksProvider") as MockProvider:
-            with patch("app.core.workspaces.get_workspace_config") as mock_ws_config:
-                mock_ws_config.return_value = MagicMock(host="https://test.azuredatabricks.net", token="test", client_id=None, client_secret=None)
-                yield MockProvider.return_value
+        # The tool resolves its Unity Catalog connection through uc_client_for,
+        # which returns (provider, client) bound to the caller's identity.
+        # Patching that seam keeps the test free of workspace config and creds.
+        provider = MagicMock()
+        provider.execute_sql = AsyncMock(return_value={"rows": []})
+        with patch("app.core.workspaces.uc_client_for", return_value=(provider, provider.client)):
+            yield provider
 
     @pytest.mark.asyncio
     async def test_properties(self, tool):
