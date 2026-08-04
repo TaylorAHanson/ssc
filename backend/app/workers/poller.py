@@ -514,28 +514,42 @@ async def process_scheduled_reports():
 
 async def _send_failure_notification(request: RequestModel, error_message: str):
     """Send an email notification if an enforcement sentinel request fails."""
-    if request.type != RequestType.ENFORCEMENT_SENTINEL.value:
+    # Read the instance's columns behind the guard and cache them. This runs on
+    # the failure path, where the session's connection is often the very thing
+    # that died — an unguarded attribute read on an expired instance would then
+    # lazy-reload against the dead connection and raise, losing the notification
+    # about the failure (and previously throwing from inside the except clause,
+    # which reached for request.id a second time).
+    try:
+        req_type = request.type
+        req_id = request.id
+        req_title = request.title
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Could not read request details to notify about failure: {e}")
         return
-        
+
+    if req_type != RequestType.ENFORCEMENT_SENTINEL.value:
+        return
+
     try:
         from app.providers.notifications.client import NotificationProvider
         notifier = NotificationProvider()
         to_email = settings.GOVERNANCE_EMAIL_GROUP
         
-        subject = f"[Action Required] Enforcement Sentinel Run Failed: {request.title}"
+        subject = f"[Action Required] Enforcement Sentinel Run Failed: {req_title}"
         body = (
             f"An Enforcement Sentinel run failed and requires your attention.<br><br>"
-            f"<b>Request ID:</b> {request.id}<br>"
-            f"<b>Title:</b> {request.title}<br>"
+            f"<b>Request ID:</b> {req_id}<br>"
+            f"<b>Title:</b> {req_title}<br>"
             f"<b>Error:</b> {error_message}<br><br>"
             f"Please check the self-service center UI for more details."
         )
         
         # Don't fail the poller if notification fails
         await notifier.send_email(to=to_email, subject=subject, body=body, is_html=True)
-        logger.info(f"Sent failure notification for sentinel run {request.id} to {to_email}")
+        logger.info(f"Sent failure notification for sentinel run {req_id} to {to_email}")
     except Exception as e:
-        logger.error(f"Failed to send failure notification for {request.id}: {e}", exc_info=True)
+        logger.error(f"Failed to send failure notification for {req_id}: {e}", exc_info=True)
 
 async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
     """Process a single request with locking and error handling."""
@@ -1052,6 +1066,52 @@ async def _v2_resume_value(db, request, result):
     return None
 
 
+def _release_pooled_connection(db: Session, request_id: str) -> None:
+    """End the open transaction so the pooled connection goes back to the pool.
+
+    Call this immediately before a call that runs for a long time without using
+    ``db``. SQLAlchemy checks a connection out when a transaction begins (any
+    read will do — even one behind a log line) and holds it until that
+    transaction ends. A graph advance can take many minutes and does all its own
+    database work on separate short-lived sessions, so without this the poller's
+    connection sits idle-in-transaction for the entire run. Lakebase closes it,
+    and every write afterwards fails with "SSL connection has been closed
+    unexpectedly" — the failure the fresh-session fallbacks in this module exist
+    to survive. Better not to lose the connection in the first place.
+
+    ``commit`` (rather than ``close``) keeps the session usable: it checks out a
+    fresh, pre-pinged connection on next use, and the ORM instances stay
+    attached. Callers must disable ``expire_on_commit`` first, or this commit
+    expires those instances and the long call's own attribute reads immediately
+    re-open the transaction we just closed.
+    """
+    try:
+        db.commit()
+    except Exception as e:  # noqa: BLE001 - releasing is best-effort
+        logger.warning(
+            f"[{request_id}] could not release DB connection before a "
+            f"long-running step: {e}"
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _resync(db: Session, request: RequestModel, request_id: str) -> None:
+    """Re-read the request row after a long call ran on a released connection.
+
+    ``expire_on_commit`` is off for this session, so the instance still holds
+    the values it had before the call. The graph writes to the same row through
+    its own sessions (status, state_context), so those values are stale and the
+    status comparison below would be made against the wrong baseline.
+    """
+    try:
+        db.refresh(request)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[{request_id}] could not refresh request after step: {e}")
+
+
 async def _process_request_state_machine(db, request: RequestModel):
     """Advance a request through its V2 durable LangGraph workflow.
 
@@ -1062,10 +1122,17 @@ async def _process_request_state_machine(db, request: RequestModel):
     """
     from app.workflows.executor import executor as v2_executor, to_request_status
 
-    logger.debug(f"[{request.id}] V2 advance - status: {request.status}")
+    request_id = request.id
+    logger.debug(f"[{request_id}] V2 advance - status: {request.status}")
+
+    # The graph does its own DB work on its own sessions, so hold no connection
+    # while it runs (see _release_pooled_connection).
+    db.expire_on_commit = False
+    _release_pooled_connection(db, request_id)
 
     # Run from the last checkpoint (first pass runs from START to the first gate).
     result = await v2_executor.advance(request)
+    _resync(db, request, request_id)
 
     # Resume as many satisfied gates as we can this tick (a gate may unblock the
     # next one, e.g. manager -> platform_admin in the same poll cycle).
@@ -1073,7 +1140,10 @@ async def _process_request_state_machine(db, request: RequestModel):
         resume_value = await _v2_resume_value(db, request, result)
         if resume_value is None:
             break
+        # A resumed gate can kick off work just as long as the initial advance.
+        _release_pooled_connection(db, request_id)
         result = await v2_executor.resume(request, resume_value)
+        _resync(db, request, request_id)
 
     # When parked on a human approval gate, materialize the approval task so it
     # surfaces on the Approvals page and the /approve endpoint can act on it.
@@ -1083,7 +1153,7 @@ async def _process_request_state_machine(db, request: RequestModel):
     # Sync request.status for the UI/poller selection.
     new_status = to_request_status(result.status)
     if new_status is not None and request.status != new_status.value:
-        logger.info(f"[{request.id}] V2 status: {request.status} -> {new_status.value}")
+        logger.info(f"[{request_id}] V2 status: {request.status} -> {new_status.value}")
         request.status = new_status.value
         request.current_state = result.current_node or result.status
         # Capture the intended values into locals BEFORE committing so a dead
@@ -1099,7 +1169,7 @@ async def _process_request_state_machine(db, request: RequestModel):
             # (often COMPLETED) status on a fresh session so a finished run is
             # not misreported as failed. Only re-raise if that also fails.
             logger.error(
-                f"[{request.id}] status commit failed ({commit_err}); "
+                f"[{request_id}] status commit failed ({commit_err}); "
                 "retrying on a fresh session",
                 exc_info=True,
             )
@@ -1107,7 +1177,7 @@ async def _process_request_state_machine(db, request: RequestModel):
                 db.rollback()
             except Exception:
                 pass
-            if not _persist_status_on_fresh_session(request.id, _final_status, _final_state):
+            if not _persist_status_on_fresh_session(request_id, _final_status, _final_state):
                 raise
 
 
@@ -1281,6 +1351,50 @@ def _clear_retry_state_on_fresh_session(request_id: str) -> bool:
         db2.close()
 
 
+def _record_retry_attempt_on_fresh_session(
+    request_id: str, error: Exception, worker_id: str, retry_count: int
+) -> bool:
+    """Persist one retryable attempt's bookkeeping on a brand-new DB session.
+
+    The retry sibling of ``_force_fail_on_fresh_session``. If the incremented
+    ``retry_count`` never lands, the poller re-selects this request at the same
+    count on the very next tick and retries it forever — which is how a single
+    dropped Lakebase connection turns into a flood of identical failures.
+
+    Re-fetches the row instead of reusing the caller's (possibly expired)
+    instance, and stores the ORIGINAL error so the UI reports the real cause
+    rather than the DB plumbing failure that hid it. Returns True iff committed.
+    """
+    # No global pool dispose (see _force_fail_on_fresh_session): pool_pre_ping
+    # re-validates just this checkout without disturbing concurrent requests.
+    db2 = get_lakebase_session()
+    try:
+        req = db2.query(RequestModel).filter(RequestModel.id == request_id).first()
+        if req is None:
+            return False
+        req.retry_count = retry_count
+        req.last_failure = datetime.now(timezone.utc)
+        req.last_error = {
+            "error": str(error),
+            "retry_count": retry_count,
+            "worker_id": worker_id,
+            "note": "recorded on a fresh session after connection loss",
+        }
+        db2.commit()
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            f"Fresh-session retry record failed for {request_id}: {e}", exc_info=True
+        )
+        try:
+            db2.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        db2.close()
+
+
 def _persist_status_on_fresh_session(
     request_id: str,
     status: str,
@@ -1365,6 +1479,7 @@ def _mark_request_failed(
     # up-front max-retries guard skip this request from now on. Capture the
     # target into a local so the recovery path below only ever *writes*
     # attributes (no lazy reload, which can fail after a rollback).
+    request_id = request.id
     target_retry = max(request.retry_count or 0, request.max_retries or 0)
     last_error = {
         "error": str(error),
@@ -1398,10 +1513,13 @@ def _mark_request_failed(
         # The audit row is best-effort; the FAILED status is not. Roll back the
         # poisoned transaction and re-commit only the status so we never loop.
         logger.error(
-            f"Failed to write failure audit row for {request.id}: {audit_err}",
+            f"Failed to write failure audit row for {request_id}: {audit_err}",
             exc_info=True,
         )
-        db.rollback()
+        try:
+            db.rollback()
+        except Exception:
+            pass
         try:
             request.status = RequestStatus.FAILED.value
             request.retry_count = target_retry
@@ -1409,11 +1527,20 @@ def _mark_request_failed(
             request.last_error = last_error
             db.commit()
         except Exception as commit_err:
+            # Same-session recovery can't outlive a dead connection, and an
+            # unpersisted FAILED status means the poller keeps re-selecting a
+            # request that is already dead. Fall back to a fresh connection with
+            # the ORIGINAL error rather than leaving it to loop.
             logger.error(
-                f"Could not persist FAILED status for {request.id}: {commit_err}",
+                f"Could not persist FAILED status for {request_id} ({commit_err}); "
+                "force-failing on a fresh session",
                 exc_info=True,
             )
-            db.rollback()
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            _force_fail_on_fresh_session(request_id, error, worker_id)
 
 
 async def _handle_retryable_error(
@@ -1428,19 +1555,28 @@ async def _handle_retryable_error(
     ``retry_count`` reaches ``max_retries`` we escalate it to a permanent
     failure via :func:`_mark_request_failed`.
     """
-    request.retry_count += 1
-    request.last_failure = datetime.now(timezone.utc)
-    request.last_error = {
+    # Capture everything up front. Once a connection has died the instance may
+    # be expired, and then a plain attribute *read* triggers a lazy reload on the
+    # dead connection — throwing from inside the very recovery path that exists
+    # to handle that failure.
+    request_id = request.id
+    max_retries = request.max_retries or 0
+    next_retry = (request.retry_count or 0) + 1
+
+    last_error = {
         "error": str(error),
         "traceback": traceback.format_exc(),
-        "retry_count": request.retry_count,
+        "retry_count": next_retry,
         "worker_id": worker_id
     }
+    request.retry_count = next_retry
+    request.last_failure = datetime.now(timezone.utc)
+    request.last_error = last_error
 
     # Budget exhausted -> escalate to a robust permanent failure.
-    if request.retry_count >= request.max_retries:
+    if next_retry >= max_retries:
         logger.warning(
-            f"Request {request.id} exceeded max retries ({request.max_retries}) "
+            f"Request {request_id} exceeded max retries ({max_retries}) "
             f"after repeated retryable errors; failing permanently: {error}"
         )
         _mark_request_failed(
@@ -1450,7 +1586,7 @@ async def _handle_retryable_error(
         )
         await _send_failure_notification(
             request,
-            f"Exceeded max retries ({request.max_retries}) after error: {error}",
+            f"Exceeded max retries ({max_retries}) after error: {error}",
         )
         return
 
@@ -1459,33 +1595,38 @@ async def _handle_retryable_error(
         db.add(
             FailureModel(
                 id=f"fail-{uuid.uuid4()}",
-                request_id=request.id,
+                request_id=request_id,
                 task_id=worker_id,
                 failure_type="retryable_error",
                 error_message=str(error),
-                error_details=request.last_error,
-                retry_count=request.retry_count,
+                error_details=last_error,
+                retry_count=next_retry,
                 occurred_at=datetime.now(timezone.utc),
             )
         )
         db.commit()
     except Exception as audit_err:
-        # Best-effort audit; still persist the incremented retry count so we
-        # make forward progress toward the cap rather than retrying at 0.
+        # The audit row is best-effort; the incremented retry_count is not. A
+        # rollback()+recommit on the SAME session cannot recover a dead
+        # connection (Lakebase drops idle SSL connections during long scans), so
+        # this used to leave the increment unpersisted — and the poller would
+        # re-select the request at the same count on every tick, forever. Move
+        # to a fresh connection, carrying the ORIGINAL error so the run reports
+        # its real cause instead of this DB failure.
         logger.error(
-            f"Failed to record retryable failure for {request.id}: {audit_err}",
+            f"Failed to record retryable failure for {request_id} ({audit_err}); "
+            "recording the attempt on a fresh session",
             exc_info=True,
         )
-        db.rollback()
         try:
-            request.retry_count = (request.retry_count or 0) + 1
-            db.commit()
-        except Exception:
             db.rollback()
+        except Exception:
+            pass
+        _record_retry_attempt_on_fresh_session(request_id, error, worker_id, next_retry)
 
     logger.warning(
-        f"Retryable error for request {request.id} "
-        f"(attempt {request.retry_count}/{request.max_retries}): {error}"
+        f"Retryable error for request {request_id} "
+        f"(attempt {next_retry}/{max_retries}): {error}"
     )
 
 

@@ -578,6 +578,20 @@ def _load_request(request_id: Optional[str]):
     spawned the workflow step (sentinel scan results, allowlist exceptions,
     report bodies). The request id is injected by the ToolExecutor as
     ``_request_id`` (the step's executor scope).
+
+    The load below opens a transaction, and SQLAlchemy keeps the pooled
+    connection checked out until that transaction ends. A step that then runs
+    for minutes without touching the database (a multi-workspace Sentinel scan)
+    would hold a Lakebase connection idle-in-transaction for its whole duration,
+    and Lakebase eventually closes it — which is what surfaced as "SSL
+    connection has been closed unexpectedly" on the *next* write. So we end the
+    read transaction immediately, returning the connection to the pool; the
+    session stays usable and transparently checks out a fresh, pre-pinged
+    connection the next time it is used.
+
+    ``expire_on_commit`` is disabled first: otherwise that commit expires
+    ``request``, and the caller's very next attribute read would lazily reload
+    it and re-open the transaction we just closed.
     """
     if not request_id:
         return None, None
@@ -585,10 +599,12 @@ def _load_request(request_id: Optional[str]):
     from app.db.session import get_db
 
     db = next(get_db())
+    db.expire_on_commit = False
     request = db.query(RequestModel).filter(RequestModel.id == request_id).first()
     if request is None:
         db.close()
         return None, None
+    db.commit()
     return db, request
 
 
@@ -610,7 +626,9 @@ async def sentinel_discover(**kwargs) -> Dict[str, Any]:
                 (request.state_context or {}).get("workspaces") or "all")
     try:
         from app.workflows.sentinel import run_discovery
-        result = await run_discovery(db, request)
+        # No session is handed to run_discovery: it runs for minutes and opens
+        # its own short-lived sessions, so nothing holds a connection meanwhile.
+        result = await run_discovery(request)
         # IMPORTANT: run_discovery already persisted every violation and check to
         # the ``sentinel_findings`` table, and downstream steps (enforce/notify)
         # reload them from there. Return ONLY the compact counts + summary — never

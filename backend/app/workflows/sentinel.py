@@ -797,7 +797,6 @@ async def _probe_workspace_auth(
 
 async def _scan_and_evaluate(
     *,
-    db,
     opa_provider,
     allowed_policy_names,
     workspace_ctx: Dict[str, Any],
@@ -904,11 +903,12 @@ async def _scan_and_evaluate(
     opa_ws = {"name": ws_name, "type": ws_type, "environment": ws_env}
 
     # Allowlist context for THIS workspace (exceptions that suppress violations).
-    # Use a SHORT-LIVED session, never the long-held ``db`` passed in: that
-    # connection sits idle for the minutes of discovery/eval below and Lakebase
-    # drops it (OAuth token expiry / idle SSL close), so reading through it here
-    # raised "SSL connection has been closed unexpectedly". A fresh session gets a
-    # live, pre-pinged connection, does the tiny read, and is closed immediately.
+    # Every DB touch in this function uses a SHORT-LIVED session like this one:
+    # a connection held across the minutes of discovery/eval below gets dropped
+    # by Lakebase (OAuth token expiry / idle SSL close), and reading through it
+    # afterwards raised "SSL connection has been closed unexpectedly". A fresh
+    # session gets a live, pre-pinged connection, does the tiny read, and closes.
+    # This is why the function takes no session parameter — see run_discovery.
     allowlist_records: List[Dict[str, Any]] = []
     from app.db.session import get_lakebase_session
 
@@ -1008,10 +1008,10 @@ async def _scan_and_evaluate(
         )
 
     # Certification writes to the local DataAsset cache are DEFERRED to a single
-    # short-lived session AFTER the eval loop (see below). Writing them here on
-    # the long-held ``db`` — then leaving that connection idle through discovery
-    # and evaluation — is exactly what dropped the SSL connection on long runs.
-    # We collect the per-resource certification results during the loop instead.
+    # short-lived session AFTER the eval loop (see below). Writing them here —
+    # then leaving that connection idle through discovery and evaluation — is
+    # exactly what dropped the SSL connection on long runs. We collect the
+    # per-resource certification results during the loop instead.
     cert_records: List[tuple] = []
 
     def _input_for(resource: Dict[str, Any]) -> Dict[str, Any]:
@@ -1152,12 +1152,12 @@ async def _scan_and_evaluate(
                         violation_record["severity"],
                     )
 
-    # Certification cache writes happen HERE, on ONE fresh short-lived session —
-    # never the long-held ``db``, which has been idle through discovery + eval and
-    # may be a dead (SSL-closed) connection by now. This is the only place a cert
-    # pass updates DataAsset rows, so the connection is checked out just for the
-    # brief batch of upserts and closed immediately. Non-cert workspace scans make
-    # no DB writes at all, so they skip this entirely.
+    # Certification cache writes happen HERE, on ONE fresh short-lived session.
+    # A connection opened before discovery would have been idle through the whole
+    # scan and may be dead (SSL-closed) by now. This is the only place a cert pass
+    # updates DataAsset rows, so the connection is checked out just for the brief
+    # batch of upserts and closed immediately. Non-cert workspace scans make no DB
+    # writes at all, so they skip this entirely.
     if record_certification and (discovered_resources or cert_records):
         from app.db.session import get_lakebase_session
 
@@ -1208,7 +1208,7 @@ def _timeout_failure(ws_name, ws_host, ws_cred_source, timeout_s, stage) -> Dict
     }
 
 
-async def run_discovery(db, request) -> Dict[str, Any]:
+async def run_discovery(request) -> Dict[str, Any]:
     """Discover resources across all target workspaces and evaluate OPA policies.
 
     A single run scans every configured target workspace for workspace-scoped
@@ -1218,6 +1218,12 @@ async def run_discovery(db, request) -> Dict[str, Any]:
     violations/checks are aggregated into one master list on
     ``request.state_context`` — each tagged with its ``workspace`` — so the
     report and the governance email stay a single, cross-workspace view.
+
+    Takes NO database session, deliberately. This runs for minutes, and a
+    session handed in here would sit idle in an open transaction for all of it
+    — pinning a Lakebase connection until the server drops it, after which
+    every later write failed with "SSL connection has been closed unexpectedly".
+    Each DB touch below opens its own short-lived session instead.
     """
     from app.core.workspaces import get_target_workspaces
     from app.providers.databricks.handlers import DatasetResourceHandler
@@ -1380,7 +1386,6 @@ async def run_discovery(db, request) -> Dict[str, Any]:
             _ws_start = datetime.utcnow()
             try:
                 v, c, n, wf = await _scan_and_evaluate_guarded(
-                    db=db,
                     opa_provider=opa_provider,
                     allowed_policy_names=allowed_policy_names,
                     workspace_ctx=ws_ctx,
@@ -1458,7 +1463,6 @@ async def run_discovery(db, request) -> Dict[str, Any]:
         _cert_start = datetime.utcnow()
         try:
             v, c, n, wf = await _scan_and_evaluate_guarded(
-                db=db,
                 opa_provider=opa_provider,
                 allowed_policy_names=allowed_policy_names,
                 workspace_ctx=cert_ctx,
