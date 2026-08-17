@@ -2,16 +2,25 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  Compass,
+  FlaskConical,
   GitBranch,
   Loader2,
   Send,
   ShieldAlert,
+  Sparkles,
   Wrench,
   X,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { api } from '../../services/api';
-import type { Workflow, WorkflowGraphSpec, WorkflowTool } from '../../services/api';
+import type {
+  GoalQuality,
+  Workflow,
+  WorkflowGraphSpec,
+  WorkflowTestHealth,
+  WorkflowTool,
+} from '../../services/api';
 
 interface Props {
   workflow: Workflow;
@@ -29,6 +38,59 @@ export function PublishConfirmModal({ workflow, graphSpec, tools, onConfirm, onC
   const [valid, setValid] = useState(!graphSpec);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
+  // Structural validity says the graph compiles; these two say whether the thing
+  // an admin is about to make live has an authored playbook and passing tests.
+  // Publishing "just the graph" is how a workflow ships with a generated stub.
+  const [tests, setTests] = useState<
+    { health: WorkflowTestHealth; blocksPublish: boolean } | null
+  >(null);
+  const [instructionsScore, setInstructionsScore] = useState<number | null>(null);
+  // The goal is the workflow's whole line in the runtime capabilities menu, so a
+  // stub or a line that reads like another workflow's is a routing bug — worth
+  // catching at the moment it goes live rather than after a misrouted request.
+  const [goalQuality, setGoalQuality] = useState<GoalQuality | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listWorkflowTests(workflow.id)
+      .then((data) => {
+        if (cancelled) return;
+        setTests({ health: data.health, blocksPublish: data.blocks_publish });
+      })
+      .catch(() => {
+        // Advisory only: a failed lookup must not stop a publish.
+        if (!cancelled) setTests(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workflow.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const markdown = workflow.instructions_markdown;
+    if (!markdown) setInstructionsScore(0);
+    api
+      .evaluateSpec(
+        graphSpec || { name: workflow.key, stages: [] },
+        markdown || undefined,
+        { goal: workflow.goal ?? '', key: workflow.key },
+      )
+      .then((report) => {
+        if (cancelled) return;
+        if (markdown) setInstructionsScore(report.instructions?.score ?? null);
+        setGoalQuality(report.goal ?? null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        if (markdown) setInstructionsScore(null);
+        setGoalQuality(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workflow.id, workflow.key, workflow.goal, workflow.instructions_markdown, graphSpec]);
 
   useEffect(() => {
     let cancelled = false;
@@ -147,6 +209,127 @@ export function PublishConfirmModal({ workflow, graphSpec, tools, onConfirm, onC
             <div className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
               This workflow has no workflow graph — publishing only changes its instructions/metadata
               that the agent reads.
+            </div>
+          )}
+
+          <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 text-sm">
+            <div className="flex items-center justify-between px-3 py-2">
+              <span className="flex items-center gap-2 text-gray-600">
+                <Sparkles className="w-4 h-4 text-violet-500" /> Instructions quality
+              </span>
+              {instructionsScore === null ? (
+                <span className="text-gray-400 text-xs">not scored</span>
+              ) : (
+                <span
+                  className={`font-medium ${
+                    instructionsScore >= 70
+                      ? 'text-green-700'
+                      : instructionsScore >= 40
+                        ? 'text-amber-600'
+                        : 'text-red-600'
+                  }`}
+                >
+                  {instructionsScore}/100
+                </span>
+              )}
+            </div>
+            <div className="flex items-center justify-between px-3 py-2">
+              <span className="flex items-center gap-2 text-gray-600">
+                <Compass className="w-4 h-4 text-sky-500" /> Routing line (goal)
+              </span>
+              {goalQuality === null ? (
+                <span className="text-gray-400 text-xs">not scored</span>
+              ) : (
+                <span
+                  className={`font-medium ${
+                    goalQuality.score >= 70
+                      ? 'text-green-700'
+                      : goalQuality.score >= 40
+                        ? 'text-amber-600'
+                        : 'text-red-600'
+                  }`}
+                >
+                  {goalQuality.score}/100
+                </span>
+              )}
+            </div>
+            <div className="flex items-center justify-between px-3 py-2">
+              <span className="flex items-center gap-2 text-gray-600">
+                <FlaskConical className="w-4 h-4 text-accent" /> Behavioral tests
+              </span>
+              {!tests || tests.health.total === 0 ? (
+                <span className="text-amber-600 text-xs font-medium">none authored</span>
+              ) : (
+                <span
+                  className={`font-medium ${
+                    tests.health.ready ? 'text-green-700' : 'text-amber-600'
+                  }`}
+                >
+                  {tests.health.passing}/{tests.health.total} passing
+                  {tests.health.never_run > 0 && (
+                    <span className="text-gray-400 font-normal">
+                      {' '}
+                      · {tests.health.never_run} never run
+                    </span>
+                  )}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {instructionsScore !== null && instructionsScore < 40 && (
+            <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+              These instructions are close to the generated baseline. They are the prompt
+              the agent follows at runtime — publishing this ships a stub. Use “Generate
+              instructions” or edit them on the Details tab first.
+            </div>
+          )}
+
+          {goalQuality && goalQuality.score < 65 && (
+            <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>
+                {goalQuality.summary.collisions.length > 0 ? (
+                  <>
+                    This workflow's goal reads almost the same as{' '}
+                    {goalQuality.summary.collisions.map((c, i) => (
+                      <span key={c.key}>
+                        {i > 0 && ', '}
+                        <code className="bg-amber-100 px-1 rounded">{c.key}</code>
+                      </span>
+                    ))}
+                    . The goal is the only thing the agent sees when it picks a workflow, so
+                    two similar lines make it guess. Say what this one covers that the other
+                    doesn't.
+                  </>
+                ) : (
+                  <>
+                    The goal is this workflow's entire line in the agent's capabilities menu
+                    — it's what the agent matches a user's request against. Right now it's
+                    too vague to route reliably. Edit it on the Details tab to say what the
+                    user gets and when to pick this workflow.
+                  </>
+                )}
+              </span>
+            </div>
+          )}
+
+          {tests && !tests.health.ready && (
+            <div
+              className={`text-xs rounded-md px-3 py-2 flex items-start gap-2 ${
+                tests.blocksPublish
+                  ? 'text-red-700 bg-red-50 border border-red-200'
+                  : 'text-amber-800 bg-amber-50 border border-amber-200'
+              }`}
+            >
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+              {tests.health.total === 0
+                ? 'Nothing verifies that this workflow behaves the way you expect. Add cases in the Tests tab.'
+                : `${tests.health.failing} failing and ${tests.health.never_run} never-run case(s).`}
+              {tests.blocksPublish
+                ? ' This environment requires passing tests, so publishing will be refused.'
+                : ''}
             </div>
           )}
 

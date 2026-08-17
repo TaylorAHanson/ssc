@@ -76,22 +76,7 @@ class AgentLLMClient:
         if tools:
             inputs["tools"] = tools
 
-        # Reasoning models (e.g. gpt-5-6-luna) reject function tools combined
-        # with a non-"none" reasoning_effort on chat/completions. Pass it
-        # explicitly only when configured (set "none" for gpt-5-6-luna); blank
-        # omits it so non-reasoning models (Claude, Llama) aren't sent an
-        # unexpected parameter they'd reject.
-        effort = (settings.AGENT_LLM_REASONING_EFFORT or "").strip()
-        if effort:
-            inputs["reasoning_effort"] = effort
-
-        # Route through the AI Gateway's MLflow chat/completions route when a
-        # gateway model is configured (the non-deprecated method): the model is
-        # named in the request body, not baked into a /serving-endpoints/ path.
-        endpoint_url: Optional[str] = None
-        if self.via_gateway:
-            inputs["model"] = self.endpoint_name
-            endpoint_url = "/ai-gateway/mlflow/v1/chat/completions"
+        endpoint_url = self._apply_routing(inputs)
 
         try:
             response = await self.client.invoke_endpoint(
@@ -124,6 +109,68 @@ class AgentLLMClient:
         logger.debug(f"Tool calls: {parsed.get('tool_calls')}")
         
         return parsed
+
+    def _apply_routing(self, inputs: Dict[str, Any]) -> Optional[str]:
+        """Adapt ``inputs`` to the configured model and return a URL override.
+
+        This is the ONE place that knows how to reach the configured model, and
+        every caller must go through it. Resolving the endpoint name yourself and
+        POSTing to ``/serving-endpoints/{name}/invocations`` looks right and works
+        right up until an admin points the platform at a gateway model, at which
+        point the name is a *model* name and that path 404s — which is exactly how
+        the workflow-test judge, the instructions generator, and the test-case
+        generator each broke while the chat agent kept working.
+        """
+        # Reasoning models (e.g. gpt-5-6-luna) reject function tools combined
+        # with a non-"none" reasoning_effort on chat/completions. Pass it
+        # explicitly only when configured (set "none" for gpt-5-6-luna); blank
+        # omits it so non-reasoning models (Claude, Llama) aren't sent an
+        # unexpected parameter they'd reject.
+        effort = (settings.AGENT_LLM_REASONING_EFFORT or "").strip()
+        if effort:
+            inputs["reasoning_effort"] = effort
+
+        # Route through the AI Gateway's MLflow chat/completions route when a
+        # gateway model is configured (the non-deprecated method): the model is
+        # named in the request body, not baked into a /serving-endpoints/ path.
+        if self.via_gateway:
+            inputs["model"] = self.endpoint_name
+            return "/ai-gateway/mlflow/v1/chat/completions"
+        return None
+
+    async def complete_text(
+        self,
+        prompt: str,
+        *,
+        temperature: float = 0.0,
+        max_tokens: int = 800,
+    ) -> str:
+        """One-shot text completion on the configured model, for non-chat callers.
+
+        Unlike :meth:`generate_response` this RAISES on transport failure instead
+        of returning a friendly sentence — its callers (LLM judges, generators)
+        need to distinguish "the model said something unparseable" from "the model
+        was unreachable", and a sentence like "I encountered an error" silently
+        becomes a bad verdict otherwise.
+        """
+        inputs: Dict[str, Any] = {
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        endpoint_url = self._apply_routing(inputs)
+        response = await self.client.invoke_endpoint(
+            self.endpoint_name,
+            inputs,
+            endpoint_url=endpoint_url,
+            use_foundation_model_format=True,
+        )
+        if response is None:
+            raise RuntimeError(
+                f"Model endpoint '{self.endpoint_name}' returned no response."
+            )
+        content = self._parse_response(response).get("content")
+        return str(content or "")
 
     def _create_error_response(self, message: str) -> Dict[str, Any]:
         return {"role": "assistant", "content": message}

@@ -62,8 +62,25 @@ _GATE_DESCRIPTIONS = {
     "data_owner": "Data Owner approval",
     "training": "Training completion",
     "pr_merge": "Pull request merge",
+    "manual_task": "Manual task (a person completes work off-platform, then marks it done)",
     "children": "Child request completion",
 }
+
+
+# Marker line stamped into every generated baseline. Detecting it is how the API
+# (and the studio) can tell "nobody has authored this yet" from "an admin wrote
+# this", which is what the auto-baseline badge and the publish warning key off.
+AUTO_BASELINE_MARKER = "Auto-generated from the workflow definition"
+
+
+def is_auto_baseline(instructions_md: str | None) -> bool:
+    """True if these instructions are still an unedited generated baseline.
+
+    A baseline covers only the vars the steps happen to reference, so publishing
+    one means the runtime agent gathers whatever the graph implies and nothing
+    else — worth flagging rather than treating as authored.
+    """
+    return AUTO_BASELINE_MARKER in (instructions_md or "")
 
 
 def _user_inputs(spec: Dict[str, Any]) -> List[str]:
@@ -165,7 +182,7 @@ def render_instructions_markdown(
     lines.append(f"**Goal**: {goal or f'Fulfill a {title.lower()} request.'}")
     lines.append("")
     lines.append(
-        "> Auto-generated from the workflow definition. Refine the wording, add "
+        f"> {AUTO_BASELINE_MARKER}. Refine the wording, add "
         "naming conventions, validation hints, or required existence checks as needed."
     )
     lines.append("")
@@ -175,10 +192,18 @@ def render_instructions_markdown(
     if user_inputs:
         for idx, var in enumerate(user_inputs, start=1):
             lines.append(f"{idx}. **{_humanize(var)}** (`{var}`)")
-    else:
+    elif stages:
         lines.append(
             "_No request-specific inputs are referenced by this workflow's steps. "
             "Confirm the user's intent, then proceed._"
+        )
+    else:
+        # No graph yet: say what the agent should do in the meantime rather than
+        # leaving the runtime playbook blank.
+        lines.append(
+            "_This workflow has no steps yet, so there are no derived inputs. List "
+            "what the requester must provide, what to validate, and who approves — "
+            "then build the graph to match._"
         )
     lines.append("")
 
@@ -192,6 +217,11 @@ def render_instructions_markdown(
                 gtype = s.get("type") or "manager"
                 desc = _GATE_DESCRIPTIONS.get(gtype, f"{_humanize(gtype)} approval")
                 auto = " (auto-approves when its condition is met)" if s.get("auto_approve") else ""
+                if gtype == "manual_task":
+                    task = str(s.get("instructions") or "").strip()
+                    detail = f": {task}" if task else ""
+                    lines.append(f"- **Manual task** — {desc}{detail}")
+                    continue
                 lines.append(f"- **Gate** — {desc}{auto}")
             else:
                 tool = s.get("tool") or "(provision)"
@@ -199,8 +229,18 @@ def render_instructions_markdown(
                 lines.append(f"- **Step** — `{tool}` ({_humanize(s.get('name', ''))}){cond}")
         lines.append("")
 
-    # Execution template — generated deterministically from the graph.
-    lines.append(render_execution_block(spec, request_type=request_type))
-    lines.append("")
+    # Execution template — generated deterministically from the graph. Skipped
+    # when there is no graph: a call contract with no parameters would be a
+    # confidently wrong instruction rather than a helpful one.
+    if stages:
+        lines.append(render_execution_block(spec, request_type=request_type))
+        lines.append("")
+    else:
+        lines.append("## Execution")
+        lines.append(
+            "_Pending: this workflow has no graph yet. Once its stages exist, the "
+            "`execute_workflow` call contract is generated from them automatically._"
+        )
+        lines.append("")
 
     return "\n".join(lines)

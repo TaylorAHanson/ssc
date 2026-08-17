@@ -640,7 +640,15 @@ async def _build_runner_and_history(
     if not settings.AGENT_ENABLED:
         raise HTTPException(status_code=503, detail="Agent is currently disabled")
 
-    logger.info(f"Incoming agent request context: {request.context}")
+    # Summarize rather than dump: ``editor_draft`` carries a whole workflow draft
+    # (instructions markdown + graph), which would flood the log on every turn.
+    _ctx = request.context or {}
+    _loggable_ctx = {
+        k: (f"<{len(v)} keys>" if isinstance(v, dict) else v)
+        for k, v in _ctx.items()
+        if k != "inline_profile"
+    }
+    logger.info(f"Incoming agent request context: {_loggable_ctx}")
     logger.info(f"Current User: {current_user.email}")
     logger.info(f"Current User Roles: {current_user.roles}")
 
@@ -653,6 +661,20 @@ async def _build_runner_and_history(
     is_authoring = requested_mode == "authoring"
     agent_mode = "authoring" if is_authoring else "unified"
     surface = "workflow" if is_authoring else "edh"
+
+    # The authoring studio sends the workflow the admin has open — including edits
+    # they typed but have not saved — so the agent edits what is on screen instead
+    # of the (stale) database copy and can't silently revert their wording. Popped
+    # from the context dict because the runner dumps remaining context entries into
+    # the prompt verbatim as "key: value" lines, which would render this as an
+    # unreadable dict repr on top of the formatted block we build here.
+    surface_context_block: Optional[str] = None
+    if is_authoring and isinstance(request.context, dict):
+        editor_draft = request.context.pop("editor_draft", None)
+        if editor_draft:
+            from app.agents.prompts import render_editor_draft_block
+
+            surface_context_block = render_editor_draft_block(editor_draft) or None
 
     visible_tools = _resolve_visible_tools(db, current_user, surface)
 
@@ -693,10 +715,17 @@ async def _build_runner_and_history(
         system_prompt=profile_system_prompt,
         tools=visible_tools,
         user_identity=user_identity,
-        max_iterations=settings.AGENT_MAX_ITERATIONS,
+        # A design turn chains far more tool calls than a runtime turn, so the
+        # studio gets its own budget — on the shared cap it ran out mid-design.
+        max_iterations=(
+            settings.AGENT_AUTHORING_MAX_ITERATIONS
+            if is_authoring
+            else settings.AGENT_MAX_ITERATIONS
+        ),
         mode=agent_mode,
         model_endpoint=model_endpoint,
         user_context_block=user_context_block,
+        surface_context_block=surface_context_block,
     )
 
     history = _resolve_history(request, current_user, db)

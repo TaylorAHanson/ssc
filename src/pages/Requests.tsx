@@ -269,7 +269,13 @@ export function RequestStateList({ request }: { request: Request }) {
           // id is the stage name (e.g. "await_approval"), so we identify the
           // gate by its `type` rather than a hardcoded id.
           const HUMAN_GATE_TYPES = ['data_owner', 'manager', 'platform_admin', 'security', 'security_admin', 'governance_admin', 'finance_admin'];
-          const isApprovalStep = (!!step.type && HUMAN_GATE_TYPES.includes(step.type)) || step.id === 'data_owner_approval' || /approval/i.test(step.id);
+          // A manual task pauses for a person but grants nothing, so it gets its
+          // own "assigned to" block rather than the approver list.
+          const isManualTask = step.type === 'manual_task';
+          const isApprovalStep = !isManualTask && ((!!step.type && HUMAN_GATE_TYPES.includes(step.type)) || step.id === 'data_owner_approval' || /approval/i.test(step.id));
+          const manualTaskApprovals = isManualTask
+            ? (request.approvals || []).filter((a) => a.approvalType === 'manual_task')
+            : [];
           const stepApprovals = isApprovalStep
             ? (request.approvals || []).filter((a) =>
                 step.type ? a.approvalType === step.type : HUMAN_GATE_TYPES.includes(a.approvalType)
@@ -403,6 +409,54 @@ export function RequestStateList({ request }: { request: Request }) {
                         : step.type === 'data_owner'
                         ? 'No data owner was resolved for the requested asset — pending review by a Platform Admin.'
                         : 'No approver was resolved — pending review by a Platform Admin.'}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Manual task: who is doing the off-platform work, and what they
+                  were asked to do. Nothing here is an approval. */}
+              {isManualTask && (
+                <div className="ml-14 mt-3 space-y-2">
+                  <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-1">
+                    Manual work assigned to
+                  </p>
+                  {manualTaskApprovals.length > 0 ? (
+                    <div className="grid gap-2">
+                      {manualTaskApprovals.map((task, tIdx) => (
+                        <div key={tIdx} className="bg-white border border-gray-200 rounded p-2 text-sm space-y-1">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              {task.status === 'approved' ? (
+                                <CheckCircle2 className="w-4 h-4 text-success" />
+                              ) : task.status === 'rejected' ? (
+                                <X className="w-4 h-4 text-alert" />
+                              ) : (
+                                <Circle className="w-4 h-4 text-gray-300" />
+                              )}
+                              <span className="font-medium text-gray-700">
+                                {task.assignedToEmail || task.assignedToRole || 'Any Platform Admin'}
+                              </span>
+                            </div>
+                            <span className={`text-xs font-medium ${
+                              task.status === 'approved' ? 'text-success' :
+                              task.status === 'rejected' ? 'text-alert' :
+                              'text-gray-500'
+                            }`}>
+                              {task.status === 'approved' ? `Marked done by ${task.approvedBy || task.assignedToEmail || task.assignedToRole || 'Platform Admin'}` :
+                               task.status === 'rejected' ? `Couldn't be completed by ${task.rejectedBy || task.assignedToEmail || task.assignedToRole || 'Platform Admin'}` :
+                               task.dueAt ? `Waiting — due ${formatDate(task.dueAt)}` : 'Waiting'}
+                            </span>
+                          </div>
+                          {task.instructions?.trim() && (
+                            <p className="text-xs text-gray-600 whitespace-pre-wrap">{task.instructions}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="bg-white border border-gray-200 rounded p-2 text-sm italic text-gray-500">
+                      Waiting for this task to be assigned.
                     </div>
                   )}
                 </div>
@@ -675,6 +729,7 @@ export function Requests() {
                           request.status === 'provisioning' ? 'bg-blue-100 text-blue-800' :
                             request.status === 'manager_approval' ? 'bg-yellow-100 text-yellow-800' :
                               request.status === 'training_pending' ? 'bg-orange-100 text-orange-800' :
+                              request.status === 'manual_task_pending' ? 'bg-amber-100 text-amber-800' :
                                 ['failed', 'rejected'].includes(request.status) ? 'bg-red-100 text-red-800' :
                                   'bg-gray-100 text-gray-800'
                           }`}>

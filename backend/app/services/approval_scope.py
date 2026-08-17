@@ -17,10 +17,18 @@ from app.db import ApprovalModel
 # An approval is visible to a role either because it is addressed to that role
 # directly (``assigned_to_role``) or because the role owns that whole class of
 # approval. Platform Admin sees everything, mirroring ``User.has_role``.
+#
+# ``manual_task`` must stay in the Platform Admin list. A manual task is created
+# with whatever assignee the gate resolved, and a gate that names no approver
+# resolves to none at all — so without a role that owns the type, the row is
+# addressed to nobody, appears in nobody's inbox, and the request waits at the
+# gate forever. ``_authorize_approval_actor`` already grants platform admins the
+# break-glass action on an unassigned approval; this is the matching visibility
+# so they can find it.
 ROLE_APPROVAL_TYPES = {
     "platform admin": (
         "platform_admin", "manager", "data_owner", "security",
-        "security_admin", "finance_admin", "governance_admin",
+        "security_admin", "finance_admin", "governance_admin", "manual_task",
     ),
     "governance admin": ("governance_admin",),
     "security admin": ("security", "security_admin"),

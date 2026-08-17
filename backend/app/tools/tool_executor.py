@@ -15,8 +15,15 @@ Pipeline (per call):
        - ENFORCE mode (``AGENT_TOOL_OPA_ENFORCE``): deny / unmet-approval halts
   5. idempotency: if a prior success fact for this scope+key exists, return the
      cached result instead of re-executing (best-effort; needs ``db`` + ``scope_id``)
-  6. execute the tool
+  6. execute the tool — unless ``ctx.dry_run`` and the tool mutates, in which case
+     a synthetic success envelope is returned and nothing is executed
   7. append an audit fact (best-effort; needs ``db`` + ``scope_id``)
+
+``dry_run`` is enforced *here* rather than inside each tool on purpose: the whole
+value of a single choke point is that a sandbox can't be forgotten by one tool
+author. It relies on ``tool.is_mutating`` being accurate — a tool that writes but
+declares itself read-only would still write, which is the same contract the OPA
+pre-flight and capability scope already depend on.
 
 The executor returns the tool's raw result on success. Policy refusals and
 unmet-approval gates are returned as ``{"error": ..., "policy_decision": {...}}``
@@ -114,6 +121,12 @@ class ToolContext:
     # Extra kwargs the caller wants injected into the tool call (e.g.
     # execute_workflow's conversation_history) that aren't model-supplied args.
     injected_args: Dict[str, Any] = field(default_factory=dict)
+    # Sandbox: when True, a *mutating* tool is never executed — the executor
+    # returns a synthetic success envelope instead, and skips audit-fact writes
+    # and idempotent replay. Read-only tools still run for real, so a sandboxed
+    # agent sees true data and only its writes are simulated. Used by the
+    # workflow test runner (Workflow Studio -> Tests).
+    dry_run: bool = False
 
 
 class ToolExecutor:
@@ -223,6 +236,15 @@ class ToolExecutor:
 
     def _audit(self, tool, ctx: ToolContext, *, ok: bool, decision: Optional[Dict[str, Any]],
                result: Any = None, error: Optional[str] = None) -> None:
+        if ctx.dry_run:
+            # A sandboxed run must leave no trace on the request's timeline;
+            # otherwise a test run pollutes the audit history of whatever scope
+            # it borrowed. The transcript the test runner keeps is the record.
+            logger.info(
+                "[dry-run] %s tool='%s' (audit fact suppressed)",
+                "ok" if ok else "failed", tool.name,
+            )
+            return
         fact_type = "agent_tool_succeeded" if ok else "agent_tool_failed"
         if not (ctx.db and ctx.scope_id):
             logger.info(
@@ -314,24 +336,44 @@ class ToolExecutor:
             # the poller instead of permanently failing the step, and the chat
             # path shows a transient error rather than a bogus "policy denied".
             if decision.get("opa_unavailable"):
-                from app.core.exceptions import RetryableError
-                self._audit(tool, ctx, ok=False, decision=decision,
-                            error="OPA policy service unavailable (infra); retryable")
-                raise RetryableError(
-                    decision.get("reason") or "OPA policy service unavailable"
-                )
+                if ctx.dry_run:
+                    # A test run must not fail just because OPA is down in this
+                    # environment — that would report the workflow as broken when
+                    # the only thing broken is the sandbox's policy sidecar.
+                    logger.warning(
+                        "[dry-run] OPA unavailable for '%s'; treating as allowed for the sandbox",
+                        tool.name,
+                    )
+                    decision = dict(_DEFAULT_ALLOW_DECISION)
+                    decision["reason"] = "Dry run: OPA unavailable, policy not evaluated."
+                else:
+                    from app.core.exceptions import RetryableError
+                    self._audit(tool, ctx, ok=False, decision=decision,
+                                error="OPA policy service unavailable (infra); retryable")
+                    raise RetryableError(
+                        decision.get("reason") or "OPA policy service unavailable"
+                    )
             blocked = self._enforce(tool, decision, ctx)
             if blocked is not None:
                 self._audit(tool, ctx, ok=False, decision=decision,
                             error=blocked.get("error"))
                 return blocked
 
-        # 5. Idempotency (mutating tools only; needs db + scope).
-        if tool.is_mutating:
+        # 5. Idempotency (mutating tools only; needs db + scope). Skipped in a dry
+        #    run: replaying a real prior result would tell the test that work
+        #    happened when nothing ran.
+        if tool.is_mutating and not ctx.dry_run:
             cached = self._cached_result(tool, ctx)
             if cached is not None:
                 logger.info("ToolExecutor: idempotent replay for '%s'", tool.name)
                 return cached
+
+        # 5b. Sandbox short-circuit. Everything above (validation, capability
+        #     scope, policy) has already run, so a test still surfaces a refusal or
+        #     a denied policy — only the side effect is withheld.
+        if ctx.dry_run and tool.is_mutating:
+            logger.info("[dry-run] simulated mutating tool '%s'", tool.name)
+            return self._simulated_result(tool, model_args)
 
         # 6. Execute.
         try:
@@ -363,6 +405,27 @@ class ToolExecutor:
         return result
 
     # -- helpers -----------------------------------------------------------
+    def _simulated_result(self, tool, model_args: Dict[str, Any]) -> Dict[str, Any]:
+        """A success envelope for a mutating tool that was not executed.
+
+        Shaped to read as a success to both the agent (so the conversation
+        continues past the call) and :func:`is_tool_failure` — hence no ``error``
+        key and ``status="simulated"`` rather than anything in ``_FAILURE_STATUS``.
+        ``dry_run`` is included so a judge or transcript reader can tell a
+        simulated write from a real one.
+        """
+        return {
+            "ok": True,
+            "status": "simulated",
+            "dry_run": True,
+            "tool": tool.name,
+            "message": (
+                f"Dry run: '{tool.name}' was not executed. In a real request it "
+                f"would have run with these arguments."
+            ),
+            "args": _audit_safe(model_args),
+        }
+
     def _validate_args(self, tool, model_args: Dict[str, Any]) -> None:
         schema = getattr(tool, "_args_schema", None)
         if schema is None:

@@ -17,6 +17,10 @@ class RequestStatus(str, Enum):
     MANAGER_APPROVAL = "manager_approval"
     DATA_OWNER_APPROVAL = "data_owner_approval"
     TRAINING_PENDING = "training_pending"
+    # Held while a human completes work the platform has no tool for (a
+    # ``manual_task`` gate). Distinct from the approval statuses because nobody is
+    # deciding anything — the request is waiting on an off-platform action.
+    MANUAL_TASK_PENDING = "manual_task_pending"
     PROVISIONING = "provisioning"
     COMPLETED = "completed"
     REJECTED = "rejected"
@@ -118,6 +122,11 @@ class Approval(BaseModel):
     # Workflow input parameters (filtered state_context — excludes internal keys).
     # Displayed to approvers so they can review what the workflow will execute with.
     workflowParameters: Optional[Dict[str, Any]] = None
+    # For ``approvalType == "manual_task"``: the work the assignee must complete
+    # before marking it done, and an optional due date so an ignored task can be
+    # shown as overdue rather than silently parking the request forever.
+    instructions: Optional[str] = None
+    dueAt: Optional[datetime] = None
 
 
 class Request(BaseModel):

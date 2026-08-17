@@ -197,6 +197,62 @@ async def test_run_stream_emits_pending_poll_and_halts():
 
 
 @pytest.mark.asyncio
+async def test_truncated_tool_arguments_are_reported_not_silently_emptied():
+    """A cut-off arguments blob must not reach the tool as {}.
+
+    Real symptom: `save_workflow_draft` carries a whole graph_spec plus the
+    runtime playbook, so its arguments outran the response-token ceiling and
+    arrived as invalid JSON. Falling back to {} called the tool with nothing,
+    which reported "Field required: key, graph_spec" — blaming the model for
+    forgetting fields it had actually sent, and giving it no way to recover.
+    """
+    fake_tool = _FakeTool(name="save_workflow_draft", result={"ok": True})
+    runner = _make_runner(
+        tools=[fake_tool],
+        scripted=[
+            _FakeLLMResponse(
+                tool_calls=[
+                    {
+                        "id": "tc-cut",
+                        "type": "function",
+                        "function": {
+                            "name": "save_workflow_draft",
+                            # Valid JSON right up to where it was severed.
+                            "arguments": '{"key": "data_migration", "graph_spec": {"stages": [{"kind": "ga',
+                        },
+                    }
+                ]
+            ),
+            _FakeLLMResponse(content="Retrying smaller."),
+        ],
+    )
+
+    events = [ev async for ev in runner.run_stream(query="build it")]
+    results = [ev for ev in events if isinstance(ev, ToolResultEvent)]
+
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert "not valid JSON" in (results[0].error or "")
+    # The agent is told the size and what to do next, not just "it failed".
+    assert "cut off" in (results[0].error or "")
+    # And the tool itself was never invoked with empty arguments.
+    assert not any(isinstance(ev, ToolCallEvent) for ev in events)
+
+
+@pytest.mark.asyncio
+async def test_the_agent_loop_asks_for_enough_output_tokens_for_a_payload_call():
+    """The client's 2000-token default truncates a workflow save mid-JSON."""
+    from app.core.config import settings
+
+    runner = _make_runner(tools=[], scripted=[_FakeLLMResponse(content="hi")])
+    [ev async for ev in runner.run_stream(query="hi")]
+
+    call = runner.llm_client.calls[0]  # type: ignore[attr-defined]
+    assert call["max_tokens"] == settings.AGENT_MAX_RESPONSE_TOKENS
+    assert settings.AGENT_MAX_RESPONSE_TOKENS >= 8000
+
+
+@pytest.mark.asyncio
 async def test_run_shim_drains_stream_into_legacy_dict():
     """`runner.run` returns the dict shape used by background callers."""
     runner = _make_runner(

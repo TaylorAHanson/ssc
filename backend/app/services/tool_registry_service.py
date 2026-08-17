@@ -39,10 +39,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_AUTHORING_TOOL_NAMES = frozenset({
     "list_workflow_building_blocks",
     "search_similar_workflows",
+    "research_workflow_context",
     "get_workflow",
     "validate_workflow_spec",
     "preview_workflow_spec",
+    "evaluate_workflow_spec",
     "save_workflow_draft",
+    "save_workflow_tests",
+    "list_workflow_tests",
+    "run_workflow_tests",
     "publish_workflow",
     "list_context_domains",
     "search_context_catalog",
@@ -57,10 +62,15 @@ DEFAULT_AUTHORING_TOOL_NAMES = frozenset({
 WORKFLOW_ONLY_TOOL_NAMES = frozenset({
     "list_workflow_building_blocks",
     "search_similar_workflows",
+    "research_workflow_context",
     "get_workflow",
     "validate_workflow_spec",
     "preview_workflow_spec",
+    "evaluate_workflow_spec",
     "save_workflow_draft",
+    "save_workflow_tests",
+    "list_workflow_tests",
+    "run_workflow_tests",
     "publish_workflow",
 })
 

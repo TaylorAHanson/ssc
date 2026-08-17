@@ -29,6 +29,9 @@ import {
   Layers,
   Power,
   PowerOff,
+  FlaskConical,
+  FileWarning,
+  X,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import type { Workflow, WorkflowInput, WorkflowGraphSpec, WorkflowListEvaluation, WorkflowTool } from '../../services/api';
@@ -36,6 +39,7 @@ import { WorkflowEditor } from '../../components/admin/WorkflowEditor';
 import { PublishConfirmModal } from '../../components/admin/PublishConfirmModal';
 import { VersionHistoryModal } from '../../components/admin/VersionHistoryModal';
 import { ImportWorkflowsModal } from '../../components/admin/ImportWorkflowsModal';
+import WorkflowTestsPanel from '../../components/admin/WorkflowTestsPanel';
 import { useBrandingStore } from '../../stores/brandingStore';
 import { Lock, Sparkles, RefreshCw } from 'lucide-react';
 import { LabelWithHelp, AskAgentHint } from '../../components/ui/help-tip';
@@ -59,6 +63,9 @@ interface WorkflowFormState {
   request_type: string;
   status: string;
   graph_spec: WorkflowGraphSpec | null;
+  /** The record's `updated_at` when it was loaded, sent back on save so the
+   *  backend can reject a write that would overwrite someone else's newer one. */
+  updated_at: string | null;
 }
 
 const emptyForm: WorkflowFormState = {
@@ -72,7 +79,12 @@ const emptyForm: WorkflowFormState = {
   request_type: '',
   status: 'draft',
   graph_spec: null,
+  updated_at: null,
 };
+
+// Bookkeeping fields, not authored content: they must never count as an edit or
+// be preserved over a server value.
+const NON_CONTENT_FIELDS: (keyof WorkflowFormState)[] = ['id', 'status', 'updated_at'];
 
 // "Compound" = the spec composes another workflow via a subworkflow ("Call
 // workflow") stage; otherwise it's "atomic". Mirrors the backend derivation so
@@ -118,6 +130,52 @@ function EvaluationBadges({ evaluation }: { evaluation?: WorkflowListEvaluation 
   );
 }
 
+/** Health, as opposed to structure. R/Q score the graph; these say whether the
+ *  thing has an authored playbook and whether anyone verified it behaves — the
+ *  two gaps you'd rather not discover in front of an audience. */
+function HealthBadges({ workflow }: { workflow: Workflow }) {
+  const src = workflow.instructions_source;
+  const tests = workflow.tests_health;
+  return (
+    <>
+      {src && src !== 'authored' && (
+        <span
+          className="inline-flex items-center gap-1 text-[10px] text-amber-700 bg-amber-50 border border-amber-100 rounded px-1.5 py-0.5"
+          title={
+            src === 'empty'
+              ? 'No runtime instructions. The self-service agent has no playbook for this workflow.'
+              : 'Instructions are still the auto-generated baseline — the agent has only a stub to follow.'
+          }
+        >
+          <FileWarning className="w-3 h-3" /> {src === 'empty' ? 'no playbook' : 'stub'}
+        </span>
+      )}
+      {tests && (
+        <span
+          className={`inline-flex items-center gap-1 text-[10px] border rounded px-1.5 py-0.5 ${
+            tests.total === 0
+              ? 'text-gray-500 bg-gray-50 border-gray-200'
+              : tests.ready
+                ? 'text-green-700 bg-green-50 border-green-100'
+                : 'text-amber-700 bg-amber-50 border-amber-100'
+          }`}
+          title={
+            tests.total === 0
+              ? 'No behavioral tests — nothing verifies this workflow does what you expect.'
+              : `${tests.passing} of ${tests.total} case(s) passing` +
+                (tests.failing ? `, ${tests.failing} failing` : '') +
+                (tests.never_run ? `, ${tests.never_run} never run` : '') +
+                (tests.stale ? `, ${tests.stale} stale` : '')
+          }
+        >
+          <FlaskConical className="w-3 h-3" />
+          {tests.total === 0 ? 'untested' : `${tests.passing}/${tests.total}`}
+        </span>
+      )}
+    </>
+  );
+}
+
 const splitList = (value: string): string[] =>
   value
     .split(',')
@@ -146,6 +204,7 @@ function toForm(workflow: Workflow): WorkflowFormState {
     request_type: workflow.request_type || '',
     status: workflow.status,
     graph_spec: workflow.graph_spec ?? null,
+    updated_at: workflow.updated_at ?? null,
   };
 }
 
@@ -161,8 +220,9 @@ export function Workflows() {
   // The selected workflow id and active tab live in the URL so the browser Back
   // button steps through workflows (and back to the list) instead of leaving the page.
   const workflowParam = searchParams.get('workflow');
-  const tab: 'details' | 'workflow' =
-    searchParams.get('tab') === 'workflow' ? 'workflow' : 'details';
+  const tabParam = searchParams.get('tab');
+  const tab: 'details' | 'workflow' | 'tests' =
+    tabParam === 'workflow' ? 'workflow' : tabParam === 'tests' ? 'tests' : 'details';
   // Master/detail: with no workflow open we show the full-width list; opening
   // (or creating) one swaps to a full-page editor — both the Details and Graph
   // tabs get the whole canvas. A pending `new=1` flag keeps "New workflow" (and
@@ -182,14 +242,45 @@ export function Workflows() {
   // AssistantShelf) that admins can ask questions / co-author in without
   // leaving the page.
   const [showAssistant, setShowAssistant] = useState(false);
+  // One-step undo for assistant-driven edits, plus the banner that offers it.
+  // The assistant can rewrite the graph and the instructions in a single turn;
+  // without this an unwanted change had no way back short of reloading (and for
+  // an unsaved draft, no way back at all).
+  const [undoSnapshot, setUndoSnapshot] = useState<WorkflowFormState | null>(null);
+  const [assistantNote, setAssistantNote] = useState<string | null>(null);
+  // Set when a save was refused because the record changed underneath us.
+  const [staleConflict, setStaleConflict] = useState(false);
+  const [generatingInstructions, setGeneratingInstructions] = useState(false);
+  // Bumped whenever the assistant writes test cases, so the Tests tab reloads
+  // instead of showing a stale list until the admin navigates away and back.
+  const [testsToken, setTestsToken] = useState(0);
+  // Fields the admin has typed into since the last save/load. Tracked explicitly
+  // (rather than diffed against the baseline) so it means "the human changed
+  // this" and never picks up the assistant's own writes — the distinction that
+  // decides whether a server value may overwrite what's on screen.
+  const adminEditedRef = useRef<Set<keyof WorkflowFormState>>(new Set());
+  // Set whenever the page changes its own URL (assistant write-back, save, tab
+  // switch) so the loader effect can tell that apart from a human pressing Back.
+  // The workflow id (or null for "back to the list") that WE are navigating to.
+  // `undefined` means "we didn't initiate this", i.e. treat it as a human action.
+  const programmaticNavRef = useRef<string | null | undefined>(undefined);
 
-  // Collapse the authoring assistant when the user leaves the studio for the
-  // workflows list (no workflow open). Staying within the studio — hopping
-  // between the Details/Graph tabs or clicking into the editor — keeps it open
+  // Collapse the authoring assistant when the user LEAVES the studio for the
+  // workflows list. Staying within the studio — hopping between the
+  // Details/Graph tabs or clicking into the editor — keeps it open
   // (click-outside close is disabled on the shelf); leaving the page entirely
   // unmounts the shelf.
+  //
+  // This watches the transition out of the editor, not the mere fact of not
+  // editing. "Build with assistant" opens the drawer and sets `new=1` in the URL
+  // in one handler, but `editing` is derived from the router's search params, so
+  // there is a render where showAssistant is already true and editing is still
+  // false. Closing on that condition slammed the drawer shut the instant the
+  // button opened it.
+  const wasEditingRef = useRef(editing);
   useEffect(() => {
-    if (!editing && showAssistant) setShowAssistant(false);
+    if (wasEditingRef.current && !editing && showAssistant) setShowAssistant(false);
+    wasEditingRef.current = editing;
   }, [editing, showAssistant]);
 
   // React to the authoring assistant's tool calls so the editor on the left
@@ -206,12 +297,71 @@ export function Workflows() {
     'publish_workflow',
   ]);
 
+  // Capture the pre-change form so a single Undo can put it back.
+  const snapshotForUndo = (prev: WorkflowFormState) => setUndoSnapshot(prev);
+
+  const noteAssistantChange = (message: string) => setAssistantNote(message);
+
+  const isFieldLocallyEdited = (field: keyof WorkflowFormState) =>
+    adminEditedRef.current.has(field);
+
+  const undoAssistantChange = () => {
+    if (!undoSnapshot) return;
+    setForm(undoSnapshot);
+    setUndoSnapshot(null);
+    setAssistantNote(null);
+  };
+
+  // Every admin-driven field change goes through this so we know which fields are
+  // theirs. Functional update so a concurrent assistant write isn't dropped.
+  const editForm = <K extends keyof WorkflowFormState>(
+    field: K,
+    value: WorkflowFormState[K],
+  ) => {
+    adminEditedRef.current.add(field);
+    setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
   const handleAuthoringToolResult = async (
     toolName: string,
     result: unknown,
     ok: boolean,
     args?: Record<string, unknown>,
   ) => {
+    // The assistant proposes behavioral tests right after saving a draft. Bump a
+    // token so the Tests tab refetches, and say so — otherwise its work lands in
+    // a tab the admin has no reason to open.
+    if (toolName === 'save_workflow_tests') {
+      if (ok) {
+        setTestsToken((n) => n + 1);
+        const saved = Array.isArray(args?.cases) ? (args.cases as unknown[]).length : 0;
+        noteAssistantChange(
+          saved > 0
+            ? `Assistant proposed ${saved} test case${saved === 1 ? '' : 's'} — review them in the Tests tab, then run.`
+            : 'Assistant updated the test cases — review them in the Tests tab.',
+        );
+      }
+      return;
+    }
+    // The assistant can run the suite itself, so pull its verdicts into the tab
+    // the admin reviews rather than leaving them only in the chat.
+    if (toolName === 'run_workflow_tests') {
+      if (ok) {
+        setTestsToken((n) => n + 1);
+        const summary = result as
+          | { passed?: number; failed?: number; errored?: number; total?: number }
+          | null;
+        const passed = summary?.passed ?? 0;
+        const total = summary?.total ?? 0;
+        const bad = (summary?.failed ?? 0) + (summary?.errored ?? 0);
+        noteAssistantChange(
+          bad > 0
+            ? `Assistant ran the tests: ${passed}/${total} passed, ${bad} need attention — see the Tests tab.`
+            : `Assistant ran the tests: ${passed}/${total} passed.`,
+        );
+      }
+      return;
+    }
     if (!AUTHORING_SPEC_TOOLS.has(toolName)) return;
 
     // 1) Live hydrate from the call arguments (works even before a save).
@@ -258,12 +408,18 @@ export function Workflows() {
         (args.instructions_markdown as string).trim()
           ? (args.instructions_markdown as string)
           : '';
+      let switchedWorkflow = false;
       setForm((prev) => {
         const targetKey = argKey || specName || prev.key;
-        // If the agent is drafting a *different* workflow than what's open,
-        // start clean so we don't inherit the open record's id (which would
-        // make a manual Save update the wrong workflow).
-        const base = prev.key && targetKey && targetKey !== prev.key ? emptyForm : prev;
+        // If the agent is drafting a *different* workflow than what's open, start
+        // clean so we don't inherit the open record's id (which would make a
+        // manual Save update the wrong workflow). Resetting silently used to
+        // throw away whatever the admin had open, so we snapshot for Undo and
+        // tell them below.
+        const differentWorkflow = !!(prev.key && targetKey && targetKey !== prev.key);
+        const base = differentWorkflow ? emptyForm : prev;
+        switchedWorkflow = differentWorkflow;
+        snapshotForUndo(prev);
         return {
           ...base,
           key: base.key || targetKey,
@@ -276,17 +432,16 @@ export function Workflows() {
           instructions_markdown: argInstructions || base.instructions_markdown,
         };
       });
+      noteAssistantChange(
+        switchedWorkflow
+          ? `The assistant switched to a different workflow (${argKey || specName}). Your previous draft was cleared.`
+          : argInstructions
+            ? 'The assistant updated the workflow graph and instructions.'
+            : 'The assistant updated the workflow graph.',
+      );
       // Show the editor full-page so the admin watches the design take shape.
       // Before a save there's no id, so flag `new=1` to keep us in edit view.
-      setSearchParams(
-        (prev) => {
-          const params = new URLSearchParams(prev);
-          params.set('tab', 'workflow');
-          if (!params.get('workflow')) params.set('new', '1');
-          return params;
-        },
-        { replace: true },
-      );
+      setStudioParams({ tab: 'workflow', isNew: true });
     }
 
     // 2) On a successful persist, open the editor for the saved workflow and
@@ -301,24 +456,23 @@ export function Workflows() {
       // Fill the instructions field from the authoritative save result (includes
       // the server-generated baseline when the agent passed none), so it's never
       // blank even if the canonical reload below races or misses a new draft.
+      // Never clobber the admin's own unsaved wording with it: the assistant now
+      // receives the open draft, so anything it saved already contains their text
+      // — a differing value here means we'd be reverting an edit it didn't see.
       if (typeof r.instructions_markdown === 'string' && r.instructions_markdown.trim()) {
-        setForm((prev) => ({ ...prev, instructions_markdown: r.instructions_markdown as string }));
+        setForm((prev) =>
+          isFieldLocallyEdited('instructions_markdown')
+            ? prev
+            : { ...prev, instructions_markdown: r.instructions_markdown as string },
+        );
       }
       // Switch to the editor view immediately — before the (heavier) reload — so
       // a refetch hiccup or a key→id lookup miss can't strand the admin on the
-      // list. "Save a draft" should always land you on that draft's page.
-      setTab('workflow');
-      // Keep the editor open on the just-hydrated draft as a floor; the canonical
-      // id (set below) replaces `new=1` once we resolve it.
-      const keepEditorOpen = () =>
-        setSearchParams(
-          (prev) => {
-            const params = new URLSearchParams(prev);
-            if (!params.get('workflow')) params.set('new', '1');
-            return params;
-          },
-          { replace: true },
-        );
+      // list. "Save a draft" should always land you on that draft's page. One
+      // combined write: the tab and the "keep the editor open" floor used to be
+      // two updates that could clobber each other (and the id set below).
+      const keepEditorOpen = () => setStudioParams({ tab: 'workflow', isNew: true });
+      keepEditorOpen();
       try {
         const fresh = await api.listWorkflows(true);
         setWorkflows(fresh);
@@ -343,10 +497,33 @@ export function Workflows() {
             if (!nextForm.graph_spec && prev.graph_spec) {
               nextForm.graph_spec = prev.graph_spec;
             }
+            // The canonical record is the new baseline, but a field the admin had
+            // edited by hand and NOT saved must survive: replacing it wholesale
+            // here is what silently reverted their instructions mid-demo. Baseline
+            // the server truth, then re-apply their edits on top so the field
+            // still reads as unsaved and Save persists it.
             setBaseline(JSON.stringify(nextForm));
-            return nextForm;
+            const preserved = { ...nextForm };
+            let keptAny = false;
+            for (const field of adminEditedRef.current) {
+              if (NON_CONTENT_FIELDS.includes(field)) continue;
+              if (JSON.stringify(preserved[field]) === JSON.stringify(prev[field])) continue;
+              (preserved[field] as unknown) = prev[field];
+              keptAny = true;
+            }
+            if (keptAny) {
+              setError(null);
+              setAssistantNote(
+                'Saved. Your unsaved edits were kept on top of the saved version — ' +
+                  'click Save to persist them.',
+              );
+            }
+            return preserved;
           });
-          setWorkflowParam(match.id);
+          // Replace rather than push: the assistant saves several times in one
+          // turn, and each push put another copy of this workflow in the history
+          // stack for Back to walk through.
+          setStudioParams({ workflow: match.id, tab: 'workflow' }, { replace: true });
         } else {
           // Couldn't resolve the id (refetch race/miss): stay in the editor on the
           // hydrated draft rather than dropping back to the list.
@@ -365,37 +542,159 @@ export function Workflows() {
 
   const dirty = useMemo(() => JSON.stringify(form) !== baseline, [form, baseline]);
 
+  // Which fields differ from the last saved/loaded state. Drives both the
+  // "unsaved" hints in the UI and — more importantly — what we tell the authoring
+  // assistant is a deliberate hand edit it must preserve.
+  const unsavedFields = useMemo(() => {
+    let base: WorkflowFormState;
+    try {
+      base = JSON.parse(baseline) as WorkflowFormState;
+    } catch {
+      return [];
+    }
+    return (Object.keys(form) as (keyof WorkflowFormState)[]).filter(
+      (k) =>
+        !NON_CONTENT_FIELDS.includes(k) &&
+        JSON.stringify(form[k]) !== JSON.stringify(base[k]),
+    );
+  }, [form, baseline]);
+
+  // What we tell the assistant is a deliberate hand edit: a field must both differ
+  // from the saved version AND have been typed by the admin (not written by the
+  // assistant itself, which would make the "preserve this" instruction a lie).
+  const adminUnsavedFields = useMemo(
+    () => unsavedFields.filter((f) => adminEditedRef.current.has(f)),
+    [unsavedFields],
+  );
+
+  // The workflow the admin has open, handed to the authoring assistant on every
+  // turn. Before this, the assistant's only view was `get_workflow` (which reads
+  // the database), so it edited a stale copy and its save reverted whatever the
+  // admin had typed but not saved. Sending the live draft — with the unsaved
+  // fields called out — makes the on-screen state its starting point.
+  const editorDraftContext = () => {
+    if (!editing) return {};
+    return {
+      editor_draft: {
+        key: form.key,
+        name: form.name,
+        goal: form.goal,
+        request_type: form.request_type,
+        status: form.status,
+        instructions_markdown: form.instructions_markdown,
+        graph_spec: form.graph_spec,
+        unsaved_fields: adminUnsavedFields,
+      },
+    };
+  };
+
+  // Mirrors the backend's derivation (see WorkflowService.to_dict) so the badge is
+  // right for unsaved text too, not just what's been persisted.
+  const instructionsState: 'empty' | 'auto_baseline' | 'authored' = !form.instructions_markdown.trim()
+    ? 'empty'
+    : form.instructions_markdown.includes('Auto-generated from the workflow definition')
+      ? 'auto_baseline'
+      : 'authored';
+
+  const generateInstructions = async () => {
+    setGeneratingInstructions(true);
+    setError(null);
+    try {
+      const result = await api.generateWorkflowInstructions({
+        graph_spec: form.graph_spec,
+        request_type: form.request_type.trim() || form.key.trim() || null,
+        goal: form.goal.trim() || null,
+        name: form.name.trim() || null,
+        // Sent so the generator improves the admin's wording instead of
+        // discarding it. A baseline is not "their wording", so it isn't sent.
+        existing_instructions:
+          instructionsState === 'authored' ? form.instructions_markdown : null,
+      });
+      snapshotForUndo(form);
+      editForm('instructions_markdown', result.instructions_markdown);
+      const quality = result.quality;
+      noteAssistantChange(
+        [
+          result.source === 'llm'
+            ? 'Authored a playbook from the graph and goal.'
+            : 'Generated the graph-derived baseline.',
+          result.warning,
+          quality ? `Instruction quality: ${quality.score}/100 (${quality.tier}).` : null,
+          'Review it — the Assumptions and Open Questions sections are for you to correct.',
+        ]
+          .filter(Boolean)
+          .join(' '),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to generate instructions');
+    } finally {
+      setGeneratingInstructions(false);
+    }
+  };
+
   const setFormBaselined = (next: WorkflowFormState) => {
     setForm(next);
     setBaseline(JSON.stringify(next));
+    // Loading or saving makes the on-screen values the saved values, so there are
+    // no outstanding hand edits to protect any more.
+    adminEditedRef.current = new Set();
+    setUndoSnapshot(null);
+    setAssistantNote(null);
   };
 
-  const setTab = (next: 'details' | 'workflow') => {
-    setSearchParams(
-      (prev) => {
-        const params = new URLSearchParams(prev);
-        params.set('tab', next);
-        return params;
-      },
-      { replace: true },
-    );
+  const setTab = (next: 'details' | 'workflow' | 'tests') => {
+    setStudioParams({ tab: next });
   };
 
-  const setWorkflowParam = (id: string | null, opts: { replace?: boolean } = {}) => {
-    setSearchParams(
-      (prev) => {
-        const params = new URLSearchParams(prev);
-        if (id) {
-          params.set('workflow', id);
+  // ONE atomic write for the studio's view state (which workflow is open, whether
+  // it's an unsaved draft, and the active tab).
+  //
+  // Several `setSearchParams` calls in the same tick are a silent clobber:
+  // react-router's functional updater reads the CURRENT location every time, so
+  // two updaters queued together both start from the same base and the last one
+  // wins. A single assistant save used to issue up to four of them (hydrate,
+  // setTab, keepEditorOpen, setWorkflowParam) — when the loser carried
+  // `workflow=<id>`, the URL came back with only `new=1`, which the loader effect
+  // below reads as "the admin left this workflow". That raised a blocking native
+  // "You have unsaved changes. Discard them?" over the assistant's own write and
+  // then blanked the editor behind it.
+  const setStudioParams = (
+    next: {
+      workflow?: string | null;
+      isNew?: boolean;
+      tab?: 'details' | 'workflow' | 'tests';
+    },
+    opts: { replace?: boolean } = { replace: true },
+  ) => {
+    // Anything the page navigates to itself is trusted: the "unsaved changes"
+    // guard exists for a human using Back/Forward, not for our own view sync.
+    //
+    // Trust is armed with the exact workflow we're switching to, and only when
+    // we're actually switching. A bare boolean stayed armed forever after any
+    // call that left `workflow` alone (a tab click is one), because the guard
+    // lives in an effect keyed on `workflow` that never ran to consume it — so
+    // the next time the admin really did navigate away with unsaved edits, the
+    // prompt was skipped and the form was silently blanked.
+    if (next.workflow !== undefined) programmaticNavRef.current = next.workflow;
+    setSearchParams((prev) => {
+      const params = new URLSearchParams(prev);
+      if (next.workflow !== undefined) {
+        if (next.workflow) {
+          params.set('workflow', next.workflow);
           params.delete('new');
         } else {
           params.delete('workflow');
         }
-        return params;
-      },
-      opts,
-    );
+      }
+      if (next.isNew === true && !params.get('workflow')) params.set('new', '1');
+      if (next.isNew === false) params.delete('new');
+      if (next.tab) params.set('tab', next.tab);
+      return params;
+    }, opts);
   };
+
+  const setWorkflowParam = (id: string | null, opts: { replace?: boolean } = {}) =>
+    setStudioParams({ workflow: id }, opts);
 
   // Leave the full-page editor and return to the list. Resets the form first so
   // the URL effect (which also guards unsaved edits) doesn't double-prompt.
@@ -448,14 +747,23 @@ export function Workflows() {
   // Load the workflow named in the URL (deep links + Back/Forward navigation).
   useEffect(() => {
     if (workflowParam === loadedIdRef.current) return;
-    // Guard unsaved edits before swapping workflows (covers Back/Forward too).
-    if (!confirmDiscard()) {
+    // Guard unsaved edits before swapping workflows (covers Back/Forward too) —
+    // but ONLY for navigation a human performed. `confirm()` is synchronous and
+    // blocks the whole page, so raising it here while the assistant is streaming
+    // froze the studio mid-turn: the admin couldn't even close the shelf, and
+    // whichever way they answered, an in-flight save was already writing state
+    // underneath the dialog.
+    const wasProgrammatic = programmaticNavRef.current === workflowParam;
+    programmaticNavRef.current = undefined;
+    if (!wasProgrammatic && !confirmDiscard()) {
       setWorkflowParam(loadedIdRef.current, { replace: true });
       return;
     }
     if (!workflowParam) {
       loadedIdRef.current = null;
-      setFormBaselined(emptyForm);
+      // `new=1` means an unsaved draft is open — often one the assistant is still
+      // writing. Blanking the form here would throw that work away.
+      if (searchParams.get('new') !== '1') setFormBaselined(emptyForm);
       return;
     }
     loadedIdRef.current = workflowParam;
@@ -524,6 +832,23 @@ export function Workflows() {
     setFocusNewTick((t) => t + 1);
   };
 
+  // Start from a conversation instead of a blank form: open a fresh draft with the
+  // assistant already expanded, so the first thing an author does is describe the
+  // workflow rather than guess at gate types.
+  const buildWithAssistant = () => {
+    if (!confirmDiscard()) return;
+    loadedIdRef.current = null;
+    setFormBaselined(emptyForm);
+    setSearchParams((prev) => {
+      const params = new URLSearchParams(prev);
+      params.delete('workflow');
+      params.set('new', '1');
+      params.set('tab', 'details');
+      return params;
+    });
+    setShowAssistant(true);
+  };
+
   const buildInput = (): WorkflowInput => ({
     key: form.key.trim(),
     name: form.name.trim() || form.key.trim(),
@@ -532,8 +857,11 @@ export function Workflows() {
     allowed_tools: form.allowed_tools.trim() ? splitList(form.allowed_tools) : null,
     policy_ref: form.policy_ref.trim() || null,
     request_type: form.request_type.trim() || null,
+    // Status is not editable here — publishing goes through Publish so the
+    // pre-publish checks and version snapshot actually run.
     status: form.status,
     graph_spec: form.graph_spec,
+    if_unmodified_since: form.updated_at,
   });
 
   const save = async () => {
@@ -553,7 +881,44 @@ export function Workflows() {
       if (wasNew) setWorkflowParam(saved.id, { replace: true });
       await loadList();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save workflow');
+      const message = e instanceof Error ? e.message : 'Failed to save workflow';
+      setError(message);
+      // A rejected stale write leaves the edits on screen; offer the reload
+      // explicitly so "changed underneath you" doesn't read as "your work is
+      // gone". Nothing is discarded until they choose to reload.
+      if (/changed since you loaded it/i.test(message) && form.id) {
+        setStaleConflict(true);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Reload the server's copy after a stale-write rejection, keeping the admin's
+  // own edits on top so the save can be retried without retyping.
+  const reloadAfterConflict = async () => {
+    if (!form.id) return;
+    setSaving(true);
+    try {
+      const full = await api.getWorkflow(form.id);
+      const fresh = toForm(full);
+      const edited = new Set(adminEditedRef.current);
+      setBaseline(JSON.stringify(fresh));
+      setForm((prev) => {
+        const merged = { ...fresh };
+        for (const field of edited) {
+          if (NON_CONTENT_FIELDS.includes(field)) continue;
+          (merged[field] as unknown) = prev[field];
+        }
+        return merged;
+      });
+      setStaleConflict(false);
+      setError(null);
+      setAssistantNote(
+        'Reloaded the current version and kept your edits on top. Review, then Save.',
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to reload workflow');
     } finally {
       setSaving(false);
     }
@@ -683,9 +1048,19 @@ export function Workflows() {
             <Upload className="w-4 h-4 mr-1" /> Import
           </Button>
           {!authoringLocked && (
-            <Button onClick={startNew} variant="outline">
-              <Plus className="w-4 h-4 mr-1" /> New workflow
-            </Button>
+            <>
+              <Button onClick={startNew} variant="outline">
+                <Plus className="w-4 h-4 mr-1" /> New workflow
+              </Button>
+              {/* Authoring from a blank form is the harder road; describing the
+                  workflow out loud is the one that actually produces a playbook. */}
+              <Button
+                onClick={buildWithAssistant}
+                title="Describe the workflow in plain language and let the assistant draft the graph, instructions, and tests"
+              >
+                <Sparkles className="w-4 h-4 mr-1" /> Build with assistant
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -707,8 +1082,41 @@ export function Workflows() {
       )}
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded-md px-4 py-2 text-sm">
-          {error}
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-md px-4 py-2 text-sm flex items-center justify-between gap-3">
+          <span>{error}</span>
+          {staleConflict && (
+            <Button variant="outline" size="sm" onClick={reloadAfterConflict} disabled={saving}>
+              <RefreshCw className={`w-3.5 h-3.5 mr-1 ${saving ? 'animate-spin' : ''}`} />
+              Reload and keep my edits
+            </Button>
+          )}
+        </div>
+      )}
+
+      {/* What the assistant just changed, with one-step Undo. The assistant can
+          rewrite the graph and the instructions in a single turn, so a change the
+          admin didn't want needs a way back that doesn't involve a reload. */}
+      {assistantNote && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-800 rounded-md px-4 py-2 text-sm flex items-center justify-between gap-3">
+          <span className="inline-flex items-center gap-2">
+            <Sparkles className="w-4 h-4 shrink-0" />
+            {assistantNote}
+          </span>
+          <span className="flex items-center gap-1 shrink-0">
+            {undoSnapshot && (
+              <Button variant="ghost" size="sm" onClick={undoAssistantChange}>
+                <Undo2 className="w-3.5 h-3.5 mr-1" /> Undo
+              </Button>
+            )}
+            <button
+              type="button"
+              className="text-blue-400 hover:text-blue-700 p-1"
+              title="Dismiss"
+              onClick={() => setAssistantNote(null)}
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </span>
         </div>
       )}
 
@@ -745,8 +1153,14 @@ export function Workflows() {
                   <div className="min-w-0">
                     <div className="text-sm font-medium truncate">{s.key}</div>
                     <div className="text-xs text-gray-500 truncate">{s.goal || '—'}</div>
+                    {s.last_published_at && (
+                      <div className="text-[10px] text-gray-400">
+                        published {new Date(s.last_published_at).toLocaleDateString()}
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
+                    <HealthBadges workflow={s} />
                     <EvaluationBadges evaluation={s.evaluation} />
                     {s.composition === 'compound' && (
                       <span
@@ -993,6 +1407,17 @@ export function Workflows() {
                   </span>
                 )}
               </button>
+              <button
+                type="button"
+                onClick={() => setTab('tests')}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px ${
+                  tab === 'tests'
+                    ? 'border-accent text-accent font-medium'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <FlaskConical className="w-4 h-4" /> Tests
+              </button>
             </div>
 
             {tab === 'details' && (
@@ -1011,7 +1436,7 @@ export function Workflows() {
                   placeholder="e.g. workspace_access"
                   value={form.key}
                   disabled={!!form.id || authoringLocked}
-                  onChange={(e) => setForm({ ...form, key: e.target.value })}
+                  onChange={(e) => editForm('key', e.target.value)}
                 />
               </div>
               <div>
@@ -1026,7 +1451,7 @@ export function Workflows() {
                   placeholder="Human-readable name"
                   value={form.name}
                   disabled={authoringLocked}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  onChange={(e) => editForm('name', e.target.value)}
                 />
               </div>
             </div>
@@ -1043,7 +1468,7 @@ export function Workflows() {
                 placeholder="Request access to an existing Databricks workspace."
                 value={form.goal}
                 disabled={authoringLocked}
-                onChange={(e) => setForm({ ...form, goal: e.target.value })}
+                onChange={(e) => editForm('goal', e.target.value)}
               />
             </div>
 
@@ -1060,7 +1485,7 @@ export function Workflows() {
                   placeholder="data.agent.tools"
                   value={form.policy_ref}
                   disabled={authoringLocked}
-                  onChange={(e) => setForm({ ...form, policy_ref: e.target.value })}
+                  onChange={(e) => editForm('policy_ref', e.target.value)}
                 />
               </div>
               <div>
@@ -1075,25 +1500,24 @@ export function Workflows() {
                   placeholder="workspace_access"
                   value={form.request_type}
                   disabled={authoringLocked}
-                  onChange={(e) => setForm({ ...form, request_type: e.target.value })}
+                  onChange={(e) => editForm('request_type', e.target.value)}
                 />
               </div>
               <div>
                 <LabelWithHelp
                   className="text-xs font-medium text-gray-600 mb-1"
-                  help="Draft = saved but not live; safe to edit and dry-run. Published = live and governing real requests. Prefer the Publish button so the pre-publish checks run."
+                  help="Draft = saved but not live; safe to edit and dry-run. Published = live and governing real requests. Change this with Publish / Unpublish — that path runs the pre-publish checks and snapshots a version you can roll back to."
                 >
                   Status
                 </LabelWithHelp>
-                <select
-                  className={inputClass}
-                  value={form.status}
-                  disabled={authoringLocked}
-                  onChange={(e) => setForm({ ...form, status: e.target.value })}
-                >
-                  <option value="draft">draft</option>
-                  <option value="published">published</option>
-                </select>
+                {/* Read-only on purpose. Setting this to "published" and saving used
+                    to make a workflow live while skipping validation, the compile
+                    check, the version bump and the snapshot — everything Publish
+                    enforces. */}
+                <div className={`${inputClass} bg-gray-50 text-gray-600 flex items-center justify-between`}>
+                  <span>{form.status === 'published' ? 'published (live)' : 'draft'}</span>
+                  <span className="text-[10px] text-gray-400">use Publish to change</span>
+                </div>
               </div>
             </div>
 
@@ -1109,26 +1533,61 @@ export function Workflows() {
                 placeholder="get_target_workspaces, execute_workflow"
                 value={form.allowed_tools}
                 disabled={authoringLocked}
-                onChange={(e) => setForm({ ...form, allowed_tools: e.target.value })}
+                onChange={(e) => editForm('allowed_tools', e.target.value)}
               />
             </div>
 
             <div>
-              <LabelWithHelp
-                className="text-xs font-medium text-gray-600 mb-1"
-                help="Markdown instructions the agent follows when running this workflow: the goal, what information to gather, and how to behave. This is the prompt guidance, separate from the executable workflow graph."
-              >
-                Instructions (markdown)
-              </LabelWithHelp>
+              <div className="flex items-end justify-between gap-3 mb-1">
+                <LabelWithHelp
+                  className="text-xs font-medium text-gray-600"
+                  help="Markdown instructions the agent follows when running this workflow: the goal, what information to gather, and how to behave. This is the prompt guidance, separate from the executable workflow graph."
+                >
+                  Instructions (markdown)
+                </LabelWithHelp>
+                <div className="flex items-center gap-2 shrink-0">
+                  {/* The runtime agent follows this text, so "nobody has written it"
+                      and "this is still the generated stub" are both worth seeing
+                      before publishing. The signal existed server-side but was
+                      never surfaced. */}
+                  {instructionsState === 'empty' && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-700 border border-red-100">
+                      no instructions
+                    </span>
+                  )}
+                  {instructionsState === 'auto_baseline' && (
+                    <span
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-100"
+                      title="These are auto-generated from the graph, so they only cover the inputs your steps reference. Edit or regenerate before publishing."
+                    >
+                      auto-generated baseline
+                    </span>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={authoringLocked || generatingInstructions}
+                    onClick={generateInstructions}
+                    title="Author a full playbook from the graph and goal. Your existing text is used as the starting point, not replaced."
+                  >
+                    {generatingInstructions ? (
+                      <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5 mr-1" />
+                    )}
+                    {form.instructions_markdown.trim() && instructionsState !== 'auto_baseline'
+                      ? 'Improve instructions'
+                      : 'Generate instructions'}
+                  </Button>
+                </div>
+              </div>
               <textarea
                 className={textareaClass}
                 rows={16}
                 placeholder="# Workflow Instructions&#10;&#10;**Goal**: ...&#10;&#10;## Information to Gather&#10;..."
                 value={form.instructions_markdown}
                 disabled={authoringLocked}
-                onChange={(e) =>
-                  setForm({ ...form, instructions_markdown: e.target.value })
-                }
+                onChange={(e) => editForm('instructions_markdown', e.target.value)}
               />
             </div>
             </>
@@ -1144,38 +1603,57 @@ export function Workflows() {
                     <WorkflowEditor
                       spec={form.graph_spec}
                       tools={tools}
-                      onChange={(graph_spec) => setForm({ ...form, graph_spec })}
+                      onChange={(graph_spec) => editForm('graph_spec', graph_spec)}
                       onAskAgent={() => setShowAssistant(true)}
+                      instructionsMarkdown={form.instructions_markdown}
                     />
                   </ErrorBoundary>
                 ) : (
+                  // Assistant-first: an empty canvas is the least useful thing to
+                  // hand someone who has never authored a workflow, so describing
+                  // it in words is the primary path and the blank graph the escape
+                  // hatch.
                   <div className="text-center py-10 border border-dashed border-gray-200 rounded-lg">
                     <WorkflowIcon className="w-8 h-8 text-gray-300 mx-auto mb-3" />
                     <p className="text-sm text-gray-600 mb-1">No workflow graph yet</p>
                     <p className="text-xs text-gray-400 max-w-md mx-auto mb-4">
-                      Build an executable workflow as ordered approval gates and provisioning
-                      steps. When published, the durable executor runs this graph instead of the
-                      code catalog.
+                      A workflow is ordered approval gates and provisioning steps. Describe
+                      what should happen in plain language and the assistant will draft the
+                      graph, the runtime instructions, and a few test cases — then you edit
+                      from there.
                     </p>
-                    <Button
-                      variant="outline"
-                      onClick={() =>
-                        setForm({
-                          ...form,
-                          graph_spec: {
+                    <div className="flex items-center justify-center gap-2">
+                      <Button onClick={() => setShowAssistant(true)}>
+                        <Sparkles className="w-4 h-4 mr-1" /> Describe it to the assistant
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() =>
+                          editForm('graph_spec', {
                             name: form.key.trim() || form.request_type.trim() || 'workflow',
                             completed_status: 'completed',
                             complete_fact: null,
                             stages: [],
-                          },
-                        })
-                      }
-                    >
-                      <Plus className="w-4 h-4 mr-1" /> Start a workflow
-                    </Button>
+                          })
+                        }
+                      >
+                        <Plus className="w-4 h-4 mr-1" /> Start from a blank graph
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>
+            )}
+
+            {tab === 'tests' && (
+              <ErrorBoundary label="the tests tab" resetKeys={[workflowParam]}>
+                <WorkflowTestsPanel
+                  workflowId={workflowParam}
+                  dirty={dirty}
+                  reloadToken={testsToken}
+                  onAskAgent={() => setShowAssistant(true)}
+                />
+              </ErrorBoundary>
             )}
 
             {authoringLocked ? (
@@ -1293,7 +1771,7 @@ export function Workflows() {
         closeOnClickOutside={false}
         title="Authoring assistant"
         widthStorageKey="authoring_assistant_width"
-        subtitle="Ask me to explain a field, or to draft / edit this workflow. When I save a draft, it opens automatically in the editor on the left."
+        subtitle="Ask me to explain a field, or to draft / edit this workflow. I can see what's open in the editor — including your unsaved edits — so ask for changes on top of your own wording. When I save a draft, it opens automatically on the left."
         headerActions={
           <button
             type="button"
@@ -1309,6 +1787,7 @@ export function Workflows() {
           mode="authoring"
           storageKey="chatview_messages_authoring"
           onToolResult={handleAuthoringToolResult}
+          extraContext={editorDraftContext}
           placeholder="Ask about authoring workflows..."
           welcomeNode={
             <div className="text-center px-2 pt-2">

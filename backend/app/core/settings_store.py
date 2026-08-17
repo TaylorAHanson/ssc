@@ -167,6 +167,16 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "for non-reasoning models (Claude, Llama), which would error on an unexpected reasoning_effort."},
     {"group": "Agent", "key": "AGENT_MAX_ITERATIONS", "label": "Max tool iterations",
      "type": "int", "min": 1, "help": "Max reasoning/tool loops the agent runs per turn."},
+    {"group": "Agent", "key": "AGENT_AUTHORING_MAX_ITERATIONS",
+     "label": "Max tool iterations (workflow studio)", "type": "int", "min": 1,
+     "help": "Separate, larger budget for the workflow-authoring assistant. One design turn "
+             "spends ~9 calls (research, preview, validate, save, save tests, run tests, fix, "
+             "re-save); too low and it stops mid-design after saving."},
+    {"group": "Agent", "key": "AGENT_MAX_RESPONSE_TOKENS",
+     "label": "Max response tokens per turn", "type": "int", "min": 256,
+     "help": "Output ceiling for one LLM turn, including tool-call arguments. Saving a "
+             "workflow sends the whole graph plus its playbook in one call — if this is "
+             "too low the arguments arrive cut off and the tool reports missing fields."},
     {"group": "Agent", "key": "AGENT_TIMEOUT_SECONDS", "label": "Turn timeout (seconds)",
      "type": "int", "min": 1, "help": "Wall-clock cap for a single agent turn."},
     {"group": "Agent", "key": "AGENT_MAX_TOOL_OUTPUT_CHARS", "label": "Max tool output (chars)",
@@ -176,6 +186,32 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Agent", "key": "WORKFLOW_AUTHORING_LOCKED", "label": "Lock workflow authoring",
      "type": "bool",
      "help": "On = no in-place workflow editing; workflows change only via bundle import. Usually locked in prod."},
+
+    # --- Workflow tests --------------------------------------------------
+    {"group": "Workflow tests", "key": "WORKFLOW_TESTS_ENABLED", "label": "Enable workflow tests",
+     "type": "bool",
+     "help": "On = admins can run a workflow's test cases from Workflow Studio. Each case starts a real agent "
+             "conversation with every mutating tool sandboxed (nothing is provisioned), so it costs model calls. "
+             "Off = the Tests tab is read-only."},
+    {"group": "Workflow tests", "key": "WORKFLOW_TEST_CONCURRENCY", "label": "Cases run in parallel",
+     "type": "int", "min": 1, "max": 10,
+     "help": "How many cases of one 'Run all' execute at the same time. Each is a full agent turn, so raising "
+             "this multiplies load on the model endpoint."},
+    {"group": "Workflow tests", "key": "WORKFLOW_TEST_TIMEOUT_SECONDS", "label": "Per-case timeout (seconds)",
+     "type": "int", "min": 30,
+     "help": "Wall-clock cap for one case (agent run plus judge). A case that exceeds it is recorded as an error "
+             "rather than holding the run open."},
+    {"group": "Workflow tests", "key": "WORKFLOW_TEST_PASS_THRESHOLD", "label": "Pass threshold (score)",
+     "type": "int", "min": 0, "max": 100,
+     "help": "Judge score at or above which a case counts as passing. The judge also returns its own verdict; "
+             "this is the numeric bar applied to it."},
+    {"group": "Workflow tests", "key": "WORKFLOW_TEST_RUNS_PER_HOUR", "label": "Max cases per admin per hour",
+     "type": "int", "min": 1,
+     "help": "Rate limit on this agent-invocation surface, counted per admin across run groups."},
+    {"group": "Workflow tests", "key": "WORKFLOW_TESTS_BLOCK_PUBLISH", "label": "Block publish on failing tests",
+     "type": "bool",
+     "help": "On = a workflow with a failing or never-run enabled case cannot be published. Off (default) = the "
+             "publish confirmation warns instead, since the judge is non-deterministic."},
 
     # --- User context (the cached user model) ----------------------------
     {"group": "Agent", "key": "USER_CONTEXT_SECTIONS", "label": "User context sections",

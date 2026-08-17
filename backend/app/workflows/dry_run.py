@@ -57,9 +57,18 @@ def project_run(
                 "waiting_status": stage.waiting_status,
                 "can_auto_approve": stage.auto_approve is not None,
             }
+            if stage.type == "manual_task":
+                entry["instructions"] = stage.instructions
+                if stage.due_in_days:
+                    entry["due_in_days"] = stage.due_in_days
             try:
                 if stage.auto_approve is not None and stage.auto_approve(ctx):
                     entry["decision"] = "auto_approve"
+                elif stage.type == "manual_task":
+                    # Not an approval: a person does work off-platform and marks it
+                    # done. Reporting it as "requires approval" would tell the
+                    # author this workflow is authorized when it isn't.
+                    entry["decision"] = "awaits_manual_completion"
                 else:
                     entry["decision"] = "requires_approval"
             except Exception as e:  # noqa: BLE001 - surface eval errors to the author

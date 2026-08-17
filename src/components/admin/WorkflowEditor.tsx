@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
+  ClipboardCheck,
   Gauge,
   GitBranch,
   GripVertical,
@@ -35,6 +36,7 @@ import {
   exprToArgValue,
   modelToAutoApprove,
   newGate,
+  newManualTask,
   newStep,
   newSubWorkflow,
   type ArgKind,
@@ -60,9 +62,17 @@ interface Props {
   onChange: (spec: WorkflowGraphSpec) => void;
   /** Opens the in-page authoring assistant panel (instead of a new chat tab). */
   onAskAgent?: () => void;
+  /** The workflow's runtime playbook, so Evaluate can score it alongside the graph. */
+  instructionsMarkdown?: string | null;
 }
 
-export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
+export function WorkflowEditor({
+  spec,
+  tools,
+  onChange,
+  onAskAgent,
+  instructionsMarkdown,
+}: Props) {
   const [selectedIdx, setSelectedIdx] = useState<number | null>(
     spec.stages.length ? 0 : null,
   );
@@ -115,6 +125,12 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
 
   const addCall = () => {
     const next = [...stages, newSubWorkflow(stages.length + 1)];
+    setStages(next);
+    setSelectedIdx(next.length - 1);
+  };
+
+  const addManualTask = () => {
+    const next = [...stages, newManualTask(stages.length + 1)];
     setStages(next);
     setSelectedIdx(next.length - 1);
   };
@@ -181,10 +197,13 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
           <Button type="button" variant="outline" size="sm" onClick={addStep}>
             <Wrench className="w-3.5 h-3.5 mr-1" /> Add step
           </Button>
+          <Button type="button" variant="outline" size="sm" onClick={addManualTask}>
+            <ClipboardCheck className="w-3.5 h-3.5 mr-1" /> Add manual task
+          </Button>
           <Button type="button" variant="outline" size="sm" onClick={addCall}>
             <Layers className="w-3.5 h-3.5 mr-1" /> Call workflow
           </Button>
-          <HelpTip text="A workflow runs its stages top to bottom. Add a gate for a human/event approval the request pauses on, a step to run one governed tool, or 'Call workflow' to nest another published workflow inline (compound). A rejection inside the nested workflow rejects this one. Drag to reorder." />
+          <HelpTip text="A workflow runs its stages top to bottom. Add a gate for a human/event approval the request pauses on, a step to run one governed tool, 'Add manual task' to hold the request while a person does work there's no tool for (they mark it done), or 'Call workflow' to nest another published workflow inline (compound). A rejection inside the nested workflow rejects this one. Drag to reorder." />
           <AskAgentHint className="ml-1" onClick={onAskAgent} label="Ask the agent" />
         </div>
         <div className="flex items-center gap-3">
@@ -263,7 +282,9 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
             >
               <GripVertical className="w-3.5 h-3.5 text-gray-300 shrink-0 cursor-grab" />
               <span className="text-[10px] text-gray-400 w-4">{idx + 1}</span>
-              {s.kind === 'gate' ? (
+              {s.kind === 'gate' && s.type === 'manual_task' ? (
+                <ClipboardCheck className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+              ) : s.kind === 'gate' ? (
                 <GitBranch className="w-3.5 h-3.5 text-amber-600 shrink-0" />
               ) : s.kind === 'subworkflow' ? (
                 <Layers className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
@@ -273,7 +294,9 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
               <span className="text-sm truncate flex-1">{s.name || '(unnamed)'}</span>
               <span className="text-[10px] text-gray-400 truncate max-w-[64px]">
                 {s.kind === 'gate'
-                  ? s.type
+                  ? s.type === 'manual_task'
+                    ? 'manual'
+                    : s.type
                   : s.kind === 'subworkflow'
                     ? (s as WorkflowSubWorkflowStage).ref || 'workflow'
                     : (s as WorkflowStepStage).tool}
@@ -303,7 +326,9 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
           <div className="border border-gray-200 rounded-md">
             <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2.5 bg-gray-50/60 rounded-t-md">
               <div className="flex items-center gap-2 text-sm font-semibold text-gray-700">
-                {selected.kind === 'gate' ? (
+                {selected.kind === 'gate' && selected.type === 'manual_task' ? (
+                  <ClipboardCheck className="w-4 h-4 text-amber-600" />
+                ) : selected.kind === 'gate' ? (
                   <GitBranch className="w-4 h-4 text-amber-600" />
                 ) : selected.kind === 'subworkflow' ? (
                   <Layers className="w-4 h-4 text-indigo-600" />
@@ -311,7 +336,9 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
                   <Wrench className="w-4 h-4 text-blue-600" />
                 )}
                 {selected.kind === 'gate'
-                  ? 'Gate'
+                  ? selected.type === 'manual_task'
+                    ? 'Manual task'
+                    : 'Gate'
                   : selected.kind === 'subworkflow'
                     ? 'Call workflow'
                     : 'Provision step'}
@@ -368,7 +395,13 @@ export function WorkflowEditor({ spec, tools, onChange, onAskAgent }: Props) {
       </div>
 
       {showTest && <WorkflowTestModal spec={spec} onClose={() => setShowTest(false)} />}
-      {showEvaluate && <WorkflowEvaluationModal spec={spec} onClose={() => setShowEvaluate(false)} />}
+      {showEvaluate && (
+        <WorkflowEvaluationModal
+          spec={spec}
+          instructionsMarkdown={instructionsMarkdown}
+          onClose={() => setShowEvaluate(false)}
+        />
+      )}
     </div>
   );
 }
@@ -429,16 +462,33 @@ function GateForm({
     <>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <LabelWithHelp className={labelClass} help="The kind of gate the request pauses on — NOT a group name. manager / platform_admin / data_owner are human approvals; training waits for a completed training, pr_merge for a merged PR, and children for all spawned child requests. To send approval to a specific group, pick a human type and set the Approver group below.">
+          <LabelWithHelp className={labelClass} help="The kind of gate the request pauses on — NOT a group name. manager / platform_admin / data_owner are human approvals; training waits for a completed training, pr_merge for a merged PR, and children for all spawned child requests. manual_task holds the request while a person does work there's no tool for, then they mark it done (it is not an approval). To send approval to a specific group, pick a human type and set the Approver group below.">
             Gate type
           </LabelWithHelp>
           <select
             className={inputClass}
             value={gate.type}
-            onChange={(e) => onChange({ type: e.target.value as GateType })}
+            onChange={(e) => {
+              const type = e.target.value as GateType;
+              // `instructions` / `due_in_days` are only valid on manual_task and
+              // `course_code` only on training — leaving a stale one behind fails
+              // spec validation on save with a confusing message.
+              const patch: Partial<WorkflowGateStage> = { type };
+              if (type !== 'manual_task') {
+                patch.instructions = null;
+                patch.due_in_days = null;
+              }
+              if (type !== 'training') {
+                patch.course_code = null;
+                patch.course_name = null;
+              }
+              onChange(patch);
+            }}
           >
             {GATE_TYPES.map((t) => (
-              <option key={t} value={t}>{t}</option>
+              <option key={t} value={t}>
+                {t === 'manual_task' ? 'manual_task (hold for manual work)' : t}
+              </option>
             ))}
           </select>
         </div>
@@ -477,11 +527,68 @@ function GateForm({
         </div>
       )}
 
+      {gate.type === 'manual_task' && (
+        <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3 space-y-3">
+          <div>
+            <LabelWithHelp
+              className={labelClass}
+              help="What the assignee must do off-platform, shown verbatim in their approvals inbox. Be specific enough that someone who didn't author this workflow can complete it — name the system, the values to use, and how to tell it worked. Required."
+            >
+              Manual work instructions
+            </LabelWithHelp>
+            <textarea
+              className={inputClass}
+              rows={4}
+              value={gate.instructions || ''}
+              placeholder={
+                'e.g. In the IdP admin console, add the requester to the "analytics-sso" app ' +
+                'and confirm they can sign in. Reply on the ticket with the app assignment ID.'
+              }
+              onChange={(e) => onChange({ instructions: e.target.value })}
+            />
+            {!(gate.instructions || '').trim() && (
+              <div className="text-[11px] text-red-500 mt-1">
+                Required — without instructions the assignee just sees an unexplained pending task.
+              </div>
+            )}
+          </div>
+          <div>
+            <LabelWithHelp
+              className={labelClass}
+              help="Optional SLA in days. A manual task can park a request indefinitely; setting this makes an ignored task show as overdue in the approvals inbox."
+            >
+              Due within (days)
+            </LabelWithHelp>
+            <input
+              className={inputClass}
+              type="number"
+              min={1}
+              value={gate.due_in_days ?? ''}
+              placeholder="e.g. 3"
+              onChange={(e) => {
+                const raw = e.target.value.trim();
+                const n = Number.parseInt(raw, 10);
+                onChange({ due_in_days: raw && Number.isFinite(n) && n > 0 ? n : null });
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       <GateApproverField gate={gate} onChange={onChange} />
 
       <div>
-        <LabelWithHelp className={labelClass} help="Optionally skip the human approval when a condition holds (e.g. low-risk scope). 'Never' always requires approval; 'When a condition is met' builds a simple rule; 'Advanced' is a raw expression for complex logic.">
-          Auto-approve (skip this gate when…)
+        <LabelWithHelp
+          className={labelClass}
+          help={
+            gate.type === 'manual_task'
+              ? "Optionally skip the manual work when a condition holds (e.g. the account is already provisioned). 'Never' always holds for a person."
+              : "Optionally skip the human approval when a condition holds (e.g. low-risk scope). 'Never' always requires approval; 'When a condition is met' builds a simple rule; 'Advanced' is a raw expression for complex logic."
+          }
+        >
+          {gate.type === 'manual_task'
+            ? 'Auto-complete (skip the manual work when…)'
+            : 'Auto-approve (skip this gate when…)'}
         </LabelWithHelp>
         <select
           className={inputClass}
@@ -500,7 +607,11 @@ function GateForm({
             }
           }}
         >
-          <option value="always">Never — always require approval</option>
+          <option value="always">
+            {gate.type === 'manual_task'
+              ? 'Never — always hold for a person'
+              : 'Never — always require approval'}
+          </option>
           <option value="conditions">When a condition is met</option>
           <option value="advanced">Advanced (raw expression)</option>
         </select>
@@ -527,8 +638,15 @@ function GateForm({
   );
 }
 
-// Human gate types where routing an approval to a specific group makes sense.
-const HUMAN_GATE_TYPES: GateType[] = ['manager', 'platform_admin', 'data_owner'];
+// Gate types that pause for a *person*, so routing the task to a specific group
+// makes sense. `manual_task` is included because an unassigned manual task is
+// nobody's job — it would sit in the inbox until someone happens to notice.
+const HUMAN_GATE_TYPES: GateType[] = [
+  'manager',
+  'platform_admin',
+  'data_owner',
+  'manual_task',
+];
 
 type ApproverSource = 'default' | 'group' | 'approver_group_tag';
 
@@ -541,6 +659,7 @@ function GateApproverField({
 }) {
   const isHuman = HUMAN_GATE_TYPES.includes(gate.type);
   const source: ApproverSource = gate.approver?.source ?? 'default';
+  const isManual = gate.type === 'manual_task';
 
   if (!isHuman) {
     return (
@@ -573,26 +692,41 @@ function GateApproverField({
       <div>
         <LabelWithHelp
           className={labelClass}
-          help="Who can approve this human gate. 'Default' uses the gate type's built-in routing (e.g. manager → the requester's manager). 'Specific group' sends it to any member of a group you name. 'From data's approver_group tag' resolves the group from the Unity Catalog approver_group tag on the requested assets."
+          help={
+            isManual
+              ? "Who does the manual work. 'Specific group' assigns the task to any member of a group you name — pick this one. 'Default' falls back to platform admins, which is rarely who should be doing the work."
+              : "Who can approve this human gate. 'Default' uses the gate type's built-in routing (e.g. manager → the requester's manager). 'Specific group' sends it to any member of a group you name. 'From data's approver_group tag' resolves the group from the Unity Catalog approver_group tag on the requested assets."
+          }
         >
-          Approver group
+          {isManual ? 'Assigned to' : 'Approver group'}
         </LabelWithHelp>
         <select
           className={inputClass}
           value={source}
           onChange={(e) => setSource(e.target.value as ApproverSource)}
         >
-          <option value="default">Default for this gate type</option>
+          <option value="default">
+            {isManual ? 'Default (platform admins)' : 'Default for this gate type'}
+          </option>
           <option value="group">Specific group</option>
           <option value="approver_group_tag">From data's approver_group tag</option>
         </select>
+        {isManual && source === 'default' && (
+          <div className="text-[11px] text-amber-600 mt-1">
+            Assign this to the team that actually performs the work, or it lands on platform admins.
+          </div>
+        )}
       </div>
 
       {source === 'group' && (
         <div>
           <LabelWithHelp
             className={labelClass}
-            help="Any member of this group (a Databricks account group or role name) can approve. The pending approval task is assigned to this group."
+            help={
+              isManual
+                ? 'Any member of this group (a Databricks account group or role name) can complete the task and mark it done.'
+                : 'Any member of this group (a Databricks account group or role name) can approve. The pending approval task is assigned to this group.'
+            }
           >
             Group name
           </LabelWithHelp>

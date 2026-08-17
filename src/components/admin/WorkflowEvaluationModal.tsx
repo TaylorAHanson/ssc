@@ -11,6 +11,10 @@ import type {
 
 interface Props {
   spec: WorkflowGraphSpec;
+  /** The runtime playbook, scored as its own dimension: it's the prompt the
+   *  self-service agent follows, so a great graph with stub instructions is not
+   *  a good workflow. */
+  instructionsMarkdown?: string | null;
   onClose: () => void;
 }
 
@@ -99,7 +103,7 @@ function FindingRow({ f }: { f: EvaluationFinding }) {
   );
 }
 
-export function WorkflowEvaluationModal({ spec, onClose }: Props) {
+export function WorkflowEvaluationModal({ spec, instructionsMarkdown, onClose }: Props) {
   const [result, setResult] = useState<WorkflowEvaluation | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -108,7 +112,7 @@ export function WorkflowEvaluationModal({ spec, onClose }: Props) {
     setRunning(true);
     setError(null);
     try {
-      setResult(await api.evaluateSpec(spec));
+      setResult(await api.evaluateSpec(spec, instructionsMarkdown ?? ''));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Evaluation failed');
       setResult(null);
@@ -164,7 +168,11 @@ export function WorkflowEvaluationModal({ spec, onClose }: Props) {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div
+                className={`grid grid-cols-1 gap-3 ${
+                  result.instructions ? 'sm:grid-cols-3' : 'sm:grid-cols-2'
+                }`}
+              >
                 <ScoreCard
                   label="Risk"
                   hint="Is this safe? Higher is riskier."
@@ -195,7 +203,36 @@ export function WorkflowEvaluationModal({ spec, onClose }: Props) {
                         : 'bg-red-500'
                   }
                 />
+                {result.instructions && (
+                  <ScoreCard
+                    label="Instructions"
+                    hint="Does the runtime playbook cover it? Higher is better."
+                    score={result.instructions.score}
+                    tier={result.instructions.tier}
+                    styles={QUALITY_TIER_STYLES}
+                    barClass={
+                      result.instructions.score >= 65
+                        ? 'bg-green-500'
+                        : result.instructions.score >= 40
+                          ? 'bg-amber-500'
+                          : 'bg-red-500'
+                    }
+                  />
+                )}
               </div>
+
+              {result.instructions && (
+                <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
+                  Playbook: {result.instructions.summary.documented_inputs}/
+                  {result.instructions.summary.total_inputs} input
+                  {result.instructions.summary.total_inputs === 1 ? '' : 's'} documented
+                  {' · '}
+                  {result.instructions.summary.chars} characters
+                  {result.instructions.summary.is_auto_baseline && (
+                    <> {' · '}<span className="text-amber-700">still the auto-generated baseline</span></>
+                  )}
+                </div>
+              )}
 
               {result.summary && (
                 <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
@@ -213,22 +250,46 @@ export function WorkflowEvaluationModal({ spec, onClose }: Props) {
                 </div>
               )}
 
-              <div>
-                <div className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
-                  Findings ({result.findings.length})
-                </div>
-                {result.findings.length === 0 ? (
-                  <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-3 py-2 flex items-center gap-2">
-                    <Sparkles className="w-4 h-4" /> No issues found — looks safe and complete.
+              {(() => {
+                // Instruction findings share the finding shape but carry no stage,
+                // so they render in the same list under their own category.
+                const allFindings: EvaluationFinding[] = [
+                  ...result.findings,
+                  ...(result.instructions?.findings ?? []).map((f) => ({
+                    severity: f.severity,
+                    category: 'instructions',
+                    message: f.message,
+                    stage: null,
+                    fix: f.fix,
+                  })),
+                ];
+                const rank: Record<string, number> = {
+                  critical: 0,
+                  high: 1,
+                  medium: 2,
+                  low: 3,
+                  info: 4,
+                };
+                allFindings.sort((a, b) => (rank[a.severity] ?? 5) - (rank[b.severity] ?? 5));
+                return (
+                  <div>
+                    <div className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
+                      Findings ({allFindings.length})
+                    </div>
+                    {allFindings.length === 0 ? (
+                      <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-3 py-2 flex items-center gap-2">
+                        <Sparkles className="w-4 h-4" /> No issues found — looks safe and complete.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {allFindings.map((f, i) => (
+                          <FindingRow key={i} f={f} />
+                        ))}
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div className="space-y-2">
-                    {result.findings.map((f, i) => (
-                      <FindingRow key={i} f={f} />
-                    ))}
-                  </div>
-                )}
-              </div>
+                );
+              })()}
             </>
           )}
         </div>

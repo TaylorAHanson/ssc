@@ -9,7 +9,10 @@ from app.db import ApprovalModel, RequestModel
 from app.models.request import Approval, ApprovalType
 from app.api.deps import get_current_user
 from app.models.user import User
-from app.services.approval_scope import approval_visibility_filter
+from app.services.approval_scope import (
+    allowed_approval_types,
+    approval_visibility_filter,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -64,6 +67,10 @@ def _map_approval(approval_model: ApprovalModel, request_model: RequestModel) ->
         supersededNote=approval_model.superseded_note,
         requestConversation=request_model.conversation,
         workflowParameters=_get_workflow_params(request_model.state_context),
+        # Manual-task items carry the work description; without it the inbox row
+        # is an unexplained "something is waiting on you".
+        instructions=approval_model.instructions,
+        dueAt=approval_model.due_at,
     )
 
 
@@ -122,17 +129,12 @@ async def get_approval(
         
     approval_model, request_model = result
     
-    # Check permission
-    allowed_types = []
-    if current_user.has_role("Platform Admin"):
-        # Platform Admins can see all approvals
-        allowed_types.extend(["platform_admin", "manager", "data_owner", "security", "security_admin", "finance_admin", "governance_admin"])
-    if current_user.has_role("Governance Admin"): allowed_types.append("governance_admin")
-    if current_user.has_role("Security Admin"): 
-        allowed_types.append("security")
-        allowed_types.append("security_admin")
-    if current_user.has_role("Finance Admin"): allowed_types.append("finance_admin")
-        
+    # Same rules as the inbox list above, from the shared table rather than a
+    # second hand-maintained copy: this one had already drifted (it predated
+    # ``manual_task``, so a manual task nobody was assigned 403'd here while the
+    # list endpoint showed it).
+    allowed_types = allowed_approval_types(current_user.roles)
+
     is_assigned = approval_model.assigned_to_email == current_user.email
     is_delegated = approval_model.delegated_to_email == current_user.email
     is_role_assigned = approval_model.assigned_to_role in current_user.entitlements

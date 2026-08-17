@@ -229,7 +229,13 @@ export const GATE_TYPES: GateType[] = [
   'data_owner',
   'training',
   'pr_merge',
+  'manual_task',
 ];
+
+/** Gate types where a *person* completes work rather than authorizing it. They
+ *  still pause the request and appear in the approvals inbox, but they are not
+ *  approvals — don't let one stand in for authorization. */
+export const COMPLETION_GATE_TYPES: GateType[] = ['manual_task'];
 
 /** Lay a spec out top-to-bottom: pending -> stages -> complete, gates branch to rejected. */
 export function specToFlow(spec: WorkflowGraphSpec): { nodes: FlowNode[]; edges: FlowEdge[] } {
@@ -255,18 +261,27 @@ export function specToFlow(spec: WorkflowGraphSpec): { nodes: FlowNode[]; edges:
     const id = s.name;
     if (s.kind === 'gate') {
       anyGate = true;
-      let sublabel = `${s.type} gate`;
+      const manual = s.type === 'manual_task';
+      let sublabel = manual ? 'manual task' : `${s.type} gate`;
       const approver = (s as { approver?: { source?: string; group?: string } }).approver;
       if (approver?.source === 'group' && approver.group) {
-        sublabel = `${s.type} · ${approver.group}`;
+        sublabel = `${manual ? 'manual task' : s.type} · ${approver.group}`;
       } else if (approver?.source === 'approver_group_tag') {
-        sublabel = `${s.type} · owner tag`;
+        sublabel = `${manual ? 'manual task' : s.type} · owner tag`;
       }
       nodes.push({
         id, label: s.name, sublabel, kind: 'gate', x: COL_X, y: row * ROW,
       });
       edges.push({ id: `${prev}->${id}`, source: prev, target: id });
-      edges.push({ id: `${id}->rejected`, source: id, target: 'rejected', label: 'reject', tone: 'reject' });
+      // A manual task can still fail — the assignee may be unable to do the work —
+      // but calling that branch "reject" implies authorization it never granted.
+      edges.push({
+        id: `${id}->rejected`,
+        source: id,
+        target: 'rejected',
+        label: manual ? "can't complete" : 'reject',
+        tone: 'reject',
+      });
     } else if (s.kind === 'subworkflow') {
       // A nested workflow can reject (the child routes to its rejected node),
       // which rejects the parent — show that branch like a gate's.
@@ -363,6 +378,19 @@ export function collectVarPaths(spec: WorkflowGraphSpec): string[] {
 
 export function newGate(index: number): WorkflowStage {
   return { kind: 'gate', name: `approval_${index}`, type: 'manager', waiting_status: 'manager_approval' };
+}
+
+/** A hold for work the platform has no tool for. Starts with empty instructions
+ *  on purpose: they're required, and the editor flags the gap rather than
+ *  shipping placeholder text to whoever gets assigned the task. */
+export function newManualTask(index: number): WorkflowStage {
+  return {
+    kind: 'gate',
+    name: `manual_task_${index}`,
+    type: 'manual_task',
+    waiting_status: 'manual_task_pending',
+    instructions: '',
+  };
 }
 
 export function newStep(index: number, defaultTool: string): WorkflowStage {

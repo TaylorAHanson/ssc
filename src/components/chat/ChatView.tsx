@@ -122,6 +122,14 @@ export interface ChatViewProps {
         ok: boolean,
         args?: Record<string, unknown>,
     ) => void;
+    /**
+     * Extra request context merged into every turn's `context` alongside `mode`.
+     * Read fresh at submit time (not captured at mount), so a host can pass live
+     * page state — e.g. the workflow authoring studio sends the draft currently
+     * open in the editor, including unsaved edits, so the agent works from what
+     * the admin sees instead of the saved database copy.
+     */
+    extraContext?: () => Record<string, unknown>;
 }
 
 /**
@@ -152,6 +160,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         formCtaLabelFor,
         emptyStateExtras,
         onToolResult,
+        extraContext,
     },
     ref,
 ) {
@@ -194,6 +203,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     const geniePollTimeoutSeconds = useBrandingStore((s) => s.geniePollTimeoutSeconds);
     const messagesEndRef = useRef<HTMLDivElement | null>(null);
     const modeDropdownRef = useRef<HTMLDivElement | null>(null);
+    // Held in a ref so even a continuation turn fired from an older closure reads
+    // the host's *current* page state rather than a stale snapshot.
+    const extraContextRef = useRef(extraContext);
+    extraContextRef.current = extraContext;
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -535,7 +548,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 {
                     query: opts.isContinuation ? '' : userText,
                     conversation_history: history,
-                    context: { mode },
+                    context: { mode, ...(extraContextRef.current?.() ?? {}) },
                     // Ties the turn to the stored transcript. An ephemeral chat
                     // (no storage key) has no session to tie it to.
                     session_id: storageKey ? getSessionId(storageKey) : undefined,

@@ -26,6 +26,14 @@ class ApprovalModel(Base):
     delegated_to = Column(String, nullable=True)
     delegated_to_email = Column(String, nullable=True)
     superseded_note = Column(Text, nullable=True)  # Set when parameters are edited & approval is superseded
+    # For 'manual_task' items: what the assignee must actually DO before marking it
+    # done. Carried from the gate's interrupt payload because the whole point of a
+    # manual task is work the platform has no tool for — without the text, the
+    # inbox item is an unexplained "something is waiting on you".
+    instructions = Column(Text, nullable=True)
+    # Optional SLA for manual tasks. A manual task can park a request
+    # indefinitely, so the inbox needs to be able to show what's overdue.
+    due_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     

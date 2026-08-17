@@ -123,6 +123,78 @@ async def test_capability_scope_refuses_out_of_scope_mutating_tool(monkeypatch):
     assert await executor.run(read, ctx_read, q="x") == {"ok": True}
 
 
+# --- Dry run (workflow test sandbox) ---------------------------------------
+#
+# A workflow test case starts the REAL agent, so the only thing standing between
+# "verify this workflow behaves" and a real grant/provision is this flag. It is
+# enforced at the executor rather than per tool precisely so no individual tool
+# can forget about it.
+
+
+@pytest.mark.asyncio
+async def test_dry_run_simulates_mutating_tools_without_executing_them(monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "AGENT_TOOL_OPA_ENFORCE", False, raising=False)
+
+    tool = _FakeTool("grant_access", is_mutating=True, result={"granted": True},
+                     side_effect_class="data_grant")
+    executor = ToolExecutor()
+
+    async def _allow(t, args, c):
+        return {"allow": True, "requires_approval": False, "approval_type": "", "reason": "ok"}
+    monkeypatch.setattr(executor, "_evaluate_policy", _allow)
+
+    ctx = ToolContext(tool_call_id="dr-1", user_identity={"email": "u@corp.com"},
+                      dry_run=True)
+    out = await executor.run(tool, ctx, target="grp")
+
+    # Nothing ran, and the agent still gets a plausible success so the
+    # conversation continues far enough to be judged.
+    assert tool.received_kwargs is None
+    assert out.get("ok") is True
+    assert out.get("dry_run") is True
+    assert out.get("status") == "simulated"
+    # The arguments it *would* have used are kept so the judge can check them.
+    assert out.get("args", {}).get("target") == "grp"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_still_executes_read_tools():
+    """Reads have to work or a test transcript is meaningless — the agent could
+    never look anything up to answer with."""
+    tool = _FakeTool("lookup", is_mutating=False, result={"rows": [1, 2]})
+    ctx = ToolContext(tool_call_id="dr-2", user_identity={"email": "u@corp.com"},
+                      dry_run=True)
+    out = await ToolExecutor().run(tool, ctx, q="x")
+    assert out == {"rows": [1, 2]}
+    assert tool.received_kwargs["q"] == "x"
+
+
+def test_dry_run_does_not_write_audit_facts(monkeypatch):
+    """A sandboxed run must not leave governance history behind, or the audit
+    trail fills with things that never happened."""
+    written: list = []
+    monkeypatch.setattr(
+        "app.state_machines.facts.add_fact",
+        lambda *a, **k: written.append(a),
+    )
+
+    tool = _FakeTool("grant_access", is_mutating=True, result={"granted": True},
+                     side_effect_class="data_grant")
+    executor = ToolExecutor()
+    # A db + scope is what makes _audit actually persist, so the flag is the only
+    # thing suppressing the write here.
+    ctx = ToolContext(tool_call_id="dr-3", user_identity={"email": "u@corp.com"},
+                      db=object(), scope_id="req-1", dry_run=True)
+    executor._audit(tool, ctx, ok=True, decision=None, result={"granted": True})
+    assert written == []
+
+    live = ToolContext(tool_call_id="dr-4", user_identity={"email": "u@corp.com"},
+                       db=object(), scope_id="req-1")
+    executor._audit(tool, live, ok=True, decision=None, result={"granted": True})
+    assert len(written) == 1, "a non-dry-run call should still be audited"
+
+
 # --- Identity spoofing -----------------------------------------------------
 #
 # Many tools scope their reads by the injected ``_user_email`` (the user-context

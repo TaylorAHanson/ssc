@@ -121,6 +121,53 @@ def _backfill_request_state_summary(engine: Engine) -> None:
     )
 
 
+def _prune_orphaned_workflow_children(engine: Engine) -> None:
+    """Delete test cases, test runs, and versions whose workflow no longer exists.
+
+    ``WorkflowService.delete`` used to remove only the workflow row, so every
+    deleted workflow left its children behind. They're unreachable (every read
+    path joins on ``workflow_id``) but they were confusing in aggregate: an admin
+    who deleted a workflow and re-created the same key got a fresh uuid and an
+    empty Tests tab, with the old cases still sitting in the table.
+
+    Idempotent: after the first run these queries match nothing.
+    """
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if "workflows" not in tables:
+        return
+    total = 0
+    with engine.begin() as conn:
+        # Never prune against an empty parent table. This is an unconditional
+        # DELETE keyed on the contents of ``workflows``, and it runs on every boot:
+        # if the app ever starts while that table is empty but its children aren't
+        # (a half-restored backup, a truncate-and-reseed), "orphaned" describes
+        # every row — including the published version snapshots that are the only
+        # rollback path. Same reasoning as the bundle import refusing an empty
+        # bundle. When workflows exist, a genuinely orphaned child is still pruned.
+        if not conn.execute(text("SELECT 1 FROM workflows LIMIT 1")).first():
+            logger.info(
+                "Migration: skipped orphan prune — the workflows table is empty, so "
+                "every test/version row would look orphaned."
+            )
+            return
+        for table in ("workflow_test_runs", "workflow_tests", "workflow_versions"):
+            if table not in tables:
+                continue
+            result = conn.execute(
+                text(
+                    f"DELETE FROM {table} WHERE workflow_id NOT IN "
+                    "(SELECT id FROM workflows)"
+                )
+            )
+            total += result.rowcount or 0
+    if total:
+        logger.info(
+            "Migration: pruned %d orphaned workflow test/version rows "
+            "(their workflow was deleted)", total,
+        )
+
+
 def run_startup_migrations(engine: Engine) -> None:
     """Apply in-place schema renames. Safe to call on every startup."""
     try:
@@ -135,6 +182,13 @@ def run_startup_migrations(engine: Engine) -> None:
         _bool_ddl = "BOOLEAN DEFAULT FALSE" if engine.dialect.name == "postgresql" else "INTEGER DEFAULT 0"
         _add_column(engine, "workflows", "disabled", _bool_ddl)
         _add_index(engine, "ix_workflows_disabled", "workflows", ["disabled"])
+        # Workflow snapshots: distinguish released versions from pre-overwrite
+        # draft backups. Publishing used to be the only thing that snapshotted, so
+        # an authoring-assistant save over a draft was unrecoverable.
+        _add_column(
+            engine, "workflow_versions", "kind", "VARCHAR DEFAULT 'publish'",
+        )
+        _add_column(engine, "workflow_versions", "note", "VARCHAR")
         # Context Catalog retrieval-usage signal columns.
         _add_column(engine, "context_documents", "retrieval_count", "INTEGER DEFAULT 0")
         _add_column(engine, "context_documents", "last_retrieved_at", "TIMESTAMP")
@@ -190,5 +244,10 @@ def run_startup_migrations(engine: Engine) -> None:
         _add_index(engine, "ix_approvals_assigned_to_email", "approvals", ["assigned_to_email"])
         _add_index(engine, "ix_approvals_assigned_to_role", "approvals", ["assigned_to_role"])
         _add_index(engine, "ix_approvals_status", "approvals", ["status"])
+        # Manual-task gates: the work instructions shown in the inbox, plus an
+        # optional SLA so an indefinitely-parked task can be surfaced as overdue.
+        _add_column(engine, "approvals", "instructions", "TEXT")
+        _add_column(engine, "approvals", "due_at", "TIMESTAMP")
+        _prune_orphaned_workflow_children(engine)
     except Exception as e:  # noqa: BLE001 - never block startup on a migration
         logger.warning("Startup migration step failed (continuing): %s", e)

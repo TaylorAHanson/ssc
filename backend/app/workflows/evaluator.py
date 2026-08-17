@@ -43,8 +43,10 @@ RISK_BY_CLASS: Dict[str, int] = {
 # Classes that genuinely change external/governed state and therefore really want
 # a human approval gate in front of them.
 RISKY_CLASSES = {"destructive", "data_grant", "membership", "infra"}
-# Gate kinds that constitute *authorization* (a human signs off). ``training`` is
-# a completion gate, not an approval; ``children`` is deprecated.
+# Gate kinds that constitute *authorization* (a human signs off). ``training`` and
+# ``manual_task`` are completion gates, not approvals — a manual task is
+# deliberately excluded so an author can't silence "risky mutation with no
+# approval" by dropping a task in front of it; ``children`` is deprecated.
 APPROVAL_GATE_TYPES = {"manager", "platform_admin", "data_owner", "pr_merge"}
 DEPRECATED_GATE_TYPES = {"children"}
 
@@ -184,6 +186,38 @@ def evaluate_spec(spec_dict: Dict[str, Any], db: Any = None) -> Dict[str, Any]:
                     risk_raw += 10
                 else:
                     effective_approval_gates.append(gtype)
+            if gtype == "manual_task":
+                # A manual task parks the request until a person acts, so an
+                # unassigned or unexplained one is a request that quietly stalls
+                # forever. Its own finding rather than the approval-gate checks,
+                # since completing work isn't authorizing it.
+                if not stage.get("approver") and not stage.get("approvers_from"):
+                    add(
+                        "high",
+                        "reliability",
+                        f"Manual task '{name}' has no assignee, so the request will park "
+                        "with nobody responsible for finishing it.",
+                        stage=name,
+                        fix="Set an 'approver' (e.g. {'source':'group','group':'platform-ops'}).",
+                    )
+                if not str(stage.get("instructions") or "").strip():
+                    add(
+                        "high",
+                        "completeness",
+                        f"Manual task '{name}' has no instructions, so whoever it lands on "
+                        "won't know what to do.",
+                        stage=name,
+                        fix="Describe the off-platform work the assignee must complete.",
+                    )
+                if not stage.get("due_in_days"):
+                    add(
+                        "low",
+                        "reliability",
+                        f"Manual task '{name}' has no due_in_days, so an ignored task is "
+                        "never visibly overdue.",
+                        stage=name,
+                        fix="Set due_in_days to make aging visible in the approvals inbox.",
+                    )
             if gtype == "data_owner" and not stage.get("approver") and not stage.get("approvers_from"):
                 add(
                     "medium",

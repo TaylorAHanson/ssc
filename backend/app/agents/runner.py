@@ -173,12 +173,18 @@ class AgentRunner:
         mode: str = "self_service",
         model_endpoint: Optional[str] = None,
         user_context_block: Optional[str] = None,
+        surface_context_block: Optional[str] = None,
+        dry_run: bool = False,
     ):
         self.llm_client = AgentLLMClient(endpoint_name=model_endpoint)
         self.tools = tools or []
         self.max_iterations = max_iterations
         self.user_identity = user_identity or {}
         self.mode = mode
+        # Sandbox for workflow tests: forwarded to every ToolContext so the
+        # executor simulates mutating calls instead of running them. Set only by
+        # the test runner — a normal turn must never be silently faked.
+        self.dry_run = dry_run
 
         # Build standard system prompt if not provided
         if system_prompt is None:
@@ -196,6 +202,12 @@ class AgentRunner:
         # as much as the default prompt does.
         if user_context_block:
             self.system_prompt += user_context_block
+
+        # What the user currently has open in the host page (today: the workflow
+        # draft in the authoring studio, including their unsaved edits). Appended
+        # last so it is the freshest thing the model reads.
+        if surface_context_block:
+            self.system_prompt += surface_context_block
 
     def _find_tool(self, name: str):
         return next((t for t in self.tools if t.name == name), None)
@@ -290,6 +302,12 @@ class AgentRunner:
                         messages=messages,
                         tools=formatted_tools,
                         temperature=0.0,  # 0.0 for deterministic reporting
+                        # The client's 2000-token default is far too small for a
+                        # tool call that carries a payload: authoring a workflow
+                        # emits a whole graph_spec plus the runtime playbook in
+                        # one `save_workflow_draft` call. Truncated arguments are
+                        # invalid JSON, which used to arrive at the tool as {}.
+                        max_tokens=settings.AGENT_MAX_RESPONSE_TOKENS,
                     )
                     tracing.set_span_outputs(
                         llm_span,
@@ -341,14 +359,46 @@ class AgentRunner:
                 for tc in tool_calls:
                     fn_name = tc.get("function", {}).get("name", "")
                     fn_args = tc.get("function", {}).get("arguments", {})
+                    tool_call_id = tc.get("id", fn_name)
                     if isinstance(fn_args, str):
+                        raw_args = fn_args
                         try:
-                            fn_args = json.loads(fn_args)
-                        except Exception:
-                            fn_args = {}
+                            fn_args = json.loads(raw_args)
+                        except Exception as e:
+                            # Do NOT fall back to {}. Empty arguments reach the
+                            # tool as "Field required" errors that name the wrong
+                            # problem: the model didn't forget the fields, its
+                            # arguments were cut off (or malformed) in transit.
+                            # Tell it that, so it can retry smaller instead of
+                            # resending the same oversized call.
+                            err_msg = (
+                                f"Your arguments for '{fn_name}' were not valid JSON "
+                                f"({e}). They were {len(raw_args)} characters and look "
+                                "cut off, so nothing was called. Retry with the SAME "
+                                "intent but a smaller payload: send the essential "
+                                "fields now and add long prose (e.g. "
+                                "instructions_markdown) in a follow-up call."
+                            )
+                            logger.warning(
+                                "Unparseable tool arguments for '%s' (%d chars): %s",
+                                fn_name, len(raw_args), e,
+                            )
+                            yield ToolResultEvent(
+                                id=tool_call_id, name=fn_name, ok=False, error=err_msg
+                            )
+                            tool_outputs.append(
+                                {
+                                    "tool_call_id": tool_call_id,
+                                    "name": fn_name,
+                                    "content": err_msg,
+                                }
+                            )
+                            executed_any = True
+                            continue
+                    if not isinstance(fn_args, dict):
+                        fn_args = {}
 
                     matching_tool = self._find_tool(fn_name)
-                    tool_call_id = tc.get("id", fn_name)
                     if not matching_tool:
                         # Unknown tool name from the LLM. Surface as a
                         # tool_result error so the user sees what went
@@ -399,6 +449,7 @@ class AgentRunner:
                             obo_token=obo_token,
                             user_identity=self.user_identity,
                             injected_args=injected_args,
+                            dry_run=self.dry_run,
                         )
                         with tracing.span(
                             f"tool:{fn_name}", "TOOL",
@@ -605,7 +656,11 @@ class AgentRunner:
                     {
                         "id": ev.id,
                         "type": "function",
-                        "function": {"name": ev.name, "arguments": {}},
+                        # Carry the real arguments: a caller that only learns
+                        # *which* tool ran can't tell a correct call from a
+                        # plausible-looking wrong one (the workflow test judge
+                        # needs exactly that distinction).
+                        "function": {"name": ev.name, "arguments": ev.arguments or {}},
                     }
                 )
             elif isinstance(ev, PendingPollEvent):

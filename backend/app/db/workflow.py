@@ -109,11 +109,17 @@ class WorkflowTombstoneModel(Base):
 
 
 class WorkflowVersionModel(Base):
-    """An immutable snapshot of a Workflow captured each time it is published.
+    """An immutable snapshot of a Workflow's body.
 
-    Powers version history + one-click rollback: every publish writes the full
-    body here keyed by (workflow_id, version), so an admin can see what changed and
-    restore a prior published definition if a change misbehaves in an env.
+    Two kinds share this table (see ``kind``):
+
+    * ``publish`` — captured on every publish, keyed by (workflow_id, version).
+      Powers version history + one-click rollback, so an admin can see what
+      changed and restore a prior published definition if a change misbehaves.
+    * ``autosave`` — captured just *before* something overwrites a draft (today:
+      an authoring-assistant save). Publishing was previously the only thing that
+      snapshotted, which meant draft edits the assistant replaced were gone for
+      good. These carry the version they were based on, not a new one.
     """
 
     __tablename__ = "workflow_versions"
@@ -122,6 +128,14 @@ class WorkflowVersionModel(Base):
     workflow_id: Mapped[str] = Column(String, nullable=False, index=True, comment="FK to workflows.id")
     workflow_key: Mapped[str] = Column(String, nullable=False, index=True, comment="Workflow key at snapshot time")
     version: Mapped[int] = Column(Integer, nullable=False, comment="The published version number")
+    kind: Mapped[str] = Column(
+        String, nullable=False, default="publish", server_default="publish",
+        comment="'publish' (a released version) or 'autosave' (pre-overwrite draft backup)",
+    )
+    note: Mapped[Optional[str]] = Column(
+        String, nullable=True,
+        comment="Why an autosave snapshot was taken, e.g. 'before authoring assistant save'",
+    )
     name: Mapped[Optional[str]] = Column(String, nullable=True)
     goal: Mapped[Optional[str]] = Column(Text, nullable=True)
     instructions_markdown: Mapped[Optional[str]] = Column(Text, nullable=True)

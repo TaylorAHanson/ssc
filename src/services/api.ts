@@ -2437,6 +2437,10 @@ export type GateType =
   | 'data_owner'
   | 'training'
   | 'pr_merge'
+  /** Holds the request while a person does work the platform has no tool for,
+   *  then they mark it done. A *completion* gate, not an authorization one — it
+   *  does not count as an approval. */
+  | 'manual_task'
   /** @deprecated The sibling-spawn ("children") model is superseded by compound
    *  workflows (a `subworkflow` stage). Retained only so older specs validate;
    *  not offered when authoring new workflows. */
@@ -2467,6 +2471,13 @@ export interface WorkflowGateStage {
    *  `course_name` is optional display copy. */
   course_code?: string | null;
   course_name?: string | null;
+  /** Required on `manual_task` gates (and invalid on any other type): what the
+   *  assignee must do off-platform before marking the task done. Shown verbatim
+   *  in their approvals inbox. */
+  instructions?: string | null;
+  /** Optional on `manual_task`: SLA in days, so an ignored task shows as overdue
+   *  instead of parking the request indefinitely. */
+  due_in_days?: number | null;
 }
 
 export interface WorkflowStepStage {
@@ -2574,11 +2585,48 @@ export interface EvaluationFinding {
   fix: string;
 }
 
+/** Quality of the runtime playbook (`instructions_markdown`) — a separate
+ *  dimension from the graph, because that text is what the agent actually
+ *  follows at runtime. */
+export interface InstructionsQuality {
+  score: number;
+  tier: string;
+  findings: { severity: EvaluationSeverity; message: string; fix: string }[];
+  summary: {
+    chars: number;
+    sections: string[];
+    documented_inputs: number;
+    total_inputs: number;
+    is_auto_baseline?: boolean;
+  };
+}
+
+/** Quality of the `goal` — the workflow's entire line in the runtime agent's
+ *  capabilities menu, and all it has to route a user's request from. Scored for
+ *  DISCRIMINATION: `collisions` are published workflows whose goals read the
+ *  same, which is what makes the agent pick the wrong workflow. */
+export interface GoalQuality {
+  score: number;
+  tier: string;
+  findings: { severity: EvaluationSeverity; message: string; fix: string }[];
+  summary: {
+    chars: number;
+    sentences: number;
+    is_stub: boolean;
+    collisions: { key: string; overlap: number; identical?: boolean }[];
+    similar_to: { key: string; overlap: number }[];
+  };
+}
+
 export interface WorkflowEvaluation {
   valid: boolean;
   error?: string;
   risk: { score: number; tier: string };
   quality: { score: number; tier: string };
+  /** Present when instructions were sent along with the spec. */
+  instructions?: InstructionsQuality;
+  /** Present when a goal was sent along with the spec. */
+  goal?: GoalQuality;
   findings: EvaluationFinding[];
   summary: {
     stage_count?: number;
@@ -2590,11 +2638,28 @@ export interface WorkflowEvaluation {
   };
 }
 
+export interface GeneratedInstructions {
+  instructions_markdown: string;
+  /** 'llm' = authored by the model; 'auto_baseline' = the graph-derived stub. */
+  source: 'llm' | 'auto_baseline';
+  warning: string | null;
+  quality?: InstructionsQuality;
+}
+
 export interface WorkflowVersion {
   id: string;
   workflow_id: string;
   workflow_key: string;
   version: number;
+  /**
+   * 'publish' = a released version. 'autosave' = a backup taken just before
+   * something overwrote the draft (e.g. an authoring-assistant save), so lost
+   * draft edits are recoverable. Autosaves share the version they were based on
+   * and must be restored by id.
+   */
+  kind?: 'publish' | 'autosave';
+  /** Why an autosave was taken. */
+  note?: string | null;
   name: string | null;
   goal: string | null;
   request_type: string | null;
@@ -2647,6 +2712,13 @@ export interface Workflow {
   /** Advisory at-a-glance evaluation (risk + quality) attached by the list API.
    *  Null when the workflow has no graph_spec to score. */
   evaluation?: WorkflowListEvaluation | null;
+  /** Whether `instructions_markdown` — the prompt the runtime agent actually
+   *  follows — was authored, is still the generated baseline, or is missing. */
+  instructions_source?: 'authored' | 'auto_baseline' | 'empty';
+  /** Behavioral test posture, attached by the list API. Null when tests are off. */
+  tests_health?: WorkflowTestHealth | null;
+  /** When this workflow was last published (from its publish snapshots). */
+  last_published_at?: string | null;
 }
 
 export interface WorkflowListEvaluation {
@@ -2668,6 +2740,12 @@ export interface WorkflowInput {
   graph_spec?: WorkflowGraphSpec | null;
   request_type?: string | null;
   status?: string;
+  /**
+   * Optimistic concurrency on update: the `updated_at` the client last read.
+   * The backend returns 409 if the workflow changed since, instead of silently
+   * overwriting whatever the authoring assistant (or another admin) saved.
+   */
+  if_unmodified_since?: string | null;
 }
 
 export async function listWorkflows(includeDrafts = true): Promise<Workflow[]> {
@@ -2807,17 +2885,207 @@ export async function testSpec(
 
 /** Advisory evaluation of a workflow graph_spec: risk + quality scores and findings.
  *  Deterministic, side-effect free, and never blocks — purely an authoring signal. */
-export async function evaluateSpec(graphSpec: WorkflowGraphSpec): Promise<WorkflowEvaluation> {
+export async function evaluateSpec(
+  graphSpec: WorkflowGraphSpec,
+  instructionsMarkdown?: string | null,
+  /** Scored against the published catalog: the goal is the workflow's whole line
+   *  in the runtime agent's capabilities menu, so a line that reads like another
+   *  workflow's is a routing problem. `key` stops a published workflow from
+   *  colliding with its own row. */
+  goal?: { goal: string | null; key?: string },
+): Promise<WorkflowEvaluation> {
   const response = await fetch(`${API_BASE_URL}/workflows/evaluate-spec`, {
     method: 'POST',
     headers: getHeaders(),
-    body: JSON.stringify({ graph_spec: graphSpec }),
+    body: JSON.stringify({
+      graph_spec: graphSpec,
+      ...(instructionsMarkdown === undefined
+        ? {}
+        : { instructions_markdown: instructionsMarkdown }),
+      ...(goal === undefined ? {} : { goal: goal.goal ?? '', key: goal.key }),
+    }),
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
     throw new Error(error.detail || `Evaluation failed: ${response.statusText}`);
   }
   return response.json();
+}
+
+/** Author (or improve) the runtime playbook for a draft workflow. Falls back to
+ *  the deterministic graph-derived baseline if the LLM is unavailable, so this
+ *  never leaves instructions blank. */
+export async function generateWorkflowInstructions(input: {
+  graph_spec?: WorkflowGraphSpec | null;
+  request_type?: string | null;
+  goal?: string | null;
+  name?: string | null;
+  existing_instructions?: string | null;
+}): Promise<GeneratedInstructions> {
+  const response = await fetch(`${API_BASE_URL}/workflows/generate-instructions`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to generate instructions: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+// --- Workflow tests (behavioral: real agent, sandboxed, LLM-judged) ---
+
+/** One test case: a question plus, in plain English, what should happen. */
+export interface WorkflowTest {
+  id: string;
+  workflow_id: string;
+  name: string;
+  question: string;
+  expected_outcome: string;
+  enabled: boolean;
+  /** `agent` = proposed by the authoring assistant, `user` = written by an admin. */
+  source: 'agent' | 'user';
+  created_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  latest_run?: WorkflowTestRun | null;
+}
+
+export interface WorkflowTestRun {
+  id: string;
+  run_group_id: string;
+  workflow_id: string;
+  test_id: string;
+  test_name?: string | null;
+  question?: string | null;
+  expected_outcome?: string | null;
+  status: 'queued' | 'running' | 'complete' | 'error';
+  verdict?: 'pass' | 'partial' | 'fail' | null;
+  score?: number | null;
+  rationale?: string | null;
+  missing?: string[];
+  error?: string | null;
+  duration_ms?: number | null;
+  triggered_by?: string | null;
+  created_at?: string | null;
+  completed_at?: string | null;
+  /** Server-computed: verdict + score against the configured pass threshold. */
+  passed?: boolean;
+  transcript?: WorkflowTestTranscriptEntry[];
+  tool_calls?: { id?: string; name?: string; arguments?: Record<string, unknown> }[];
+}
+
+export interface WorkflowTestTranscriptEntry {
+  role: string;
+  content?: string;
+  name?: string;
+  tool_calls?: { name?: string; arguments?: unknown }[];
+}
+
+/** Test posture for a workflow. `never_run` is deliberately separate from
+ *  `failing`: "we don't know" and "we know it's broken" aren't the same problem. */
+export interface WorkflowTestHealth {
+  total: number;
+  passing: number;
+  failing: number;
+  errored: number;
+  never_run: number;
+  stale: number;
+  pass_threshold: number;
+  ready: boolean;
+}
+
+export interface WorkflowTestsResponse {
+  tests: WorkflowTest[];
+  health: WorkflowTestHealth;
+  enabled: boolean;
+  blocks_publish: boolean;
+}
+
+export interface WorkflowTestRunGroup {
+  run_group_id: string;
+  done: boolean;
+  runs: WorkflowTestRun[];
+  health?: WorkflowTestHealth;
+}
+
+export interface GeneratedWorkflowTests {
+  cases: { name: string; question: string; expected_outcome: string }[];
+  source: 'llm' | 'fallback';
+  warning?: string | null;
+  tests?: WorkflowTest[];
+}
+
+async function workflowTestsFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, { headers: getHeaders(), ...init });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || response.statusText);
+  }
+  return response.json();
+}
+
+export function listWorkflowTests(workflowId: string): Promise<WorkflowTestsResponse> {
+  return workflowTestsFetch(`${API_BASE_URL}/workflows/${workflowId}/tests`);
+}
+
+export function createWorkflowTest(
+  workflowId: string,
+  input: { name?: string; question: string; expected_outcome: string; enabled?: boolean },
+): Promise<WorkflowTest> {
+  return workflowTestsFetch(`${API_BASE_URL}/workflows/${workflowId}/tests`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateWorkflowTest(
+  workflowId: string,
+  testId: string,
+  input: { name?: string; question?: string; expected_outcome?: string; enabled?: boolean },
+): Promise<WorkflowTest> {
+  return workflowTestsFetch(`${API_BASE_URL}/workflows/${workflowId}/tests/${testId}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteWorkflowTest(workflowId: string, testId: string): Promise<{ status: string }> {
+  return workflowTestsFetch(`${API_BASE_URL}/workflows/${workflowId}/tests/${testId}`, {
+    method: 'DELETE',
+  });
+}
+
+/** Propose cases. Nothing is persisted unless `save` is true. */
+export function generateWorkflowTests(
+  workflowId: string,
+  input?: { count?: number; save?: boolean },
+): Promise<GeneratedWorkflowTests> {
+  return workflowTestsFetch(`${API_BASE_URL}/workflows/${workflowId}/tests/generate`, {
+    method: 'POST',
+    body: JSON.stringify({ count: input?.count ?? 5, save: input?.save ?? false }),
+  });
+}
+
+/** Start a sandboxed run. Returns a group id to poll — each case is a full agent turn. */
+export function runWorkflowTests(
+  workflowId: string,
+  testIds?: string[],
+): Promise<{ run_group_id: string; runs: WorkflowTestRun[] }> {
+  return workflowTestsFetch(`${API_BASE_URL}/workflows/${workflowId}/tests/run`, {
+    method: 'POST',
+    body: JSON.stringify({ test_ids: testIds ?? null }),
+  });
+}
+
+export function getWorkflowTestRunGroup(
+  workflowId: string,
+  groupId: string,
+): Promise<WorkflowTestRunGroup> {
+  return workflowTestsFetch(
+    `${API_BASE_URL}/workflows/${workflowId}/tests/runs/${groupId}`,
+  );
 }
 
 /** Published-version history for a workflow (newest first). */
@@ -2830,12 +3098,21 @@ export async function listWorkflowVersions(workflowId: string): Promise<Workflow
   return response.json();
 }
 
-/** Restore a prior published version's body into the workflow as a fresh draft. */
-export async function rollbackWorkflow(workflowId: string, version: number): Promise<Workflow> {
+/** Restore a snapshot's body into the workflow as a fresh draft.
+ *  Pass `{ version }` for a published version or `{ snapshot_id }` for a specific
+ *  snapshot (the only way to restore an autosave backup). */
+export async function rollbackWorkflow(
+  workflowId: string,
+  target: number | { version?: number; snapshotId?: string },
+): Promise<Workflow> {
+  const body =
+    typeof target === 'number'
+      ? { version: target }
+      : { version: target.version, snapshot_id: target.snapshotId };
   const response = await fetch(`${API_BASE_URL}/workflows/${workflowId}/rollback`, {
     method: 'POST',
     headers: getHeaders(),
-    body: JSON.stringify({ version }),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
@@ -2992,6 +3269,14 @@ export const api = {
   deleteWorkflow,
   validateSpec,
   evaluateSpec,
+  generateWorkflowInstructions,
+  listWorkflowTests,
+  createWorkflowTest,
+  updateWorkflowTest,
+  deleteWorkflowTest,
+  generateWorkflowTests,
+  runWorkflowTests,
+  getWorkflowTestRunGroup,
   listWorkflowTools,
   testSpec,
   cloneWorkflow,

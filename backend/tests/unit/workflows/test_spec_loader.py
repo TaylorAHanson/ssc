@@ -79,6 +79,62 @@ def test_group_name_in_type_suggests_approver_block(bad_type):
         validate_spec_dict(spec)
 
 
+# --- manual_task gates ----------------------------------------------------
+#
+# "Hold here while a human does this off-platform, then mark it done." It rides the
+# gate machinery (interrupt, approvals inbox, resume) but the authored
+# `instructions` are what the assignee actually reads, so an empty one is a task
+# nobody can action and must not validate.
+
+def _manual_task_spec(**overrides):
+    gate = {
+        "kind": "gate", "name": "create_jira_ticket", "type": "manual_task",
+        "instructions": "Open a JIRA ticket in PLATFORM and attach the request id.",
+        "approver": {"source": "group", "group": "platform_ops"},
+    }
+    gate.update(overrides)
+    return {"name": "demo", "complete_fact": "done", "stages": [gate]}
+
+
+def test_manual_task_gate_validates_and_compiles():
+    spec_dict = _manual_task_spec()
+    validate_spec_dict(spec_dict)
+    (gate,) = spec_from_dict(spec_dict).stages
+    assert isinstance(gate, Gate)
+    assert gate.type == "manual_task"
+    # The instructions have to survive compilation or the assignee's inbox row
+    # says only "something is waiting on you".
+    assert "JIRA" in (gate.instructions or "")
+
+
+@pytest.mark.parametrize("instructions", [None, "", "   "])
+def test_manual_task_gate_requires_instructions(instructions):
+    spec = _manual_task_spec()
+    if instructions is None:
+        spec["stages"][0].pop("instructions")
+    else:
+        spec["stages"][0]["instructions"] = instructions
+    with pytest.raises(SpecError, match="instructions"):
+        validate_spec_dict(spec)
+
+
+def test_instructions_only_allowed_on_manual_task_gates():
+    """A stray `instructions` on an approval gate would be silently ignored at
+    runtime, which reads as "I told the approver what to do" when nobody did."""
+    spec = _good_spec()
+    spec["stages"][0]["instructions"] = "do the thing"
+    with pytest.raises(SpecError, match="instructions"):
+        validate_spec_dict(spec)
+
+
+def test_manual_task_is_not_counted_as_an_approval_gate():
+    """It's a completion gate, not authorization. If it counted, an author could
+    silence "risky mutation with no approval" by dropping in a manual task."""
+    from app.workflows.evaluator import APPROVAL_GATE_TYPES
+
+    assert "manual_task" not in APPROVAL_GATE_TYPES
+
+
 def test_item_expr_only_valid_in_item_args():
     spec = _good_spec()
     spec["stages"][1]["args"]["bad"] = {"$item": True}

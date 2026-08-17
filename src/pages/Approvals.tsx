@@ -7,11 +7,26 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
-import { CheckCircle2, UserPlus, Clock, Check, X, Shield, Database, Badge, Calendar, Trash2, ArrowRight, Pencil, Settings2, AlertCircle } from 'lucide-react';
+import { CheckCircle2, ClipboardCheck, UserPlus, Clock, Check, X, Shield, Database, Badge, Calendar, Trash2, ArrowRight, Pencil, Settings2, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
 import { api } from '../services/api';
 import type { Approval, ApprovalAction, Delegation } from '../types';
+
+const isOverdue = (dueAt: string) => new Date(dueAt).getTime() < Date.now();
+
+// Aging. A manual task can park a request indefinitely — there is no timeout and
+// nothing chases it — so "how long has this been sitting here" has to be visible
+// in the inbox rather than something you only learn when the requester asks.
+const AGING_DAYS = 3;
+const STALE_DAYS = 7;
+
+const waitingDays = (createdAt: string) => {
+  const started = new Date(createdAt).getTime();
+  if (!Number.isFinite(started)) return 0;
+  return Math.floor((Date.now() - started) / 86_400_000);
+};
+
 
 export function Approvals() {
   const approvals = useRequestStore((state) => state.approvals);
@@ -69,13 +84,40 @@ export function Approvals() {
     manager: 'Manager',
     governance_admin: 'Governance Admin',
     security_admin: 'Security Admin',
-    finance_admin: 'Finance Admin'
+    finance_admin: 'Finance Admin',
+    // Not a role: a manual_task item is work assigned to you, not an approval
+    // you grant. Labeling it "Manual Task" keeps that distinction on screen.
+    manual_task: 'Manual Task'
   };
 
   // Filter approvals by user's roles
   // Note: The backend already filters the approvals list to only those the user is authorized to see.
   // We just need to separate them into pending and completed.
-  const pendingApprovals = approvals.filter((a) => a.status === 'pending');
+  // Oldest first: the thing that has been blocking a requester the longest is the
+  // thing to look at, and a manual task with nothing chasing it can otherwise sit
+  // at the bottom of the list forever.
+  const pendingApprovals = approvals
+    .filter((a) => a.status === 'pending')
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  // One line at the top of the inbox so aging registers before you start clicking.
+  const agingSummary = (() => {
+    const aging = pendingApprovals.filter((a) => waitingDays(a.createdAt) >= AGING_DAYS);
+    if (aging.length === 0) return null;
+    const overdue = pendingApprovals.filter((a) => a.dueAt && isOverdue(a.dueAt)).length;
+    const manual = aging.filter((a) => a.approvalType === 'manual_task').length;
+    const oldest = Math.max(...aging.map((a) => waitingDays(a.createdAt)));
+    const parts = [
+      `${aging.length} item${aging.length === 1 ? '' : 's'} have been waiting ${AGING_DAYS}+ days (oldest: ${oldest})`,
+    ];
+    if (manual > 0) {
+      parts.push(
+        `${manual} ${manual === 1 ? 'is a manual task' : 'are manual tasks'} — those requests stay paused until someone marks the work done`,
+      );
+    }
+    if (overdue > 0) parts.push(`${overdue} past its due date`);
+    return `${parts.join('; ')}.`;
+  })();
 
   const completedApprovals = approvals
     .filter((a) => a.status !== 'pending')
@@ -389,12 +431,37 @@ export function Approvals() {
       {pendingApprovals.length > 0 && (
         <div className="space-y-4">
           <h2 className="text-xl font-semibold text-gray-900">Pending ({pendingApprovals.length})</h2>
+          {agingSummary && (
+            <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-md px-4 py-2 text-sm flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>{agingSummary}</span>
+            </div>
+          )}
           {pendingApprovals.map((approval) => (
             <Card key={approval.id} className="border-l-4 border-l-primary">
               <CardHeader>
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
-                    <CardTitle className="text-lg">{approval.requestTitle}</CardTitle>
+                    <CardTitle className="text-lg flex items-center gap-2 flex-wrap">
+                      {approval.requestTitle}
+                      {waitingDays(approval.createdAt) >= AGING_DAYS && (
+                        <span
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+                            waitingDays(approval.createdAt) >= STALE_DAYS
+                              ? 'bg-red-100 text-red-800'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                          title={
+                            approval.approvalType === 'manual_task'
+                              ? "The request stays paused until someone marks this manual work done — it won't time out on its own."
+                              : 'The request stays paused until someone decides.'
+                          }
+                        >
+                          <AlertCircle className="w-3.5 h-3.5" />
+                          waiting {waitingDays(approval.createdAt)} days
+                        </span>
+                      )}
+                    </CardTitle>
                     <div className="mt-2 space-y-1 text-sm text-gray-600">
                       <p>
                         <span className="font-medium">Requested by:</span> {approval.requestedBy} ({approval.requestedByEmail})
@@ -403,21 +470,48 @@ export function Approvals() {
                         <span className="font-medium">Type:</span> {approval.requestType.replace(/_/g, ' ')}
                       </p>
                       <p>
-                        <span className="font-medium">Approval Type:</span>{' '}
+                        <span className="font-medium">
+                          {approval.approvalType === 'manual_task' ? 'Task Type:' : 'Approval Type:'}
+                        </span>{' '}
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${approval.approvalType === 'platform_admin'
                           ? 'bg-blue-100 text-blue-800'
                           : approval.approvalType === 'data_owner'
                             ? 'bg-purple-100 text-purple-800'
-                            : 'bg-gray-100 text-gray-800'
+                            : approval.approvalType === 'manual_task'
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-gray-100 text-gray-800'
                           }`}>
                           {roleLabels[approval.approvalType] || approval.approvalType.replace(/_/g, ' ')}
                         </span>
                       </p>
+                      {approval.dueAt && (
+                        <p className="flex items-center gap-1">
+                          <Clock className="w-4 h-4" />
+                          <span className={isOverdue(approval.dueAt) ? 'text-red-600 font-medium' : ''}>
+                            {isOverdue(approval.dueAt) ? 'Overdue — was due ' : 'Due '}
+                            {formatInTimeZone(new Date(approval.dueAt), 'America/Los_Angeles', 'PPp zzz')}
+                          </span>
+                        </p>
+                      )}
                       <p className="flex items-center gap-1">
                         <Clock className="w-4 h-4" />
                         <span>Requested {formatInTimeZone(new Date(approval.createdAt), 'America/Los_Angeles', 'PPp zzz')}</span>
                       </p>
                     </div>
+                    {/* What the assignee actually has to go do. Without this the
+                        row is an unexplained "something is waiting on you". */}
+                    {approval.approvalType === 'manual_task' && (
+                      <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                        <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-2 flex items-center gap-1">
+                          <ClipboardCheck className="w-3.5 h-3.5" />
+                          What to do
+                        </p>
+                        <p className="text-sm text-gray-800 whitespace-pre-wrap">
+                          {approval.instructions?.trim() ||
+                            'No instructions were recorded on this task — ask a platform admin before marking it done.'}
+                        </p>
+                      </div>
+                    )}
                     {/* Workflow parameters read-only view */}
                     {approval.workflowParameters && Object.keys(approval.workflowParameters).length > 0 && (
                       <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
@@ -442,12 +536,15 @@ export function Approvals() {
               </CardHeader>
               <CardContent>
                 <div className="flex flex-wrap gap-2">
+                  {/* A manual task is completed, not authorized — the same
+                      approve/reject endpoints record the fact the poller waits
+                      on, so only the wording changes. */}
                   <Button
                     onClick={() => handleAction(approval, 'approve')}
                     className="bg-green-600 hover:bg-green-700 text-white"
                   >
                     <Check className="w-4 h-4 mr-2" />
-                    Approve
+                    {approval.approvalType === 'manual_task' ? 'Mark done' : 'Approve'}
                   </Button>
                   <Button
                     onClick={() => handleAction(approval, 'reject')}
@@ -455,7 +552,7 @@ export function Approvals() {
                     className="border-red-300 text-red-700 hover:bg-red-50"
                   >
                     <X className="w-4 h-4 mr-2" />
-                    Reject
+                    {approval.approvalType === 'manual_task' ? "Can't complete" : 'Reject'}
                   </Button>
                   <Button
                     onClick={() => handleAction(approval, 'delegate')}
@@ -577,13 +674,17 @@ export function Approvals() {
         </div>
       )}
 
-      {selectedApproval && actionType && (
+      {selectedApproval && actionType && (() => {
+        const isManualTask = selectedApproval.approvalType === 'manual_task';
+        return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <Card className="w-full max-w-md mx-4">
             <CardHeader>
               <CardTitle>
-                {actionType === 'approve' && 'Approve Request'}
-                {actionType === 'reject' && 'Reject Request'}
+                {actionType === 'approve' &&
+                  (isManualTask ? 'Mark Task Done' : 'Approve Request')}
+                {actionType === 'reject' &&
+                  (isManualTask ? "Can't Complete Task" : 'Reject Request')}
                 {actionType === 'delegate' && 'Delegate Approval'}
                 {actionType === 'edit' && (
                   <span className="flex items-center gap-2">
@@ -625,13 +726,27 @@ export function Approvals() {
                 </div>
               )}
 
+              {actionType === 'approve' && isManualTask && selectedApproval.instructions?.trim() && (
+                <div className="text-sm text-gray-700 bg-amber-50 border border-amber-200 rounded p-3">
+                  <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-1">
+                    Confirm you completed
+                  </p>
+                  <p className="whitespace-pre-wrap">{selectedApproval.instructions}</p>
+                </div>
+              )}
+
               {actionType === 'reject' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Rejection Note <span className="text-red-500">*</span>
+                    {isManualTask ? 'Why it can\u2019t be completed' : 'Rejection Note'}{' '}
+                    <span className="text-red-500">*</span>
                   </label>
                   <Textarea
-                    placeholder="Please provide a reason for rejection..."
+                    placeholder={
+                      isManualTask
+                        ? 'Explain what blocked the task so the requester knows what happened...'
+                        : 'Please provide a reason for rejection...'
+                    }
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
                     className="w-full min-h-[100px]"
@@ -686,8 +801,8 @@ export function Approvals() {
                         'bg-blue-600 hover:bg-blue-700'}
                 >
                   {isProcessing ? 'Processing...' :
-                    actionType === 'approve' ? 'Confirm Approval' :
-                      actionType === 'reject' ? 'Confirm Rejection' :
+                    actionType === 'approve' ? (isManualTask ? 'Confirm Done' : 'Confirm Approval') :
+                      actionType === 'reject' ? (isManualTask ? "Confirm Can't Complete" : 'Confirm Rejection') :
                         actionType === 'edit' ? 'Apply & Restart' :
                           'Confirm Delegation'}
                 </Button>
@@ -708,7 +823,8 @@ export function Approvals() {
             </CardContent>
           </Card>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

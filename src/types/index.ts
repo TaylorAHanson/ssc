@@ -2,6 +2,8 @@ export type RequestStatus =
   | 'pending'
   | 'manager_approval'
   | 'training_pending'
+  /** Parked on a `manual_task` gate: waiting on a person to do off-platform work. */
+  | 'manual_task_pending'
   | 'provisioning'
   | 'completed'
   | 'rejected'
@@ -108,7 +110,14 @@ export interface BannerMessage {
   createdAt: string;
 }
 
-export type ApprovalType = 'platform_admin' | 'data_owner' | 'manager' | 'security';
+export type ApprovalType =
+  | 'platform_admin'
+  | 'data_owner'
+  | 'manager'
+  | 'security'
+  /** Not an authorization: a person completes off-platform work and marks it
+   *  done. Shares the inbox and endpoints with approvals. */
+  | 'manual_task';
 
 export interface Approval {
   id: string;
@@ -135,6 +144,10 @@ export interface Approval {
   workflowParameters?: Record<string, any>;
   /** Explanation of why this approval was superseded by a parameter edit. */
   supersededNote?: string;
+  /** `manual_task` only: the work the assignee must complete, shown verbatim. */
+  instructions?: string;
+  /** `manual_task` only: SLA deadline, so an ignored task can show as overdue. */
+  dueAt?: string;
 }
 
 export interface ApprovalAction {

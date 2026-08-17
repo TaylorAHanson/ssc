@@ -30,7 +30,10 @@ def _humanize(node_id: str) -> str:
 
 def _gate_satisfied(gtype: str, have: set, facts: list) -> bool:
     """Whether a gate's approval/event fact is present (shared by views)."""
-    if gtype in ("manager", "platform_admin", "data_owner"):
+    # ``manual_task`` shares the approval fact shape (the inbox's "Mark done"
+    # writes approval_received with approval_type "manual_task"), so the same
+    # check satisfies it.
+    if gtype in ("manager", "platform_admin", "data_owner", "manual_task"):
         return any(
             f.event_type == "approval_received"
             and (f.event_data or {}).get("approval_type") == gtype

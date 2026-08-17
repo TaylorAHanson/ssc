@@ -59,6 +59,47 @@ def test_delete(db_session):
     assert WorkflowService.get(db_session, workflow.id) is None
 
 
+def test_delete_takes_tests_runs_and_versions_with_it(db_session):
+    """Test cases hang off the workflow's uuid, so leaving them behind means an
+    admin who deletes a workflow and re-creates the same key gets a new uuid, an
+    empty Tests tab, and rows nothing can ever reach again."""
+    from app.db.workflow import WorkflowVersionModel
+    from app.db.workflow_test import WorkflowTestModel, WorkflowTestRunModel
+
+    workflow = WorkflowService.create(db_session, key="with_children", name="X")
+    survivor = WorkflowService.create(db_session, key="untouched", name="Y")
+
+    for owner in (workflow, survivor):
+        db_session.add(
+            WorkflowTestModel(
+                id=f"t-{owner.key}", workflow_id=owner.id, name="happy path",
+                question="do the thing", expected_outcome="it asks first",
+                enabled=True, source="agent",
+            )
+        )
+        db_session.add(
+            WorkflowTestRunModel(
+                id=f"r-{owner.key}", run_group_id=f"g-{owner.key}",
+                workflow_id=owner.id, test_id=f"t-{owner.key}", status="complete",
+            )
+        )
+    WorkflowService.snapshot_draft(db_session, workflow.id, note="before")
+    db_session.commit()
+
+    WorkflowService.delete(db_session, workflow.id)
+
+    def _count(model):
+        return db_session.query(model).filter(model.workflow_id == workflow.id).count()
+
+    assert _count(WorkflowTestModel) == 0
+    assert _count(WorkflowTestRunModel) == 0
+    assert _count(WorkflowVersionModel) == 0
+    # And a neighbour's cases are untouched.
+    assert db_session.query(WorkflowTestModel).filter(
+        WorkflowTestModel.workflow_id == survivor.id
+    ).count() == 1
+
+
 def _spec_with_input():
     return {
         "name": "training_session_request",
@@ -144,6 +185,47 @@ def test_update_to_blank_instructions_regenerates_baseline(db_session):
     updated = WorkflowService.update(db_session, wf.id, instructions_markdown="")
     assert updated.instructions_markdown and updated.instructions_markdown.strip()
     assert "Information to Gather" in updated.instructions_markdown
+
+
+def test_stageless_workflow_still_gets_a_playbook(db_session):
+    """The gap that shipped blank instructions: the safety net used to require the
+    graph to already have stages, so a brand-new workflow (goal + request type, no
+    stages yet) saved with nothing for the runtime agent to follow."""
+    wf = WorkflowService.create(
+        db_session, key="stageless", name="Stageless",
+        goal="Request a sandbox workspace", request_type="stageless",
+        graph_spec={"name": "stageless", "stages": []},
+        instructions_markdown="",
+        status="draft",
+    )
+    assert wf.instructions_markdown and wf.instructions_markdown.strip()
+    assert "Request a sandbox workspace" in wf.instructions_markdown
+
+
+def test_whitespace_only_instructions_count_as_empty(db_session):
+    """Agents pass "\\n  " for optional fields, which would otherwise defeat the
+    safety net and persist a blank Details page."""
+    wf = WorkflowService.create(
+        db_session, key="whitespace", name="W", request_type="whitespace",
+        graph_spec=_spec_with_input(), instructions_markdown="   \n\t ",
+        status="draft",
+    )
+    assert "Information to Gather" in (wf.instructions_markdown or "")
+
+
+def test_draft_snapshot_makes_an_overwritten_draft_recoverable(db_session):
+    """Publishing used to be the only thing that snapshotted, so a draft edit the
+    assistant replaced was gone for good."""
+    wf = WorkflowService.create(db_session, key="autosave", name="A",
+                                instructions_markdown="# Mine\n\nCarefully written.")
+    WorkflowService.snapshot_draft(db_session, wf.id, actor="assistant@corp.com",
+                                   note="before authoring assistant save")
+    WorkflowService.update(db_session, wf.id, instructions_markdown="# Assistant rewrite")
+
+    versions = WorkflowService.list_versions(db_session, wf.id)
+    autosaves = [v for v in versions if v.kind == "autosave"]
+    assert autosaves, "an assistant save must leave a restorable snapshot"
+    assert "Carefully written." in (autosaves[0].instructions_markdown or "")
 
 
 def test_seed_specs_from_catalog_backfills_and_is_idempotent(db_session):

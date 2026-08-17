@@ -23,7 +23,15 @@ from app.workflows.tool_registry import get_tool, has_tool
 # compound workflows (a ``subworkflow`` stage composes children as nested
 # subgraphs). It stays here so older published specs still validate; new
 # authoring no longer offers it.
-GATE_TYPES = {"manager", "platform_admin", "data_owner", "training", "pr_merge", "children"}
+# ``manual_task`` is a *completion* gate, not an authorization one: it holds the
+# request while a human does something the platform has no tool for, then they
+# mark it done. Modeled as a gate so it inherits interrupt/pause/resume, the
+# approvals inbox, and the audit trail — before it, authors faked this with a
+# notification step that didn't actually wait for anything.
+GATE_TYPES = {
+    "manager", "platform_admin", "data_owner", "training", "pr_merge",
+    "manual_task", "children",
+}
 
 # Tokens that strongly suggest a value is a group/role name rather than a gate kind.
 _GROUP_NAME_TOKENS = ("admin", "group", "team", "approver", "owner", "_grp", "role")
@@ -56,6 +64,9 @@ class SpecError(ValueError):
 _GATE_KEYS = {
     "kind", "name", "type", "waiting_status", "auto_approve", "approvers_from",
     "approver", "course_code", "course_name",
+    # manual_task only: what the assignee has to actually do, and an optional
+    # SLA in days used for aging/escalation visibility in the inbox.
+    "instructions", "due_in_days",
 }
 _STEP_KEYS = {
     "kind", "name", "tool", "approvals", "running_status", "success_fact",
@@ -161,6 +172,34 @@ def _validate_gate(stage: Dict[str, Any], where: str) -> None:
     if "course_name" in stage and stage["course_name"] is not None:
         if not isinstance(stage["course_name"], str):
             raise SpecError(f"{where}.course_name must be a string")
+    # A manual task with no instructions is a dead end: the request pauses and
+    # whoever it lands on has no idea what to do, so require the text up front.
+    if gtype == "manual_task":
+        instructions = stage.get("instructions")
+        if not isinstance(instructions, str) or not instructions.strip():
+            raise SpecError(
+                f"{where}.instructions is required on a 'manual_task' gate — describe "
+                "what the assignee must do before marking it done."
+            )
+    elif "instructions" in stage and stage["instructions"] is not None:
+        # Say what to do instead: an author reaching for `instructions` on an
+        # approval gate wants either approver guidance (which belongs in the
+        # workflow's playbook) or an off-platform work step (a manual_task).
+        raise SpecError(
+            f"{where}.instructions is only valid on a 'manual_task' gate (this one is "
+            f"'{gtype}'). Drop the field and put guidance for approvers in the "
+            f"workflow's instructions_markdown, or — if a PERSON has to do work "
+            f"off-platform here — change this gate's type to 'manual_task'."
+        )
+    if "due_in_days" in stage and stage["due_in_days"] is not None:
+        if gtype != "manual_task":
+            raise SpecError(
+                f"{where}.due_in_days is only valid on a 'manual_task' gate (this one "
+                f"is '{gtype}'). Drop the field, or make it a 'manual_task' gate."
+            )
+        due = stage["due_in_days"]
+        if not isinstance(due, int) or isinstance(due, bool) or due <= 0:
+            raise SpecError(f"{where}.due_in_days must be a positive integer (days)")
 
 
 def _validate_gate_approver(approver: Any, where: str) -> None:
@@ -299,16 +338,24 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
     preceding_gate_types: List[str] = []
     for stage in data.get("stages", []):
         if stage["kind"] == "gate":
+            # A manual task isn't awaiting approval, so it gets its own default
+            # status: "manager_approval" on a held request would mislead both the
+            # requester's status page and anyone triaging the queue.
+            default_waiting = (
+                "manual_task_pending" if stage["type"] == "manual_task" else "manager_approval"
+            )
             gate = Gate(
                 name=stage["name"],
                 type=stage["type"],
-                waiting_status=stage.get("waiting_status", "manager_approval"),
+                waiting_status=stage.get("waiting_status", default_waiting),
                 auto_approve=_auto_approve_fn(stage["auto_approve"])
                 if stage.get("auto_approve") is not None else None,
                 approvers_from=_value_fn(stage["approvers_from"])
                 if stage.get("approvers_from") is not None else None,
                 course_code=stage.get("course_code"),
                 course_name=stage.get("course_name"),
+                instructions=stage.get("instructions"),
+                due_in_days=stage.get("due_in_days"),
             )
             approver = stage.get("approver")
             if approver:

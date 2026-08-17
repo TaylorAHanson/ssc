@@ -286,16 +286,19 @@ class WorkflowService:
         """Normalize a workflow's instructions on every save so they're never blank
         and always carry the canonical, graph-derived ``execute_workflow`` block.
 
-        - No graph to derive from (legacy/code workflow): leave instructions as-is.
-        - Graph present + prose given: splice the canonical Execution block in
+        - Blank prose: generate a baseline, so EVERY save path (agent tool, the
+          editor's manual Save button, import) gets the "instructions are never
+          empty" guarantee — not just the agent tool. This applies even with no
+          graph yet: the runtime playbook used to be left empty in exactly the case
+          where an author is most likely to publish without noticing.
+        - Prose given + graph present: splice the canonical Execution block in
           (persisted, so the editor shows the call and it can't drift from the spec).
-        - Graph present + blank prose: generate a baseline from the spec, so EVERY
-          save path (agent tool, the editor's manual Save button, import) gets the
-          "instructions are never empty" guarantee — not just the agent tool.
+        - Prose given + no graph (legacy/code workflow): leave it as-is.
+
+        Whitespace counts as blank on every path — a textarea the admin cleared
+        would otherwise persist as "authored".
         """
         spec = graph_spec or {}
-        if not spec.get("stages"):
-            return instructions_markdown
         from app.workflows.instructions import (
             render_instructions_markdown,
             with_canonical_execution,
@@ -303,6 +306,8 @@ class WorkflowService:
 
         if not (instructions_markdown and instructions_markdown.strip()):
             return render_instructions_markdown(spec, request_type=request_type, goal=goal)
+        if not spec.get("stages"):
+            return instructions_markdown
         return with_canonical_execution(
             instructions_markdown, spec, request_type=request_type
         )
@@ -320,6 +325,7 @@ class WorkflowService:
             workflow_id=workflow.id,
             workflow_key=workflow.key,
             version=workflow.version,
+            kind="publish",
             name=workflow.name,
             goal=workflow.goal,
             instructions_markdown=workflow.instructions_markdown,
@@ -362,9 +368,110 @@ class WorkflowService:
         return (
             db.query(WorkflowVersionModel)
             .filter(WorkflowVersionModel.workflow_id == workflow_id)
-            .order_by(WorkflowVersionModel.version.desc())
+            # Newest first across both kinds: published versions and the autosave
+            # backups taken between them, so history reads chronologically.
+            .order_by(
+                WorkflowVersionModel.version.desc(),
+                WorkflowVersionModel.published_at.desc(),
+            )
             .all()
         )
+
+    # Keep autosave history useful without letting it grow unbounded.
+    _MAX_AUTOSAVES_PER_WORKFLOW = 20
+
+    @staticmethod
+    def snapshot_draft(
+        db: Session,
+        workflow_id: str,
+        *,
+        actor: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> Optional[WorkflowVersionModel]:
+        """Back up a workflow's current body *before* something overwrites it.
+
+        Publishing is the only thing that used to snapshot, so an edit that
+        replaced a draft — most importantly an authoring-assistant save landing on
+        top of hand edits — could not be recovered. Call this immediately before
+        such a write. Best-effort: a snapshot failure must never block the edit.
+        """
+        try:
+            workflow = WorkflowService.get(db, workflow_id)
+            if not workflow:
+                return None
+            snap = WorkflowVersionModel(
+                id=str(uuid.uuid4()),
+                workflow_id=workflow.id,
+                workflow_key=workflow.key,
+                # The version this body was based on; autosaves never mint one.
+                version=workflow.version or 0,
+                kind="autosave",
+                note=note,
+                published_by=actor,
+                **{col: getattr(workflow, col) for col in _BODY_FIELDS},
+            )
+            db.add(snap)
+            db.commit()
+            WorkflowService._prune_autosaves(db, workflow_id)
+            return snap
+        except Exception as e:  # noqa: BLE001 - a backup must not break the save
+            logger.warning("Could not snapshot workflow %s: %s", workflow_id, e)
+            db.rollback()
+            return None
+
+    @staticmethod
+    def _prune_autosaves(db: Session, workflow_id: str) -> None:
+        """Keep only the most recent autosave snapshots for a workflow."""
+        try:
+            stale = (
+                db.query(WorkflowVersionModel)
+                .filter(
+                    WorkflowVersionModel.workflow_id == workflow_id,
+                    WorkflowVersionModel.kind == "autosave",
+                )
+                .order_by(WorkflowVersionModel.published_at.desc())
+                .offset(WorkflowService._MAX_AUTOSAVES_PER_WORKFLOW)
+                .all()
+            )
+            if not stale:
+                return
+            for row in stale:
+                db.delete(row)
+            db.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Autosave prune skipped for %s: %s", workflow_id, e)
+            db.rollback()
+
+    @staticmethod
+    def restore_snapshot(db: Session, workflow_id: str, snapshot_id: str) -> WorkflowModel:
+        """Restore a specific snapshot (published or autosave) onto the draft.
+
+        Identified by snapshot id rather than version number because autosaves
+        share the version they were based on — several can exist per version.
+        """
+        workflow = WorkflowService.get(db, workflow_id)
+        if not workflow:
+            raise ValueError("Workflow not found")
+        snap = (
+            db.query(WorkflowVersionModel)
+            .filter(
+                WorkflowVersionModel.id == snapshot_id,
+                WorkflowVersionModel.workflow_id == workflow_id,
+            )
+            .first()
+        )
+        if not snap:
+            raise ValueError("Snapshot not found for this workflow")
+        # Back up what we're about to replace, so restoring is itself undoable.
+        WorkflowService.snapshot_draft(
+            db, workflow_id, note="before restoring an earlier snapshot"
+        )
+        for col in _BODY_FIELDS:
+            setattr(workflow, col, getattr(snap, col))
+        workflow.status = "draft"
+        db.commit()
+        db.refresh(workflow)
+        return workflow
 
     @staticmethod
     def rollback(db: Session, workflow_id: str, version: int) -> WorkflowModel:
@@ -380,11 +487,19 @@ class WorkflowService:
         snap = (
             db.query(WorkflowVersionModel)
             .filter(WorkflowVersionModel.workflow_id == workflow_id,
-                    WorkflowVersionModel.version == version)
+                    WorkflowVersionModel.version == version,
+                    # Autosave backups share the version they were based on, so
+                    # pin this to released versions; restore those by id instead.
+                    WorkflowVersionModel.kind == "publish")
             .first()
         )
         if not snap:
             raise ValueError(f"Version {version} not found for this workflow")
+        # Rolling back replaces the current draft body; back it up first so the
+        # rollback itself is reversible.
+        WorkflowService.snapshot_draft(
+            db, workflow_id, note=f"before rolling back to v{version}"
+        )
         for col in _BODY_FIELDS:
             setattr(workflow, col, getattr(snap, col))
         workflow.status = "draft"
@@ -524,9 +639,7 @@ class WorkflowService:
                 .all()
             )
             for wf in orphans:
-                db.query(WorkflowVersionModel).filter(
-                    WorkflowVersionModel.workflow_id == wf.id
-                ).delete(synchronize_session=False)
+                WorkflowService.purge_dependents(db, wf.id)
                 pruned_key = wf.key
                 db.delete(wf)
                 # Tombstone pruned keys too: a catalog key (present in SPECS) would
@@ -539,11 +652,45 @@ class WorkflowService:
         return report
 
     @staticmethod
+    def purge_dependents(db: Session, workflow_id: str) -> Dict[str, int]:
+        """Delete everything keyed to one workflow row: versions, tests, test runs.
+
+        Nothing here is reachable once the workflow is gone — every read path joins
+        on ``workflow_id``. Leaving the rows behind isn't just a leak: an admin who
+        deletes a workflow and re-creates the same key gets a NEW uuid, so their
+        test cases are silently unreachable ("I saw 5 tests, then none") while the
+        old rows accumulate invisibly.
+
+        Bulk deletes, not ORM cascades — these tables carry no relationship()
+        (see the FK comments on the models), so SQLAlchemy would not cascade.
+        """
+        from app.db.workflow_test import WorkflowTestModel, WorkflowTestRunModel
+
+        removed = {
+            "versions": db.query(WorkflowVersionModel)
+            .filter(WorkflowVersionModel.workflow_id == workflow_id)
+            .delete(synchronize_session=False),
+            "test_runs": db.query(WorkflowTestRunModel)
+            .filter(WorkflowTestRunModel.workflow_id == workflow_id)
+            .delete(synchronize_session=False),
+            "tests": db.query(WorkflowTestModel)
+            .filter(WorkflowTestModel.workflow_id == workflow_id)
+            .delete(synchronize_session=False),
+        }
+        return removed
+
+    @staticmethod
     def delete(db: Session, workflow_id: str, *, deleted_by: Optional[str] = None) -> None:
         workflow = WorkflowService.get(db, workflow_id)
         if not workflow:
             raise ValueError("Workflow not found")
         key = workflow.key
+        removed = WorkflowService.purge_dependents(db, workflow_id)
+        if any(removed.values()):
+            logger.info(
+                "Deleting workflow %s (%s) also removed %s versions, %s tests, %s test runs",
+                key, workflow_id, removed["versions"], removed["tests"], removed["test_runs"],
+            )
         db.delete(workflow)
         # Tombstone the key so the startup seeders don't re-create a
         # bundled/catalog workflow the admin intentionally deleted (otherwise it
@@ -790,6 +937,33 @@ class WorkflowService:
             logger.info("Consolidated %d legacy workflow alias(es) / refs", changed)
         return changed
 
+    @staticmethod
+    def last_published_map(db: Session, workflow_ids: List[str]) -> Dict[str, Optional[str]]:
+        """When each workflow was last published (ISO), from its publish snapshots.
+
+        ``workflows`` itself has no published_at column — the release history lives
+        in ``workflow_versions`` — so the list view reads it from there in one query
+        rather than per row.
+        """
+        ids = [wid for wid in workflow_ids if wid]
+        if not ids:
+            return {}
+        rows = (
+            db.query(WorkflowVersionModel)
+            .filter(
+                WorkflowVersionModel.workflow_id.in_(ids),
+                WorkflowVersionModel.kind == "publish",
+            )
+            .order_by(WorkflowVersionModel.published_at.desc())
+            .all()
+        )
+        out: Dict[str, Optional[str]] = {}
+        for row in rows:
+            if row.workflow_id in out:
+                continue
+            out[row.workflow_id] = row.published_at.isoformat() if row.published_at else None
+        return out
+
     # --------------------------------------------------------------- mapping
     @staticmethod
     def to_dict(workflow: WorkflowModel, *, include_body: bool = True) -> Dict[str, Any]:
@@ -818,6 +992,15 @@ class WorkflowService:
         compound = is_compound_spec(spec)
         d["composition"] = "compound" if compound else "atomic"
         d["subworkflow_refs"] = subworkflow_refs(spec)
+        # Instruction health, cheap enough for the list view: the runtime agent
+        # follows instructions_markdown, so "still the generated stub" is a real
+        # gap an author should see before publishing — not just in the body.
+        from app.workflows.instructions import is_auto_baseline
+
+        md = workflow.instructions_markdown or ""
+        d["instructions_source"] = (
+            "empty" if not md.strip() else "auto_baseline" if is_auto_baseline(md) else "authored"
+        )
         if include_body:
             d["instructions_markdown"] = workflow.instructions_markdown
             d["graph_spec"] = workflow.graph_spec
@@ -830,6 +1013,8 @@ class WorkflowService:
             "workflow_id": snap.workflow_id,
             "workflow_key": snap.workflow_key,
             "version": snap.version,
+            "kind": snap.kind or "publish",
+            "note": snap.note,
             "name": snap.name,
             "goal": snap.goal,
             "request_type": snap.request_type,

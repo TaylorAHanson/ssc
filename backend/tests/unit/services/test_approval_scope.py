@@ -24,8 +24,41 @@ def test_platform_admin_sees_every_approval_type():
     types = allowed_approval_types(["Platform Admin"])
     assert set(types) == {
         "platform_admin", "manager", "data_owner", "security",
-        "security_admin", "finance_admin", "governance_admin",
+        "security_admin", "finance_admin", "governance_admin", "manual_task",
     }
+
+
+def test_an_unassigned_manual_task_is_still_visible_to_a_platform_admin(db_session):
+    """A manual_task gate that names no approver creates a row assigned to nobody.
+
+    With no role owning the type, such a row appeared in NO inbox, so the request
+    waited at the gate forever with nothing on screen to act on — while the approve
+    endpoint would have allowed a platform admin to complete it all along.
+    """
+    import uuid
+    from app.db import ApprovalModel
+
+    orphan = ApprovalModel(
+        id=str(uuid.uuid4()),
+        request_id="req-manual",
+        approval_type="manual_task",
+        status="pending",
+        assigned_to_email=None,
+        assigned_to_role=None,
+        instructions="File a ticket with the DBA team, then mark this done.",
+    )
+    db_session.add(orphan)
+    db_session.commit()
+
+    def visible_to(roles):
+        return db_session.query(ApprovalModel).filter(
+            approval_visibility_filter("admin@example.com", roles=roles, entitlements=[])
+        ).all()
+
+    assert [a.id for a in visible_to(["Platform Admin"])] == [orphan.id]
+    # Still scoped: it is not dumped into every admin's inbox.
+    assert visible_to(["Finance Admin"]) == []
+    assert visible_to([]) == []
 
 
 def test_scoped_roles_see_only_their_own_types():

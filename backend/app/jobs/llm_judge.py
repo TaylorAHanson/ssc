@@ -38,7 +38,7 @@ TOOLS CALLED:
 """
 
 
-def _judge_one(client, endpoint: str, request_text: str, response_text: str,
+def _judge_one(client, request_text: str, response_text: str,
                tools_text: str) -> dict:
     prompt = _JUDGE_PROMPT.format(
         request=request_text[:4000], response=response_text[:4000],
@@ -46,18 +46,9 @@ def _judge_one(client, endpoint: str, request_text: str, response_text: str,
     )
     import asyncio
 
-    result = asyncio.run(
-        client.invoke_endpoint(
-            endpoint,
-            {"messages": [{"role": "user", "content": prompt}],
-             "temperature": 0.0, "max_tokens": 300},
-            use_foundation_model_format=True,
-        )
+    content = asyncio.run(
+        client.complete_text(prompt, temperature=0.0, max_tokens=300)
     )
-    content = ""
-    if isinstance(result, dict):
-        msg = result.get("message") or {}
-        content = msg.get("content") or result.get("content") or ""
     try:
         start, end = content.find("{"), content.rfind("}")
         return json.loads(content[start:end + 1])
@@ -70,23 +61,22 @@ def run(limit: int = 50, dry_run: bool = False) -> int:
 
     from app.agents.tracing import init_tracing
     from app.core.config import settings
-    from app.model_serving.client import ModelServingClient
+    from app.model_serving.agent_llm import AgentLLMClient
 
     init_tracing()
-    endpoint = settings.AI_GATEWAY_ENDPOINT or settings.MODEL_SERVING_AGENT_LLM_ENDPOINT
     if settings.MLFLOW_EXPERIMENT:
         mlflow.set_experiment(settings.MLFLOW_EXPERIMENT)
 
     traces = mlflow.search_traces(max_results=limit, order_by=["timestamp DESC"])
     logger.info("LLM judge: scoring %d traces", len(traces))
 
-    client = ModelServingClient()
+    client = AgentLLMClient()
     scored = 0
     for _, row in traces.iterrows():
         trace_id = row.get("trace_id") or row.get("request_id")
         request_text = json.dumps(row.get("request", ""), default=str)
         response_text = json.dumps(row.get("response", ""), default=str)
-        verdict = _judge_one(client, endpoint, request_text, response_text, "")
+        verdict = _judge_one(client, request_text, response_text, "")
         logger.info("trace=%s verdict=%s", trace_id, verdict)
         if dry_run:
             continue

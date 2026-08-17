@@ -1031,7 +1031,10 @@ async def _v2_resume_value(db, request, result):
         return {"approved": False, "reason": "rejected"}
 
     gtype = (result.interrupt_payload or {}).get("type")
-    if gtype in ("manager", "platform_admin", "data_owner"):
+    # A manual task resumes off the same ``approval_received`` fact the human
+    # gates use — the inbox's "Mark done" writes it with approval_type
+    # "manual_task" — so it needs no new endpoint or fact type.
+    if gtype in ("manager", "platform_admin", "data_owner", "manual_task"):
         approved = any(
             f.event_type == "approval_received"
             and (f.event_data or {}).get("approval_type") == gtype
@@ -1181,9 +1184,14 @@ async def _process_request_state_machine(db, request: RequestModel):
                 raise
 
 
-# Gate types that route to a human approver (and therefore need an approval
-# task row). Automated gates (training, pr_merge, children) resolve via facts.
-_HUMAN_GATE_TYPES = {"manager", "platform_admin", "data_owner"}
+# Gate types that route to a human (and therefore need an approval task row).
+# Automated gates (training, pr_merge, children) resolve via facts.
+# ``manual_task`` is here because it also needs an inbox item — but it is a
+# *completion* gate, not an authorization one: the human is doing work, not
+# approving. It is deliberately NOT in the evaluator's APPROVAL_GATE_TYPES, so
+# dropping a manual task in front of a risky step doesn't silence the "no
+# approval gate" finding.
+_HUMAN_GATE_TYPES = {"manager", "platform_admin", "data_owner", "manual_task"}
 
 
 def _split_assignee(approver: Optional[str]):
@@ -1234,12 +1242,24 @@ def _ensure_approval_task(db: Session, request: RequestModel, payload) -> None:
     first = approvers[0] if isinstance(approvers, (list, tuple)) and approvers else None
     assigned_email, assigned_role = _split_assignee(first)
 
+    # Manual tasks carry their work instructions (and optional SLA) onto the row so
+    # the inbox can show what to do instead of a bare "pending" item.
+    instructions = payload.get("instructions") if gtype == "manual_task" else None
+    due_at = None
+    if gtype == "manual_task" and payload.get("due_in_days"):
+        try:
+            due_at = datetime.utcnow() + timedelta(days=int(payload["due_in_days"]))
+        except (TypeError, ValueError):
+            due_at = None
+
     try:
         db.add(
             ApprovalModel(
                 id=f"appr-{uuid.uuid4()}",
                 request_id=request.id,
                 approval_type=gtype,
+                instructions=instructions,
+                due_at=due_at,
                 # Record both the display name and email. We only have the
                 # requester's email here, so use it for both — the Approval API
                 # requires a non-null ``requested_by`` and 500s otherwise.

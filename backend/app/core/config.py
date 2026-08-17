@@ -341,6 +341,17 @@ class Settings(BaseSettings):
     # Agent Settings
     AGENT_ENABLED: bool = True
     AGENT_MAX_ITERATIONS: int = 10
+    # The authoring studio needs a bigger budget than a runtime turn: one design
+    # turn legitimately spends ~9 calls (building blocks, research, preview,
+    # validate, save draft, save tests, run tests, then a fix + re-save), so the
+    # runtime cap of 10 left no room to finish and the agent stopped after saving.
+    AGENT_AUTHORING_MAX_ITERATIONS: int = 18
+    # Output ceiling for one LLM turn, INCLUDING tool-call arguments. Authoring a
+    # workflow emits a whole graph_spec plus the runtime playbook inside a single
+    # `save_workflow_draft` call, which blew past the old 2000-token default; the
+    # arguments came back cut off mid-JSON and reached the tool as {} ("Field
+    # required: key, graph_spec"). Raise this if a big save still truncates.
+    AGENT_MAX_RESPONSE_TOKENS: int = 12000
     AGENT_TIMEOUT_SECONDS: int = 60
     # Per-tool output cap (chars). Prevents a single chatty tool (e.g. system
     # tables, audit logs, table lists) from blowing the model's context window.
@@ -421,6 +432,26 @@ class Settings(BaseSettings):
     # stay available. Set True in production so workflows are built+proven in lower
     # envs and promoted as a vetted bundle, never hand-edited live.
     WORKFLOW_AUTHORING_LOCKED: bool = False
+
+    # Workflow tests (Workflow Studio -> Tests). A test run starts the real agent
+    # against a workflow's own instructions with the ToolExecutor in dry_run, so it
+    # is an agent-invocation surface: it costs model calls and it is rate-limited
+    # and role-gated on top of the sandbox.
+    WORKFLOW_TESTS_ENABLED: bool = True
+    # Cases executed concurrently within one run group. Each case is a full agent
+    # conversation, so this multiplies model load — keep it small.
+    WORKFLOW_TEST_CONCURRENCY: int = 2
+    # Hard ceiling per case (agent + judge). A wedged case must not hold a run
+    # group open forever; it is recorded as an error instead.
+    WORKFLOW_TEST_TIMEOUT_SECONDS: int = 180
+    # Judge score at or above which a case counts as passing.
+    WORKFLOW_TEST_PASS_THRESHOLD: int = 70
+    # Cases one admin may launch per hour (counted across run groups).
+    WORKFLOW_TEST_RUNS_PER_HOUR: int = 60
+    # When True, publishing is *blocked* while any enabled test case is failing or
+    # has never run. Default warns instead: a hard block on a non-deterministic
+    # judge would strand authors whose workflow is actually fine.
+    WORKFLOW_TESTS_BLOCK_PUBLISH: bool = False
 
     # Open Policy Agent (governance / Rego)
     # Empty OPA_URL → app starts an embedded `opa run --server` child process

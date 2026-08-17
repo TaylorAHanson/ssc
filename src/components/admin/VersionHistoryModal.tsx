@@ -13,12 +13,16 @@ interface Props {
   locked?: boolean;
 }
 
-/** Published-version history with one-click rollback. Restoring loads the chosen
- *  version's body back as a draft so it can be reviewed/tested before re-publishing. */
+/** Snapshot history with one-click restore. Restoring loads the chosen snapshot's
+ *  body back as a draft so it can be reviewed/tested before re-publishing.
+ *
+ *  Two kinds of snapshot appear here: published versions, and the autosave backups
+ *  taken right before something overwrote a draft (e.g. an authoring-assistant
+ *  save) — which is how draft edits that used to be unrecoverable get recovered. */
 export function VersionHistoryModal({ workflowId, currentVersion, onRestored, onClose, locked }: Props) {
   const [versions, setVersions] = useState<WorkflowVersion[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [restoring, setRestoring] = useState<number | null>(null);
+  const [restoring, setRestoring] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -31,12 +35,26 @@ export function VersionHistoryModal({ workflowId, currentVersion, onRestored, on
     };
   }, [workflowId]);
 
-  const restore = async (version: number) => {
-    if (!confirm(`Restore version ${version} as a new draft? Current unpublished edits will be replaced.`)) return;
-    setRestoring(version);
+  const restore = async (snapshot: WorkflowVersion) => {
+    const isAutosave = snapshot.kind === 'autosave';
+    const label = isAutosave
+      ? `the autosave from ${snapshot.published_at ? new Date(snapshot.published_at).toLocaleString() : 'earlier'}`
+      : `version ${snapshot.version}`;
+    if (
+      !confirm(
+        `Restore ${label} as a new draft? Current unpublished edits will be replaced ` +
+          '(they get backed up here first, so this is reversible).',
+      )
+    )
+      return;
+    setRestoring(snapshot.id);
     setError(null);
     try {
-      const workflow = await api.rollbackWorkflow(workflowId, version);
+      // Autosaves share a version number, so they can only be addressed by id.
+      const workflow = await api.rollbackWorkflow(
+        workflowId,
+        isAutosave ? { snapshotId: snapshot.id } : { version: snapshot.version },
+      );
       onRestored(workflow);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to restore');
@@ -70,51 +88,66 @@ export function VersionHistoryModal({ workflowId, currentVersion, onRestored, on
             </div>
           ) : versions.length === 0 ? (
             <div className="text-sm text-gray-400 text-center py-10">
-              No published versions yet. Publishing a workflow snapshots it here.
+              No snapshots yet. Publishing captures a version here, and a backup is
+              taken automatically before the assistant overwrites a draft.
             </div>
           ) : (
             <div className="space-y-2">
-              {versions.map((v) => (
-                <div
-                  key={v.id}
-                  className="flex items-center gap-3 border border-gray-200 rounded-md px-3 py-2"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">v{v.version}</span>
-                      {v.version === currentVersion && (
-                        <span className="text-[10px] bg-green-50 text-green-700 rounded px-1.5 py-0.5">
-                          current
+              {versions.map((v) => {
+                const isAutosave = v.kind === 'autosave';
+                return (
+                  <div
+                    key={v.id}
+                    className={`flex items-center gap-3 border rounded-md px-3 py-2 ${
+                      isAutosave ? 'border-dashed border-gray-200 bg-gray-50/60' : 'border-gray-200'
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">
+                          {isAutosave ? 'Autosave' : `v${v.version}`}
                         </span>
-                      )}
-                      {v.has_graph && (
-                        <span className="text-[10px] text-gray-500 inline-flex items-center gap-1">
-                          <WorkflowIcon className="w-3 h-3" /> {v.stage_count} stage{v.stage_count === 1 ? '' : 's'}
-                        </span>
-                      )}
+                        {isAutosave ? (
+                          <span className="text-[10px] bg-amber-50 text-amber-700 rounded px-1.5 py-0.5">
+                            backup · based on v{v.version}
+                          </span>
+                        ) : (
+                          v.version === currentVersion && (
+                            <span className="text-[10px] bg-green-50 text-green-700 rounded px-1.5 py-0.5">
+                              current
+                            </span>
+                          )
+                        )}
+                        {v.has_graph && (
+                          <span className="text-[10px] text-gray-500 inline-flex items-center gap-1">
+                            <WorkflowIcon className="w-3 h-3" /> {v.stage_count} stage{v.stage_count === 1 ? '' : 's'}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-gray-400 truncate">
+                        {v.published_at ? new Date(v.published_at).toLocaleString() : ''}
+                        {v.published_by ? ` · ${v.published_by}` : ''}
+                        {v.note ? ` · ${v.note}` : ''}
+                      </div>
                     </div>
-                    <div className="text-[11px] text-gray-400 truncate">
-                      {v.published_at ? new Date(v.published_at).toLocaleString() : ''}
-                      {v.published_by ? ` · ${v.published_by}` : ''}
-                    </div>
+                    {!locked && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={restoring !== null}
+                        onClick={() => restore(v)}
+                      >
+                        {restoring === v.id ? (
+                          <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                        ) : (
+                          <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                        )}
+                        Restore
+                      </Button>
+                    )}
                   </div>
-                  {!locked && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={restoring !== null}
-                      onClick={() => restore(v.version)}
-                    >
-                      {restoring === v.version ? (
-                        <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
-                      ) : (
-                        <RotateCcw className="w-3.5 h-3.5 mr-1" />
-                      )}
-                      Restore
-                    </Button>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

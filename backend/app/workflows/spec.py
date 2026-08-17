@@ -43,7 +43,9 @@ class WorkflowState(TypedDict, total=False):
 class Gate:
     """A human/event approval gate, compiled to an ``interrupt()`` node."""
     name: str                 # node id, e.g. "manager_approval"
-    type: str                 # "manager" | "platform_admin" | "data_owner" | "training" | "pr_merge" | "children"
+    # "manager" | "platform_admin" | "data_owner" | "training" | "pr_merge"
+    # | "manual_task" | "children"
+    type: str
     waiting_status: str = "manager_approval"   # RequestStatus while paused
     # Skip the gate entirely when this predicate of context is true (auto-approve).
     auto_approve: Optional[Callable[[Dict[str, Any]], bool]] = None
@@ -72,6 +74,14 @@ class Gate:
     # manual "mark complete". ``course_name`` is display-only copy for the UI.
     course_code: Optional[str] = None
     course_name: Optional[str] = None
+    # For ``type == "manual_task"`` gates: what the assignee must actually DO
+    # off-platform before marking the task done (there is no tool for this work —
+    # that's the point of the gate). Required by the loader, carried in the
+    # interrupt payload, and shown verbatim in the approvals inbox.
+    instructions: Optional[str] = None
+    # Optional SLA in days, used for aging/escalation visibility. A manual task can
+    # park a request indefinitely, so the inbox needs to be able to show "overdue".
+    due_in_days: Optional[int] = None
 
 
 @dataclass
@@ -158,6 +168,13 @@ def _gate_node(gate: Gate):
             payload["course_code"] = gate.course_code
             if gate.course_name:
                 payload["course_name"] = gate.course_name
+        # Manual tasks carry their own instructions into the inbox: the assignee is
+        # being asked to do work the platform can't do, so the task text IS the
+        # entire content of the item they see.
+        if gate.type == "manual_task":
+            payload["instructions"] = gate.instructions or ""
+            if gate.due_in_days:
+                payload["due_in_days"] = gate.due_in_days
         approvers = await _resolve_gate_approvers(gate, ctx)
         if approvers:
             # Surface under both keys: ``data_owners`` keeps parity with the old
