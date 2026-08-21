@@ -131,6 +131,17 @@ def _report(settings, host: str, has_auth: bool) -> None:
     _say(f"  {_status(bool(host))} Databricks host      {host or '(missing)'}")
     _say(f"  {_status(has_auth)} Databricks auth      {'resolved' if has_auth else '(missing - run `databricks auth login`)'}")
 
+    # The user identity is separate from the app's own auth above: on-behalf-of
+    # calls (MCP discovery, UC listings, Genie) run as *you*, and locally there's
+    # no forwarded token, so they lean on your CLI login.
+    try:
+        from app.core.local_identity import local_identity_status
+
+        obo_ok, obo_detail = local_identity_status()
+    except Exception as e:  # noqa: BLE001 - never let the report crash startup
+        obo_ok, obo_detail = False, f"could not check ({type(e).__name__}: {e})"
+    _say(f"  {_status(obo_ok)} On-behalf-of user    {obo_detail}")
+
     warehouse = (getattr(settings, 'DATABRICKS_WAREHOUSE_ID', '') or '').strip()
     _say(f"  {_status(bool(warehouse))} SQL warehouse id     {warehouse or '(unset - SQL tools/run_sql will be unavailable)'}")
 
@@ -150,6 +161,11 @@ def _report(settings, host: str, has_auth: bool) -> None:
         _say("  Missing Databricks config. Easiest fix:")
         _say("    databricks auth login --host https://<your-workspace>.databricks.com")
         _say("  ...then re-run ./dev.sh (no need to paste a token into .env).")
+    elif not obo_ok:
+        _say("")
+        _say("  No user identity for on-behalf-of calls, so MCP discovery, Unity")
+        _say("  Catalog listings and Genie will fail locally. Fix:")
+        _say(f"    databricks auth login --host {host}")
     _say("---------------------------------------------")
     _say("")
 

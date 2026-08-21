@@ -1339,7 +1339,15 @@ export async function createMcpSource(data: McpSourceCreate): Promise<McpSource>
   return response.json();
 }
 
-export async function getAvailableMcpSources(): Promise<{ sources: AvailableMcpSource[] }> {
+export interface AvailableMcpSources {
+  sources: AvailableMcpSource[];
+  /** Per-kind discovery failures (connections / genie / apps), verbatim from the SDK. */
+  errors?: string[];
+  /** Identity the workspace was listed as: 'obo' (the caller) or 'sp'. */
+  identity?: 'obo' | 'sp';
+}
+
+export async function getAvailableMcpSources(): Promise<AvailableMcpSources> {
   const response = await fetch(`${API_BASE_URL}/tool-registry/sources/available`, { headers: getHeaders() });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));

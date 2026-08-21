@@ -44,6 +44,12 @@ export function ToolRegistry() {
   const [browseLoading, setBrowseLoading] = useState(false);
   const [available, setAvailable] = useState<AvailableMcpSource[]>([]);
   const [browseQuery, setBrowseQuery] = useState('');
+  // Why discovery came back empty, straight from the backend — an empty workspace
+  // and a failing listing call look identical otherwise.
+  const [browseDiagnostics, setBrowseDiagnostics] = useState<{
+    errors: string[];
+    identity: 'obo' | 'sp';
+  }>({ errors: [], identity: 'obo' });
 
   // Tool table filters
   const [search, setSearch] = useState('');
@@ -189,8 +195,17 @@ export function ToolRegistry() {
     try {
       const res = await getAvailableMcpSources();
       setAvailable(res.sources);
+      const errors = res.errors ?? [];
+      const identity = res.identity ?? 'obo';
+      setBrowseDiagnostics({ errors, identity });
       if (res.sources.length === 0) {
-        flash('error', 'No MCP servers found in the workspace (the Service Principal may lack access).');
+        const who = identity === 'obo' ? 'you' : 'the app Service Principal';
+        flash(
+          'error',
+          errors.length
+            ? `Workspace listing failed as ${who}: ${errors.join(' | ')}`
+            : `No MCP servers visible to ${who} in this workspace — nothing to list.`
+        );
       }
     } catch (error) {
       flash('error', error instanceof Error ? error.message : 'Failed to list workspace MCP servers');
@@ -326,7 +341,39 @@ export function ToolRegistry() {
                   <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
                 </div>
               ) : available.length === 0 ? (
-                <p className="text-sm text-gray-500 px-3 py-4">No MCP servers found in the workspace.</p>
+                <div className="px-3 py-4 space-y-2">
+                  <p className="text-sm text-gray-500">
+                    No MCP servers found, listing as{' '}
+                    {browseDiagnostics.identity === 'obo'
+                      ? 'you (on-behalf-of)'
+                      : 'the app Service Principal'}
+                    .
+                  </p>
+                  {browseDiagnostics.errors.length > 0 ? (
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-red-700">
+                        The workspace listing calls failed, so this is not a "nothing registered"
+                        result:
+                      </p>
+                      <ul className="space-y-1">
+                        {browseDiagnostics.errors.map((err, i) => (
+                          <li
+                            key={i}
+                            className="text-xs font-mono text-red-700 bg-red-50 border border-red-100 rounded p-2 break-words"
+                          >
+                            {err}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-500">
+                      The calls succeeded — this workspace has no Unity Catalog HTTP connections,
+                      Genie spaces, or <code>mcp-*</code> apps visible to that identity. You can
+                      still add a server by URL.
+                    </p>
+                  )}
+                </div>
               ) : (
                 <>
                   <div className="relative px-3 py-2 border-b border-gray-100">

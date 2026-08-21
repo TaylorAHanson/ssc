@@ -16,7 +16,7 @@ environments where the optional dependency isn't installed.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from app.core.config import settings
 
@@ -246,7 +246,9 @@ def list_tools(server_url: str, obo_token: Optional[str] = None) -> List[Dict[st
 def _list_mcp_servers_with_client(ws, host: str) -> Tuple[List[Dict[str, Any]], List[str]]:
     """Core discovery logic using a pre-built WorkspaceClient.
 
-    Separated so we can retry with a different client on auth failure.
+    Returns ``(sources, errors)``: each server kind is listed independently so one
+    failing kind never hides the others, and the per-kind failure reasons come back
+    with the results instead of being swallowed.
     """
     out: List[Dict[str, Any]] = []
     errors: List[str] = []
@@ -308,7 +310,21 @@ def _list_mcp_servers_with_client(ws, host: str) -> Tuple[List[Dict[str, Any]], 
     return out, errors
 
 
-def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> List[Dict[str, Any]]:
+class McpDiscovery(NamedTuple):
+    """Result of a workspace MCP scan, including *why* it came back empty.
+
+    An empty ``sources`` list means something very different depending on
+    ``errors``: no servers exist/are visible (nothing to fix) versus the listing
+    calls themselves failing (auth expired, missing grants). Callers need both to
+    tell an admin the truth.
+    """
+
+    sources: List[Dict[str, Any]]
+    errors: List[str]
+    identity: str  # "obo" (as the caller) | "sp" (as the app Service Principal)
+
+
+def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> McpDiscovery:
     """Enumerate MCP servers available in the workspace via the Databricks SDK.
 
     Lets an admin pick a server instead of hand-typing a name + URL. Pulls the
@@ -323,19 +339,19 @@ def list_workspace_mcp_servers(obo_token: Optional[str] = None) -> List[Dict[str
     Runs On-Behalf-Of the user when ``obo_token`` is given (so per-user
     connections/spaces are visible), else as the Service Principal. There is
     intentionally no cross-identity fallback — discovery reflects exactly what the
-    chosen identity can see. Returns dicts shaped for the quick-add form:
+    chosen identity can see. Sources are dicts shaped for the quick-add form:
     ``{name, server_url, kind, detail}``.
     """
     host = _host()
+    identity = "obo" if obo_token else "sp"
     ws = build_obo_workspace_client(obo_token) if obo_token else build_sp_workspace_client()
-    label = "OBO" if obo_token else "SP"
     out, errors = _list_mcp_servers_with_client(ws, host)
     if errors and not out:
         logger.warning(
             "list_workspace_mcp_servers: %s returned empty (errors: %s)",
-            label, "; ".join(errors),
+            identity.upper(), "; ".join(errors),
         )
-        return out
+    return McpDiscovery(sources=out, errors=errors, identity=identity)
 
 
 def _content_to_text(result: Any) -> str:

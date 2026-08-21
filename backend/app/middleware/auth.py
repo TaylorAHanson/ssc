@@ -29,6 +29,7 @@ import uuid
 from typing import Awaitable, Callable, MutableMapping
 
 from app.core.config import settings
+from app.core.local_identity import local_user_token
 from app.core.logging_formatter import (
     current_client_ip,
     current_correlation_id,
@@ -141,9 +142,21 @@ class AuthMiddleware:
                         "Forwarded headers: %s",
                         method, path, fwd_headers,
                     )
-                if not obo_token and settings.MOCK_USER_TOKEN:
-                    obo_token = settings.MOCK_USER_TOKEN
-                    logger.debug("AuthMiddleware: Using MOCK_USER_TOKEN")
+                if not obo_token:
+                    # Local dev: no platform header, so stand in for it with the
+                    # developer's own CLI login. Preferred over MOCK_USER_TOKEN
+                    # because that is a static paste which expires silently and
+                    # then fails every on-behalf-of call. Cached inside, so this
+                    # only reaches the SDK about twice an hour.
+                    obo_token = local_user_token()
+                    if obo_token:
+                        logger.debug(
+                            "AuthMiddleware [%s %s]: using your Databricks CLI identity for OBO",
+                            method, path,
+                        )
+                    elif settings.MOCK_USER_TOKEN:
+                        obo_token = settings.MOCK_USER_TOKEN
+                        logger.debug("AuthMiddleware: Using MOCK_USER_TOKEN")
 
                 # FastAPI / Starlette construct ``request.state`` from
                 # ``scope["state"]`` lazily on first access, so writing

@@ -465,13 +465,17 @@ class ToolRegistryService:
     @staticmethod
     def list_workspace_mcp_candidates(
         db: Session, obo_token: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """MCP servers discoverable in the workspace via the SDK (for the picker).
 
         Lists On-Behalf-Of the caller when ``obo_token`` is provided so per-user
         connections/spaces show up. Flags candidates already registered (by
         matching ``server_url`` against existing sources) so the UI can
         annotate/disable them.
+
+        Returns ``{sources, errors, identity}``: the discovery failures and the
+        identity used travel with the results so an empty picker can explain
+        itself instead of guessing at a cause.
         """
         from app.tools.external import mcp_client
 
@@ -479,10 +483,14 @@ class ToolRegistryService:
             (s.server_url or "").rstrip("/")
             for s in db.query(McpSourceModel.server_url).all()
         }
-        candidates = mcp_client.list_workspace_mcp_servers(obo_token=obo_token)
-        for c in candidates:
+        found = mcp_client.list_workspace_mcp_servers(obo_token=obo_token)
+        for c in found.sources:
             c["already_registered"] = (c.get("server_url") or "").rstrip("/") in existing_urls
-        return candidates
+        return {
+            "sources": found.sources,
+            "errors": found.errors,
+            "identity": found.identity,
+        }
 
     # ------------------------------------------------------ surface resolution
     @staticmethod

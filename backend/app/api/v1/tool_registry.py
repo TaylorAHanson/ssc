@@ -174,11 +174,9 @@ def list_available_sources(
     from app.tools.external.mcp_client import McpDependencyError
 
     try:
-        return {
-            "sources": ToolRegistryService.list_workspace_mcp_candidates(
-                db, obo_token=_obo_token(request)
-            )
-        }
+        return ToolRegistryService.list_workspace_mcp_candidates(
+            db, obo_token=_obo_token(request)
+        )
     except McpDependencyError as e:
         raise HTTPException(status_code=503, detail=str(e))
 

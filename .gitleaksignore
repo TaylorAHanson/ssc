@@ -1,0 +1,17 @@
+# Reviewed false positives for the Databricks pre-push secret scan (gitleaks).
+# Format: <commit>:<file>:<rule>:<line>. A fingerprint suppresses exactly that one
+# line in that one commit — the scan still runs, and anything else still blocks.
+
+# A README env-var example showing the SHAPE of a Lakebase/Postgres DATABASE_URL:
+# the postgresql scheme followed by the literal placeholder words for user and
+# password, then host, port and database. Every component is the placeholder word
+# itself, so there is no credential to leak or rotate; the rule simply can't tell
+# the word "password" from a password. (Spelled out in prose rather than as a URL
+# on purpose — writing the example verbatim here makes THIS file trip the scan.)
+#
+# The line was deleted from README.md long ago (51137f5), but gitleaks scans each
+# commit on its own, so the copy in the repo's ROOT commit still trips the pre-push
+# hook. That commit is an ancestor of origin/main and upstream/main and is contained
+# by every local branch, so amending it — as the hook's generic advice suggests —
+# would rewrite every SHA in the repository to hide a fake password.
+691474008589dcf94e29e1cc144a9e6df78ff0cc:README.md:postgres-connection-string:109
