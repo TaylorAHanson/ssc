@@ -16,6 +16,7 @@ import { Button } from '../ui/button';
 import { api } from '../../services/api';
 import type {
   GoalQuality,
+  InstructionsQuality,
   Workflow,
   WorkflowGraphSpec,
   WorkflowTestHealth,
@@ -44,7 +45,14 @@ export function PublishConfirmModal({ workflow, graphSpec, tools, onConfirm, onC
   const [tests, setTests] = useState<
     { health: WorkflowTestHealth; blocksPublish: boolean } | null
   >(null);
-  const [instructionsScore, setInstructionsScore] = useState<number | null>(null);
+  // Three states, not two: an unresolved playbook must not render as 0/100. Reading
+  // "no instructions" off a workflow summary that simply omits the field is what
+  // made every authored playbook look like a stub here.
+  const [instructions, setInstructions] = useState<
+    | { status: 'loading' }
+    | { status: 'unavailable' }
+    | { status: 'scored'; quality: InstructionsQuality }
+  >({ status: 'loading' });
   // The goal is the workflow's whole line in the runtime capabilities menu, so a
   // stub or a line that reads like another workflow's is a routing bug — worth
   // catching at the moment it goes live rather than after a misrouted request.
@@ -69,24 +77,45 @@ export function PublishConfirmModal({ workflow, graphSpec, tools, onConfirm, onC
 
   useEffect(() => {
     let cancelled = false;
-    const markdown = workflow.instructions_markdown;
-    if (!markdown) setInstructionsScore(0);
-    api
-      .evaluateSpec(
-        graphSpec || { name: workflow.key, stages: [] },
-        markdown || undefined,
-        { goal: workflow.goal ?? '', key: workflow.key },
-      )
-      .then((report) => {
+    setInstructions({ status: 'loading' });
+    (async () => {
+      // The list API serves summaries with the playbook stripped, so the workflow
+      // handed to this modal usually carries no `instructions_markdown` at all.
+      // Fetch the server's copy by id — that is the text Publish makes live, and
+      // it's the same by-id lookup the tests and goal panels already do.
+      let markdown =
+        workflow.instructions_markdown === undefined
+          ? undefined
+          : workflow.instructions_markdown ?? '';
+      if (markdown === undefined) {
+        try {
+          markdown = (await api.getWorkflow(workflow.id)).instructions_markdown ?? '';
+        } catch {
+          // Stays undefined so the backend skips scoring: unknown is not empty,
+          // and empty legitimately scores 0 with a "ships a stub" warning.
+          markdown = undefined;
+        }
+      }
+      if (cancelled) return;
+      try {
+        const report = await api.evaluateSpec(
+          graphSpec || { name: workflow.key, stages: [] },
+          markdown,
+          { goal: workflow.goal ?? '', key: workflow.key },
+        );
         if (cancelled) return;
-        if (markdown) setInstructionsScore(report.instructions?.score ?? null);
         setGoalQuality(report.goal ?? null);
-      })
-      .catch(() => {
+        setInstructions(
+          report.instructions
+            ? { status: 'scored', quality: report.instructions }
+            : { status: 'unavailable' },
+        );
+      } catch {
         if (cancelled) return;
-        if (markdown) setInstructionsScore(null);
         setGoalQuality(null);
-      });
+        setInstructions({ status: 'unavailable' });
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -141,6 +170,22 @@ export function PublishConfirmModal({ workflow, graphSpec, tools, onConfirm, onC
 
   const hasGraph = !!graphSpec && (graphSpec.stages?.length ?? 0) > 0;
   const noRequestType = hasGraph && !workflow.request_type;
+
+  // A single "close to the generated baseline" line misdiagnosed every low score.
+  // The scorer already distinguishes the cases an author actually hits, so say
+  // which one this is. An untouched baseline warns at any score: the baseline
+  // penalty is only 35, so a tidily-generated stub clears a score threshold while
+  // still being the thing this dialog exists to catch.
+  const instructionsWarning =
+    instructions.status !== 'scored'
+      ? null
+      : instructions.quality.summary.chars === 0
+        ? 'This workflow has no runtime instructions, so the agent has nothing to follow when a request comes in.'
+        : instructions.quality.summary.is_auto_baseline
+          ? 'These instructions are still the generated baseline, which only covers what the graph happens to reference.'
+          : instructions.quality.score < 40
+            ? `These instructions scored ${instructions.quality.score}/100 — thin for something the agent runs a governed request from.`
+            : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -217,19 +262,23 @@ export function PublishConfirmModal({ workflow, graphSpec, tools, onConfirm, onC
               <span className="flex items-center gap-2 text-gray-600">
                 <Sparkles className="w-4 h-4 text-violet-500" /> Instructions quality
               </span>
-              {instructionsScore === null ? (
+              {instructions.status === 'loading' ? (
+                <span className="text-gray-400 text-xs flex items-center gap-1">
+                  <Loader2 className="w-3 h-3 animate-spin" /> scoring…
+                </span>
+              ) : instructions.status === 'unavailable' ? (
                 <span className="text-gray-400 text-xs">not scored</span>
               ) : (
                 <span
                   className={`font-medium ${
-                    instructionsScore >= 70
+                    instructions.quality.score >= 70
                       ? 'text-green-700'
-                      : instructionsScore >= 40
+                      : instructions.quality.score >= 40
                         ? 'text-amber-600'
                         : 'text-red-600'
                   }`}
                 >
-                  {instructionsScore}/100
+                  {instructions.quality.score}/100
                 </span>
               )}
             </div>
@@ -277,12 +326,14 @@ export function PublishConfirmModal({ workflow, graphSpec, tools, onConfirm, onC
             </div>
           </div>
 
-          {instructionsScore !== null && instructionsScore < 40 && (
+          {instructionsWarning && (
             <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-              These instructions are close to the generated baseline. They are the prompt
-              the agent follows at runtime — publishing this ships a stub. Use “Generate
-              instructions” or edit them on the Details tab first.
+              <span>
+                {instructionsWarning} They are the prompt the agent follows at runtime, so
+                use “Generate instructions” or edit them on the Details tab before
+                publishing.
+              </span>
             </div>
           )}
 

@@ -73,7 +73,8 @@ export function WorkflowEditor({
   onAskAgent,
   instructionsMarkdown,
 }: Props) {
-  const [selectedIdx, setSelectedIdx] = useState<number | null>(
+  // Raw state — read the clamped `selectedIdx` below instead.
+  const [rawSelectedIdx, setSelectedIdx] = useState<number | null>(
     spec.stages.length ? 0 : null,
   );
   const [validating, setValidating] = useState(false);
@@ -85,6 +86,17 @@ export function WorkflowEditor({
 
   const defaultTool = tools[0]?.name || 'send_notification';
   const stages = spec.stages;
+
+  // The selection is local state but `spec` is owned by the parent, so a shorter
+  // stage list arriving from outside (a version rollback, the assistant
+  // rewriting the graph, a different workflow opening) can leave the held index
+  // past the end. `stages[staleIdx]` is `undefined` rather than `null`, which
+  // slips through the `selected === null` check and crashes the inspector on
+  // `.kind`, so clamp on every read.
+  const selectedIdx =
+    rawSelectedIdx === null || stages.length === 0
+      ? null
+      : Math.min(rawSelectedIdx, stages.length - 1);
 
   const setStages = (next: WorkflowStage[]) => {
     onChange({ ...spec, stages: next });

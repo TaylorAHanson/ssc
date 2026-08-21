@@ -1601,6 +1601,11 @@ export function Workflows() {
                     resetKeys={[workflowParam, searchParams.get('new')]}
                   >
                     <WorkflowEditor
+                      // The editor's local state (selected stage, validation
+                      // banner) belongs to one workflow: keying on the id drops
+                      // it on a switch instead of showing the next workflow with
+                      // the previous one's selection.
+                      key={workflowParam ?? 'new'}
                       spec={form.graph_spec}
                       tools={tools}
                       onChange={(graph_spec) => editForm('graph_spec', graph_spec)}
