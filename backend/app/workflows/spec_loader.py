@@ -138,6 +138,49 @@ def validate_spec_dict(data: Any) -> None:
         else:
             _validate_step(stage, where)
 
+    _validate_on_reject(data, seen)
+
+
+def _validate_on_reject(data: Dict[str, Any], stage_names: set) -> None:
+    """Validate the rejection path: steps that run when a gate denies the request.
+
+    Steps only — a gate here would ask for approval of a decision already made, and
+    a nested workflow would be a second graph on a terminal path. Names share one
+    namespace with ``stages`` because both write into the same ``results`` map.
+    """
+    on_reject = data.get("on_reject")
+    if on_reject is None:
+        return
+    if not isinstance(on_reject, list):
+        raise SpecError("spec.on_reject must be a list of steps")
+
+    seen: set = set()
+    for i, stage in enumerate(on_reject):
+        where = f"on_reject[{i}]"
+        if not isinstance(stage, dict):
+            raise SpecError(f"{where} must be an object")
+        kind = stage.get("kind", "step")
+        if kind != "step":
+            raise SpecError(
+                f"{where}.kind must be 'step' — the rejection path runs steps only "
+                "(the decision is already final, so there is nothing left to approve)"
+            )
+        name = stage.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise SpecError(f"{where}.name is required")
+        if name in ("complete", "rejected", "pending", "completed"):
+            raise SpecError(f"{where}: '{name}' is reserved")
+        if name in seen or name in stage_names:
+            raise SpecError(f"{where}: duplicate stage name '{name}'")
+        seen.add(name)
+        if stage.get("approvals"):
+            raise SpecError(
+                f"{where}.approvals cannot be set: a gate DENIED this request, so "
+                "attesting an approval here would tell the policy layer something "
+                "that did not happen. Remove it."
+            )
+        _validate_step(stage, where)
+
 
 def _validate_gate(stage: Dict[str, Any], where: str) -> None:
     _reject_unknown_keys(stage, _GATE_KEYS, where)
@@ -388,29 +431,38 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
             # every gate that precedes this step.
             explicit = stage.get("approvals")
             approvals = list(explicit) if explicit else list(preceding_gate_types)
-            step = Step(
-                name=stage["name"],
-                tool=get_tool(stage["tool"]),
-                args=_args_fn(stage.get("args", {})),
-                running_status=stage.get("running_status", "provisioning"),
-                approvals=approvals,
-                success_fact=stage.get("success_fact"),
-            )
-            if stage.get("for_each") is not None:
-                step.for_each = _for_each_fn(stage["for_each"])
-                step.item_args = _item_args_fn(stage.get("item_args", {}))
-            if stage.get("run_if") is not None:
-                step.run_if = _auto_approve_fn(stage["run_if"])  # bool predicate over ctx
-            if stage.get("writes_context") is not None:
-                step.writes_context = list(stage["writes_context"])
-            stages.append(step)
+            stages.append(_step_from_dict(stage, approvals))
 
     return WorkflowSpec(
         name=data["name"],
         stages=stages,
         completed_status=data.get("completed_status", "completed"),
         complete_fact=data.get("complete_fact"),
+        # Rejection-path steps attest NOTHING. Inheriting the preceding gates the
+        # way a normal step does would attest the very gate that denied the
+        # request, so a mutating cleanup tool here faces policy with an empty hand.
+        on_reject=[_step_from_dict(s, []) for s in (data.get("on_reject") or [])],
     )
+
+
+def _step_from_dict(stage: Dict[str, Any], approvals: List[str]) -> Step:
+    """Compile one step, with its approvals attestation supplied by the caller."""
+    step = Step(
+        name=stage["name"],
+        tool=get_tool(stage["tool"]),
+        args=_args_fn(stage.get("args", {})),
+        running_status=stage.get("running_status", "provisioning"),
+        approvals=approvals,
+        success_fact=stage.get("success_fact"),
+    )
+    if stage.get("for_each") is not None:
+        step.for_each = _for_each_fn(stage["for_each"])
+        step.item_args = _item_args_fn(stage.get("item_args", {}))
+    if stage.get("run_if") is not None:
+        step.run_if = _auto_approve_fn(stage["run_if"])  # bool predicate over ctx
+    if stage.get("writes_context") is not None:
+        step.writes_context = list(stage["writes_context"])
+    return step
 
 
 # --------------------------------------------------------------------------

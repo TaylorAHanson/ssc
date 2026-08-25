@@ -2532,6 +2532,12 @@ export interface WorkflowGraphSpec {
   complete_fact?: string | null;
   completed_status?: string;
   stages: WorkflowStage[];
+  /**
+   * Steps that run when a gate denies the request, before it ends. `stages` only
+   * covers the path where the request is still alive. Steps only — the decision is
+   * final — and never with `approvals`, since a gate just refused.
+   */
+  on_reject?: WorkflowStepStage[];
 }
 
 export interface WorkflowTool {

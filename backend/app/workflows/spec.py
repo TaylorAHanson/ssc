@@ -143,6 +143,19 @@ class WorkflowSpec:
     stages: List[Stage] = field(default_factory=list)
     completed_status: str = "completed"
     complete_fact: Optional[str] = None
+    # Steps to run when a gate denies the request, before the terminal rejection
+    # node. This is the authorable half of "what happens on reject" — the platform
+    # already emails the requester a default notice (see
+    # ``app/services/rejection_notice.py``); these are for anything workflow-
+    # specific: a tailored message, closing a ticket, releasing a placeholder.
+    #
+    # Two properties they do NOT share with ``stages``:
+    #   * They attest NO approvals. A regular step inherits the gates before it
+    #     because the graph proves those gates passed; here one demonstrably did
+    #     not, so a mutating tool is judged by OPA with nothing attested.
+    #   * A failure is logged and skipped rather than raised. The request was
+    #     denied, and a broken cleanup step must not re-file that as a failure.
+    on_reject: List[Step] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------
@@ -188,6 +201,12 @@ def _gate_node(gate: Gate):
         if not approved:
             out["rejected"] = True
             out["rejection_reason"] = reason
+            # Also mirror the decision into ``context``, because that is what
+            # authored expressions read: without it an ``on_reject`` step can't
+            # quote the reason in a message or branch on which gate said no.
+            out["context"] = {
+                **ctx, "rejection_reason": reason, "rejected_gate": gate.name,
+            }
         return out
 
     return node
@@ -330,16 +349,66 @@ def _complete_node(spec: WorkflowSpec, *, nested: bool = False):
     return node
 
 
-async def _rejected_node(state: WorkflowState) -> WorkflowState:
-    from app.db.session import get_db
-    from app.state_machines.facts import add_fact
-    db = next(get_db())
-    try:
-        add_fact(db, state["request_id"], "request_rejected",
-                 {"reason": state.get("rejection_reason")}, actor="approver")
-    finally:
-        db.close()
-    return {"status": "rejected"}
+def _reject_step_node(step: Step):
+    """An ``on_reject`` step: a normal step whose failure can't derail the denial.
+
+    On the happy path a failing step must halt the graph — the next stage would act
+    on work that didn't happen. Here the decision is already final, so a failure is
+    recorded in ``results`` and flow continues to the terminal rejection node.
+    Otherwise a broken cleanup step would leave a DENIED request marked FAILED, and
+    the poller would keep retrying it.
+    """
+    inner = _step_node(step)
+
+    async def node(state: WorkflowState) -> WorkflowState:
+        try:
+            return await inner(state)
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "[%s] on_reject step '%s' failed (the rejection still stands): %s",
+                state.get("request_id"), step.name, e, exc_info=True,
+            )
+            results = dict(state.get("results", {}))
+            results[step.name] = {"error": str(e)}
+            return {"results": results}
+
+    return node
+
+
+def _rejected_node(*, nested: bool = False):
+    """The terminal rejection path: record the fact, then close the loop.
+
+    ``nested`` mirrors :func:`_complete_node`. A child's rejection routes to the
+    child's rejected node AND then to the parent's, so only the top-level graph
+    notifies — otherwise a compound workflow emails the requester once per level.
+    """
+    async def node(state: WorkflowState) -> WorkflowState:
+        from app.db.session import get_db
+        from app.state_machines.facts import add_fact
+        db = next(get_db())
+        try:
+            add_fact(db, state["request_id"], "request_rejected",
+                     {"reason": state.get("rejection_reason")}, actor="approver")
+            if not nested:
+                # Nothing downstream of here can tell the requester — this node
+                # ends the graph — so the notice is sent from inside it. Guarded:
+                # the request WAS denied, and letting a notification problem raise
+                # here would record that decision as a graph failure instead.
+                try:
+                    from app.services.rejection_notice import notify_requester_of_rejection
+
+                    await notify_requester_of_rejection(
+                        db, state["request_id"], state.get("rejection_reason")
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.error(
+                        "[%s] rejection notice failed: %s", state["request_id"], e, exc_info=True
+                    )
+        finally:
+            db.close()
+        return {"status": "rejected"}
+
+    return node
 
 
 def _subworkflow_input_node(sub: "SubWorkflow"):
@@ -413,7 +482,20 @@ def build_spec_graph(
         return entries[i + 1] if i + 1 < len(entries) else "complete"
 
     g.add_node("complete", _complete_node(spec, nested=_depth > 0))
-    g.add_node("rejected", _rejected_node)
+    g.add_node("rejected", _rejected_node(nested=_depth > 0))
+
+    # The rejection path: authored ``on_reject`` steps chained ahead of the terminal
+    # node, so every gate's failure edge points at the first of them instead of
+    # straight at the end of the graph.
+    reject_entry = "rejected"
+    if spec.on_reject:
+        for idx, step in enumerate(spec.on_reject):
+            g.add_node(step.name, _reject_step_node(step))
+            nxt_reject = (
+                spec.on_reject[idx + 1].name if idx + 1 < len(spec.on_reject) else "rejected"
+            )
+            g.add_edge(step.name, nxt_reject)
+        reject_entry = spec.on_reject[0].name
 
     for i, stage in enumerate(spec.stages):
         nxt = next_entry(i)
@@ -422,7 +504,7 @@ def build_spec_graph(
             g.add_conditional_edges(
                 stage.name,
                 _gate_router(stage.name, nxt),
-                {"next": nxt, "rejected": "rejected"},
+                {"next": nxt, "rejected": reject_entry},
             )
         elif isinstance(stage, SubWorkflow):
             if _depth + 1 > _MAX_SUBWORKFLOW_DEPTH:
@@ -469,7 +551,7 @@ def build_spec_graph(
             g.add_conditional_edges(
                 stage.name,
                 _subworkflow_router,
-                {"next": nxt, "rejected": "rejected"},
+                {"next": nxt, "rejected": reject_entry},
             )
         else:  # Step
             g.add_node(stage.name, _step_node(stage))

@@ -13,6 +13,7 @@ import type {
   SpecExpr,
   WorkflowGraphSpec,
   WorkflowStage,
+  WorkflowStepStage,
 } from '../services/api';
 
 // --- expression detection -------------------------------------------------
@@ -207,7 +208,9 @@ export interface FlowNode {
   id: string;
   label: string;
   sublabel?: string;
-  kind: 'start' | 'gate' | 'step' | 'complete' | 'rejected';
+  /** `reject_step` is an authored `on_reject` step: it runs only on the rejection
+   *  branch, so it's drawn in that column and isn't editable as a stage. */
+  kind: 'start' | 'gate' | 'step' | 'reject_step' | 'complete' | 'rejected';
   x: number;
   y: number;
 }
@@ -251,6 +254,13 @@ export function specToFlow(spec: WorkflowGraphSpec): { nodes: FlowNode[]; edges:
   const stages = (spec.stages || []).filter(
     (s): s is WorkflowStage => !!s && typeof s === 'object',
   );
+  const onReject = (spec.on_reject || []).filter(
+    (s): s is WorkflowStepStage => !!s && typeof s === 'object',
+  );
+  // Where a denial lands: the first authored rejection step, or the terminal node
+  // when the workflow adds nothing of its own.
+  const rejectEntry = onReject.length ? onReject[0].name : 'rejected';
+
   let row = 0;
   nodes.push({ id: 'pending', label: 'Submitted', kind: 'start', x: COL_X, y: row * ROW });
   let prev = 'pending';
@@ -278,7 +288,7 @@ export function specToFlow(spec: WorkflowGraphSpec): { nodes: FlowNode[]; edges:
       edges.push({
         id: `${id}->rejected`,
         source: id,
-        target: 'rejected',
+        target: rejectEntry,
         label: manual ? "can't complete" : 'reject',
         tone: 'reject',
       });
@@ -295,7 +305,7 @@ export function specToFlow(spec: WorkflowGraphSpec): { nodes: FlowNode[]; edges:
         kind: 'step', x: COL_X, y: row * ROW,
       });
       edges.push({ id: `${prev}->${id}`, source: prev, target: id, label: conditional ? 'if' : undefined });
-      edges.push({ id: `${id}->rejected`, source: id, target: 'rejected', label: 'reject', tone: 'reject' });
+      edges.push({ id: `${id}->rejected`, source: id, target: rejectEntry, label: 'reject', tone: 'reject' });
     } else {
       const step = s as WorkflowStage & { tool?: string; run_if?: unknown };
       const conditional = step.run_if !== undefined && step.run_if !== null;
@@ -316,8 +326,43 @@ export function specToFlow(spec: WorkflowGraphSpec): { nodes: FlowNode[]; edges:
   nodes.push({ id: 'complete', label: 'Completed', kind: 'complete', x: COL_X, y: row * ROW });
   edges.push({ id: `${prev}->complete`, source: prev, target: 'complete' });
 
+  // The rejection branch, drawn only when something can actually reject. Any
+  // authored on_reject steps run down this column before the terminal node.
   if (anyGate) {
-    nodes.push({ id: 'rejected', label: 'Rejected', kind: 'rejected', x: REJECT_X, y: (row * ROW) / 2 });
+    let rejectRow = 1;
+    let prevReject: string | null = null;
+    onReject.forEach((s) => {
+      nodes.push({
+        id: s.name,
+        label: s.name,
+        sublabel: s.tool,
+        kind: 'reject_step',
+        x: REJECT_X,
+        y: rejectRow * ROW,
+      });
+      if (prevReject) {
+        edges.push({
+          id: `${prevReject}->${s.name}`, source: prevReject, target: s.name, tone: 'reject',
+        });
+      }
+      prevReject = s.name;
+      rejectRow += 1;
+    });
+    nodes.push({
+      id: 'rejected',
+      label: 'Rejected',
+      // Say it out loud: the requester is told, with the approver's reason, even
+      // when the workflow itself adds nothing to this path.
+      sublabel: 'requester notified',
+      kind: 'rejected',
+      x: REJECT_X,
+      y: Math.max((row * ROW) / 2, rejectRow * ROW),
+    });
+    if (prevReject) {
+      edges.push({
+        id: `${prevReject}->rejected`, source: prevReject, target: 'rejected', tone: 'reject',
+      });
+    }
   }
   return { nodes, edges };
 }

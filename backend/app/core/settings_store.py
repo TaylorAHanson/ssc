@@ -61,6 +61,19 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Notifications & Governance", "key": "GOVERNANCE_EMAIL_GROUP", "label": "Governance admin recipients",
      "type": "string",
      "help": "Who receives Enforcement Sentinel alerts + the daily digest. Comma-separate multiple addresses."},
+    {"group": "Notifications & Governance", "key": "REJECTION_NOTIFY_REQUESTER",
+     "label": "Tell requesters when a request is denied", "type": "bool",
+     "help": "On (recommended) = when an approver denies a request, the requester is emailed the "
+             "reason. A workflow's rejection path ends the request, so nothing else closes this "
+             "loop. Off = the denial is recorded and visible in the app, but nobody is told."},
+    {"group": "Notifications & Governance", "key": "REJECTION_NOTIFY_SUBJECT",
+     "label": "Rejection email subject", "type": "string",
+     "help": "Supports {{request_title}}, {{request_id}}, {{request_type}}, {{reason}}, "
+             "{{rejected_by}}, {{brand_name}}, and {{app_url}}."},
+    {"group": "Notifications & Governance", "key": "REJECTION_NOTIFY_BODY",
+     "label": "Rejection email body (HTML)", "type": "textarea",
+     "help": "Sent as HTML, with the same {{...}} tokens as the subject. {{reason}} is the note the "
+             "approver typed; it reads 'No reason was recorded.' when they left it blank."},
     {"group": "Notifications & Governance", "key": "APP_BASE_URL", "label": "App base URL (for email links)",
      "type": "string",
      "help": "Public URL of this app, e.g. https://your-app.databricksapps.com. Used for the 'Review' button in governance emails. Blank omits the button."},
@@ -441,7 +454,10 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "Controls which items appear in the sidebar and top navigation. Hiding a tab only removes it "
         "from the menu — it does not disable the underlying capability (use Features for that)."
     ),
-    "Notifications & Governance": "Where governance alerts go and when the daily Enforcement Sentinel digest is sent.",
+    "Notifications & Governance": (
+        "Where governance alerts go, when the daily Enforcement Sentinel digest is sent, and what a "
+        "requester is told when their request is denied."
+    ),
     "Scheduling": (
         "How often the background jobs run — the Sentinel scan, data-asset cache sync, data-contract "
         "redraft, and calendar sync. All are standard 5-field cron in UTC; leave a field blank to disable "

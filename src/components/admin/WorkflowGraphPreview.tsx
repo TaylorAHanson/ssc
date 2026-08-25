@@ -49,6 +49,7 @@ const KIND_STYLES: Record<FlowNode['kind'], { border: string; bg: string; icon: 
   start: { border: 'border-gray-300', bg: 'bg-gray-50', icon: <Play className="w-3.5 h-3.5 text-gray-500" /> },
   gate: { border: 'border-amber-300', bg: 'bg-amber-50', icon: <GitBranch className="w-3.5 h-3.5 text-amber-600" /> },
   step: { border: 'border-blue-300', bg: 'bg-blue-50', icon: <Wrench className="w-3.5 h-3.5 text-blue-600" /> },
+  reject_step: { border: 'border-red-200', bg: 'bg-red-50/60', icon: <Wrench className="w-3.5 h-3.5 text-red-500" /> },
   complete: { border: 'border-green-300', bg: 'bg-green-50', icon: <CheckCircle2 className="w-3.5 h-3.5 text-green-600" /> },
   rejected: { border: 'border-red-300', bg: 'bg-red-50', icon: <XCircle className="w-3.5 h-3.5 text-red-600" /> },
 };

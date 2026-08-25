@@ -673,6 +673,17 @@ class Settings(BaseSettings):
     
     # Notification Settings
     GOVERNANCE_EMAIL_GROUP: str = _notifications.get("governance_email_group", os.getenv("GOVERNANCE_EMAIL_GROUP", "data-governance@example.com"))
+
+    # Rejection notice to the requester. Nothing else closes this loop: a denied
+    # request ends on the graph's terminal rejection node, which writes a fact and
+    # stops. Admin -> Settings can reword or disable it.
+    REJECTION_NOTIFY_REQUESTER: bool = _notifications.get("rejection_notify_requester", True)
+    REJECTION_NOTIFY_SUBJECT: str = _notifications.get(
+        "rejection_notify_subject", os.getenv("REJECTION_NOTIFY_SUBJECT", "")
+    )
+    REJECTION_NOTIFY_BODY: str = _notifications.get(
+        "rejection_notify_body", os.getenv("REJECTION_NOTIFY_BODY", "")
+    )
     
     # Email Provider Selection
     NOTIFICATION_EMAIL_PROVIDER: str = "smtp" # "smtp", "ses", "mock"

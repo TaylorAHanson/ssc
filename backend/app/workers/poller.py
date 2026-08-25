@@ -1026,9 +1026,14 @@ async def _v2_resume_value(db, request, result):
     if not result.interrupted:
         return None
 
-    # Rejection short-circuits any gate.
+    # Rejection short-circuits any gate. Carry the approver's actual note through:
+    # this reason reaches the graph state, the rejection fact, and the notice the
+    # requester gets, and a hardcoded marker made all three say "rejected".
     if has_fact(db, request.id, "request_rejected"):
-        return {"approved": False, "reason": "rejected"}
+        from app.services.rejection_notice import resolve_rejection_details
+
+        note, _reviewer = resolve_rejection_details(db, request.id)
+        return {"approved": False, "reason": note or "rejected"}
 
     gtype = (result.interrupt_payload or {}).get("type")
     # A manual task resumes off the same ``approval_received`` fact the human

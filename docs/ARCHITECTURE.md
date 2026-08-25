@@ -648,6 +648,19 @@ tools/workflows granted in Unity Catalog.
     runtime `WorkflowSpec`. Data access (multi-owner) uses a `resolve_data_owners` step that lifts
     resolved owners into context for a `data_owner` gate's `approvers_from` expression, plus a
     `for_each` grant fan-out.
+  - **The rejection path.** Every gate's refusal edge (and a nested workflow's rejection) routes to
+    one terminal node that records `request_rejected` and ends the graph — a denial can never rejoin
+    `stages`. Two things hang off it: the platform **always tells the requester**, with the
+    approver's note, from `app/services/rejection_notice.py` (copy + on/off under Admin → Settings →
+    Notifications & Governance; sent outside the `ToolExecutor` on purpose, since a notice OPA could
+    deny would mean the platform can't say it said no); and a spec may declare **`on_reject`**, an
+    ordered list of steps that run before that node for workflow-specific handling (a tailored
+    message, closing a ticket, releasing a reservation). `on_reject` steps differ from `stages` steps
+    in two deliberate ways: they attest **no approvals** (a gate just refused, so inheriting the
+    preceding gates would tell the policy layer something untrue — declaring `approvals` there is a
+    validation error), and a failure among them is logged and skipped rather than raised, so a broken
+    cleanup step can't re-file a DENIED request as FAILED. The gate mirrors `rejection_reason` and
+    `rejected_gate` into `context` so those steps can quote or branch on the decision.
   - Provider operations are wrapped as mutating tools (`app/workflows/tools.py`): `grant_uc_access`,
     `terraform_plan/apply`, `create_uc_object`, `create_service_principal`, `github_*`,
     `add_group_membership`, `send_notification`, `sentinel_*`, `run_notebook_job`,

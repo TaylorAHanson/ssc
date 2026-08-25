@@ -214,6 +214,15 @@ def live_graph(request, db) -> Dict[str, Any]:
                 stopped = True
         node_states["complete"] = "pending"
         node_states["rejected"] = "rejected"
+        # Authored rejection steps only ran if the request was actually DENIED (a
+        # failure stops before this path). Mark one done only when its success_fact
+        # proves it: a rejection step is allowed to fail without stopping the
+        # rejection, so painting them all green would claim work we can't verify.
+        if status == "rejected":
+            for s in (spec_dict.get("on_reject") or []):
+                success_fact = s.get("success_fact")
+                if success_fact and success_fact in have:
+                    node_states[s["name"]] = "done"
     else:
         found = False
         for s in stages:

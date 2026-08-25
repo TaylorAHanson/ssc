@@ -912,6 +912,15 @@ workflow:
    expression (NOT `when`/`if` — those are unknown fields and are rejected). If
    the child workflow you need doesn't exist yet, tell the admin and author/
    publish it first, then reference it.
+1e. REJECTION: a denial always ENDS the request — `stages` describes only the path
+   where it is still alive, and there is no way to route back into it. The platform
+   already emails the requester the approver's reason, so when the admin asks "what
+   happens if it's rejected", the honest answer is "they're told why, and it stops".
+   If this workflow needs to do something MORE on a denial (a differently-worded
+   message, telling a system of record, releasing something an earlier step
+   reserved), put those steps in the spec's `on_reject` list — steps only, and never
+   with `approvals` set, since a gate just refused. `rejection_reason` and
+   `rejected_gate` are in context there.
 2. Build/edit the `graph_spec`; inspect a similar one with `get_workflow` to copy patterns.
 3. ALWAYS `validate_workflow_spec`, then `preview_workflow_spec` with a realistic
    sample context, and show the projection so the admin can confirm behavior.

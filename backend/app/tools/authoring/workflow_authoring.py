@@ -180,6 +180,17 @@ async def list_workflow_building_blocks() -> Dict[str, Any]:
             "name": "str (required)",
             "complete_fact": "optional fact written on completion",
             "stages": "ordered list of gate/step/subworkflow objects",
+            "on_reject": (
+                "OPTIONAL list of STEPS (same shape as a 'step' stage) that run when a "
+                "gate DENIES the request, before it ends. This is the rejection branch: "
+                "'stages' only describes what happens while the request is still alive. "
+                "Gates and subworkflows are NOT allowed here — the decision is final. "
+                "Never set 'approvals' on these steps (a gate just refused, so there is "
+                "nothing to attest and it fails validation). Two extra context keys are "
+                "available to $var here: 'rejection_reason' (the approver's note) and "
+                "'rejected_gate' (which gate said no — use it in 'run_if' to handle "
+                "different gates differently)."
+            ),
             "subworkflow": {"kind": "subworkflow", "name": "str",
                             "ref": "key of an existing workflow to run inline (compound) — MUST "
                                    "be one of available_workflows keys; do not invent it",
@@ -230,7 +241,15 @@ async def list_workflow_building_blocks() -> Dict[str, Any]:
             "'success_fact' is optional (a timeline marker) — skip it on notification/"
             "closing steps, and never set it to the same value as the spec's "
             "'complete_fact'. Use a step's 'run_if' for conditional "
-            "branching (e.g. only notify security when tier == 'high'). To COMPOSE "
+            "branching (e.g. only notify security when tier == 'high'). "
+            "REJECTION: a denied request always ends — every gate's refusal path is "
+            "terminal — and the platform emails the requester a default notice with the "
+            "approver's reason, so you do NOT need to add anything for them to be told. "
+            "Add 'on_reject' steps only for handling this workflow specifically needs on "
+            "a denial (a differently-worded message, notifying a system of record, "
+            "releasing something reserved earlier). There is no way to continue the "
+            "workflow after a rejection, and no 'rejected' stage may be declared in "
+            "'stages' — put those steps in 'on_reject' instead. To COMPOSE "
             "an existing capability, add a 'subworkflow' stage whose 'ref' is a key "
             "from 'available_workflows' (this makes the workflow 'compound'); it runs "
             "inline as a nested graph — its gates pause/resume like native ones and "

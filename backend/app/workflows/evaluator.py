@@ -301,6 +301,28 @@ def evaluate_spec(spec_dict: Dict[str, Any], db: Any = None) -> Dict[str, Any]:
                         fix="Use a step-specific success_fact distinct from complete_fact.",
                     )
 
+    # The rejection path. Its steps run precisely because a gate said NO, so they
+    # attest no approvals — a mutating tool here asks the policy layer to act on an
+    # unapproved request, which is a different (and easier to miss) shape of risk
+    # than an ungated step on the happy path.
+    for i, stage in enumerate(spec_dict.get("on_reject") or []):
+        if not isinstance(stage, dict):
+            continue
+        name = stage.get("name") or f"on_reject[{i}]"
+        cls, mutating = _tool_meta(stage.get("tool"))
+        if not mutating:
+            continue
+        risk_raw += float(RISK_BY_CLASS.get(cls, 10))
+        add(
+            "critical" if cls == "destructive" else "high",
+            "safety",
+            f"Rejection step '{name}' runs a '{cls}' tool ('{stage.get('tool')}') on a request "
+            "that was DENIED — nothing here is approved.",
+            stage=name,
+            fix="Keep the rejection path to notifications/cleanup, or move this action onto the "
+                "approved path behind a gate.",
+        )
+
     # Spec-level completeness checks.
     if step_count == 0 and not subworkflow_refs:
         add(
@@ -358,5 +380,6 @@ def evaluate_spec(spec_dict: Dict[str, Any], db: Any = None) -> Dict[str, Any]:
             "mutating_steps": mutating_count,
             "approval_gates": effective_approval_gates,
             "composes": subworkflow_refs,
+            "on_reject_steps": len(spec_dict.get("on_reject") or []),
         },
     }

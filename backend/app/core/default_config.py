@@ -360,6 +360,21 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Governance notification recipients (mirrored to Settings.GOVERNANCE_EMAIL_GROUP).
     "notifications": {
         "governance_email_group": "data-governance@example.com",
+        # The rejection notice. A workflow's rejection path is terminal — it
+        # records the fact and ends — so without this the requester is never told
+        # their request was denied, or why. On by default for that reason.
+        # Templates use the same {{token}} convention as workflow instructions;
+        # app/services/rejection_notice.py owns the token list.
+        "rejection_notify_requester": True,
+        "rejection_notify_subject": "Your request was not approved: {{request_title}}",
+        "rejection_notify_body": (
+            "<p>Your request <strong>{{request_title}}</strong> was reviewed and "
+            "not approved.</p>"
+            "<p><strong>Reason:</strong> {{reason}}</p>"
+            "<p><strong>Reviewed by:</strong> {{rejected_by}}</p>"
+            "<p style=\"color:#64748b;font-size:12px;\">Request {{request_id}} "
+            "&middot; {{brand_name}}</p>"
+        ),
     },
 
     # Web lookup config for the search_databricks_docs / fetch_doc_page tools.

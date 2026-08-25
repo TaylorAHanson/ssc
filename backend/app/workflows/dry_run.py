@@ -6,7 +6,9 @@ context, it compiles the spec and walks the stages, evaluating the same
 expressions the executor would (gate auto-approve predicates, step ``args``,
 ``for_each`` fan-out, per-item ``item_args``) **without executing any tool or
 touching the database**. The result is a stage-by-stage projection an admin can
-read to confirm "with this input, who approves and what each step receives".
+read to confirm "with this input, who approves and what each step receives". The
+projection also covers the rejection path (``on_reject``), which the author would
+otherwise only ever see by having a request denied in production.
 
 This is deliberately side-effect free: it only resolves tools by name and runs
 the safe expression evaluator (:mod:`app.workflows.expr`), so it is safe to call on an
@@ -109,54 +111,20 @@ def project_run(
                 requires_approval = True
             stages_out.append(entry)
         else:
-            step: Step = stage
-            entry = {
-                "kind": "step",
-                "name": step.name,
-                "tool": getattr(step.tool, "name", "?"),
-                "is_mutating": bool(getattr(step.tool, "is_mutating", False)),
-                "side_effect_class": getattr(step.tool, "side_effect_class", "read"),
-                "approvals": list(step.approvals),
-                "success_fact": step.success_fact,
-                "conditional": step.run_if is not None,
-            }
-            # Conditional branching projection: will this step run for this input?
-            will_run = True
-            if step.run_if is not None:
-                try:
-                    will_run = bool(step.run_if(ctx))
-                except Exception as e:  # noqa: BLE001 - surface eval errors to the author
-                    will_run = True
-                    entry["error"] = str(e)
-            entry["will_run"] = will_run
-            entry["decision"] = "run" if will_run else "skip"
-            if not will_run:
-                # Skipped: no tool call, no fan-out — make that explicit.
-                entry["fan_out"] = 0
-                entry["calls"] = []
-                stages_out.append(entry)
-                continue
-            try:
-                if step.for_each is not None:
-                    items = step.for_each(ctx) or []
-                    entry["fan_out"] = len(items)
-                    calls = []
-                    for item in items[:max_items]:
-                        calls.append(
-                            step.item_args(ctx, item) if step.item_args else step.args(ctx)
-                        )
-                    entry["calls"] = calls
-                    if len(items) > max_items:
-                        entry["truncated"] = True
-                else:
-                    entry["fan_out"] = 1
-                    entry["calls"] = [step.args(ctx)]
-            except Exception as e:  # noqa: BLE001
-                entry["error"] = str(e)
-                entry["calls"] = []
-            if entry["is_mutating"]:
+            entry = _project_step(stage, ctx, max_items)
+            if entry["is_mutating"] and entry["will_run"]:
                 mutating_steps += 1
             stages_out.append(entry)
+
+    # The rejection path, projected under the context the executor gives it: the
+    # gate writes the approver's reason and its own name into context, so an author
+    # can see whether their rejection message actually picks them up.
+    reject_ctx = {
+        **ctx,
+        "rejection_reason": ctx.get("rejection_reason", "<the approver's reason>"),
+        "rejected_gate": ctx.get("rejected_gate", "<the gate that denied it>"),
+    }
+    on_reject_out = [_project_step(s, reject_ctx, max_items) for s in spec.on_reject]
 
     return {
         "name": spec.name,
@@ -165,4 +133,58 @@ def project_run(
         "stages": stages_out,
         "requires_approval": requires_approval,
         "mutating_steps": mutating_steps,
+        # What runs if a gate denies the request. Always present (possibly empty):
+        # every workflow has this path whether or not the author put steps on it.
+        "on_reject": on_reject_out,
+        "on_reject_mutating_steps": sum(
+            1 for e in on_reject_out if e["is_mutating"] and e["will_run"]
+        ),
     }
+
+
+def _project_step(step: Step, ctx: Dict[str, Any], max_items: int) -> Dict[str, Any]:
+    """Project one step: will it run, and with what arguments."""
+    entry: Dict[str, Any] = {
+        "kind": "step",
+        "name": step.name,
+        "tool": getattr(step.tool, "name", "?"),
+        "is_mutating": bool(getattr(step.tool, "is_mutating", False)),
+        "side_effect_class": getattr(step.tool, "side_effect_class", "read"),
+        "approvals": list(step.approvals),
+        "success_fact": step.success_fact,
+        "conditional": step.run_if is not None,
+    }
+    # Conditional branching projection: will this step run for this input?
+    will_run = True
+    if step.run_if is not None:
+        try:
+            will_run = bool(step.run_if(ctx))
+        except Exception as e:  # noqa: BLE001 - surface eval errors to the author
+            will_run = True
+            entry["error"] = str(e)
+    entry["will_run"] = will_run
+    entry["decision"] = "run" if will_run else "skip"
+    if not will_run:
+        # Skipped: no tool call, no fan-out — make that explicit.
+        entry["fan_out"] = 0
+        entry["calls"] = []
+        return entry
+    try:
+        if step.for_each is not None:
+            items = step.for_each(ctx) or []
+            entry["fan_out"] = len(items)
+            calls = []
+            for item in items[:max_items]:
+                calls.append(
+                    step.item_args(ctx, item) if step.item_args else step.args(ctx)
+                )
+            entry["calls"] = calls
+            if len(items) > max_items:
+                entry["truncated"] = True
+        else:
+            entry["fan_out"] = 1
+            entry["calls"] = [step.args(ctx)]
+    except Exception as e:  # noqa: BLE001
+        entry["error"] = str(e)
+        entry["calls"] = []
+    return entry
