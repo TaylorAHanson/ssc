@@ -61,7 +61,7 @@ export function CertificationChecklist({ ruleRows }: { ruleRows: ChecklistRuleRo
 
   return (
     <div className="flex flex-col">
-      <div className="flex items-center gap-2 border-b border-gray-100 bg-gray-50/80 px-3 py-2">
+      <div className="sticky top-0 z-20 flex items-center gap-2 h-11 border-b border-gray-200 bg-gray-50/95 backdrop-blur-sm px-3">
         {(
           [
             { id: 'all', label: `All (${ruleRows.length})` },
@@ -83,7 +83,7 @@ export function CertificationChecklist({ ruleRows }: { ruleRows: ChecklistRuleRo
         ))}
       </div>
 
-      <div className="p-0 overflow-y-auto flex-1 max-h-[60vh]">
+      <div className="p-0">
         {ruleRows.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-12 text-center">
             <ClipboardList className="w-12 h-12 text-gray-400 mb-4" />
@@ -103,7 +103,7 @@ export function CertificationChecklist({ ruleRows }: { ruleRows: ChecklistRuleRo
           </div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="bg-white sticky top-0 z-10 text-gray-500 font-medium border-b border-gray-200">
+            <thead className="bg-white sticky top-11 z-10 text-gray-500 font-medium border-b border-gray-200 shadow-sm">
               <tr>
                 <th className="p-3 px-4 text-left w-28">Result</th>
                 <th className="p-3 text-left">Resource</th>

@@ -375,26 +375,28 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Web Lookup", "key": "yaml:web_search.max_fetch_chars", "label": "Max fetch chars",
      "type": "int", "min": 1000, "help": "Cap on extracted page text handed to the model."},
 
-    # --- Governance Tags (GitOps) ----------------------------------------
-    {"group": "Governance Tags (GitOps)", "key": "GOVERNANCE_TAGS_REPO", "label": "Tag governance repo",
+    # --- Governance Tag Management ---------------------------------------
+    {"group": "Governance Tags", "key": "GOVERNANCE_TAGS_LOCAL_MODE", "label": "Local execution mode",
+     "type": "bool",
+     "help": "When enabled, tag changes are planned, validated, risk-assessed, and applied directly to "
+             "Unity Catalog from the app without opening a GitHub PR or requiring GitHub Actions. "
+             "Useful when GitHub Actions / network connectivity is blocked or unavailable."},
+    {"group": "Governance Tags", "key": "GOVERNANCE_TAGS_REPO", "label": "Tag governance repo",
      "type": "string",
-     "help": "Repository the app opens tag-change PRs against — 'owner/repo', or a bare name resolved "
-             "against the GitHub org. Blank = tag changes are rejected at submit with a clear "
-             "'not configured' error rather than half-opening a request."},
-    {"group": "Governance Tags (GitOps)", "key": "GOVERNANCE_TAGS_BASE_BRANCH", "label": "Base branch",
+     "help": "Repository the app opens tag-change PRs against (GitOps mode) — 'owner/repo', or a bare name "
+             "resolved against the GitHub org. Blank in GitOps mode = tag changes are rejected at submit."},
+    {"group": "Governance Tags", "key": "GOVERNANCE_TAGS_BASE_BRANCH", "label": "Base branch",
      "type": "string",
-     "help": "Branch this deployment's PRs target. The governance repo keeps one long-lived branch per "
-             "environment (e.g. dev / test / stage / prod) and merging is what applies the tags, so this "
-             "must match the environment this app instance governs. There is no default."},
-    {"group": "Governance Tags (GitOps)", "key": "GOVERNANCE_TAGS_PATH", "label": "Migrations path",
+     "help": "Branch this deployment's PRs target in GitOps mode. The governance repo keeps one long-lived "
+             "branch per environment (e.g. dev / test / stage / prod) and merging is what applies the tags."},
+    {"group": "Governance Tags", "key": "GOVERNANCE_TAGS_PATH", "label": "Migrations path",
      "type": "string",
      "help": "Directory in the repo where generated .sql migrations are committed. The repo's validation "
              "workflow only looks at files under this path."},
-    {"group": "Governance Tags (GitOps)", "key": "GOVERNANCE_TAGS_LEDGER_TABLE", "label": "Apply ledger table",
+    {"group": "Governance Tags", "key": "GOVERNANCE_TAGS_LEDGER_TABLE", "label": "Apply ledger table",
      "type": "string",
-     "help": "Fully-qualified Delta table (catalog.schema.table) the repo's apply job writes each migration's "
-             "outcome to. The app reads it after a merge to confirm the tags actually applied — a merge alone "
-             "only means the SQL was accepted for execution. Blank = requests complete at merge, unverified."},
+     "help": "Fully-qualified Delta table (catalog.schema.table) the apply job writes each migration's "
+             "outcome to. The app reads/updates it to track and verify tag changes. Blank = unverified."},
 
     # --- Catalogs & Content ---------------------------------------------
     {"group": "Catalogs & Content", "key": "yaml:self_service_center", "label": "Self-Service Center",

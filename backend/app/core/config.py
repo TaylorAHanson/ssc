@@ -724,9 +724,11 @@ class Settings(BaseSettings):
     # override for a self-hosted GitHub Enterprise Server host.
     GITHUB_WEB_BASE_URL: str = "https://github.com"
 
-    # Governance Tag Management (GitOps for UC tag changes)
-    # The app opens PRs against this repo; a GitHub Action in the repo runs the
-    # generated ALTER...SET/UNSET TAGS SQL per environment on merge.
+    # Governance Tag Management (GitOps or Local Mode for UC tag changes)
+    # In GitOps mode, the app opens PRs against this repo and GitHub Actions applies
+    # the generated SQL on merge. In Local Mode, the app plans, validates, checks risk,
+    # and applies changes directly to Unity Catalog without requiring GitHub / Actions.
+    GOVERNANCE_TAGS_LOCAL_MODE: bool = False
     GOVERNANCE_TAGS_REPO: str = ""  # "owner/repo" or bare repo name (resolved against GITHUB_ORG)
     # Base branch PRs target. The governance repo uses one branch per environment
     # (dev / test / stage / prod) and has no 'main', so there is no safe default —

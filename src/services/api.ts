@@ -1810,6 +1810,14 @@ export async function getTableDetails(tableName: string): Promise<TableDetailsRe
 // Governance: Tag Management
 // ---------------------------------------------------------------------------
 
+export interface TagManagerModeResponse {
+  local_mode: boolean;
+  repo?: string | null;
+  base_branch?: string | null;
+  ledger_table?: string | null;
+  environment: string;
+}
+
 export interface TagDataset {
   dataset_id: string;
   catalog?: string | null;
@@ -1828,16 +1836,132 @@ export interface DatasetTablesResponse {
   error?: string | null;
 }
 
+export interface TagDiffItem {
+  table: string;
+  object_type: string;
+  exists: boolean;
+  before: Record<string, string>;
+  after: Record<string, string>;
+  changed_keys: string[];
+  removed_keys: string[];
+  overwritten_keys: string[];
+  unchanged_keys: string[];
+}
+
+export interface TagPlanResponse {
+  summary: string;
+  statement_count: number;
+  object_count: number;
+  missing_objects: string[];
+  statements: string[];
+  diffs: TagDiffItem[];
+  all_diffs?: TagDiffItem[];
+}
+
+export interface RiskFactorItem {
+  name: string;
+  label: string;
+  count: number;
+  contribution: number;
+  details: string[];
+}
+
+export interface RiskReportResponse {
+  environment: string;
+  score: number;
+  band: 'low' | 'medium' | 'high' | 'critical';
+  emoji: string;
+  multiplier: number;
+  raw_score: number;
+  object_count: number;
+  statement_count: number;
+  vocabulary_available: boolean;
+  factors: RiskFactorItem[];
+  all_factors?: RiskFactorItem[];
+}
+
+export interface LintSuggestion {
+  value: string;
+  uses: number;
+}
+
+export interface LintFindingItem {
+  code: string;
+  severity: 'warning' | 'info';
+  fqn: string;
+  key: string;
+  value: string;
+  message: string;
+  suggestions: LintSuggestion[];
+}
+
+export interface AgentReviewConcern {
+  severity: 'info' | 'low' | 'medium' | 'high';
+  object: string;
+  message: string;
+}
+
+export interface AgentReviewResponse {
+  available: boolean;
+  reason?: string;
+  model?: string;
+  summary?: string;
+  concerns: AgentReviewConcern[];
+  questions: string[];
+  risk_agreement?: string;
+  rationale?: string;
+}
+
+export interface TagPreviewResponse {
+  valid: boolean;
+  policy_violations: string[];
+  policy_warnings: string[];
+  plan: TagPlanResponse;
+  risk: RiskReportResponse;
+  lint: { findings: LintFindingItem[] };
+  agent_review: AgentReviewResponse;
+}
+
+export interface TagStatementOutcome {
+  table: string;
+  operation: string;
+  sql: string;
+  status: string;
+  detail: string;
+}
+
 export interface TagChange {
   id: string;
   title: string;
   dataset_id?: string | null;
   status: string;
+  execution_mode: 'local' | 'gitops';
   pr_url?: string | null;
   pr_number?: number | null;
   table_count: number;
+  applied_count?: number;
+  noop_count?: number;
+  failed_count?: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface TagChangeDetail extends TagChange {
+  plan?: TagPlanResponse | null;
+  risk?: RiskReportResponse | null;
+  lint?: { findings: LintFindingItem[] } | null;
+  agent_review?: AgentReviewResponse | null;
+  outcomes?: TagStatementOutcome[] | null;
+  error?: string | null;
+}
+
+export async function getTagManagerMode(): Promise<TagManagerModeResponse> {
+  const response = await fetch(`${API_BASE_URL}/tags/mode`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get tag manager mode: ${response.status} ${errorText}`);
+  }
+  return response.json();
 }
 
 export async function getTagDatasets(): Promise<TagDataset[]> {
@@ -1857,6 +1981,24 @@ export async function getDatasetTags(datasetId: string): Promise<DatasetTablesRe
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`Failed to get dataset tags: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function previewTagChange(payload: {
+  dataset_id: string;
+  dataset_name?: string;
+  tables: { table: string; desired_tags: Record<string, string> }[];
+  pr_title?: string;
+}): Promise<TagPreviewResponse> {
+  const response = await fetch(`${API_BASE_URL}/tags/preview`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to preview tag change: ${response.status} ${errorText}`);
   }
   return response.json();
 }
@@ -1884,6 +2026,17 @@ export async function listTagChanges(): Promise<TagChange[]> {
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`Failed to list tag changes: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getTagChangeDetail(changeId: string): Promise<TagChangeDetail> {
+  const response = await fetch(`${API_BASE_URL}/tags/changes/${encodeURIComponent(changeId)}`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get tag change detail: ${response.status} ${errorText}`);
   }
   return response.json();
 }
@@ -3244,10 +3397,13 @@ export const api = {
   getDatabricksGenieSpaces,
   getTableLineage,
   getTableDetails,
+  getTagManagerMode,
   getTagDatasets,
   getDatasetTags,
+  previewTagChange,
   createTagChange,
   listTagChanges,
+  getTagChangeDetail,
   listContextDomains,
   getContextDomain,
   createContextDomain,

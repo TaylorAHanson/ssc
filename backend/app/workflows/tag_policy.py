@@ -20,6 +20,47 @@ logger = logging.getLogger(__name__)
 
 POLICY_PATH = "policy/tag_policy.yml"
 
+DEFAULT_POLICY_YAML = """
+reserved_prefixes:
+  - "system."
+key_mode: open
+known_keys:
+  dataset:
+    required: true
+    description: Logical dataset this object belongs to. Groups tables and views.
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+  data_owner:
+    required: true
+    description: Accountable owner (team or group name) for the data.
+    pattern: "^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$"
+  approver_group:
+    required: true
+    description: Group that approves access requests for this dataset.
+    pattern: "^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$"
+  access_group:
+    required: true
+    description: Group granted access once a request is approved.
+    pattern: "^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$"
+  reliability_window:
+    required: true
+    description: Freshness/reliability commitment, e.g. 24h or 7d.
+    pattern: "^[0-9]+(m|h|d|w)$"
+  classification:
+    required: false
+    description: Sensitivity classification.
+    pattern: "^(public|internal|confidential|restricted)$"
+protected_keys: []
+limits:
+  max_tags_per_object: 50
+  max_key_length: 256
+  max_value_length: 256
+key_pattern: "^[A-Za-z0-9_][A-Za-z0-9._-]*$"
+"""
+
+
+def get_default_policy() -> "TagPolicy":
+    return TagPolicy.parse(DEFAULT_POLICY_YAML)
+
 
 @dataclass
 class TagPolicy:
@@ -49,6 +90,9 @@ class TagPolicy:
 
     def _is_reserved(self, key: str) -> bool:
         return any(key.startswith(p) for p in self.reserved_prefixes)
+
+    def is_reserved(self, key: str) -> bool:
+        return self._is_reserved(key)
 
     def _is_protected(self, key: str) -> bool:
         """Protected keys may be re-valued but never removed."""

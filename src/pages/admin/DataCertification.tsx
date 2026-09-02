@@ -731,9 +731,9 @@ export function DataCertification() {
         ) : null;
 
         return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in" onClick={() => setViolationAsset(null)}>
-          <div className={`bg-white rounded-xl shadow-xl w-full ${hasChecklist ? 'max-w-5xl' : 'max-w-2xl'} flex flex-col overflow-hidden animate-in zoom-in-95`} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-white">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in" onClick={() => setViolationAsset(null)}>
+          <div className={`bg-white rounded-xl shadow-xl w-full ${hasChecklist ? 'max-w-5xl' : 'max-w-2xl'} max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 my-auto`} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-white flex-shrink-0">
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
                   {hasChecklist ? <ClipboardList className="w-5 h-5 text-gray-700" /> : <AlertCircle className="w-5 h-5 text-amber-500" />}
@@ -752,7 +752,7 @@ export function DataCertification() {
             </div>
 
             {hasChecklist ? (
-              <div className="flex-1 overflow-y-auto">
+              <div className="flex-1 min-h-0 overflow-y-auto">
                 <CertificationChecklist ruleRows={ruleRows} />
                 {(dqDetail || nextSteps) && (
                   <div className="p-6 bg-gray-50 border-t border-gray-100 space-y-6">
@@ -762,7 +762,7 @@ export function DataCertification() {
                 )}
               </div>
             ) : (
-              <div className="p-6 bg-gray-50 flex-1 overflow-y-auto max-h-[60vh] space-y-6">
+              <div className="p-6 bg-gray-50 flex-1 min-h-0 overflow-y-auto space-y-6">
                 {dqDetail}
                 {violationAsset.certification_violations && violationAsset.certification_violations.length > 0 && (
                   <div>
@@ -787,7 +787,7 @@ export function DataCertification() {
               </div>
             )}
 
-            <div className="p-4 border-t border-gray-100 bg-white flex justify-end">
+            <div className="p-4 border-t border-gray-100 bg-white flex justify-end flex-shrink-0">
               <Button onClick={() => setViolationAsset(null)}>Close</Button>
             </div>
           </div>
