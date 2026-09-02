@@ -287,7 +287,7 @@ def fetch_tag_vocabulary(
                 mem_query = (
                     f"SELECT catalog_name, schema_name, table_name, tag_value "
                     f"FROM {catalog}.information_schema.table_tags "
-                    f"WHERE tag_name = {_quote_sql_literal(dataset_key)} "
+                    f"WHERE tag_name IN ({_quote_sql_literal(dataset_key)}, 'data_set') "
                     f"AND tag_value IN ({val_list_sql})"
                 )
                 try:
@@ -334,6 +334,12 @@ def build_tag_plan(
             for k, v in desired_raw.items()
             if k and not any(str(k).startswith(p) for p in HIDDEN_DISPLAY_PREFIXES)
         }
+        # Dataset partition tags ('dataset', 'data_set') are structural grouping metadata;
+        # if present in live state and omitted in a partial edit, preserve them so tables are not orphaned.
+        for ds_key in ("dataset", "data_set"):
+            if ds_key in state.tags and ds_key not in desired:
+                desired[ds_key] = state.tags[ds_key]
+
         current = dict(state.tags)
 
         # Diff calculation

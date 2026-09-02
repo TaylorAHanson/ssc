@@ -171,7 +171,7 @@ def discover_dataset_groups(
         parts = dataset_id.split(".")
         if len(parts) == 3:
             catalog_name, schema_name, table_name = parts
-            query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {catalog_name}.information_schema.table_tags WHERE tag_name = 'dataset' AND catalog_name = '{catalog_name}' AND schema_name = '{schema_name}' AND table_name = '{table_name}'"
+            query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {catalog_name}.information_schema.table_tags WHERE tag_name IN ('dataset', 'data_set') AND catalog_name = '{catalog_name}' AND schema_name = '{schema_name}' AND table_name = '{table_name}'"
             try:
                 response = provider.client.statement_execution.execute_statement(
                     statement=query,
@@ -195,7 +195,7 @@ def discover_dataset_groups(
         # includes this data set name.
         if not dataset_groups:
             for cat_name in _scan_catalogs:
-                query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {cat_name}.information_schema.table_tags WHERE tag_name = 'dataset'"
+                query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {cat_name}.information_schema.table_tags WHERE tag_name IN ('dataset', 'data_set')"
                 try:
                     response = provider.client.statement_execution.execute_statement(
                         statement=query,
@@ -217,7 +217,7 @@ def discover_dataset_groups(
         # Fetch every catalog to scan (configured list or all visible ones).
         for cat_name in _scan_catalogs:
             # Query the local information_schema for each catalog
-            query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {cat_name}.information_schema.table_tags WHERE tag_name = 'dataset'"
+            query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {cat_name}.information_schema.table_tags WHERE tag_name IN ('dataset', 'data_set')"
             logger.info(f"Querying information_schema for catalog {cat_name}")
 
             try:

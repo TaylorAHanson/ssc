@@ -98,6 +98,8 @@ class TagPolicy:
         """Protected keys may be re-valued but never removed."""
         if key in self.protected_keys:
             return True
+        if key in ("dataset", "data_set"):
+            return True
         return bool((self.known_keys.get(key) or {}).get("required"))
 
     def _check_set(self, table: str, key: str, value: str) -> List[str]:

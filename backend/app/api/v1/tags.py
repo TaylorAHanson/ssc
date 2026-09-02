@@ -345,10 +345,24 @@ def get_dataset_tables(
     try:
         provider = _get_provider()
         table_names = _discover_dataset_tables(provider, dataset_id, db=db)
-        tables = [
-            TableTags(table=name, tags=_get_table_tags(provider, name))
-            for name in table_names
-        ]
+        if not table_names:
+            return DatasetTablesResponse(
+                dataset_id=dataset_id,
+                tables=[],
+                suggested_keys=SUGGESTED_TAG_KEYS,
+            )
+
+        live_state = fetch_live_state(provider, table_names)
+        tables = []
+        for name in table_names:
+            norm = _normalize_fqn(name)
+            obj_state = live_state.get(norm)
+            if obj_state and (obj_state.exists or obj_state.tags):
+                tags = dict(obj_state.tags)
+            else:
+                tags = _get_table_tags(provider, name)
+            tables.append(TableTags(table=name, tags=tags))
+
         return DatasetTablesResponse(
             dataset_id=dataset_id,
             tables=tables,

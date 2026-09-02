@@ -88,3 +88,30 @@ def test_plan_with_missing_object():
     plan = build_tag_plan(desired, live_state)
     assert plan.missing_objects == ["main.sales.missing"]
     assert plan.statement_count == 1
+
+
+def test_plan_preserves_dataset_tag_when_omitted():
+    live_state = {
+        "main.sales.orders": ObjectState(
+            display="main.sales.orders",
+            object_type="TABLE",
+            exists=True,
+            tags={"dataset": "orders_ds", "old_key": "old_val"},
+        )
+    }
+    # Desired tags omit 'dataset', but provide a new tag
+    desired = [{"table": "main.sales.orders", "desired_tags": {"owner": "analytics"}}]
+
+    plan = build_tag_plan(desired, live_state)
+    assert plan.actionable
+    diff = plan.diffs["main.sales.orders"]
+    # 'dataset' should be preserved in diff.after and NOT in removed_keys
+    assert diff.after.get("dataset") == "orders_ds"
+    assert "dataset" not in diff.removed_keys
+    assert "old_key" in diff.removed_keys
+
+    # Generated statements must UNSET 'old_key' but NEVER 'dataset'
+    stmts = plan.statements
+    assert any("UNSET TAGS ('old_key')" in s for s in stmts)
+    assert not any("UNSET TAGS" in s and "'dataset'" in s for s in stmts)
+
