@@ -117,6 +117,15 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "workspaces can be slow. Bounds ONE call, not the whole scan (that's "
              "the per-workspace timeout above). Safe because sentinel runs on its "
              "own thread pool. 0 = use the app-wide default."},
+    {"group": "Notifications & Governance", "key": "SENTINEL_AUTO_ENFORCE_APPS", "label": "Auto-enforce App policy",
+     "type": "bool",
+     "help": "OFF by default. When enabled, non-compliant Databricks Apps in production enterprise workspaces are automatically stopped and have their permissions revoked to admins only. All other resource types remain manual Review & Act only."},
+    {"group": "Notifications & Governance", "key": "SENTINEL_AUTO_ENFORCE_MAX_APPS_PER_RUN", "label": "Max auto-stopped apps per run",
+     "type": "int", "min": 1, "max": 20,
+     "help": "Circuit breaker cap on how many non-compliant apps can be stopped automatically in a single Sentinel run. Prevents mass outages if a policy or allowlist misfires."},
+    {"group": "Notifications & Governance", "key": "SENTINEL_PROTECTED_APP_NAMES", "label": "Protected app names/patterns",
+     "type": "string",
+     "help": "Comma-separated list of app names or glob patterns (e.g. 'edh-ssc*, mcp-server*, custom-app') that are protected and can never be stopped or revoked by automated enforcement."},
     {"group": "Notifications & Governance", "key": "SCAN_CATALOGS", "label": "Scanned catalogs",
      "type": "string",
      "help": "Comma-separated Unity Catalog allowlist that scopes governed data, "
@@ -439,6 +448,13 @@ READONLY_FIELDS: List[Dict[str, Any]] = [
     {"group": "GitOps", "key": "INFRA_REPO_URL", "label": "Infra repo URL"},
     {"group": "GitOps", "key": "INFRA_REPO_BRANCH", "label": "Infra repo branch"},
     {"group": "GitOps", "key": "GITHUB_ORG", "label": "GitHub org"},
+    # --- Infrastructure Provisioning (Terramate) ----------------------
+    {"group": "Infrastructure Provisioning (Terramate)", "key": "TERRAMATE_API_URL", "label": "Terramate API URL",
+     "type": "string", "help": "Base URL of the Terramate Provisioning API (Databricks App or local dev URL)."},
+    {"group": "Infrastructure Provisioning (Terramate)", "key": "TERRAMATE_API_TOKEN", "label": "Terramate API Bearer token",
+     "type": "string", "help": "Optional Bearer token or PAT for authenticating to the Terramate API."},
+    {"group": "Infrastructure Provisioning (Terramate)", "key": "TERRAMATE_HTTP_TIMEOUT_SECONDS", "label": "HTTP timeout (sec)",
+     "type": "int", "min": 1, "help": "Timeout in seconds for Terramate API HTTP requests."},
 ]
 
 _EDITABLE_BY_KEY = {f["key"]: f for f in EDITABLE_FIELDS}
@@ -487,6 +503,10 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "TAGS SQL to a governance repo and opens a PR, and a workflow in that repo applies it on merge. "
         "These settings point the app at that repo, the branch for this environment, and the ledger table "
         "it reads back to confirm the apply succeeded. Changes apply to the next request."
+    ),
+    "Infrastructure Provisioning (Terramate)": (
+        "Settings for connecting to the Terramate Provisioning API service (terramate-api-wrapper) that "
+        "orchestrates GitOps pull requests and outputs for infrastructure changes."
     ),
     "Catalogs & Content": (
         "The curated, data-driven content surfaces: the landing-page Self-Service Center cards, the "

@@ -558,12 +558,21 @@ class Settings(BaseSettings):
     # blank = the app's own home workspace (settings.DATABRICKS_*). The DQ
     # warehouse + ADOC schema always come from the global settings.
     SENTINEL_DATA_CERT_WORKSPACE: str = os.getenv("SENTINEL_DATA_CERT_WORKSPACE", "")
+    # Automated App policy enforcement
+    SENTINEL_AUTO_ENFORCE_APPS: bool = os.getenv("SENTINEL_AUTO_ENFORCE_APPS", "false").lower() == "true"
+    SENTINEL_AUTO_ENFORCE_MAX_APPS_PER_RUN: int = int(os.getenv("SENTINEL_AUTO_ENFORCE_MAX_APPS_PER_RUN", "3"))
+    SENTINEL_PROTECTED_APP_NAMES: str = os.getenv("SENTINEL_PROTECTED_APP_NAMES", "")
 
     # Retry Settings
     DEFAULT_MAX_RETRIES: int = 3
     TERRAFORM_MAX_RETRIES: int = 2
     API_MAX_RETRIES: int = 3
     DB_MAX_RETRIES: int = 5
+
+    # Terramate API Provisioning Settings
+    TERRAMATE_API_URL: str = os.getenv("TERRAMATE_API_URL", "http://localhost:8000")
+    TERRAMATE_API_TOKEN: str = os.getenv("TERRAMATE_API_TOKEN", "")
+    TERRAMATE_HTTP_TIMEOUT_SECONDS: int = int(os.getenv("TERRAMATE_HTTP_TIMEOUT_SECONDS", "30"))
     
     # Terraform Settings
     TERRAFORM_WORKSPACE_BASE_DIR: str = "/tmp/terraform"  # Base directory for Terraform workspaces

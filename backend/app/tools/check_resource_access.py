@@ -1,91 +1,126 @@
-from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field
-from app.tools.mcp import tool
-from app.providers.terraform.volume_provider import VolumeGitOpsProvider
-from app.core.config import settings
+"""
+Tool to check existing access grants on a Unity Catalog resource.
+"""
+from __future__ import annotations
+
 import logging
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, Field
+
+from app.core.config import settings
+from app.providers.databricks import DatabricksProvider
+from app.tools.mcp import tool
+from app.tools.sql_safety import SqlSafetyError, require_identifier
 
 logger = logging.getLogger(__name__)
 
 
 class CheckResourceAccessInput(BaseModel):
-    target_host: str = Field(..., description="The host URL of the target Databricks workspace.")
-    resource_name: str = Field(..., description="Name of the resource (schema or catalog)")
-    principal: Optional[str] = Field(None, description="Optional: specific user, group, or service principal to check")
+    resource_name: str = Field(
+        ...,
+        description="Full name of the Unity Catalog resource (e.g. 'main.default' or 'sales_catalog')",
+    )
+    target_host: Optional[str] = Field(
+        default=None,
+        description="The host URL of the target Databricks workspace (optional).",
+    )
+    principal: Optional[str] = Field(
+        default=None,
+        description="Optional: specific user, group, or service principal to check",
+    )
 
 
 @tool(
     name="check_resource_access",
-    description="Check existing access grants on a Unity Catalog resource (schema or catalog) in a specific workspace. Use this BEFORE granting or revoking access to verify current state.",
-    args_schema=CheckResourceAccessInput
+    description="Check existing access grants on a Unity Catalog resource (schema or catalog). Use this BEFORE granting or revoking access to verify current state.",
+    args_schema=CheckResourceAccessInput,
+    side_effect_class="read",
 )
-def check_resource_access(target_host: str, resource_name: str, principal: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+async def check_resource_access(
+    resource_name: str,
+    target_host: Optional[str] = None,
+    principal: Optional[str] = None,
+    _obo_token: Optional[str] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
     """
-    Check what access grants exist on a resource.
-    
-    Returns:
-        - exists: Whether the resource exists in our system
-        - grants: List of all grants on the resource
-        - principal_grants: Privileges for the specific principal (if provided)
+    Check what access grants exist on a resource by querying Unity Catalog.
     """
     try:
-        volume_path = settings.GITOPS_VOLUME_PATH
-        if not volume_path:
-            return {
-                "success": False,
-                "error": "GITOPS_VOLUME_PATH not configured"
-            }
-        
-        provider = VolumeGitOpsProvider(
-            volume_path=volume_path,
-            config={
-                "environment": settings.DEFAULT_ENVIRONMENT or "dev",
-                "git_username": settings.GIT_USERNAME,
-                "git_email": settings.GIT_EMAIL,
-            }
+        for part in resource_name.split("."):
+            require_identifier(part.strip(), "resource_name")
+    except SqlSafetyError as e:
+        return {"success": False, "error": str(e)}
+
+    try:
+        provider = DatabricksProvider(
+            host=target_host or settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
+            token=settings.DATABRICKS_TOKEN,
+            client_id=settings.DATABRICKS_CLIENT_ID,
+            client_secret=settings.DATABRICKS_CLIENT_SECRET,
+            config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID},
         )
-        
-        result = provider.check_access(resource_name, principal)
-        
-        if not result.get("exists"):
+
+        is_schema = "." in resource_name
+        object_type = "SCHEMA" if is_schema else "CATALOG"
+
+        query = f"SHOW GRANTS ON {object_type} {resource_name}"
+        result = await provider.execute_sql(
+            query,
+            timeout_seconds=30,
+            obo_token=_obo_token,
+            require_obo=False,
+        )
+        rows = result.get("rows", [])
+
+        grants: List[Dict[str, Any]] = []
+        for r in rows:
+            p = r.get("Principal") or r.get("principal")
+            action = r.get("ActionType") or r.get("action_type") or r.get("Privilege")
+            if p and action:
+                existing = next((g for g in grants if g["principal"] == p), None)
+                if existing:
+                    if action not in existing["privileges"]:
+                        existing["privileges"].append(action)
+                else:
+                    grants.append({"principal": p, "privileges": [action]})
+
+        if principal:
+            principal_match = next(
+                (g for g in grants if g["principal"].lower() == principal.lower()),
+                None,
+            )
+            privs = principal_match["privileges"] if principal_match else []
             return {
                 "success": True,
-                "exists": False,
-                "message": f"Resource '{resource_name}' not found in our GitOps configuration. It may not be managed by {settings.BRAND_NAME} yet.",
-                "grants": []
+                "exists": True,
+                "resource_name": resource_name,
+                "principal": principal,
+                "principal_privileges": privs,
+                "has_grants": bool(privs),
+                "message": (
+                    f"{principal} has privileges: {', '.join(privs)}"
+                    if privs
+                    else f"{principal} has no grants on {resource_name}"
+                ),
             }
-        
-        # Format the response for the agent
-        response = {
+
+        grant_summary = [f"{g['principal']}: {', '.join(g['privileges'])}" for g in grants]
+        return {
             "success": True,
             "exists": True,
             "resource_name": resource_name,
-            "catalog": result.get("catalog", "unknown"),
-            "grants": result.get("grants", [])
+            "grants": grants,
+            "message": (
+                f"Grants on {resource_name}: {'; '.join(grant_summary)}"
+                if grant_summary
+                else f"No grants found on {resource_name}"
+            ),
         }
-        
-        if principal:
-            principal_privs = result.get("principal_grants", [])
-            if principal_privs:
-                response["principal"] = principal
-                response["principal_privileges"] = principal_privs
-                response["message"] = f"{principal} has the following privileges on {resource_name}: {', '.join(principal_privs)}"
-            else:
-                response["principal"] = principal
-                response["principal_privileges"] = []
-                response["message"] = f"{principal} has no grants on {resource_name}"
-        else:
-            if result.get("grants"):
-                grant_summary = [f"{g.get('principal')}: {g.get('privileges')}" for g in result.get("grants", [])]
-                response["message"] = f"Grants on {resource_name}: {'; '.join(grant_summary)}"
-            else:
-                response["message"] = f"No grants found on {resource_name}"
-        
-        return response
-        
     except Exception as e:
-        logger.error(f"Error checking resource access: {e}")
+        logger.error(f"Error checking resource access for '{resource_name}': {e}")
         return {
             "success": False,
-            "error": str(e)
+            "error": str(e),
+            "message": f"Could not check access on '{resource_name}': {e}",
         }

@@ -85,6 +85,12 @@ const resourceTypeLabel = (type: any): string => {
     return (type || '').toString();
 };
 
+const isProtectedApp = (appId?: string): boolean => {
+    if (!appId) return false;
+    const lower = appId.toLowerCase();
+    return lower.startsWith('edh-ssc') || lower.includes('edh-ssc') || lower.startsWith('mcp-server') || lower.includes('mcp-server');
+};
+
 // Render an owner as an email (verbatim) or a service-principal id behind an
 // "SP" chip; muted "Unknown" when unresolved.
 const OwnerCell = ({ owner }: { owner: string }) => {
@@ -119,7 +125,7 @@ export function EnforcementSentinel() {
     const [environment, setEnvironment] = useState<'dev' | 'stage' | 'prod'>('prod');
     const [actionLoading, setActionLoading] = useState<string | null>(null);
     const [selectedViolation, setSelectedViolation] = useState<any | null>(null);
-    const [executedActions, setExecutedActions] = useState<Record<string, { at: string }>>({});
+    const [executedActions, setExecutedActions] = useState<Record<string, { at: string; executed_action?: string }>>({});
 
     // In-report search + severity filter (on top of the policy-group tabs) and
     // incremental rendering. A completed run can carry tens of thousands of
@@ -314,7 +320,10 @@ export function EnforcementSentinel() {
                     for (const rec of records) {
                         const key = `${selectedRunId}-${rec.workspace || ''}-${rec.resource_id}-${rec.policy_name}-${rec.action}`;
                         if (!next[key]) {
-                            next[key] = { at: rec.at ? formatPacific(rec.at, { year: undefined }) : '' };
+                            next[key] = {
+                                at: rec.at ? formatPacific(rec.at, { year: undefined }) : '',
+                                executed_action: rec.executed_action,
+                            };
                         }
                     }
                     return next;
@@ -370,7 +379,10 @@ export function EnforcementSentinel() {
 
     const handleExecuteAction = async (runId: string, v: any) => {
         const label = resolveResourceName(v) ? `${resolveResourceName(v)} (${v.resource_id})` : v.resource_id;
-        if (!confirm(`Are you sure you want to manually execute the '${v.action}' action on ${resourceTypeLabel(v.resource_type)} ${label}?`)) return;
+        const actionVerb = v.resource_type === 'app' && ['KILL', 'STOP_AND_REVOKE'].includes(v.action)
+            ? 'stop and revoke access for'
+            : `manually execute the '${v.action}' action on`;
+        if (!confirm(`Are you sure you want to ${actionVerb} ${resourceTypeLabel(v.resource_type)} ${label}?`)) return;
         
         setActionLoading(v.resource_id);
         try {
@@ -396,7 +408,10 @@ export function EnforcementSentinel() {
             
             setExecutedActions(prev => ({
                 ...prev,
-                [`${runId}-${resolveWorkspace(v)}-${v.resource_id}-${v.policy}-${v.action}`]: { at: formatPacific(new Date().toISOString(), { year: undefined }) }
+                [`${runId}-${resolveWorkspace(v)}-${v.resource_id}-${v.policy}-${v.action}`]: {
+                    at: formatPacific(new Date().toISOString(), { year: undefined }),
+                    executed_action: `manual_${v.action.toLowerCase()}`,
+                }
             }));
         } catch (e: any) {
             console.error(e);
@@ -1177,7 +1192,14 @@ export function EnforcementSentinel() {
                                                                     <tr key={idx} className="hover:bg-gray-50">
                                                                         <td className="p-3 px-4 font-mono text-xs text-gray-900">
                                                                             <div className="flex flex-col">
-                                                                                <span className="text-[10px] text-gray-700 font-semibold uppercase tracking-wider font-sans mb-0.5">{resourceTypeLabel(v.resource_type)}</span>
+                                                                                <div className="flex items-center gap-1.5 mb-0.5">
+                                                                                    <span className="text-[10px] text-gray-700 font-semibold uppercase tracking-wider font-sans">{resourceTypeLabel(v.resource_type)}</span>
+                                                                                    {v.resource_type === 'app' && isProtectedApp(v.resource_id) && (
+                                                                                        <span className="inline-flex items-center text-[9px] px-1.5 py-0 rounded bg-amber-50 text-amber-700 border border-amber-200 font-sans font-medium" title="Protected from automated actions by platform safety policy">
+                                                                                            Protected
+                                                                                        </span>
+                                                                                    )}
+                                                                                </div>
                                                                                 {resolveResourceName(v) && (
                                                                                     <span className="font-sans font-medium text-gray-900 break-words">{resolveResourceName(v)}</span>
                                                                                 )}
@@ -1211,12 +1233,17 @@ export function EnforcementSentinel() {
                                                                                     const execKey = `${selectedRun.id}-${resolveWorkspace(v)}-${v.resource_id}-${v.policy}-${v.action}`;
                                                                                     const executed = executedActions[execKey];
                                                                                     if (executed) {
+                                                                                        const isAuto = executed.executed_action === 'automated_stop_and_revoke';
+                                                                                        const isProtected = executed.executed_action === 'skipped_protected';
                                                                                         return (
                                                                                             <div className="flex flex-col items-end">
-                                                                                                <span className="text-xs font-semibold text-green-600 flex items-center">
-                                                                                                    <CheckCircle2 className="w-3 h-3 mr-1" /> Executed
+                                                                                                <span className={`text-xs font-semibold flex items-center ${isProtected ? 'text-amber-600' : 'text-green-600'}`}>
+                                                                                                    <CheckCircle2 className="w-3 h-3 mr-1" />
+                                                                                                    {isAuto ? 'Auto-Stopped' : isProtected ? 'Protected' : 'Executed'}
                                                                                                 </span>
-                                                                                                <span className="text-[10px] text-gray-500">by you on {executed.at}</span>
+                                                                                                <span className="text-[10px] text-gray-500">
+                                                                                                    {isAuto ? `by Sentinel on ${executed.at}` : isProtected ? 'Skipped (Safety Policy)' : `by you on ${executed.at}`}
+                                                                                                </span>
                                                                                             </div>
                                                                                         );
                                                                                     }
@@ -1224,7 +1251,7 @@ export function EnforcementSentinel() {
                                                                                     // action is a no-op (e.g. WARN / KEEP_*), but disable
                                                                                     // it with an explanatory tooltip so it never looks
                                                                                     // like the control is missing.
-                                                                                    const actionable = ['KILL', 'CERTIFY', 'UNCERTIFY'].includes(v.action);
+                                                                                    const actionable = ['KILL', 'STOP_AND_REVOKE', 'CERTIFY', 'UNCERTIFY'].includes(v.action);
                                                                                     return actionable ? (
                                                                                         <Button 
                                                                                             size="sm" 
@@ -1339,7 +1366,9 @@ export function EnforcementSentinel() {
                                 className="flex items-center bg-red-600 hover:bg-red-700 text-white"
                             >
                                 {actionLoading === selectedViolation.resource_id ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-                                Execute Action
+                                {selectedViolation.resource_type === 'app' && ['KILL', 'STOP_AND_REVOKE'].includes(selectedViolation.action)
+                                    ? 'Stop App & Revoke Access'
+                                    : 'Execute Action'}
                             </Button>
                         </div>
                     </div>

@@ -825,12 +825,21 @@ async def execute_enforcement_action(
     action_to_take = body.action.upper()
     executed_action = f"manual_{action_to_take.lower()}"
 
+    if body.resource_type == "app":
+        from app.providers.databricks.handlers.app_handler import is_protected_app
+
+        if action_to_take in ("KILL", "STOP_AND_REVOKE") and is_protected_app(body.resource_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot execute destructive action on protected app '{body.resource_id}'. This app is protected by platform safety policy.",
+            )
+
     # Before a DESTRUCTIVE action, re-validate that the violation still exists.
     # A user may have already remediated it since the scan; we must not punish
     # them for a stale finding. Safe/reversible actions (certify/uncertify/warn)
     # are not gated. We only proceed on a POSITIVE confirmation that it still
     # violates — "fixed", "gone", or "couldn't determine" all abort.
-    if action_to_take == "KILL":
+    if action_to_take in ("KILL", "STOP_AND_REVOKE"):
         recheck = await revalidate_violation(
             workspace_client=workspace_client,
             host=host,
@@ -840,9 +849,9 @@ async def execute_enforcement_action(
         )
         if recheck.get("still_violates") is False:
             logger.info(
-                "Aborting manual KILL on %s (%s): re-validation shows the violation "
+                "Aborting manual %s on %s (%s): re-validation shows the violation "
                 "is no longer present (%s).",
-                body.resource_id, body.policy_name, recheck.get("reason"),
+                action_to_take, body.resource_id, body.policy_name, recheck.get("reason"),
             )
             # Record an audit row so the abort is visible in history.
             try:
@@ -857,7 +866,7 @@ async def execute_enforcement_action(
                     intended_action=action_to_take,
                     executed_action="aborted_revalidated",
                     reason=(
-                        f"KILL aborted by {current_user.email}: violation no longer present "
+                        f"{action_to_take} aborted by {current_user.email}: violation no longer present "
                         f"on re-validation ({recheck.get('detail') or recheck.get('reason')})."
                     ),
                 ))
@@ -883,9 +892,56 @@ async def execute_enforcement_action(
                 ).strip(),
             )
 
+    audit_reason = f"Manually executed by {current_user.email}. Original reason: {body.reason}"
     try:
-        if action_to_take == "KILL":
-            await handler.kill(body.resource_id)
+        if action_to_take in ("KILL", "STOP_AND_REVOKE"):
+            if body.resource_type == "app" and hasattr(handler, "stop_and_revoke"):
+                stop_res = await handler.stop_and_revoke(body.resource_id)
+                if stop_res.get("status") == "skipped_protected":
+                    raise HTTPException(status_code=400, detail=stop_res.get("message", "App is protected."))
+                import json
+
+                prev_acl = stop_res.get("previous_acl") or []
+                executed_action = "manual_stop_and_revoke"
+                audit_reason = (
+                    f"Manually executed stop_and_revoke by {current_user.email}. "
+                    f"Previous ACL snapshot: {json.dumps(prev_acl)}. Original reason: {body.reason}"
+                )
+            else:
+                await handler.kill(body.resource_id)
+        elif action_to_take == "REINSTATE":
+            if hasattr(handler, "reinstate_permissions"):
+                import json
+
+                prior_audit = (
+                    db.query(EnforcementAuditModel)
+                    .filter(
+                        EnforcementAuditModel.resource_id == body.resource_id,
+                        EnforcementAuditModel.resource_type == body.resource_type,
+                        EnforcementAuditModel.executed_action.in_(("automated_stop_and_revoke", "manual_stop_and_revoke")),
+                    )
+                    .order_by(EnforcementAuditModel.created_at.desc())
+                    .first()
+                )
+                prev_acl = None
+                if prior_audit and "Previous ACL snapshot:" in (prior_audit.reason or ""):
+                    try:
+                        raw = prior_audit.reason.split("Previous ACL snapshot:", 1)[1].strip()
+                        start_idx = raw.find("[")
+                        end_idx = raw.rfind("]")
+                        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                            prev_acl = json.loads(raw[start_idx : end_idx + 1])
+                        else:
+                            prev_acl = json.loads(raw)
+                    except Exception as parse_err:
+                        logger.warning("Could not parse previous ACL snapshot: %s", parse_err)
+                success = await handler.reinstate_permissions(body.resource_id, original_acl=prev_acl)
+                if not success:
+                    raise HTTPException(status_code=500, detail=f"Failed to reinstate permissions on app {body.resource_id}")
+                executed_action = "manual_reinstate"
+                audit_reason = f"Manually reinstated permissions by {current_user.email}. Reinstated from prior snapshot: {bool(prev_acl)}."
+            else:
+                raise HTTPException(status_code=400, detail=f"Handler does not support reinstate for {body.resource_type}")
         elif action_to_take == "CERTIFY":
             if hasattr(handler, "certify"):
                 await handler.certify(body.resource_id)
@@ -912,7 +968,7 @@ async def execute_enforcement_action(
             severity="MANUAL",
             intended_action=action_to_take,
             executed_action=executed_action,
-            reason=f"Manually executed by {current_user.email}. Original reason: {body.reason}"
+            reason=audit_reason,
         )
         db.add(audit_record)
         db.commit()
@@ -975,12 +1031,16 @@ async def list_enforcement_actions(
         raise HTTPException(status_code=403, detail="Not authorized to view enforcement actions")
 
     from app.db.enforcement_audit import EnforcementAuditModel
+    from sqlalchemy import or_
 
     records = (
         db.query(EnforcementAuditModel)
         .filter(
             EnforcementAuditModel.request_id == request_id,
-            EnforcementAuditModel.executed_action.like("manual_%"),
+            or_(
+                EnforcementAuditModel.executed_action.like("manual_%"),
+                EnforcementAuditModel.executed_action.in_(("automated_stop_and_revoke", "skipped_protected")),
+            ),
         )
         .order_by(EnforcementAuditModel.created_at.asc())
         .all()

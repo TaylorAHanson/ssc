@@ -59,6 +59,12 @@ def _get_gitops_provider():
     return VolumeGitOpsProvider()
 
 
+def _get_terramate_provider():
+    """Terramate API provider used for infrastructure provisioning."""
+    from app.providers.terramate.client import TerramateProvider
+    return TerramateProvider()
+
+
 def _get_notification_provider():
     from app.providers.notifications.client import NotificationProvider
     return NotificationProvider()
@@ -216,6 +222,92 @@ async def terraform_apply(**kwargs) -> Dict[str, Any]:
     provider = _get_gitops_provider()
     result = await provider.apply(kwargs.get("request_id"), kwargs.get("parameters", {}))
     return {"applied": result}
+
+
+# --------------------------------------------------------------------------
+# Terramate Provisioning Tools (v2 API abstraction)
+# --------------------------------------------------------------------------
+class TerramateSubmitInput(BaseModel):
+    request_type: str = Field(..., description="Resource type to provision (e.g. 'workspace', 'schema')")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Type-specific provisioning parameters")
+    idempotency_key: Optional[str] = Field(default=None, description="Optional client idempotency key (UUIDv4)")
+
+
+@tool(
+    name="terramate_submit_request",
+    args_schema=TerramateSubmitInput,
+    side_effect_class="infra",
+    description="Submit an infrastructure provisioning request to the Terramate API service.",
+)
+async def terramate_submit_request(
+    request_type: str,
+    parameters: Optional[Dict[str, Any]] = None,
+    idempotency_key: Optional[str] = None,
+    **kwargs,
+) -> Dict[str, Any]:
+    import uuid
+
+    provider = _get_terramate_provider()
+    key = idempotency_key or kwargs.get("_tool_call_id") or str(uuid.uuid4())
+    requester = kwargs.get("_user_email") or "self-service-app"
+    result = await provider.create_request(
+        request_type=request_type,
+        params=parameters or {},
+        idempotency_key=key,
+        requester=requester,
+    )
+    return {
+        "ok": result.get("success", False),
+        "terramate_request_id": result.get("request_id"),
+        "status": result.get("status"),
+    }
+
+
+class TerramateGetPlanInput(BaseModel):
+    terramate_request_id: str = Field(..., description="The Terramate request UUID")
+    ordinal: int = Field(default=0, description="Step ordinal index in the playbook")
+
+
+@tool(
+    name="terramate_get_plan",
+    args_schema=TerramateGetPlanInput,
+    side_effect_class="read",
+    description="Fetch the generated Terraform plan for a Terramate request step.",
+)
+async def terramate_get_plan(
+    terramate_request_id: str,
+    ordinal: int = 0,
+    **kwargs,
+) -> Dict[str, Any]:
+    provider = _get_terramate_provider()
+    return await provider.get_step_plan(terramate_request_id, ordinal=ordinal)
+
+
+class TerramateCheckStatusInput(BaseModel):
+    terramate_request_id: str = Field(..., description="The Terramate request UUID")
+
+
+@tool(
+    name="terramate_check_status",
+    args_schema=TerramateCheckStatusInput,
+    side_effect_class="read",
+    description="Query the live progress, PR state, and outputs of a Terramate provisioning request.",
+)
+async def terramate_check_status(
+    terramate_request_id: str,
+    **kwargs,
+) -> Dict[str, Any]:
+    provider = _get_terramate_provider()
+    detail = await provider.get_request(terramate_request_id)
+    if detail is None:
+        return {"exists": False, "status": "not_found", "terramate_request_id": terramate_request_id}
+    return {
+        "exists": True,
+        "terramate_request_id": detail.get("id"),
+        "type": detail.get("type"),
+        "status": detail.get("status"),
+        "steps": detail.get("steps", []),
+    }
 
 
 class CreateUcObjectInput(BaseModel):
