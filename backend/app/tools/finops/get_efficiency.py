@@ -14,7 +14,7 @@ class GetEfficiencyInput(BaseModel):
 
 @tool(
     name="get_resource_efficiency_metrics",
-    description="Identifies potentially inefficient resources, such as idle clusters.",
+    description="Identify idle or underutilized Databricks compute clusters running beyond a specified inactivity threshold.",
     required_role="finance_admin",
     args_schema=GetEfficiencyInput
 )

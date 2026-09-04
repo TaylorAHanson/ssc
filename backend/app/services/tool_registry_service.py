@@ -179,6 +179,12 @@ class ToolRegistryService:
                 # Keep origin in sync if a tool moved definition sites.
                 if row.origin != catalog_origin:
                     row.origin = catalog_origin
+                    # When a tool moves to workflow, adopt workflow defaults (SP identity, workflow execution).
+                    if catalog_origin == TOOL_ORIGIN_WORKFLOW:
+                        row.enabled_for_main_agent = False
+                        row.enabled_for_workflow_agent = False
+                        row.enabled_for_workflow_execution = True
+                        row.identity_mode = IDENTITY_SP
 
         # Prune orphans: local/workflow rows whose code tool no longer exists
         # (renamed or deleted). Safe because the catalog is authoritative for

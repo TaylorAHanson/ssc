@@ -14,7 +14,7 @@ class CheckTaggingInput(BaseModel):
 
 @tool(
     name="check_tagging_compliance",
-    description="Identifies resources (clusters, warehouses) that are missing required tags defined by policy.",
+    description="Scan Databricks compute resources (clusters, SQL warehouses) to identify assets missing required cost-allocation or governance tags.",
     required_role="finance_admin",
     args_schema=CheckTaggingInput
 )

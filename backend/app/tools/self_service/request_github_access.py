@@ -20,10 +20,7 @@ class RequestGitHubAccessInput(BaseModel):
 
 @tool(
     name="request_github_access",
-    description=("Looks up an existing GitHub repo or team and returns the GitHub-native request "
-                 "link the user should follow to request access. This app does NOT grant access "
-                 "and imposes no approval gate — a repo/team owner approves the request inside "
-                 "GitHub. Use for 'request access to repo X' or 'join team Y'."),
+    description="Look up a GitHub repository or team and return the native link for the user to request access in GitHub.",
     args_schema=RequestGitHubAccessInput,
 )
 async def request_github_access(target_type: str = "repo", target: str = "",

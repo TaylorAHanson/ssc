@@ -43,12 +43,8 @@ class GetUserContextInput(BaseModel):
     friendly_label="Checking who you are",
     friendly_completion_label="Reviewed your profile",
     description=(
-        "Get what is known about the CURRENT user: their name, roles and persona, "
-        "their recent requests, approvals waiting on them, and their group "
-        "memberships. Always scoped to the caller — it cannot look up anyone else "
-        "(use member_lookup for that). A summary is already in your instructions; "
-        "call this to see a list that was truncated there, or to re-check after the "
-        "user says their access changed."
+        "Retrieve the current user's profile: name, roles, recent request submissions, "
+        "pending approvals, and identity group memberships. Scoped strictly to the caller."
     ),
 )
 async def get_user_context_tool(

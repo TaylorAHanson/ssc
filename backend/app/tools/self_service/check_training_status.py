@@ -11,7 +11,7 @@ class CheckTrainingStatusArgs(BaseModel):
 
 @tool(
     name="check_training_status",
-    description="Check training status. Use 'status' to check a user's completed courses. Use 'leaderboard' for top users (requires no email). Use 'recent' for last N days completions (requires no email).",
+    description="Check user training completion status, leaderboard, or recent course completions.",
     args_schema=CheckTrainingStatusArgs
 )
 

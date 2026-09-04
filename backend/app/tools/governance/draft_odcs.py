@@ -160,7 +160,7 @@ class DraftOdcsInput(BaseModel):
 
 @tool(
     name="draft_odcs_contract",
-    description="Drafts an Open Data Contract Standard (ODCS) v3 YAML document for a given set of datasets by fetching their metadata and using AI to generate the combined structure. Important: Always use this tool to generate the 'odcs_yaml' parameter before calling execute_workflow for data_certification.",
+    description="Draft an Open Data Contract Standard (ODCS) v3 YAML document for Unity Catalog datasets by fetching table schemas and generating contract structure.",
     args_schema=DraftOdcsInput
 )
 async def draft_odcs_contract(

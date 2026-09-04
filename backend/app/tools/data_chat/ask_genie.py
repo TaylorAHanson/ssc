@@ -30,29 +30,11 @@ from app.tools.mcp import tool
 logger = logging.getLogger(__name__)
 
 
-_DESCRIPTION = """\
-Ask a natural-language question to Databricks Genie - the general-purpose data chat \
-inside Databricks. Genie searches across the caller's accessible Unity Catalog data \
-and any Genie Spaces they're entitled to, then returns a grounded answer with a \
-deep link back to the conversation in Databricks. This is a slow tool (typically \
-30-120 seconds). Use it when you need actual data, not platform metadata.
-
-Use it for:
-- Counts, trends, aggregations across business data ("how many active customers last quarter?")
-- Joins / lookups across tables ("what's the average order value by region?")
-- Open-ended questions that require querying actual rows of data.
-- Discovery questions like "what data is available?" or "what tables can you query?" - \
-Genie is grounded in the caller's accessible UC data and is the right place to ask.
-
-Prefer faster tools for:
-- Listing UC catalogs/schemas/tables structurally => use get_table_list / get_catalog_list when available.
-- User entitlements / who has access to what => use search_user_entitlements.
-- Platform metadata (workspaces, jobs, audit logs) => use the dedicated tools.
-- Questions answerable from your own knowledge / system prompt context.
-
-Calling this tool returns immediately with a pending-poll handle; the user sees \
-"Asking Genie..." and the answer streams in once it's ready.\
-"""
+_DESCRIPTION = (
+    "Ask a natural-language business question across Unity Catalog data via Databricks Genie. "
+    "Ideal for aggregations, trends, and exploratory queries over live table data when you do not "
+    "know the exact schema. Returns an answer with a deep link back to Databricks."
+)
 
 
 class AskYourDataInput(BaseModel):

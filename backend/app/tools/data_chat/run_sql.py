@@ -49,25 +49,10 @@ _POLL_INTERVAL_SECONDS = 2.0
 _STATE_SUCCEEDED = "SUCCEEDED"
 _TERMINAL_BAD = {"FAILED", "CANCELED", "CANCELLED", "CLOSED"}
 
-_DESCRIPTION = """\
-Run a READ-ONLY SQL query on Databricks SQL and get the rows back. The query runs \
-through Databricks' managed SQL server as the current user (their Unity Catalog \
-permissions apply) and is read-only — the server rejects anything that writes.
-
-Use this when you already know the table(s) and want precise, fast, chartable data \
-- e.g. after discovering a table with search_data_assets / get_table_list. The rows \
-come back directly, so the chat auto-renders a chart you (or the user) can re-graph, \
-and you can call render_chart afterward to change the visualization.
-
-Prefer ask_your_data (Genie) instead when the question is vague, spans unknown \
-tables, or you'd be guessing at the schema - Genie grounds natural language in the \
-metastore. Prefer this tool when you can write the SQL yourself.
-
-Tips:
-- Use fully-qualified names (catalog.schema.table), including system.* tables \
-(system.billing.usage, system.lakeflow.jobs, ...) for cost/usage/job questions.
-- Add your own LIMIT for large tables; only one statement per call.\
-"""
+_DESCRIPTION = (
+    "Execute a read-only SQL query on Databricks SQL Serverless under the caller's Unity Catalog permissions. "
+    "Use when you know the table schema and want precise, fast, chartable data. Returns rows directly for display or charting."
+)
 
 
 class RunSqlInput(BaseModel):

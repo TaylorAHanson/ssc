@@ -44,18 +44,7 @@ class LmwsProbeConfigInput(BaseModel):
 
 @tool(
     name="lmws_probe_config",
-    description=(
-        "Platform-admin diagnostic: report whether LMWS is CONFIGURED in this "
-        "environment, without contacting the gateway. Call this FIRST whenever any "
-        "LMWS operation fails with a 'not configured' or credential error — it says "
-        "which of the three independent causes applies: the app's service principal "
-        "cannot read the secret scope (a Databricks grant), the scope is readable but "
-        "the password key is missing (an IAM request), or a base URL is blank (a "
-        "deployment/settings change). Pass refresh=true to re-read the credential "
-        "after fixing a secret-scope grant, which avoids needing an app restart. Also "
-        "reports the service account and which base URLs are set. Never returns the "
-        "password itself."
-    ),
+    description="Platform-admin diagnostic: verify LMWS configuration, secret scope access, and endpoint URLs without calling the gateway.",
     args_schema=LmwsProbeConfigInput,
     side_effect_class="read",
     required_role="platform_admin",
@@ -117,18 +106,7 @@ class LmwsProbeReadInput(BaseModel):
 
 @tool(
     name="lmws_probe_read",
-    description=(
-        "Platform-admin diagnostic: call a READ-ONLY LMWS endpoint with the app's "
-        "service account and report exactly what the gateway returned (HTTP status, "
-        "body-level errors, latency) without raising. Start here before any N2K "
-        "membership work: n2kListMetadataGet with {\"listName\": \"<list>\"} says "
-        "whether the list is N2K and whether it requires a JQS justification form — "
-        "if it does, adds cannot be automated because the JQS answer id is only "
-        "obtainable through a browser form. Use requestStatus with {\"requestid\": "
-        "\"<id>\"} to follow a request produced by an add. This changes nothing. For "
-        "ordinary group questions use member_lookup or group_lookup instead; this "
-        "tool is for characterizing the LMWS API itself."
-    ),
+    description="Platform-admin diagnostic: call a read-only LMWS endpoint (e.g. n2kListMetadataGet, requestStatus) using service account credentials.",
     args_schema=LmwsProbeReadInput,
     side_effect_class="read",
     required_role="platform_admin",
@@ -252,29 +230,7 @@ class LmwsProbeAddInput(BaseModel):
 
 @tool(
     name="lmws_probe_membership_add",
-    description=(
-        "Platform-admin diagnostic: probe the LMWS membership-ADD endpoints for a list "
-        "to determine which ones the service account can use — specifically for N2K "
-        "(need-to-know) lists that the production listMembersAdd endpoint refuses. "
-        "Leave 'endpoint' blank to compare all candidates in one run. Candidates span "
-        "two different services: the LMWS endpoints (GET) and the FWS-API 'addMembers' "
-        "(POST), which has its own ACLs and, uniquely, a 'requester' field for acting "
-        "on behalf of an entitled user. How to read each outcome: 'acl_missing' means "
-        "the account lacks an ACL group — the detail names which one, and the FWS ACLs "
-        "are ordinary join requests needing no N2K Director approval; "
-        "'supervisor_required' means the ACL passed but the account is not a supervisor "
-        "of that specific list, which only the list owner can grant per-list and has NO "
-        "API, so stop and tell the user to contact the owner rather than retrying; "
-        "'wrong_list_type' means that endpoint does not apply to this list, so ignore "
-        "it and read the others; 'list_not_found' (FWS) means the wrong systemEndpoint "
-        "directory. If every endpoint returns 'supervisor_required', retrying will not "
-        "help — the next thing to try is the FWS endpoint with an entitled 'requester'. "
-        "Defaults to dry_run=true, returning the exact "
-        "request without calling the gateway; dry_run=false performs a REAL membership "
-        "change and may file an approval request, so only do that when explicitly "
-        "asked. This is a diagnostic — route genuine access requests through the "
-        "governed add_group_membership path instead."
-    ),
+    description="Platform-admin diagnostic: probe LMWS and FWS membership-add endpoints for an identity list to test ACL and supervisor status. Defaults to dry_run=True.",
     args_schema=LmwsProbeAddInput,
     side_effect_class="membership",
     required_role="platform_admin",

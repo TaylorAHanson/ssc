@@ -15,7 +15,7 @@ class SearchRequestsInput(BaseModel):
 
 @tool(
     name="search_requests",
-    description="Search for existing requests by title, ID, or status. Use this to check the status of a user's request or find specific requests.",
+    description="Search self-service requests by title, UUID, status ('pending', 'approved', 'rejected', 'completed'), or requester.",
     args_schema=SearchRequestsInput
 )
 def search_requests(

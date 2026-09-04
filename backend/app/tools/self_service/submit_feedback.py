@@ -44,14 +44,7 @@ class SubmitFeedbackInput(BaseModel):
 @tool(
     name="submit_feedback",
     side_effect_class="app_write",
-    description=(
-        "Submit the user's feedback, feature request, or bug report so it's "
-        "recorded for the admins to triage. Use this when the user wants to "
-        "report a bug, request a feature, or share feedback about the app. "
-        "ALWAYS confirm the details (type, a clear title, and a description) "
-        "with the user first — do NOT invent or embellish what they said. "
-        "Capture their own words."
-    ),
+    description="Submit user feedback, feature requests, or bug reports to the admin triage backlog.",
     args_schema=SubmitFeedbackInput,
     feature_flag="core",
     friendly_label="Submitting feedback...",

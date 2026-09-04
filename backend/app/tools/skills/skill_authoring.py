@@ -42,12 +42,7 @@ class GetSkillInput(BaseModel):
 
 @tool(
     name="list_skills",
-    description=(
-        "List the skills available to the user: personal skills (their Workspace "
-        "`.skills` folder) and shared skills (in `.skills` folders on UC Volumes "
-        "they can access). Returns id, name, description, and storage location. "
-        "Call this to discover a skill before loading it with get_skill."
-    ),
+    description="List available personal and shared skills from Workspace folders and UC Volumes.",
     args_schema=ListSkillsInput,
     feature_flag=_FEATURE,
     friendly_label="Loading your skills...",

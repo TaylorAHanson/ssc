@@ -80,17 +80,8 @@ class SearchDataAssetsInput(BaseModel):
 @tool(
     name="search_data_assets",
     description=(
-        "Search the locally-cached data catalog (Unity Catalog tables/views that "
-        "have been synced into this app) by keyword. FAST — it scans the local "
-        "database with no live Databricks calls, so prefer it as the FIRST step "
-        "for data-discovery questions ('what data is there about X?', 'where is "
-        "the Y table?', 'do we have data on Z?'). Matches on name, "
-        "fully-qualified name, description, owner, catalog, schema, domain, and "
-        "tags, and returns catalog/schema/table, type, owner, description, "
-        "domain, tags, and certification. Fall back to the live metadata tools "
-        "(get_table_list / "
-        "get_schema_list) only if this returns nothing, and use ask_your_data "
-        "(Genie) when the user needs actual rows/analysis."
+        "Search cached Unity Catalog data assets (tables, views, schemas) by keyword across name, "
+        "description, tags, domain, and owner. Fast local lookup for dataset discovery without live Databricks API calls."
     ),
     args_schema=SearchDataAssetsInput,
     feature_flag="data_discovery",

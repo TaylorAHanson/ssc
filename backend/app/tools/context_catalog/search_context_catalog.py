@@ -23,13 +23,7 @@ class SearchContextCatalogInput(BaseModel):
 
 @tool(
     name="search_context_catalog",
-    description=(
-        "Search the Context Catalog — a curated knowledge base of company- and "
-        "domain-specific documents — and return the most relevant passages with "
-        "citations. Use this BEFORE answering questions about internal processes, "
-        "standards, products, or domain knowledge that generic Databricks docs "
-        "wouldn't cover. Always cite the returned document titles."
-    ),
+    description="Search curated enterprise knowledge documents, playbooks, and architectural standards in the Context Catalog. Returns relevant text passages with citations.",
     args_schema=SearchContextCatalogInput,
     feature_flag="context_catalog",
     friendly_label="Searching the context catalog...",

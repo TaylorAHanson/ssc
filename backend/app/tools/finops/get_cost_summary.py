@@ -18,7 +18,7 @@ class GetCostSummaryInput(BaseModel):
 
 @tool(
     name="get_cost_summary",
-    description="Retrieves aggregated cost data over a specified time range from system.billing.usage. Can group by workspace, SKU, user, or tags.",
+    description="Retrieve aggregated DBU usage and cost over a date range from system.billing.usage. Can group by 'workspace_id', 'sku_name', 'usage_type', or custom tags.",
     required_role="finance_admin",
     args_schema=GetCostSummaryInput
 )

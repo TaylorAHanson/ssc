@@ -18,7 +18,7 @@ class GetForecastedSpendInput(BaseModel):
 
 @tool(
     name="get_forecasted_spend",
-    description="Forecasts total spend for the current month based on daily run rate of the last 30 days.",
+    description="Forecast total spend and projected cost for the current month based on recent daily run rate.",
     required_role="finance_admin",
     args_schema=GetForecastedSpendInput
 )

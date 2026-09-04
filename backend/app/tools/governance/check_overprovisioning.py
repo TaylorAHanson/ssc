@@ -16,11 +16,7 @@ class CheckOverprovisionedUsersInput(BaseModel):
 
 @tool(
     name="check_overprovisioned_users",
-    description="""Identifies users with excessive privileges or high-risk profiles using a score-based model.
-Capabilities:
-1) Risk Score Assessment: Combines privilege counts with activity data (from audit logs) to find users with high access but low usage.
-2) Grants Summary: Provides a breakdown of total grants across all Unity Catalog securables (catalogs, schemas, tables, etc.).
-3) Admin Audit: Identifies members of the 'admins' group.""",
+    description="Audit user privilege posture across Unity Catalog. 'risk_score' flags users with high privileges but low activity; 'grants_summary' counts total grants; 'workspace_admins' lists admin members.",
     required_role="governance_admin",
     args_schema=CheckOverprovisionedUsersInput
 )

@@ -31,29 +31,10 @@ logger = logging.getLogger(__name__)
 _MARKS = {"bar", "line", "area", "point", "arc"}
 _AGGREGATES = {"sum", "mean", "median", "min", "max", "count", "none"}
 
-_DESCRIPTION = """\
-Visualize the most recent data answer as a chart, or re-graph it a different way. \
-Use this when the user asks to chart / plot / graph data, or to change an existing \
-chart ("make it a line", "show it as a pie by region", "stack by category").
-
-Databricks Genie returns data but never a chart, so call this AFTER a data answer \
-(e.g. from ask_your_data) to turn those rows into a visualization. You only specify \
-HOW to chart it — the chart binds to the rows already returned in this conversation, \
-so you do NOT need to pass the data yourself.
-
-Specify:
-- mark: bar | line | area | point (scatter) | arc (pie)
-- x: the column for the x axis (or the category for a pie)
-- y: the column for the y axis / measure (or the value for a pie)
-- color: optional column to split series by color / slices
-- aggregate: how to combine the measure when grouping (sum, mean, median, min, max, \
-count, or none for raw values)
-
-Pick columns by their names as they appear in the data answer. Prefer 'line' for \
-trends over time, 'bar' for category comparisons, 'point' for two numeric measures, \
-and 'arc' for parts-of-a-whole. The user can fine-tune the result with on-chart \
-controls afterward.\
-"""
+_DESCRIPTION = (
+    "Render or update a chart from previously retrieved tabular query data (e.g. from ask_your_data or run_sql). "
+    "Supports marks: 'bar', 'line', 'area', 'point', 'arc'. Binds automatically to tabular rows in the conversation."
+)
 
 
 class RenderChartInput(BaseModel):

@@ -12,7 +12,7 @@ class ListWorkspacesInput(BaseModel):
 
 @tool(
     name="list_workspaces",
-    description="Lists all workspaces in the Databricks account. Returns workspace IDs, names, and regions. Useful for determining which workspaces are available in the environment.",
+    description="List all Databricks workspaces in the account with IDs, names, and status.",
     args_schema=ListWorkspacesInput
 )
 async def list_workspaces(status: Optional[str] = None, **kwargs) -> Dict[str, Any]:

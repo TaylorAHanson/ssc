@@ -15,7 +15,7 @@ class CheckObjectPermissionsInput(BaseModel):
 
 @tool(
     name="check_object_permissions",
-    description="Lists all grants and permissions on a specific Unity Catalog object (catalog, schema, table, etc.).",
+    description="Run 'SHOW GRANTS' on any Unity Catalog securable (CATALOG, SCHEMA, TABLE, VOLUME, FUNCTION, MODEL) to inspect current access control lists.",
     required_role="governance_admin",
     args_schema=CheckObjectPermissionsInput
 )

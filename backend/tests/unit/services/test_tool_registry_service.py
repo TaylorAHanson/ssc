@@ -100,6 +100,34 @@ def test_sync_local_tools_seeds_provider_tools_workflow_execution_only(db_sessio
     names = {r.tool_name for r in rows}
     # Spot-check a known mutating provider tool is present and gated this way.
     assert "terraform_apply" in names
+    assert "terramate_provision" in names
+
+
+def test_sync_local_tools_updates_origin_change_to_workflow_defaults(db_session):
+    # Simulate a tool that originally seeded as local (chat-callable, OBO)
+    # moving to workflow origin (provider tool).
+    row = ToolRegistryModel(
+        id="test-moving-tool",
+        tool_name="terramate_provision",
+        origin=TOOL_ORIGIN_LOCAL,
+        description="Legacy local registration",
+        enabled=True,
+        enabled_for_main_agent=True,
+        enabled_for_workflow_agent=False,
+        enabled_for_workflow_execution=False,
+        identity_mode=IDENTITY_OBO,
+    )
+    db_session.add(row)
+    db_session.commit()
+
+    # When sync_local_tools runs, terramate_provision is now a workflow tool in code
+    ToolRegistryService.sync_local_tools(db_session)
+
+    refreshed = db_session.query(ToolRegistryModel).filter_by(tool_name="terramate_provision").first()
+    assert refreshed.origin == TOOL_ORIGIN_WORKFLOW
+    assert refreshed.enabled_for_main_agent is False
+    assert refreshed.enabled_for_workflow_execution is True
+    assert refreshed.identity_mode == IDENTITY_SP
 
 
 def test_sync_local_tools_is_idempotent(db_session):

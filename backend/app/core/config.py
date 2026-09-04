@@ -571,7 +571,6 @@ class Settings(BaseSettings):
 
     # Terramate API Provisioning Settings
     TERRAMATE_API_URL: str = os.getenv("TERRAMATE_API_URL", "http://localhost:8000")
-    TERRAMATE_API_TOKEN: str = os.getenv("TERRAMATE_API_TOKEN", "")
     TERRAMATE_HTTP_TIMEOUT_SECONDS: int = int(os.getenv("TERRAMATE_HTTP_TIMEOUT_SECONDS", "30"))
     
     # Terraform Settings

@@ -146,12 +146,7 @@ def _composable_keys(db) -> set:
 # --------------------------------------------------------------------------
 @tool(
     name="list_workflow_building_blocks",
-    description=(
-        "List the building blocks for authoring a no-code workflow (Workflow): the "
-        "available step TOOLS (with side-effect class + whether they mutate), the "
-        "GATE types, and the expression operators. Call this FIRST when helping an "
-        "admin design or edit a workflow so you wire steps to real tools."
-    ),
+    description="List available step tools, gate types, and expression operators for authoring no-code workflows.",
     required_role=_AUTHOR_ROLE,
     friendly_label="Loading workflow building blocks...",
 )
@@ -274,13 +269,7 @@ class SearchSimilarWorkflowsInput(BaseModel):
 
 @tool(
     name="search_similar_workflows",
-    description=(
-        "Search EXISTING workflows (Workflows) for ones similar to what the admin wants to "
-        "build, by keyword-matching the description against each workflow's key, name, and "
-        "goal. Call this BEFORE drafting a new workflow: if a close match exists, suggest "
-        "reusing/cloning/editing it instead of authoring a duplicate. Returns ranked "
-        "candidates with key, name, goal, status, and request_type."
-    ),
+    description="Search existing workflows by keyword matching against key, name, and goal to find reuse candidates.",
     required_role=_AUTHOR_ROLE,
     args_schema=SearchSimilarWorkflowsInput,
     friendly_label="Searching for similar workflows...",
@@ -349,16 +338,7 @@ class ResearchWorkflowContextInput(BaseModel):
 
 @tool(
     name="research_workflow_context",
-    description=(
-        "Research the organization's own conventions BEFORE drafting a workflow's "
-        "instructions. Runs a Context Catalog pass for this topic (naming "
-        "conventions, approval norms, ownership rules, policy constraints, expiry/"
-        "access-review requirements) and returns the matching passages with their "
-        "document titles, plus a checklist of what to fold into the playbook. Call "
-        "this BEFORE authoring instructions_markdown so the workflow reflects how "
-        "THIS company works rather than generic Databricks advice — and cite the "
-        "document titles you used."
-    ),
+    description="Search Context Catalog knowledge domains for naming conventions, approval norms, and policy requirements relevant to a workflow topic.",
     required_role=_AUTHOR_ROLE,
     args_schema=ResearchWorkflowContextInput,
     friendly_label="Researching your organization's conventions...",
@@ -453,13 +433,7 @@ class GetWorkflowInput(BaseModel):
 
 @tool(
     name="get_workflow",
-    description=(
-        "Fetch an existing workflow (Workflow) by key, including its current graph_spec, "
-        "instructions_markdown, status (draft/published), request_type, and metadata. Use "
-        "this to inspect a workflow before editing it: build on the returned graph_spec and "
-        "REFINE the existing instructions_markdown — do not start from scratch or you'll "
-        "discard prior admin edits."
-    ),
+    description="Fetch a workflow definition by key (graph_spec, instructions_markdown, metadata, and status).",
     required_role=_AUTHOR_ROLE,
     args_schema=GetWorkflowInput,
     friendly_label="Loading workflow...",
@@ -502,12 +476,7 @@ class ValidateSpecInput(BaseModel):
 
 @tool(
     name="validate_workflow_spec",
-    description=(
-        "Structurally validate a candidate workflow graph_spec WITHOUT saving it: "
-        "checks stage shapes, gate types, that each step's tool exists, and that all "
-        "expressions are well-formed. Returns {valid, error}. Always validate before "
-        "saving or publishing."
-    ),
+    description="Structurally validate a candidate workflow graph_spec (stage shapes, gates, step tools, expressions) without saving.",
     required_role=_AUTHOR_ROLE,
     args_schema=ValidateSpecInput,
     friendly_label="Validating workflow...",
@@ -547,12 +516,7 @@ class PreviewSpecInput(BaseModel):
 
 @tool(
     name="preview_workflow_spec",
-    description=(
-        "Dry-run a candidate workflow graph_spec against a sample request context "
-        "WITHOUT running any tool or writing anything. Projects which gates auto-approve, "
-        "the exact args each step would receive, and fan-out — so you can confirm behavior "
-        "with the admin before saving/publishing."
-    ),
+    description="Dry-run a workflow graph_spec against sample request context to project gate evaluations, tool args, and fan-out.",
     required_role=_AUTHOR_ROLE,
     args_schema=PreviewSpecInput,
     friendly_label="Previewing workflow...",
@@ -583,15 +547,7 @@ class EvaluateSpecInput(BaseModel):
 
 @tool(
     name="evaluate_workflow_spec",
-    description=(
-        "Evaluate a candidate workflow graph_spec for SAFETY and COMPLETENESS without "
-        "saving it. Returns a deterministic report: a risk score 0-100 (higher = riskier) "
-        "+ tier, a quality score 0-100 (higher = better) + tier, and findings (each with "
-        "severity, category, message, and a fix). Call this after validate/preview and "
-        "BEFORE recommending save/publish: read the findings back to the admin in plain "
-        "language, explain the scores, and propose concrete fixes for any high/critical "
-        "items (e.g. a risky mutation with no approval gate)."
-    ),
+    description="Evaluate a workflow graph_spec for safety and completeness, producing risk/quality scores and policy findings.",
     required_role=_AUTHOR_ROLE,
     args_schema=EvaluateSpecInput,
     friendly_label="Evaluating workflow...",
@@ -668,19 +624,7 @@ class SaveDraftInput(BaseModel):
 
 @tool(
     name="save_workflow_draft",
-    description=(
-        "Save a workflow graph_spec as a DRAFT (creates the Workflow if new, else updates it "
-        "and marks it draft). Validates the spec first and refuses to save an invalid one. "
-        "Auto-generates baseline runtime instructions from the spec when none are supplied. "
-        "Does NOT publish — the workflow won't affect live requests until published, so you "
-        "do NOT need permission to save. Save as part of the design turn, right after you "
-        "validate and preview: a draft is reversible (every save is snapshotted for undo) "
-        "and it is what test cases attach to, so waiting for confirmation just leaves the "
-        "design unsaved and untested. Tell the admin you saved a draft, and ask before "
-        "PUBLISHING, not before saving. ONE exception: if the workflow is already "
-        "PUBLISHED, saving would take it offline, so the save is refused until the admin "
-        "agrees (see take_offline)."
-    ),
+    description="Save a workflow graph_spec as a draft (creates new or updates existing). You do NOT need permission to save a draft; ask before PUBLISHING, not before saving.",
     required_role=_AUTHOR_ROLE,
     args_schema=SaveDraftInput,
     side_effect_class="app_write",
@@ -953,16 +897,7 @@ class SaveWorkflowTestsInput(BaseModel):
 
 @tool(
     name="save_workflow_tests",
-    description=(
-        "Save behavioral test cases for a workflow so the admin can verify it actually "
-        "behaves as intended. Each case is a question plus a plain-English expected "
-        "outcome; running one starts the real agent with every mutating tool sandboxed "
-        "and an LLM judge compares the transcript to the expectation. Propose 3-5 cases "
-        "right after saving a draft — happy path, missing required field, out-of-scope "
-        "refusal, ambiguous input, rejection path — and then CALL run_workflow_tests "
-        "yourself in the same turn; saving cases you never run proves nothing. "
-        "Hand-written (admin-authored) cases are never replaced by this tool."
-    ),
+    description="Save behavioral test cases for an authored workflow draft. CALL run_workflow_tests in the same turn after saving test cases.",
     required_role=_AUTHOR_ROLE,
     args_schema=SaveWorkflowTestsInput,
     side_effect_class="app_write",
@@ -1056,14 +991,7 @@ class ListWorkflowTestsInput(BaseModel):
 
 @tool(
     name="list_workflow_tests",
-    description=(
-        "Read a workflow's behavioral test cases AND the result of the most recent run "
-        "of each: verdict, score, the judge's rationale, what it found missing, which "
-        "tools the agent called, and (optionally) the transcript. Call this when the "
-        "admin asks how the tests did, says a case failed, or before changing a "
-        "workflow you have already tested — it is the only way to see what actually "
-        "happened rather than guessing."
-    ),
+    description="List behavioral test cases and latest run results (verdicts, scores, rationales, transcripts) for a workflow.",
     required_role=_AUTHOR_ROLE,
     args_schema=ListWorkflowTestsInput,
     friendly_label="Reading workflow tests...",
@@ -1165,16 +1093,7 @@ class RunWorkflowTestsInput(BaseModel):
 
 @tool(
     name="run_workflow_tests",
-    description=(
-        "RUN a workflow's behavioral test cases and wait for the results. Each case "
-        "starts the real self-service agent against this workflow's saved instructions "
-        "and tools with every mutating tool sandboxed (nothing is provisioned, no "
-        "audit facts are written), then an LLM judge scores the transcript against the "
-        "case's expected outcome. Returns each verdict with the judge's rationale. "
-        "Tests run against the SAVED workflow, so save your changes first. Use this to "
-        "close the loop: save, run, read the failures, fix the instructions or the "
-        "expectation, run again."
-    ),
+    description="Execute a workflow's behavioral test cases in a sandboxed agent loop and return judge scores/verdicts.",
     required_role=_AUTHOR_ROLE,
     args_schema=RunWorkflowTestsInput,
     side_effect_class="app_write",
@@ -1314,12 +1233,7 @@ class PublishWorkflowInput(BaseModel):
 
 @tool(
     name="publish_workflow",
-    description=(
-        "Publish a workflow (Workflow) so it governs live requests of its request_type. Runs "
-        "the full pre-publish gate (structural validation + compiles the spec + resolves every "
-        "tool) and refuses to publish an invalid one. This is consequential — only call after "
-        "the admin EXPLICITLY confirms they want it live. Snapshots an immutable version for rollback."
-    ),
+    description="Publish a validated workflow draft so it governs live requests of its request_type. Requires explicit admin confirmation.",
     required_role=_AUTHOR_ROLE,
     args_schema=PublishWorkflowInput,
     side_effect_class="app_write",

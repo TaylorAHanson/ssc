@@ -1,15 +1,14 @@
 """
-Unit tests for Terramate workflow and conversational tools, and check_resource_access.
+Unit tests for Terramate workflow and conversational tools, and check_resource_access (ADR-0004).
 """
 from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.tools.check_resource_access import check_resource_access
 from app.tools.self_service.check_provisioning_status import check_provisioning_status
-from app.tools.self_service.terramate_provision import terramate_provision
 from app.workflows.tools import (
     terramate_check_status,
-    terramate_get_plan,
+    terramate_provision,
     terramate_submit_request,
 )
 
@@ -37,26 +36,7 @@ async def test_terramate_submit_request_workflow_tool():
             request_type="workspace",
             params={"name": "my-ws"},
             idempotency_key="key-abc",
-            requester="requester@databricks.com",
         )
-
-
-@pytest.mark.asyncio
-async def test_terramate_get_plan_workflow_tool():
-    with patch("app.providers.terramate.client.TerramateProvider.get_step_plan", new_callable=AsyncMock) as mock_plan:
-        mock_plan.return_value = {
-            "available": True,
-            "ordinal": 0,
-            "plan": "Terraform plan output",
-        }
-
-        result = await terramate_get_plan.execute(
-            terramate_request_id="req-999",
-            ordinal=0,
-        )
-
-        assert result["available"] is True
-        assert result["plan"] == "Terraform plan output"
 
 
 @pytest.mark.asyncio
@@ -65,22 +45,43 @@ async def test_terramate_check_status_workflow_tool():
         mock_get.return_value = {
             "id": "req-999",
             "type": "workspace",
-            "status": "applied",
-            "steps": [{"ordinal": 0, "status": "applied"}],
+            "status": "in_progress",
+            "steps": [
+                {
+                    "ordinal": 0,
+                    "key": "create",
+                    "status": "submitted",
+                    "pr_url": "https://github.com/org/repo/pull/10",
+                }
+            ],
         }
 
         result = await terramate_check_status.execute(terramate_request_id="req-999")
         assert result["exists"] is True
-        assert result["status"] == "applied"
+        assert result["status"] == "in_progress"
+        assert result["is_terminal"] is False
+        assert result["is_succeeded"] is False
+        assert result["active_pr_url"] == "https://github.com/org/repo/pull/10"
+
+        mock_get.return_value = {
+            "id": "req-999",
+            "type": "workspace",
+            "status": "succeeded",
+            "steps": [{"ordinal": 0, "status": "done"}],
+        }
+        result_succeeded = await terramate_check_status.execute(terramate_request_id="req-999")
+        assert result_succeeded["is_terminal"] is True
+        assert result_succeeded["is_succeeded"] is True
 
         mock_get.return_value = None
         result_404 = await terramate_check_status.execute(terramate_request_id="missing")
         assert result_404["exists"] is False
         assert result_404["status"] == "not_found"
+        assert result_404["is_terminal"] is True
 
 
 @pytest.mark.asyncio
-async def test_terramate_provision_conversational_tool():
+async def test_terramate_provision_workflow_tool():
     with patch("app.providers.terramate.client.TerramateProvider.create_request", new_callable=AsyncMock) as mock_create:
         mock_create.return_value = {
             "success": True,
@@ -91,51 +92,58 @@ async def test_terramate_provision_conversational_tool():
         result = await terramate_provision.execute(
             request_type="schema",
             parameters={"catalog": "main", "name": "finance"},
-            reason="Finance reporting project",
-            _user_email="analyst@databricks.com",
+            idempotency_key="idemp-key-1",
         )
 
-        assert result["success"] is True
-        assert result["request_id"] == "req-123"
-        assert result["type"] == "schema"
+        assert result["ok"] is True
+        assert result["terramate_request_id"] == "req-123"
+        assert result["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_terramate_provision_rejects_invalid_type():
+    # Demonstrates client-side Pydantic validation: 'test' is rejected before any network call
+    result = await terramate_provision.execute(
+        request_type="test",
+        parameters={"test": True},
+    )
+    assert "error" in result
+    assert "Invalid arguments for tool 'terramate_provision'" in result["error"]
 
 
 @pytest.mark.asyncio
 async def test_check_provisioning_status_conversational_tool():
-    with patch("app.providers.terramate.client.TerramateProvider.get_request", new_callable=AsyncMock) as mock_get, \
-         patch("app.providers.terramate.client.TerramateProvider.get_step_plan", new_callable=AsyncMock) as mock_plan:
+    with patch("app.providers.terramate.client.TerramateProvider.get_request", new_callable=AsyncMock) as mock_get:
         mock_get.return_value = {
             "id": "req-123",
             "type": "schema",
-            "status": "running",
+            "status": "in_progress",
             "requester": "analyst@databricks.com",
             "steps": [
                 {
                     "ordinal": 0,
                     "key": "schema",
-                    "status": "running",
+                    "status": "submitted",
                     "pr_number": 42,
                     "pr_url": "https://github.com/org/repo/pull/42",
-                    "stuck": False,
+                    "stuck": True,
                 }
             ],
-        }
-        mock_plan.return_value = {
-            "available": True,
-            "plan": "Plan summary",
         }
 
         result = await check_provisioning_status.execute(
             request_id="req-123",
-            include_plan=True,
         )
 
         assert result["success"] is True
         assert result["found"] is True
-        assert result["status"] == "running"
+        assert result["status"] == "in_progress"
+        assert result["is_terminal"] is False
         assert len(result["steps"]) == 1
         assert result["steps"][0]["pr_number"] == 42
-        assert result["plan"] == "Plan summary"
+        assert "https://github.com/org/repo/pull/42" in result["active_pr_urls"]
+        assert "Action required on GitHub" in result["message"]
+        assert "waiting longer than expected" in result["message"]
 
 
 @pytest.mark.asyncio

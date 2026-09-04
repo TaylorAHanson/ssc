@@ -1,15 +1,21 @@
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from app.providers.calendar.client import CalendarProvider
 
-MOCK_ICS = """BEGIN:VCALENDAR
+
+def _generate_mock_ics() -> str:
+    now = datetime.now(timezone.utc)
+    d1_start = (now + timedelta(days=2)).strftime("%Y%m%dT%H%M%SZ")
+    d1_end = (now + timedelta(days=2, hours=2)).strftime("%Y%m%dT%H%M%SZ")
+    d2_start = (now + timedelta(days=5)).strftime("%Y%m%dT%H%M%SZ")
+    return f"""BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//Example Corp//NONSGML Event Calendar//EN
 BEGIN:VEVENT
 UID:uid1@example.com
 DTSTAMP:20260130T100000Z
-DTSTART:20260210T090000Z
-DTEND:20260210T110000Z
+DTSTART:{d1_start}
+DTEND:{d1_end}
 SUMMARY:Test Workshop
 DESCRIPTION:This is a test workshop.
 LOCATION:Virtual (Teams)
@@ -17,16 +23,17 @@ END:VEVENT
 BEGIN:VEVENT
 UID:uid2@example.com
 DTSTAMP:20260130T100000Z
-DTSTART:20260215T140000Z
+DTSTART:{d2_start}
 SUMMARY:Community Meetup
 DESCRIPTION:Join us for a meetup! https://teams.microsoft.com/l/meetup-join/19%3ameeting_test%40thread.v2/0?context=%7b%22Tid%22%3a%22test%22%7d
 LOCATION:Building Q
 END:VEVENT
 END:VCALENDAR"""
 
+
 def test_parse_ics():
     provider = CalendarProvider()
-    events = provider.parse_ics(MOCK_ICS)
+    events = provider.parse_ics(_generate_mock_ics())
     
     assert len(events) == 2
     

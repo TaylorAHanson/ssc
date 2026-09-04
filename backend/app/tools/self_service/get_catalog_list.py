@@ -13,7 +13,7 @@ class GetCatalogListInput(BaseModel):
 
 @tool(
     name="get_catalog_list",
-    description="Lists all available catalogs in the Databricks Unity Catalog for a specific workspace. You can optionally filter by a specific name or pattern to check if a catalog exists. NEXT STEP: Use 'get_schema_list' to explore a specific catalog.",
+    description="List accessible Unity Catalog catalogs. Supports filtering by exact name or glob pattern (e.g. '*dev*').",
     args_schema=GetCatalogListInput
 )
 def get_catalog_list(target_host: str, name_pattern: Optional[str] = None, _obo_token: Optional[str] = None) -> Dict[str, Any]:

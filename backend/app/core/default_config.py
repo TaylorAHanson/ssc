@@ -317,7 +317,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "get_user_context": True,
         "check_tagging_compliance": True,
         "check_object_permissions": True,
-        "terramate_provision": True,
         "check_provisioning_status": True,
         "audit_user_access": True,
         "search_audit_logs": True,

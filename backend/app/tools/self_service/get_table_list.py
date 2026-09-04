@@ -17,7 +17,7 @@ class GetTableListInput(BaseModel):
 
 @tool(
     name="get_table_list",
-    description="Lists all tables within a specified catalog and schema in Unity Catalog for a specific workspace. You can optionally filter by a specific name or pattern to check if a table exists. NEXT STEP: If the user needs access, proceed to the 'Request Data Access' workflow.",
+    description="List tables within a specified catalog and schema in Unity Catalog. Supports filtering by exact name or glob pattern (e.g. '*orders*').",
     args_schema=GetTableListInput
 )
 async def get_table_list(target_host: str, catalog_name: str, schema_name: str, name_pattern: Optional[str] = None, _obo_token: Optional[str] = None) -> Dict[str, Any]:

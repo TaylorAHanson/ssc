@@ -13,7 +13,7 @@ class GetCredentialListInput(BaseModel):
 
 @tool(
     name="get_credential_list",
-    description="Lists all storage credentials in Unity Catalog for a specific workspace. You can optionally filter by a specific name or pattern to check if a credential exists.",
+    description="List storage credentials in Unity Catalog, with optional name pattern filter.",
     args_schema=GetCredentialListInput
 )
 def get_credential_list(target_host: str, name_pattern: Optional[str] = None, _obo_token: Optional[str] = None) -> Dict[str, Any]:

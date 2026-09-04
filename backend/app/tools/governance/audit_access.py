@@ -15,7 +15,7 @@ class AuditUserAccessInput(BaseModel):
 
 @tool(
     name="audit_user_access",
-    description="Lists all Unity Catalog permissions granted to a specific user (direct and via groups).",
+    description="Audit all Unity Catalog privileges (catalog, schema, table) granted to a specific user within a designated catalog.",
     required_role="governance_admin",
     args_schema=AuditUserAccessInput
 )

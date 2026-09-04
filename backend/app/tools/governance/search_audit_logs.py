@@ -26,28 +26,7 @@ class SearchAuditLogsInput(BaseModel):
 
 @tool(
     name="search_audit_logs",
-    description="""Searches system.access.audit for specific actions, actors, or targets. This can be used to get counts of events happening, like users logging in or a count of usage of a specific feature.
-Supports aggregations like COUNT and GROUP BY to answer analytical questions.
-
-Table Schema for system.access.audit:
-- account_id (string): ID of the account
-- workspace_id (string): ID of the workspace
-- version (string): Audit log schema version (typically 2.0)
-- event_time (timestamp): Timestamp of the event (UTC)
-- event_date (date): Calendar date the action took place
-- source_ip_address (string): IP address where the request originated
-- user_agent (string): Origination of request (client info)
-- session_id (string): ID of the session
-- user_identity (struct): Identity of user initiating request (e.g. {"email": "user@domain.com"})
-- service_name (string): Service name initiating request (e.g. unityCatalog, clusters, sqlConnector)
-- action_name (string): Category of the event (e.g. getTable, login, createCluster)
-- request_id (string): Unique ID of request
-- request_params (map): Map of key values containing request parameters
-- response (struct): Struct containing statusCode (e.g. 200) and errorMessage
-- audit_level (string): 'WORKSPACE' or 'ACCOUNT'
-- event_id (string): Unique ID of the event
-- identity_metadata (struct): Identities involved (run_by, run_as)
-""",
+    description="Search system.access.audit logs for user actions, service calls, and authentication events across workspaces. Supports filtering by date, actor, action_name, and optional GROUP BY aggregation.",
     required_role="security_admin",
     args_schema=SearchAuditLogsInput
 )

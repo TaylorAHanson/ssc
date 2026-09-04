@@ -32,7 +32,7 @@ class CheckResourceAccessInput(BaseModel):
 
 @tool(
     name="check_resource_access",
-    description="Check existing access grants on a Unity Catalog resource (schema or catalog). Use this BEFORE granting or revoking access to verify current state.",
+    description="Inspect live Unity Catalog access grants on a catalog or schema (e.g. 'main' or 'main.sales'). Use before granting or revoking access to verify current state.",
     args_schema=CheckResourceAccessInput,
     side_effect_class="read",
 )

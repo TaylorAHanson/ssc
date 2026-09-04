@@ -12,7 +12,7 @@ class CheckGitHubRepoInput(BaseModel):
 
 @tool(
     name="check_github_repo",
-    description="Checks if a GitHub repository exists in the organization. Use this to verify repo name availability before creation.",
+    description="Check whether a repository name already exists in the configured GitHub organization.",
     args_schema=CheckGitHubRepoInput
 )
 async def check_github_repo(repo_name: str) -> Dict[str, Any]:

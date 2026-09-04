@@ -14,7 +14,7 @@ class FindOwnerInput(BaseModel):
 
 @tool(
     name="find_owner",
-    description="Finds the owner and relevant tags (e.g., approver_group, access_group) of a specified Databricks object (catalog, schema, table, job, dashboard, notebook, genie_space).",
+    description="Look up the owner and metadata tags (e.g. approver_group, access_group) of a Databricks object: catalog, schema, table, job, dashboard, notebook, or genie_space.",
     args_schema=FindOwnerInput
 )
 async def find_owner(object_type: str, object_name: str) -> Dict[str, Any]:

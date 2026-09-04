@@ -16,7 +16,7 @@ class SearchApprovalsInput(BaseModel):
 
 @tool(
     name="search_approvals",
-    description="Search for pending approvals by type (manager, data_owner, platform_admin) or status. Use this to find requests that are awaiting action from specific roles.",
+    description="List pending approval tasks awaiting review, filterable by approval type ('manager', 'data_owner', 'platform_admin') or request ID.",
     args_schema=SearchApprovalsInput
 )
 def search_approvals(

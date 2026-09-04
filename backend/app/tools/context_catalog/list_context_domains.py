@@ -15,11 +15,7 @@ class ListContextDomainsInput(BaseModel):
 
 @tool(
     name="list_context_domains",
-    description=(
-        "List the available Context Catalog domains (curated, company-specific "
-        "knowledge areas). Use this to discover what subjects the catalog covers "
-        "before deciding whether to call search_context_catalog with a domain filter."
-    ),
+    description="List available knowledge domains in the Context Catalog (e.g. FSI, Governance, Architecture) with document counts.",
     args_schema=ListContextDomainsInput,
     feature_flag="context_catalog",
     friendly_label="Browsing the context catalog...",

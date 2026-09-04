@@ -136,15 +136,7 @@ class SearchDatabricksDocsInput(BaseModel):
 
 @tool(
     name="search_databricks_docs",
-    description=(
-        "Search the official Databricks documentation for pages relevant to a "
-        "product or how-to question (features, configuration, syntax, limits, "
-        "best practices). Returns ranked page titles + URLs (and snippets when "
-        "available). Use this when the user asks how Databricks works or how to "
-        "do something in Databricks, then call fetch_doc_page on the best 1-2 "
-        "hits to read the content and answer WITH citations. Does NOT query your "
-        "data — use ask_your_data (Genie) or search_data_assets for that."
-    ),
+    description="Search official Databricks product documentation for feature guides, syntax, configurations, and limits. Returns ranked articles and URLs.",
     args_schema=SearchDatabricksDocsInput,
     feature_flag="web_search",
     friendly_label="Searching Databricks docs...",

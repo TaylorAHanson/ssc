@@ -13,7 +13,7 @@ class ExecuteWorkflowInput(BaseModel):
 
 @tool(
     name="execute_workflow",
-    description="Executes a specified workflow with the given parameters and initiates the corresponding state machine.",
+    description="Initiate a governed self-service workflow (e.g. 'request_data_access', 'workspace_provision') with validated user parameters.",
     args_schema=ExecuteWorkflowInput,
     # Gateway to every provisioning workflow (catalog/schema/volume/SP/repo,
     # Terraform apply, UC grants, identity-group membership). The downstream

@@ -25,13 +25,8 @@ class GroupLookupInput(BaseModel):
 @tool(
     name="group_lookup",
     description=(
-        "Inspect an identity group/list you are authorized to see, returning its "
-        "members (and owner/supervisors where the backend provides them). Only use "
-        "when the user explicitly asks about a group's contents. Do NOT call this "
-        "as a pre-check before adding a member: many lists are restricted / N2K and "
-        "will reject the lookup for anyone who isn't the list owner/supervisor, even "
-        "when the membership change itself is valid. To verify before a change, look "
-        "up the USER with member_lookup instead."
+        "Look up an identity group's members and owners via the identity provider (SCIM/Okta/LMWS). "
+        "Only use when the user explicitly asks for a group's roster."
     ),
     args_schema=GroupLookupInput,
     side_effect_class="read",
@@ -73,13 +68,8 @@ def _normalize_member(member: str) -> str:
 @tool(
     name="member_lookup",
     description=(
-        "Look up all identity group/list memberships for a given user. This is the "
-        "correct way to verify a request before a membership change: confirm the "
-        "user exists and see which groups they already belong to (e.g. so you don't "
-        "add them to a group they're already in). Unlike group_lookup it does NOT "
-        "require access to the target group, so it works even for restricted / N2K "
-        "lists. Accepts a corporate username or an email address (the part before "
-        "'@' is used)."
+        "Look up all identity group memberships for a user by corporate username or email address. "
+        "Useful for verifying existing memberships before requesting a group change."
     ),
     args_schema=MemberLookupInput,
     side_effect_class="read",

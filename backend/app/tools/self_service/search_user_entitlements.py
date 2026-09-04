@@ -220,7 +220,7 @@ def _prepare_client(use_obo: bool, obo_token: Optional[str]) -> tuple:
 
 @tool(
     name="search_user_entitlements",
-    description="Searches for user entitlements across Data (Unity Catalog), Workspace (Notebooks, Folders), and Compute resources. Features: 1) Recursively searches workspace folders up to 5 levels deep. 2) Analyzes EFFECTIVE permissions, resolving both direct access and group inheritance (e.g., 'MANAGE' via 'Admin Group'). Use this to answer 'what do I have access to?' or 'can I access X?'.",
+    description="Discover effective user entitlements across Data (Unity Catalog), Workspace (notebooks, folders), and Compute (clusters). Resolves direct and group-inherited access.",
     args_schema=SearchEntitlementsInput
 )
 async def search_user_entitlements(entitlement_types: List[str], filter_string: Optional[str] = None, use_obo: bool = True, **kwargs) -> Dict[str, Any]:

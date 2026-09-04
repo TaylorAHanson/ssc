@@ -64,6 +64,9 @@ resources:
             value: "${var.github_pat_secret_key}"
           - name: GITHUB_ORG
             value: "${var.github_org}"
+          # Terramate API wrapper (Databricks App or service URL)
+          - name: TERRAMATE_API_URL
+            value: "${var.terramate_api_url}"
           # Governance tag GitOps: the app commits generated ALTER ... TAGS SQL to
           # this repo/branch and a workflow there applies it on merge.
           - name: GOVERNANCE_TAGS_REPO
@@ -309,6 +312,9 @@ variables:
   github_org:
     description: "GitHub organization for repo/template operations (same across envs)"
     default: "databricks-field-eng"
+  terramate_api_url:
+    description: "Base URL of the Terramate Provisioning API (Databricks App URL or custom gateway)"
+    default: "http://localhost:8000"
   governance_tags_repo:
     description: "Repo the app opens UC tag-change PRs against ('owner/repo', or bare name resolved against github_org)"
     default: "tag-manager"

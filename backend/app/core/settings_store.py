@@ -417,6 +417,12 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Catalogs & Content", "key": "yaml:embedded_apps", "label": "Embedded Apps",
      "type": "catalog", "kind": "embedded_apps", "add_label": "Add app",
      "help": "External web apps surfaced inside this app via an iframe. Each adds a sidebar link opening at /embedded/<id>. Note: targets that send X-Frame-Options/CSP frame-ancestors may render blank."},
+
+    # --- Infrastructure Provisioning (Terramate) ----------------------
+    {"group": "Infrastructure Provisioning (Terramate)", "key": "TERRAMATE_API_URL", "label": "Terramate API URL",
+     "type": "string", "help": "Base URL of the Terramate Provisioning API (Databricks App or local dev URL)."},
+    {"group": "Infrastructure Provisioning (Terramate)", "key": "TERRAMATE_HTTP_TIMEOUT_SECONDS", "label": "HTTP timeout (sec)",
+     "type": "int", "min": 1, "help": "Timeout in seconds for Terramate API HTTP requests."},
 ]
 
 
@@ -448,13 +454,6 @@ READONLY_FIELDS: List[Dict[str, Any]] = [
     {"group": "GitOps", "key": "INFRA_REPO_URL", "label": "Infra repo URL"},
     {"group": "GitOps", "key": "INFRA_REPO_BRANCH", "label": "Infra repo branch"},
     {"group": "GitOps", "key": "GITHUB_ORG", "label": "GitHub org"},
-    # --- Infrastructure Provisioning (Terramate) ----------------------
-    {"group": "Infrastructure Provisioning (Terramate)", "key": "TERRAMATE_API_URL", "label": "Terramate API URL",
-     "type": "string", "help": "Base URL of the Terramate Provisioning API (Databricks App or local dev URL)."},
-    {"group": "Infrastructure Provisioning (Terramate)", "key": "TERRAMATE_API_TOKEN", "label": "Terramate API Bearer token",
-     "type": "string", "help": "Optional Bearer token or PAT for authenticating to the Terramate API."},
-    {"group": "Infrastructure Provisioning (Terramate)", "key": "TERRAMATE_HTTP_TIMEOUT_SECONDS", "label": "HTTP timeout (sec)",
-     "type": "int", "min": 1, "help": "Timeout in seconds for Terramate API HTTP requests."},
 ]
 
 _EDITABLE_BY_KEY = {f["key"]: f for f in EDITABLE_FIELDS}
@@ -1041,7 +1040,7 @@ def get_state() -> Dict[str, Any]:
     group_order = [
         "Branding & Appearance", "System Banner", "Features", "Navigation",
         "Notifications & Governance", "Agent", "Data & AI", "Catalogs & Content",
-        "Web Lookup", "Target Workspaces",
+        "Web Lookup", "Target Workspaces", "Infrastructure Provisioning (Terramate)",
     ]
     return {
         "fields": fields,

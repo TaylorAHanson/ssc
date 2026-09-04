@@ -18,11 +18,7 @@ class GetContextDocumentInput(BaseModel):
 
 @tool(
     name="get_context_document",
-    description=(
-        "Fetch the full markdown body of a single Context Catalog document by id. "
-        "Use this after search_context_catalog when a passage looks relevant and you "
-        "need the complete document for detail."
-    ),
+    description="Retrieve the full markdown text of a Context Catalog document by its ID.",
     args_schema=GetContextDocumentInput,
     feature_flag="context_catalog",
     friendly_label="Opening context document...",

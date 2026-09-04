@@ -597,7 +597,7 @@ export interface SettingField {
   group: string;
   key: string;
   label: string;
-  type: 'bool' | 'int' | 'string' | 'color' | 'select' | 'textarea' | 'collection' | 'string_list' | 'catalog' | 'cron';
+  type: 'bool' | 'int' | 'string' | 'password' | 'color' | 'select' | 'textarea' | 'collection' | 'string_list' | 'catalog' | 'cron';
   help?: string;
   min?: number;
   max?: number;

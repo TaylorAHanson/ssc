@@ -48,15 +48,7 @@ class PingUrlInput(BaseModel):
 
 @tool(
     name="ping_url",
-    description=(
-        "Connectivity diagnostic: make a single HTTP request from the app to any "
-        "URL to prove the app can REACH that host over the network (e.g. an "
-        "internal API gateway across corporate egress). Reports network_reachable "
-        "(did we reach the host at all — any HTTP response, even 401/403/404, "
-        "counts as reachable), the HTTP status code, and latency. Sends NO "
-        "credentials. Use verify_tls=false for internal-CA hosts (a TLS error "
-        "still proves reachability)."
-    ),
+    description="Connectivity diagnostic: test network reachability and HTTP status code for a target URL without sending credentials.",
     args_schema=PingUrlInput,
     feature_flag="core",
     friendly_label="Pinging URL...",

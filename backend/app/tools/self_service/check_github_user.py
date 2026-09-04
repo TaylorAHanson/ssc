@@ -16,9 +16,7 @@ class CheckGitHubUserInput(BaseModel):
 
 @tool(
     name="check_github_user",
-    description=("Validates one or more GitHub usernames: whether each login exists and whether it "
-                 "is already a member of the org. Use before adding contributors to a repo/team so "
-                 "typos are caught and the user knows who will be invited vs added immediately."),
+    description="Validate whether one or more GitHub usernames exist and check their organization membership status.",
     args_schema=CheckGitHubUserInput,
 )
 async def check_github_user(usernames: List[str]) -> Dict[str, Any]:

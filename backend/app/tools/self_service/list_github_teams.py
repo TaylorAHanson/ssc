@@ -16,8 +16,7 @@ class ListGitHubTeamsInput(BaseModel):
 
 @tool(
     name="list_github_teams",
-    description=("Lists GitHub org teams (name, slug, description) so a user can pick which team "
-                 "to request access to. Use before request_github_access when the user names a team."),
+    description="List organization teams with names and slugs, optionally filtered by keyword.",
     args_schema=ListGitHubTeamsInput,
 )
 async def list_github_teams(name_hint: Optional[str] = None) -> Dict[str, Any]:

@@ -12,7 +12,7 @@ class ListGitHubTemplatesInput(BaseModel):
 
 @tool(
     name="list_github_templates",
-    description="Lists available reusable GitHub repository templates in the organization. Use this to help users discover boilarplate projects or examples for their new repositories.",
+    description="List available repository templates in the organization, optionally filtered by keyword.",
     args_schema=ListGitHubTemplatesInput
 )
 async def list_github_templates(description_hint: Optional[str] = None) -> Dict[str, Any]:
