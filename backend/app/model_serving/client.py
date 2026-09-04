@@ -252,32 +252,7 @@ class ModelServingClient:
             logger.debug(f"Response structure: {json.dumps(result, indent=2, default=str)[:3000]}")
             
             # Handle different response formats
-            # Foundation Model APIs typically return: {"choices": [...]} or {"output": "..."}
-            # Custom models return: {"predictions": [...]} or {"outputs": [...]}
-            if "choices" in result and len(result["choices"]) > 0:
-                # Foundation Model API format
-                return result["choices"][0]
-            elif "predictions" in result and len(result["predictions"]) > 0:
-                # Custom model format
-                return result["predictions"][0]
-            elif "outputs" in result:
-                return result["outputs"]
-            elif "output" in result:
-                return result["output"]
-            elif "candidates" in result:
-                # Gemini format - return the full result for processing
-                return result
-            elif "message" in result:
-                # New Gemini format with message wrapper
-                return result
-            else:
-                # Return the full result if we can't parse it
-                # This should never be None - result comes from response.json()
-                if result is None:
-                    logger.error("response.json() returned None - this should not happen")
-                    return {}
-                logger.warning(f"Unexpected response format from endpoint: {list(result.keys()) if isinstance(result, dict) else type(result)}")
-                return result
+            return self._format_endpoint_result(result)
         except httpx.HTTPStatusError as e:
             # Log the error response body for debugging
             error_body = None
@@ -305,6 +280,31 @@ class ModelServingClient:
                     error_message = str(error_body)
             elif error_text:
                 error_message = error_text[:500]  # Limit length
+
+            # If the model does not support the temperature parameter, retry once without it
+            if e.response.status_code == 400 and "temperature" in error_message.lower() and (
+                "not support" in error_message.lower() or "unsupported" in error_message.lower()
+            ):
+                had_temp = False
+                if isinstance(payload, dict) and "temperature" in payload:
+                    payload.pop("temperature", None)
+                    had_temp = True
+                if isinstance(payload, dict) and isinstance(payload.get("inputs"), dict) and "temperature" in payload["inputs"]:
+                    payload["inputs"].pop("temperature", None)
+                    had_temp = True
+                if isinstance(inputs, dict) and "temperature" in inputs:
+                    inputs.pop("temperature", None)
+                if had_temp:
+                    logger.warning(
+                        f"Endpoint '{endpoint_name}' rejected temperature parameter. Retrying without temperature."
+                    )
+                    try:
+                        retry_resp = await self.client.post(url, json=payload)
+                        retry_resp.raise_for_status()
+                        result = retry_resp.json()
+                        return self._format_endpoint_result(result)
+                    except Exception as retry_err:
+                        logger.error(f"Retry without temperature failed for '{endpoint_name}': {retry_err}")
             
             if e.response.status_code >= 500:
                 raise RetryableError(f"Model serving error: {error_message}")
@@ -322,6 +322,29 @@ class ModelServingClient:
                 raise RetryableError(f"Failed to invoke endpoint: {error_message}")
         except httpx.RequestError as e:
             raise RetryableError(f"Request error: {str(e)}")
+
+    def _format_endpoint_result(self, result: Any) -> Any:
+        """Normalize endpoint response payload into a standard dictionary/object."""
+        if isinstance(result, dict):
+            if "choices" in result and len(result["choices"]) > 0:
+                return result["choices"][0]
+            elif "predictions" in result and len(result["predictions"]) > 0:
+                return result["predictions"][0]
+            elif "outputs" in result:
+                return result["outputs"]
+            elif "output" in result:
+                return result["output"]
+            elif "candidates" in result:
+                return result
+            elif "message" in result:
+                return result
+            else:
+                if result is None:
+                    logger.error("response.json() returned None - this should not happen")
+                    return {}
+                logger.warning(f"Unexpected response format from endpoint: {list(result.keys()) if isinstance(result, dict) else type(result)}")
+                return result
+        return result
     
     async def health_check(self, endpoint_name: str) -> bool:
         """Check if endpoint is healthy."""

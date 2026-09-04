@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class DraftOdpsInput(BaseModel):
     odcs_yamls: List[str] = Field(..., description="List of ODCS YAML contents to be included as data products")
-    openapi_urls: Optional[List[str]] = Field(None, description="Optional. List of URLs to OpenAPI specifications")
+    openapi_urls: Optional[List[str]] = Field(None, description="Optional. List of publicly accessible HTTP(S) URLs to raw OpenAPI JSON/YAML specifications.")
     product_name: str = Field(..., description="The name of the Open Data Product")
 
 @tool(

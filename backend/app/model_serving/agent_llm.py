@@ -121,6 +121,12 @@ class AgentLLMClient:
         the workflow-test judge, the instructions generator, and the test-case
         generator each broke while the chat agent kept working.
         """
+        # Some models (e.g. Gemini models like gemini-3.8-flash, reasoning models like o1/o3/o4)
+        # do not support the temperature parameter on Databricks Model Serving / AI Gateway.
+        model_name = (self.endpoint_name or "").lower()
+        if any(prefix in model_name for prefix in ("gemini", "o1", "o3", "o4")):
+            inputs.pop("temperature", None)
+
         # Reasoning models (e.g. gpt-5-6-luna) reject function tools combined
         # with a non-"none" reasoning_effort on chat/completions. Pass it
         # explicitly only when configured (set "none" for gpt-5-6-luna); blank
@@ -209,8 +215,21 @@ class AgentLLMClient:
         # 3. Direct "message" wrapper (Gemini/Databricks variant seen in logs)
         if "message" in response:
             return self._parse_message_wrapper(response["message"])
+
+        # 4. Direct "candidates" format (Native Gemini variant)
+        if "candidates" in response and response["candidates"]:
+            cand = response["candidates"][0]
+            if isinstance(cand, dict):
+                if "content" in cand:
+                    cand_content = cand["content"]
+                    if isinstance(cand_content, dict):
+                        parts = cand_content.get("parts", [])
+                        text_parts = [p.get("text", "") for p in parts if isinstance(p, dict) and "text" in p]
+                        return {"role": "assistant", "content": "".join(text_parts)}
+                if "message" in cand:
+                    return self._parse_message_wrapper(cand["message"])
             
-        # 4. Direct content/output (Fallback)
+        # 5. Direct content/output (Fallback)
         if "content" in response:
              return {"role": response.get("role", "assistant"), "content": str(response["content"])}
              

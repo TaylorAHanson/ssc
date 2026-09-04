@@ -14,7 +14,7 @@ class CheckAssetQualityInput(BaseModel):
 
 @tool(
     name="check_asset_quality",
-    description="Checks for quality issues: missing descriptions (comments), empty tables, or unused assets.",
+    description="Scan Unity Catalog assets for quality issues: missing descriptions (comments) or empty tables.",
     required_role="governance_admin",
     args_schema=CheckAssetQualityInput
 )

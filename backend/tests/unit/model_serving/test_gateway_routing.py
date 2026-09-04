@@ -106,6 +106,70 @@ async def test_complete_text_raises_instead_of_returning_a_friendly_sentence(mon
         await client.complete_text("grade this")
 
 
+@pytest.mark.asyncio
+async def test_gemini_models_omit_temperature(monkeypatch):
+    """Gemini models (e.g. gemini-3.8-flash) reject the temperature parameter on Databricks Model Serving."""
+    client, transport = _client(monkeypatch, gateway="gemini-3.8-flash")
+    await client.complete_text("test prompt", temperature=0.7)
+
+    call = transport.calls[0]
+    assert "temperature" not in call["inputs"]
+
+
+@pytest.mark.asyncio
+async def test_non_gemini_models_preserve_temperature(monkeypatch):
+    """Standard models preserve the configured temperature parameter."""
+    client, transport = _client(monkeypatch, direct="databricks-claude-sonnet")
+    await client.complete_text("test prompt", temperature=0.7)
+
+    call = transport.calls[0]
+    assert call["inputs"]["temperature"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_model_serving_client_retries_on_unsupported_temperature():
+    """If an endpoint returns 400 rejecting temperature, ModelServingClient retries once without temperature."""
+    import httpx
+    from app.model_serving.client import ModelServingClient
+
+    attempt = 0
+
+    class MockAsyncClient:
+        async def post(self, url, json=None):
+            nonlocal attempt
+            attempt += 1
+            if attempt == 1:
+                req = httpx.Request("POST", "http://test" + url)
+                resp = httpx.Response(
+                    400,
+                    request=req,
+                    json={
+                        "error_code": "BAD_REQUEST",
+                        "message": "BAD_REQUEST: Model gemini-3.8-flash does not support the temperature parameter.",
+                    },
+                )
+                raise httpx.HTTPStatusError("Bad Request", request=req, response=resp)
+            # Second attempt (retry without temperature)
+            req = httpx.Request("POST", "http://test" + url)
+            assert "temperature" not in json
+            return httpx.Response(
+                200,
+                request=req,
+                json={"choices": [{"message": {"role": "assistant", "content": "Hello!"}}]},
+            )
+
+    client = ModelServingClient()
+    client.base_url = "http://test"
+    client.client = MockAsyncClient()  # type: ignore[assignment]
+    # Mock token freshness
+    client._token_is_stale = lambda: False  # type: ignore[assignment]
+
+    inputs = {"messages": [{"role": "user", "content": "hi"}], "temperature": 0.5}
+    res = await client.invoke_endpoint("custom-gemini-endpoint", inputs, use_foundation_model_format=True)
+    assert attempt == 2
+    assert res == {"message": {"role": "assistant", "content": "Hello!"}}
+
+
 def test_no_llm_caller_resolves_the_endpoint_by_hand():
     """Guard the pattern, not just today's four bugs: resolving the endpoint name
     and POSTing it yourself silently breaks the moment a gateway model is set."""
