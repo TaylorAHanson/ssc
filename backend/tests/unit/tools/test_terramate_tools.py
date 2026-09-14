@@ -8,6 +8,7 @@ from app.tools.check_resource_access import check_resource_access
 from app.tools.self_service.check_provisioning_status import check_provisioning_status
 from app.workflows.tools import (
     terramate_check_status,
+    terramate_poll_status,
     terramate_provision,
     terramate_submit_request,
 )
@@ -172,3 +173,40 @@ async def test_check_resource_access_direct_uc():
         assert res_principal["has_grants"] is True
         assert "USE_SCHEMA" in res_principal["principal_privileges"]
         assert "SELECT" in res_principal["principal_privileges"]
+
+
+@pytest.mark.asyncio
+async def test_terramate_poll_status_reaches_terminal():
+    with patch("app.providers.terramate.client.TerramateProvider.get_request", new_callable=AsyncMock) as mock_get:
+        # First call: in_progress, second call: succeeded
+        mock_get.side_effect = [
+            {"id": "req-poll-1", "status": "in_progress", "steps": []},
+            {"id": "req-poll-1", "status": "succeeded", "steps": [{"status": "done"}]},
+        ]
+
+        result = await terramate_poll_status.execute(
+            terramate_request_id="req-poll-1",
+            poll_interval_seconds=1,
+            max_wait_seconds=5,
+        )
+
+        assert result["is_terminal"] is True
+        assert result["is_succeeded"] is True
+        assert result["ok"] is True
+        assert result["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_terramate_poll_status_times_out():
+    with patch("app.providers.terramate.client.TerramateProvider.get_request", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = {"id": "req-poll-2", "status": "in_progress", "steps": []}
+
+        result = await terramate_poll_status.execute(
+            terramate_request_id="req-poll-2",
+            poll_interval_seconds=1,
+            max_wait_seconds=1,
+        )
+
+        assert result["is_terminal"] is False
+        assert result["timed_out"] is True
+        assert result["ok"] is False

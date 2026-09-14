@@ -44,7 +44,7 @@ class Gate:
     """A human/event approval gate, compiled to an ``interrupt()`` node."""
     name: str                 # node id, e.g. "manager_approval"
     # "manager" | "platform_admin" | "data_owner" | "training" | "pr_merge"
-    # | "manual_task" | "children"
+    # | "terramate" | "manual_task" | "children"
     type: str
     waiting_status: str = "manager_approval"   # RequestStatus while paused
     # Skip the gate entirely when this predicate of context is true (auto-approve).
@@ -188,6 +188,9 @@ def _gate_node(gate: Gate):
             payload["instructions"] = gate.instructions or ""
             if gate.due_in_days:
                 payload["due_in_days"] = gate.due_in_days
+        # Terramate gate can pass along terramate_request_id if already written into context
+        if gate.type in ("terramate", "terramate_status") and "terramate_request_id" in ctx:
+            payload["terramate_request_id"] = ctx["terramate_request_id"]
         approvers = await _resolve_gate_approvers(gate, ctx)
         if approvers:
             # Surface under both keys: ``data_owners`` keeps parity with the old

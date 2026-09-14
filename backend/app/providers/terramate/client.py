@@ -120,19 +120,19 @@ class TerramateProvider(BaseProvider):
         headers = self._get_headers(idempotency_key=idempotency_key)
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
                 response = await client.post(url, json=payload, headers=headers)
 
                 if response.status_code == 503:
-                    detail = response.json().get("detail", "Intake is currently disabled")
+                    detail = response.json().get("detail", "Intake is currently disabled") if response.text else "Intake disabled"
                     raise PermanentError(f"Terramate intake gate closed: {detail}")
 
                 if response.status_code == 401:
-                    detail = response.json().get("detail", "No resolvable caller identity")
+                    detail = response.json().get("detail", "No resolvable caller identity") if response.text else "Unauthorized"
                     raise PermanentError(f"Terramate authentication error (401): {detail}")
 
                 if response.status_code == 422:
-                    raw_detail = response.json().get("detail", response.text)
+                    raw_detail = response.json().get("detail", response.text) if response.text else "Unprocessable Entity"
                     formatted = _format_validation_error(raw_detail)
                     raise PermanentError(f"Terramate parameter validation failed for type '{request_type}': {formatted}")
 
@@ -140,7 +140,21 @@ class TerramateProvider(BaseProvider):
                     raise PermanentError(f"Terramate API client error ({response.status_code}): {response.text}")
 
                 response.raise_for_status()
-                data = response.json()
+
+                raw_text = response.text or ""
+                if not raw_text.strip():
+                    raise PermanentError(
+                        f"Terramate API returned an empty response (HTTP {response.status_code}) from {url}. "
+                        "Verify that TERRAMATE_API_URL points to the Terramate API service."
+                    )
+
+                try:
+                    data = response.json()
+                except Exception as err:
+                    raise PermanentError(
+                        f"Terramate API returned invalid JSON (HTTP {response.status_code}) from {url}: {raw_text[:200]}"
+                    ) from err
+
                 logger.info(
                     "terramate_request_created request_id=%s type=%s status=%s",
                     data.get("request_id"),
@@ -174,17 +188,23 @@ class TerramateProvider(BaseProvider):
         headers = self._get_headers()
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
                 response = await client.get(url, headers=headers)
                 if response.status_code == 404:
                     return None
                 if response.status_code == 401:
-                    detail = response.json().get("detail", "No resolvable caller identity")
+                    detail = response.json().get("detail", "No resolvable caller identity") if response.text else "Unauthorized"
                     raise PermanentError(f"Terramate authentication error (401): {detail}")
                 if 400 <= response.status_code < 500:
                     raise PermanentError(f"Terramate API client error ({response.status_code}): {response.text}")
                 response.raise_for_status()
-                return response.json()
+                raw_text = response.text or ""
+                if not raw_text.strip():
+                    raise PermanentError(f"Terramate API returned an empty response (HTTP {response.status_code}) from {url}")
+                try:
+                    return response.json()
+                except Exception as err:
+                    raise PermanentError(f"Terramate API returned invalid JSON (HTTP {response.status_code}) from {url}: {raw_text[:200]}") from err
         except httpx.HTTPStatusError as e:
             if e.response.status_code >= 500:
                 raise RetryableError(f"Terramate API server error ({e.response.status_code}): {e}") from e

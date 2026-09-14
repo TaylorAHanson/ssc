@@ -48,7 +48,7 @@ def _authoring_locked() -> bool:
 # Note: the legacy "children" gate is deprecated (superseded by subworkflow
 # stages) and intentionally omitted so the agent never authors a new one.
 _GATE_TYPES = [
-    "manager", "platform_admin", "data_owner", "training", "pr_merge", "manual_task",
+    "manager", "platform_admin", "data_owner", "training", "pr_merge", "terramate", "manual_task",
 ]
 
 # What each gate type is for and which EXTRA fields it accepts. Without this the
@@ -80,6 +80,11 @@ _GATE_TYPE_DETAILS: Dict[str, Dict[str, Any]] = {
     "pr_merge": {
         "waits_for": "an automated check",
         "when": "a pull request must be merged (GitOps) before the flow continues.",
+        "extra_fields": [],
+    },
+    "terramate": {
+        "waits_for": "an automated check",
+        "when": "a Terramate provisioning request must reach terminal succeeded status before the flow continues.",
         "extra_fields": [],
     },
     "manual_task": {

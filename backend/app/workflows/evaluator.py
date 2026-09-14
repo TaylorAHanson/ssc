@@ -47,7 +47,9 @@ RISKY_CLASSES = {"destructive", "data_grant", "membership", "infra"}
 # ``manual_task`` are completion gates, not approvals — a manual task is
 # deliberately excluded so an author can't silence "risky mutation with no
 # approval" by dropping a task in front of it; ``children`` is deprecated.
-APPROVAL_GATE_TYPES = {"manager", "platform_admin", "data_owner", "pr_merge"}
+APPROVAL_GATE_TYPES = {
+    "manager", "platform_admin", "data_owner", "pr_merge", "terramate", "terramate_status",
+}
 DEPRECATED_GATE_TYPES = {"children"}
 
 # How much each finding severity subtracts from the 100-point quality budget.

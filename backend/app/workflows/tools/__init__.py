@@ -79,6 +79,7 @@ from app.workflows.tools.infra import (
     CreateSpInput,
     CreateUcObjectInput,
     TerramateCheckStatusInput,
+    TerramatePollStatusInput,
     TerramateProvisionInput,
     TerramateResourceType,
     TerramateSubmitInput,
@@ -87,6 +88,7 @@ from app.workflows.tools.infra import (
     terraform_apply,
     terraform_plan,
     terramate_check_status,
+    terramate_poll_status,
     terramate_provision,
     terramate_submit_request,
 )
@@ -129,6 +131,7 @@ __all__ = [
     "CreateSpInput",
     "CreateUcObjectInput",
     "TerramateCheckStatusInput",
+    "TerramatePollStatusInput",
     "TerramateProvisionInput",
     "TerramateResourceType",
     "TerramateSubmitInput",
@@ -137,6 +140,7 @@ __all__ = [
     "terraform_apply",
     "terraform_plan",
     "terramate_check_status",
+    "terramate_poll_status",
     "terramate_provision",
     "terramate_submit_request",
     # GitHub & Tags

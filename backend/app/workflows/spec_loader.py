@@ -30,7 +30,7 @@ from app.workflows.tool_registry import get_tool, has_tool
 # notification step that didn't actually wait for anything.
 GATE_TYPES = {
     "manager", "platform_admin", "data_owner", "training", "pr_merge",
-    "manual_task", "children",
+    "terramate", "terramate_status", "manual_task", "children",
 }
 
 # Tokens that strongly suggest a value is a group/role name rather than a gate kind.

@@ -499,7 +499,11 @@ function GateForm({
           >
             {GATE_TYPES.map((t) => (
               <option key={t} value={t}>
-                {t === 'manual_task' ? 'manual_task (hold for manual work)' : t}
+                {t === 'manual_task'
+                  ? 'manual_task (hold for manual work)'
+                  : t === 'terramate'
+                    ? 'terramate (poll until provision terminal)'
+                    : t}
               </option>
             ))}
           </select>

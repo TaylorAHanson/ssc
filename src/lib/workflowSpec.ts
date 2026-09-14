@@ -232,6 +232,7 @@ export const GATE_TYPES: GateType[] = [
   'data_owner',
   'training',
   'pr_merge',
+  'terramate',
   'manual_task',
 ];
 

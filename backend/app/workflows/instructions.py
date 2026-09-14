@@ -62,6 +62,8 @@ _GATE_DESCRIPTIONS = {
     "data_owner": "Data Owner approval",
     "training": "Training completion",
     "pr_merge": "Pull request merge",
+    "terramate": "Terramate provisioning completion",
+    "terramate_status": "Terramate provisioning completion",
     "manual_task": "Manual task (a person completes work off-platform, then marks it done)",
     "children": "Child request completion",
 }

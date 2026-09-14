@@ -63,6 +63,8 @@ class _FakeProvider:
     async def submit_job(self, *a, **k): return {"run_id": 1, "state": "SUCCESS"}
     async def send(self, **k): return {"sent": True}
     async def send_email(self, **k): return True
+    async def create_request(self, *a, **k): return {"request_id": "fake-tm-req", "status": "pending", "success": True}
+    async def get_request(self, *a, **k): return {"id": "fake-tm-req", "status": "succeeded", "steps": []}
 
 
 def _install_fakes():
@@ -92,7 +94,7 @@ def _install_fakes():
     fake = _FakeProvider()
     for getter in ("_get_databricks_provider", "_get_github_provider",
                    "_get_gitops_provider", "_get_notification_provider",
-                   "_get_identity_provider"):
+                   "_get_identity_provider", "_get_terramate_provider"):
         setattr(T, getter, lambda fake=fake: fake)
 
 

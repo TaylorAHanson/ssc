@@ -86,6 +86,31 @@ async def terramate_provision(
         params=parameters or {},
         idempotency_key=key,
     )
+
+    # Record fact for audit trail and so gates can resolve the terramate request id
+    req_id = kwargs.get("_request_id") or kwargs.get("request_id") or kwargs.get("scope_id")
+    if req_id and result.get("request_id"):
+        from app.db.session import get_db
+        from app.state_machines.facts import add_fact
+        db = next(get_db())
+        try:
+            add_fact(
+                db,
+                req_id,
+                "terramate_request_created",
+                {
+                    "request_type": request_type,
+                    "terramate_request_id": result.get("request_id"),
+                    "status": result.get("status"),
+                },
+                actor="system",
+            )
+            db.commit()
+        except Exception as e:
+            logger.warning("[%s] Failed to record terramate_request_created fact: %s", req_id, e)
+        finally:
+            db.close()
+
     return {
         "ok": result.get("success", False),
         "terramate_request_id": result.get("request_id"),
@@ -145,6 +170,77 @@ async def terramate_check_status(
         "active_pr_url": active_pr_url,
         "steps": steps,
     }
+
+
+class TerramatePollStatusInput(BaseModel):
+    terramate_request_id: Optional[str] = Field(
+        default=None,
+        description="The Terramate request UUID. If omitted, resolved from workflow context/facts.",
+    )
+    poll_interval_seconds: int = Field(
+        default=5,
+        description="Seconds between polling checks (min 1, max 30, default 5).",
+    )
+    max_wait_seconds: int = Field(
+        default=60,
+        description="Maximum seconds to poll before returning current status (min 1, max 300, default 60).",
+    )
+
+
+@tool(
+    name="terramate_poll_status",
+    args_schema=TerramatePollStatusInput,
+    side_effect_class="read",
+    description="Poll Terramate API until the provisioning request reaches terminal succeeded or failed status, or timeout expires.",
+)
+async def terramate_poll_status(
+    terramate_request_id: Optional[str] = None,
+    poll_interval_seconds: int = 5,
+    max_wait_seconds: int = 60,
+    **kwargs,
+) -> Dict[str, Any]:
+    import asyncio
+    import time
+
+    req_id = terramate_request_id or kwargs.get("terramate_request_id")
+    if not req_id:
+        scope_id = kwargs.get("_request_id") or kwargs.get("request_id") or kwargs.get("scope_id")
+        if scope_id:
+            from app.db.session import get_db
+            from app.state_machines.facts import get_latest_fact
+            db = next(get_db())
+            try:
+                fact = get_latest_fact(db, scope_id, "terramate_request_created")
+                if fact and fact.event_data:
+                    req_id = fact.event_data.get("terramate_request_id")
+            finally:
+                db.close()
+
+    if not req_id:
+        return {
+            "ok": False,
+            "error": "No terramate_request_id provided or found in context facts",
+            "is_terminal": True,
+            "is_succeeded": False,
+        }
+
+    interval = max(1, min(poll_interval_seconds, 30))
+    timeout = max(1, min(max_wait_seconds, 300))
+    start = time.monotonic()
+
+    while True:
+        status_res = await terramate_check_status.execute(terramate_request_id=req_id, **kwargs)
+        if status_res.get("is_terminal"):
+            status_res["ok"] = bool(status_res.get("is_succeeded"))
+            return status_res
+
+        elapsed = time.monotonic() - start
+        if elapsed + interval > timeout:
+            status_res["ok"] = False
+            status_res["timed_out"] = True
+            return status_res
+
+        await asyncio.sleep(interval)
 
 
 class CreateUcObjectInput(BaseModel):

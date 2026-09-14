@@ -1014,6 +1014,145 @@ async def _pr_gate_from_github(db, request):
     return None
 
 
+async def _terramate_gate_from_api(db, request, result=None):
+    """Resolve a ``terramate`` gate by polling the Terramate API for request status.
+
+    Under ADR-0004, the Terramate API is a request intake and status oracle.
+    The self-service app polls GET /v1/requests/{id} until the request status is
+    terminal:
+      - 'succeeded': all steps applied successfully -> approve gate.
+      - 'failed' / 'cancelled': step failed or PR rejected -> reject gate.
+      - 'pending' / 'in_progress': still waiting on PR merges and CI apply -> return None (stay waiting).
+    """
+    from app.state_machines.facts import add_fact, get_latest_fact
+    from app.workflows.tools.infra import terramate_check_status
+
+    payload = (result.interrupt_payload or {}) if (result and hasattr(result, "interrupt_payload")) else {}
+    terramate_request_id = payload.get("terramate_request_id")
+
+    if not terramate_request_id:
+        fact = get_latest_fact(db, request.id, "terramate_request_created")
+        if fact and fact.event_data:
+            terramate_request_id = fact.event_data.get("terramate_request_id")
+
+    if not terramate_request_id:
+        params = getattr(request, "parameters", {}) or {}
+        if isinstance(params, dict):
+            terramate_request_id = params.get("terramate_request_id")
+
+    if not terramate_request_id:
+        ctx = getattr(request, "state_context", {}) or {}
+        if isinstance(ctx, dict):
+            terramate_request_id = ctx.get("terramate_request_id")
+
+    if not terramate_request_id:
+        logger.warning(
+            "[%s] terramate gate is waiting but no terramate_request_id found; "
+            "the request will not advance until one is recorded",
+            request.id,
+        )
+        return None
+
+    try:
+        status_res = await terramate_check_status.execute(terramate_request_id=terramate_request_id)
+    except Exception as e:  # noqa: BLE001 - never fail a poll tick on API connectivity issues
+        logger.warning(
+            "[%s] Terramate request %s status lookup failed: %s",
+            request.id,
+            terramate_request_id,
+            e,
+        )
+        return None
+
+    if not status_res or not status_res.get("exists", True) or status_res.get("status") == "not_found":
+        logger.warning(
+            "[%s] Terramate request %s not found yet, will retry next poll tick",
+            request.id,
+            terramate_request_id,
+        )
+        return None
+
+    is_terminal = status_res.get("is_terminal", False)
+    is_succeeded = status_res.get("is_succeeded", False)
+    status = status_res.get("status", "pending")
+    active_pr_url = status_res.get("active_pr_url")
+    steps = status_res.get("steps") or []
+
+    # If still in flight, record any new active PR URL for visibility
+    if not is_terminal:
+        if active_pr_url:
+            latest_pr_fact = get_latest_fact(db, request.id, "terramate_pr_active")
+            if not latest_pr_fact or (latest_pr_fact.event_data or {}).get("pr_url") != active_pr_url:
+                add_fact(
+                    db,
+                    request.id,
+                    "terramate_pr_active",
+                    {
+                        "terramate_request_id": terramate_request_id,
+                        "pr_url": active_pr_url,
+                        "status": status,
+                    },
+                    actor="system",
+                )
+                db.commit()
+        return None
+
+    # Terminal: succeeded
+    if is_succeeded:
+        add_fact(
+            db,
+            request.id,
+            "terramate_provision_succeeded",
+            {
+                "terramate_request_id": terramate_request_id,
+                "status": status,
+                "steps": steps,
+            },
+            actor="system",
+        )
+        db.commit()
+        logger.info(
+            "[%s] Terramate request %s succeeded; advancing gate",
+            request.id,
+            terramate_request_id,
+        )
+        return {"approved": True}
+
+    # Terminal: failed or cancelled
+    failed_step = next(
+        (s for s in steps if s.get("status") in ("failed", "rejected")),
+        None,
+    )
+    if failed_step:
+        reason = f"Terramate step '{failed_step.get('key', '?')}' {failed_step.get('status')}"
+    elif status == "cancelled":
+        reason = "Terramate provisioning request was cancelled"
+    else:
+        reason = f"Terramate provisioning request {status}"
+
+    add_fact(
+        db,
+        request.id,
+        "terramate_provision_failed",
+        {
+            "terramate_request_id": terramate_request_id,
+            "status": status,
+            "reason": reason,
+            "steps": steps,
+        },
+        actor="system",
+    )
+    db.commit()
+    logger.info(
+        "[%s] Terramate request %s terminal %s (%s); rejecting",
+        request.id,
+        terramate_request_id,
+        status,
+        reason,
+    )
+    return {"approved": False, "reason": reason}
+
+
 async def _v2_resume_value(db, request, result):
     """Map approval/event facts to a gate resume value, or None if still waiting.
 
@@ -1071,6 +1210,10 @@ async def _v2_resume_value(db, request, result):
         return await _pr_gate_from_github(db, request)
     if gtype == "children":
         return {"approved": True} if has_fact(db, request.id, "all_children_completed") else None
+    if gtype in ("terramate", "terramate_status"):
+        if has_fact(db, request.id, "terramate_provision_succeeded"):
+            return {"approved": True}
+        return await _terramate_gate_from_api(db, request, result)
     return None
 
 

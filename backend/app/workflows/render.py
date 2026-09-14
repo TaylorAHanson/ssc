@@ -43,6 +43,8 @@ def _gate_satisfied(gtype: str, have: set, facts: list) -> bool:
         return "training_completed" in have
     if gtype == "pr_merge":
         return "pr_merged" in have
+    if gtype in ("terramate", "terramate_status"):
+        return "terramate_provision_succeeded" in have
     if gtype == "children":
         return "all_children_completed" in have
     return False

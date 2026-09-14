@@ -2598,6 +2598,8 @@ export type GateType =
   | 'data_owner'
   | 'training'
   | 'pr_merge'
+  | 'terramate'
+  | 'terramate_status'
   /** Holds the request while a person does work the platform has no tool for,
    *  then they mark it done. A *completion* gate, not an authorization one — it
    *  does not count as an approval. */
