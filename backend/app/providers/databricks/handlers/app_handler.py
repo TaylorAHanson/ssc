@@ -115,9 +115,15 @@ class AppResourceHandler(BaseResourceHandler):
     async def discover(self) -> List[Dict[str, Any]]:
         resources = []
         try:
-            # Note: Requires databricks-sdk >= 0.20.0 for apps
-            apps = await asyncio.to_thread(self.workspace_client.apps.list)
+            # Note: Requires databricks-sdk >= 0.20.0 for apps.
+            # apps.list() returns a lazy generator; wrap in list() inside to_thread
+            # so the actual HTTP network fetch executes off the async event loop.
+            apps = await asyncio.to_thread(lambda: list(self.workspace_client.apps.list()))
             for app in apps:
+                deployment_status = getattr(app.active_deployment, "status", None) if getattr(app, "active_deployment", None) else None
+                state = getattr(deployment_status, "state", "UNKNOWN")
+                state_val = getattr(state, "value", str(state)) if state else "UNKNOWN"
+
                 resources.append({
                     "id": app.name,
                     # `app.name` is the human-readable slug and also the id the
@@ -125,11 +131,10 @@ class AppResourceHandler(BaseResourceHandler):
                     "name": getattr(app, "display_name", None) or app.name,
                     "type": "app",
                     "owner": getattr(app, "creator", "unknown"),
-                    "state": getattr(app.active_deployment, "state", "UNKNOWN")
-                    if getattr(app, "active_deployment", None)
-                    else "UNKNOWN",
+                    "state": state_val,
                     "tags": {},
                 })
+            logger.info("AppResourceHandler: discovered %d app(s)", len(resources))
         except Exception as e:
             # Re-raise so the Sentinel attributes this to the workspace + classifies
             # it (auth / permission / network) instead of reporting a silent 0.

@@ -294,7 +294,9 @@ async def test_lakebase_outside_enterprise_prod_is_allowed():
     "resource_dict",
     [
         {"id": "should-trigger", "type": "app"},
+        {"id": "Should-Trigger", "type": "app"},
         {"id": "app-uuid-1", "name": "should-trigger", "type": "app"},
+        {"id": "app-uuid-2", "name": "Should-Trigger", "type": "app"},
     ],
 )
 async def test_app_mock_policy_should_trigger(resource_dict):

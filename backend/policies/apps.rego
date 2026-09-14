@@ -49,11 +49,11 @@ violations["app_not_idle"] contains msg if {
 }
 
 is_should_trigger if {
-	object.get(input.resource, "name", "") == "should-trigger"
+	lower(object.get(input.resource, "name", "")) == "should-trigger"
 }
 
 is_should_trigger if {
-	object.get(input.resource, "id", "") == "should-trigger"
+	lower(object.get(input.resource, "id", "")) == "should-trigger"
 }
 
 violations["mock_app_should_trigger"] contains msg if {
