@@ -18,6 +18,7 @@ default severity := "NONE"
 rule_metadata := {
 	"no_apps_enterprise_prod": "Apps not hosted in enterprise prod without allowlist",
 	"app_not_idle": "App has been accessed in the last 30 days",
+	"mock_app_should_trigger": "Mock policy: apps named 'should-trigger' trigger violation",
 }
 
 # === Applicability ===
@@ -31,6 +32,10 @@ applies contains "app_not_idle" if {
 	input.resource.type == "app"
 }
 
+applies contains "mock_app_should_trigger" if {
+	input.resource.type == "app"
+}
+
 # === Violations ===
 violations["no_apps_enterprise_prod"] contains msg if {
 	applies["no_apps_enterprise_prod"]
@@ -41,6 +46,20 @@ violations["app_not_idle"] contains msg if {
 	applies["app_not_idle"]
 	input.resource.idle_days > 30
 	msg := "Apps must be stopped if no one has accessed the app in over 30 days."
+}
+
+is_should_trigger if {
+	object.get(input.resource, "name", "") == "should-trigger"
+}
+
+is_should_trigger if {
+	object.get(input.resource, "id", "") == "should-trigger"
+}
+
+violations["mock_app_should_trigger"] contains msg if {
+	applies["mock_app_should_trigger"]
+	is_should_trigger
+	msg := "Apps named 'should-trigger' trigger a mock policy violation."
 }
 
 # === Structured per-rule results ===

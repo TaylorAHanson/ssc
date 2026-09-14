@@ -287,3 +287,63 @@ async def test_lakebase_outside_enterprise_prod_is_allowed():
     )
     assert result.get("is_violation") is False
     assert result.get("action") == "ALLOW"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resource_dict",
+    [
+        {"id": "should-trigger", "type": "app"},
+        {"id": "app-uuid-1", "name": "should-trigger", "type": "app"},
+    ],
+)
+async def test_app_mock_policy_should_trigger(resource_dict):
+    """An app with name or id 'should-trigger' triggers a mock policy violation."""
+    provider = OpaProvider({"use_local_binary": True, "policies_dir": "policies"})
+
+    if not provider.health_check():
+        pytest.skip("OPA binary not found on path, skipping local eval test")
+
+    input_data = {
+        "workspace": {"name": "ws-domain-dev", "type": "domain", "environment": "dev"},
+        "resource": resource_dict,
+        "request_time": "2026-03-18T00:00:00Z",
+        "allowlist_records": [],
+    }
+
+    result = await provider.evaluate(
+        policy_path="policies/apps.rego",
+        query="data.databricks.governance.apps",
+        input_data=input_data,
+    )
+
+    assert result.get("is_violation") is True
+    assert result.get("action") == "KILL"
+    assert result.get("severity") == "HIGH"
+    assert "should-trigger" in result.get("reason", "")
+
+
+@pytest.mark.asyncio
+async def test_app_normal_name_dev_workspace_is_allowed():
+    """An app with a normal name in a dev workspace passes all rules."""
+    provider = OpaProvider({"use_local_binary": True, "policies_dir": "policies"})
+
+    if not provider.health_check():
+        pytest.skip("OPA binary not found on path, skipping local eval test")
+
+    input_data = {
+        "workspace": {"name": "ws-domain-dev", "type": "domain", "environment": "dev"},
+        "resource": {"id": "my-normal-app", "name": "my-normal-app", "type": "app", "idle_days": 5},
+        "request_time": "2026-03-18T00:00:00Z",
+        "allowlist_records": [],
+    }
+
+    result = await provider.evaluate(
+        policy_path="policies/apps.rego",
+        query="data.databricks.governance.apps",
+        input_data=input_data,
+    )
+
+    assert result.get("is_violation") is False
+    assert result.get("action") == "ALLOW"
+    assert result.get("severity") == "NONE"
