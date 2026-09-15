@@ -313,6 +313,35 @@ def test_render_includes_identity_and_activity():
     assert "New workspace" in block
 
 
+def test_recent_topics_use_bounded_session_titles_not_transcript_text(db_session):
+    from app.services import chat_session_service as chats
+
+    chats.upsert_session(
+        db_session,
+        "user@example.com",
+        "session-1",
+        title="Catalog access planning",
+        messages=[
+            {"kind": "user", "content": "Initial question"},
+            {"kind": "user", "content": "Raw follow-up that should not enter context"},
+        ],
+    )
+
+    topics = uc._recent_chat_topics(db_session, "user@example.com", limit=5)
+
+    assert topics == ["Catalog access planning"]
+    assert "Raw follow-up that should not enter context" not in topics
+
+
+def test_render_labels_recent_topics_as_conversations():
+    block = uc.render_user_context_block({
+        "stale": False,
+        "sections": {"activity": {"recent_topics": ["Catalog access planning"]}},
+    })
+
+    assert "Recent conversations: Catalog access planning" in block
+
+
 def test_render_truncates_at_the_char_cap(monkeypatch):
     """Someone in hundreds of groups must not crowd out the rest of the prompt."""
     monkeypatch.setattr(settings, "USER_CONTEXT_MAX_CHARS", 400)

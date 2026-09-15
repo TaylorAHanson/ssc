@@ -44,13 +44,39 @@ from app.tools.tool_executor import ToolContext, executor
 
 logger = logging.getLogger(__name__)
 
-# Placeholder we substitute when pruning an old tool output to stay within
-# the context window. Kept short and recognizable so the LLM understands
-# the data was dropped (and avoid double-pruning the same message).
-_PRUNED_TOOL_PLACEHOLDER = (
-    "[truncated: earlier tool result removed to stay within context window. "
-    "Re-run the tool with more specific filters if you need this data again.]"
-)
+# Prefix used to recognize tool results that have already been compacted.
+_PRUNED_TOOL_PREFIX = "[truncated tool result:"
+_PRUNED_TOOL_PREVIEW_CHARS = 400
+
+
+def _tool_call_names(messages: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Index tool-call ids to names without disturbing message linkage."""
+    names: Dict[str, str] = {}
+    for message in messages:
+        for tool_call in message.get("tool_calls") or []:
+            if not isinstance(tool_call, dict):
+                continue
+            call_id = tool_call.get("id")
+            function = tool_call.get("function")
+            name = function.get("name") if isinstance(function, dict) else None
+            if call_id and name:
+                names[str(call_id)] = str(name)
+    return names
+
+
+def _pruned_tool_stub(content: str, tool_name: Optional[str]) -> str:
+    """Retain a bounded hint about a removed tool result.
+
+    The prefix usually contains the result's status and primary identifiers,
+    which is enough for the model to preserve continuity. It is explicitly a
+    hint, not an authoritative summary; the tool must be re-run for full data.
+    """
+    preview = " ".join(content.split())[:_PRUNED_TOOL_PREVIEW_CHARS]
+    label = tool_name or "unknown tool"
+    return (
+        f"{_PRUNED_TOOL_PREFIX} {label}; retained prefix: {preview} "
+        "Re-run the tool with more specific filters for complete/current data.]"
+    )
 
 
 def _truncate_tool_output(content: str, max_chars: int) -> str:
@@ -91,7 +117,7 @@ def _estimate_messages_chars(messages: List[Dict[str, Any]]) -> int:
 
 
 def _prune_oldest_tool_outputs(messages: List[Dict[str, Any]], max_chars: int) -> int:
-    """Replace oldest ``tool`` message contents with a placeholder until the
+    """Replace oldest ``tool`` message contents with compact stubs until the
     total estimated prompt size is at or below ``max_chars``.
 
     We mutate ``content`` in place rather than removing the message so that
@@ -103,6 +129,7 @@ def _prune_oldest_tool_outputs(messages: List[Dict[str, Any]], max_chars: int) -
     if max_chars <= 0:
         return 0
     pruned = 0
+    names_by_id = _tool_call_names(messages)
     for m in messages:
         if _estimate_messages_chars(messages) <= max_chars:
             break
@@ -111,11 +138,13 @@ def _prune_oldest_tool_outputs(messages: List[Dict[str, Any]], max_chars: int) -
         content = m.get("content")
         if not isinstance(content, str):
             continue
-        if content == _PRUNED_TOOL_PLACEHOLDER:
+        if content.startswith(_PRUNED_TOOL_PREFIX):
             continue
-        if len(content) <= len(_PRUNED_TOOL_PLACEHOLDER):
+        tool_name = m.get("name") or names_by_id.get(str(m.get("tool_call_id") or ""))
+        stub = _pruned_tool_stub(content, str(tool_name) if tool_name else None)
+        if len(content) <= len(stub):
             continue
-        m["content"] = _PRUNED_TOOL_PLACEHOLDER
+        m["content"] = stub
         pruned += 1
     return pruned
 

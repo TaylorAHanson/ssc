@@ -207,10 +207,12 @@ def _build_activity(db: Session, identity: UserIdentity) -> Dict[str, Any]:
 
 
 def _recent_chat_topics(db: Session, email: str, limit: int) -> List[str]:
-    """The user's last few asks, newest first, from their server-side chat log.
+    """The user's recent conversation titles, newest first.
 
     Best-effort: chat history is a separate concern and an empty list is a
     perfectly good answer, so a failure here must not fail the whole section.
+    Titles are already derived and bounded when the session is saved, so this
+    avoids replaying raw transcript content into the system prompt.
     """
     try:
         from app.db.chat_session import ChatSessionModel
@@ -224,14 +226,9 @@ def _recent_chat_topics(db: Session, email: str, limit: int) -> List[str]:
         )
         topics: List[str] = []
         for row in rows:
-            for message in reversed(row.messages or []):
-                if not isinstance(message, dict) or message.get("kind") != "user":
-                    continue
-                text = str(message.get("content") or "").strip()
-                # Cap length so one pasted wall of text can't dominate the block.
-                if text and text not in topics:
-                    topics.append(text[:140])
-                break
+            title = str(row.title or "").strip()
+            if title and title not in topics:
+                topics.append(title[:140])
             if len(topics) >= limit:
                 break
         return topics[:limit]
@@ -737,7 +734,7 @@ def render_user_context_block(payload: Dict[str, Any]) -> str:
                 )
         topics = activity.get("recent_topics") or []
         if topics:
-            lines.append(f"- Recently asked about: {_fmt_list(topics, limit)}")
+            lines.append(f"- Recent conversations: {_fmt_list(topics, limit)}")
 
     groups = sections.get("groups") or {}
     if groups and not groups.get("error"):

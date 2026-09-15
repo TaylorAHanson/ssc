@@ -19,7 +19,7 @@ from app.agents.events import (
     ToolCallEvent,
     ToolResultEvent,
 )
-from app.agents.runner import AgentRunner
+from app.agents.runner import AgentRunner, _prune_oldest_tool_outputs
 
 
 class _FakeLLMResponse:
@@ -85,6 +85,34 @@ def _make_runner(tools: List[Any], scripted: List[_FakeLLMResponse]) -> AgentRun
     )
     runner.llm_client = _FakeLLMClient(scripted)  # type: ignore[assignment]
     return runner
+
+
+def test_prompt_pruning_retains_tool_name_and_result_prefix():
+    """Compaction should preserve continuity without breaking tool-call pairing."""
+    original_result = '{"request_id":"req-123","status":"pending","rows":' + ("x" * 2000)
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "tc-1",
+                    "type": "function",
+                    "function": {"name": "get_request", "arguments": {}},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tc-1", "content": original_result},
+    ]
+
+    assert _prune_oldest_tool_outputs(messages, max_chars=800) == 1
+    compacted = messages[1]["content"]
+    assert compacted.startswith("[truncated tool result: get_request;")
+    assert "req-123" in compacted
+    assert '"status":"pending"' in compacted
+    assert messages[1]["tool_call_id"] == "tc-1"
+    assert len(compacted) < len(original_result)
+    assert _prune_oldest_tool_outputs(messages, max_chars=1) == 0
 
 
 @pytest.mark.asyncio
