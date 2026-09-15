@@ -4,7 +4,7 @@ Infrastructure provisioning workflow tools (Terraform and Terramate).
 import logging
 from typing import Any, Dict, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.tools.mcp import tool
 from app.workflows.tools import _common
@@ -44,22 +44,49 @@ TerramateResourceType = Literal["schema", "workspace"]
 
 
 class TerramateProvisionInput(BaseModel):
-    request_type: TerramateResourceType = Field(
-        ...,
+    request_type: Optional[TerramateResourceType] = Field(
+        default=None,
         description="Resource type to provision. Allowed values: 'schema', 'workspace'.",
     )
-    parameters: Dict[str, Any] = Field(
-        default_factory=dict,
+    type: Optional[TerramateResourceType] = Field(
+        default=None,
+        description="Alias for 'request_type' matching the downstream Terramate API.",
+    )
+    parameters: Optional[Dict[str, Any]] = Field(
+        default=None,
         description=(
             "Type-specific provisioning parameters. "
             "For 'schema': catalog, name, owner, optional comment. "
             "For 'workspace': name, metastore, domain_owner, groups."
         ),
     )
+    params: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Alias for 'parameters' matching the downstream Terramate API.",
+    )
     idempotency_key: Optional[str] = Field(
         default=None,
         description="Optional client idempotency key (UUIDv4). Defaults to workflow request_id if available.",
     )
+
+    @model_validator(mode="after")
+    def _resolve_aliases(self) -> "TerramateProvisionInput":
+        resolved_type = self.request_type or self.type
+        if not resolved_type:
+            raise ValueError(
+                "Either 'request_type' or 'type' must be provided ('schema' or 'workspace')."
+            )
+        self.request_type = resolved_type
+        self.type = resolved_type
+
+        resolved_params = (
+            self.parameters
+            if self.parameters is not None
+            else (self.params if self.params is not None else {})
+        )
+        self.parameters = resolved_params
+        self.params = resolved_params
+        return self
 
 
 @tool(
@@ -68,22 +95,33 @@ class TerramateProvisionInput(BaseModel):
     side_effect_class="infra",
     description=(
         "Submit an infrastructure provisioning request to the Terramate API service. "
-        "Workflow building block used to provision schemas and workspaces via GitOps."
+        "Workflow building block used to provision schemas and workspaces via GitOps. "
+        "Accepts either 'request_type' or 'type', and 'parameters' or 'params'."
     ),
 )
 async def terramate_provision(
-    request_type: str,
+    request_type: Optional[str] = None,
     parameters: Optional[Dict[str, Any]] = None,
     idempotency_key: Optional[str] = None,
+    type: Optional[str] = None,
+    params: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Dict[str, Any]:
     import uuid
 
+    req_type = request_type or type
+    if not req_type:
+        return {
+            "ok": False,
+            "error": "Missing required argument: 'request_type' (or 'type') must be provided.",
+        }
+    param_dict = parameters if parameters is not None else (params if params is not None else {})
+
     provider = _common._get_terramate_provider()
     key = idempotency_key or kwargs.get("request_id") or kwargs.get("_tool_call_id") or str(uuid.uuid4())
     result = await provider.create_request(
-        request_type=request_type,
-        params=parameters or {},
+        request_type=req_type,
+        params=param_dict,
         idempotency_key=key,
     )
 
@@ -99,7 +137,8 @@ async def terramate_provision(
                 req_id,
                 "terramate_request_created",
                 {
-                    "request_type": request_type,
+                    "request_type": req_type,
+                    "type": req_type,
                     "terramate_request_id": result.get("request_id"),
                     "status": result.get("status"),
                 },
@@ -114,7 +153,10 @@ async def terramate_provision(
     return {
         "ok": result.get("success", False),
         "terramate_request_id": result.get("request_id"),
+        "request_id": result.get("request_id"),
         "status": result.get("status"),
+        "type": req_type,
+        "request_type": req_type,
     }
 
 
@@ -124,28 +166,59 @@ TerramateSubmitInput = TerramateProvisionInput
 
 
 class TerramateCheckStatusInput(BaseModel):
-    terramate_request_id: str = Field(..., description="The Terramate request UUID")
+    terramate_request_id: Optional[str] = Field(
+        default=None, description="The Terramate request UUID"
+    )
+    request_id: Optional[str] = Field(
+        default=None, description="Alias for 'terramate_request_id'."
+    )
+
+    @model_validator(mode="after")
+    def _resolve_aliases(self) -> "TerramateCheckStatusInput":
+        resolved_id = self.terramate_request_id or self.request_id
+        if not resolved_id:
+            raise ValueError("Either 'terramate_request_id' or 'request_id' must be provided.")
+        self.terramate_request_id = resolved_id
+        self.request_id = resolved_id
+        return self
 
 
 @tool(
     name="terramate_check_status",
     args_schema=TerramateCheckStatusInput,
     side_effect_class="read",
-    description="Query the live progress, PR state, and terminal status of a Terramate provisioning request.",
+    description="Query the live progress, PR state, and terminal status of a Terramate provisioning request. Accepts either 'terramate_request_id' or 'request_id'.",
 )
 async def terramate_check_status(
-    terramate_request_id: str,
+    terramate_request_id: Optional[str] = None,
+    request_id: Optional[str] = None,
     **kwargs,
 ) -> Dict[str, Any]:
+    req_id = (
+        terramate_request_id
+        or request_id
+        or kwargs.get("terramate_request_id")
+        or kwargs.get("request_id")
+    )
+    if not req_id:
+        return {
+            "exists": False,
+            "status": "not_found",
+            "is_terminal": True,
+            "is_succeeded": False,
+            "error": "Either 'terramate_request_id' or 'request_id' must be provided.",
+        }
+
     provider = _common._get_terramate_provider()
-    detail = await provider.get_request(terramate_request_id)
+    detail = await provider.get_request(req_id)
     if detail is None:
         return {
             "exists": False,
             "status": "not_found",
             "is_terminal": True,
             "is_succeeded": False,
-            "terramate_request_id": terramate_request_id,
+            "terramate_request_id": req_id,
+            "request_id": req_id,
         }
 
     status = detail.get("status", "pending")
@@ -163,6 +236,7 @@ async def terramate_check_status(
     return {
         "exists": True,
         "terramate_request_id": detail.get("id"),
+        "request_id": detail.get("id"),
         "type": detail.get("type"),
         "status": status,
         "is_terminal": is_terminal,
@@ -177,6 +251,10 @@ class TerramatePollStatusInput(BaseModel):
         default=None,
         description="The Terramate request UUID. If omitted, resolved from workflow context/facts.",
     )
+    request_id: Optional[str] = Field(
+        default=None,
+        description="Alias for 'terramate_request_id'.",
+    )
     poll_interval_seconds: int = Field(
         default=5,
         description="Seconds between polling checks (min 1, max 30, default 5).",
@@ -185,6 +263,14 @@ class TerramatePollStatusInput(BaseModel):
         default=60,
         description="Maximum seconds to poll before returning current status (min 1, max 300, default 60).",
     )
+
+    @model_validator(mode="after")
+    def _resolve_aliases(self) -> "TerramatePollStatusInput":
+        resolved_id = self.terramate_request_id or self.request_id
+        if resolved_id:
+            self.terramate_request_id = resolved_id
+            self.request_id = resolved_id
+        return self
 
 
 @tool(
@@ -197,12 +283,18 @@ async def terramate_poll_status(
     terramate_request_id: Optional[str] = None,
     poll_interval_seconds: int = 5,
     max_wait_seconds: int = 60,
+    request_id: Optional[str] = None,
     **kwargs,
 ) -> Dict[str, Any]:
     import asyncio
     import time
 
-    req_id = terramate_request_id or kwargs.get("terramate_request_id")
+    req_id = (
+        terramate_request_id
+        or request_id
+        or kwargs.get("terramate_request_id")
+        or kwargs.get("request_id")
+    )
     if not req_id:
         scope_id = kwargs.get("_request_id") or kwargs.get("request_id") or kwargs.get("scope_id")
         if scope_id:

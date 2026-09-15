@@ -50,6 +50,44 @@ async def test_create_request_success(provider):
 
 
 @pytest.mark.asyncio
+async def test_create_request_success_with_aliases(provider):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 202
+    mock_resp.text = '{"request_id": "22222222-2222-2222-2222-222222222222", "status": "pending"}'
+    mock_resp.json.return_value = {
+        "request_id": "22222222-2222-2222-2222-222222222222",
+        "status": "pending",
+    }
+
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_resp
+
+        result = await provider.create_request(
+            type="schema",
+            parameters={"catalog": "main", "name": "finance"},
+            idempotency_key="key-456",
+        )
+
+        assert result["success"] is True
+        assert result["request_id"] == "22222222-2222-2222-2222-222222222222"
+        assert result["status"] == "pending"
+
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args.kwargs
+        assert call_kwargs["json"] == {"type": "schema", "params": {"catalog": "main", "name": "finance"}}
+        assert call_kwargs["headers"]["Idempotency-Key"] == "key-456"
+
+
+@pytest.mark.asyncio
+async def test_create_request_missing_type_raises(provider):
+    with pytest.raises(PermanentError, match="Resource type .* is required"):
+        await provider.create_request(
+            params={"name": "test-ws"},
+            idempotency_key="key-no-type",
+        )
+
+
+@pytest.mark.asyncio
 async def test_create_request_missing_idempotency_key(provider):
     with pytest.raises(PermanentError, match="Idempotency-Key is required"):
         await provider.create_request(

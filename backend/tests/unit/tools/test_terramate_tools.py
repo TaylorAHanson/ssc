@@ -113,6 +113,142 @@ async def test_terramate_provision_rejects_invalid_type():
 
 
 @pytest.mark.asyncio
+async def test_terramate_provision_with_type_and_params_aliases():
+    """Verify terramate_provision works with downstream API parameter names (type, params)."""
+    with patch("app.providers.terramate.client.TerramateProvider.create_request", new_callable=AsyncMock) as mock_create:
+        mock_create.return_value = {
+            "success": True,
+            "request_id": "req-alias-ws",
+            "status": "pending",
+        }
+
+        result = await terramate_provision.execute(
+            type="workspace",
+            params={"name": "analytics-ws"},
+            idempotency_key="key-alias-1",
+        )
+
+        assert result["ok"] is True
+        assert result["terramate_request_id"] == "req-alias-ws"
+        assert result["request_id"] == "req-alias-ws"
+        assert result["type"] == "workspace"
+        assert result["request_type"] == "workspace"
+        assert result["status"] == "pending"
+        mock_create.assert_called_once_with(
+            request_type="workspace",
+            params={"name": "analytics-ws"},
+            idempotency_key="key-alias-1",
+        )
+
+
+@pytest.mark.asyncio
+async def test_terramate_provision_mixed_aliases():
+    """Verify terramate_provision supports mixed naming conventions."""
+    with patch("app.providers.terramate.client.TerramateProvider.create_request", new_callable=AsyncMock) as mock_create:
+        mock_create.return_value = {
+            "success": True,
+            "request_id": "req-mix-1",
+            "status": "pending",
+        }
+
+        # type + parameters
+        res1 = await terramate_provision.execute(
+            type="schema",
+            parameters={"catalog": "main", "name": "finance"},
+            idempotency_key="key-mix-1",
+        )
+        assert res1["ok"] is True
+        mock_create.assert_called_with(
+            request_type="schema",
+            params={"catalog": "main", "name": "finance"},
+            idempotency_key="key-mix-1",
+        )
+
+        # request_type + params
+        mock_create.reset_mock()
+        mock_create.return_value = {
+            "success": True,
+            "request_id": "req-mix-2",
+            "status": "pending",
+        }
+        res2 = await terramate_provision.execute(
+            request_type="workspace",
+            params={"name": "my-ws"},
+            idempotency_key="key-mix-2",
+        )
+        assert res2["ok"] is True
+        mock_create.assert_called_with(
+            request_type="workspace",
+            params={"name": "my-ws"},
+            idempotency_key="key-mix-2",
+        )
+
+
+@pytest.mark.asyncio
+async def test_terramate_provision_missing_type_rejected():
+    """Omitting both request_type and type should fail validation cleanly."""
+    result = await terramate_provision.execute(
+        parameters={"name": "test"},
+        idempotency_key="key-missing-type",
+    )
+    assert "error" in result
+    assert "Invalid arguments for tool 'terramate_provision'" in result["error"]
+    assert "Either 'request_type' or 'type' must be provided" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_terramate_provision_rejects_invalid_type_alias():
+    """Passing an invalid literal to 'type' alias is rejected."""
+    result = await terramate_provision.execute(
+        type="invalid_resource",
+        params={"name": "test"},
+    )
+    assert "error" in result
+    assert "Invalid arguments for tool 'terramate_provision'" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_terramate_check_status_with_request_id_alias():
+    """Verify terramate_check_status accepts 'request_id' as an alias."""
+    with patch("app.providers.terramate.client.TerramateProvider.get_request", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = {
+            "id": "req-alias-777",
+            "type": "workspace",
+            "status": "succeeded",
+            "steps": [{"ordinal": 0, "status": "done"}],
+        }
+
+        result = await terramate_check_status.execute(request_id="req-alias-777")
+        assert result["exists"] is True
+        assert result["terramate_request_id"] == "req-alias-777"
+        assert result["request_id"] == "req-alias-777"
+        assert result["is_succeeded"] is True
+        mock_get.assert_called_once_with("req-alias-777")
+
+
+@pytest.mark.asyncio
+async def test_terramate_poll_status_with_request_id_alias():
+    """Verify terramate_poll_status accepts 'request_id' as an alias."""
+    with patch("app.providers.terramate.client.TerramateProvider.get_request", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = {
+            "id": "req-poll-alias",
+            "status": "succeeded",
+            "steps": [{"status": "done"}],
+        }
+
+        result = await terramate_poll_status.execute(
+            request_id="req-poll-alias",
+            poll_interval_seconds=1,
+            max_wait_seconds=5,
+        )
+
+        assert result["is_terminal"] is True
+        assert result["is_succeeded"] is True
+        assert result["ok"] is True
+        assert result["terramate_request_id"] == "req-poll-alias"
+
+
+@pytest.mark.asyncio
 async def test_check_provisioning_status_conversational_tool():
     with patch("app.providers.terramate.client.TerramateProvider.get_request", new_callable=AsyncMock) as mock_get:
         mock_get.return_value = {

@@ -94,9 +94,14 @@ class TerramateProvider(BaseProvider):
     @retry_on_retryable(max_attempts=3)
     async def create_request(
         self,
-        request_type: str,
-        params: Dict[str, Any],
-        idempotency_key: str,
+        request_type: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+        idempotency_key: str = "",
+        *,
+        type: Optional[str] = None,
+        parameters: Optional[Dict[str, Any]] = None,
+        requester: Optional[str] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """
         Submit a new provisioning request to the Terramate API.
@@ -105,17 +110,26 @@ class TerramateProvider(BaseProvider):
             request_type: Resource type (discriminated union, e.g. "workspace", "schema").
             params: Type-specific parameter payload.
             idempotency_key: Stable client-generated UUIDv4 preventing duplicate submissions (required).
+            type: Alias for request_type matching downstream API terminology.
+            parameters: Alias for params matching workflow terminology.
+            requester: Optional caller identity.
 
         Returns:
             Dict with request_id and status (e.g. {"success": True, "request_id": "...", "status": "pending"}).
         """
+        resolved_type = request_type or type
+        if not resolved_type:
+            raise PermanentError("Resource type ('request_type' or 'type') is required for Terramate provisioning requests.")
+
         if not idempotency_key:
             raise PermanentError("Idempotency-Key is required for Terramate provisioning requests.")
 
+        resolved_params = params if params is not None else (parameters if parameters is not None else {})
+
         url = f"{self.api_url}/v1/requests"
         payload = {
-            "type": request_type,
-            "params": params,
+            "type": resolved_type,
+            "params": resolved_params,
         }
         headers = self._get_headers(idempotency_key=idempotency_key)
 
@@ -134,7 +148,7 @@ class TerramateProvider(BaseProvider):
                 if response.status_code == 422:
                     raw_detail = response.json().get("detail", response.text) if response.text else "Unprocessable Entity"
                     formatted = _format_validation_error(raw_detail)
-                    raise PermanentError(f"Terramate parameter validation failed for type '{request_type}': {formatted}")
+                    raise PermanentError(f"Terramate parameter validation failed for type '{resolved_type}': {formatted}")
 
                 if 400 <= response.status_code < 500:
                     raise PermanentError(f"Terramate API client error ({response.status_code}): {response.text}")
@@ -158,7 +172,7 @@ class TerramateProvider(BaseProvider):
                 logger.info(
                     "terramate_request_created request_id=%s type=%s status=%s",
                     data.get("request_id"),
-                    request_type,
+                    resolved_type,
                     data.get("status"),
                 )
                 return {
