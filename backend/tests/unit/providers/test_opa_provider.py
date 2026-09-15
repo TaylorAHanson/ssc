@@ -290,17 +290,9 @@ async def test_lakebase_outside_enterprise_prod_is_allowed():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "resource_dict",
-    [
-        {"id": "should-trigger", "type": "app"},
-        {"id": "Should-Trigger", "type": "app"},
-        {"id": "app-uuid-1", "name": "should-trigger", "type": "app"},
-        {"id": "app-uuid-2", "name": "Should-Trigger", "type": "app"},
-    ],
-)
-async def test_app_mock_policy_should_trigger(resource_dict):
-    """An app with name or id 'should-trigger' triggers a mock policy violation."""
+async def test_idle_app_outside_enterprise_prod_stops_without_revoke():
+    """An idle app (>30 days) in a dev/test/domain workspace violates the idle rule
+    and its remedy is a non-revoking STOP (not KILL) — the owner keeps access."""
     provider = OpaProvider({"use_local_binary": True, "policies_dir": "policies"})
 
     if not provider.health_check():
@@ -308,7 +300,60 @@ async def test_app_mock_policy_should_trigger(resource_dict):
 
     input_data = {
         "workspace": {"name": "ws-domain-dev", "type": "domain", "environment": "dev"},
-        "resource": resource_dict,
+        "resource": {"id": "idle-dev-app", "name": "idle-dev-app", "type": "app", "idle_days": 90},
+        "request_time": "2026-03-18T00:00:00Z",
+        "allowlist_records": [],
+    }
+
+    result = await provider.evaluate(
+        policy_path="policies/apps.rego",
+        query="data.databricks.governance.apps",
+        input_data=input_data,
+    )
+
+    assert result.get("is_violation") is True
+    assert result.get("action") == "STOP"
+    assert result.get("severity") == "HIGH"
+
+
+@pytest.mark.asyncio
+async def test_non_idle_app_outside_enterprise_prod_is_allowed():
+    """A non-idle app in a dev/test/domain workspace has nothing to enforce."""
+    provider = OpaProvider({"use_local_binary": True, "policies_dir": "policies"})
+
+    if not provider.health_check():
+        pytest.skip("OPA binary not found on path, skipping local eval test")
+
+    input_data = {
+        "workspace": {"name": "ws-domain-dev", "type": "domain", "environment": "dev"},
+        "resource": {"id": "active-dev-app", "name": "active-dev-app", "type": "app", "idle_days": 5},
+        "request_time": "2026-03-18T00:00:00Z",
+        "allowlist_records": [],
+    }
+
+    result = await provider.evaluate(
+        policy_path="policies/apps.rego",
+        query="data.databricks.governance.apps",
+        input_data=input_data,
+    )
+
+    assert result.get("is_violation") is False
+    assert result.get("action") == "ALLOW"
+    assert result.get("severity") == "NONE"
+
+
+@pytest.mark.asyncio
+async def test_idle_app_in_enterprise_prod_is_killed_hosting_rule_wins():
+    """In enterprise prod an idle app trips BOTH the hosting rule and the idle rule.
+    The stricter KILL (stop + revoke) must win over the idle STOP."""
+    provider = OpaProvider({"use_local_binary": True, "policies_dir": "policies"})
+
+    if not provider.health_check():
+        pytest.skip("OPA binary not found on path, skipping local eval test")
+
+    input_data = {
+        "workspace": {"name": "ws-enterprise-prod", "type": "enterprise", "environment": "prod"},
+        "resource": {"id": "idle-prod-app", "name": "idle-prod-app", "type": "app", "idle_days": 90},
         "request_time": "2026-03-18T00:00:00Z",
         "allowlist_records": [],
     }
@@ -322,7 +367,6 @@ async def test_app_mock_policy_should_trigger(resource_dict):
     assert result.get("is_violation") is True
     assert result.get("action") == "KILL"
     assert result.get("severity") == "HIGH"
-    assert "should-trigger" in result.get("reason", "")
 
 
 @pytest.mark.asyncio

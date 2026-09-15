@@ -18,7 +18,6 @@ default severity := "NONE"
 rule_metadata := {
 	"no_apps_enterprise_prod": "Apps not hosted in enterprise prod without allowlist",
 	"app_not_idle": "App has been accessed in the last 30 days",
-	"mock_app_should_trigger": "Mock policy: apps named 'should-trigger' trigger violation",
 }
 
 # === Applicability ===
@@ -28,11 +27,11 @@ applies contains "no_apps_enterprise_prod" if {
 	input.workspace.environment == "prod"
 }
 
+# Idle enforcement applies to apps in ANY governed workspace. Its remedy is a
+# non-revoking STOP (see enforcement_action below): the app is stopped but the
+# owner keeps access, so this is safe outside enterprise prod. In enterprise
+# prod the hosting rule also fires and its stricter KILL (stop + revoke) wins.
 applies contains "app_not_idle" if {
-	input.resource.type == "app"
-}
-
-applies contains "mock_app_should_trigger" if {
 	input.resource.type == "app"
 }
 
@@ -46,20 +45,6 @@ violations["app_not_idle"] contains msg if {
 	applies["app_not_idle"]
 	input.resource.idle_days > 30
 	msg := "Apps must be stopped if no one has accessed the app in over 30 days."
-}
-
-is_should_trigger if {
-	lower(object.get(input.resource, "name", "")) == "should-trigger"
-}
-
-is_should_trigger if {
-	lower(object.get(input.resource, "id", "")) == "should-trigger"
-}
-
-violations["mock_app_should_trigger"] contains msg if {
-	applies["mock_app_should_trigger"]
-	is_should_trigger
-	msg := "Apps named 'should-trigger' trigger a mock policy violation."
 }
 
 # === Structured per-rule results ===
@@ -86,6 +71,17 @@ is_violation := common.is_violation(violation_reasons)
 has_approved_exception := common.has_approved_exception(input.allowlist_records, input.resource.id, is_violation, input.request_time)
 has_pending_exception := common.has_pending_exception(input.allowlist_records, input.resource.id, is_violation, has_approved_exception)
 
-action := common.resolve_action(is_violation, has_approved_exception, has_pending_exception, "KILL")
+# The intended enforcement action depends on which rule fired. The hosting
+# violation (unauthorized app in enterprise prod) warrants a full stop + ACL
+# revoke (KILL). An idle app just needs to be stopped, so its ACLs are left
+# intact and its owner can restart it without an admin reinstating access
+# (STOP). If BOTH fire, the stricter KILL wins.
+default enforcement_action := "STOP"
+
+enforcement_action := "KILL" if {
+	count(object.get(violations, "no_apps_enterprise_prod", set())) > 0
+}
+
+action := common.resolve_action(is_violation, has_approved_exception, has_pending_exception, enforcement_action)
 reason := common.resolve_reason(is_violation, has_approved_exception, has_pending_exception, input.allowlist_records, input.resource.id, input.request_time, violation_reasons)
 severity := common.resolve_severity(is_violation, has_approved_exception, has_pending_exception, "HIGH")

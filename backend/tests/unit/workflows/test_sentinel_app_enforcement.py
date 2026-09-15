@@ -82,6 +82,13 @@ def test_determine_intended_step():
     assert sentinel.determine_intended_step("HIGH", "KILL", "cluster") == "kill"
     assert sentinel.determine_intended_step("HIGH", "KILL", "job") == "kill"
 
+    # Idle apps map STOP to a non-revoking stop (app-only)
+    assert sentinel.determine_intended_step("HIGH", "STOP", "app") == "stop"
+    # STOP has no meaning off-apps; a stray STOP falls back to kill (-> warn later)
+    assert sentinel.determine_intended_step("HIGH", "STOP", "cluster") == "kill"
+    # A MEDIUM STOP is downgraded to warn like other destructive actions
+    assert sentinel.determine_intended_step("MEDIUM", "STOP", "app") == "warn"
+
     # Non-destructive / lower severity actions
     assert sentinel.determine_intended_step("MEDIUM", "KILL", "app") == "warn"
     assert sentinel.determine_intended_step("LOW", "KILL", "app") == "warn"
@@ -92,16 +99,24 @@ def test_resolve_automated_step_toggle():
     # Toggle OFF (default): apps are downgraded to warn
     with patch.object(settings, "SENTINEL_AUTO_ENFORCE_APPS", False):
         assert sentinel.resolve_automated_step("HIGH", "KILL", "app") == "warn"
+        assert sentinel.resolve_automated_step("HIGH", "STOP", "app") == "warn"
         assert sentinel.resolve_automated_step("HIGH", "KILL", "cluster") == "warn"
 
     # Toggle ON: apps get stop_and_revoke, while clusters/jobs STAY downgraded to warn!
     with patch.object(settings, "SENTINEL_AUTO_ENFORCE_APPS", True):
         assert sentinel.resolve_automated_step("HIGH", "KILL", "app") == "stop_and_revoke"
         assert sentinel.resolve_automated_step("HIGH", "STOP_AND_REVOKE", "app") == "stop_and_revoke"
+        # Idle apps auto-stop (no revoke) when the toggle is on
+        assert sentinel.resolve_automated_step("HIGH", "STOP", "app") == "stop"
         # Non-app resources MUST remain manual-only
         assert sentinel.resolve_automated_step("HIGH", "KILL", "cluster") == "warn"
         assert sentinel.resolve_automated_step("HIGH", "KILL", "job") == "warn"
         assert sentinel.resolve_automated_step("HIGH", "KILL", "sql_warehouse") == "warn"
+        # Genie spaces and Lakebase were previously covered by the combined
+        # apps_and_genie policy; the app toggle must NEVER auto-enforce them.
+        assert sentinel.resolve_automated_step("HIGH", "KILL", "genie_space") == "warn"
+        assert sentinel.resolve_automated_step("HIGH", "STOP_AND_REVOKE", "genie_space") == "warn"
+        assert sentinel.resolve_automated_step("HIGH", "KILL", "lakebase") == "warn"
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +174,42 @@ async def test_app_handler_stop_and_revoke_success():
     assert any(req.service_principal_name == "test-sp-client-id" for req in new_acl)
     # Ensure rogue owner is stripped from new ACL
     assert not any(req.user_name == "rogue-owner@company.com" for req in new_acl)
+
+
+@pytest.mark.asyncio
+async def test_app_handler_stop_without_revoke():
+    """handler.stop() stops the app but must NOT touch its ACLs (no revoke)."""
+    mock_ws = MagicMock()
+    mock_app = MagicMock(spec=App)
+    mock_app.name = "idle-app"
+    mock_app.creator = "owner@company.com"
+    mock_app.compute_status = MagicMock(spec=ComputeStatus)
+    mock_app.compute_status.state = ComputeState.ACTIVE
+    mock_ws.apps.get.return_value = mock_app
+
+    handler = AppResourceHandler(mock_ws)
+    res = await handler.stop("idle-app")
+
+    assert res["status"] == "success"
+    assert res["stopped"] is True
+    assert res["permissions_revoked"] is False
+    assert res["creator"] == "owner@company.com"
+    mock_ws.apps.stop.assert_called_once_with(name="idle-app")
+    # Crucially, ACLs are left intact.
+    mock_ws.apps.set_permissions.assert_not_called()
+    mock_ws.apps.get_permissions.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_app_handler_stop_protected():
+    mock_ws = MagicMock()
+    handler = AppResourceHandler(mock_ws)
+
+    res = await handler.stop("edh-ssc-prod")
+    assert res["status"] == "skipped_protected"
+    assert res["stopped"] is False
+    mock_ws.apps.stop.assert_not_called()
+    mock_ws.apps.set_permissions.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -240,6 +291,66 @@ async def test_sentinel_run_enforcement_app_auto_stopped(db_session):
     assert audit_row is not None
     assert audit_row.executed_action == "automated_stop_and_revoke"
     assert "Previous ACL snapshot:" in audit_row.reason
+
+
+@pytest.mark.asyncio
+async def test_sentinel_run_enforcement_idle_app_auto_stopped_without_revoke(db_session):
+    """An idle-app violation (action STOP) auto-stops the app but does NOT revoke:
+    handler.stop is called (not stop_and_revoke) and the audit records automated_stop."""
+    req = _make_request(db_session)
+
+    replace_run_findings(
+        db_session,
+        req.id,
+        checks=[],
+        violations=[
+            {
+                "rule_id": "app_not_idle",
+                "resource_id": "idle-domain-app",
+                "resource_type": "app",
+                "policy": "apps",
+                "severity": "HIGH",
+                "action": "STOP",
+                "reason": "Apps must be stopped if no one has accessed the app in over 30 days.",
+                "workspace": {"name": "domain-ws", "host": "https://domain.databricks.net", "environment": "dev"},
+            }
+        ],
+    )
+
+    mock_handler = MagicMock()
+    mock_handler.workspace_client = MagicMock()
+    mock_handler.stop = AsyncMock(return_value={
+        "status": "success",
+        "stopped": True,
+        "permissions_revoked": False,
+        "creator": "idle-owner@databricks.com",
+    })
+    mock_handler.stop_and_revoke = AsyncMock()
+
+    with (
+        patch.object(settings, "SENTINEL_AUTO_ENFORCE_APPS", True),
+        patch.object(sentinel, "_new_workspace_client", return_value=mock_handler.workspace_client),
+        patch.object(sentinel, "_handlers_by_type", return_value={"app": mock_handler}),
+        patch.object(sentinel, "revalidate_violation", new=AsyncMock(return_value={"still_violates": True})),
+        patch("app.providers.notifications.client.NotificationProvider.send_email", new=AsyncMock(return_value=True)) as mock_email,
+        patch("app.db.session.get_lakebase_session", side_effect=lambda: _keep_open(db_session)),
+    ):
+        result = await sentinel.run_enforcement(db_session, req)
+
+    assert result["apps_auto_stopped"] == 1
+    mock_handler.stop.assert_called_once_with("idle-domain-app")
+    # The idle path must NEVER revoke access.
+    mock_handler.stop_and_revoke.assert_not_called()
+    mock_email.assert_called_once()
+
+    audit_row = db_session.query(EnforcementAuditModel).filter(
+        EnforcementAuditModel.request_id == req.id,
+        EnforcementAuditModel.resource_id == "idle-domain-app",
+    ).first()
+    assert audit_row is not None
+    assert audit_row.executed_action == "automated_stop"
+    assert audit_row.intended_action == "stop"
+    assert "Previous ACL snapshot:" not in (audit_row.reason or "")
 
 
 @pytest.mark.asyncio
@@ -496,6 +607,63 @@ async def test_manual_enforce_stop_and_revoke_success(db_session):
     assert audit_row is not None
     assert audit_row.executed_action == "manual_stop_and_revoke"
     assert "Previous ACL snapshot:" in audit_row.reason
+
+
+@pytest.mark.asyncio
+async def test_manual_enforce_stop_without_revoke_success(db_session):
+    """Manual STOP on an idle app stops it without revoking (calls handler.stop)."""
+    from app.api.v1.requests import execute_enforcement_action, EnforcementActionRequest
+    from app.models.user import User
+
+    admin_user = User(
+        id="usr-admin",
+        email="admin@company.com",
+        full_name="Admin User",
+        roles=["Platform Admin", "Governance Admin"],
+        groups=["admins"],
+    )
+
+    req = _make_request(db_session)
+    body = EnforcementActionRequest(
+        resource_id="idle-manual-app",
+        resource_type="app",
+        action="STOP",
+        policy_name="apps",
+        reason="Idle beyond threshold",
+    )
+
+    mock_handler = MagicMock()
+    mock_handler.stop = AsyncMock(return_value={
+        "status": "success",
+        "stopped": True,
+        "permissions_revoked": False,
+        "creator": "owner@company.com",
+    })
+    mock_handler.stop_and_revoke = AsyncMock()
+
+    with (
+        patch("app.workflows.sentinel._new_workspace_client", return_value=MagicMock()),
+        patch("app.workflows.sentinel.revalidate_violation", new=AsyncMock(return_value={"still_violates": True})),
+        patch("app.providers.databricks.handlers.AppResourceHandler", return_value=mock_handler),
+    ):
+        res = await execute_enforcement_action(
+            request_id=req.id,
+            body=body,
+            current_user=admin_user,
+            db=db_session,
+        )
+
+    assert res["status"] == "success"
+    mock_handler.stop.assert_called_once_with("idle-manual-app")
+    mock_handler.stop_and_revoke.assert_not_called()
+
+    audit_row = db_session.query(EnforcementAuditModel).filter(
+        EnforcementAuditModel.request_id == req.id,
+        EnforcementAuditModel.resource_id == "idle-manual-app",
+    ).first()
+    assert audit_row is not None
+    assert audit_row.executed_action == "manual_stop"
+    assert "Previous ACL snapshot:" not in (audit_row.reason or "")
 
 
 @pytest.mark.asyncio

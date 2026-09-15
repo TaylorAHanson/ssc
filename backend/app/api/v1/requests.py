@@ -828,7 +828,7 @@ async def execute_enforcement_action(
     if body.resource_type == "app":
         from app.providers.databricks.handlers.app_handler import is_protected_app
 
-        if action_to_take in ("KILL", "STOP_AND_REVOKE") and is_protected_app(body.resource_id):
+        if action_to_take in ("KILL", "STOP_AND_REVOKE", "STOP") and is_protected_app(body.resource_id):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Cannot execute destructive action on protected app '{body.resource_id}'. This app is protected by platform safety policy.",
@@ -839,7 +839,7 @@ async def execute_enforcement_action(
     # them for a stale finding. Safe/reversible actions (certify/uncertify/warn)
     # are not gated. We only proceed on a POSITIVE confirmation that it still
     # violates — "fixed", "gone", or "couldn't determine" all abort.
-    if action_to_take in ("KILL", "STOP_AND_REVOKE"):
+    if action_to_take in ("KILL", "STOP_AND_REVOKE", "STOP"):
         recheck = await revalidate_violation(
             workspace_client=workspace_client,
             host=host,
@@ -909,6 +909,23 @@ async def execute_enforcement_action(
                 )
             else:
                 await handler.kill(body.resource_id)
+        elif action_to_take == "STOP":
+            # App-only, non-revoking stop (idle apps): stop the app but leave its
+            # ACLs intact so the owner can restart it without a reinstate.
+            if body.resource_type == "app" and hasattr(handler, "stop"):
+                stop_res = await handler.stop(body.resource_id)
+                if stop_res.get("status") == "skipped_protected":
+                    raise HTTPException(status_code=400, detail=stop_res.get("message", "App is protected."))
+                executed_action = "manual_stop"
+                audit_reason = (
+                    f"Manually stopped (access left intact) by {current_user.email}. "
+                    f"Original reason: {body.reason}"
+                )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"STOP is only supported for apps, not '{body.resource_type}'.",
+                )
         elif action_to_take == "REINSTATE":
             if hasattr(handler, "reinstate_permissions"):
                 import json

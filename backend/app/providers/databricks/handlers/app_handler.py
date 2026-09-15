@@ -256,6 +256,61 @@ class AppResourceHandler(BaseResourceHandler):
             "message": f"App '{resource_id}' stopped and access revoked to admins only.",
         }
 
+    async def stop(self, resource_id: str) -> Dict[str, Any]:
+        """Stop an app WITHOUT revoking permissions (used for idle-app enforcement).
+
+        An idle app just needs to be stopped; its ACLs are deliberately left
+        intact so the owner can restart it without an admin reinstating access.
+        Contrast with :meth:`stop_and_revoke`, used for hosting violations.
+        """
+        if is_protected_app(resource_id):
+            logger.warning("Refusing to stop protected app: %s", resource_id)
+            return {
+                "status": "skipped_protected",
+                "stopped": False,
+                "creator": None,
+                "message": f"App '{resource_id}' is protected from automated enforcement.",
+            }
+
+        try:
+            app = await asyncio.to_thread(self.workspace_client.apps.get, name=resource_id)
+        except Exception as e:
+            logger.error("Failed to get app %s: %s", resource_id, e)
+            raise
+
+        creator = getattr(app, "creator", None)
+
+        compute_state = None
+        if hasattr(app, "compute_status") and app.compute_status:
+            compute_state = getattr(app.compute_status, "state", None)
+        state_str = str(getattr(compute_state, "value", compute_state) or "").upper()
+
+        stopped = False
+        if state_str not in ("STOPPED", "DELETING", "STOPPING"):
+            try:
+                await asyncio.to_thread(self.workspace_client.apps.stop, name=resource_id)
+                stopped = True
+                logger.info("Successfully requested stop for idle app %s", resource_id)
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "already stopped" in err_msg or "not running" in err_msg or "stopped" in err_msg:
+                    logger.info("App %s was already stopped: %s", resource_id, e)
+                    stopped = True
+                else:
+                    logger.error("Failed to stop app %s: %s", resource_id, e)
+                    raise
+        else:
+            stopped = True
+            logger.info("App %s is already in state '%s'; skipping stop call", resource_id, state_str)
+
+        return {
+            "status": "success",
+            "stopped": stopped,
+            "permissions_revoked": False,
+            "creator": creator,
+            "message": f"App '{resource_id}' stopped; access left intact.",
+        }
+
     async def reinstate_permissions(
         self,
         resource_id: str,

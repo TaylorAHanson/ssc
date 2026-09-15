@@ -109,7 +109,7 @@ NON_REMEDIATION_ACTIONS = frozenset(
 
 # High-impact automated changes; the MEDIUM tier blocks these (warn instead).
 DESTRUCTIVE_ACTIONS = frozenset(
-    {"KILL", "DROP", "SUSPEND", "REVOKE_ADMIN", "ARCHIVE", "ARCHIVE_FLAG", "STOP_AND_RECONFIGURE", "STOP_AND_REVOKE"}
+    {"KILL", "STOP", "DROP", "SUSPEND", "REVOKE_ADMIN", "ARCHIVE", "ARCHIVE_FLAG", "STOP_AND_RECONFIGURE", "STOP_AND_REVOKE"}
 )
 
 # current policy name -> names it used to be filed under. The multi-resource
@@ -170,6 +170,12 @@ def determine_intended_step(severity_raw: Any, action: str, resource_type: str =
         if resource_type == "app":
             return "stop_and_revoke"
         return "kill"
+    # STOP is an app-only, non-revoking stop (idle apps): stop the app but leave
+    # its ACLs intact. Non-apps never emit STOP; treat any stray as a plain kill.
+    if action == "STOP" and severity == "HIGH":
+        if resource_type == "app":
+            return "stop"
+        return "kill"
     # HIGH non-KILL actions (PAUSE, DROP, …): no typed handler yet — notify owner.
     if severity == "HIGH":
         return "warn"
@@ -181,7 +187,8 @@ def determine_intended_step(severity_raw: Any, action: str, resource_type: str =
 def resolve_automated_step(severity_raw: Any, action: str, resource_type: str = "unknown") -> str:
     """Decide what the automated enforcement phase actually executes for one violation.
 
-    Returns one of: ``skip``, ``warn``, ``certify``, ``uncertify``, ``stop_and_revoke``.
+    Returns one of: ``skip``, ``warn``, ``certify``, ``uncertify``, ``stop``,
+    ``stop_and_revoke``.
 
     There is no enforcement *mode* and no dry-run: by default, the sentinel never performs
     destructive actions automatically. Safe, reversible actions (certify,
@@ -190,17 +197,20 @@ def resolve_automated_step(severity_raw: Any, action: str, resource_type: str = 
     remains available only via a human "Review & Act".
 
     EXCEPTION: When ``SENTINEL_AUTO_ENFORCE_APPS`` is enabled in settings,
-    non-compliant Databricks Apps (resource_type == "app") execute ``stop_and_revoke``
-    automatically under circuit-breaker limits.
+    non-compliant Databricks Apps (resource_type == "app") execute their app-only
+    step automatically under circuit-breaker limits: ``stop_and_revoke`` for a
+    hosting violation, ``stop`` (no ACL revoke) for an idle app.
     """
     intended = determine_intended_step(severity_raw, action, resource_type)
-    if intended in ("kill", "stop_and_revoke"):
+    if intended in ("kill", "stop_and_revoke", "stop"):
         if resource_type == "app":
             try:
                 from app.core.config import settings
 
                 if getattr(settings, "SENTINEL_AUTO_ENFORCE_APPS", False):
-                    return "stop_and_revoke"
+                    # For apps, ``intended`` is already the app-specific step
+                    # (``stop_and_revoke`` or ``stop``) — never ``kill``.
+                    return intended
             except Exception:  # noqa: BLE001
                 pass
         return "warn"
@@ -1951,6 +1961,99 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
                             else:
                                 executed_action = stop_res.get("status", "error_execution")
                                 audit_reason = stop_res.get("message", "Failed to stop app.")
+            elif step == "stop":
+                # App-only, non-revoking stop (idle apps). Stops the app but leaves
+                # its ACLs intact, so the owner can restart it without an admin
+                # reinstating access. Shares the same safety rails as
+                # stop_and_revoke: protected-app guard, per-run circuit breaker,
+                # and live re-validation before acting.
+                from app.providers.databricks.handlers.app_handler import is_protected_app
+                if is_protected_app(resource_id):
+                    executed_action = "skipped_protected"
+                    audit_reason = f"Automated stop skipped: App '{resource_id}' is protected by platform safety policy."
+                    logger.warning("Sentinel: skipped automated idle-stop for protected app %s", resource_id)
+                elif apps_auto_stopped_this_run >= max_apps_per_run:
+                    logger.warning(
+                        "Sentinel: circuit breaker reached (%d apps stopped). Downgrading idle app %s to warn.",
+                        max_apps_per_run, resource_id,
+                    )
+                    executed_action = "warn_circuit_breaker"
+                    audit_reason = f"Circuit breaker tripped (max {max_apps_per_run} apps/run reached); downgraded to warning."
+                    if handler:
+                        body = violation.get("reason", "")
+                        await handler.warn(resource_id, f"[CIRCUIT_BREAKER] {body}".strip())
+                else:
+                    ws_host = ws.get("host")
+                    client_for_ws = getattr(handler, "workspace_client", None) or _new_workspace_client(ws_host)
+                    recheck = await revalidate_violation(
+                        workspace_client=client_for_ws,
+                        host=ws_host,
+                        resource_type=resource_type,
+                        resource_id=resource_id,
+                        policy_name=violation.get("policy", "apps"),
+                    )
+                    if recheck.get("still_violates") is False:
+                        logger.info(
+                            "Sentinel: aborting automated idle-stop on %s: violation no longer present (%s)",
+                            resource_id, recheck.get("reason"),
+                        )
+                        executed_action = "aborted_revalidated"
+                        audit_reason = (
+                            f"Automated stop aborted: violation no longer present on re-validation "
+                            f"({recheck.get('detail') or recheck.get('reason')})."
+                        )
+                    elif recheck.get("still_violates") is None:
+                        logger.warning(
+                            "Sentinel: could not confirm violation on recheck for %s (%s); skipping automated idle-stop for safety",
+                            resource_id, recheck.get("detail"),
+                        )
+                        executed_action = "aborted_revalidate_inconclusive"
+                        audit_reason = (
+                            f"Automated stop aborted for safety: re-validation inconclusive ({recheck.get('detail')})."
+                        )
+                    else:
+                        if not handler or not hasattr(handler, "stop"):
+                            executed_action = "error_no_handler"
+                            audit_reason = "No handler with stop capability available."
+                            logger.error("No handler with stop for resource_type=%s", resource_type)
+                        else:
+                            stop_res = await handler.stop(resource_id)
+                            if stop_res.get("status") == "success":
+                                executed_action = "automated_stop"
+                                executed_count += 1
+                                apps_auto_stopped_this_run += 1
+                                creator = stop_res.get("creator") or "unknown"
+                                audit_reason = (
+                                    f"Automatically stopped (idle) by policy enforcement; access left intact. "
+                                    f"Creator: {creator}. Original reason: {violation.get('reason', '')}."
+                                )
+                                if creator and "@" in str(creator):
+                                    try:
+                                        from app.providers.notifications.client import NotificationProvider
+                                        notifier = NotificationProvider()
+                                        app_url = getattr(settings, "APP_BASE_URL", "")
+                                        subject = f"[Governance Alert] Databricks App '{resource_id}' stopped due to inactivity"
+                                        ws_display = ws.get("name") or "Databricks"
+                                        notify_body = (
+                                            f"<p>Hello,</p>"
+                                            f"<p>Your Databricks App <strong>{resource_id}</strong> in workspace <strong>{ws_display}</strong> "
+                                            f"has been automatically stopped by Governance Sentinel enforcement because it has been idle.</p>"
+                                            f"<p><strong>Reason:</strong> {violation.get('reason', 'App idle beyond the allowed threshold')}</p>"
+                                            f"<p>Your access to the app is unchanged — you can restart it at any time. If it should stay running, "
+                                            f"please submit an Allowlist Exception request through the Governance portal"
+                                            + (f': <a href="{app_url}">{app_url}</a>' if app_url else ".")
+                                            + "</p>"
+                                        )
+                                        await notifier.send_email(to=creator, subject=subject, body=notify_body, is_html=True)
+                                        logger.info("Sent automated idle-stop notification to creator %s for app %s", creator, resource_id)
+                                    except Exception as notify_err:  # noqa: BLE001
+                                        logger.warning("Could not send notification email to creator %s: %s", creator, notify_err)
+                            elif stop_res.get("status") == "skipped_protected":
+                                executed_action = "skipped_protected"
+                                audit_reason = stop_res.get("message", "App is protected.")
+                            else:
+                                executed_action = stop_res.get("status", "error_execution")
+                                audit_reason = stop_res.get("message", "Failed to stop app.")
             elif step == "warn":
                 if not handler:
                     executed_action = "error_no_handler"
@@ -1984,7 +2087,8 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
             executed_action = "error_execution"
 
         if intended != executed_action and not (
-            intended in ("kill", "stop_and_revoke") and executed_action == "automated_stop_and_revoke"
+            (intended in ("kill", "stop_and_revoke") and executed_action == "automated_stop_and_revoke")
+            or (intended == "stop" and executed_action == "automated_stop")
         ):
             manual_required += 1
 
@@ -2016,10 +2120,10 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
 
     enforce_summary = (
         f"Processed {len(violations)} violation(s); executed {executed_count} automated "
-        f"action(s) (certify/uncertify/warn/stop_and_revoke)."
+        f"action(s) (certify/uncertify/warn/stop/stop_and_revoke)."
     )
     if apps_auto_stopped_this_run:
-        enforce_summary += f" {apps_auto_stopped_this_run} non-compliant app(s) were automatically stopped and revoked."
+        enforce_summary += f" {apps_auto_stopped_this_run} non-compliant app(s) were automatically stopped (idle apps keep their access; hosting violations also have access revoked)."
     if manual_required:
         enforce_summary += (
             f" {manual_required} destructive action(s) were downgraded to a warning and "

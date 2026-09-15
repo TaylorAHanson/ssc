@@ -1233,7 +1233,7 @@ export function EnforcementSentinel() {
                                                                                     const execKey = `${selectedRun.id}-${resolveWorkspace(v)}-${v.resource_id}-${v.policy}-${v.action}`;
                                                                                     const executed = executedActions[execKey];
                                                                                     if (executed) {
-                                                                                        const isAuto = executed.executed_action === 'automated_stop_and_revoke';
+                                                                                        const isAuto = executed.executed_action?.startsWith('automated_') ?? false;
                                                                                         const isProtected = executed.executed_action === 'skipped_protected';
                                                                                         return (
                                                                                             <div className="flex flex-col items-end">
@@ -1251,7 +1251,7 @@ export function EnforcementSentinel() {
                                                                                     // action is a no-op (e.g. WARN / KEEP_*), but disable
                                                                                     // it with an explanatory tooltip so it never looks
                                                                                     // like the control is missing.
-                                                                                    const actionable = ['KILL', 'STOP_AND_REVOKE', 'CERTIFY', 'UNCERTIFY'].includes(v.action);
+                                                                                    const actionable = ['KILL', 'STOP_AND_REVOKE', 'STOP', 'CERTIFY', 'UNCERTIFY'].includes(v.action);
                                                                                     return actionable ? (
                                                                                         <Button 
                                                                                             size="sm" 
