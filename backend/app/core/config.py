@@ -242,7 +242,7 @@ class Settings(BaseSettings):
     DATA_QUALITY_TABLE: str = "" # Table with ADOC DQ history
     # catalog.schema that holds the ADOC `*_history` tables (adoc_dq_history,
     # adoc_freshness_history, adoc_data_drift_history, adoc_profile_anomaly_history,
-    # adoc_schema_drift_history). Intentionally BLANK by default: this is an
+    # adoc_schema_drift_history, adoc_reconciliation_history). Intentionally BLANK by default: this is an
     # environment-specific catalog, and a shipped default (it used to be a stage
     # catalog) silently makes every other environment certify against the wrong
     # DQ history. Set it per target in databricks.yml or Admin -> Settings; while

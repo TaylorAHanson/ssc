@@ -20,6 +20,11 @@ DEFAULT_RELIABILITY_WINDOW_DAYS = 7
 # differ), so UNION-ing the raw `items` array fails with INCOMPATIBLE_COLUMN_TYPE.
 # We explode + project only the scalar fields we need inside each arm so the
 # unioned columns are all compatible scalar types.
+#
+# adoc_reconciliation_history is NOT in this list: it has no assetInfo.assetUid /
+# assetName. It uses a left/right pair (leftBackingAssetUid, rightBackingAssetUid)
+# and runs as its OWN statement via _build_reconciliation_failed_rules_query so a
+# recon-only failure can't drop these core tables to "not fetched".
 _ADOC_HISTORY_TABLES = [
     "adoc_dq_history",
     "adoc_freshness_history",
@@ -33,6 +38,19 @@ _ADOC_ITEM_PROJECTION = (
     "item.ruleItemId AS ruleItemId, item.columnName AS columnName, "
     "item.dimension AS dimension, item.resultPercent AS resultPercent, "
     "item.threshold AS threshold, item.rowsFailed AS rowsFailed"
+)
+# Reconciliation compares two assets; alias each side into the same scalar
+# columns the ranked CTE and row-attribution loop already consume.
+_ADOC_RECON_HISTORY_TABLE = "adoc_reconciliation_history"
+_ADOC_RECON_ITEM_FIELDS = (
+    "execution.ruleName AS ruleName, execution.ruleType AS ruleType, processed_at, "
+    "item.ruleItemId AS ruleItemId, item.columnName AS columnName, "
+    "item.dimension AS dimension, item.resultPercent AS resultPercent, "
+    "item.threshold AS threshold, item.rowsFailed AS rowsFailed"
+)
+_ADOC_RECON_PROJECTIONS = (
+    f"assetInfo.leftBackingAssetUid AS assetUid, assetInfo.leftAssetName AS assetName, {_ADOC_RECON_ITEM_FIELDS}",
+    f"assetInfo.rightBackingAssetUid AS assetUid, assetInfo.rightAssetName AS assetName, {_ADOC_RECON_ITEM_FIELDS}",
 )
 
 
@@ -198,20 +216,17 @@ class DatasetResourceHandler(BaseResourceHandler):
                 
         return resources
 
-    def _build_failed_rules_query(self, adoc_schema: str, window_days: int, full_names: List[str]) -> str:
-        """Build ONE query returning the latest failed rule-item per asset for a
-        given lookback window, across all ADOC *_history tables.
+    def _wrap_ranked_failed_rules(self, arms: List[str], window_days: int, full_names: List[str]) -> str:
+        """Wrap already-projected UNION arms in the shared ranked/latest query.
 
-        Mirrors the previous per-table query (explode + project scalars, keep the
-        most recent occurrence per rule-item, only rows where score < threshold)
-        but covers every ``full_name`` at once via an OR of ``assetUid LIKE`` so a
-        single warehouse scan serves the whole group.
+        Every arm must project the same scalar columns (see
+        ``_ADOC_ITEM_PROJECTION`` / ``_ADOC_RECON_PROJECTIONS``): assetUid,
+        assetName, ruleName, ruleType, processed_at, ruleItemId, columnName,
+        dimension, resultPercent, threshold, rowsFailed. Keeps only the most
+        recent occurrence per (assetUid, ruleItemId) within the window where
+        the score is below threshold.
         """
-        arms = "\n    UNION ALL\n    ".join(
-            f"SELECT {_ADOC_ITEM_PROJECTION} FROM {adoc_schema}.{t} "
-            "LATERAL VIEW explode(items) exploded AS item"
-            for t in _ADOC_HISTORY_TABLES
-        )
+        arms_sql = "\n    UNION ALL\n    ".join(arms)
         # Match any requested asset (assetUid contains the full dotted name), same
         # semantics as the old per-asset LIKE '%full_name%'. Single-quotes in a UC
         # name are not valid, so no escaping is required.
@@ -219,7 +234,7 @@ class DatasetResourceHandler(BaseResourceHandler):
         asset_filter = f"      AND ({likes})\n" if likes else ""
         return f"""
 WITH exploded AS (
-    {arms}
+    {arms_sql}
 ),
 ranked AS (
     SELECT assetUid, assetName, ruleName, ruleType, columnName, dimension,
@@ -235,6 +250,49 @@ FROM ranked
 WHERE rn = 1
 ORDER BY resultPercent ASC
 """
+
+    def _build_failed_rules_query(self, adoc_schema: str, window_days: int, full_names: List[str]) -> str:
+        """Build ONE query returning the latest failed rule-item per asset for a
+        given lookback window, across the core ADOC *_history tables.
+
+        Mirrors the previous per-table query (explode + project scalars, keep the
+        most recent occurrence per rule-item, only rows where score < threshold)
+        but covers every ``full_name`` at once via an OR of ``assetUid LIKE`` so a
+        single warehouse scan serves the whole group.
+
+        Reconciliation is deliberately NOT unioned in here — it has a different
+        assetInfo shape and runs as its own statement (see
+        ``_build_reconciliation_failed_rules_query``) so a recon problem can't
+        drop the core tables to "not fetched".
+        """
+        explode = "LATERAL VIEW explode(items) exploded AS item"
+        arms = [
+            f"SELECT {_ADOC_ITEM_PROJECTION} FROM {adoc_schema}.{t} {explode}"
+            for t in _ADOC_HISTORY_TABLES
+        ]
+        return self._wrap_ranked_failed_rules(arms, window_days, full_names)
+
+    def _build_reconciliation_failed_rules_query(self, adoc_schema: str, window_days: int, full_names: List[str]) -> str:
+        """Build the reconciliation-only failed-rules query, run SEPARATELY.
+
+        ``adoc_reconciliation_history`` compares two assets and has no
+        ``assetInfo.assetUid``/``assetName``; it exposes a left/right pair
+        (``leftBackingAssetUid``/``leftAssetName`` and the right equivalents).
+        We emit two arms so a single recon failure is attributed to BOTH
+        compared assets, each aliased into the shared scalar columns.
+
+        Kept out of ``_build_failed_rules_query`` on purpose: if the recon
+        schema, permissions, or the (still-unverified in this env) failure
+        direction / uid format are wrong, this query fails in isolation and we
+        lose only recon signal — the core DQ tables in the same window are
+        unaffected. See ``_populate_failed_rules_batched``.
+        """
+        explode = "LATERAL VIEW explode(items) exploded AS item"
+        arms = [
+            f"SELECT {proj} FROM {adoc_schema}.{_ADOC_RECON_HISTORY_TABLE} {explode}"
+            for proj in _ADOC_RECON_PROJECTIONS
+        ]
+        return self._wrap_ranked_failed_rules(arms, window_days, full_names)
 
     def _run_dq_statement(self, query: str) -> tuple:
         """Execute a DQ statement, poll to completion, and collect ALL chunks.
@@ -333,9 +391,11 @@ ORDER BY resultPercent ASC
 
         for window_days, group in by_window.items():
             full_names = [fn for _, fn in group]
-            query = self._build_failed_rules_query(adoc_schema, window_days, full_names)
+
+            # --- Core ADOC *_history tables: these GATE "fetched" status. ---
+            core_query = self._build_failed_rules_query(adoc_schema, window_days, full_names)
             try:
-                state, rows = self._run_dq_statement(query)
+                state, rows = self._run_dq_statement(core_query)
             except Exception as e:  # noqa: BLE001
                 logger.error(
                     "Batched DQ query raised for window=%dd (%d asset(s)): %s",
@@ -351,36 +411,68 @@ ORDER BY resultPercent ASC
                 )
                 continue  # leave failed_rule_count = -1 for this group
 
-            # The query succeeded → every asset in this group is now "fetched".
+            # The core query succeeded → every asset in this group is now "fetched".
             for asset_info, _ in group:
                 asset_info["failed_rules"] = []
                 asset_info["failed_rule_count"] = 0
+            self._apply_failed_rows(group, rows)
 
-            for r in rows:
-                # Pad short rows so unpacking is safe; column order matches the
-                # SELECT list. The statement API returns all values as strings.
-                r = list(r) + [None] * (9 - len(r))
-                asset_uid, asset_name, rule_name, rule_type, column_name, dimension, result_percent, threshold, rows_failed = r[:9]
-                uid = asset_uid or ""
-                for asset_info, full_name in group:
-                    # Attribute the row exactly like the old per-asset query did:
-                    # assetUid LIKE '%full_name%'. (No assetName fallback — the SQL
-                    # already filters on assetUid, and matching assetName too could
-                    # misattribute a row to a second asset.)
-                    if full_name in uid:
-                        asset_info["failed_rules"].append({
-                            "rule": rule_name or "Unnamed rule",
-                            "rule_type": rule_type,
-                            "table": asset_name or full_name,
-                            "column": column_name,
-                            "dimension": dimension,
-                            "score": float(result_percent) if result_percent not in (None, "") else None,
-                            "threshold": float(threshold) if threshold not in (None, "") else None,
-                            "rows_failed": int(rows_failed) if rows_failed not in (None, "") else None,
-                        })
+            # --- Reconciliation: SEPARATE statement, best-effort, additive. ---
+            # Isolated so a recon schema / permission / semantics problem can only
+            # lose recon signal — it can NEVER drop the core tables above back to
+            # "not fetched" (which would block certification env-wide). Any
+            # failure here is logged and swallowed; core results stand.
+            recon_query = self._build_reconciliation_failed_rules_query(
+                adoc_schema, window_days, full_names
+            )
+            try:
+                recon_state, recon_rows = self._run_dq_statement(recon_query)
+                if recon_state == "SUCCEEDED":
+                    self._apply_failed_rows(group, recon_rows)
+                else:
+                    logger.warning(
+                        "Reconciliation DQ query ended in state=%s for window=%dd "
+                        "(%d asset(s)); core DQ results kept, recon signal skipped this run.",
+                        recon_state, window_days, len(full_names),
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "Reconciliation DQ query raised for window=%dd (%d asset(s)); "
+                    "core DQ results kept, recon signal skipped this run: %s",
+                    window_days, len(full_names), e,
+                )
 
             for asset_info, _ in group:
                 asset_info["failed_rule_count"] = len(asset_info["failed_rules"])
+
+    def _apply_failed_rows(self, group: List[tuple], rows: List[Any]) -> None:
+        """Attribute result rows to the assets in ``group`` and append failures.
+
+        Shared by the core and reconciliation passes. Attribution matches the
+        old per-asset query: ``assetUid LIKE '%full_name%'`` (no assetName
+        fallback — the SQL already filters on assetUid, and matching assetName
+        too could misattribute a row to a second asset). Callers are responsible
+        for having reset ``failed_rules``/``failed_rule_count`` beforehand and
+        for recomputing the count afterwards.
+        """
+        for r in rows:
+            # Pad short rows so unpacking is safe; column order matches the
+            # SELECT list. The statement API returns all values as strings.
+            r = list(r) + [None] * (9 - len(r))
+            asset_uid, asset_name, rule_name, rule_type, column_name, dimension, result_percent, threshold, rows_failed = r[:9]
+            uid = asset_uid or ""
+            for asset_info, full_name in group:
+                if full_name in uid:
+                    asset_info["failed_rules"].append({
+                        "rule": rule_name or "Unnamed rule",
+                        "rule_type": rule_type,
+                        "table": asset_name or full_name,
+                        "column": column_name,
+                        "dimension": dimension,
+                        "score": float(result_percent) if result_percent not in (None, "") else None,
+                        "threshold": float(threshold) if threshold not in (None, "") else None,
+                        "rows_failed": int(rows_failed) if rows_failed not in (None, "") else None,
+                    })
 
     def _apply_uc_metadata(self, pending: List[tuple]) -> None:
         """Fill in tags, columns, and descriptions for every discovered asset.
