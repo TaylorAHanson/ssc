@@ -104,6 +104,35 @@ def _acl_dict_to_request(item: Dict[str, Any]) -> Optional[AppAccessControlReque
     )
 
 
+def _acl_is_admins_only(previous_acl: Optional[List[Dict[str, Any]]]) -> bool:
+    """True iff this ACL snapshot grants access to no one except the ``admins``
+    group and service principals (the executing SP).
+
+    Used to detect an app whose access is *already* locked down, so enforcement
+    can no-op instead of re-revoking (and re-notifying the owner) on every scan.
+    Conservative by design: any direct user grant, any non-``admins`` group, any
+    unrecognized entry shape, or the absence of the ``admins`` group all return
+    ``False`` — i.e. when unsure we treat the app as NOT locked and re-enforce
+    (which is a safe, idempotent re-apply), never the other way around.
+    """
+    if not previous_acl:
+        return False
+    has_admins = False
+    for item in previous_acl:
+        if not isinstance(item, dict):
+            return False
+        if item.get("user_name"):
+            return False
+        group = item.get("group_name")
+        if group:
+            if group == "admins":
+                has_admins = True
+            else:
+                return False
+        # service_principal_name entries are permitted (the executing admin SP).
+    return has_admins
+
+
 class AppResourceHandler(BaseResourceHandler):
     """Resource handler for Databricks Apps."""
 
@@ -190,9 +219,29 @@ class AppResourceHandler(BaseResourceHandler):
         if hasattr(app, "compute_status") and app.compute_status:
             compute_state = getattr(app.compute_status, "state", None)
         state_str = str(getattr(compute_state, "value", compute_state) or "").upper()
+        was_stopped = state_str in ("STOPPED", "DELETING", "STOPPING")
+
+        # No-op short-circuit: if the app is ALREADY stopped AND its access is
+        # ALREADY locked down to admins only, there is nothing to do. Return
+        # early so the caller can skip the repeat owner-notification and the
+        # circuit-breaker slot. If the owner/admin has since restarted the app
+        # (state != stopped) or reopened its ACL, we fall through and re-enforce.
+        if was_stopped and _acl_is_admins_only(previous_acl):
+            logger.info(
+                "App %s already stopped with access restricted; no-op enforcement.", resource_id
+            )
+            return {
+                "status": "success",
+                "already_enforced": True,
+                "stopped": True,
+                "permissions_revoked": True,
+                "previous_acl": previous_acl,
+                "creator": creator,
+                "message": f"App '{resource_id}' already stopped with access restricted; no action taken.",
+            }
 
         stopped = False
-        if state_str not in ("STOPPED", "DELETING", "STOPPING"):
+        if not was_stopped:
             try:
                 await asyncio.to_thread(self.workspace_client.apps.stop, name=resource_id)
                 stopped = True
@@ -249,6 +298,7 @@ class AppResourceHandler(BaseResourceHandler):
 
         return {
             "status": "success",
+            "already_enforced": False,
             "stopped": stopped,
             "permissions_revoked": True,
             "previous_acl": previous_acl,
@@ -284,9 +334,16 @@ class AppResourceHandler(BaseResourceHandler):
         if hasattr(app, "compute_status") and app.compute_status:
             compute_state = getattr(app.compute_status, "state", None)
         state_str = str(getattr(compute_state, "value", compute_state) or "").upper()
+        was_stopped = state_str in ("STOPPED", "DELETING", "STOPPING")
 
+        # No-op short-circuit: if the app is already stopped, there's nothing to
+        # do — report already_enforced so the caller skips the repeat owner
+        # notification and the circuit-breaker slot. Because the idle path leaves
+        # access intact, the owner CAN restart the app; when they do, the next
+        # scan sees it running and re-enforces (we are not blind to restarts).
+        already_enforced = was_stopped
         stopped = False
-        if state_str not in ("STOPPED", "DELETING", "STOPPING"):
+        if not was_stopped:
             try:
                 await asyncio.to_thread(self.workspace_client.apps.stop, name=resource_id)
                 stopped = True
@@ -296,19 +353,25 @@ class AppResourceHandler(BaseResourceHandler):
                 if "already stopped" in err_msg or "not running" in err_msg or "stopped" in err_msg:
                     logger.info("App %s was already stopped: %s", resource_id, e)
                     stopped = True
+                    already_enforced = True
                 else:
                     logger.error("Failed to stop app %s: %s", resource_id, e)
                     raise
         else:
             stopped = True
-            logger.info("App %s is already in state '%s'; skipping stop call", resource_id, state_str)
+            logger.info("App %s is already stopped; no-op idle enforcement", resource_id)
 
         return {
             "status": "success",
+            "already_enforced": already_enforced,
             "stopped": stopped,
             "permissions_revoked": False,
             "creator": creator,
-            "message": f"App '{resource_id}' stopped; access left intact.",
+            "message": (
+                f"App '{resource_id}' already stopped; no action taken."
+                if already_enforced
+                else f"App '{resource_id}' stopped; access left intact."
+            ),
         }
 
     async def reinstate_permissions(

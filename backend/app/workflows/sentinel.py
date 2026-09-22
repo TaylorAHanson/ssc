@@ -1923,7 +1923,21 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
                         else:
                             import json
                             stop_res = await handler.stop_and_revoke(resource_id)
-                            if stop_res.get("status") == "success":
+                            if stop_res.get("status") == "success" and stop_res.get("already_enforced"):
+                                # No-op: app was already stopped AND access already
+                                # locked to admins. Skip the repeat owner email and
+                                # do NOT consume a circuit-breaker slot, so standing
+                                # (already-handled) violations can't starve new ones.
+                                executed_action = "already_enforced"
+                                audit_reason = (
+                                    f"No-op: app already stopped with access restricted. "
+                                    f"Original reason: {violation.get('reason', '')}."
+                                )
+                                logger.info(
+                                    "Sentinel: %s already enforced (stopped + locked); skipping repeat stop/notification.",
+                                    resource_id,
+                                )
+                            elif stop_res.get("status") == "success":
                                 executed_action = "automated_stop_and_revoke"
                                 executed_count += 1
                                 apps_auto_stopped_this_run += 1
@@ -2018,7 +2032,21 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
                             logger.error("No handler with stop for resource_type=%s", resource_type)
                         else:
                             stop_res = await handler.stop(resource_id)
-                            if stop_res.get("status") == "success":
+                            if stop_res.get("status") == "success" and stop_res.get("already_enforced"):
+                                # No-op: idle app already stopped. Skip the repeat
+                                # owner email and don't consume a circuit-breaker
+                                # slot. If the owner restarts it, the next scan sees
+                                # it running and re-enforces (restarts aren't missed).
+                                executed_action = "already_enforced"
+                                audit_reason = (
+                                    f"No-op: idle app already stopped. "
+                                    f"Original reason: {violation.get('reason', '')}."
+                                )
+                                logger.info(
+                                    "Sentinel: idle app %s already stopped; skipping repeat stop/notification.",
+                                    resource_id,
+                                )
+                            elif stop_res.get("status") == "success":
                                 executed_action = "automated_stop"
                                 executed_count += 1
                                 apps_auto_stopped_this_run += 1
@@ -2089,6 +2117,9 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
         if intended != executed_action and not (
             (intended in ("kill", "stop_and_revoke") and executed_action == "automated_stop_and_revoke")
             or (intended == "stop" and executed_action == "automated_stop")
+            # An already-enforced no-op means the resource is already in its
+            # enforced terminal state — it does NOT require a manual follow-up.
+            or executed_action == "already_enforced"
         ):
             manual_required += 1
 

@@ -157,6 +157,7 @@ async def test_app_handler_stop_and_revoke_success():
     res = await handler.stop_and_revoke("rogue-app")
 
     assert res["status"] == "success"
+    assert res["already_enforced"] is False
     assert res["stopped"] is True
     assert res["permissions_revoked"] is True
     assert res["creator"] == "rogue-owner@company.com"
@@ -191,6 +192,7 @@ async def test_app_handler_stop_without_revoke():
     res = await handler.stop("idle-app")
 
     assert res["status"] == "success"
+    assert res["already_enforced"] is False
     assert res["stopped"] is True
     assert res["permissions_revoked"] is False
     assert res["creator"] == "owner@company.com"
@@ -210,6 +212,83 @@ async def test_app_handler_stop_protected():
     assert res["stopped"] is False
     mock_ws.apps.stop.assert_not_called()
     mock_ws.apps.set_permissions.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_app_handler_stop_already_stopped_is_noop():
+    """An idle app that is already stopped is a no-op: already_enforced=True and
+    the stop API is not called again (so the caller can skip email + breaker)."""
+    mock_ws = MagicMock()
+    mock_app = MagicMock(spec=App)
+    mock_app.name = "idle-app"
+    mock_app.creator = "owner@company.com"
+    mock_app.compute_status = MagicMock(spec=ComputeStatus)
+    mock_app.compute_status.state = ComputeState.STOPPED
+    mock_ws.apps.get.return_value = mock_app
+
+    handler = AppResourceHandler(mock_ws)
+    res = await handler.stop("idle-app")
+
+    assert res["status"] == "success"
+    assert res["already_enforced"] is True
+    mock_ws.apps.stop.assert_not_called()
+    mock_ws.apps.set_permissions.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_app_handler_stop_and_revoke_already_enforced_is_noop():
+    """Already stopped AND already locked to admins-only -> stop_and_revoke is a
+    pure no-op: no stop call and no permission write."""
+    mock_ws = MagicMock()
+    mock_app = MagicMock(spec=App)
+    mock_app.name = "rogue-app"
+    mock_app.creator = "owner@company.com"
+    mock_app.compute_status = MagicMock(spec=ComputeStatus)
+    mock_app.compute_status.state = ComputeState.STOPPED
+
+    mock_perms = MagicMock(spec=AppPermissions)
+    mock_perms.access_control_list = [
+        MagicMock(as_dict=lambda: {"group_name": "admins", "permission_level": "CAN_MANAGE"}),
+        MagicMock(as_dict=lambda: {"service_principal_name": "sp-123", "permission_level": "CAN_MANAGE"}),
+    ]
+    mock_ws.apps.get.return_value = mock_app
+    mock_ws.apps.get_permissions.return_value = mock_perms
+
+    handler = AppResourceHandler(mock_ws)
+    res = await handler.stop_and_revoke("rogue-app")
+
+    assert res["status"] == "success"
+    assert res["already_enforced"] is True
+    mock_ws.apps.stop.assert_not_called()
+    mock_ws.apps.set_permissions.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_app_handler_stop_and_revoke_relocks_when_acl_reopened():
+    """Stopped but ACL reopened (a user regained access) -> NOT a no-op: the ACL
+    is re-locked (already_enforced=False, set_permissions called)."""
+    mock_ws = MagicMock()
+    mock_app = MagicMock(spec=App)
+    mock_app.name = "rogue-app"
+    mock_app.creator = "owner@company.com"
+    mock_app.compute_status = MagicMock(spec=ComputeStatus)
+    mock_app.compute_status.state = ComputeState.STOPPED
+
+    mock_perms = MagicMock(spec=AppPermissions)
+    mock_perms.access_control_list = [
+        MagicMock(as_dict=lambda: {"user_name": "someone@company.com", "permission_level": "CAN_MANAGE"}),
+    ]
+    mock_ws.apps.get.return_value = mock_app
+    mock_ws.apps.get_permissions.return_value = mock_perms
+    mock_ws.config.client_id = "sp-abc"
+
+    handler = AppResourceHandler(mock_ws)
+    res = await handler.stop_and_revoke("rogue-app")
+
+    assert res["status"] == "success"
+    assert res["already_enforced"] is False
+    mock_ws.apps.stop.assert_not_called()  # already stopped, no stop needed
+    mock_ws.apps.set_permissions.assert_called_once()  # but ACL is re-locked
 
 
 @pytest.mark.asyncio
@@ -351,6 +430,123 @@ async def test_sentinel_run_enforcement_idle_app_auto_stopped_without_revoke(db_
     assert audit_row.executed_action == "automated_stop"
     assert audit_row.intended_action == "stop"
     assert "Previous ACL snapshot:" not in (audit_row.reason or "")
+
+
+@pytest.mark.asyncio
+async def test_sentinel_run_enforcement_already_enforced_is_noop(db_session):
+    """A standing hosting violation whose app is already stopped + locked is a
+    no-op: no owner email, not counted as an auto-stop (so it can't consume the
+    circuit breaker), not flagged as manual-required, audited as already_enforced."""
+    req = _make_request(db_session)
+    replace_run_findings(
+        db_session,
+        req.id,
+        checks=[],
+        violations=[
+            {
+                "rule_id": "no_apps_enterprise_prod",
+                "resource_id": "already-stopped-app",
+                "resource_type": "app",
+                "policy": "apps",
+                "severity": "HIGH",
+                "action": "KILL",
+                "reason": "App not permitted in prod enterprise workspace without allowlist.",
+                "workspace": {"name": "prod-ws", "host": "https://prod.databricks.net", "environment": "prod"},
+            }
+        ],
+    )
+
+    mock_handler = MagicMock()
+    mock_handler.workspace_client = MagicMock()
+    mock_handler.stop_and_revoke = AsyncMock(return_value={
+        "status": "success",
+        "already_enforced": True,
+        "stopped": True,
+        "permissions_revoked": True,
+        "previous_acl": [],
+        "creator": "owner@databricks.com",
+    })
+
+    with (
+        patch.object(settings, "SENTINEL_AUTO_ENFORCE_APPS", True),
+        patch.object(sentinel, "_new_workspace_client", return_value=mock_handler.workspace_client),
+        patch.object(sentinel, "_handlers_by_type", return_value={"app": mock_handler}),
+        patch.object(sentinel, "revalidate_violation", new=AsyncMock(return_value={"still_violates": True})),
+        patch("app.providers.notifications.client.NotificationProvider.send_email", new=AsyncMock(return_value=True)) as mock_email,
+        patch("app.db.session.get_lakebase_session", side_effect=lambda: _keep_open(db_session)),
+    ):
+        result = await sentinel.run_enforcement(db_session, req)
+
+    assert result["apps_auto_stopped"] == 0
+    assert result["manual_required"] == 0
+    mock_handler.stop_and_revoke.assert_called_once_with("already-stopped-app")
+    mock_email.assert_not_called()
+
+    audit_row = db_session.query(EnforcementAuditModel).filter(
+        EnforcementAuditModel.request_id == req.id,
+        EnforcementAuditModel.resource_id == "already-stopped-app",
+    ).first()
+    assert audit_row is not None
+    assert audit_row.executed_action == "already_enforced"
+
+
+@pytest.mark.asyncio
+async def test_sentinel_run_enforcement_idle_already_stopped_is_noop(db_session):
+    """An idle-app violation whose app is already stopped is a no-op: no email,
+    not counted, audited as already_enforced. (A later restart -> running -> the
+    next scan re-enforces; that path is covered by the auto-stop test above.)"""
+    req = _make_request(db_session)
+    replace_run_findings(
+        db_session,
+        req.id,
+        checks=[],
+        violations=[
+            {
+                "rule_id": "app_not_idle",
+                "resource_id": "idle-already-stopped",
+                "resource_type": "app",
+                "policy": "apps",
+                "severity": "HIGH",
+                "action": "STOP",
+                "reason": "Apps must be stopped if no one has accessed the app in over 30 days.",
+                "workspace": {"name": "domain-ws", "host": "https://domain.databricks.net", "environment": "dev"},
+            }
+        ],
+    )
+
+    mock_handler = MagicMock()
+    mock_handler.workspace_client = MagicMock()
+    mock_handler.stop = AsyncMock(return_value={
+        "status": "success",
+        "already_enforced": True,
+        "stopped": True,
+        "permissions_revoked": False,
+        "creator": "idle-owner@databricks.com",
+    })
+    mock_handler.stop_and_revoke = AsyncMock()
+
+    with (
+        patch.object(settings, "SENTINEL_AUTO_ENFORCE_APPS", True),
+        patch.object(sentinel, "_new_workspace_client", return_value=mock_handler.workspace_client),
+        patch.object(sentinel, "_handlers_by_type", return_value={"app": mock_handler}),
+        patch.object(sentinel, "revalidate_violation", new=AsyncMock(return_value={"still_violates": True})),
+        patch("app.providers.notifications.client.NotificationProvider.send_email", new=AsyncMock(return_value=True)) as mock_email,
+        patch("app.db.session.get_lakebase_session", side_effect=lambda: _keep_open(db_session)),
+    ):
+        result = await sentinel.run_enforcement(db_session, req)
+
+    assert result["apps_auto_stopped"] == 0
+    assert result["manual_required"] == 0
+    mock_handler.stop.assert_called_once_with("idle-already-stopped")
+    mock_handler.stop_and_revoke.assert_not_called()
+    mock_email.assert_not_called()
+
+    audit_row = db_session.query(EnforcementAuditModel).filter(
+        EnforcementAuditModel.request_id == req.id,
+        EnforcementAuditModel.resource_id == "idle-already-stopped",
+    ).first()
+    assert audit_row is not None
+    assert audit_row.executed_action == "already_enforced"
 
 
 @pytest.mark.asyncio
