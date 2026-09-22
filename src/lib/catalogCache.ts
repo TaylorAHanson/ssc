@@ -18,6 +18,7 @@
 import { useEffect, useState } from 'react';
 
 import { api } from '../services/api';
+import type { DomainHierarchy, LegacyMapping } from '../services/api';
 
 const TTL_MS = 5 * 60_000;
 
@@ -194,6 +195,24 @@ export const discoveryCatalogResource = createResource<any[]>(async () => {
 
 /** Hook for the unified Discover catalog. */
 export const useDiscoveryCatalog = discoveryCatalogResource.useResource;
+
+export const domainHierarchyResource = createResource<DomainHierarchy[]>(
+  () => api.getDomainHierarchy().catch(() => []),
+  [],
+);
+export const useDomainHierarchy = domainHierarchyResource.useResource;
+
+export const legacyMappingsResource = createResource<LegacyMapping[]>(
+  () => api.getLegacyMappings().catch(() => []),
+  [],
+);
+export const useLegacyMappings = legacyMappingsResource.useResource;
+
+export const metricViewsResource = createResource<any[]>(
+  () => api.getMetricViews().catch(() => []),
+  [],
+);
+export const useMetricViews = metricViewsResource.useResource;
 
 /**
  * The set of asset IDs the current user can actually access, computed server
