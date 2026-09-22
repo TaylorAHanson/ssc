@@ -72,7 +72,12 @@ class Settings(BaseSettings):
     # Used to build absolute links in outbound emails (e.g. the Enforcement
     # Sentinel "Review" button in the governance digest). Blank omits the link.
     APP_BASE_URL: str = os.getenv("APP_BASE_URL", "")
-    
+
+    # Optional contact (team name, email, or DL) shown in the "Questions?" line of
+    # automated enforcement emails to app owners. Blank omits the line entirely so
+    # we never ship a placeholder to real inboxes.
+    GOVERNANCE_CONTACT: str = os.getenv("GOVERNANCE_CONTACT", "")
+
     # API Settings
     API_V1_PREFIX: str = "/api/v1"
     PROJECT_NAME: str = f"{_brand_name} API"

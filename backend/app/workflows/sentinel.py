@@ -222,6 +222,32 @@ def warn_prefix(severity: str, action: str) -> str:
     return f"[{normalize_severity(severity)}/{action}]"
 
 
+def _enforcement_next_steps_html(app_url: str = "", contact: str = "") -> str:
+    """Shared "Next steps" + sign-off block for automated enforcement emails to
+    app owners.
+
+    Presents the two remediation paths (migrate to a Command Center widget, or
+    request an exception) and an optional contact line. ``app_url`` links the
+    exception request to the Governance portal; when blank the portal is named
+    without a link. ``contact`` is admin-configured (``GOVERNANCE_CONTACT``); when
+    blank the "Questions?" line is omitted so no placeholder ships to real inboxes.
+    """
+    portal = f'<a href="{app_url}">Governance portal</a>' if app_url else "Governance portal"
+    contact_line = f"<p>Questions? Contact {html.escape(contact)}.</p>" if contact else ""
+    return (
+        "<p><strong>Next steps</strong></p>"
+        "<p><strong>Option 1 (recommended): Migrate to a Command Center widget.</strong> "
+        "For governance and cost reasons, we encourage moving this app into Command Center "
+        "as a widget. We're building an automated way to handle the migration and will share "
+        "details as soon as it's available.</p>"
+        "<p><strong>Option 2: Request an exception.</strong> If this app can't be migrated to a "
+        f"widget, you'll need to submit an exception request through the {portal}.</p>"
+        f"{contact_line}"
+        "<p>Thank you,</p>"
+        "<p>Governance Sentinel</p>"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
@@ -1953,17 +1979,16 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
                                         from app.providers.notifications.client import NotificationProvider
                                         notifier = NotificationProvider()
                                         app_url = getattr(settings, "APP_BASE_URL", "")
+                                        contact = getattr(settings, "GOVERNANCE_CONTACT", "")
                                         subject = f"[Governance Alert] Databricks App '{resource_id}' stopped due to policy non-compliance"
                                         ws_display = ws.get("name") or "Databricks"
                                         notify_body = (
-                                            f"<p>Hello,</p>"
+                                            "<p>Hello,</p>"
                                             f"<p>Your Databricks App <strong>{resource_id}</strong> in workspace <strong>{ws_display}</strong> "
-                                            f"has been automatically stopped and its permissions restricted by Governance Sentinel enforcement.</p>"
+                                            "has been automatically stopped and its permissions restricted by Governance Sentinel enforcement.</p>"
                                             f"<p><strong>Reason:</strong> {violation.get('reason', 'Enterprise policy non-compliance')}</p>"
-                                            f"<p>Only workspace administrators currently have access to this app. If this app requires an exception, "
-                                            f"please submit an Allowlist Exception request through the Governance portal"
-                                            + (f': <a href="{app_url}">{app_url}</a>' if app_url else ".")
-                                            + "</p>"
+                                            "<p>Only workspace administrators currently have access to this app.</p>"
+                                            + _enforcement_next_steps_html(app_url, contact)
                                         )
                                         await notifier.send_email(to=creator, subject=subject, body=notify_body, is_html=True)
                                         logger.info("Sent automated enforcement notification to creator %s for app %s", creator, resource_id)
@@ -2060,17 +2085,16 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
                                         from app.providers.notifications.client import NotificationProvider
                                         notifier = NotificationProvider()
                                         app_url = getattr(settings, "APP_BASE_URL", "")
+                                        contact = getattr(settings, "GOVERNANCE_CONTACT", "")
                                         subject = f"[Governance Alert] Databricks App '{resource_id}' stopped due to inactivity"
                                         ws_display = ws.get("name") or "Databricks"
                                         notify_body = (
-                                            f"<p>Hello,</p>"
+                                            "<p>Hello,</p>"
                                             f"<p>Your Databricks App <strong>{resource_id}</strong> in workspace <strong>{ws_display}</strong> "
-                                            f"has been automatically stopped by Governance Sentinel enforcement because it has been idle.</p>"
+                                            "has been automatically stopped by Governance Sentinel enforcement because it has been idle.</p>"
                                             f"<p><strong>Reason:</strong> {violation.get('reason', 'App idle beyond the allowed threshold')}</p>"
-                                            f"<p>Your access to the app is unchanged — you can restart it at any time. If it should stay running, "
-                                            f"please submit an Allowlist Exception request through the Governance portal"
-                                            + (f': <a href="{app_url}">{app_url}</a>' if app_url else ".")
-                                            + "</p>"
+                                            "<p>Your access to the app is unchanged — you can restart it at any time.</p>"
+                                            + _enforcement_next_steps_html(app_url, contact)
                                         )
                                         await notifier.send_email(to=creator, subject=subject, body=notify_body, is_html=True)
                                         logger.info("Sent automated idle-stop notification to creator %s for app %s", creator, resource_id)
