@@ -20,12 +20,14 @@ import {
   ChevronDown,
   ChevronRight,
   Webhook,
+  TrendingUp,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Fragment, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 export type AssetTypeId =
+  | 'metric_view'
   | 'data_product'
   | 'dataset'
   | 'table'
@@ -53,10 +55,11 @@ export interface AssetTypeMeta {
 
 /**
  * Canonical display order requested by the team:
- * Data Products → Datasets → Dashboards → Apps → Genie Spaces → (leftovers:
+ * Metric Views → Data Products → Datasets → Dashboards → Apps → Genie Spaces → (leftovers:
  * Tables & Views, then Jobs).
  */
 export const ASSET_TYPE_ORDER: AssetTypeId[] = [
+  'metric_view',
   'data_product',
   'dataset',
   'dashboard',
@@ -67,6 +70,16 @@ export const ASSET_TYPE_ORDER: AssetTypeId[] = [
 ];
 
 export const ASSET_TYPES: Record<AssetTypeId, AssetTypeMeta> = {
+  metric_view: {
+    id: 'metric_view',
+    label: 'Metric View',
+    plural: 'Metric Views',
+    icon: TrendingUp,
+    description: 'Governed business metrics, KPIs, and semantic dimensions.',
+    accentText: 'text-emerald-700',
+    accentBg: 'bg-emerald-50',
+    accentBorder: 'border-emerald-200',
+  },
   data_product: {
     id: 'data_product',
     label: 'Data Product',
@@ -150,6 +163,7 @@ const TABLE_LIKE = new Set(['managed', 'external', 'view', 'table']);
  */
 export function normalizeAssetType(raw: string | null | undefined): AssetTypeId {
   const t = String(raw || '').toLowerCase();
+  if (t === 'metric_view' || t === 'metric') return 'metric_view';
   if (TABLE_LIKE.has(t)) return 'table';
   if (t === 'data_product') return 'data_product';
   if (t === 'dataset') return 'dataset';

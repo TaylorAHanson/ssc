@@ -40,6 +40,11 @@ def _serialize(asset: DataAssetModel) -> Dict[str, Any]:
         "description": asset.description,
         "owner": asset.owner,
         "domain": asset.domain,
+        "subdomain": asset.subdomain,
+        "kpis": asset.kpis or [],
+        "downstream_dashboards": asset.downstream_dashboards or [],
+        "upstream_tables": asset.upstream_tables or [],
+        "legacy_mappings": asset.legacy_mappings or [],
         "tags": asset.tags or [],
         "certified": bool(asset.certified),
         "contract_url": asset.contract_url,
@@ -52,18 +57,22 @@ class SearchDataAssetsInput(BaseModel):
         min_length=1,
         description=(
             "Keywords or asset name to search the local data catalog for "
-            "(e.g. 'cancel pushout', 'sales orders', 'customer retention'). "
-            "Matched against the table name, fully-qualified name, description, "
-            "owner, catalog, schema, domain, and tags."
+            "(e.g. 'demand planning', 'forecast accuracy', 'sales orders', 'customer retention'). "
+            "Matched against the table name, metric views, KPIs, description, "
+            "owner, catalog, schema, domain, subdomain, and tags."
         ),
     )
     asset_type: Optional[str] = Field(
         default=None,
-        description="Optional filter by asset type, e.g. 'VIEW', 'MANAGED', 'EXTERNAL', 'DATA_PRODUCT'.",
+        description="Optional filter by asset type, e.g. 'METRIC_VIEW', 'VIEW', 'MANAGED', 'EXTERNAL', 'DATA_PRODUCT'.",
     )
     domain: Optional[str] = Field(
         default=None,
-        description="Optional domain filter (e.g. 'Core', 'Analytics').",
+        description="Optional domain filter (e.g. 'Supply Chain', 'Finance', 'Sales & Commercial').",
+    )
+    subdomain: Optional[str] = Field(
+        default=None,
+        description="Optional subdomain filter (e.g. 'Planning & Forecasting', 'Order Management').",
     )
     certified_only: bool = Field(
         default=False,
@@ -80,8 +89,9 @@ class SearchDataAssetsInput(BaseModel):
 @tool(
     name="search_data_assets",
     description=(
-        "Search cached Unity Catalog data assets (tables, views, schemas) by keyword across name, "
-        "description, tags, domain, and owner. Fast local lookup for dataset discovery without live Databricks API calls."
+        "Search cached Unity Catalog data assets (Metric Views, tables, views, schemas) by keyword across name, "
+        "description, domain, subdomain, KPIs, tags, and owner. Positions governed Metric Views over raw tables. "
+        "Fast local lookup for data discovery without live Databricks API calls."
     ),
     args_schema=SearchDataAssetsInput,
     feature_flag="data_discovery",
@@ -91,6 +101,7 @@ def search_data_assets(
     query: str,
     asset_type: Optional[str] = None,
     domain: Optional[str] = None,
+    subdomain: Optional[str] = None,
     certified_only: bool = False,
     limit: int = 15,
 ) -> Dict[str, Any]:
@@ -105,9 +116,11 @@ def search_data_assets(
             DataAssetModel.catalog,
             DataAssetModel.schema,
             DataAssetModel.domain,
+            DataAssetModel.subdomain,
             # Tags are JSON (SQLite) / JSONB (Postgres); cast to text so a plain
             # ILIKE works the same on both — matches the tag NAMES we store.
             cast(DataAssetModel.tags, String),
+            cast(DataAssetModel.kpis, String),
         ]
 
         q = db.query(DataAssetModel)
@@ -115,6 +128,8 @@ def search_data_assets(
             q = q.filter(DataAssetModel.type.ilike(f"%{asset_type}%"))
         if domain:
             q = q.filter(DataAssetModel.domain.ilike(f"%{domain}%"))
+        if subdomain:
+            q = q.filter(DataAssetModel.subdomain.ilike(f"%{subdomain}%"))
         if certified_only:
             q = q.filter(DataAssetModel.certified.is_(True))
 
@@ -139,6 +154,9 @@ def search_data_assets(
             if not tokens:
                 return 1.0
             tag_text = " ".join(asset.tags) if isinstance(asset.tags, list) else ""
+            kpi_text = ""
+            if isinstance(asset.kpis, list):
+                kpi_text = " ".join(f"{k.get('name', '')} {k.get('value', '')}" for k in asset.kpis if isinstance(k, dict))
             haystack = " ".join(
                 v.lower()
                 for v in (
@@ -149,7 +167,9 @@ def search_data_assets(
                     asset.catalog,
                     asset.schema,
                     asset.domain,
+                    asset.subdomain,
                     tag_text,
+                    kpi_text,
                 )
                 if v
             )
@@ -160,6 +180,14 @@ def search_data_assets(
             score += sum(1 for t in tokens if t in name_hay)
             if asset.certified:
                 score += 0.5
+            # Metric Views position over raw tables:
+            is_metric = (
+                str(asset.type).upper() == "METRIC_VIEW"
+                or bool(asset.kpis)
+                or (asset.table_name and asset.table_name.lower().startswith(("metric_", "sem_")))
+            )
+            if is_metric:
+                score += 2.0
             return score
 
         candidates.sort(key=_score, reverse=True)
@@ -168,10 +196,9 @@ def search_data_assets(
 
         if assets:
             note = (
-                "Cached UC tables/views from the local data catalog. Offer to "
-                "summarize a candidate, find_owner, help request access, or run "
-                "ask_your_data (Genie) for the actual rows/analysis. Reference "
-                "assets by their fully-qualified id (catalog.schema.table)."
+                "Cached Metric Views and UC tables/views from the local data catalog. "
+                "Governed Metric Views are listed first with their KPIs, upstream tables, and downstream dashboards. "
+                "Offer to summarize a metric view, launch a related dashboard, or request access."
             )
         else:
             note = (
@@ -191,3 +218,45 @@ def search_data_assets(
         }
     finally:
         db.close()
+
+
+class SearchMetricViewsInput(BaseModel):
+    query: str = Field(
+        default="",
+        description="Search term for metric views, KPIs, or business questions (e.g. 'forecast accuracy', 'yield', 'order fulfillment').",
+    )
+    domain: Optional[str] = Field(
+        default=None,
+        description="Optional domain filter (e.g. 'Supply Chain', 'Finance', 'Sales & Commercial').",
+    )
+    subdomain: Optional[str] = Field(
+        default=None,
+        description="Optional subdomain filter (e.g. 'Planning & Forecasting', 'Procurement').",
+    )
+    limit: int = Field(default=10, ge=1, le=30, description="Max metric views to return.")
+
+
+@tool(
+    name="search_metric_views",
+    description=(
+        "Search and discover governed Metric Views, business KPIs, and related dashboards/apps. "
+        "Use this as the preferred tool when the user asks about business metrics, KPIs, or domain reporting."
+    ),
+    args_schema=SearchMetricViewsInput,
+    feature_flag="data_discovery",
+    friendly_label="Finding governed metric views...",
+)
+def search_metric_views(
+    query: str = "",
+    domain: Optional[str] = None,
+    subdomain: Optional[str] = None,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    """Search specifically for governed metric views with their KPIs and downstream dashboards."""
+    return search_data_assets._func(
+        query=query if query.strip() else "metric",
+        asset_type="METRIC_VIEW",
+        domain=domain,
+        subdomain=subdomain,
+        limit=limit,
+    )

@@ -197,6 +197,13 @@ def run_startup_migrations(engine: Engine) -> None:
         # stores the JSON string the JSONType serializes.
         _json_ddl = "JSONB" if engine.dialect.name == "postgresql" else "TEXT"
         _add_column(engine, "data_assets", "certification_rule_results", _json_ddl)
+        # Metric Views / Domain hierarchy enrichment
+        _add_column(engine, "data_assets", "subdomain", "VARCHAR")
+        _add_index(engine, "ix_data_assets_subdomain", "data_assets", ["subdomain"])
+        _add_column(engine, "data_assets", "kpis", _json_ddl)
+        _add_column(engine, "data_assets", "upstream_tables", _json_ddl)
+        _add_column(engine, "data_assets", "downstream_dashboards", _json_ddl)
+        _add_column(engine, "data_assets", "legacy_mappings", _json_ddl)
         # Enforcement Sentinel: marks the scheduled run that emitted the daily
         # governance digest (anchored once-per-local-day dispatch).
         _add_column(engine, "requests", "digest_emitted_at", "TIMESTAMP")

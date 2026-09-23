@@ -48,6 +48,11 @@ class DataAssetModel(Base):
     description = Column(String, nullable=True)
     owner = Column(String, nullable=True)
     domain = Column(String, nullable=True, index=True)
+    subdomain = Column(String, nullable=True, index=True)
+    kpis = Column(JSONType, nullable=True) # e.g. [{"name": "Forecast Accuracy", "value": "94.2%"}]
+    upstream_tables = Column(JSONType, nullable=True) # e.g. ["catalog.schema.table", ...]
+    downstream_dashboards = Column(JSONType, nullable=True) # e.g. [{"id": "...", "name": "...", "type": "dashboard"}]
+    legacy_mappings = Column(JSONType, nullable=True) # e.g. [{"dashboard": "...", "status": "Active", "owner": "..."}]
     tags = Column(JSONType, default=list)
     certified = Column(Boolean, default=False)
     contract_url = Column(String, nullable=True)

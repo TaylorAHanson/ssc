@@ -1,0 +1,466 @@
+import { useState, useRef, useEffect } from 'react';
+import {
+  TrendingUp,
+  ShieldCheck,
+  ExternalLink,
+  LayoutDashboard,
+  Database,
+  Lock,
+  GitBranch,
+  Calendar,
+  Clock,
+  User,
+  X,
+  Sparkles,
+} from 'lucide-react';
+import type { DataAsset, MetricKpi } from '../../services/api';
+import { catalogExplorerUrl } from '../../lib/databricksLinks';
+import { LineageGraph, type LineageSeedTable } from './LineageGraph';
+
+interface DashboardOrApp {
+  id: string;
+  name: string;
+  type?: string;
+  description?: string;
+  owner?: string;
+  views?: number;
+  updated_at?: string;
+}
+
+interface UpstreamTableInfo {
+  name: string;
+  fqn?: string;
+  schema?: string;
+  type?: string;
+  description?: string;
+}
+
+interface InlineMetricViewDetailProps {
+  asset: DataAsset;
+  onClose: () => void;
+  onRequestAccess?: (asset: DataAsset) => void;
+  onSelectTable?: (tableName: string) => void;
+  workspaceUrl: string;
+}
+
+export function InlineMetricViewDetail({
+  asset,
+  onClose,
+  onRequestAccess,
+  onSelectTable,
+  workspaceUrl,
+}: InlineMetricViewDetailProps) {
+  const [detailTab, setDetailTab] = useState<'kpis' | 'lineage' | 'dashboards' | 'tables'>('kpis');
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Reset scroll to top when metric view opens or changes
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const main = document.querySelector('main');
+    if (main) {
+      main.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [asset.id]);
+
+  const catalogUrl = catalogExplorerUrl(
+    workspaceUrl,
+    asset.catalog,
+    asset.schema_name,
+    asset.table_name,
+  );
+
+  const cleanName = asset.table_name
+    .replace(/^(metric_|sem_)/i, '')
+    .replace(/_metric_view$/i, '')
+    .replace(/_/g, ' ');
+
+  const kpis: MetricKpi[] = asset.kpis || [
+    {
+      name: 'Primary Measure',
+      value: '94.2%',
+      trend: '+1.5%',
+      formula: 'SUM(actual_value) / NULLIF(SUM(target_value), 0)',
+      aggregation: 'RATIO',
+      unit: '%',
+      dimensions: ['Region', 'Product Family', 'Period'],
+      description: 'Primary governed semantic measure for this metric view.',
+    },
+    {
+      name: 'Variance',
+      value: '5.8%',
+      trend: '-0.4%',
+      formula: 'AVG(ABS(actual_value - target_value) / NULLIF(target_value, 0)) * 100',
+      aggregation: 'AVG',
+      unit: '%',
+      dimensions: ['Business Unit', 'Fiscal Week'],
+      description: 'Mean absolute percentage variance against benchmark targets.',
+    },
+  ];
+
+  const downstreamDashboards: DashboardOrApp[] = asset.downstream_dashboards || [
+    {
+      id: `dash_${asset.table_name}_review`,
+      name: `Weekly ${cleanName} Review`,
+      type: 'dashboard',
+      description: `Executive review dashboard powered by ${asset.table_name}`,
+      owner: asset.owner || 'SCM Analytics',
+      views: 342,
+      updated_at: '2 hours ago',
+    },
+    {
+      id: `app_${asset.table_name}_explorer`,
+      name: `${cleanName} Analytics Tool`,
+      type: 'app',
+      description: 'Interactive self-service application with custom dimension slicing',
+      owner: asset.owner || 'Data Engineering',
+      views: 184,
+      updated_at: '1 day ago',
+    },
+  ];
+
+  const upstreamTables: UpstreamTableInfo[] = asset.upstream_tables || [
+    {
+      name: `${asset.table_name.replace(/^(metric_|sem_)/i, '').replace(/_metric_view$/i, '')}_gold`,
+      fqn: `${asset.catalog}.${asset.schema_name}.${asset.table_name.replace(/^(metric_|sem_)/i, '').replace(/_metric_view$/i, '')}_gold`,
+      schema: asset.schema_name,
+      type: 'TABLE',
+      description: 'Aggregated gold-layer facts and dimensional attributes in Unity Catalog.',
+    },
+    {
+      name: 'dim_organization_hierarchy',
+      fqn: `${asset.catalog}.${asset.schema_name}.dim_organization_hierarchy`,
+      schema: asset.schema_name,
+      type: 'TABLE',
+      description: 'Standard enterprise business units, regions, and cost centers.',
+    },
+  ];
+
+  const seedTables: LineageSeedTable[] = [
+    {
+      fqn: `${asset.catalog}.${asset.schema_name}.${asset.table_name}`,
+      displayName: cleanName,
+      upstreams: upstreamTables.map((t) => t.fqn || t.name),
+      downstreams: downstreamDashboards.map((d) => d.name),
+    },
+  ];
+
+  return (
+    <div
+      ref={containerRef}
+      className="bg-white rounded-2xl border-2 border-primary/30 shadow-md p-5 sm:p-6 space-y-6 animate-in fade-in slide-in-from-top-4 duration-300 relative"
+    >
+      {/* Top Banner & Action Bar */}
+      <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4 pb-4 border-b border-slate-100">
+        <div className="space-y-1.5 flex-1">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-primary/10 text-primary border border-primary/20 uppercase tracking-wide">
+              <Sparkles className="w-3 h-3 text-primary" /> Metric View Deep Dive
+            </span>
+
+            {asset.certified && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> Certified
+              </span>
+            )}
+
+            {asset.domain && (
+              <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium">
+                {asset.domain}
+              </span>
+            )}
+
+            {asset.subdomain && (
+              <span className="text-[11px] px-2 py-0.5 rounded-md bg-primary/10 text-primary font-medium">
+                {asset.subdomain}
+              </span>
+            )}
+          </div>
+
+          <h3 className="text-2xl font-black text-slate-900 capitalize tracking-tight flex items-center gap-2">
+            <span>{cleanName}</span>
+          </h3>
+
+          <p className="font-mono text-xs text-slate-400">
+            {asset.catalog}.{asset.schema_name}.{asset.table_name}
+          </p>
+
+          <p className="text-xs text-slate-600 max-w-3xl leading-relaxed pt-1">
+            {asset.description ||
+              `Governed business metrics and semantic dimensions for ${asset.subdomain || asset.domain}.`}
+          </p>
+
+          {/* Metadata badges */}
+          <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 pt-2">
+            <div className="flex items-center gap-1.5">
+              <User className="w-3.5 h-3.5 text-slate-400" />
+              <span>Owner: <strong className="text-slate-700">{asset.owner || 'SCM Analytics'}</strong></span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-slate-400" />
+              <span>SLA: <strong className="text-slate-700">{asset.sla || 'Daily 06:00 UTC'}</strong></span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-slate-400" />
+              <span>Refreshed: <strong className="text-slate-700">Today</strong></span>
+            </div>
+          </div>
+        </div>
+
+        {/* Action Controls */}
+        <div className="flex items-center gap-2 self-start shrink-0">
+          {catalogUrl && (
+            <a
+              href={catalogUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs"
+              title="Open in Databricks Catalog Explorer"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+              <span>Catalog Explorer</span>
+            </a>
+          )}
+
+          {onRequestAccess && (
+            <button
+              type="button"
+              onClick={() => onRequestAccess(asset)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-primary hover:bg-primary/90 text-white text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span>Request Access</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center gap-1 p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer ml-1"
+            title="Close metric view details"
+          >
+            <X className="w-4 h-4 stroke-[2.5]" />
+          </button>
+        </div>
+      </div>
+
+      {/* Sub-Tabs: KPI Measures | Lineage Flow | Consuming Apps | Upstream Tables */}
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 pb-2">
+          <button
+            type="button"
+            onClick={() => setDetailTab('kpis')}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              detailTab === 'kpis'
+                ? 'bg-primary text-white shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+            }`}
+          >
+            <TrendingUp className="w-3.5 h-3.5" />
+            <span>Governed KPI Measures ({kpis.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setDetailTab('lineage')}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              detailTab === 'lineage'
+                ? 'bg-primary text-white shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+            }`}
+          >
+            <GitBranch className="w-3.5 h-3.5" />
+            <span>Lineage Flow</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setDetailTab('dashboards')}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              detailTab === 'dashboards'
+                ? 'bg-primary text-white shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+            }`}
+          >
+            <LayoutDashboard className="w-3.5 h-3.5" />
+            <span>Consuming Dashboards & Apps ({downstreamDashboards.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setDetailTab('tables')}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              detailTab === 'tables'
+                ? 'bg-primary text-white shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+            }`}
+          >
+            <Database className="w-3.5 h-3.5" />
+            <span>Upstream Lakehouse Tables ({upstreamTables.length})</span>
+          </button>
+        </div>
+
+        {/* SUBTAB 1: Governed KPI Measures Table */}
+        {detailTab === 'kpis' && (
+          <div className="space-y-3">
+            <div className="bg-slate-50/50 rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-700 font-semibold">
+                    <th className="py-2.5 px-4">KPI / Measure</th>
+                    <th className="py-2.5 px-4">Calculation / Formula</th>
+                    <th className="py-2.5 px-4">Aggregation</th>
+                    <th className="py-2.5 px-4">Current Value & Trend</th>
+                    <th className="py-2.5 px-4">Supported Dimensions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {kpis.map((kpi, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
+                      <td className="py-3 px-4 font-semibold text-slate-900">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-primary shrink-0" />
+                          <span>{kpi.name}</span>
+                        </div>
+                        {kpi.description && (
+                          <div className="text-[11px] text-slate-500 font-normal mt-0.5 max-w-xs leading-relaxed">
+                            {kpi.description}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 font-mono text-[11px] text-primary">
+                        <span className="bg-primary/5 border border-primary/20 px-2 py-1 rounded inline-block max-w-sm truncate">
+                          {kpi.formula || `SUM(${kpi.name.toLowerCase().replace(/ /g, '_')})`}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-mono text-[11px] font-semibold uppercase">
+                          {kpi.aggregation || 'RATIO'}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="font-extrabold text-slate-900 text-sm">{kpi.value}</span>
+                        {kpi.trend && (
+                          <span
+                            className={`ml-1.5 text-[10px] font-bold ${
+                              kpi.trend.startsWith('+')
+                                ? 'text-emerald-600'
+                                : kpi.trend.startsWith('-')
+                                ? 'text-amber-600'
+                                : 'text-slate-500'
+                            }`}
+                          >
+                            {kpi.trend}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 text-slate-600">
+                        <div className="flex flex-wrap gap-1">
+                          {(kpi.dimensions || ['Region', 'Product Family', 'Period']).map((dim, dIdx) => (
+                            <span
+                              key={dIdx}
+                              className="px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded text-[10px] font-medium"
+                            >
+                              {dim}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* SUBTAB 2: Interactive Lineage Flow */}
+        {detailTab === 'lineage' && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs text-slate-500 pb-1">
+              <span>Upstream sources & downstream consumers traced in Unity Catalog</span>
+            </div>
+            <div className="h-[380px] rounded-xl overflow-hidden border border-slate-200 bg-slate-50 shadow-2xs">
+              <LineageGraph
+                seedTables={seedTables}
+                workspaceUrl={workspaceUrl}
+                height="380px"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* SUBTAB 3: Consuming Dashboards & Apps */}
+        {detailTab === 'dashboards' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {downstreamDashboards.map((dash) => (
+              <div
+                key={dash.id}
+                className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs hover:border-slate-300 transition-all flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                      {dash.type || 'Dashboard'}
+                    </span>
+                    <span className="text-[11px] text-slate-400">{dash.views} views</span>
+                  </div>
+                  <h4 className="text-sm font-bold text-slate-900 mb-1">{dash.name}</h4>
+                  <p className="text-xs text-slate-500 leading-relaxed mb-3">
+                    {dash.description}
+                  </p>
+                </div>
+                <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                  <span>Owner: {dash.owner || 'SCM Analytics'}</span>
+                  <span className="text-primary font-semibold inline-flex items-center gap-1">
+                    Open <ExternalLink className="w-3 h-3" />
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* SUBTAB 4: Upstream Lakehouse Tables */}
+        {detailTab === 'tables' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {upstreamTables.map((tbl, idx) => (
+              <div
+                key={idx}
+                className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs hover:border-slate-300 transition-all flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-indigo-50 text-indigo-800 border border-indigo-200">
+                      {tbl.type || 'Table'}
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400">{tbl.schema}</span>
+                  </div>
+                  <h4 className="text-sm font-bold text-slate-900 mb-1 font-mono">
+                    {tbl.name}
+                  </h4>
+                  <p className="text-xs text-slate-500 leading-relaxed mb-3">
+                    {tbl.description}
+                  </p>
+                </div>
+                <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                  <span className="font-mono text-[10px] text-slate-400 truncate max-w-[200px]">
+                    {tbl.fqn}
+                  </span>
+                  {onSelectTable && (
+                    <button
+                      type="button"
+                      onClick={() => onSelectTable(tbl.name)}
+                      className="text-primary font-semibold inline-flex items-center gap-1 hover:text-primary/80 cursor-pointer text-xs"
+                    >
+                      View Schema &rarr;
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

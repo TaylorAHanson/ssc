@@ -32,12 +32,17 @@ class DataAssetResponse(BaseModel):
     description: Optional[str] = None
     owner: Optional[str] = None
     domain: Optional[str] = None
+    subdomain: Optional[str] = None
     tags: List[str] = []
     certified: bool = False
     contract_url: Optional[str] = None
     data_quality: Optional[dict] = None
     certification_violations: Optional[List[str]] = None
     sla: Optional[str] = None
+    kpis: Optional[List[dict]] = None
+    upstream_tables: Optional[List[dict]] = None
+    downstream_dashboards: Optional[List[dict]] = None
+    legacy_mappings: Optional[List[dict]] = None
     created_at: Optional[datetime] = None
     last_synced_at: datetime
 
@@ -97,17 +102,244 @@ def list_data_assets(
             "description": asset.description,
             "owner": asset.owner,
             "domain": asset.domain,
+            "subdomain": asset.subdomain,
             "tags": asset.tags if asset.tags else [],
             "certified": asset.certified,
             "contract_url": asset.contract_url,
             "data_quality": asset.data_quality,
             "certification_violations": asset.certification_violations if isinstance(asset.certification_violations, list) else (json.loads(asset.certification_violations) if isinstance(asset.certification_violations, str) else None),
             "sla": asset.sla,
+            "kpis": asset.kpis,
+            "upstream_tables": asset.upstream_tables,
+            "downstream_dashboards": asset.downstream_dashboards,
+            "legacy_mappings": asset.legacy_mappings,
             "created_at": asset.created_at,
             "last_synced_at": asset.last_synced_at
         })
         
     return result
+
+
+@router.get("/domains")
+def get_domains_hierarchy(db: Session = Depends(get_db)):
+    """Return hierarchical summary of domains, subdomains, metric views, and headline KPIs."""
+    assets = db.query(DataAssetModel).all()
+    domain_map: dict[str, dict] = {}
+
+    domain_descriptions = {
+        "Supply Chain": "Enterprise supply-chain semantic layer covering planning, procurement, manufacturing, and logistics",
+        "Finance": "Core financial models, budget tracking, revenue variance, and OpEx forecasting",
+        "Sales & Commercial": "Customer retention, sales pipeline execution, omnichannel demand, and merchandising",
+        "Operations & Facilities": "Facility operations, power delivery, data center metrics, and IoT sensor streams",
+        "Risk & Compliance": "Governance enforcement, KYC audits, data contract adherence, and fraud detection",
+        "Enterprise Data": "Core shared lakehouse infrastructure, master data, and central analytical schemas",
+    }
+
+    subdomain_descriptions = {
+        "Planning & Forecasting": "Demand planning, wafer capacity, sales forecasts, and supply-demand outlook",
+        "Order Management": "Sales orders, order fulfillment, purchase forecasts, and order lifecycle management",
+        "Procurement": "Direct and indirect procurement, purchase orders, quotations, supplier lead time, and receipts",
+        "Manufacturing & WIP": "Manufacturing operations, WIP tracking, cost posting, cycle times, and bill of materials",
+        "Yield & Foundry": "Yield analytics, foundry intelligence, wafer capacity planning, and quality metrics",
+        "Inventory & Lot Tracking": "Inventory management, lot genealogy, traceability, and lot movements",
+        "Planning & Budgeting": "Financial planning, OpEx budgets, entity plan attainment, and cost center variance",
+        "Revenue & Margin": "Top-line revenue, contribution margins, product line profitability, and discount analysis",
+        "Cost Management": "Standard vs actual cost variance, cost centers, expense run-rates, and scrap accounting",
+        "Customer Analytics": "Customer 360, retention cohorts, subscriber churn, and lifetime value modeling",
+        "Retail & Merchandising": "Omnichannel store analytics, catalog pricing rules, inventory sell-through, and promo tracking",
+        "Sales Execution": "Deal intelligence, sales order conversion, rep attainment, and pipeline velocity",
+        "Governance & Audit": "Access controls, certification violations, data contract compliance, and audit logs",
+        "Site & Asset Performance": "Data center MW delivered, energy efficiency, equipment telemetry, and uptime SLAs",
+        "General Analytics": "General enterprise analytics, staging tables, and operational views",
+    }
+
+    for a in assets:
+        d = a.domain or "Enterprise Data"
+        sd = a.subdomain or "General Analytics"
+        is_metric = (
+            str(a.type).upper() == "METRIC_VIEW"
+            or (a.table_name and a.table_name.lower().startswith(("metric_", "sem_")))
+            or a.kpis is not None
+        )
+
+        if d not in domain_map:
+            domain_map[d] = {
+                "domain": d,
+                "description": domain_descriptions.get(d, f"Curated semantic layer for {d}"),
+                "subdomains": {},
+                "metric_view_count": 0,
+                "table_count": 0,
+                "dashboard_count": 0,
+            }
+
+        dom_entry = domain_map[d]
+        dom_entry["table_count"] += 1
+        if is_metric:
+            dom_entry["metric_view_count"] += 1
+            if a.downstream_dashboards:
+                dom_entry["dashboard_count"] += len(a.downstream_dashboards)
+
+        if sd not in dom_entry["subdomains"]:
+            dom_entry["subdomains"][sd] = {
+                "name": sd,
+                "description": subdomain_descriptions.get(sd, f"Subdomain covering {sd}"),
+                "metric_views_count": 0,
+                "tables_count": 0,
+                "metric_views": [],
+                "schemas": set(),
+                "kpis": [],
+            }
+
+        sub_entry = dom_entry["subdomains"][sd]
+        sub_entry["tables_count"] += 1
+        if a.schema:
+            sub_entry["schemas"].add(a.schema)
+        if is_metric:
+            sub_entry["metric_views_count"] += 1
+            sub_entry["metric_views"].append(a.table_name)
+            if a.kpis and not sub_entry["kpis"]:
+                sub_entry["kpis"] = a.kpis[:2]
+
+    results = []
+    priority_order = ["Supply Chain", "Finance", "Sales & Commercial", "Operations & Facilities", "Risk & Compliance", "Enterprise Data"]
+    sorted_domains = sorted(domain_map.keys(), key=lambda x: priority_order.index(x) if x in priority_order else 99)
+
+    for d in sorted_domains:
+        data = domain_map[d]
+        subdomains_list = []
+        for sd_name, sd_data in data["subdomains"].items():
+            subdomains_list.append({
+                "name": sd_data["name"],
+                "description": sd_data["description"],
+                "metric_views_count": max(sd_data["metric_views_count"], len(sd_data["metric_views"])),
+                "tables_count": sd_data["tables_count"],
+                "metric_views": sd_data["metric_views"][:8],
+                "schemas": sorted(list(sd_data["schemas"]))[:3],
+                "kpis": sd_data["kpis"],
+            })
+
+        subdomains_list.sort(key=lambda x: (x["metric_views_count"], x["tables_count"]), reverse=True)
+
+        results.append({
+            "domain": data["domain"],
+            "description": data["description"],
+            "subdomain_count": len(subdomains_list),
+            "metric_view_count": data["metric_view_count"],
+            "table_count": data["table_count"],
+            "dashboard_count": max(data["dashboard_count"], len(subdomains_list) * 3),
+            "subdomains": subdomains_list,
+        })
+
+    return results
+
+
+@router.get("/legacy_mappings")
+def get_legacy_mappings(
+    domain: Optional[str] = None,
+    subdomain: Optional[str] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Return legacy dashboard mappings with status (Active, Migrating, Deprecated)."""
+    query = db.query(DataAssetModel).filter(DataAssetModel.legacy_mappings.isnot(None))
+    if domain:
+        query = query.filter(DataAssetModel.domain == domain)
+    if subdomain:
+        query = query.filter(DataAssetModel.subdomain == subdomain)
+
+    assets = query.all()
+    mappings = []
+    seen = set()
+
+    for a in assets:
+        if not a.legacy_mappings:
+            continue
+        for m in a.legacy_mappings:
+            dash_name = m.get("dashboard") or "Untitled Dashboard"
+            key = (dash_name, a.domain, a.subdomain)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            m_status = m.get("status", "Active")
+            if status and m_status.lower() != status.lower():
+                continue
+
+            mappings.append({
+                "id": f"{a.id}_{dash_name}".replace(" ", "_"),
+                "dashboard": dash_name,
+                "status": m_status,
+                "owner": m.get("owner", a.owner or "Analytics Team"),
+                "metric_view": m.get("metric_view", a.table_name),
+                "metric_view_id": a.id,
+                "subdomain": m.get("subdomain", a.subdomain or "Planning & Forecasting"),
+                "domain": m.get("domain", a.domain or "Supply Chain"),
+                "description": m.get("description", a.description or f"Legacy report mapped to {a.table_name}"),
+            })
+
+    return mappings
+
+
+@router.get("/metric_views")
+def list_metric_views(
+    domain: Optional[str] = None,
+    subdomain: Optional[str] = None,
+    query: Optional[str] = None,
+    certified: Optional[bool] = None,
+    db: Session = Depends(get_db),
+):
+    """Return all governed metric views matching filters."""
+    from sqlalchemy import or_
+
+    q = db.query(DataAssetModel).filter(
+        or_(
+            DataAssetModel.type == "METRIC_VIEW",
+            DataAssetModel.kpis.isnot(None),
+            DataAssetModel.table_name.like("metric_%"),
+            DataAssetModel.table_name.like("sem_%"),
+        )
+    )
+    if domain:
+        q = q.filter(DataAssetModel.domain == domain)
+    if subdomain:
+        q = q.filter(DataAssetModel.subdomain == subdomain)
+    if certified is not None:
+        q = q.filter(DataAssetModel.certified == certified)
+    if query:
+        term = f"%{query}%"
+        q = q.filter(
+            or_(
+                DataAssetModel.table_name.ilike(term),
+                DataAssetModel.description.ilike(term),
+                DataAssetModel.schema.ilike(term),
+            )
+        )
+
+    assets = q.all()
+    results = []
+    for a in assets:
+        results.append({
+            "id": a.id,
+            "catalog": a.catalog,
+            "schema_name": a.schema,
+            "table_name": a.table_name,
+            "type": "METRIC_VIEW",
+            "description": a.description,
+            "owner": a.owner,
+            "domain": a.domain,
+            "subdomain": a.subdomain,
+            "tags": a.tags or [],
+            "certified": bool(a.certified),
+            "kpis": a.kpis or [],
+            "upstream_tables": a.upstream_tables or [],
+            "downstream_dashboards": a.downstream_dashboards or [],
+            "legacy_mappings": a.legacy_mappings or [],
+            "contract_url": a.contract_url,
+            "created_at": a.created_at,
+            "last_synced_at": a.last_synced_at,
+        })
+    return results
+
 
 class AccessibleAssetsResponse(BaseModel):
     available: bool

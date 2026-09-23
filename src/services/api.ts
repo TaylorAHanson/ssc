@@ -1404,6 +1404,17 @@ export async function syncMcpSource(id: string): Promise<{ ok: boolean; count: n
   return response.json();
 }
 
+export interface MetricKpi {
+  name: string;
+  value: string;
+  trend?: string;
+  formula?: string;
+  aggregation?: string;
+  unit?: string;
+  dimensions?: string[];
+  description?: string;
+}
+
 export interface DataAsset {
   id: string;
   catalog: string;
@@ -1413,14 +1424,90 @@ export interface DataAsset {
   description: string | null;
   owner: string | null;
   domain: string | null;
+  subdomain?: string | null;
   tags: string[];
   certified: boolean;
   contract_url: string | null;
   data_quality: any | null;
   certification_violations: string[] | null;
   sla: string | null;
+  kpis?: MetricKpi[] | null;
+  upstream_tables?: Array<{ name: string; fqn: string; schema: string; type: string; description?: string }> | null;
+  downstream_dashboards?: Array<{ id: string; name: string; type: string; description?: string; owner?: string; views?: number; updated_at?: string }> | null;
+  legacy_mappings?: Array<{ dashboard: string; status: 'Active' | 'Migrating' | 'Deprecated'; owner?: string; description?: string; metric_view?: string; subdomain?: string; domain?: string }> | null;
   created_at: string | null;
   last_synced_at: string;
+}
+
+export interface SubdomainMeta {
+  name: string;
+  description: string;
+  metric_views_count: number;
+  tables_count: number;
+  metric_views: string[];
+  schemas: string[];
+  kpis?: MetricKpi[];
+}
+
+export interface DomainHierarchy {
+  domain: string;
+  description: string;
+  subdomain_count: number;
+  metric_view_count: number;
+  table_count: number;
+  dashboard_count: number;
+  subdomains: SubdomainMeta[];
+}
+
+export interface LegacyMapping {
+  id: string;
+  dashboard: string;
+  status: 'Active' | 'Migrating' | 'Deprecated';
+  owner: string;
+  metric_view: string;
+  metric_view_id: string;
+  subdomain: string;
+  domain: string;
+  description: string;
+}
+
+export async function getDomainHierarchy(): Promise<DomainHierarchy[]> {
+  const response = await fetch(`${API_BASE_URL}/data-assets/domains`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch domain hierarchy: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getLegacyMappings(params?: { domain?: string; subdomain?: string; status?: string }): Promise<LegacyMapping[]> {
+  const url = new URL(`${API_BASE_URL}/data-assets/legacy_mappings`, window.location.origin);
+  if (params?.domain) url.searchParams.append('domain', params.domain);
+  if (params?.subdomain) url.searchParams.append('subdomain', params.subdomain);
+  if (params?.status) url.searchParams.append('status', params.status);
+  const response = await fetch(url.toString(), {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch legacy mappings: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getMetricViews(params?: { domain?: string; subdomain?: string; query?: string; certified?: boolean }): Promise<DataAsset[]> {
+  const url = new URL(`${API_BASE_URL}/data-assets/metric_views`, window.location.origin);
+  if (params?.domain) url.searchParams.append('domain', params.domain);
+  if (params?.subdomain) url.searchParams.append('subdomain', params.subdomain);
+  if (params?.query) url.searchParams.append('query', params.query);
+  if (params?.certified !== undefined) url.searchParams.append('certified', String(params.certified));
+  const response = await fetch(url.toString(), {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch metric views: ${response.status}`);
+  }
+  return response.json();
 }
 
 export async function getDataAssets(params?: { domain?: string; certified?: boolean; certification_only?: boolean; limit?: number; offset?: number }): Promise<DataAsset[]> {
@@ -3376,6 +3463,9 @@ export const api = {
   deleteAllowlistEntry,
   getDataAssets,
   getAccessibleAssetIds,
+  getDomainHierarchy,
+  getLegacyMappings,
+  getMetricViews,
   getDataContracts,
   getContractHistory,
   createDataContract,
