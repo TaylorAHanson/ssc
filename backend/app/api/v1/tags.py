@@ -27,6 +27,7 @@ from app.workflows.tag_apply import apply_tag_plan
 from app.workflows.tag_lint import run_lint_checks
 from app.workflows.tag_plan import (
     DATASET_KEY,
+    _normalize_fqn,
     build_tag_plan,
     fetch_live_state,
     fetch_tag_vocabulary,
