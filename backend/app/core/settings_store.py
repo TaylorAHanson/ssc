@@ -80,6 +80,16 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Notifications & Governance", "key": "GOVERNANCE_CONTACT", "label": "Governance contact (for enforcement emails)",
      "type": "string",
      "help": "Team name, email, or DL shown in the 'Questions? Contact ...' line of automated enforcement emails to app owners. Blank omits the line."},
+    {"group": "Notifications & Governance", "key": "NOTIFICATION_EMAIL_PROVIDER", "label": "Email provider",
+     "type": "select", "options": ["ses", "smtp", "mock"],
+     "help": "How notification emails are delivered. ses = AWS SES (IAM creds from the deploy-time "
+             "secret scope); smtp = the SMTP host set in the environment; mock = log only, nothing is sent."},
+    {"group": "Notifications & Governance", "key": "NOTIFICATION_EMAIL_SES_SOURCE", "label": "SES sender address",
+     "type": "string",
+     "help": "From address for all notification emails when the provider is ses. Must be a verified "
+             "identity in SES for the region below, or sends will fail."},
+    {"group": "Notifications & Governance", "key": "NOTIFICATION_EMAIL_SES_REGION", "label": "SES region",
+     "type": "string", "help": "AWS region of the SES identity, e.g. us-west-2."},
     {"group": "Notifications & Governance", "key": "ENFORCEMENT_DIGEST_HOUR_LOCAL", "label": "Daily digest hour (0-23)",
      "type": "int", "min": 0, "max": 23,
      "help": "Local hour the once-per-day governance digest is sent (anchored to the timezone below)."},
@@ -450,9 +460,7 @@ READONLY_FIELDS: List[Dict[str, Any]] = [
      "help": "Max total seconds the SDK will keep retrying a transient failure "
              "before giving up. 0 = SDK default."},
     {"group": "Identity & Email", "key": "IDENTITY_PROVIDER", "label": "Identity provider"},
-    {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_PROVIDER", "label": "Email provider"},
-    {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_SES_REGION", "label": "SES region"},
-    {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_SES_SOURCE", "label": "SES source address"},
+    {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_SES_SECRET_SCOPE", "label": "SES IAM secret scope"},
     {"group": "GitOps", "key": "GITOPS_MODE", "label": "GitOps mode"},
     {"group": "GitOps", "key": "INFRA_REPO_URL", "label": "Infra repo URL"},
     {"group": "GitOps", "key": "INFRA_REPO_BRANCH", "label": "Infra repo branch"},
@@ -475,8 +483,8 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "from the menu — it does not disable the underlying capability (use Features for that)."
     ),
     "Notifications & Governance": (
-        "Where governance alerts go, when the daily Enforcement Sentinel digest is sent, and what a "
-        "requester is told when their request is denied."
+        "Where governance alerts go, when the daily Enforcement Sentinel digest is sent, what a "
+        "requester is told when their request is denied, and how/from whom notification email is sent."
     ),
     "Scheduling": (
         "How often the background jobs run — the Sentinel scan, data-asset cache sync, data-contract "
