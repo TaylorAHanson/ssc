@@ -701,6 +701,18 @@ def get_databricks_apps():
         # Return empty list if apps aren't supported in this workspace/SDK yet
         return []
 
+def _user_uc_client(req: Request):
+    """WorkspaceClient bound to the signed-in user, for Unity Catalog reads.
+
+    Discover must only show metadata the user can see themselves, so these reads
+    run On-Behalf-Of the user (home workspace), never as the app's service
+    principal. ``uc_client_for`` refuses the SP fallback on deployed targets.
+    """
+    from app.core.workspaces import uc_client_for
+
+    return uc_client_for(getattr(req.state, "token", None))[1]
+
+
 def _classify_uc_error(message: str) -> str:
     """Translate raw UC SDK errors into user-facing strings.
 
@@ -722,7 +734,7 @@ def _classify_uc_error(message: str) -> str:
 
 
 @router.get("/databricks/table")
-def get_databricks_table_details(table_name: str):
+def get_databricks_table_details(table_name: str, req: Request):
     """Return full Unity Catalog metadata for a single table.
 
     Always returns HTTP 200 with a payload so frontend can inspect the
@@ -730,8 +742,6 @@ def get_databricks_table_details(table_name: str):
     would be intercepted by the app's SPA-fallback 404 handler, masking
     the real reason.)
     """
-    from app.providers.databricks import DatabricksProvider
-    from app.core.config import settings
     from fastapi import HTTPException
     import logging
 
@@ -758,15 +768,10 @@ def get_databricks_table_details(table_name: str):
     }
 
     try:
-        provider = DatabricksProvider(
-            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-            token=settings.DATABRICKS_TOKEN,
-            client_id=settings.DATABRICKS_CLIENT_ID,
-            client_secret=settings.DATABRICKS_CLIENT_SECRET,
-        )
+        client = _user_uc_client(req)
 
         try:
-            info = provider.client.tables.get(full_name=table_name)
+            info = client.tables.get(full_name=table_name)
         except Exception as e:
             msg = str(e)
             logger.warning(f"Failed to fetch table info for {table_name}: {msg}")
@@ -794,7 +799,7 @@ def get_databricks_table_details(table_name: str):
 
         tags = {}
         try:
-            uc_tags = provider.client.entity_tag_assignments.list(
+            uc_tags = client.entity_tag_assignments.list(
                 entity_type="tables", entity_name=table_name
             )
             for t in uc_tags:
@@ -822,15 +827,13 @@ def get_databricks_table_details(table_name: str):
 
 
 @router.get("/databricks/lineage")
-def get_databricks_table_lineage(table_name: str):
+def get_databricks_table_lineage(table_name: str, req: Request):
     """Return immediate (1-hop) upstream/downstream tables for a UC table.
 
     `table_name` must be a fully qualified name like ``catalog.schema.table``.
     Used by the Discover page Lineage tab to render a click-to-expand graph
     similar to Databricks Catalog Explorer's lineage view.
     """
-    from app.providers.databricks import DatabricksProvider
-    from app.core.config import settings
     from fastapi import HTTPException
     import logging
 
@@ -843,15 +846,10 @@ def get_databricks_table_lineage(table_name: str):
         )
 
     try:
-        provider = DatabricksProvider(
-            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-            token=settings.DATABRICKS_TOKEN,
-            client_id=settings.DATABRICKS_CLIENT_ID,
-            client_secret=settings.DATABRICKS_CLIENT_SECRET,
-        )
-        resp = provider.client.api_client.do(
+        resp = _user_uc_client(req).api_client.do(
             "GET",
-            f"/api/2.0/lineage-tracking/table-lineage?table_name={table_name}&include_entity_lineage=true",
+            "/api/2.0/lineage-tracking/table-lineage",
+            query={"table_name": table_name, "include_entity_lineage": "true"},
         ) or {}
 
         def _extract(entries):

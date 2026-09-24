@@ -349,9 +349,8 @@ export function LineageGraph({ seedTables, workspaceUrl, height = '100%' }: Line
                 const resp = await api.getTableLineage(fqn);
                 if (resp.error_kind === 'permission_denied') {
                     setError(
-                        `This app's service principal doesn't have access to ${fqn} in Unity Catalog, ` +
-                        `so its lineage can't be loaded. Ask a workspace admin to grant the SP USE CATALOG / ` +
-                        `USE SCHEMA / SELECT on this table.`,
+                        `You don't have access to ${fqn} in Unity Catalog yet, so its lineage can't be ` +
+                        `shown. Request access, or ask the data owner for USE CATALOG / USE SCHEMA / SELECT.`,
                     );
                 } else if (resp.error) {
                     setError(resp.error);

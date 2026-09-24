@@ -208,7 +208,7 @@ export function DataDiscovery() {
         if (details.error_kind === 'not_found') {
           setTableDetailsError(`This table isn't visible in the connected workspace. The Discover catalog may be out of date or the table may have moved.`);
         } else if (details.error_kind === 'permission_denied') {
-          setTableDetailsError(`This app's service principal doesn't have access to ${fqn}. Ask a workspace admin to grant USE CATALOG / USE SCHEMA / SELECT on this object so the Discover page can show its columns.`);
+          setTableDetailsError(`You don't have access to ${fqn} yet, so its columns can't be shown. Request access, or ask the data owner for USE CATALOG / USE SCHEMA / SELECT.`);
         } else if (details.error) {
           setTableDetailsError(details.error);
         }

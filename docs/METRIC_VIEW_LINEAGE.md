@@ -26,9 +26,11 @@ sync (see the sketch at the end).
 
 **Status (2026-09-24):** implemented in `_fetch_downstream_dashboards`; the lookback window is
 `DATA_ASSET_LINEAGE_LOOKBACK_DAYS` (Admin -> Settings, default 90). Two other callers still use
-the REST endpoint for table-to-table lineage and will hit the same 429s: the Discover Lineage
-tab (`GET /data-assets/databricks/lineage`, `backend/app/api/v1/data_assets.py`) and ODCS
-contract drafting (`fetch_datasets_metadata`, `backend/app/tools/governance/draft_odcs.py`).
+the REST endpoint for table-to-table lineage, one call per user action: the Discover Lineage
+tab (`GET /data-assets/databricks/lineage`, `backend/app/api/v1/data_assets.py`, now run as
+the signed-in user) and ODCS contract drafting (`fetch_datasets_metadata`,
+`backend/app/tools/governance/draft_odcs.py`). With the sync no longer calling the endpoint,
+it answered normally again (0.3-0.7 s, observed 18:41 UTC).
 
 ---
 
