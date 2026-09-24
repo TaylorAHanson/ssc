@@ -10,6 +10,7 @@ import {
   Clock,
   User,
   X,
+  Loader2,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import type { DataAsset, MetricKpi, MetricViewDetail } from '../../services/api';
@@ -69,6 +70,11 @@ function emptyKpisMessage(detail: MetricViewDetail | null): string {
   }
 }
 
+// Dimension chips shown before "+N more"; large metric views define 100+.
+const DIMENSION_PREVIEW_COUNT = 12;
+// After this long, the warehouse is probably cold-starting; say so.
+const SLOW_LOAD_SECONDS = 20;
+
 interface UpstreamTableInfo {
   name: string;
   fqn?: string;
@@ -121,6 +127,23 @@ export function InlineMetricViewDetail({
   }, [asset.id]);
   const detail = loaded?.assetId === asset.id ? loaded.result : null;
 
+  // Seconds spent waiting on the warehouse, shown while the detail loads.
+  const [elapsed, setElapsed] = useState<{ assetId: string; seconds: number } | null>(null);
+  const isLoading = detail === null;
+  useEffect(() => {
+    if (!isLoading) return;
+    const start = Date.now();
+    const timer = setInterval(
+      () => setElapsed({ assetId: asset.id, seconds: Math.floor((Date.now() - start) / 1000) }),
+      1000,
+    );
+    return () => clearInterval(timer);
+  }, [asset.id, isLoading]);
+  const elapsedSeconds = elapsed?.assetId === asset.id ? elapsed.seconds : 0;
+
+  const [dimensionsExpandedFor, setDimensionsExpandedFor] = useState<string | null>(null);
+  const dimensionsExpanded = dimensionsExpandedFor === asset.id;
+
   // Start at the top of the panel whenever a different metric view opens.
   useEffect(() => {
     containerRef.current?.scrollIntoView({ block: 'start' });
@@ -162,7 +185,7 @@ export function InlineMetricViewDetail({
     >
       {/* Top Banner & Action Bar */}
       <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4 pb-4 border-b border-slate-100">
-        <div className="space-y-1.5 flex-1">
+        <div className="space-y-1.5 flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-2 mb-1">
             {asset.certified && (
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -187,7 +210,7 @@ export function InlineMetricViewDetail({
             <span>{cleanName}</span>
           </h3>
 
-          <p className="font-mono text-xs text-slate-400">
+          <p className="font-mono text-xs text-slate-400 break-all">
             {asset.catalog}.{asset.schema_name}.{asset.table_name}
           </p>
 
@@ -306,14 +329,41 @@ export function InlineMetricViewDetail({
         {/* SUBTAB 1: Governed KPI Measures Table */}
         {detailTab === 'kpis' && (
           <div className="space-y-3">
+            {isLoading && (
+              <div className="flex items-start gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2.5 text-xs text-slate-600">
+                <Loader2 className="w-4 h-4 mt-px shrink-0 animate-spin text-primary" />
+                <div>
+                  <p className="font-semibold text-slate-800">
+                    Reading measures and current values with your permissions…
+                    <span className="ml-1.5 font-normal tabular-nums text-slate-500">{elapsedSeconds}s</span>
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    {elapsedSeconds < SLOW_LOAD_SECONDS
+                      ? 'This usually takes 5–15 seconds.'
+                      : 'Taking longer than usual — the SQL warehouse may be starting up, which can take up to a minute.'}
+                  </p>
+                </div>
+              </div>
+            )}
             {dimensions.length > 0 && (
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                <span className="font-semibold text-slate-500 mr-1">Slice by</span>
-                {dimensions.map((dim) => (
+                <span className="font-semibold text-slate-500 mr-1">
+                  Slice by <span className="font-normal text-slate-400">({dimensions.length})</span>
+                </span>
+                {(dimensionsExpanded ? dimensions : dimensions.slice(0, DIMENSION_PREVIEW_COUNT)).map((dim) => (
                   <span key={dim} className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md text-[11px] font-medium">
                     {dim}
                   </span>
                 ))}
+                {dimensions.length > DIMENSION_PREVIEW_COUNT && (
+                  <button
+                    type="button"
+                    onClick={() => setDimensionsExpandedFor(dimensionsExpanded ? null : asset.id)}
+                    className="px-2 py-0.5 rounded-md text-[11px] font-semibold text-primary hover:bg-primary/10 transition-colors cursor-pointer"
+                  >
+                    {dimensionsExpanded ? 'Show fewer' : `+${dimensions.length - DIMENSION_PREVIEW_COUNT} more`}
+                  </button>
+                )}
               </div>
             )}
             <div className="bg-slate-50/50 rounded-xl border border-slate-200 overflow-x-auto shadow-2xs">
@@ -321,12 +371,27 @@ export function InlineMetricViewDetail({
                 <thead>
                   <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-700 font-semibold">
                     <th className="py-2.5 px-4">KPI</th>
-                    <th className="py-2.5 px-4">Current Value</th>
+                    <th className="py-2.5 px-4 whitespace-nowrap">Current Value</th>
                     <th className="py-2.5 px-4">Formula</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {kpis.length === 0 && (
+                  {isLoading &&
+                    [0, 1, 2].map((i) => (
+                      <tr key={i} className="animate-pulse">
+                        <td className="py-3.5 px-4">
+                          <div className="h-3 w-40 rounded bg-slate-200" />
+                          <div className="mt-2 h-2.5 w-56 rounded bg-slate-100" />
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <div className="h-3.5 w-14 rounded bg-slate-200" />
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <div className="h-5 w-64 rounded bg-slate-100" />
+                        </td>
+                      </tr>
+                    ))}
+                  {!isLoading && kpis.length === 0 && (
                     <tr>
                       <td colSpan={3} className="py-6 px-4 text-center text-slate-400 italic">
                         {emptyKpisMessage(detail)}
@@ -365,7 +430,11 @@ export function InlineMetricViewDetail({
               <div className="text-[11px] text-amber-700">
                 <p>
                   {detail.available ? "Couldn't load current values" : "Couldn't read this metric view"}
-                  {detail.error_kind === 'permission_denied' ? ' — you may not have access to this metric view.' : '.'}
+                  {detail.error_kind === 'permission_denied'
+                    ? ' — you may not have access to this metric view.'
+                    : detail.error_kind === 'broken_dependency'
+                      ? ' — one of its source tables no longer exists. Ask the owner to fix the definition.'
+                      : '.'}
                 </p>
                 <details className="mt-1 text-slate-500">
                   <summary className="cursor-pointer select-none">Show error details</summary>

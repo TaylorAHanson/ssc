@@ -678,6 +678,10 @@ def _classify_uc_error(message: str) -> str:
     grants on the target object).
     """
     m = (message or "").lower()
+    # A view whose source/join table was dropped or renamed — checked before
+    # "does not exist" since the message contains that too.
+    if "uc_dependency_does_not_exist" in m:
+        return "broken_dependency"
     if "does not exist" in m:
         return "not_found"
     if ("permission" in m or "not authorized" in m or "access denied" in m or "forbidden" in m

@@ -105,3 +105,12 @@ def test_unknown_asset_and_missing_warehouse():
 def test_uc_missing_privilege_is_classified_as_permission_denied():
     assert _classify_uc_error("User does not have SELECT on Table 'a.b.c'") == "permission_denied"
     assert _classify_uc_error("Table 'a.b.c' does not exist") == "not_found"
+
+
+def test_view_with_a_dropped_source_is_a_broken_dependency():
+    msg = ("[UC_DEPENDENCY_DOES_NOT_EXIST] Dependency does not exist in Unity Catalog: Table "
+           "'c.s.mv' is invalid because one of the underlying resources does not exist.")
+    assert _classify_uc_error(msg) == "broken_dependency"
+    out = _run(_asset(), FakeProvider(_describe(), RuntimeError(msg)))
+    assert out["available"] and len(out["kpis"]) == 2
+    assert out["error_kind"] == "broken_dependency"
