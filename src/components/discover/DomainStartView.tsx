@@ -23,6 +23,10 @@ interface DomainStartViewProps {
   onLaunchFullMode: (domain: string, subdomain?: string | null) => void;
 }
 
+function plural(n: number, one: string, many = `${one}s`) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 function getDomainMeta(domain: string) {
   const d = domain.toLowerCase();
   if (d.includes('supply')) {
@@ -117,7 +121,7 @@ export function DomainStartView({
       className={`max-w-6xl mx-auto space-y-8 transition-all duration-500 ease-out ${
         selectedDomain
           ? 'pt-2 sm:pt-4 pb-28'
-          : 'pt-10 sm:pt-20 lg:pt-28 pb-16 min-h-[55vh]'
+          : 'pt-4 sm:pt-8 pb-16 min-h-[55vh]'
       }`}
     >
       {/* Clean Hero Title */}
@@ -193,18 +197,18 @@ export function DomainStartView({
               {/* Bottom Meta Stats */}
               <div className="pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
                 <div className="flex items-center gap-3 font-medium">
-                  <span className="text-slate-700 font-semibold inline-flex items-center gap-1">
+                  <span className="text-slate-700 font-semibold inline-flex items-center gap-1 whitespace-nowrap">
                     <Layers className="w-3.5 h-3.5 text-slate-400" />
-                    {dom.subdomain_count} Subdomains
+                    {plural(dom.subdomain_count, 'subdomain')}
                   </span>
                   <span className="text-slate-300">•</span>
-                  <span className="inline-flex items-center gap-1 text-primary font-semibold">
+                  <span className="inline-flex items-center gap-1 text-primary font-semibold whitespace-nowrap">
                     <TrendingUp className="w-3.5 h-3.5" />
-                    {dom.metric_view_count} Metrics
+                    {plural(dom.metric_view_count, 'metric view')}
                   </span>
                 </div>
 
-                <div className="inline-flex items-center gap-1 text-slate-400 group-hover:text-primary group-hover:translate-x-0.5 transition-all font-semibold text-xs">
+                <div className="inline-flex items-center gap-1 text-slate-400 group-hover:text-primary group-hover:translate-x-0.5 transition-all font-semibold text-xs whitespace-nowrap">
                   <span>{isSelected ? 'Change' : 'Select'}</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </div>
@@ -243,7 +247,7 @@ export function DomainStartView({
                 </button>
               </h3>
               <p className="text-xs text-slate-500">
-                Pick a business subdomain to jump directly into its governed metrics and Lakehouse tables.
+                Pick a business subdomain to jump directly into its metric views and tables.
               </p>
             </div>
 
@@ -252,7 +256,7 @@ export function DomainStartView({
               onClick={() => onLaunchFullMode(currentDomainData.domain, null)}
               className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-sm transition-all cursor-pointer self-start sm:self-center"
             >
-              <span>Explore All {currentDomainData.domain} ({currentDomainData.metric_view_count} metrics)</span>
+              <span>Explore All {currentDomainData.domain} ({plural(currentDomainData.metric_view_count, 'metric view')})</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -289,33 +293,6 @@ export function DomainStartView({
                       {sd.description}
                     </p>
 
-                    {/* Headline KPIs if available */}
-                    {sd.kpis && sd.kpis.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 mb-3">
-                        {sd.kpis.slice(0, 2).map((kpi, idx) => (
-                          <div
-                            key={idx}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-50 border border-slate-200 text-[11px]"
-                          >
-                            <span className="text-slate-500 font-medium">{kpi.name}:</span>
-                            <span className="font-bold text-slate-900">{kpi.value}</span>
-                            {kpi.trend && (
-                              <span
-                                className={`text-[10px] font-semibold ${
-                                  kpi.trend.startsWith('+')
-                                    ? 'text-emerald-600'
-                                    : kpi.trend.startsWith('-')
-                                    ? 'text-amber-600'
-                                    : 'text-slate-500'
-                                }`}
-                              >
-                                {kpi.trend}
-                              </span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
                   </div>
 
                   {/* Footer details */}
@@ -323,16 +300,16 @@ export function DomainStartView({
                     <div className="flex items-center gap-2 font-medium">
                       {sd.metric_views_count > 0 ? (
                         <>
-                          <span className="text-primary font-semibold inline-flex items-center gap-1">
+                          <span className="text-primary font-semibold inline-flex items-center gap-1 whitespace-nowrap">
                             <TrendingUp className="w-3 h-3" />
-                            {sd.metric_views_count} metrics
+                            {plural(sd.metric_views_count, 'metric view')}
                           </span>
                           <span className="text-slate-300">•</span>
                         </>
                       ) : null}
-                      <span className="inline-flex items-center gap-1 text-slate-600">
+                      <span className="inline-flex items-center gap-1 text-slate-600 whitespace-nowrap">
                         <Database className="w-3 h-3 text-slate-400" />
-                        {sd.tables_count} tables
+                        {plural(sd.tables_count, 'table')}
                       </span>
                     </div>
 

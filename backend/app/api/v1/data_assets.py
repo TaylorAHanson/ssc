@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict
 from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
+from app.workers.tasks.sync_data_assets import is_metric_view
 from app.api.deps import get_current_user
 from datetime import datetime
 import json
@@ -156,11 +157,7 @@ def get_domains_hierarchy(db: Session = Depends(get_db)):
     for a in assets:
         d = a.domain or "Enterprise Data"
         sd = a.subdomain or "General Analytics"
-        is_metric = (
-            str(a.type).upper() == "METRIC_VIEW"
-            or (a.table_name and a.table_name.lower().startswith(("metric_", "sem_")))
-            or a.kpis is not None
-        )
+        is_metric = is_metric_view(a.type)
 
         if d not in domain_map:
             domain_map[d] = {
@@ -173,11 +170,12 @@ def get_domains_hierarchy(db: Session = Depends(get_db)):
             }
 
         dom_entry = domain_map[d]
-        dom_entry["table_count"] += 1
         if is_metric:
             dom_entry["metric_view_count"] += 1
             if a.downstream_dashboards:
                 dom_entry["dashboard_count"] += len(a.downstream_dashboards)
+        else:
+            dom_entry["table_count"] += 1
 
         if sd not in dom_entry["subdomains"]:
             dom_entry["subdomains"][sd] = {
@@ -191,14 +189,13 @@ def get_domains_hierarchy(db: Session = Depends(get_db)):
             }
 
         sub_entry = dom_entry["subdomains"][sd]
-        sub_entry["tables_count"] += 1
+        if not is_metric:
+            sub_entry["tables_count"] += 1
         if a.schema:
             sub_entry["schemas"].add(a.schema)
         if is_metric:
             sub_entry["metric_views_count"] += 1
             sub_entry["metric_views"].append(a.table_name)
-            if a.kpis and not sub_entry["kpis"]:
-                sub_entry["kpis"] = a.kpis[:2]
 
     results = []
     priority_order = ["Supply Chain", "Finance", "Sales & Commercial", "Operations & Facilities", "Risk & Compliance", "Enterprise Data"]
@@ -226,7 +223,7 @@ def get_domains_hierarchy(db: Session = Depends(get_db)):
             "subdomain_count": len(subdomains_list),
             "metric_view_count": data["metric_view_count"],
             "table_count": data["table_count"],
-            "dashboard_count": max(data["dashboard_count"], len(subdomains_list) * 3),
+            "dashboard_count": data["dashboard_count"],
             "subdomains": subdomains_list,
         })
 
@@ -291,14 +288,7 @@ def list_metric_views(
     """Return all governed metric views matching filters."""
     from sqlalchemy import or_
 
-    q = db.query(DataAssetModel).filter(
-        or_(
-            DataAssetModel.type == "METRIC_VIEW",
-            DataAssetModel.kpis.isnot(None),
-            DataAssetModel.table_name.like("metric_%"),
-            DataAssetModel.table_name.like("sem_%"),
-        )
-    )
+    q = db.query(DataAssetModel).filter(DataAssetModel.type == "METRIC_VIEW")
     if domain:
         q = q.filter(DataAssetModel.domain == domain)
     if subdomain:
@@ -339,6 +329,50 @@ def list_metric_views(
             "last_synced_at": a.last_synced_at,
         })
     return results
+
+
+def _quote_ident(name: str) -> str:
+    return "`" + str(name).replace("`", "``") + "`"
+
+
+@router.get("/metric_views/values")
+async def get_metric_view_values(asset_id: str, req: Request, db: Session = Depends(get_db)):
+    """Current value of each measure in a cached metric view, queried live.
+
+    Runs On-Behalf-Of the signed-in user, so values reflect their own grants
+    (and any row filters). Only the view and measure identifiers from the synced
+    definition are used to build the statement — nothing from the request is
+    interpolated. Returns ``values`` keyed by measure name, or ``error`` when the
+    query can't be run (no warehouse, no access, bad definition).
+    """
+    from app.core.config import settings
+    from app.core.workspaces import get_uc_provider
+
+    asset = db.query(DataAssetModel).filter(DataAssetModel.id == asset_id).first()
+    if not asset or not is_metric_view(asset.type):
+        return {"values": {}, "error": "Metric view not found in the catalog cache."}
+    measures = [k["measure"] for k in (asset.kpis or []) if isinstance(k, dict) and k.get("measure")]
+    if not measures:
+        return {"values": {}, "error": "No measures available: the sync identity couldn't read this metric view's definition, or it defines none."}
+    if not settings.DATABRICKS_WAREHOUSE_ID:
+        return {"values": {}, "error": "No SQL warehouse is configured."}
+
+    fqn = ".".join(_quote_ident(p) for p in (asset.catalog, asset.schema, asset.table_name))
+    select = ", ".join(f"MEASURE({_quote_ident(m)}) AS {_quote_ident(m)}" for m in measures)
+    try:
+        result = await get_uc_provider().execute_sql(
+            f"SELECT {select} FROM {fqn}",
+            warehouse=settings.DATABRICKS_WAREHOUSE_ID,
+            obo_token=getattr(req.state, "token", None),
+            require_obo=True,
+            timeout_seconds=60,
+        )
+    except Exception as e:
+        logger.info("Metric view values for %s unavailable: %s", asset_id, e)
+        return {"values": {}, "error": str(e), "error_kind": _classify_uc_error(str(e))}
+
+    rows = result.get("rows") or []
+    return {"values": rows[0] if rows else {}, "error": None}
 
 
 class AccessibleAssetsResponse(BaseModel):
@@ -562,8 +596,31 @@ def get_databricks_apps():
             client_id=settings.DATABRICKS_CLIENT_ID,
             client_secret=settings.DATABRICKS_CLIENT_SECRET
         )
-        apps = provider.client.apps.list()
-        return [{"id": a.name, "name": a.name, "type": "app", "creator": a.creator} for a in apps]
+        # Raw REST rather than ``apps.list()``: the SDK's App model doesn't carry
+        # ``thumbnail_url`` yet, so it would be silently dropped.
+        apps, page_token = [], None
+        while True:
+            resp = provider.client.api_client.do(
+                "GET", "/api/2.0/apps", query={"page_token": page_token} if page_token else None
+            ) or {}
+            apps.extend(resp.get("apps") or [])
+            page_token = resp.get("next_page_token")
+            if not page_token:
+                break
+        return [
+            {
+                "id": a["name"],
+                "name": a["name"],
+                "type": "app",
+                "creator": a.get("creator"),
+                "description": a.get("description") or None,
+                "url": a.get("url") or None,
+                "thumbnail_url": a.get("thumbnail_url") or None,
+                "updated_at": a.get("update_time"),
+            }
+            for a in apps
+            if a.get("name")
+        ]
     except Exception as e:
         logger.error(f"Failed to fetch apps: {e}")
         # Return empty list if apps aren't supported in this workspace/SDK yet

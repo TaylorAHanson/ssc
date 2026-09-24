@@ -1,6 +1,9 @@
 /** @type {import('tailwindcss').Config} */
 import typography from "@tailwindcss/typography";
 
+const withAlpha = (cssVar) =>
+  `color-mix(in srgb, var(${cssVar}) calc(<alpha-value> * 100%), transparent)`;
+
 export default {
   content: [
     "./index.html",
@@ -10,14 +13,17 @@ export default {
     extend: {
       colors: {
         border: "hsl(214.3 31.8% 91.4%)",
+        // Brand colors are runtime CSS variables (admin-editable hex), so
+        // opacity modifiers like `bg-primary/10` need color-mix — a bare
+        // var() silently drops them.
         primary: {
-          DEFAULT: "var(--brand-primary)",
+          DEFAULT: withAlpha("--brand-primary"),
         },
-        secondary: "var(--brand-secondary)",
-        info: "var(--brand-info)",
-        alert: "var(--brand-alert)",
-        warning: "var(--brand-warning)",
-        success: "var(--brand-success)",
+        secondary: withAlpha("--brand-secondary"),
+        info: withAlpha("--brand-info"),
+        alert: withAlpha("--brand-alert"),
+        warning: withAlpha("--brand-warning"),
+        success: withAlpha("--brand-success"),
         background: {
           DEFAULT: "var(--theme-surface)",
         },

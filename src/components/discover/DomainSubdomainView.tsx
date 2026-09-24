@@ -72,7 +72,7 @@ export function DomainSubdomainView({
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold tracking-wide uppercase mb-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-emerald-600" /> Governed Business Domain
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600" /> Business Domain
               </div>
               <h2 className="text-2xl font-bold tracking-tight text-slate-900 flex items-center gap-3">
                 {currentDomainData.domain}
@@ -231,8 +231,8 @@ export function DomainSubdomainView({
                             key={idx}
                             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-emerald-200 shadow-2xs text-xs"
                           >
-                            <span className="text-slate-500 font-medium">{kpi.name}:</span>
-                            <span className="font-bold text-slate-900">{kpi.value}</span>
+                            <span className="text-slate-500 font-medium">{kpi.name}{kpi.value ? ':' : ''}</span>
+                            {kpi.value && <span className="font-bold text-slate-900">{kpi.value}</span>}
                             {kpi.trend && (
                               <span
                                 className={`text-[10px] font-semibold ${
@@ -321,8 +321,8 @@ export function DomainSubdomainView({
                             key={idx}
                             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200 text-xs"
                           >
-                            <span className="text-slate-500 font-medium">{kpi.name}:</span>
-                            <span className="font-bold text-slate-900">{kpi.value}</span>
+                            <span className="text-slate-500 font-medium">{kpi.name}{kpi.value ? ':' : ''}</span>
+                            {kpi.value && <span className="font-bold text-slate-900">{kpi.value}</span>}
                             {kpi.trend && (
                               <span
                                 className={`text-[10px] font-semibold ${
@@ -345,7 +345,7 @@ export function DomainSubdomainView({
                     {sd.metric_views && sd.metric_views.length > 0 ? (
                       <div className="mb-3">
                         <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
-                          Governed Metric Views
+                          Metric Views
                         </div>
                         <div className="flex flex-wrap gap-1.5">
                           {sd.metric_views.slice(0, 3).map((mv) => (
@@ -373,7 +373,7 @@ export function DomainSubdomainView({
                     ) : sd.schemas && sd.schemas.length > 0 ? (
                       <div className="mb-3">
                         <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
-                          Governed Lakehouse Tables
+                          Tables
                         </div>
                         <div className="flex flex-wrap gap-1.5">
                           <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded bg-indigo-50 text-indigo-800 border border-indigo-200/60 font-mono">

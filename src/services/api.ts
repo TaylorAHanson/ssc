@@ -1406,8 +1406,12 @@ export async function syncMcpSource(id: string): Promise<{ ok: boolean; count: n
 
 export interface MetricKpi {
   name: string;
-  value: string;
-  trend?: string;
+  /** Measure identifier to pass to MEASURE() for live values. */
+  measure?: string;
+  /** The measure's `format` block from the metric view YAML, if any. */
+  format?: { type?: string; currency_code?: string } | null;
+  value?: string | null;
+  trend?: string | null;
   formula?: string;
   aggregation?: string;
   unit?: string;
@@ -1433,7 +1437,7 @@ export interface DataAsset {
   sla: string | null;
   kpis?: MetricKpi[] | null;
   upstream_tables?: Array<{ name: string; fqn: string; schema: string; type: string; description?: string }> | null;
-  downstream_dashboards?: Array<{ id: string; name: string; type: string; description?: string; owner?: string; views?: number; updated_at?: string }> | null;
+  downstream_dashboards?: Array<{ id: string; name: string; type: string; description?: string; owner?: string; views?: number; updated_at?: string; url?: string | null }> | null;
   legacy_mappings?: Array<{ dashboard: string; status: 'Active' | 'Migrating' | 'Deprecated'; owner?: string; description?: string; metric_view?: string; subdomain?: string; domain?: string }> | null;
   created_at: string | null;
   last_synced_at: string;
@@ -1491,6 +1495,23 @@ export async function getLegacyMappings(params?: { domain?: string; subdomain?: 
   });
   if (!response.ok) {
     throw new Error(`Failed to fetch legacy mappings: ${response.status}`);
+  }
+  return response.json();
+}
+
+export interface MetricViewValues {
+  values: Record<string, string | number | null>;
+  error: string | null;
+  error_kind?: string;
+}
+
+/** Live value of each measure in a metric view, queried as the current user. */
+export async function getMetricViewValues(assetId: string): Promise<MetricViewValues> {
+  const url = new URL(`${API_BASE_URL}/data-assets/metric_views/values`, window.location.origin);
+  url.searchParams.append('asset_id', assetId);
+  const response = await fetch(url.toString(), { headers: getHeaders() });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch metric view values: ${response.status}`);
   }
   return response.json();
 }
@@ -3466,6 +3487,7 @@ export const api = {
   getDomainHierarchy,
   getLegacyMappings,
   getMetricViews,
+  getMetricViewValues,
   getDataContracts,
   getContractHistory,
   createDataContract,

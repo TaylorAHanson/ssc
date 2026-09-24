@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useDeferredValue, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { 
-  ShieldCheck, Database, Table as TableIcon, Info, X,
+  ShieldCheck, Table as TableIcon, Info, X,
   Tag, FileText, Loader2,
   BookOpen, Calendar, GitBranch, AlertCircle, ChevronDown, ChevronUp,
   Link as LinkIcon, ArrowDownToLine, ArrowUpFromLine, Lock, Columns3,
@@ -12,12 +12,13 @@ import { api } from '../services/api';
 import type { DataAsset, TableDetailsResponse } from '../services/api';
 import { useBrandingStore } from '../stores/brandingStore';
 import {
+  appUrl,
   assetWorkspaceUrl,
   catalogExplorerUrl,
+  dashboardUrl,
   workspaceLinkLabel,
 } from '../lib/databricksLinks';
 import { LineageGraph, type LineageSeedTable } from '../components/discover/LineageGraph';
-import { AssetTypeBadge } from '../lib/assetTypes';
 import { ChatView, type ChatViewHandle } from '../components/chat/ChatView';
 import {
   useDiscoveryCatalog,
@@ -27,6 +28,8 @@ import {
 } from '../lib/catalogCache';
 import { DomainStartView } from '../components/discover/DomainStartView';
 import { DomainFullView } from '../components/discover/DomainFullView';
+import { DiscoverSearchResults } from '../components/discover/DiscoverSearchResults';
+import { SidePanel } from '../components/discover/SidePanel';
 import { DiscoverSearch } from '../components/discover/DiscoverSearch';
 
 import yaml from 'js-yaml';
@@ -228,24 +231,33 @@ export function DataDiscovery() {
     return () => window.clearTimeout(id);
   }, [agentQuery]);
 
-  const filteredDatasets = useMemo(() => {
+  // Landing-page search is catalog-wide: it ignores any domain picked in step 1.
+  // Results are ranked: name match > description/KPI match > domain/subdomain match.
+  const landingSearch = useMemo(() => {
     const term = effectiveSearchTerm.trim().toLowerCase();
-    return datasets.filter((ds) => {
-      const matchesSearch =
-        !term ||
-        ds.table_name.toLowerCase().includes(term) ||
-        (ds.description && ds.description.toLowerCase().includes(term)) ||
-        (ds.owner && ds.owner.toLowerCase().includes(term)) ||
-        (ds.domain && ds.domain.toLowerCase().includes(term));
-
-      const matchesDomain = !selectedDomain || ds.domain === selectedDomain;
-      const matchesSubdomain = !selectedSubdomain || ds.subdomain === selectedSubdomain;
-      const matchesCertified = !showCertifiedOnly || ds.certified;
-      const matchesAccessible = !(showAccessibleOnly && accessibleAvailable) || accessibleIds.has(ds.id);
-
-      return matchesSearch && matchesDomain && matchesSubdomain && matchesCertified && matchesAccessible;
-    });
-  }, [datasets, effectiveSearchTerm, selectedDomain, selectedSubdomain, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds]);
+    if (!term) return null;
+    const passesFilters = (a: DataAsset) =>
+      (!showCertifiedOnly || a.certified) &&
+      (!(showAccessibleOnly && accessibleAvailable) || accessibleIds.has(a.id));
+    const score = (a: DataAsset) => {
+      const has = (text?: string | null) => Boolean(text && text.toLowerCase().includes(term));
+      if (has(a.table_name) || has(a.table_name.replace(/_/g, ' '))) return 3;
+      if (has(a.description) || has(a.owner) || (a.kpis || []).some((k) => has(k.name))) return 2;
+      if (has(a.domain) || has(a.subdomain)) return 1;
+      return 0;
+    };
+    const rank = (items: DataAsset[]) =>
+      items
+        .filter(passesFilters)
+        .map((a) => ({ a, s: score(a) }))
+        .filter((x) => x.s > 0)
+        .sort((x, y) => y.s - x.s || Number((y.a.kpis?.length ?? 0) > 0) - Number((x.a.kpis?.length ?? 0) > 0))
+        .map((x) => x.a);
+    return {
+      metricViews: rank(metricViewsData as DataAsset[]),
+      assets: rank(datasets.filter((ds) => ds.type !== 'METRIC_VIEW')),
+    };
+  }, [effectiveSearchTerm, metricViewsData, datasets, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds]);
 
   const filteredMetricViews = useMemo(() => {
     return metricViewsData.filter((mv) => {
@@ -276,8 +288,7 @@ export function DataDiscovery() {
     return datasets.filter((ds) => {
       if (selectedDomain && ds.domain !== selectedDomain) return false;
       if (selectedSubdomain && ds.subdomain !== selectedSubdomain) return false;
-      const isMv = ds.type === 'METRIC_VIEW' || ds.table_name.startsWith('metric_') || ds.table_name.startsWith('sem_');
-      if (isMv) return false;
+      if (ds.type === 'METRIC_VIEW') return false;
       if (showCertifiedOnly && !ds.certified) return false;
       if (showAccessibleOnly && accessibleAvailable && !accessibleIds.has(ds.id)) return false;
       if (effectiveSearchTerm.trim()) {
@@ -295,30 +306,35 @@ export function DataDiscovery() {
       name: string;
       type: string;
       description: string;
-      views: number;
-      updated_at: string;
+      views?: number;
+      updated_at?: string;
+      url?: string | null;
     }> = [];
     const aList: Array<{
       id: string;
       name: string;
       type: string;
       description: string;
-      views: number;
-      updated_at: string;
+      views?: number;
+      updated_at?: string;
+      url?: string | null;
+      thumbnail_url?: string | null;
     }> = [];
 
-    // Harvest from datasets
+    // Harvest from datasets. Workspace dashboards carry no domain, so they're
+    // only listed unscoped; within a domain, dashboards come from the lineage of
+    // its metric views below.
     for (const ds of datasets) {
       if (ds.type === 'dashboard') {
-        const matchesDomain = !selectedDomain || ds.domain === selectedDomain || ds.domain === 'Analytics';
-        if (matchesDomain) {
+        if (!selectedDomain) {
           dList.push({
             id: ds.id,
             name: ds.table_name || ds.name,
             type: 'dashboard',
-            description: ds.description || 'Lakeview Dashboard in Databricks workspace',
-            views: ds.views || 240,
-            updated_at: ds.updated_at || 'Recently updated',
+            description: ds.description || 'Dashboard',
+            views: ds.views,
+            updated_at: ds.updated_at,
+            url: dashboardUrl(databricksWorkspaceUrl, ds.id),
           });
         }
       } else if (ds.type === 'app') {
@@ -328,9 +344,12 @@ export function DataDiscovery() {
             id: ds.id,
             name: ds.table_name || ds.name,
             type: 'app',
-            description: ds.description || 'Interactive Databricks App',
-            views: ds.views || 180,
-            updated_at: ds.updated_at || 'Recently updated',
+            description: ds.description || '',
+            views: ds.views,
+            updated_at: ds.updated_at,
+            // The running app, not its settings page; fall back to the workspace page.
+            url: ds.url || appUrl(databricksWorkspaceUrl, ds.id),
+            thumbnail_url: ds.thumbnail_url ?? null,
           });
         }
       }
@@ -349,6 +368,7 @@ export function DataDiscovery() {
           description?: string;
           views?: number;
           updated_at?: string;
+          url?: string | null;
         }>) {
           if (!d || !d.name) continue;
           const isApp = d.type === 'app';
@@ -358,9 +378,10 @@ export function DataDiscovery() {
               id: d.id || d.name,
               name: d.name,
               type: 'app',
-              description: d.description || `Interactive Databricks App consuming ${mv.table_name}`,
-              views: d.views || 160,
-              updated_at: d.updated_at || 'Recently updated',
+              description: d.description || `App using ${mv.table_name}`,
+              views: d.views,
+              updated_at: d.updated_at,
+              url: d.url,
             });
           } else if (!isApp && !seenD.has(d.name)) {
             seenD.add(d.name);
@@ -369,45 +390,13 @@ export function DataDiscovery() {
               name: d.name,
               type: 'dashboard',
               description: d.description || `Downstream analytical view built on ${mv.table_name}`,
-              views: d.views || 240,
-              updated_at: d.updated_at || 'Recently updated',
+              views: d.views,
+              updated_at: d.updated_at,
+              url: d.url,
             });
           }
         }
       }
-    }
-
-    const scope = selectedSubdomain || selectedDomain || 'Business';
-    if (dList.length === 0) {
-      dList.push(
-        {
-          id: 'exec_review',
-          name: `${scope} Executive Review`,
-          type: 'dashboard',
-          description: `High-level executive KPIs, monthly trend analysis, and regional forecast performance for ${scope}.`,
-          views: 342,
-          updated_at: '2h ago',
-        },
-        {
-          id: 'actuals_waterfall',
-          name: `${scope} vs Actuals Waterfall`,
-          type: 'dashboard',
-          description: `Granular variance analysis comparing forecast vs actuals across ${scope} categories.`,
-          views: 218,
-          updated_at: '4h ago',
-        }
-      );
-    }
-
-    if (aList.length === 0) {
-      aList.push({
-        id: 'hierarchy_explorer',
-        name: `${scope} Scenario Explorer`,
-        type: 'app',
-        description: `Interactive Databricks App allowing dynamic scenario modeling and drill-downs for ${scope}.`,
-        views: 156,
-        updated_at: '1d ago',
-      });
     }
 
     return {
@@ -415,7 +404,7 @@ export function DataDiscovery() {
       appsList: aList,
       consumingSolutions: [...dList, ...aList],
     };
-  }, [datasets, filteredMetricViews, selectedSubdomain, selectedDomain]);
+  }, [datasets, filteredMetricViews, selectedDomain, databricksWorkspaceUrl]);
 
   // Open an asset's detail view by id. Used both by the catalog rails ("View
   // details") and by deep-links from the agent landing.
@@ -500,19 +489,22 @@ export function DataDiscovery() {
         <div>
           <h1 className="text-3xl font-bold text-gray-900 mb-1">Discover</h1>
           <p className="text-gray-600 text-sm">
-            Browse governed business domains, discover metric views, and explore data lineage.
+            Browse business domains, discover metric views, and explore data lineage.
           </p>
         </div>
-        <div className="flex items-center gap-2.5 self-end sm:self-center">
-          {discoveryStage === 'start' && (
-            <DiscoverSearch
-              value={searchTerm}
-              onChange={setSearchTerm}
-              onSubmitAgentQuery={submitAgentQuery}
-            />
-          )}
-        </div>
       </div>
+
+      {discoveryStage === 'start' && (
+        <div className="max-w-3xl mx-auto w-full pt-2">
+          <DiscoverSearch
+            variant="hero"
+            value={searchTerm}
+            onChange={setSearchTerm}
+            onSubmitAgentQuery={submitAgentQuery}
+            placeholder="Search metric views, tables, dashboards…"
+          />
+        </div>
+      )}
 
       {/* Inline agent panel — answers questions without leaving the page. */}
       {agentQuery && (
@@ -543,7 +535,24 @@ export function DataDiscovery() {
 
       {/* Main Content Body */}
       <div className="space-y-8 animate-in fade-in duration-300">
-        {discoveryStage === 'start' ? (
+        {discoveryStage === 'start' && landingSearch ? (
+          <DiscoverSearchResults
+            term={effectiveSearchTerm.trim()}
+            metricViews={landingSearch.metricViews}
+            assets={landingSearch.assets}
+            workspaceUrl={databricksWorkspaceUrl}
+            selectedAssetId={selectedDataset?.id ?? null}
+            onOpenMetricView={(mv) => {
+              handleSelectDomain(mv.domain || null);
+              handleSelectSubdomain(mv.subdomain || null);
+              setSearchTerm('');
+              setSelectedMetricView(mv);
+              handleSetStage('full');
+            }}
+            onOpenAsset={setSelectedDataset}
+            onClear={() => setSearchTerm('')}
+          />
+        ) : discoveryStage === 'start' ? (
           <DomainStartView
             domains={domainsHierarchy}
             selectedDomain={selectedDomain}
@@ -585,14 +594,9 @@ export function DataDiscovery() {
             showAccessibleOnly={showAccessibleOnly}
             onToggleAccessibleOnly={() => setShowAccessibleOnly(!showAccessibleOnly)}
             selectedMetricView={selectedMetricView}
-            onSelectMetricView={(mv) => {
-              setSelectedMetricView(mv);
-              if (mv) {
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-                document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' });
-              }
-            }}
+            onSelectMetricView={setSelectedMetricView}
             onSelectTable={setSelectedDataset}
+            selectedTableId={selectedDataset?.id ?? null}
             onRequestAccess={handleRequestAccess}
             workspaceUrl={databricksWorkspaceUrl}
             searchTerm={searchTerm}
@@ -601,65 +605,6 @@ export function DataDiscovery() {
           />
         )}
 
-        {/* Supporting Tables when user is actively searching */}
-        {effectiveSearchTerm.trim() && filteredDatasets.length > 0 && (
-          <div className="space-y-3 pt-6 border-t border-slate-200">
-            <div className="flex items-center justify-between">
-              <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <Database className="w-4 h-4 text-blue-500" />
-                Related Lakehouse Tables & Datasets ({filteredDatasets.length})
-              </h4>
-            </div>
-
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
-                    <th className="py-2.5 px-4">Name</th>
-                    <th className="py-2.5 px-4">Domain</th>
-                    <th className="py-2.5 px-4">Type</th>
-                    <th className="py-2.5 px-4">Description</th>
-                    <th className="py-2.5 px-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredDatasets.slice(0, 8).map((ds) => (
-                    <tr key={ds.id} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="py-3 px-4 font-mono font-medium text-slate-900">
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            onClick={() => setSelectedDataset(ds)}
-                            className="cursor-pointer hover:text-primary"
-                          >
-                            {ds.table_name}
-                          </span>
-                          {ds.certified && <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />}
-                        </div>
-                        <div className="text-[10px] text-slate-400 font-normal">{`${ds.catalog}.${ds.schema_name}`}</div>
-                      </td>
-                      <td className="py-3 px-4 text-slate-700">{ds.domain || 'General'}</td>
-                      <td className="py-3 px-4">
-                        <AssetTypeBadge type={ds.type} />
-                      </td>
-                      <td className="py-3 px-4 text-slate-600 max-w-xs truncate">
-                        {ds.description || '—'}
-                      </td>
-                      <td className="py-3 px-4 text-right space-x-2">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedDataset(ds)}
-                          className="font-semibold text-primary hover:text-primary/80 cursor-pointer"
-                        >
-                          Details
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Full Details Modal */}
@@ -835,8 +780,8 @@ function DetailsModal({
   }, [tabs.length]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm transition-opacity animate-in fade-in duration-200">
-      <div className="bg-white rounded-xl shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col transform transition-all animate-in zoom-in-95 duration-200">
+    <SidePanel label={`${asset.table_name} details`} onClose={onClose}>
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col">
 
         {/* Header */}
         <div className="p-6 pb-4 flex justify-between items-start bg-white">
@@ -920,7 +865,7 @@ function DetailsModal({
         </div>
 
         {/* Scrollable Content */}
-        <div className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-6">
+        <div className="p-4 sm:p-6 space-y-6">
 
           {/* Contract loading / error states (visible regardless of tab so users get feedback) */}
           {isDataset && isLoadingContract && (
@@ -1351,7 +1296,7 @@ function DetailsModal({
           )}
         </div>
       </div>
-    </div>
+    </SidePanel>
   );
 }
 

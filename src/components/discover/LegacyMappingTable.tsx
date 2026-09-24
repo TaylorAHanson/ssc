@@ -50,7 +50,7 @@ export function LegacyMappingTable({ mappings, onSelectMetricView }: LegacyMappi
             Legacy Dashboard Mapping
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Tracking migration of legacy reports to governed metric views
+            Tracking migration of legacy reports to metric views
           </p>
         </div>
 
@@ -110,7 +110,7 @@ export function LegacyMappingTable({ mappings, onSelectMetricView }: LegacyMappi
               <th className="py-3 px-4">Dashboard (Legacy)</th>
               <th className="py-3 px-4">Status</th>
               <th className="py-3 px-4">Owner</th>
-              <th className="py-3 px-4">Governed Metric View</th>
+              <th className="py-3 px-4">Metric View</th>
               <th className="py-3 px-4">Subdomain</th>
               <th className="py-3 px-4 text-right">Actions</th>
             </tr>

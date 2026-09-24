@@ -1,11 +1,9 @@
 import {
-  TrendingUp,
   ShieldCheck,
   ExternalLink,
   ChevronRight,
   Database,
   LayoutDashboard,
-  Check,
 } from 'lucide-react';
 import type { DataAsset, MetricKpi } from '../../services/api';
 import { catalogExplorerUrl } from '../../lib/databricksLinks';
@@ -16,9 +14,11 @@ interface MetricViewCardProps {
   isSelected?: boolean;
   onSelect: (asset: DataAsset) => void;
   onRequestAccess?: (asset: DataAsset) => void;
+  /** Optional line above the title, e.g. "Finance › Planning & Budgeting" in search results. */
+  context?: string;
 }
 
-export function MetricViewCard({ asset, isSelected = false, onSelect }: MetricViewCardProps) {
+export function MetricViewCard({ asset, isSelected = false, onSelect, context }: MetricViewCardProps) {
   const databricksWorkspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
   const catalogUrl = catalogExplorerUrl(
     databricksWorkspaceUrl,
@@ -32,25 +32,9 @@ export function MetricViewCard({ asset, isSelected = false, onSelect }: MetricVi
     .replace(/_metric_view$/, '')
     .replace(/_/g, ' ');
 
-  const kpis: MetricKpi[] = asset.kpis || [
-    {
-      name: 'Forecast Accuracy',
-      value: '94.2%',
-      trend: '+1.5%',
-      formula: '1 - ABS(actual_qty - forecast_qty) / actual_qty',
-      aggregation: 'AVG',
-    },
-    {
-      name: 'Attainment',
-      value: '98.2%',
-      trend: '+1.0%',
-      formula: 'actual_qty / planned_qty',
-      aggregation: 'RATIO',
-    },
-  ];
-
-  const dashboardsCount = asset.downstream_dashboards?.length || 3;
-  const tablesCount = asset.upstream_tables?.length || 3;
+  const kpis: MetricKpi[] = asset.kpis ?? [];
+  const dashboardsCount = asset.downstream_dashboards?.length ?? 0;
+  const tablesCount = asset.upstream_tables?.length ?? 0;
 
   return (
     <div
@@ -62,66 +46,47 @@ export function MetricViewCard({ asset, isSelected = false, onSelect }: MetricVi
       }`}
     >
       <div>
-        {/* Top Badges */}
-        <div className="flex items-center justify-between gap-2 mb-3">
-          <div className="flex items-center gap-2">
-            <span
-              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${
-                isSelected
-                  ? 'bg-primary text-white'
-                  : 'bg-primary/10 text-primary border border-primary/20'
-              }`}
-            >
-              <TrendingUp className="w-3 h-3" />
-              Metric View
-            </span>
+        {catalogUrl && (
+          <a
+            href={catalogUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1 rounded hover:bg-slate-100 transition-colors"
+            title="Open in Catalog Explorer"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        )}
 
-            {asset.certified && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                Certified
-              </span>
-            )}
-
-            {isSelected && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-900 text-white shadow-2xs">
-                <Check className="w-3 h-3 stroke-[3]" /> Viewing Details
-              </span>
-            )}
-          </div>
-
-          {catalogUrl && (
-            <a
-              href={catalogUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="text-slate-400 hover:text-slate-600 p-1 rounded hover:bg-slate-100 transition-colors"
-              title="Open in Unity Catalog Explorer"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
-          )}
-        </div>
+        {asset.certified && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 mb-2 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+            Certified
+          </span>
+        )}
 
         {/* Title & Description */}
-        <h4 className="text-base font-bold text-slate-900 group-hover:text-primary transition-colors capitalize mb-1">
+        {context && <div className="text-[11px] font-semibold text-slate-500 mb-1 pr-6 truncate">{context}</div>}
+        <h4 className="text-base font-bold text-slate-900 group-hover:text-primary transition-colors capitalize mb-1 pr-6">
           {cleanName}
         </h4>
         <div className="text-[11px] font-mono text-slate-400 mb-2 truncate">
           {asset.catalog}.{asset.schema_name}.{asset.table_name}
         </div>
 
-        <p className="text-xs text-slate-600 line-clamp-2 mb-4 leading-relaxed">
-          {asset.description ||
-            `Governed business metrics and semantic dimensions for ${asset.subdomain || asset.domain}.`}
-        </p>
+        {asset.description && (
+          <p className="text-xs text-slate-600 line-clamp-2 mb-4 leading-relaxed">{asset.description}</p>
+        )}
 
-        {/* Exposed KPIs Section */}
+        {/* KPIs */}
+        {kpis.length === 0 ? (
+          <p className="mb-4 text-[11px] text-slate-400 italic">No KPIs available.</p>
+        ) : (
         <div className="mb-4">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2">
-            <span>Exposed KPIs ({kpis.length})</span>
-            {kpis[0]?.dimensions && (
+            <span>KPIs ({kpis.length})</span>
+            {kpis[0]?.dimensions && kpis[0].dimensions.length > 0 && (
               <span className="text-[10px] text-slate-400 font-normal lowercase truncate max-w-[140px]">
                 by {kpis[0].dimensions.slice(0, 2).join(', ')}
               </span>
@@ -144,6 +109,7 @@ export function MetricViewCard({ asset, isSelected = false, onSelect }: MetricVi
                   )}
                 </div>
 
+                {(kpi.value || kpi.trend) && (
                 <div className="flex items-baseline justify-between mt-1">
                   <span className="text-sm font-extrabold text-slate-900">{kpi.value}</span>
                   {kpi.trend && (
@@ -160,6 +126,7 @@ export function MetricViewCard({ asset, isSelected = false, onSelect }: MetricVi
                     </span>
                   )}
                 </div>
+                )}
 
                 {kpi.formula && (
                   <div className="mt-1 text-[9.5px] font-mono text-slate-400 truncate" title={kpi.formula}>
@@ -170,6 +137,7 @@ export function MetricViewCard({ asset, isSelected = false, onSelect }: MetricVi
             ))}
           </div>
         </div>
+        )}
       </div>
 
       {/* Footer Details */}
@@ -177,17 +145,17 @@ export function MetricViewCard({ asset, isSelected = false, onSelect }: MetricVi
         <div className="flex items-center gap-3">
           <span className="inline-flex items-center gap-1 font-medium text-slate-600">
             <LayoutDashboard className="w-3 h-3 text-amber-500" />
-            {dashboardsCount} Dashboards & Apps
+            {dashboardsCount} {dashboardsCount === 1 ? 'dashboard' : 'dashboards'}
           </span>
           <span className="text-slate-300">•</span>
           <span className="inline-flex items-center gap-1 text-slate-500">
             <Database className="w-3 h-3 text-slate-400" />
-            {tablesCount} Tables
+            {tablesCount} {tablesCount === 1 ? 'source' : 'sources'}
           </span>
         </div>
 
         <div className="inline-flex items-center gap-1 text-primary font-semibold group-hover:translate-x-0.5 transition-transform">
-          <span>{isSelected ? 'Viewing details ↓' : 'Inspect KPIs & Lineage'}</span>
+          <span>{isSelected ? 'Viewing ↓' : 'Details'}</span>
           <ChevronRight className="w-3.5 h-3.5" />
         </div>
       </div>

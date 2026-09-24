@@ -7,13 +7,12 @@ import {
   Database,
   Lock,
   GitBranch,
-  Calendar,
   Clock,
   User,
   X,
-  Sparkles,
 } from 'lucide-react';
-import type { DataAsset, MetricKpi } from '../../services/api';
+import { api } from '../../services/api';
+import type { DataAsset, MetricKpi, MetricViewValues } from '../../services/api';
 import { catalogExplorerUrl } from '../../lib/databricksLinks';
 import { LineageGraph, type LineageSeedTable } from './LineageGraph';
 
@@ -25,6 +24,30 @@ interface DashboardOrApp {
   owner?: string;
   views?: number;
   updated_at?: string;
+  url?: string | null;
+}
+
+/** Render a raw measure value using the measure's YAML `format`, if any. */
+function formatMeasureValue(raw: string | number | null | undefined, format?: MetricKpi['format']): string {
+  if (raw === null || raw === undefined || raw === '') return '—';
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n)) return String(raw);
+  const type = format?.type?.toLowerCase();
+  if (type === 'percentage') {
+    return new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(n);
+  }
+  const compact = Math.abs(n) >= 10_000;
+  const opts: Intl.NumberFormatOptions = compact
+    ? { notation: 'compact', maximumSignificantDigits: 3 }
+    : { maximumFractionDigits: Math.abs(n) < 1 ? 4 : 2 };
+  if (type === 'currency' && format?.currency_code) {
+    try {
+      return new Intl.NumberFormat(undefined, { ...opts, style: 'currency', currency: format.currency_code }).format(n);
+    } catch {
+      // Unknown currency code: fall through to a plain number.
+    }
+  }
+  return new Intl.NumberFormat(undefined, opts).format(n);
 }
 
 interface UpstreamTableInfo {
@@ -52,14 +75,26 @@ export function InlineMetricViewDetail({
 }: InlineMetricViewDetailProps) {
   const [detailTab, setDetailTab] = useState<'kpis' | 'lineage' | 'dashboards' | 'tables'>('kpis');
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const [liveValues, setLiveValues] = useState<{ assetId: string; result: MetricViewValues } | null>(null);
 
-  // Reset scroll to top when metric view opens or changes
+  // Query current measure values live (as the user) whenever a view is opened.
   useEffect(() => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    const main = document.querySelector('main');
-    if (main) {
-      main.scrollTo({ top: 0, behavior: 'smooth' });
-    }
+    let cancelled = false;
+    api
+      .getMetricViewValues(asset.id)
+      .catch((e: Error) => ({ values: {}, error: e.message }))
+      .then((result) => {
+        if (!cancelled) setLiveValues({ assetId: asset.id, result });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [asset.id]);
+  const values = liveValues?.assetId === asset.id ? liveValues.result : null;
+
+  // Start at the top of the panel whenever a different metric view opens.
+  useEffect(() => {
+    containerRef.current?.scrollIntoView({ block: 'start' });
   }, [asset.id]);
 
   const catalogUrl = catalogExplorerUrl(
@@ -74,66 +109,13 @@ export function InlineMetricViewDetail({
     .replace(/_metric_view$/i, '')
     .replace(/_/g, ' ');
 
-  const kpis: MetricKpi[] = asset.kpis || [
-    {
-      name: 'Primary Measure',
-      value: '94.2%',
-      trend: '+1.5%',
-      formula: 'SUM(actual_value) / NULLIF(SUM(target_value), 0)',
-      aggregation: 'RATIO',
-      unit: '%',
-      dimensions: ['Region', 'Product Family', 'Period'],
-      description: 'Primary governed semantic measure for this metric view.',
-    },
-    {
-      name: 'Variance',
-      value: '5.8%',
-      trend: '-0.4%',
-      formula: 'AVG(ABS(actual_value - target_value) / NULLIF(target_value, 0)) * 100',
-      aggregation: 'AVG',
-      unit: '%',
-      dimensions: ['Business Unit', 'Fiscal Week'],
-      description: 'Mean absolute percentage variance against benchmark targets.',
-    },
-  ];
+  const kpis: MetricKpi[] = asset.kpis ?? [];
+  // All measures in a metric view share its dimensions; show them once.
+  const dimensions = Array.from(new Set(kpis.flatMap((k) => k.dimensions ?? [])));
 
-  const downstreamDashboards: DashboardOrApp[] = asset.downstream_dashboards || [
-    {
-      id: `dash_${asset.table_name}_review`,
-      name: `Weekly ${cleanName} Review`,
-      type: 'dashboard',
-      description: `Executive review dashboard powered by ${asset.table_name}`,
-      owner: asset.owner || 'SCM Analytics',
-      views: 342,
-      updated_at: '2 hours ago',
-    },
-    {
-      id: `app_${asset.table_name}_explorer`,
-      name: `${cleanName} Analytics Tool`,
-      type: 'app',
-      description: 'Interactive self-service application with custom dimension slicing',
-      owner: asset.owner || 'Data Engineering',
-      views: 184,
-      updated_at: '1 day ago',
-    },
-  ];
+  const downstreamDashboards: DashboardOrApp[] = asset.downstream_dashboards ?? [];
 
-  const upstreamTables: UpstreamTableInfo[] = asset.upstream_tables || [
-    {
-      name: `${asset.table_name.replace(/^(metric_|sem_)/i, '').replace(/_metric_view$/i, '')}_gold`,
-      fqn: `${asset.catalog}.${asset.schema_name}.${asset.table_name.replace(/^(metric_|sem_)/i, '').replace(/_metric_view$/i, '')}_gold`,
-      schema: asset.schema_name,
-      type: 'TABLE',
-      description: 'Aggregated gold-layer facts and dimensional attributes in Unity Catalog.',
-    },
-    {
-      name: 'dim_organization_hierarchy',
-      fqn: `${asset.catalog}.${asset.schema_name}.dim_organization_hierarchy`,
-      schema: asset.schema_name,
-      type: 'TABLE',
-      description: 'Standard enterprise business units, regions, and cost centers.',
-    },
-  ];
+  const upstreamTables: UpstreamTableInfo[] = asset.upstream_tables ?? [];
 
   const seedTables: LineageSeedTable[] = [
     {
@@ -147,16 +129,12 @@ export function InlineMetricViewDetail({
   return (
     <div
       ref={containerRef}
-      className="bg-white rounded-2xl border-2 border-primary/30 shadow-md p-5 sm:p-6 space-y-6 animate-in fade-in slide-in-from-top-4 duration-300 relative"
+      className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 sm:p-6 space-y-6 relative"
     >
       {/* Top Banner & Action Bar */}
       <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4 pb-4 border-b border-slate-100">
         <div className="space-y-1.5 flex-1">
           <div className="flex flex-wrap items-center gap-2 mb-1">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-primary/10 text-primary border border-primary/20 uppercase tracking-wide">
-              <Sparkles className="w-3 h-3 text-primary" /> Metric View Deep Dive
-            </span>
-
             {asset.certified && (
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> Certified
@@ -184,25 +162,22 @@ export function InlineMetricViewDetail({
             {asset.catalog}.{asset.schema_name}.{asset.table_name}
           </p>
 
-          <p className="text-xs text-slate-600 max-w-3xl leading-relaxed pt-1">
-            {asset.description ||
-              `Governed business metrics and semantic dimensions for ${asset.subdomain || asset.domain}.`}
-          </p>
+          {asset.description && (
+            <p className="text-xs text-slate-600 max-w-3xl leading-relaxed pt-1">{asset.description}</p>
+          )}
 
           {/* Metadata badges */}
           <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 pt-2">
             <div className="flex items-center gap-1.5">
               <User className="w-3.5 h-3.5 text-slate-400" />
-              <span>Owner: <strong className="text-slate-700">{asset.owner || 'SCM Analytics'}</strong></span>
+              <span>Owner: <strong className="text-slate-700">{asset.owner || 'Unknown'}</strong></span>
             </div>
-            <div className="flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5 text-slate-400" />
-              <span>SLA: <strong className="text-slate-700">{asset.sla || 'Daily 06:00 UTC'}</strong></span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <Calendar className="w-3.5 h-3.5 text-slate-400" />
-              <span>Refreshed: <strong className="text-slate-700">Today</strong></span>
-            </div>
+            {asset.sla && (
+              <div className="flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-slate-400" />
+                <span>SLA: <strong className="text-slate-700">{asset.sla}</strong></span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -214,7 +189,7 @@ export function InlineMetricViewDetail({
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs"
-              title="Open in Databricks Catalog Explorer"
+              title="Open in Catalog Explorer"
             >
               <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
               <span>Catalog Explorer</span>
@@ -256,7 +231,7 @@ export function InlineMetricViewDetail({
             }`}
           >
             <TrendingUp className="w-3.5 h-3.5" />
-            <span>Governed KPI Measures ({kpis.length})</span>
+            <span>KPIs ({kpis.length})</span>
           </button>
 
           <button
@@ -282,7 +257,7 @@ export function InlineMetricViewDetail({
             }`}
           >
             <LayoutDashboard className="w-3.5 h-3.5" />
-            <span>Consuming Dashboards & Apps ({downstreamDashboards.length})</span>
+            <span>Dashboards ({downstreamDashboards.length})</span>
           </button>
 
           <button
@@ -295,25 +270,40 @@ export function InlineMetricViewDetail({
             }`}
           >
             <Database className="w-3.5 h-3.5" />
-            <span>Upstream Lakehouse Tables ({upstreamTables.length})</span>
+            <span>Source Tables ({upstreamTables.length})</span>
           </button>
         </div>
 
         {/* SUBTAB 1: Governed KPI Measures Table */}
         {detailTab === 'kpis' && (
           <div className="space-y-3">
-            <div className="bg-slate-50/50 rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+            {dimensions.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="font-semibold text-slate-500 mr-1">Slice by</span>
+                {dimensions.map((dim) => (
+                  <span key={dim} className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md text-[11px] font-medium">
+                    {dim}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="bg-slate-50/50 rounded-xl border border-slate-200 overflow-x-auto shadow-2xs">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-700 font-semibold">
-                    <th className="py-2.5 px-4">KPI / Measure</th>
-                    <th className="py-2.5 px-4">Calculation / Formula</th>
-                    <th className="py-2.5 px-4">Aggregation</th>
-                    <th className="py-2.5 px-4">Current Value & Trend</th>
-                    <th className="py-2.5 px-4">Supported Dimensions</th>
+                    <th className="py-2.5 px-4">KPI</th>
+                    <th className="py-2.5 px-4">Current Value</th>
+                    <th className="py-2.5 px-4">Formula</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
+                  {kpis.length === 0 && (
+                    <tr>
+                      <td colSpan={3} className="py-6 px-4 text-center text-slate-400 italic">
+                        No measures available — the metric view definition couldn't be read or defines none.
+                      </td>
+                    </tr>
+                  )}
                   {kpis.map((kpi, idx) => (
                     <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
                       <td className="py-3 px-4 font-semibold text-slate-900">
@@ -327,49 +317,35 @@ export function InlineMetricViewDetail({
                           </div>
                         )}
                       </td>
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        <span className="font-extrabold text-slate-900 text-sm">
+                          {!values
+                            ? 'Loading…'
+                            : formatMeasureValue(kpi.measure ? values.values[kpi.measure] : kpi.value, kpi.format)}
+                        </span>
+                      </td>
                       <td className="py-3 px-4 font-mono text-[11px] text-primary">
-                        <span className="bg-primary/5 border border-primary/20 px-2 py-1 rounded inline-block max-w-sm truncate">
-                          {kpi.formula || `SUM(${kpi.name.toLowerCase().replace(/ /g, '_')})`}
+                        <span className="bg-primary/5 border border-primary/20 px-2 py-1 rounded inline-block max-w-sm truncate" title={kpi.formula}>
+                          {kpi.formula || '—'}
                         </span>
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-mono text-[11px] font-semibold uppercase">
-                          {kpi.aggregation || 'RATIO'}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className="font-extrabold text-slate-900 text-sm">{kpi.value}</span>
-                        {kpi.trend && (
-                          <span
-                            className={`ml-1.5 text-[10px] font-bold ${
-                              kpi.trend.startsWith('+')
-                                ? 'text-emerald-600'
-                                : kpi.trend.startsWith('-')
-                                ? 'text-amber-600'
-                                : 'text-slate-500'
-                            }`}
-                          >
-                            {kpi.trend}
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 text-slate-600">
-                        <div className="flex flex-wrap gap-1">
-                          {(kpi.dimensions || ['Region', 'Product Family', 'Period']).map((dim, dIdx) => (
-                            <span
-                              key={dIdx}
-                              className="px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded text-[10px] font-medium"
-                            >
-                              {dim}
-                            </span>
-                          ))}
-                        </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            {values?.error && kpis.length > 0 && (
+              <div className="text-[11px] text-amber-700">
+                <p>
+                  Couldn't load current values
+                  {values.error_kind === 'permission_denied' ? ' — you may not have access to this metric view.' : '.'}
+                </p>
+                <details className="mt-1 text-slate-500">
+                  <summary className="cursor-pointer select-none">Show error details</summary>
+                  <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-[10px]">{values.error}</pre>
+                </details>
+              </div>
+            )}
           </div>
         )}
 
@@ -392,6 +368,9 @@ export function InlineMetricViewDetail({
         {/* SUBTAB 3: Consuming Dashboards & Apps */}
         {detailTab === 'dashboards' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {downstreamDashboards.length === 0 && (
+              <p className="text-xs text-slate-400 italic">No dashboards or apps are linked to this metric view.</p>
+            )}
             {downstreamDashboards.map((dash) => (
               <div
                 key={dash.id}
@@ -402,7 +381,9 @@ export function InlineMetricViewDetail({
                     <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
                       {dash.type || 'Dashboard'}
                     </span>
-                    <span className="text-[11px] text-slate-400">{dash.views} views</span>
+                    {dash.views != null && (
+                      <span className="text-[11px] text-slate-400">{dash.views} views</span>
+                    )}
                   </div>
                   <h4 className="text-sm font-bold text-slate-900 mb-1">{dash.name}</h4>
                   <p className="text-xs text-slate-500 leading-relaxed mb-3">
@@ -410,10 +391,19 @@ export function InlineMetricViewDetail({
                   </p>
                 </div>
                 <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                  <span>Owner: {dash.owner || 'SCM Analytics'}</span>
-                  <span className="text-primary font-semibold inline-flex items-center gap-1">
-                    Open <ExternalLink className="w-3 h-3" />
-                  </span>
+                  <span>{dash.owner ? `Owner: ${dash.owner}` : ''}</span>
+                  {dash.url ? (
+                    <a
+                      href={dash.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary font-semibold inline-flex items-center gap-1"
+                    >
+                      Open <ExternalLink className="w-3 h-3" />
+                    </a>
+                  ) : (
+                    <span className="text-[11px] text-slate-400">No link available</span>
+                  )}
                 </div>
               </div>
             ))}
@@ -423,6 +413,9 @@ export function InlineMetricViewDetail({
         {/* SUBTAB 4: Upstream Lakehouse Tables */}
         {detailTab === 'tables' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {upstreamTables.length === 0 && (
+              <p className="text-xs text-slate-400 italic">No source tables found in the metric view definition.</p>
+            )}
             {upstreamTables.map((tbl, idx) => (
               <div
                 key={idx}

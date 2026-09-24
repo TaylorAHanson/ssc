@@ -1,8 +1,14 @@
+import json
 import logging
 import asyncio
-from datetime import datetime, timezone
+import re
+
+import dateutil.parser
+import yaml
+from datetime import datetime, timedelta, timezone
 from croniter import croniter, CroniterBadCronError
-from app.db.session import get_db
+from sqlalchemy import func
+from app.db.session import get_lakebase_session
 from app.db.data_asset import DataAssetModel
 from app.core.config import settings
 from app.core.exceptions import AuthenticationError
@@ -81,367 +87,220 @@ def infer_domain_and_subdomain(catalog: str, schema: str, table_name: str, tags:
     return domain or inferred_domain, subdomain or inferred_subdomain
 
 
-def derive_metric_view_enrichments(
-    catalog: str,
-    schema: str,
-    table_name: str,
-    asset_type: str,
-    description: str | None,
-    domain: str,
-    subdomain: str,
-) -> dict:
-    """Derive KPIs, upstream tables, downstream dashboards/apps, and legacy mappings for metric views."""
-    is_metric_view = (
-        str(asset_type).upper() == "METRIC_VIEW"
-        or table_name.lower().startswith("metric_")
-        or table_name.lower().startswith("sem_")
-        or "metric" in table_name.lower()
-    )
-    if not is_metric_view:
+def is_metric_view(asset_type: str | None) -> bool:
+    """A UC metric view is identified by its table type — never by its name."""
+    return str(asset_type or "").upper() == "METRIC_VIEW"
+
+
+def is_system_managed_table(table_name: str | None) -> bool:
+    """Hidden, Databricks-managed tables (e.g. metric view materializations,
+    ``__materialization_mat_*`` / ``__<uuid>_metric_view_mat_*``) are prefixed
+    with ``__`` and aren't user-facing assets."""
+    return (table_name or "").startswith("__")
+
+
+_FQN_RE = re.compile(r"^`?[\w-]+`?\.`?[\w-]+`?\.`?[\w-]+`?$")
+_AGG_RE = re.compile(r"^\s*([A-Za-z_]+)\s*\(")
+
+
+def _infer_aggregation(expr: str) -> str | None:
+    """Best-effort label for a measure expression: RATIO for a division of
+    aggregates, else the leading aggregate function (SUM, COUNT, AVG, ...)."""
+    if not expr:
+        return None
+    if "/" in expr:
+        return "RATIO"
+    m = _AGG_RE.match(expr)
+    return m.group(1).upper() if m else None
+
+
+def _source_tables(spec: dict) -> list[str]:
+    """Table FQNs referenced as the metric view's ``source`` or join sources.
+    SQL-query sources are skipped — they aren't a single table."""
+    sources = []
+    stack = [spec]
+    while stack:
+        node = stack.pop()
+        src = node.get("source")
+        if isinstance(src, str) and _FQN_RE.match(src.strip()):
+            sources.append(src.strip().replace("`", ""))
+        stack.extend(j for j in (node.get("joins") or []) if isinstance(j, dict))
+    return list(dict.fromkeys(sources))
+
+
+def derive_metric_view_enrichments(asset_type: str, view_definition: str | None) -> dict:
+    """Derive KPIs and upstream source tables from a metric view's YAML definition.
+
+    Returns ``{}`` for anything that isn't a metric view. KPI values are left
+    unset — they're queried live, as the user, when the view is opened. Downstream
+    dashboards come from UC lineage (filled in by the sync), and legacy mappings
+    have no real source, so both start empty rather than invented.
+    """
+    if not is_metric_view(asset_type):
         return {}
 
-    name_lower = table_name.lower()
+    enrichments = {"kpis": [], "upstream_tables": [], "downstream_dashboards": [], "legacy_mappings": []}
+    if not view_definition:
+        return enrichments
 
-    # KPIs based on metric view domain / subdomain
-    if "forecast" in name_lower or "demand" in name_lower or subdomain == "Planning & Forecasting":
-        kpis = [
-            {
-                "name": "Forecast Accuracy",
-                "formula": "1 - ABS(actual_qty - forecast_qty) / NULLIF(actual_qty, 0)",
-                "aggregation": "AVG",
-                "unit": "%",
-                "value": "94.2%",
-                "trend": "+1.5%",
-                "dimensions": ["Region", "Product Family", "Horizon"],
-                "description": "Weighted demand forecast accuracy against actual delivered orders.",
-            },
-            {
-                "name": "MAPE",
-                "formula": "AVG(ABS(actual_qty - forecast_qty) / NULLIF(actual_qty, 0)) * 100",
-                "aggregation": "AVG",
-                "unit": "%",
-                "value": "5.8%",
-                "trend": "-0.4%",
-                "dimensions": ["SKU", "Distribution Center", "Fiscal Week"],
-                "description": "Mean absolute percentage variance between forecasted demand and physical shipments.",
-            },
-            {
-                "name": "Forecast Bias",
-                "formula": "SUM(forecast_qty - actual_qty) / NULLIF(SUM(actual_qty), 0) * 100",
-                "aggregation": "RATIO",
-                "unit": "%",
-                "value": "-1.2%",
-                "trend": "neutral",
-                "dimensions": ["Product Line", "Region"],
-                "description": "Tendency of the statistical forecast to consistently over- or under-predict.",
-            },
-            {
-                "name": "Plan Attainment",
-                "formula": "SUM(actual_qty) / NULLIF(SUM(planned_qty), 0) * 100",
-                "aggregation": "RATIO",
-                "unit": "%",
-                "value": "98.2%",
-                "trend": "+1.0%",
-                "dimensions": ["Business Unit", "Quarter"],
-                "description": "Percentage of overall operational supply plan achieved to date.",
-            },
-        ]
-    elif "order" in name_lower or subdomain == "Order Management":
-        kpis = [
-            {
-                "name": "Order Fill Rate",
-                "formula": "SUM(shipped_complete_orders) / NULLIF(COUNT(orders), 0) * 100",
-                "aggregation": "RATIO",
-                "unit": "%",
-                "value": "96.1%",
-                "trend": "+0.8%",
-                "dimensions": ["Customer Tier", "Sales Channel"],
-                "description": "Percentage of customer orders fulfilled complete on first shipment.",
-            },
-            {
-                "name": "Avg Order Value (AOV)",
-                "formula": "SUM(order_total_amount) / NULLIF(COUNT(DISTINCT order_id), 0)",
-                "aggregation": "AVG",
-                "unit": "$",
-                "value": "$48.2K",
-                "trend": "+3.2%",
-                "dimensions": ["Segment", "Region"],
-                "description": "Average gross currency value across settled commercial orders.",
-            },
-            {
-                "name": "Order Cycle Time",
-                "formula": "AVG(delivery_timestamp - order_timestamp)",
-                "aggregation": "AVG",
-                "unit": "days",
-                "value": "2.4 days",
-                "trend": "-0.3 days",
-                "dimensions": ["Warehouse", "Carrier"],
-                "description": "Elapsed business days from order placement to verified customer receipt.",
-            },
-        ]
-    elif "procure" in name_lower or "leadtime" in name_lower or "supplier" in name_lower or subdomain == "Procurement":
-        kpis = [
-            {
-                "name": "Contract Savings Rate",
-                "formula": "SUM(baseline_cost - negotiated_cost) / NULLIF(SUM(baseline_cost), 0) * 100",
-                "aggregation": "RATIO",
-                "unit": "%",
-                "value": "7.3%",
-                "trend": "+0.5%",
-                "dimensions": ["Commodity", "Vendor Tier"],
-                "description": "Cost reduction achieved below historical baseline spend contracts.",
-            },
-            {
-                "name": "On-Time Delivery (OTD)",
-                "formula": "SUM(on_time_shipments) / NULLIF(COUNT(shipments), 0) * 100",
-                "aggregation": "RATIO",
-                "unit": "%",
-                "value": "94.7%",
-                "trend": "+1.1%",
-                "dimensions": ["Supplier", "Part Category"],
-                "description": "Percentage of purchase order lines delivered on or before agreed dock date.",
-            },
-            {
-                "name": "Lead Time Variance",
-                "formula": "AVG(actual_lead_days - quoted_lead_days)",
-                "aggregation": "AVG",
-                "unit": "days",
-                "value": "+1.8 days",
-                "trend": "-0.4 days",
-                "dimensions": ["Supplier Region", "Transport Mode"],
-                "description": "Average deviation in days from contracted component delivery lead times.",
-            },
-        ]
-    elif "wip" in name_lower or "manufactur" in name_lower or "workcenter" in name_lower or subdomain == "Manufacturing & WIP":
-        kpis = [
-            {
-                "name": "OEE (Overall Equipment Effectiveness)",
-                "formula": "Availability_Rate * Performance_Efficiency * Quality_Rate",
-                "aggregation": "COMPOSITE",
-                "unit": "%",
-                "value": "82.4%",
-                "trend": "+2.1%",
-                "dimensions": ["Fab", "Manufacturing Line", "Shift"],
-                "description": "Composite benchmark combining tool availability, line throughput, and yield.",
-            },
-            {
-                "name": "WIP Turns",
-                "formula": "COGS_Annualized / NULLIF(AVG(WIP_Value), 0)",
-                "aggregation": "RATIO",
-                "unit": "x",
-                "value": "4.2x",
-                "trend": "+0.3x",
-                "dimensions": ["Workcenter", "Product Family"],
-                "description": "Velocity of raw silicon and subassemblies progressing through active wafer lines.",
-            },
-            {
-                "name": "Scrap Rate",
-                "formula": "SUM(scrap_units) / NULLIF(SUM(total_units_started), 0) * 100",
-                "aggregation": "RATIO",
-                "unit": "%",
-                "value": "1.4%",
-                "trend": "-0.2%",
-                "dimensions": ["Process Step", "Tool Chamber"],
-                "description": "Percentage of started wafer lots lost to in-line contamination or tool defects.",
-            },
-        ]
-    elif "yield" in name_lower or "wafer" in name_lower or subdomain == "Yield & Foundry":
-        kpis = [
-            {
-                "name": "First Pass Yield",
-                "formula": "SUM(passed_die) / NULLIF(SUM(tested_die), 0) * 100",
-                "aggregation": "RATIO",
-                "unit": "%",
-                "value": "96.7%",
-                "trend": "+0.4%",
-                "dimensions": ["Wafer Lot", "Process Node", "Foundry"],
-                "description": "Percentage of manufactured die passing automated electrical probe test on first test.",
-            },
-            {
-                "name": "Defect Density",
-                "formula": "SUM(fatal_defects) / NULLIF(SUM(wafer_area_cm2), 0)",
-                "aggregation": "RATIO",
-                "unit": "def/cm²",
-                "value": "0.042",
-                "trend": "-0.005",
-                "dimensions": ["Lithography Layer", "Tool ID"],
-                "description": "Fatal particle anomalies detected per square centimeter of silicon area.",
-            },
-        ]
-    elif "inventory" in name_lower or "stock" in name_lower or subdomain == "Inventory & Lot Tracking":
-        kpis = [
-            {
-                "name": "Inventory Turns",
-                "formula": "Annualized_COGS / NULLIF(Current_Inventory_Value, 0)",
-                "aggregation": "RATIO",
-                "unit": "x",
-                "value": "5.8x",
-                "trend": "+0.2x",
-                "dimensions": ["Logistics Hub", "Material Type"],
-                "description": "Annual turnover rate of physical inventory across worldwide depots.",
-            },
-            {
-                "name": "Days Sales of Inventory (DSI)",
-                "formula": "(Current_Inventory_Value / Daily_COGS)",
-                "aggregation": "RATIO",
-                "unit": "days",
-                "value": "38.4 days",
-                "trend": "-2.1 days",
-                "dimensions": ["Finished Goods", "Raw Materials"],
-                "description": "Average number of days required to turn inventory on hand into sales shipments.",
-            },
-            {
-                "name": "Lot Genealogy Index",
-                "formula": "COUNT(DISTINCT traced_lots) / NULLIF(COUNT(DISTINCT total_lots), 0) * 100",
-                "aggregation": "RATIO",
-                "unit": "%",
-                "value": "99.9%",
-                "trend": "stable",
-                "dimensions": ["Packaging Facility", "Supplier"],
-                "description": "Percentage of active lots with verified end-to-end trace genealogy in Unity Catalog.",
-            },
-        ]
-    else:
-        kpis = [
-            {
-                "name": "Plan Attainment Rate",
-                "formula": "SUM(actual_value) / NULLIF(SUM(target_value), 0) * 100",
-                "aggregation": "RATIO",
-                "unit": "%",
-                "value": "98.2%",
-                "trend": "+1.0%",
-                "dimensions": ["Business Division", "Quarter"],
-                "description": "Overall percentage of quarterly performance targets achieved.",
-            },
-            {
-                "name": "Variance to Target",
-                "formula": "(SUM(actual_value) - SUM(target_value)) / NULLIF(SUM(target_value), 0) * 100",
-                "aggregation": "RATIO",
-                "unit": "%",
-                "value": "2.4%",
-                "trend": "-0.5%",
-                "dimensions": ["Cost Center", "Region"],
-                "description": "Relative percentage variance against baseline operational expectations.",
-            },
-        ]
+    try:
+        spec = yaml.safe_load(view_definition)
+    except yaml.YAMLError as e:
+        logger.warning("Could not parse metric view definition: %s", e)
+        return enrichments
+    if not isinstance(spec, dict):
+        return enrichments
 
-    # Clean display title
-    clean_title = (
-        table_name.replace("metric_", "")
-        .replace("sem_", "")
-        .replace("_metric_view", "")
-        .replace("_", " ")
-        .title()
-    )
-
-    # Downstream Dashboards & Apps
-    downstream_dashboards = [
-        {
-            "id": f"dash_{table_name}_review",
-            "name": f"Weekly {clean_title} Review",
-            "type": "dashboard",
-            "description": f"Exec-level {clean_title} review with forecast vs actuals and regional breakdown",
-            "owner": "FPA" if domain == "Finance" else "SCM Analytics",
-            "views": 342,
-            "updated_at": "2 hours ago",
-        },
-        {
-            "id": f"dash_{table_name}_actuals",
-            "name": f"{clean_title} vs Actuals",
-            "type": "dashboard",
-            "description": "Waterfall chart showing forecast accuracy by product family and quarter",
-            "owner": "Demand Planning" if domain == "Supply Chain" else "Operations",
-            "views": 218,
-            "updated_at": "4 hours ago",
-        },
-        {
-            "id": f"app_{table_name}_explorer",
-            "name": f"{clean_title} Hierarchy Explorer",
-            "type": "app",
-            "description": "Interactive drill-down tool with filters by BU and region",
-            "owner": "Enterprise Tools",
-            "views": 156,
-            "updated_at": "1 day ago",
-        },
+    dimensions = [
+        d.get("display_name") or d.get("name")
+        for d in (spec.get("dimensions") or [])
+        if isinstance(d, dict) and (d.get("display_name") or d.get("name"))
     ]
+    for m in spec.get("measures") or []:
+        if not isinstance(m, dict) or not m.get("name"):
+            continue
+        expr = str(m.get("expr") or "")
+        enrichments["kpis"].append({
+            "name": m.get("display_name") or m["name"],
+            # The identifier to pass to MEASURE() when querying live values.
+            "measure": m["name"],
+            "format": m.get("format") if isinstance(m.get("format"), dict) else None,
+            "formula": expr,
+            "aggregation": _infer_aggregation(expr),
+            "value": None,
+            "trend": None,
+            "dimensions": dimensions,
+            "description": m.get("comment"),
+        })
 
-    # Legacy dashboard mappings matching mockup
-    legacy_mappings = [
-        {
-            "dashboard": f"Weekly {clean_title} Review",
-            "status": "Active",
-            "owner": "FPA",
-            "description": f"Exec-level {clean_title} review with forecast vs actuals and regional breakdown",
-            "metric_view": table_name,
-            "subdomain": subdomain,
-            "domain": domain,
-        },
-        {
-            "dashboard": f"{clean_title} vs Actuals",
-            "status": "Deprecated",
-            "owner": "Demand Planning",
-            "description": "Waterfall chart showing forecast accuracy by product family and quarter",
-            "metric_view": table_name,
-            "subdomain": subdomain,
-            "domain": domain,
-        },
-        {
-            "dashboard": f"{clean_title} Hierarchy Explorer",
-            "status": "Migrating",
-            "owner": "SCM Analytics",
-            "description": "Interactive drill-down through planning hierarchy with filters by BU and region",
-            "metric_view": table_name,
-            "subdomain": subdomain,
-            "domain": domain,
-        },
-    ]
+    for fqn in _source_tables(spec):
+        parts = fqn.split(".")
+        enrichments["upstream_tables"].append({
+            "name": parts[2],
+            "fqn": fqn,
+            "schema": parts[1],
+            "type": "source",
+            "description": None,
+        })
 
-    prefix = table_name.replace("metric_", "").replace("sem_", "").replace("_metric_view", "")
-    upstream_tables = [
-        {
-            "name": f"{prefix}_forecast_weekly",
-            "fqn": f"{catalog}.silver_{prefix}.{prefix}_forecast_weekly",
-            "schema": f"silver_{prefix}",
-            "type": "managed",
-            "description": "Forecast projections and prediction outputs",
-        },
-        {
-            "name": f"{prefix}_actuals_daily",
-            "fqn": f"{catalog}.gold_{prefix}.{prefix}_actuals_daily",
-            "schema": f"gold_{prefix}",
-            "type": "managed",
-            "description": "Recorded actuals from operational systems",
-        },
-        {
-            "name": f"{prefix}_variance",
-            "fqn": f"{catalog}.platinum_insights.{prefix}_variance",
-            "schema": "platinum_insights",
-            "type": "managed",
-            "description": "Variance analysis comparing plan vs actual",
-        },
-    ]
+    return enrichments
 
-    return {
-        "kpis": kpis,
-        "downstream_dashboards": downstream_dashboards,
-        "legacy_mappings": legacy_mappings,
-        "upstream_tables": upstream_tables,
-    }
+
+async def _fetch_metric_view_definitions(provider, fqns: list[str]) -> dict[str, str | None]:
+    """Fetch the YAML ``view_definition`` for each metric view via the UC Tables API."""
+    sem = asyncio.Semaphore(8)
+
+    async def _one(fqn: str):
+        async with sem:
+            try:
+                info = await asyncio.to_thread(provider.client.tables.get, fqn)
+                return fqn, getattr(info, "view_definition", None)
+            except Exception as e:  # noqa: BLE001 - one bad view mustn't fail the sync
+                logger.warning("Could not fetch metric view definition for %s: %s", fqn, e)
+                return fqn, None
+
+    return dict(await asyncio.gather(*(_one(f) for f in fqns)))
+
+
+async def _fetch_downstream_dashboards(provider, fqns: list[str]) -> dict[str, list[dict]]:
+    """Dashboards that read each metric view, from Unity Catalog lineage.
+
+    Names come from the home workspace's Lakeview dashboards; a dashboard that
+    lineage reports but this workspace can't see (e.g. it lives in another
+    workspace) is still listed, labelled by id, with no link.
+    """
+    sem = asyncio.Semaphore(8)
+
+    async def _one(fqn: str):
+        async with sem:
+            try:
+                resp = await asyncio.to_thread(
+                    provider.client.api_client.do,
+                    "GET",
+                    "/api/2.0/lineage-tracking/table-lineage",
+                    query={"table_name": fqn, "include_entity_lineage": "true"},
+                )
+            except Exception as e:  # noqa: BLE001 - one bad view mustn't fail the sync
+                logger.warning("Could not fetch lineage for %s: %s", fqn, e)
+                return fqn, []
+        infos = []
+        for entry in (resp or {}).get("downstreams") or []:
+            infos.extend(entry.get("dashboardV3Infos") or [])
+        return fqn, infos
+
+    lineage = dict(await asyncio.gather(*(_one(f) for f in fqns)))
+    if not any(lineage.values()):
+        return {f: [] for f in fqns}
+
+    try:
+        known = {d.dashboard_id: d for d in await asyncio.to_thread(lambda: list(provider.client.lakeview.list()))}
+    except Exception as e:  # noqa: BLE001 - fall back to id-only entries
+        logger.warning("Could not list Lakeview dashboards to resolve lineage names: %s", e)
+        known = {}
+    host = (provider.client.config.host or "").rstrip("/")
+
+    out: dict[str, list[dict]] = {}
+    for fqn, infos in lineage.items():
+        seen, dashboards = set(), []
+        for info in infos:
+            dash_id = info.get("dashboard_id")
+            if not dash_id or dash_id in seen:
+                continue
+            seen.add(dash_id)
+            d = known.get(dash_id)
+            dashboards.append({
+                "id": dash_id,
+                "name": d.display_name if d else f"Dashboard {dash_id}",
+                "type": "dashboard",
+                "description": None if d else f"In workspace {info.get('workspace_id')}, not visible from this one",
+                "url": f"{host}/dashboardsv3/{dash_id}/published" if d and host else None,
+                "updated_at": info.get("lineage_timestamp"),
+            })
+        out[fqn] = dashboards
+    return out
 
 
 # Track next sync time
 _next_sync_time = None
+# The first poll after boot syncs immediately unless the cache is this fresh —
+# enough to absorb dev auto-reloads without re-syncing on every file save.
+_BOOT_SYNC_MIN_AGE = timedelta(minutes=10)
+_boot_checked = False
+
+
+def _cache_is_fresh(now: datetime) -> bool:
+    db = get_lakebase_session()
+    try:
+        # DATA_PRODUCT rows aren't owned by this sync (Sentinel scans stamp them),
+        # so they mustn't make the cache look fresh.
+        last = (
+            db.query(func.max(DataAssetModel.last_synced_at))
+            .filter(DataAssetModel.type != "DATA_PRODUCT")
+            .scalar()
+        )
+    finally:
+        db.close()
+    if last is None:
+        return False
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return now - last < _BOOT_SYNC_MIN_AGE
 
 async def sync_data_assets_task(force: bool = False):
     """
     Task to sync data assets from Databricks Information Schema into local Lakebase cache.
     Designed to be called periodically from the poller.
     """
-    global _next_sync_time
+    global _next_sync_time, _boot_checked
     now = datetime.now(timezone.utc)
     
     # Check if we should sync based on cron
     cron_expr = getattr(settings, 'DATA_ASSET_SYNC_CRON', '0 * * * *')
+    if not force and cron_expr and not _boot_checked:
+        _boot_checked = True
+        if not _cache_is_fresh(now):
+            force = True
+            logger.info("Data asset cache is stale or empty at boot; syncing now.")
     if not force:
         if not cron_expr:
             return # Disabled
@@ -522,10 +381,31 @@ async def sync_data_assets_task(force: bool = False):
         """
         
         result = await provider.execute_sql(query, warehouse=settings.DATABRICKS_WAREHOUSE_ID)
-        rows = result.get("rows", [])
-        
+        # Skip hidden Databricks-managed tables (metric view materializations);
+        # they then fall out of the cache via the stale-asset delete below.
+        rows = [r for r in result.get("rows", []) if not is_system_managed_table(r.get("table_name"))]
+
+        metric_view_fqns = [
+            f"{r.get('catalog')}.{r.get('schema')}.{r.get('table_name')}"
+            for r in rows if is_metric_view(r.get("type"))
+        ]
+        definitions, dashboards_by_mv = (
+            await asyncio.gather(
+                _fetch_metric_view_definitions(provider, metric_view_fqns),
+                _fetch_downstream_dashboards(provider, metric_view_fqns),
+            )
+            if metric_view_fqns else ({}, {})
+        )
+        missing = sum(1 for v in definitions.values() if not v)
+        if missing:
+            logger.warning(
+                "%d of %d metric view definition(s) unavailable to the sync identity; "
+                "their KPIs will be empty until it can read them.",
+                missing, len(metric_view_fqns),
+            )
+
         if rows:
-            db = next(get_db())
+            db = get_lakebase_session()
             try:
                 # Upsert records into local SQLite
                 # We'll just update existing and insert new
@@ -536,10 +416,9 @@ async def sync_data_assets_task(force: bool = False):
                     
                     tags = row.get("tags")
                     if isinstance(tags, str): # sometimes returns as stringified array
-                        import json
                         try:
                             tags = json.loads(tags)
-                        except:
+                        except ValueError:
                             tags = []
                     if not tags:
                         tags = []
@@ -569,21 +448,17 @@ async def sync_data_assets_task(force: bool = False):
                     asset.domain = domain
                     asset.subdomain = subdomain
 
-                    # Enrich metric views with KPIs, lineage tables, downstream dashboards/apps, and legacy mappings
+                    # Enrich metric views from their YAML definition. Always assign so
+                    # non-metric-views are cleared of any previously cached enrichment.
                     enrichments = derive_metric_view_enrichments(
-                        row.get("catalog", ""),
-                        row.get("schema", ""),
-                        row.get("table_name", ""),
-                        row.get("type", "TABLE"),
-                        row.get("description"),
-                        domain,
-                        subdomain,
+                        row.get("type", "TABLE"), definitions.get(asset_id)
                     )
-                    if enrichments:
-                        asset.kpis = enrichments.get("kpis")
-                        asset.upstream_tables = enrichments.get("upstream_tables")
-                        asset.downstream_dashboards = enrichments.get("downstream_dashboards")
-                        asset.legacy_mappings = enrichments.get("legacy_mappings")
+                    asset.kpis = enrichments.get("kpis")
+                    asset.upstream_tables = enrichments.get("upstream_tables")
+                    asset.downstream_dashboards = (
+                        dashboards_by_mv.get(asset_id, []) if enrichments else None
+                    )
+                    asset.legacy_mappings = enrichments.get("legacy_mappings")
 
                     if certified:
                         asset.certified = True
@@ -600,7 +475,6 @@ async def sync_data_assets_task(force: bool = False):
                         try:
                             # Databricks usually returns ISO 8601 timestamps
                             # e.g., '2023-10-24T12:00:00.000Z'
-                            import dateutil.parser
                             asset.created_at = dateutil.parser.isoparse(created_at_str)
                         except Exception as e:
                             logger.warning(f"Could not parse created_at {created_at_str}: {e}")

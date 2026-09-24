@@ -61,7 +61,7 @@ export function CatalogRails({
     id: dp.id,
     type: 'data_product',
     title: dp.name,
-    subtitle: dp.description || 'Governed data product',
+    subtitle: dp.description || 'Data product',
   });
 
   const dsItem = (ds: any): PinnedItem => ({
@@ -118,7 +118,7 @@ export function CatalogRails({
               key={dp.id}
               type="data_product"
               title={dp.name}
-              subtitle={dp.description || 'Governed data product'}
+              subtitle={dp.description || 'Data product'}
               pinned={isPinned(item.key)}
               onTogglePin={() => togglePin(item)}
               onViewDetails={() => onViewDetails({ id: dp.id, type: 'data_product', title: dp.name })}
