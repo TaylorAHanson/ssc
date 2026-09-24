@@ -2,13 +2,14 @@ import { useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useRequestStore } from '../stores/requestStore';
 import {
-  Activity, MessageSquarePlus, GraduationCap, SlidersHorizontal
+  Activity, MessageSquarePlus, GraduationCap, SlidersHorizontal, ArrowLeftRight
 } from 'lucide-react';
 import { TestRunner } from '../components/admin/TestRunner';
 import { AdminDashboard } from './admin/AdminDashboard';
 import { FeedbackAdmin } from './admin/FeedbackAdmin';
 import { TrainingUpload } from '../components/admin/TrainingUpload';
 import { Settings } from './admin/Settings';
+import { LegacyDashboards } from './admin/LegacyDashboards';
 import { useBrandingStore } from '../stores/brandingStore';
 
 export function Admin() {
@@ -25,8 +26,8 @@ export function Admin() {
   const uiTabs = useBrandingStore((s) => s.uiTabs);
   const feedbackEnabled = uiTabs?.feedback !== false;
 
-  const validTabs = ['dashboard', 'settings', 'test-runner', 'training', ...(feedbackEnabled ? ['feedback'] : [])];
-  const activeTab = tab && validTabs.includes(tab) ? tab as 'dashboard' | 'settings' | 'test-runner' | 'training' | 'feedback' : 'dashboard';
+  const validTabs = ['dashboard', 'settings', 'test-runner', 'training', 'legacy-dashboards', ...(feedbackEnabled ? ['feedback'] : [])];
+  const activeTab = tab && validTabs.includes(tab) ? tab as 'dashboard' | 'settings' | 'test-runner' | 'training' | 'legacy-dashboards' | 'feedback' : 'dashboard';
 
   const handleTabChange = (newTab: string) => {
     navigate(`/admin/${newTab}`);
@@ -80,6 +81,16 @@ export function Admin() {
           <GraduationCap className="w-4 h-4 inline mr-2" />
           Training Upload
         </button>
+        <button
+          onClick={() => handleTabChange('legacy-dashboards')}
+          className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'legacy-dashboards'
+            ? 'border-b-2 border-primary text-primary'
+            : 'text-gray-600 hover:text-gray-900'
+            }`}
+        >
+          <ArrowLeftRight className="w-4 h-4 inline mr-2" />
+          Legacy Dashboards
+        </button>
         {feedbackEnabled && (
           <button
             onClick={() => handleTabChange('feedback')}
@@ -98,6 +109,7 @@ export function Admin() {
       {activeTab === 'dashboard' && <AdminDashboard />}
       {activeTab === 'settings' && <Settings />}
       {activeTab === 'training' && <TrainingUpload />}
+      {activeTab === 'legacy-dashboards' && <LegacyDashboards />}
       {activeTab === 'feedback' && <FeedbackAdmin />}
     </div>
   );

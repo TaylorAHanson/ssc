@@ -13,8 +13,9 @@ import {
   ExternalLink,
   Layers,
   X,
+  ArrowLeftRight,
 } from 'lucide-react';
-import type { DomainHierarchy, DataAsset, SubdomainMeta } from '../../services/api';
+import type { DomainHierarchy, DataAsset, LegacyMapping, SubdomainMeta } from '../../services/api';
 import { MetricViewCard } from './MetricViewCard';
 import { DiscoverSearch } from './DiscoverSearch';
 import { InlineMetricViewDetail } from './InlineMetricViewDetail';
@@ -22,8 +23,9 @@ import { AssetCard } from './AssetCard';
 import { Pagination } from './Pagination';
 import { usePagination } from './usePagination';
 import { SidePanel } from './SidePanel';
+import { LegacyMappingTable } from './LegacyMappingTable';
 
-type ContentKind = 'metrics' | 'tables' | 'dashboards' | 'apps';
+type ContentKind = 'metrics' | 'tables' | 'dashboards' | 'apps' | 'legacy';
 
 const KINDS_STORAGE_KEY = 'discover_content_kinds';
 // Cards per page: 4 rows of the 3-column grid.
@@ -32,7 +34,7 @@ const PAGE_SIZE = 12;
 function loadPickedKinds(): ContentKind[] | null {
   try {
     const raw = JSON.parse(localStorage.getItem(KINDS_STORAGE_KEY) || 'null');
-    const valid: ContentKind[] = ['metrics', 'tables', 'dashboards', 'apps'];
+    const valid: ContentKind[] = ['metrics', 'tables', 'dashboards', 'apps', 'legacy'];
     return Array.isArray(raw) && raw.length && raw.every((k) => valid.includes(k)) ? raw : null;
   } catch {
     return null;
@@ -55,6 +57,8 @@ const CONTENT_KINDS: Array<{
   { key: 'tables', label: 'Tables & Views', Icon: Database, on: 'bg-indigo-50 border-indigo-600 text-indigo-800', off: 'text-indigo-700' },
   { key: 'dashboards', label: 'Dashboards', Icon: LayoutDashboard, on: 'bg-amber-50 border-amber-500 text-amber-800', off: 'text-amber-700' },
   { key: 'apps', label: 'Apps', Icon: Box, on: 'bg-purple-50 border-purple-600 text-purple-800', off: 'text-purple-700' },
+  // Only offered where admins have mapped legacy (e.g. Tableau) dashboards.
+  { key: 'legacy', label: 'Legacy Dashboards', Icon: ArrowLeftRight, on: 'bg-slate-100 border-slate-700 text-slate-800', off: 'text-slate-600' },
 ];
 
 function SectionHeading({ kind, count }: { kind: ContentKind; count: number }) {
@@ -205,6 +209,12 @@ interface DomainFullViewProps {
   searchTerm: string;
   onSearchChange: (value: string) => void;
   onSubmitAgentQuery?: (query: string) => void;
+  /** Legacy dashboards mapped to metric views in this domain / subdomain. */
+  legacyMappings?: LegacyMapping[];
+  /** Opens a metric view from the legacy table, even one hidden by the current filters. */
+  onOpenMetricViewById?: (metricViewId: string) => void;
+  /** Legacy dashboard names matching the search, per metric view — shown on its card. */
+  replacesFor?: (metricViewId: string) => string[];
 }
 
 export function DomainFullView({
@@ -233,6 +243,9 @@ export function DomainFullView({
   searchTerm,
   onSearchChange,
   onSubmitAgentQuery,
+  legacyMappings = [],
+  onOpenMetricViewById,
+  replacesFor,
 }: DomainFullViewProps) {
   const currentDomainData = domainsHierarchy.find((d) => d.domain === domain) || domainsHierarchy[0];
   const currentSubdomainMeta = currentDomainData?.subdomains.find((sd) => sd.name === subdomain);
@@ -249,6 +262,7 @@ export function DomainFullView({
     tables: tables.length,
     dashboards: dashboardsList.length,
     apps: appsList.length,
+    legacy: legacyMappings.length,
   };
   const [pickedKinds, setPickedKindsState] = useState<ContentKind[] | null>(loadPickedKinds);
   const setPickedKinds = (update: ContentKind[] | null | ((prev: ContentKind[] | null) => ContentKind[] | null)) =>
@@ -271,6 +285,8 @@ export function DomainFullView({
   // subdomain with none) falls back to the defaults rather than a blank page.
   const shownKinds = pickedKinds && pickedKinds.some((k) => counts[k] > 0) ? pickedKinds : defaultKinds;
   const isShown = (kind: ContentKind) => shownKinds.includes(kind);
+  // The legacy tile only appears where there's something to map.
+  const offeredKinds = CONTENT_KINDS.filter((k) => k.key !== 'legacy' || counts.legacy > 0 || isShown('legacy'));
   const showHeadings = shownKinds.length > 1;
   const toggleKind = (kind: ContentKind) => {
     const next = isShown(kind) ? shownKinds.filter((k) => k !== kind) : [...shownKinds, kind];
@@ -290,9 +306,10 @@ export function DomainFullView({
   const dashboardPages = usePagination(dashboardsList, PAGE_SIZE, pageKey(dashboardsList.length));
   const appPages = usePagination(appsList, PAGE_SIZE, pageKey(appsList.length));
 
-  // Opening a metric view makes sure metric views are shown.
+  // Opening a metric view makes sure metric views are shown — except from the
+  // legacy table, where the side panel is enough and the table should stay put.
   useEffect(() => {
-    if (selectedMetricView) {
+    if (selectedMetricView && !isShown('legacy')) {
       setPickedKinds((prev) => {
         const base = prev ?? defaultKinds;
         return base.includes('metrics') ? prev : ['metrics', ...base];
@@ -529,8 +546,12 @@ export function DomainFullView({
 
       {/* Content switcher (multi-select): Metric Views | Tables & Views | Dashboards | Apps */}
       <div className="space-y-4">
-        <div role="group" aria-label="Show asset types" className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {CONTENT_KINDS.map(({ key, label, Icon, on, off }) => {
+        <div
+          role="group"
+          aria-label="Show asset types"
+          className={`grid grid-cols-2 gap-3 ${offeredKinds.length > 4 ? 'sm:grid-cols-3 lg:grid-cols-5' : 'sm:grid-cols-4'}`}
+        >
+          {offeredKinds.map(({ key, label, Icon, on, off }) => {
             const active = isShown(key);
             return (
               <button
@@ -564,6 +585,7 @@ export function DomainFullView({
                     <MetricViewCard
                       key={mv.id}
                       asset={mv}
+                      replaces={replacesFor?.(mv.id)}
                       isSelected={selectedMetricView?.id === mv.id}
                       onSelect={(asset) => onSelectMetricView(selectedMetricView?.id === asset.id ? null : asset)}
                       onRequestAccess={onRequestAccess}
@@ -629,6 +651,23 @@ export function DomainFullView({
               </>
             ) : (
               <EmptyNote>No dashboards linked to {subdomain || domain}.</EmptyNote>
+            )}
+          </section>
+        )}
+
+        {/* LEGACY DASHBOARDS */}
+        {isShown('legacy') && (
+          <section className="space-y-3 scroll-mt-28">
+            {showHeadings && <SectionHeading kind="legacy" count={counts.legacy} />}
+            {legacyMappings.length > 0 ? (
+              <LegacyMappingTable
+                mappings={legacyMappings}
+                searchTerm={searchTerm}
+                showSubdomain={!subdomain}
+                onOpenMetricView={(id) => onOpenMetricViewById?.(id)}
+              />
+            ) : (
+              <EmptyNote>No legacy dashboards are mapped to metric views in {subdomain || domain}.</EmptyNote>
             )}
           </section>
         )}

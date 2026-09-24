@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Database,
   LayoutDashboard,
+  ArrowLeftRight,
 } from 'lucide-react';
 import type { DataAsset, MetricKpi, MetricViewDefinition } from '../../services/api';
 import { catalogExplorerUrl } from '../../lib/databricksLinks';
@@ -30,9 +31,11 @@ interface MetricViewCardProps {
   onRequestAccess?: (asset: DataAsset) => void;
   /** Optional line above the title, e.g. "Finance › Planning & Budgeting" in search results. */
   context?: string;
+  /** Legacy dashboards this view replaces that matched the search — explains why it's listed. */
+  replaces?: string[];
 }
 
-export function MetricViewCard({ asset, isSelected = false, onSelect, context }: MetricViewCardProps) {
+export function MetricViewCard({ asset, isSelected = false, onSelect, context, replaces }: MetricViewCardProps) {
   const databricksWorkspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
   const catalogUrl = catalogExplorerUrl(
     databricksWorkspaceUrl,
@@ -94,6 +97,19 @@ export function MetricViewCard({ asset, isSelected = false, onSelect, context }:
 
         {asset.description && (
           <p className="text-xs text-slate-600 line-clamp-2 mb-4 leading-relaxed">{asset.description}</p>
+        )}
+
+        {replaces && replaces.length > 0 && (
+          <div
+            className="-mt-2 mb-4 flex items-center gap-1.5 text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1"
+            title={`Replaces legacy ${replaces.length === 1 ? 'dashboard' : 'dashboards'}: ${replaces.join(', ')}`}
+          >
+            <ArrowLeftRight className="w-3 h-3 text-slate-400 shrink-0" />
+            <span className="truncate">
+              Replaces <span className="font-semibold text-slate-800">{replaces[0]}</span>
+              {replaces.length > 1 && ` +${replaces.length - 1} more`}
+            </span>
+          </div>
         )}
 
         {/* KPIs */}

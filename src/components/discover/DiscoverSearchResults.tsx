@@ -14,6 +14,8 @@ interface DiscoverSearchResultsProps {
   onOpenMetricView: (mv: DataAsset) => void;
   onOpenAsset: (asset: DataAsset) => void;
   onClear: () => void;
+  /** Legacy dashboard names matching the search, per metric view. */
+  replacesFor?: (metricViewId: string) => string[];
 }
 
 // Cards per page: 4 rows of the 3-column grid, same as the domain view.
@@ -36,6 +38,7 @@ export function DiscoverSearchResults({
   onOpenMetricView,
   onOpenAsset,
   onClear,
+  replacesFor,
 }: DiscoverSearchResultsProps) {
   const mvPages = usePagination(metricViews, PAGE_SIZE, `${term}|${metricViews.length}`);
   const assetPages = usePagination(assets, PAGE_SIZE, `${term}|${assets.length}`);
@@ -71,7 +74,13 @@ export function DiscoverSearchResults({
           </h3>
           <div className={GRID}>
             {mvPages.pageItems.map((mv) => (
-              <MetricViewCard key={mv.id} asset={mv} context={location(mv)} onSelect={onOpenMetricView} />
+              <MetricViewCard
+                key={mv.id}
+                asset={mv}
+                context={location(mv)}
+                replaces={replacesFor?.(mv.id)}
+                onSelect={onOpenMetricView}
+              />
             ))}
           </div>
           <Pagination {...mvPages} onPageChange={mvPages.setPage} />

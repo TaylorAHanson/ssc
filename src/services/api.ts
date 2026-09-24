@@ -1438,7 +1438,6 @@ export interface DataAsset {
   kpis?: MetricKpi[] | null;
   upstream_tables?: Array<{ name: string; fqn: string; schema: string; type: string; description?: string }> | null;
   downstream_dashboards?: Array<{ id: string; name: string; type: string; description?: string; owner?: string; views?: number; updated_at?: string; url?: string | null }> | null;
-  legacy_mappings?: Array<{ dashboard: string; status: 'Active' | 'Migrating' | 'Deprecated'; owner?: string; description?: string; metric_view?: string; subdomain?: string; domain?: string }> | null;
   created_at: string | null;
   last_synced_at: string;
 }
@@ -1463,16 +1462,41 @@ export interface DomainHierarchy {
   subdomains: SubdomainMeta[];
 }
 
+export type LegacyStatus = 'Active' | 'Migrating' | 'Deprecated';
+
+/** A legacy (e.g. Tableau) dashboard and the metric view that replaces it. Domain/subdomain come from the view. */
 export interface LegacyMapping {
   id: string;
   dashboard: string;
-  status: 'Active' | 'Migrating' | 'Deprecated';
-  owner: string;
-  metric_view: string;
+  description: string | null;
+  status: LegacyStatus;
+  owner: string | null;
+  url: string | null;
   metric_view_id: string;
-  subdomain: string;
-  domain: string;
-  description: string;
+  metric_view: string;
+  metric_view_description: string | null;
+  domain: string | null;
+  subdomain: string | null;
+  /** False when the mapped view is no longer in the catalog. */
+  in_catalog: boolean;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+export interface LegacyMappingInput {
+  dashboard: string;
+  /** Metric view full name, or its table name if unique. */
+  metric_view: string;
+  status: LegacyStatus;
+  owner?: string | null;
+  description?: string | null;
+  url?: string | null;
+}
+
+export interface LegacyMappingImportResult {
+  created: number;
+  skipped: number;
+  errors: Array<{ row: number; error: string }>;
 }
 
 export async function getDomainHierarchy(): Promise<DomainHierarchy[]> {
@@ -1486,7 +1510,7 @@ export async function getDomainHierarchy(): Promise<DomainHierarchy[]> {
 }
 
 export async function getLegacyMappings(params?: { domain?: string; subdomain?: string; status?: string }): Promise<LegacyMapping[]> {
-  const url = new URL(`${API_BASE_URL}/data-assets/legacy_mappings`, window.location.origin);
+  const url = new URL(`${API_BASE_URL}/legacy-dashboards`, window.location.origin);
   if (params?.domain) url.searchParams.append('domain', params.domain);
   if (params?.subdomain) url.searchParams.append('subdomain', params.subdomain);
   if (params?.status) url.searchParams.append('status', params.status);
@@ -1496,6 +1520,54 @@ export async function getLegacyMappings(params?: { domain?: string; subdomain?: 
   if (!response.ok) {
     throw new Error(`Failed to fetch legacy mappings: ${response.status}`);
   }
+  return response.json();
+}
+
+/** FastAPI error detail as one readable line (validation errors arrive as a list). */
+async function legacyError(response: Response, action: string): Promise<Error> {
+  const body = await response.json().catch(() => null);
+  const detail = body?.detail;
+  if (Array.isArray(detail)) {
+    return new Error(detail.map((d: { loc?: unknown[]; msg?: string }) => `${d.loc?.slice(-1)[0] ?? 'field'}: ${d.msg}`).join('; '));
+  }
+  return new Error(detail || `Failed to ${action}: ${response.statusText}`);
+}
+
+export async function createLegacyMapping(data: LegacyMappingInput): Promise<LegacyMapping> {
+  const response = await fetch(`${API_BASE_URL}/legacy-dashboards`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) throw await legacyError(response, 'add mapping');
+  return response.json();
+}
+
+export async function updateLegacyMapping(id: string, data: LegacyMappingInput): Promise<LegacyMapping> {
+  const response = await fetch(`${API_BASE_URL}/legacy-dashboards/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) throw await legacyError(response, 'save mapping');
+  return response.json();
+}
+
+export async function deleteLegacyMapping(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/legacy-dashboards/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) throw await legacyError(response, 'delete mapping');
+}
+
+export async function importLegacyMappings(rows: Array<Record<string, string>>): Promise<LegacyMappingImportResult> {
+  const response = await fetch(`${API_BASE_URL}/legacy-dashboards/import`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ rows }),
+  });
+  if (!response.ok) throw await legacyError(response, 'import mappings');
   return response.json();
 }
 
@@ -3510,6 +3582,10 @@ export const api = {
   getAccessibleAssetIds,
   getDomainHierarchy,
   getLegacyMappings,
+  createLegacyMapping,
+  updateLegacyMapping,
+  deleteLegacyMapping,
+  importLegacyMappings,
   getMetricViews,
   getMetricViewDetail,
   getMetricViewDefinitions,

@@ -11,12 +11,15 @@ import {
   User,
   X,
   Loader2,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { primeMetricViewDefinition, useMetricViewDefinition } from './useMetricViewDefinition';
 import type { DataAsset, MetricKpi, MetricViewDetail } from '../../services/api';
 import { catalogExplorerUrl } from '../../lib/databricksLinks';
 import { LineageGraph, type LineageSeedTable } from './LineageGraph';
+import { useLegacyMappings } from '../../lib/catalogCache';
+import { LegacyStatusBadge } from './LegacyMappingTable';
 
 interface DashboardOrApp {
   id: string;
@@ -174,6 +177,8 @@ export function InlineMetricViewDetail({
   const dimensions = Array.from(new Set(kpis.flatMap((k) => k.dimensions ?? [])));
 
   const downstreamDashboards: DashboardOrApp[] = asset.downstream_dashboards ?? [];
+  const { data: legacyMappings } = useLegacyMappings();
+  const replaces = legacyMappings.filter((m) => m.metric_view_id === asset.id);
 
   const upstreamTables: UpstreamTableInfo[] = known?.upstream_tables ?? [];
 
@@ -224,6 +229,43 @@ export function InlineMetricViewDetail({
 
           {asset.description && (
             <p className="text-xs text-slate-600 max-w-3xl leading-relaxed pt-1">{asset.description}</p>
+          )}
+
+          {replaces.length > 0 && (
+            <div className="pt-2">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 mb-1.5">
+                <ArrowLeftRight className="w-3.5 h-3.5 text-slate-400" />
+                Replaces {replaces.length === 1 ? 'this legacy dashboard' : `${replaces.length} legacy dashboards`}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {replaces.map((m) => {
+                  const label = (
+                    <>
+                      <span className="font-semibold text-slate-800">{m.dashboard}</span>
+                      <LegacyStatusBadge status={m.status} />
+                      {m.url && <ExternalLink className="w-3 h-3 text-slate-400" />}
+                    </>
+                  );
+                  const chip = 'inline-flex items-center gap-1.5 pl-2.5 pr-1 py-0.5 rounded-lg border border-slate-200 bg-slate-50 text-xs';
+                  return m.url ? (
+                    <a
+                      key={m.id}
+                      href={m.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`${chip} hover:border-slate-300 hover:bg-white transition-colors`}
+                      title={m.description || 'Open the legacy dashboard'}
+                    >
+                      {label}
+                    </a>
+                  ) : (
+                    <span key={m.id} className={chip} title={m.description || undefined}>
+                      {label}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
           )}
 
           {/* Metadata badges */}

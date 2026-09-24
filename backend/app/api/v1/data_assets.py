@@ -232,53 +232,6 @@ def get_domains_hierarchy(db: Session = Depends(get_db)):
     return results
 
 
-@router.get("/legacy_mappings")
-def get_legacy_mappings(
-    domain: Optional[str] = None,
-    subdomain: Optional[str] = None,
-    status: Optional[str] = None,
-    db: Session = Depends(get_db),
-):
-    """Return legacy dashboard mappings with status (Active, Migrating, Deprecated)."""
-    query = db.query(DataAssetModel).filter(DataAssetModel.legacy_mappings.isnot(None))
-    if domain:
-        query = query.filter(DataAssetModel.domain == domain)
-    if subdomain:
-        query = query.filter(DataAssetModel.subdomain == subdomain)
-
-    assets = query.all()
-    mappings = []
-    seen = set()
-
-    for a in assets:
-        if not a.legacy_mappings:
-            continue
-        for m in a.legacy_mappings:
-            dash_name = m.get("dashboard") or "Untitled Dashboard"
-            key = (dash_name, a.domain, a.subdomain)
-            if key in seen:
-                continue
-            seen.add(key)
-
-            m_status = m.get("status", "Active")
-            if status and m_status.lower() != status.lower():
-                continue
-
-            mappings.append({
-                "id": f"{a.id}_{dash_name}".replace(" ", "_"),
-                "dashboard": dash_name,
-                "status": m_status,
-                "owner": m.get("owner", a.owner or "Analytics Team"),
-                "metric_view": m.get("metric_view", a.table_name),
-                "metric_view_id": a.id,
-                "subdomain": m.get("subdomain", a.subdomain or "Planning & Forecasting"),
-                "domain": m.get("domain", a.domain or "Supply Chain"),
-                "description": m.get("description", a.description or f"Legacy report mapped to {a.table_name}"),
-            })
-
-    return mappings
-
-
 @router.get("/metric_views")
 def list_metric_views(
     domain: Optional[str] = None,
@@ -326,7 +279,6 @@ def list_metric_views(
             "kpis": a.kpis,
             "upstream_tables": a.upstream_tables,
             "downstream_dashboards": a.downstream_dashboards or [],
-            "legacy_mappings": a.legacy_mappings or [],
             "contract_url": a.contract_url,
             "created_at": a.created_at,
             "last_synced_at": a.last_synced_at,

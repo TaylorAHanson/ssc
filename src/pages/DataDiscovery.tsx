@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useDeferredValue, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useRef, useDeferredValue, useCallback, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { 
   ShieldCheck, Table as TableIcon, Info, X,
@@ -9,7 +9,7 @@ import {
   Users, Server
 } from 'lucide-react';
 import { api } from '../services/api';
-import type { DataAsset, TableDetailsResponse } from '../services/api';
+import type { DataAsset, LegacyMapping, TableDetailsResponse } from '../services/api';
 import { useBrandingStore } from '../stores/brandingStore';
 import {
   appUrl,
@@ -25,6 +25,7 @@ import {
   useAccessibleAssets,
   useDomainHierarchy,
   useMetricViews,
+  useLegacyMappings,
 } from '../lib/catalogCache';
 import { DomainStartView } from '../components/discover/DomainStartView';
 import { DomainFullView } from '../components/discover/DomainFullView';
@@ -44,6 +45,7 @@ export function DataDiscovery() {
   // Resources from cache
   const { data: domainsHierarchy } = useDomainHierarchy();
   const { data: metricViewsData } = useMetricViews();
+  const { data: legacyMappings } = useLegacyMappings();
 
   // Navigation and selection state (persistent across sessions via localStorage)
   const [discoveryStage, setDiscoveryStage] = useState<'start' | 'full'>(() => {
@@ -231,6 +233,29 @@ export function DataDiscovery() {
     return () => window.clearTimeout(id);
   }, [agentQuery]);
 
+  // Legacy (e.g. Tableau) dashboards per metric view: people search by the old
+  // dashboard name and should land on the view that replaces it.
+  const legacyByMv = useMemo(() => {
+    const map = new Map<string, LegacyMapping[]>();
+    for (const m of legacyMappings) map.set(m.metric_view_id, [...(map.get(m.metric_view_id) ?? []), m]);
+    return map;
+  }, [legacyMappings]);
+  const legacyNamesMatching = useCallback(
+    (mvId: string) => {
+      const term = effectiveSearchTerm.trim().toLowerCase();
+      if (!term) return [];
+      return (legacyByMv.get(mvId) ?? []).filter((m) => m.dashboard.toLowerCase().includes(term)).map((m) => m.dashboard);
+    },
+    [legacyByMv, effectiveSearchTerm],
+  );
+  const scopedLegacyMappings = useMemo(
+    () =>
+      legacyMappings.filter(
+        (m) => m.domain === selectedDomain && (!selectedSubdomain || m.subdomain === selectedSubdomain),
+      ),
+    [legacyMappings, selectedDomain, selectedSubdomain],
+  );
+
   // Landing-page search is catalog-wide: it ignores any domain picked in step 1.
   // Results are ranked: name match > description/KPI match > domain/subdomain match.
   const landingSearch = useMemo(() => {
@@ -242,6 +267,7 @@ export function DataDiscovery() {
     const score = (a: DataAsset) => {
       const has = (text?: string | null) => Boolean(text && text.toLowerCase().includes(term));
       if (has(a.table_name) || has(a.table_name.replace(/_/g, ' '))) return 3;
+      if (legacyNamesMatching(a.id).length > 0) return 3;
       if (has(a.description) || has(a.owner) || (a.kpis || []).some((k) => has(k.name))) return 2;
       if (has(a.domain) || has(a.subdomain)) return 1;
       return 0;
@@ -257,7 +283,7 @@ export function DataDiscovery() {
       metricViews: rank(metricViewsData as DataAsset[]),
       assets: rank(datasets.filter((ds) => ds.type !== 'METRIC_VIEW')),
     };
-  }, [effectiveSearchTerm, metricViewsData, datasets, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds]);
+  }, [effectiveSearchTerm, metricViewsData, datasets, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds, legacyNamesMatching]);
 
   const filteredMetricViews = useMemo(() => {
     return metricViewsData.filter((mv) => {
@@ -277,11 +303,11 @@ export function DataDiscovery() {
         const term = effectiveSearchTerm.toLowerCase();
         const kpiNames = (mv.kpis || []).map((k: { name?: string; value?: string }) => `${k.name || ''} ${k.value || ''}`).join(' ');
         const hay = `${mv.table_name} ${mv.description || ''} ${mv.domain || ''} ${mv.subdomain || ''} ${kpiNames}`.toLowerCase();
-        if (!hay.includes(term)) return false;
+        if (!hay.includes(term) && legacyNamesMatching(mv.id).length === 0) return false;
       }
       return true;
     });
-  }, [metricViewsData, selectedDomain, selectedSubdomain, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds, effectiveSearchTerm]);
+  }, [metricViewsData, selectedDomain, selectedSubdomain, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds, effectiveSearchTerm, legacyNamesMatching]);
 
   // Governed Lakehouse tables and views in this domain/subdomain (excluding metric views)
   const subdomainTables = useMemo(() => {
@@ -551,6 +577,7 @@ export function DataDiscovery() {
             }}
             onOpenAsset={setSelectedDataset}
             onClear={() => setSearchTerm('')}
+            replacesFor={legacyNamesMatching}
           />
         ) : discoveryStage === 'start' ? (
           <DomainStartView
@@ -602,6 +629,12 @@ export function DataDiscovery() {
             searchTerm={searchTerm}
             onSearchChange={setSearchTerm}
             onSubmitAgentQuery={submitAgentQuery}
+            legacyMappings={scopedLegacyMappings}
+            replacesFor={legacyNamesMatching}
+            onOpenMetricViewById={(id) => {
+              const mv = (metricViewsData as DataAsset[]).find((v) => v.id === id);
+              if (mv) setSelectedMetricView(mv);
+            }}
           />
         )}
 

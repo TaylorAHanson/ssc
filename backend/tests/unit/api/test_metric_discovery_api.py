@@ -1,8 +1,8 @@
-"""Tests for Metric Views, Domain Hierarchy, and Legacy Mapping discovery endpoints & tools."""
+"""Tests for Metric Views and Domain Hierarchy discovery endpoints & tools."""
 
 from unittest.mock import MagicMock, patch
 import pytest
-from app.api.v1.data_assets import get_domains_hierarchy, get_legacy_mappings, list_metric_views
+from app.api.v1.data_assets import get_domains_hierarchy, list_metric_views
 from app.db.data_asset import DataAssetModel
 from app.tools.self_service.search_data_assets import search_metric_views
 
@@ -86,19 +86,6 @@ def test_get_metric_views(sample_assets):
     assert result[0]["table_name"] == "metric_demand_planning"
     assert result[0]["subdomain"] == "Planning & Forecasting"
     assert result[0]["kpis"] is not None
-
-
-def test_get_legacy_mappings(sample_assets):
-    mock_db = MagicMock()
-    mock_query = MagicMock()
-    mock_db.query.return_value = mock_query
-    mock_query.filter.return_value = mock_query
-    mock_query.all.return_value = [sample_assets[0]]
-
-    result = get_legacy_mappings(db=mock_db)
-    assert len(result) >= 1
-    assert any(m["dashboard"] == "Tableau Demand v2" for m in result)
-    assert any(m["status"] == "Active" for m in result)
 
 
 def test_search_metric_views_tool(sample_assets):

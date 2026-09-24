@@ -14,6 +14,7 @@ from sqlalchemy import String, cast, or_
 from app.tools.mcp import tool
 from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
+from app.db.legacy_dashboard import LegacyDashboardMappingModel
 
 
 # Common filler words that would only add noise to a keyword scan.
@@ -30,7 +31,7 @@ def _tokenize(query: str) -> List[str]:
     return [t for t in raw if len(t) >= 2 and t not in _STOPWORDS]
 
 
-def _serialize(asset: DataAssetModel) -> Dict[str, Any]:
+def _serialize(asset: DataAssetModel, legacy: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     return {
         "id": asset.id,
         "catalog": asset.catalog,
@@ -44,7 +45,8 @@ def _serialize(asset: DataAssetModel) -> Dict[str, Any]:
         "kpis": asset.kpis or [],
         "downstream_dashboards": asset.downstream_dashboards or [],
         "upstream_tables": asset.upstream_tables or [],
-        "legacy_mappings": asset.legacy_mappings or [],
+        # Legacy (e.g. Tableau) dashboards this metric view replaces.
+        "legacy_mappings": legacy or [],
         "tags": asset.tags or [],
         "certified": bool(asset.certified),
         "contract_url": asset.contract_url,
@@ -150,6 +152,31 @@ def search_data_assets(
         # Cap the candidate pull; the local table is small and we rank in Python.
         candidates = q.limit(200).all()
 
+        # A user may only know the legacy (e.g. Tableau) dashboard name: pull in
+        # the metric views mapped to any dashboard the query names.
+        terms = tokens or [query.strip()]
+        legacy_rows = db.query(LegacyDashboardMappingModel).all()
+        legacy_by_mv: Dict[str, List[Dict[str, Any]]] = {}
+        for m in legacy_rows:
+            legacy_by_mv.setdefault(m.metric_view_id, []).append(
+                {"dashboard": m.dashboard, "status": m.status, "owner": m.owner})
+        legacy_hits = {
+            m.metric_view_id for m in legacy_rows
+            if any(t.lower() in m.dashboard.lower() for t in terms)
+        }
+        missing = legacy_hits - {a.id for a in candidates}
+        if missing:
+            extra = db.query(DataAssetModel).filter(DataAssetModel.id.in_(missing))
+            if asset_type:
+                extra = extra.filter(DataAssetModel.type.ilike(f"%{asset_type}%"))
+            if domain:
+                extra = extra.filter(DataAssetModel.domain.ilike(f"%{domain}%"))
+            if subdomain:
+                extra = extra.filter(DataAssetModel.subdomain.ilike(f"%{subdomain}%"))
+            if certified_only:
+                extra = extra.filter(DataAssetModel.certified.is_(True))
+            candidates.extend(extra.all())
+
         def _score(asset: DataAssetModel) -> float:
             if not tokens:
                 return 1.0
@@ -173,6 +200,8 @@ def search_data_assets(
                 )
                 if v
             )
+            legacy_text = " ".join(d["dashboard"] for d in legacy_by_mv.get(asset.id, []))
+            haystack = f"{haystack} {legacy_text.lower()}"
             name_hay = f"{asset.id or ''} {asset.table_name or ''}".lower()
             score = sum(1 for t in tokens if t in haystack)
             # Boost matches that land in the name/FQN (more relevant than a
@@ -192,7 +221,7 @@ def search_data_assets(
 
         candidates.sort(key=_score, reverse=True)
         top = candidates[:limit]
-        assets = [_serialize(a) for a in top]
+        assets = [_serialize(a, legacy_by_mv.get(a.id)) for a in top]
 
         if assets:
             note = (
@@ -240,6 +269,7 @@ class SearchMetricViewsInput(BaseModel):
     name="search_metric_views",
     description=(
         "Search and discover governed Metric Views, business KPIs, and related dashboards/apps. "
+        "Also finds the metric view that replaces a legacy (e.g. Tableau) dashboard by that dashboard's name. "
         "Use this as the preferred tool when the user asks about business metrics, KPIs, or domain reporting."
     ),
     args_schema=SearchMetricViewsInput,
