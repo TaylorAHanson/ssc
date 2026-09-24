@@ -194,6 +194,22 @@ class TrainingService:
         return q.order_by(TrainingCourseModel.sort_order, TrainingCourseModel.title).all()
 
     @staticmethod
+    def courses_by_track(db: Session, track_ids: List[str]) -> Dict[str, List[TrainingCourseModel]]:
+        """Every course for ``track_ids`` in one query, grouped by track (same order as list_courses)."""
+        out: Dict[str, List[TrainingCourseModel]] = {tid: [] for tid in track_ids}
+        if not track_ids:
+            return out
+        rows = (
+            db.query(TrainingCourseModel)
+            .filter(TrainingCourseModel.track_id.in_(track_ids))
+            .order_by(TrainingCourseModel.sort_order, TrainingCourseModel.title)
+            .all()
+        )
+        for course in rows:
+            out.setdefault(course.track_id, []).append(course)
+        return out
+
+    @staticmethod
     def get_course(db: Session, course_id: str) -> Optional[TrainingCourseModel]:
         return db.query(TrainingCourseModel).filter(TrainingCourseModel.id == course_id).first()
 
@@ -282,6 +298,22 @@ class TrainingService:
             .order_by(TrainingMediaModel.sort_order, TrainingMediaModel.title)
             .all()
         )
+
+    @staticmethod
+    def media_by_course(db: Session, course_ids: List[str]) -> Dict[str, List[TrainingMediaModel]]:
+        """Every media item for ``course_ids`` in one query, grouped by course (same order as list_media)."""
+        out: Dict[str, List[TrainingMediaModel]] = {cid: [] for cid in course_ids}
+        if not course_ids:
+            return out
+        rows = (
+            db.query(TrainingMediaModel)
+            .filter(TrainingMediaModel.course_id.in_(course_ids))
+            .order_by(TrainingMediaModel.sort_order, TrainingMediaModel.title)
+            .all()
+        )
+        for media in rows:
+            out.setdefault(media.course_id, []).append(media)
+        return out
 
     @staticmethod
     def get_media(db: Session, media_id: str) -> Optional[TrainingMediaModel]:
@@ -563,7 +595,8 @@ class TrainingService:
 
     @staticmethod
     def track_to_dict(db: Session, track: TrainingTrackModel,
-                      include_courses: bool = False) -> Dict[str, Any]:
+                      include_courses: bool = False,
+                      course_count: Optional[int] = None) -> Dict[str, Any]:
         data = {
             "id": track.id,
             "slug": track.slug,
@@ -578,7 +611,9 @@ class TrainingService:
             "created_at": track.created_at.isoformat() if track.created_at else None,
             "updated_at": track.updated_at.isoformat() if track.updated_at else None,
         }
-        data["course_count"] = (
+        # Callers that already hold the track's courses pass the count to skip
+        # the per-track COUNT query.
+        data["course_count"] = course_count if course_count is not None else (
             db.query(TrainingCourseModel)
             .filter(TrainingCourseModel.track_id == track.id)
             .count()

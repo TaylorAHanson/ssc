@@ -373,21 +373,6 @@ class Settings(BaseSettings):
     # `data.agent.tools` policy is tuned against real traffic.
     AGENT_TOOL_OPA_ENFORCE: bool = False
 
-    # Agent profiles (authored in the Command Center Agent Studio) may pin a
-    # ``model``. Routing a turn to an arbitrary serving endpoint bypasses the AI
-    # Gateway's guardrails / rate + cost limits, so a profile's model is honored
-    # ONLY if it appears in this comma-separated allowlist of endpoint names.
-    # Empty (default) = ignore profile models entirely and always use the
-    # gateway/default routing. Use "*" to allow any endpoint (NOT recommended).
-    AGENT_PROFILE_MODEL_ALLOWLIST: str = ""
-
-    @property
-    def agent_profile_model_allowlist(self) -> set:
-        raw = (self.AGENT_PROFILE_MODEL_ALLOWLIST or "").strip()
-        if not raw:
-            return set()
-        return {m.strip() for m in raw.split(",") if m.strip()}
-
     # --- User context ("the user model") -------------------------------
     # The agent reads a cached per-user context blob on every turn so it doesn't
     # have to ask who the caller is. Assembly is too slow to run inline (the
@@ -487,6 +472,10 @@ class Settings(BaseSettings):
     # Editable in Admin -> Settings.
     SCAN_CATALOGS: str = os.getenv("SCAN_CATALOGS", "")
     DATA_ASSET_SYNC_CRON: str = "0 * * * *"
+    # How far back the sync looks in system.access.table_lineage for dashboards
+    # that read each metric view (lineage keeps a rolling year). A dashboard
+    # nobody opened in this window isn't listed. Editable in Admin -> Settings.
+    DATA_ASSET_LINEAGE_LOOKBACK_DAYS: int = int(os.getenv("DATA_ASSET_LINEAGE_LOOKBACK_DAYS", "90"))
     # Data contract (ODCS) sync. Rediscovers 'dataset'-tagged tables and redrafts
     # their ODCS contracts. This calls the LLM once per dataset, so it is heavier
     # than the data-asset cache sync — default OFF (empty = manual "Sync Data
@@ -609,7 +598,7 @@ class Settings(BaseSettings):
     IDP_API_KEY: str = ""  # SECRET: Set in .env
 
     # Identity-group provider (vendor-neutral membership management).
-    # noop (default, records-only) | rest (SCIM/REST) | lmws (Qualcomm legacy).
+    # noop (default, records-only) | rest (SCIM/REST) | lmws (legacy LMWS/FWS-API).
     IDENTITY_PROVIDER: str = "noop"
     # UC tag keys that map an asset to its access/approver group (configurable so
     # customers use their own tagging conventions instead of hardcoded names).
@@ -648,6 +637,9 @@ class Settings(BaseSettings):
     LMWS_JOB_TIMEOUT_SECONDS: int = 1800  # Job-level timeout for an LMWS action run
     LMWS_DEFAULT_JUSTIFICATION: str = "Automated via Databricks job"
     LMWS_DEFAULT_CLONE_SOURCE: str = ""  # Default clone source for createSPGroup (set per-deployment)
+    # Domain appended to the requester CN for createSPGroup's notificationCallBack
+    # email (e.g. "example.com"; set per-deployment). Required for createSPGroup.
+    LMWS_NOTIFICATION_EMAIL_DOMAIN: str = ""
     # Inline (agent-tool) read path polling: how long a stateless tool will
     # wait for a job-backed read (list_retrieve / member_retrieve) before
     # giving up. State-machine writes poll across ticks instead.
@@ -679,7 +671,7 @@ class Settings(BaseSettings):
     LMWS_PASSWORD_SECRET_KEY: str = os.getenv("LMWS_PASSWORD_SECRET_KEY", "edhapisvc")
     LMWS_SERVICE_PASSWORD: str = os.getenv("LMWS_SERVICE_PASSWORD", "")  # optional override
     # TLS verification for the direct calls. Defaults to False to match the
-    # vendored notebook (the internal Qualcomm gateway presents an internal CA);
+    # vendored notebook (the internal gateway presents an internal CA);
     # flip on where the gateway chain is trusted by the app runtime.
     LMWS_NATIVE_VERIFY_TLS: bool = False
     LMWS_NATIVE_TIMEOUT_SECONDS: int = 30  # Per-request HTTP timeout for direct calls

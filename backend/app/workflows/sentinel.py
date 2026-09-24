@@ -1709,6 +1709,21 @@ def _refresh_data_asset_quality(db, discovered_resources: List[Dict[str, Any]], 
         dq["failed_rules"] = aggregated_failed_rules
         asset.data_quality = dq
         flag_modified(asset, "data_quality")
+        # Per-table snapshot for the certification detail view's red/green table
+        # breakdown. Only the fields that view shows — not the full discovery
+        # record (columns, descriptions) — to keep the row small.
+        asset.certification_assets = [
+            {
+                "name": a.get("name"),
+                "type": a.get("type"),
+                "exists": bool(a.get("table_exists", True)),
+                "certified": str((a.get("tags") or {}).get("system.certification_status", "")).lower() == "certified",
+                "failed_rule_count": a.get("failed_rule_count", -1),
+                "tags": {k: v for k, v in (a.get("tags") or {}).items() if not str(k).startswith("system.")},
+            }
+            for a in assets
+        ]
+        flag_modified(asset, "certification_assets")
         # Roll up the live Unity Catalog certification tag into the cached flag
         # the certification UI reads (DataAsset.certified). A product is
         # certified iff it has backing tables and every one carries

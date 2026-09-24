@@ -14,6 +14,7 @@ Three surfaces:
 Writes require Platform/Governance Admin; reads are available to any
 authenticated user.
 """
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -103,7 +104,7 @@ class ConsumptionUpdate(BaseModel):
 # --------------------------------------------------------------------- learner
 
 @router.get("/me", response_model=Dict[str, Any])
-async def get_my_training(
+def get_my_training(
     current_user: User = Depends(deps.get_current_user),
     db: Session = Depends(deps.get_db),
 ):
@@ -112,13 +113,16 @@ async def get_my_training(
     completed_codes = set(provider.get_user_training_status(current_user.email))
 
     tracks = TrainingService.list_tracks(db, include_drafts=False)
+    # Batch-load courses and media (one query each) instead of per track/course.
+    all_courses = TrainingService.courses_by_track(db, [t.id for t in tracks])
     course_ids: List[str] = []
     track_payloads: List[Dict[str, Any]] = []
     for track in tracks:
-        courses = [c for c in TrainingService.list_courses(db, track.id) if c.status == "published"]
+        courses = [c for c in all_courses[track.id] if c.status == "published"]
         course_ids.extend(c.id for c in courses)
         track_payloads.append((track, courses))
 
+    media_by_course = TrainingService.media_by_course(db, course_ids)
     consumption = TrainingService.consumption_for_user(db, current_user.email, course_ids)
 
     result_tracks: List[Dict[str, Any]] = []
@@ -126,7 +130,7 @@ async def get_my_training(
         course_dicts: List[Dict[str, Any]] = []
         completed_count = 0
         for course in courses:
-            media = TrainingService.list_media(db, course.id)
+            media = media_by_course[course.id]
             media_payload = []
             videos = [m for m in media if m.kind in _VIDEO_KINDS]
             pct_values: List[float] = []
@@ -156,7 +160,7 @@ async def get_my_training(
             cd["progress"] = round(progress, 3)
             course_dicts.append(cd)
 
-        td = TrainingService.track_to_dict(db, track)
+        td = TrainingService.track_to_dict(db, track, course_count=len(all_courses[track.id]))
         td["courses"] = course_dicts
         td["completed_count"] = completed_count
         td["total_count"] = len(course_dicts)
@@ -169,7 +173,7 @@ async def get_my_training(
 
 
 @router.get("/courses", response_model=List[Dict[str, str]])
-async def list_courses(
+def list_courses(
     current_user: User = Depends(deps.get_current_user),
     db: Session = Depends(deps.get_db),
 ):
@@ -183,7 +187,7 @@ async def list_courses(
 
 
 @router.post("/consumption", response_model=Dict[str, Any])
-async def record_consumption(
+def record_consumption(
     body: ConsumptionUpdate,
     current_user: User = Depends(deps.get_current_user),
     db: Session = Depends(deps.get_db),
@@ -229,7 +233,7 @@ def _parse_range(range_header: Optional[str], size: int) -> Optional[tuple]:
 
 
 @router.get("/media/{media_id}/stream")
-async def stream_media(
+def stream_media(
     media_id: str,
     request: Request,
     current_user: User = Depends(deps.get_current_user),
@@ -275,7 +279,7 @@ async def stream_media(
 # ----------------------------------------------------------------- admin: tracks
 
 @router.get("/tracks", response_model=List[Dict[str, Any]])
-async def admin_list_tracks(
+def admin_list_tracks(
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     db: Session = Depends(deps.get_db),
 ):
@@ -286,7 +290,7 @@ async def admin_list_tracks(
 
 
 @router.post("/tracks", response_model=Dict[str, Any])
-async def admin_create_track(
+def admin_create_track(
     body: TrackCreate,
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     db: Session = Depends(deps.get_db),
@@ -296,7 +300,7 @@ async def admin_create_track(
 
 
 @router.patch("/tracks/{track_id}", response_model=Dict[str, Any])
-async def admin_update_track(
+def admin_update_track(
     track_id: str,
     body: TrackUpdate,
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
@@ -310,7 +314,7 @@ async def admin_update_track(
 
 
 @router.delete("/tracks/{track_id}", response_model=Dict[str, Any])
-async def admin_delete_track(
+def admin_delete_track(
     track_id: str,
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     db: Session = Depends(deps.get_db),
@@ -328,7 +332,7 @@ async def admin_delete_track(
 # --------------------------------------------------------------- admin: courses
 
 @router.post("/tracks/{track_id}/courses", response_model=Dict[str, Any])
-async def admin_create_course(
+def admin_create_course(
     track_id: str,
     body: CourseCreate,
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
@@ -344,7 +348,7 @@ async def admin_create_course(
 
 
 @router.patch("/courses/{course_id}", response_model=Dict[str, Any])
-async def admin_update_course(
+def admin_update_course(
     course_id: str,
     body: CourseUpdate,
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
@@ -358,7 +362,7 @@ async def admin_update_course(
 
 
 @router.delete("/courses/{course_id}", response_model=Dict[str, Any])
-async def admin_delete_course(
+def admin_delete_course(
     course_id: str,
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     db: Session = Depends(deps.get_db),
@@ -388,18 +392,27 @@ async def admin_upload_media(
     if not TrainingService.get_course(db, course_id):
         raise HTTPException(status_code=404, detail="Course not found")
 
-    content = await file.read()
     max_bytes = settings.TRAINING_MAX_UPLOAD_MB * 1024 * 1024
+    too_large = HTTPException(
+        status_code=413,
+        detail=f"File exceeds the {settings.TRAINING_MAX_UPLOAD_MB} MB limit",
+    )
+    # Reject on the declared size before buffering the whole file in memory.
+    if file.size is not None and file.size > max_bytes:
+        raise too_large
+    content = await file.read()
     if len(content) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File exceeds the {settings.TRAINING_MAX_UPLOAD_MB} MB limit",
-        )
+        raise too_large
 
-    storage = TrainingMediaStorage()
     media_id = TrainingService.new_media_id()
+
+    def _store():
+        return TrainingMediaStorage().store_media(media_id, file.filename or "media", content)
+
     try:
-        storage_path, size = storage.store_media(media_id, file.filename or "media", content)
+        # The UC Volume upload is a blocking SDK call that can take as long as the
+        # file is large; run it off the event loop so it can't stall the app.
+        storage_path, size = await asyncio.to_thread(_store)
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to store training media: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to store media: {e}")
@@ -420,7 +433,7 @@ async def admin_upload_media(
 
 
 @router.patch("/media/{media_id}", response_model=Dict[str, Any])
-async def admin_update_media(
+def admin_update_media(
     media_id: str,
     body: MediaUpdate,
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
@@ -434,7 +447,7 @@ async def admin_update_media(
 
 
 @router.delete("/media/{media_id}", response_model=Dict[str, Any])
-async def admin_delete_media(
+def admin_delete_media(
     media_id: str,
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     db: Session = Depends(deps.get_db),
@@ -467,7 +480,7 @@ async def admin_sync_catalog(
 
 
 @router.get("/analytics/consumption", response_model=List[Dict[str, Any]])
-async def admin_consumption_analytics(
+def admin_consumption_analytics(
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     db: Session = Depends(deps.get_db),
 ):

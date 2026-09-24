@@ -84,12 +84,15 @@ def get_facts(
     Returns:
         List of EventModel instances, ordered by creation time
     """
+    return _facts_query(db, request_id, fact_type).order_by(EventModel.created_at.asc()).all()
+
+
+def _facts_query(db: Session, request_id: str, fact_type: Optional[str] = None):
+    """Unordered query for a request's facts, optionally of one type."""
     query = db.query(EventModel).filter(EventModel.request_id == request_id)
-    
     if fact_type:
         query = query.filter(EventModel.event_type == fact_type)
-    
-    return query.order_by(EventModel.created_at.asc()).all()
+    return query
 
 
 def has_fact(
@@ -113,14 +116,12 @@ def has_fact(
     Example:
         has_fact(db, "req-123", "workspace_created", workspace_id="ws-456")
     """
-    facts = get_facts(db, request_id, fact_type)
-    
-    if not facts:
-        return False
-    
     if not conditions:
-        return True
-    
+        # Existence check only — don't load every fact of this type.
+        return _facts_query(db, request_id, fact_type).with_entities(EventModel.id).first() is not None
+
+    facts = get_facts(db, request_id, fact_type)
+
     # Check if any fact matches all conditions
     for fact in facts:
         fact_data = fact.event_data or {}
@@ -151,16 +152,13 @@ def get_latest_fact(
     Returns:
         Most recent matching EventModel of that type, or None
     """
-    facts = get_facts(db, request_id, fact_type)
-    
-    if not facts:
-        return None
-        
+    newest_first = _facts_query(db, request_id, fact_type).order_by(EventModel.created_at.desc())
+
     if not conditions:
-        return facts[-1]
-        
-    # Check facts in reverse order (latest first)
-    for fact in reversed(facts):
+        return newest_first.first()
+
+    # Conditions match inside the JSON event_data, so they're checked in Python.
+    for fact in newest_first.all():
         fact_data = fact.event_data or {}
         if all(
             fact_data.get(key) == value

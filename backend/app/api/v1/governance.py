@@ -47,7 +47,7 @@ def _latest_completed_run(db: Session) -> Optional[RequestModel]:
 
 
 @router.get("/digest-info")
-async def get_digest_info(
+def get_digest_info(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -149,7 +149,7 @@ class PurgeSentinelRunsRequest(BaseModel):
 
 
 @router.post("/sentinel/runs/purge")
-async def purge_sentinel_runs(
+def purge_sentinel_runs(
     body: PurgeSentinelRunsRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),

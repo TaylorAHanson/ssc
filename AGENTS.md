@@ -5,12 +5,6 @@ canonical agent guide; `.cursor/rules/project-rules.mdc` points here. Nested
 `AGENTS.md` files add area-specific detail — the nearest one to the file you're
 editing wins.
 
-> **Naming note:** this file (`AGENTS.md`, plural) is *developer tooling* — how to
-> work on the codebase. It is **unrelated** to the application's runtime
-> **`AGENT.md`** (singular) Agent Profiles, which are authored in the Command
-> Center and loaded on-behalf-of the user at runtime (see `docs/ARCHITECTURE.md`
-> §14). Don't conflate them.
-
 ## What this is
 
 A **no-code, governed agentic platform** on Databricks Apps: admins author

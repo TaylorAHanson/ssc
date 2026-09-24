@@ -1,7 +1,7 @@
 # Databricks notebook source
 # LMWS / FWS-API Group Management Job
 #
-# Manages Qualcomm LMWS/FWS-API groups via parameterized job runs. This notebook
+# Manages LMWS/FWS-API groups via parameterized job runs. This notebook
 # is the "engine" behind `app.providers.lmws.client.LmwsProvider`: the app uploads
 # and submits it as a one-time job (serverless by default, or classic compute
 # when LMWS_USE_SERVERLESS is off), passing the action and its arguments as
@@ -19,7 +19,7 @@
 #   * Service account must be a list-supervisor of target lists for membership ops.
 #
 # NOTE: TLS verification is disabled (verify=False) to match the production
-# client against the internal Qualcomm gateway CA. HTTP-level failures raise
+# client against the internal gateway CA. HTTP-level failures raise
 # (via raise_for_status) and surface as a failed job; the app treats a non-JSON
 # or {"Result": "FAILED"/"ERROR"} body as failure (see LmwsProvider.parse_output).
 
@@ -58,6 +58,7 @@ dbutils.widgets.text("authn_url", "")                     # LMWS authn base URL
 dbutils.widgets.text("rest_url", "")                      # LMWS REST (publicAPIrest) base URL
 dbutils.widgets.text("cache_url", "")                     # LMWS list cache info base URL
 dbutils.widgets.text("fws_url", "")                       # FWS-API entitlement base URL
+dbutils.widgets.text("notification_email_domain", "")     # domain for createSPGroup notificationCallBack
 
 action = dbutils.widgets.get("action").strip()
 list_name = dbutils.widgets.get("list_name").strip()
@@ -83,6 +84,7 @@ BASE_LMWS_AUTHN = dbutils.widgets.get("authn_url").strip()
 BASE_LMWS_REST = dbutils.widgets.get("rest_url").strip()
 BASE_LMWS_CACHE = dbutils.widgets.get("cache_url").strip()
 BASE_FWS = dbutils.widgets.get("fws_url").strip()
+NOTIFICATION_EMAIL_DOMAIN = dbutils.widgets.get("notification_email_domain").strip().lstrip("@")
 
 print(f"LMWS action={action} list_name={list_name} members={members} request_id={request_id}")
 
@@ -113,7 +115,7 @@ supervisors_csv = ",".join(supervisors)
 
 
 # ---------------------------------------------------------------------------
-# FWS-API / LMWS HTTP client (basic-auth against the Qualcomm gateway)
+# FWS-API / LMWS HTTP client (basic-auth against the gateway)
 # ---------------------------------------------------------------------------
 _AUTH = HTTPBasicAuth(SERVICE_USERNAME, SERVICE_PASSWORD)
 
@@ -232,6 +234,7 @@ def _action_list_create_new() -> dict:
 def _action_create_sp_group() -> dict:
     _require(list_name, "list_name")
     _require(owner, "owner")
+    _require(NOTIFICATION_EMAIL_DOMAIN, "notification_email_domain (LMWS_NOTIFICATION_EMAIL_DOMAIN)")
     resp = _post(BASE_FWS, "fws_url", "createSPGroup", {
         "actor": SERVICE_USERNAME,
         "listName": list_name,
@@ -243,7 +246,7 @@ def _action_create_sp_group() -> dict:
         "supervisors": supervisors_csv,
         "type": "SECURITY",
         "CCIClassification": cci_classification,
-        "notificationCallBack": f"{requester}@qualcomm.com",
+        "notificationCallBack": f"{requester}@{NOTIFICATION_EMAIL_DOMAIN}",
         "accessRequested": "on-prem-windowsbased",
     })
     return {

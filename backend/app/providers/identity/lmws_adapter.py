@@ -1,6 +1,6 @@
 """LMWS adapter behind the vendor-neutral IdentityGroupProvider.
 
-One selectable backend (``IDENTITY_PROVIDER=lmws``) for the Qualcomm FWS-API.
+One selectable backend (``IDENTITY_PROVIDER=lmws``) for the LMWS/FWS-API.
 Each operation runs against the LMWS/FWS-API gateway either **natively**
 (in-process HTTP via :class:`LmwsNativeClient`, the default) or via the
 **serverless** notebook job (:class:`LmwsProvider`), selected at call time by

@@ -1,12 +1,12 @@
 """
 Pluggable identity-group provider.
 
-Generalizes group/membership management away from any single vendor (Qualcomm's
+Generalizes group/membership management away from any single vendor (e.g. the
 LMWS/FWS-API). The active backend is chosen by ``settings.IDENTITY_PROVIDER``:
 
     noop  - default; logs + records (works out-of-the-box, no external system)
     rest  - generic SCIM/REST endpoint (config-driven)
-    lmws  - Qualcomm FWS-API via the vendored Databricks job (legacy adapter)
+    lmws  - LMWS/FWS-API via the vendored Databricks job (legacy adapter)
 
 All V2 group mutations go through the single ``add_group_membership`` tool ->
 ``get_identity_provider()``, so swapping vendors is one config change.

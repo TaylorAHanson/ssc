@@ -189,35 +189,54 @@ def derive_metric_view_enrichments(asset_type: str, view_definition: str | None)
     return enrichments
 
 
+# Metric views per system.access.table_lineage query, so a large catalog can't
+# build an unbounded IN (...) list.
+_LINEAGE_BATCH = 500
+
+
 async def _fetch_downstream_dashboards(provider, fqns: list[str]) -> dict[str, list[dict]]:
-    """Dashboards that read each metric view, from Unity Catalog lineage.
+    """Dashboards that read each metric view, from ``system.access.table_lineage``.
+
+    One query per batch of views, over the last ``DATA_ASSET_LINEAGE_LOOKBACK_DAYS``.
+    This replaced per-view calls to the Catalog Explorer lineage endpoint, which is
+    rate-limited: each call retried until the SDK's 2-minute deadline and the
+    blocked threads stalled the rest of the poller. See docs/METRIC_VIEW_LINEAGE.md.
 
     Names come from the home workspace's Lakeview dashboards; a dashboard that
     lineage reports but this workspace can't see (e.g. it lives in another
-    workspace) is still listed, labelled by id, with no link.
+    workspace) is still listed, labelled by id, with no link. If the sync identity
+    can't read the system table, every view gets no dashboards and the sync goes on.
     """
-    sem = asyncio.Semaphore(8)
+    from app.tools.sql_safety import quote_literal
 
-    async def _one(fqn: str):
-        async with sem:
-            try:
-                resp = await asyncio.to_thread(
-                    provider.client.api_client.do,
-                    "GET",
-                    "/api/2.0/lineage-tracking/table-lineage",
-                    query={"table_name": fqn, "include_entity_lineage": "true"},
-                )
-            except Exception as e:  # noqa: BLE001 - one bad view mustn't fail the sync
-                logger.warning("Could not fetch lineage for %s: %s", fqn, e)
-                return fqn, []
-        infos = []
-        for entry in (resp or {}).get("downstreams") or []:
-            infos.extend(entry.get("dashboardV3Infos") or [])
-        return fqn, infos
-
-    lineage = dict(await asyncio.gather(*(_one(f) for f in fqns)))
-    if not any(lineage.values()):
-        return {f: [] for f in fqns}
+    out: dict[str, list[dict]] = {f: [] for f in fqns}
+    days = max(1, int(getattr(settings, "DATA_ASSET_LINEAGE_LOOKBACK_DAYS", 90) or 90))
+    rows: list[dict] = []
+    try:
+        for start in range(0, len(fqns), _LINEAGE_BATCH):
+            names = ", ".join(quote_literal(f) for f in fqns[start:start + _LINEAGE_BATCH])
+            result = await provider.execute_sql(
+                f"""
+                SELECT source_table_full_name, entity_id,
+                       MAX(workspace_id) AS workspace_id, MAX(event_time) AS last_read
+                FROM system.access.table_lineage
+                WHERE event_date >= current_date() - INTERVAL {days} DAYS
+                  AND source_type = 'METRIC_VIEW'
+                  AND entity_type = 'DASHBOARD_V3'
+                  AND source_table_full_name IN ({names})
+                GROUP BY source_table_full_name, entity_id
+                """,
+                warehouse=settings.DATABRICKS_WAREHOUSE_ID,
+            )
+            rows.extend(result.get("rows", []))
+    except Exception as e:  # noqa: BLE001 - lineage is an enrichment; never fail the sync
+        logger.warning(
+            "Could not read dashboard lineage from system.access.table_lineage (the sync "
+            "identity needs USE CATALOG on system, USE SCHEMA on system.access and SELECT): %s", e,
+        )
+        return out
+    if not rows:
+        return out
 
     try:
         known = {d.dashboard_id: d for d in await asyncio.to_thread(lambda: list(provider.client.lakeview.list()))}
@@ -226,24 +245,19 @@ async def _fetch_downstream_dashboards(provider, fqns: list[str]) -> dict[str, l
         known = {}
     host = (provider.client.config.host or "").rstrip("/")
 
-    out: dict[str, list[dict]] = {}
-    for fqn, infos in lineage.items():
-        seen, dashboards = set(), []
-        for info in infos:
-            dash_id = info.get("dashboard_id")
-            if not dash_id or dash_id in seen:
-                continue
-            seen.add(dash_id)
-            d = known.get(dash_id)
-            dashboards.append({
-                "id": dash_id,
-                "name": d.display_name if d else f"Dashboard {dash_id}",
-                "type": "dashboard",
-                "description": None if d else f"In workspace {info.get('workspace_id')}, not visible from this one",
-                "url": f"{host}/dashboardsv3/{dash_id}/published" if d and host else None,
-                "updated_at": info.get("lineage_timestamp"),
-            })
-        out[fqn] = dashboards
+    for row in sorted(rows, key=lambda r: str(r.get("last_read") or ""), reverse=True):
+        fqn, dash_id = row.get("source_table_full_name"), row.get("entity_id")
+        if fqn not in out or not dash_id or any(d["id"] == dash_id for d in out[fqn]):
+            continue
+        d = known.get(dash_id)
+        out[fqn].append({
+            "id": dash_id,
+            "name": d.display_name if d else f"Dashboard {dash_id}",
+            "type": "dashboard",
+            "description": None if d else f"In workspace {row.get('workspace_id')}, not visible from this one",
+            "url": f"{host}/dashboardsv3/{dash_id}/published" if d and host else None,
+            "updated_at": row.get("last_read"),
+        })
     return out
 
 

@@ -1,33 +1,16 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
-import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, ChevronUp, ChevronDown, Filter, Trash2, RefreshCw, Download, ClipboardList } from 'lucide-react';
+import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, ChevronUp, ChevronDown, ChevronRight, Filter, Trash2, RefreshCw, Download } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { api } from '../../services/api';
 import type { DataContract } from '../../services/api';
-import { CertificationChecklist } from '../../components/admin/CertificationChecklist';
-import type { ChecklistRuleRow } from '../../components/admin/CertificationChecklist';
-import { format, parseISO } from 'date-fns';
+import { DatasetCertificationDrawer } from '../../components/admin/DatasetCertificationDrawer';
+import type { DrawerTab } from '../../components/admin/DatasetCertificationDrawer';
+import { format } from 'date-fns';
+import { formatPacific, parseUtc } from '../../lib/certificationDates';
 import Editor from '@monaco-editor/react';
 import yaml from 'js-yaml';
-
-// The backend serializes naive UTC datetimes (no timezone suffix). Treat any
-// such string as UTC so date-fns renders it in the viewer's local timezone.
-const parseUtc = (value: string): Date =>
-  parseISO(/Z|[+-]\d{2}:?\d{2}$/.test(value) ? value : `${value}Z`);
-
-// Render a UTC timestamp in US Pacific time with an explicit tz label. Uses the
-// America/Los_Angeles zone so the abbreviation auto-switches between PST and PDT
-// with daylight saving rather than being hardcoded.
-const formatPacific = (value: string): string =>
-  parseUtc(value).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-    timeZone: 'America/Los_Angeles',
-    timeZoneName: 'short',
-  });
 
 export function DataCertification() {
   const [datasets, setDatasets] = useState<DataContract[]>([]);
@@ -50,8 +33,33 @@ export function DataCertification() {
   const [contractHistory, setContractHistory] = useState<DataContract[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   
-  // Violations Modal State
-  const [violationAsset, setViolationAsset] = useState<DataContract | null>(null);
+  // Detail drawer: which data set is open, deep-linkable as ?dataset=<id>
+  // (the same link the backend stores as each asset's contract_url).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const detailDatasetId = searchParams.get('dataset');
+  const [detailTab, setDetailTab] = useState<DrawerTab>('overview');
+  const [detailReload, setDetailReload] = useState(0);
+
+  const openDetail = (datasetId: string, tab: DrawerTab = 'overview') => {
+    setDetailTab(tab);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('dataset', datasetId);
+      return next;
+    });
+  };
+  const closeDetail = () =>
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('dataset');
+      return next;
+    });
+
+  const reloadContracts = async () => {
+    const contracts = await api.getDataContracts();
+    setDatasets(contracts);
+    setDetailReload((n) => n + 1);
+  };
 
   const fetchHistory = async (datasetId: string, contractUrl?: string | null) => {
     try {
@@ -100,10 +108,8 @@ export function DataCertification() {
     
     try {
       await api.deleteDataContract(datasetId);
-      
-      // Reload assets to reflect changes
-      const contracts = await api.getDataContracts();
-      setDatasets(contracts);
+      if (detailDatasetId === datasetId) closeDetail();
+      await reloadContracts();
     } catch (e: any) {
       console.error('Failed to delete contract', e);
       alert('Failed to delete contract: ' + e.message);
@@ -138,9 +144,7 @@ export function DataCertification() {
 
       await api.createDataContract(datasetId, yamlContent);
       setIsEditorOpen(false);
-      // Reload assets to reflect changes
-      const contracts = await api.getDataContracts();
-      setDatasets(contracts);
+      await reloadContracts();
     } catch (e: any) {
       setYamlError(e.message || 'Failed to save data contract');
     } finally {
@@ -155,10 +159,7 @@ export function DataCertification() {
       const res = await api.checkPolicy(datasetId);
       setSyncMessage({ type: 'success', text: `Policy Check Started: ${res.message || 'Success'}` });
       setTimeout(() => setSyncMessage(null), 5000);
-      
-      // Reload assets to reflect changes
-      const contracts = await api.getDataContracts();
-      setDatasets(contracts);
+      await reloadContracts();
     } catch (e: any) {
       console.error(e);
       setSyncMessage({ type: 'error', text: e.message || "Error checking policy." });
@@ -175,11 +176,7 @@ export function DataCertification() {
       const res = await api.syncDataContracts(datasetId);
       setSyncMessage({ type: 'success', text: `Sync Complete: ${res.message}` });
       setTimeout(() => setSyncMessage(null), 5000);
-      
-      // Reload assets to reflect changes
-      const contracts = await api.getDataContracts();
-      setDatasets(contracts);
-      
+      await reloadContracts();
     } catch (e: any) {
       console.error(e);
       setSyncMessage({ type: 'error', text: e.message || "Error syncing contracts." });
@@ -446,9 +443,20 @@ export function DataCertification() {
                     const hasViolations = canOpenChecklist;
 
                     return (
-                      <tr key={contract.dataset_id} className="hover:bg-gray-50 transition-colors">
+                      <tr
+                        key={contract.dataset_id}
+                        onClick={() => openDetail(contract.dataset_id)}
+                        className={`cursor-pointer transition-colors ${detailDatasetId === contract.dataset_id ? 'bg-blue-50/60' : 'hover:bg-gray-50'}`}
+                      >
                         <td className="p-3 pl-4">
-                          <div className="font-medium text-gray-900">{contract.table_name || contract.dataset_id}</div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openDetail(contract.dataset_id); }}
+                            className="group/name inline-flex items-center gap-1 font-medium text-gray-900 hover:text-primary hover:underline text-left"
+                            title="View overview, tables, checklist and history"
+                          >
+                            {contract.table_name || contract.dataset_id}
+                            <ChevronRight className="w-3.5 h-3.5 text-gray-300 group-hover/name:text-primary" />
+                          </button>
                           <div className="text-xs text-gray-500 font-mono mt-0.5">
                             {contract.catalog || ''}{contract.schema_name ? `.${contract.schema_name}` : ''}
                           </div>
@@ -484,7 +492,7 @@ export function DataCertification() {
                         <td className="p-3">
                           {canOpenChecklist ? (
                             <button
-                              onClick={() => setViolationAsset(contract)}
+                              onClick={(e) => { e.stopPropagation(); openDetail(contract.dataset_id, 'checklist'); }}
                               className={`font-semibold hover:underline cursor-pointer ${(typeof failedCount === 'number' && failedCount === 0) ? 'text-green-600' : 'text-red-600'}`}
                               title="View the full certification checklist (passing and failing rules)"
                             >
@@ -505,7 +513,7 @@ export function DataCertification() {
                             </span>
                           )}
                         </td>
-                        <td className="p-3 text-right">
+                        <td className="p-3 text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1.5">
                             <Button 
                               variant="outline" 
@@ -560,6 +568,24 @@ export function DataCertification() {
           </div>
         </CardContent>
       </Card>
+
+      {detailDatasetId && (() => {
+        const openContract = datasets.find(d => d.dataset_id === detailDatasetId);
+        return (
+          <DatasetCertificationDrawer
+            key={detailDatasetId}
+            datasetId={detailDatasetId}
+            initialTab={detailTab}
+            reloadToken={detailReload}
+            onClose={closeDetail}
+            onEditContract={() => openContract && handleEdit(openContract)}
+            onSync={() => handleSyncContracts(detailDatasetId)}
+            onCheckPolicy={() => handleCheckPolicy(detailDatasetId)}
+            isSyncing={isSyncingContracts}
+            isChecking={isCheckingPolicy}
+          />
+        );
+      })()}
 
       {/* Editor Modal */}
       {isEditorOpen && (
@@ -666,134 +692,6 @@ export function DataCertification() {
         </div>
       )}
 
-      {/* Certification Checklist Modal — the SAME checklist the Enforcement
-          Sentinel renders (pass + fail), driven by the shared component. */}
-      {violationAsset && (() => {
-        const rr = Array.isArray(violationAsset.certification_rule_results) ? violationAsset.certification_rule_results : [];
-        const hasChecklist = rr.length > 0;
-        // Enrich the stored per-rule results into the shape the shared checklist
-        // expects — resource is the data product itself.
-        const ruleRows: ChecklistRuleRow[] = rr.map(r => ({
-          ...r,
-          resource_type: 'data_product',
-          resource_id: violationAsset.dataset_id,
-          resource: { name: violationAsset.table_name || violationAsset.dataset_id },
-          policy: 'data_certification',
-          severity: r.passed ? 'NONE' : 'HIGH',
-        }));
-        const failedRules = Array.isArray(violationAsset.data_quality?.failed_rules) ? violationAsset.data_quality.failed_rules : [];
-
-        const dqDetail = failedRules.length > 0 ? (
-          <div>
-            <p className="text-sm text-gray-600 mb-3">
-              Failing data quality rules within the reliability window:
-            </p>
-            <div className="overflow-hidden rounded-lg border border-gray-200">
-              <table className="w-full text-sm bg-white">
-                <thead className="bg-gray-50 text-gray-500 text-xs border-b border-gray-200">
-                  <tr>
-                    <th className="text-left font-medium p-2 pl-3">Rule</th>
-                    <th className="text-left font-medium p-2">Column</th>
-                    <th className="text-right font-medium p-2">Score</th>
-                    <th className="text-right font-medium p-2">Threshold</th>
-                    <th className="text-right font-medium p-2 pr-3">Rows Failed</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {failedRules.map((fr: any, i: number) => (
-                    <tr key={i} className="align-top">
-                      <td className="p-2 pl-3">
-                        <div className="font-medium text-gray-900">{fr.rule || 'Unnamed rule'}</div>
-                        <div className="text-[11px] text-gray-500">
-                          {[fr.dimension, fr.rule_type].filter(Boolean).join(' · ')}
-                        </div>
-                        {fr.table && <div className="text-[10px] text-gray-400 font-mono break-all">{fr.table}</div>}
-                      </td>
-                      <td className="p-2 text-gray-700">{fr.column || '—'}</td>
-                      <td className="p-2 text-right font-semibold text-red-600">{fr.score != null ? `${Number(fr.score).toFixed(2)}%` : '—'}</td>
-                      <td className="p-2 text-right text-gray-600">{fr.threshold != null ? `${Number(fr.threshold).toFixed(2)}%` : '—'}</td>
-                      <td className="p-2 pr-3 text-right text-gray-600">{fr.rows_failed != null ? Number(fr.rows_failed).toLocaleString() : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : null;
-
-        // Only nudge remediation when something actually failed — the checklist
-        // modal now also opens for fully-passing datasets.
-        const hasFailures = ruleRows.some(r => !r.passed) || failedRules.length > 0 || !!(violationAsset.certification_violations && violationAsset.certification_violations.length > 0);
-        const nextSteps = hasFailures ? (
-          <div className="p-4 bg-blue-50 text-blue-800 rounded-lg border border-blue-100 text-sm">
-            <p><strong>Next Steps:</strong> Once the data engineering team resolves these issues in Databricks (e.g., by adding missing tags, defining RBAC, or improving data quality scores), the next Enforcement Sentinel run will automatically detect the changes and generate a Data Certification request.</p>
-          </div>
-        ) : null;
-
-        return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in" onClick={() => setViolationAsset(null)}>
-          <div className={`bg-white rounded-xl shadow-xl w-full ${hasChecklist ? 'max-w-5xl' : 'max-w-2xl'} max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 my-auto`} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-white flex-shrink-0">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                  {hasChecklist ? <ClipboardList className="w-5 h-5 text-gray-700" /> : <AlertCircle className="w-5 h-5 text-amber-500" />}
-                  {hasChecklist ? 'Certification Checklist' : 'Certification Issues'}
-                </h3>
-                <p className="text-xs text-gray-500 mt-1 font-mono">{violationAsset.catalog || ''}.{violationAsset.schema_name || ''}.{violationAsset.table_name || violationAsset.dataset_id}</p>
-              </div>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={() => setViolationAsset(null)}
-                className="w-8 h-8 p-0"
-              >
-                <X className="w-4 h-4" />
-              </Button>
-            </div>
-
-            {hasChecklist ? (
-              <div className="flex-1 min-h-0 overflow-y-auto">
-                <CertificationChecklist ruleRows={ruleRows} />
-                {(dqDetail || nextSteps) && (
-                  <div className="p-6 bg-gray-50 border-t border-gray-100 space-y-6">
-                    {dqDetail}
-                    {nextSteps}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="p-6 bg-gray-50 flex-1 min-h-0 overflow-y-auto space-y-6">
-                {dqDetail}
-                {violationAsset.certification_violations && violationAsset.certification_violations.length > 0 && (
-                  <div>
-                    <p className="text-sm text-gray-600 mb-4">
-                      This dataset fails the following Open Policy Agent (OPA) checks required for certification:
-                    </p>
-                    <ul className="space-y-3">
-                      {violationAsset.certification_violations?.map((v, i) => (
-                        <li key={i} className="flex items-start gap-3 bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
-                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-red-100 text-red-700 flex items-center justify-center text-xs font-bold mt-0.5">
-                            {i + 1}
-                          </span>
-                          <span className="text-sm text-gray-800 leading-snug pt-0.5">
-                            {v.replace(/^\d+\.\s*/, '')}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {nextSteps}
-              </div>
-            )}
-
-            <div className="p-4 border-t border-gray-100 bg-white flex justify-end flex-shrink-0">
-              <Button onClick={() => setViolationAsset(null)}>Close</Button>
-            </div>
-          </div>
-        </div>
-        );
-      })()}
 
     </div>
   );

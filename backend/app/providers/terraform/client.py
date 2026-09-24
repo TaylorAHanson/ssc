@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.core.exceptions import RetryableError, PermanentError
 from app.core.retry import retry_on_retryable
 import os
+import re
 import shutil
 import logging
 import yaml
@@ -59,7 +60,18 @@ class TerraformProvider(BaseProvider):
             return self.repo_url.replace("https://", f"https://x-access-token:{self.git_token}@")
 
         return self.repo_url
-        
+
+    def _redact(self, value: Any) -> str:
+        """Stringify an error with the git token / URL credentials masked.
+
+        GitPython errors echo the failing command line, which includes the
+        token-bearing clone URL; these messages reach logs and ``last_error``.
+        """
+        text = str(value)
+        if self.git_token:
+            text = text.replace(self.git_token, "***")
+        return re.sub(r"://[^/@\s]+@", "://***@", text)
+
     @retry_on_retryable(max_attempts=3)
     async def plan(self, request_id: str, target_file: str, content: Dict[str, Any], commit_message: str) -> Dict[str, Any]:
         """
@@ -103,9 +115,9 @@ class TerraformProvider(BaseProvider):
             return result
             
         except git.GitCommandError as e:
-            raise RetryableError(f"Git operation failed: {str(e)}")
+            raise RetryableError(f"Git operation failed: {self._redact(e)}")
         except Exception as e:
-            raise RetryableError(f"Unexpected error: {str(e)}")
+            raise RetryableError(f"Unexpected error: {self._redact(e)}")
 
     @retry_on_retryable(max_attempts=3)
     async def apply(self, request_id: str) -> Dict[str, Any]:
@@ -133,7 +145,7 @@ class TerraformProvider(BaseProvider):
                 repo.git.merge(branch_name, "--no-ff", "-m", f"Merge request {request_id}")
             except git.GitCommandError as e:
                 # Handle merge conflicts if needed, for now treat as failure
-                raise PermanentError(f"Merge conflict or failure: {str(e)}")
+                raise PermanentError(f"Merge conflict or failure: {self._redact(e)}")
             
             # Push main
             self._push_with_retry(repo, self.main_branch)
@@ -143,15 +155,15 @@ class TerraformProvider(BaseProvider):
                 repo.delete_head(branch_name, force=True)
                 repo.remotes.origin.push(refspec=f":{branch_name}") 
             except Exception as e:
-                logger.warning(f"Failed to delete branch {branch_name}: {e}")
+                logger.warning(f"Failed to delete branch {branch_name}: {self._redact(e)}")
 
             logger.info(f"Merged {branch_name} to {self.main_branch}. CI should trigger apply.")
             return {"status": "merged", "branch": self.main_branch}
             
         except git.GitCommandError as e:
-            raise RetryableError(f"Git operation failed: {str(e)}")
+            raise RetryableError(f"Git operation failed: {self._redact(e)}")
         except Exception as e:
-            raise RetryableError(f"Unexpected error: {str(e)}")
+            raise RetryableError(f"Unexpected error: {self._redact(e)}")
 
     @retry_on_retryable(max_attempts=3)
     async def upsert_resource(self, target_file: str, content: Dict[str, Any], commit_message: str) -> Dict[str, Any]:
@@ -243,7 +255,7 @@ class TerraformProvider(BaseProvider):
                 cw.set_value("user", "email", self.email)
             return repo
         except Exception as e:
-            raise RetryableError(f"Repo preparation failed: {str(e)}")
+            raise RetryableError(f"Repo preparation failed: {self._redact(e)}")
 
     def _push_with_retry(self, repo: git.Repo, branch_name: str):
         """Push with rebase on conflict."""

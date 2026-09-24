@@ -131,6 +131,18 @@ class LmwsNativeClient:
         return (requester or "").strip() or (owner or "").strip() or self.username
 
     @staticmethod
+    def _notification_email_domain() -> str:
+        """Domain for createSPGroup's notificationCallBack email (never hardcoded)."""
+        domain = (settings.LMWS_NOTIFICATION_EMAIL_DOMAIN or "").strip().lstrip("@")
+        if not domain:
+            raise PermanentError(
+                "LMWS notification email domain is not configured. Set "
+                "LMWS_NOTIFICATION_EMAIL_DOMAIN in Admin -> Settings (Group Management) "
+                "before creating SP groups."
+            )
+        return domain
+
+    @staticmethod
     def _require_url(base: str, name: str) -> str:
         if not base:
             raise PermanentError(
@@ -326,7 +338,7 @@ class LmwsNativeClient:
             "supervisors": _csv(supervisors),
             "type": "SECURITY",
             "CCIClassification": cci_classification or "1",
-            "notificationCallBack": f"{req}@qualcomm.com",
+            "notificationCallBack": f"{req}@{self._notification_email_domain()}",
             "accessRequested": "on-prem-windowsbased",
         })
         return {

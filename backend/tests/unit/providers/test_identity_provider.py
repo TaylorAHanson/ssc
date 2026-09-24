@@ -1,4 +1,4 @@
-"""Unit tests for the pluggable IdentityGroupProvider (de-Qualcomm generalization).
+"""Unit tests for the pluggable IdentityGroupProvider (vendor-neutral generalization).
 
 The factory selects a backend from ``settings.IDENTITY_PROVIDER`` and defaults to
 the vendor-neutral noop provider so the app runs out-of-the-box.

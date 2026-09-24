@@ -39,7 +39,7 @@ class SaveContentRequest(BaseModel):
 
 
 @router.get("/content", response_model=List[ContentInfo])
-async def list_all_content():
+def list_all_content():
     """List all available content files."""
     try:
         return list_content()
@@ -49,7 +49,7 @@ async def list_all_content():
 
 
 @router.get("/content/{filename}", response_model=Union[Dict[str, Any], List[Any]])
-async def get_content_file(filename: str, version: Optional[str] = None):
+def get_content_file(filename: str, version: Optional[str] = None):
     """Get specific content file."""
     try:
         if version:
@@ -72,7 +72,7 @@ async def get_content_file(filename: str, version: Optional[str] = None):
 
 
 @router.get("/content/{filename}/versions", response_model=List[ContentVersionInfo])
-async def get_versions(filename: str):
+def get_versions(filename: str):
     """Get versions of a content file."""
     try:
         return list_content_versions(filename)
@@ -82,7 +82,7 @@ async def get_versions(filename: str):
 
 
 @router.put("/content/{filename}")
-async def update_content(filename: str, request: SaveContentRequest):
+def update_content(filename: str, request: SaveContentRequest):
     """Update a content file."""
     try:
         success = save_content(

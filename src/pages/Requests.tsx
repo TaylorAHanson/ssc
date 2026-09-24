@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useRequestStore } from '../stores/requestStore';
+import { useVisibleInterval } from '../hooks/useVisibleInterval';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { formatInTimeZone } from 'date-fns-tz';
@@ -155,18 +156,12 @@ export function RequestStateList({ request }: { request: Request }) {
 
   useEffect(() => {
     fetchApprovals();
-    
-    // Poll for request updates every 5 seconds when viewing details
-    // This ensures we catch state transitions in real-time
-    const isActive = !['completed', 'failed', 'rejected'].includes(request.status);
-    if (isActive) {
-      const pollInterval = setInterval(() => {
-        fetchRequests();
-      }, 5000);
-      
-      return () => clearInterval(pollInterval);
-    }
-  }, [fetchApprovals, fetchRequests, request.status]);
+  }, [fetchApprovals, request.status]);
+
+  // Poll for request updates every 5 seconds while viewing an active request,
+  // so state transitions show up live. Paused while the tab is hidden.
+  const isActive = !['completed', 'failed', 'rejected'].includes(request.status);
+  useVisibleInterval(fetchRequests, 5000, isActive);
 
   // Collect all states to display
   let steps: { id: string; name: string; status: string; type?: string; order: number; completedAt?: string; facts?: { type: string; timestamp: string; data: Record<string, string> }[] }[] = [];
@@ -560,17 +555,14 @@ export function Requests() {
     fetchRequests().finally(() => {
       if (mounted) setIsLoading(false);
     });
-    
-    // Poll for updates every 10 seconds to catch state transitions
-    const pollInterval = setInterval(() => {
-      fetchRequests();
-    }, 10000);
-    
     return () => {
       mounted = false;
-      clearInterval(pollInterval);
     };
   }, [fetchRequests]);
+
+  // Poll for updates every 10 seconds to catch state transitions (paused while
+  // the tab is hidden).
+  useVisibleInterval(fetchRequests, 10000);
 
 
   const handleDelete = async (requestId: string, e: React.MouseEvent) => {

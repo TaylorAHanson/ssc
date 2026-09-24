@@ -15,7 +15,7 @@ from app.models.user import User
 router = APIRouter()
 
 @router.get("", response_model=List[Delegation])
-async def get_delegations(
+def get_delegations(
     delegator_email: Optional[str] = None,
     delegatee_email: Optional[str] = None,
     current_user: User = Depends(get_current_user),
@@ -54,7 +54,7 @@ async def get_delegations(
     ]
 
 @router.post("", response_model=Delegation)
-async def create_delegation(
+def create_delegation(
     delegation_in: DelegationCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -87,7 +87,7 @@ async def create_delegation(
     )
 
 @router.delete("/{delegation_id}")
-async def delete_delegation(
+def delete_delegation(
     delegation_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)

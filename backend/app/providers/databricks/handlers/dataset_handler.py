@@ -54,6 +54,43 @@ _ADOC_RECON_PROJECTIONS = (
 )
 
 
+def contract_table_names(dataset_def: Dict[str, Any]) -> List[str]:
+    """Expand a parsed ODCS contract's ``schema`` entries to full table names.
+
+    Each entry's ``physicalName`` becomes ``catalog.schema.table``, using the
+    entry's own catalog/schema when set, else the first ``servers`` entry's.
+    Entries that can't be qualified are skipped.
+    """
+    servers = dataset_def.get("servers", []) or []
+    default_catalog = servers[0].get("catalog", "") if servers else ""
+    default_schema = servers[0].get("schema", "") if servers else ""
+
+    tables: List[str] = []
+    for this_schema in dataset_def.get("schema", []) or []:
+        physical_table = this_schema.get("physicalName")
+        if not physical_table:
+            continue
+
+        table_catalog = this_schema.get("catalog")
+        table_schema = this_schema.get("schema")
+
+        if table_catalog and table_schema:
+            if "." in physical_table:
+                full_name = physical_table
+            else:
+                full_name = f"{table_catalog}.{table_schema}.{physical_table}"
+        elif "." in physical_table and len(physical_table.split(".")) == 3:
+            full_name = physical_table
+        else:
+            if not default_catalog or not default_schema:
+                continue
+            full_name = f"{default_catalog}.{default_schema}.{physical_table}"
+
+        tables.append(full_name)
+
+    return tables
+
+
 class DatasetResourceHandler(BaseResourceHandler):
     async def discover(self) -> List[Dict[str, Any]]:
         resources = []
@@ -467,6 +504,9 @@ ORDER BY resultPercent ASC
                         "rule": rule_name or "Unnamed rule",
                         "rule_type": rule_type,
                         "table": asset_name or full_name,
+                        # The contract table this failure was attributed to
+                        # (``table`` is the DQ tool's own, possibly short, name).
+                        "asset": full_name,
                         "column": column_name,
                         "dimension": dimension,
                         "score": float(result_percent) if result_percent not in (None, "") else None,
@@ -563,34 +603,7 @@ ORDER BY resultPercent ASC
             logger.error(f"Failed to parse contract YAML for {resource_id}: {e}")
             return []
 
-        servers = dataset_def.get("servers", [])
-        default_catalog = servers[0].get("catalog", "") if servers else ""
-        default_schema = servers[0].get("schema", "") if servers else ""
-
-        tables: List[str] = []
-        for this_schema in dataset_def.get("schema", []) or []:
-            physical_table = this_schema.get("physicalName")
-            if not physical_table:
-                continue
-
-            table_catalog = this_schema.get("catalog")
-            table_schema = this_schema.get("schema")
-
-            if table_catalog and table_schema:
-                if "." in physical_table:
-                    full_name = physical_table
-                else:
-                    full_name = f"{table_catalog}.{table_schema}.{physical_table}"
-            elif "." in physical_table and len(physical_table.split(".")) == 3:
-                full_name = physical_table
-            else:
-                if not default_catalog or not default_schema:
-                    continue
-                full_name = f"{default_catalog}.{default_schema}.{physical_table}"
-
-            tables.append(full_name)
-
-        return tables
+        return contract_table_names(dataset_def)
 
     @staticmethod
     def _catalog_in_scope(full_name: str) -> bool:

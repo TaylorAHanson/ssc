@@ -85,7 +85,7 @@ async def test_create_tag_change_local_mode(db_session, mock_admin_user):
             ],
         )
 
-        res = await create_tag_change(payload=payload, db=db_session, current_user=mock_admin_user)
+        res = create_tag_change(payload=payload, db=db_session, current_user=mock_admin_user)
         assert res.execution_mode == "local"
         assert res.status == "completed"
         assert res.applied_count >= 1

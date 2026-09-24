@@ -62,6 +62,10 @@ class DataAssetModel(Base):
     # [{id, description, category, passed, messages}, ...]. Powers the DRY
     # "identical to the Sentinel" checklist view and the exec XLS report.
     certification_rule_results = Column(JSONType, nullable=True)
+    # Per-table snapshot from the last policy scan of a data product:
+    # [{name, type, exists, certified, failed_rule_count, tags}, ...]. Powers the
+    # per-table red/green breakdown in the certification detail view.
+    certification_assets = Column(JSONType, nullable=True)
     sla = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=True)
     last_synced_at = Column(DateTime, default=datetime.utcnow, nullable=False)

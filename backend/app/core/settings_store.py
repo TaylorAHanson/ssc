@@ -147,6 +147,11 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "so only these catalogs' assets show up in Discover. "
              "Spaces around each name are trimmed. Leave BLANK to include every catalog the service "
              "principal can see (excluding system/samples). Applies on the next scan/sync — no restart needed."},
+    {"group": "Notifications & Governance", "key": "DATA_ASSET_LINEAGE_LOOKBACK_DAYS",
+     "label": "Dashboard lineage lookback (days)", "type": "int", "min": 1, "max": 365,
+     "help": "How many days of system.access.table_lineage the data-asset sync searches for "
+             "dashboards that read each metric view. A dashboard nobody opened in this window isn't "
+             "listed. Lineage keeps up to 365 days. Applies on the next sync."},
     {"group": "Notifications & Governance", "key": "DATA_QUALITY_TABLE", "label": "Data quality table",
      "type": "string",
      "help": "Fully-qualified table (catalog.schema.table) holding the ADOC data-quality history used "
@@ -187,7 +192,7 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Agent", "key": "MODEL_SERVING_AGENT_LLM_ENDPOINT", "label": "Model serving endpoint",
      "type": "string",
      "help": "The Databricks Model Serving endpoint (the underlying LLM) the agent calls directly. Used "
-             "when no AI Gateway endpoint is set below and an agent profile hasn't pinned its own model. "
+             "when no AI Gateway endpoint is set below. "
              "Read per turn — a change applies to the next agent request, no restart needed."},
     {"group": "Agent", "key": "AI_GATEWAY_ENDPOINT", "label": "AI Gateway model",
      "type": "string",
@@ -314,6 +319,10 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "type": "string",
      "help": "FWS-API entitlement base URL "
              "(e.g. https://<gateway>/iam/v1/fws-api/entitlement). Applies to the next LMWS run."},
+    {"group": "Group Management (LMWS)", "key": "LMWS_NOTIFICATION_EMAIL_DOMAIN", "label": "LMWS notification email domain",
+     "type": "string",
+     "help": "Email domain appended to the requester's CN for the FWS-API notificationCallBack "
+             "(e.g. example.com). Required to create SP groups. Applies to the next LMWS run."},
     {"group": "Group Management (LMWS)", "key": "LMWS_SERVICE_USERNAME", "label": "Native LMWS service account",
      "type": "string",
      "help": "Service-account username used when LMWS runs natively (in-app) — see 'Run LMWS natively' above. "

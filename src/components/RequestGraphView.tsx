@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { api } from '../services/api';
 import type { RequestGraph } from '../services/api';
+import { useVisibleInterval } from '../hooks/useVisibleInterval';
 import { WorkflowGraphPreview } from './admin/WorkflowGraphPreview';
 
 interface Props {
@@ -42,12 +43,8 @@ export function RequestGraphView({ requestId, pollMs = 5000 }: Props) {
     load();
   }, [load]);
 
-  // Poll until the request reaches a terminal state.
-  useEffect(() => {
-    if (!graph || TERMINAL.has(graph.status)) return;
-    const t = window.setInterval(load, pollMs);
-    return () => window.clearInterval(t);
-  }, [graph, load, pollMs]);
+  // Poll until the request reaches a terminal state (paused while the tab is hidden).
+  useVisibleInterval(load, pollMs, !!graph && !TERMINAL.has(graph.status));
 
   if (loading) {
     return (

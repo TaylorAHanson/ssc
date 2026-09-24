@@ -2,6 +2,7 @@
 State locking mechanism for concurrent state transitions.
 """
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.db.request import RequestModel
@@ -65,19 +66,28 @@ def acquire_lock(db: Session, request_id: str, worker_id: str, timeout_minutes: 
     return rows_updated > 0
 
 
-def release_lock(db: Session, request_id: str):
+def release_lock(db: Session, request_id: str, worker_id: Optional[str] = None):
     """
     Release lock on request state.
-    
+
+    When ``worker_id`` is given, only a lock still held by that worker is
+    released. A run can outlive its lock (e.g. a missed heartbeat), letting
+    another worker take over; an unconditional release would then clear the new
+    holder's lock and let a third worker pick the request up concurrently.
+
     Args:
         db: Database session
         request_id: Request ID to unlock
+        worker_id: Worker ID that must hold the lock (None = release unconditionally)
     """
-    request = db.query(RequestModel).filter(RequestModel.id == request_id).first()
-    if request:
-        request.locked_by = None
-        request.locked_until = None
-        db.commit()
+    query = db.query(RequestModel).filter(RequestModel.id == request_id)
+    if worker_id is not None:
+        query = query.filter(RequestModel.locked_by == worker_id)
+    query.update({
+        RequestModel.locked_by: None,
+        RequestModel.locked_until: None,
+    })
+    db.commit()
 
 
 def heartbeat_lock(db: Session, request_id: str, worker_id: str, timeout_minutes: int) -> bool:

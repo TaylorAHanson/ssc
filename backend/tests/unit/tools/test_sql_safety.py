@@ -5,6 +5,7 @@ import pytest
 
 from app.tools.sql_safety import (
     SqlSafetyError,
+    quote_identifier,
     quote_literal,
     reject_dangerous_snippet,
     require_date,
@@ -19,6 +20,13 @@ def test_quote_literal_escapes_single_quotes():
     assert quote_literal("o'brien") == "'o''brien'"
     # A break-out attempt is neutralized into a single quoted literal.
     assert quote_literal("x' OR '1'='1") == "'x'' OR ''1''=''1'"
+
+
+def test_quote_identifier_escapes_backticks():
+    assert quote_identifier("main") == "`main`"
+    assert quote_identifier("my-catalog") == "`my-catalog`"
+    # A break-out attempt stays inside one quoted identifier.
+    assert quote_identifier("x` UNION SELECT 1 --") == "`x`` UNION SELECT 1 --`"
 
 
 @pytest.mark.parametrize("good", ["2026-01-02", "1999-12-31"])

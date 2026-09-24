@@ -47,7 +47,7 @@ class MemberLookupInput(BaseModel):
         description=(
             "The user whose group memberships to look up. Accepts either a corporate "
             "username (CN) or an email address — if an email is given, the part before "
-            "'@' is used automatically (e.g. 'taylhans@qualcomm.com' -> 'taylhans')."
+            "'@' is used automatically (e.g. 'jdoe@example.com' -> 'jdoe')."
         ),
     )
 

@@ -29,6 +29,26 @@ interface RequestStore {
   completeTraining: (requestId: string) => Promise<void>;
 }
 
+const requestStateKey = (r: Request | undefined) =>
+  r ? `${r.status}|${r.stateMachine?.currentState ?? ''}` : '';
+
+// The backend poller advances a request asynchronously after an action. Rather
+// than sleeping a fixed time (too short on a busy poller, needlessly slow on an
+// idle one), refetch until `done()` reports the change landed or we time out.
+async function refreshUntil(
+  refresh: () => Promise<unknown>,
+  done: () => boolean,
+  timeoutMs: number,
+  intervalMs = 1000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  await refresh();
+  while (!done() && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+    await refresh();
+  }
+}
+
 export const useRequestStore = create<RequestStore>((set, get) => ({
   requests: [],
   approvals: [],
@@ -137,14 +157,21 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
         await api.rejectRequest(approval.requestId, action.note);
       }
 
-      // Small delay to allow backend poller to transition state before we refetch
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
-      // Refresh state
-      await Promise.all([
-        get().fetchRequests(),
-        get().fetchApprovals()
-      ]);
+      // Refresh until the backend poller has moved the request on. An approver
+      // may not see the request itself, so fall back to the approval leaving
+      // 'pending'.
+      const requestId = get().approvals.find(a => a.id === action.approvalId)?.requestId;
+      const findRequest = () => get().requests.find(r => r.id === requestId);
+      const before = requestStateKey(findRequest());
+      await refreshUntil(
+        () => Promise.all([get().fetchRequests(), get().fetchApprovals()]),
+        () => {
+          const req = findRequest();
+          if (req) return requestStateKey(req) !== before;
+          return get().approvals.find(a => a.id === action.approvalId)?.status !== 'pending';
+        },
+        10_000,
+      );
     } catch (error) {
       console.error('Failed to process approval:', error);
       throw error;
@@ -178,14 +205,19 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
 
   completeTraining: async (requestId: string) => {
     try {
+      const findRequest = () => get().requests.find(r => r.id === requestId);
+      const before = requestStateKey(findRequest());
       await api.completeTraining(requestId);
-      // Wait a moment for the backend poller to pick up the change and update status
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      // Refresh requests to update UI with completed status
-      await get().fetchRequests();
-      // Force update of selected request in UI if it exists
-      // This is a bit tricky with the current architecture where Requests component holds selected state locally.
-      // But fetchRequests updates the global store which the component subscribes to.
+      // Refresh until the backend poller picks up the change. fetchRequests
+      // updates the global store, which the Requests page subscribes to.
+      await refreshUntil(
+        () => get().fetchRequests(),
+        () => {
+          const req = findRequest();
+          return !req || req.trainingCompleted || requestStateKey(req) !== before;
+        },
+        15_000,
+      );
     } catch (error) {
       console.error('Failed to complete training:', error);
       throw error;

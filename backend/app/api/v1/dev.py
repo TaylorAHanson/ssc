@@ -265,7 +265,7 @@ async def setup_github_templates():
 
 
 @router.post("/github/trigger-test")
-async def trigger_github_test():
+def trigger_github_test():
     """Trigger a mock GitHub Repo Creation request."""
     try:
         from app.db.session import get_session_local

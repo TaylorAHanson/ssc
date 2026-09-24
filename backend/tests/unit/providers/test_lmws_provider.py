@@ -29,7 +29,7 @@ def test_build_parameters_normalizes_and_defaults():
     # defaults applied
     assert params["justification"]
     # clone_source is now a per-deployment config (blank by default after the
-    # de-Qualcomm generalization), so we only assert it's wired through from
+    # vendor-neutral generalization), so we only assert it's wired through from
     # settings, not that it carries a hardcoded value.
     assert "clone_source" in params
     assert params["clone_source"] == settings.LMWS_DEFAULT_CLONE_SOURCE

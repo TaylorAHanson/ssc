@@ -85,7 +85,7 @@ flowchart TB
         TF["Terraform"]
         IdP["LMWS / identity provider"]
         SES["AWS SES (email)"]
-        CC["Command Center<br/>(Agent Studio — skills & profiles)"]
+        CC["Command Center<br/>(Agent Studio — skills)"]
     end
 
     User -->|"SSO + OBO token"| UI
@@ -103,7 +103,7 @@ flowchart TB
     Exec --> TF
     Exec --> IdP
     Exec --> SES
-    Agent -.->|"load SKILL.md / AGENT.md (OBO)"| CC
+    Agent -.->|"load SKILL.md (OBO)"| CC
     MCPApp -.->|"registrable in AI Gateway → MCPs"| Gateway
 ```
 
@@ -114,11 +114,11 @@ flowchart TB
 | **Databricks App** | Single serverless host for the React UI, FastAPI API, agent loop, LangGraph executor, poller, `ToolExecutor`, embedded OPA, and the in-app `/mcp` server. User identity arrives as a forwarded OBO token (`X-Forwarded-Access-Token`). |
 | **Lakebase** | Postgres attached to the app bundle. System of record for requests, immutable events, approvals, workflows, and the tool registry. LangGraph checkpoints live here in deployed envs. |
 | **AI Gateway → Model Serving** | Every agent LLM call prefers the AI Gateway endpoint (`AI_GATEWAY_ENDPOINT`); the gateway routes to one or more served models (A/B traffic, guardrails, rate limits). Falls back to direct Model Serving when no gateway is configured. |
-| **Unity Catalog + SQL warehouse** | Data plane: UC enforces grants on reads (OBO); the warehouse executes SQL. UC Volumes hold GitOps config, training media, and shared skills/profiles. |
+| **Unity Catalog + SQL warehouse** | Data plane: UC enforces grants on reads (OBO); the warehouse executes SQL. UC Volumes hold GitOps config, training media, and shared skills. |
 | **Secret scopes** | GitHub PAT, SES keys, per-target-workspace SP credentials, LMWS secrets — read at runtime by the App SP. |
 | **MLflow + scheduled jobs** | Tracing per agent turn; inference-table capture from the gateway; a scheduled **LLM-as-a-judge** job scores production quality. Other crons drive Sentinel scans and catalog syncs. |
 | **Optional MCP App** | A separate Databricks App (`mcp_app/`) can be registered under **AI Gateway → MCPs** for external agent discovery; the main app also exposes governed tools at `/mcp`. |
-| **Command Center** | External authoring surface for `SKILL.md` folders and `AGENT.md` profiles on UC Volumes; this app loads them OBO at runtime. |
+| **Command Center** | External authoring surface for `SKILL.md` folders on UC Volumes; this app loads them OBO at runtime. |
 
 ## 4. The Guardrail Stack
 
@@ -816,53 +816,6 @@ tools/workflows granted in Unity Catalog.
     (`_get_skills_section` in `app/agents/prompts.py`) appears whenever the load tools are present
     and guides the agent to discover (`list_skills`) and load (`get_skill`) a matching skill, then
     follow its instructions.
-- **Agent Profiles (per-request `AGENT.md` reference — load-only here; authored in the Command
-  Center).** A *profile* is a folder authored by the Command Center *Agent Studio* —
-  `<base>/.agents/<slug>/AGENT.md` (+ `skills/*.md`) — where `AGENT.md` is markdown with YAML
-  frontmatter (`name`/`description`/`model`/`tools`) and a body that is the system prompt. A chat
-  request can carry a `profile_ref` (on `ConversationRequest`, or `context.profile_ref`) and the
-  runtime will run *that* profile for the turn:
-  - **Loading is fully OBO** (`app/providers/profiles/client.py` → `ProfileProvider`, read-only):
-    `get_profile(obo_token, profile_ref)` builds a user-scoped `WorkspaceClient`, reads `AGENT.md`
-    (UC Volume via Files API, or Workspace via Export `RAW`), parses the frontmatter, and inlines
-    the sibling `skills/*.md` bodies. `profile_ref` may be a filesystem path
-    (`/Volumes/.../.agents/<slug>` or `.../AGENT.md`) or the Studio's opaque `store|dir_path` id.
-  - **Effect on the turn** (`_apply_agent_profile` → `_compose_profile` in `app/api/v1/agent.py`):
-    - **Prompt layering (default).** The profile body + inlined skills are the agent's identity.
-      They are layered on a **minimal structural scaffold** only — `get_profile_base_scaffold()`:
-      the runtime output/tool contract (GFM markdown rules, "tools only / no fabrication", OBO
-      auth) plus the available-tools list. The scaffold is deliberately **not** the Self-Service
-      prompt: the Self-Service persona, its capability routing, FinOps/governance behavior, and the
-      workflow-execution flow are **one profile among many**, not a global baseline, so a custom
-      profile never inherits the Self-Service identity. (The default no-profile agent still uses the
-      full `get_agent_prompt()`.) A profile may drop even the scaffold with `base: none` (a.k.a.
-      `standalone`) in its frontmatter.
-    - **Tools — server-qualified ids.** Profiles store **canonical** ids `"<server>/<tool>"`
-      (e.g. `sql/run_sql`) authored against the Command Center's AI Gateway MCP catalog. The runtime
-      keys on bare names, so matching accepts the full id **or** the suffix after the last `/`. The
-      result is **intersected** with the admin-governed surface (a profile can only *narrow*).
-      Because a profile can only ever *narrow*, an allowlist that matches **nothing** grants **no
-      tools** — never the full surface. This covers both an **empty** allowlist (blank/new draft)
-      and a **non-empty** list whose ids match nothing on this runtime (namespace drift: ids
-      authored against the AI Gateway MCP catalog that this runtime's registry doesn't expose). The
-      no-match case logs loudly and increments the `tool_no_match` counter so the parity gap gets
-      fixed at the source; handing a narrow agent all 50+ tools would make it masquerade as the full
-      Self-Service Hub.
-    - **Model — allowlisted only.** A profile's `model` routes the turn to a specific endpoint
-      (`AgentRunner(model_endpoint=…)` → `AgentLLMClient(endpoint_name=…)`) **only** if it appears in
-      `AGENT_PROFILE_MODEL_ALLOWLIST` (empty = always use the gateway default; `*` = allow any).
-      Otherwise it is ignored (counter `model_rejected`) so a profile can't silently bypass the
-      gateway's guardrails / rate + cost limits.
-  - **Try-it (inline profiles).** A chat request may instead carry an `inline_profile`
-    (`{name, prompt, base, tools, skills, model}`) — an **unsaved** draft applied via
-    `_apply_inline_profile` with identical governance (tool intersection + model allowlist). This
-    powers the Command Center Agent Studio "Try it" tab, letting an author test a draft before
-    persisting it. `inline_profile` takes precedence over `profile_ref`.
-  - **Observability.** `_apply_*_profile` maintains in-process counters (`applied`, `inline_applied`,
-    `load_error`, `tool_no_match`, `model_rejected`) plus mean load latency, readable via
-    `get_profile_metrics()` (tests / future scrape endpoint).
-  - **Fail-safe:** any load failure (bad ref, no access, missing file) logs a warning and falls
-    back to the default prompt + full surface toolset — a broken reference never breaks chat.
 - **Remaining:** pooled Postgres checkpointer; wire the SSE `trace_id` into the chat-UI feedback
   control; end-to-end validation of the ResponsesAgent registration + `--sandbox` harness against
   a live workspace (both require workspace credentials).

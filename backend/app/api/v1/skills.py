@@ -37,7 +37,7 @@ def _obo(request: Request) -> Optional[str]:
 # --------------------------------------------------------------------- routes
 
 @router.get("")
-async def list_skills(
+def list_skills(
     request: Request,
     include_shared: bool = True,
     user: User = Depends(deps.get_current_user),
@@ -56,7 +56,7 @@ async def list_skills(
 
 
 @router.get("/{skill_id}")
-async def get_skill(
+def get_skill(
     skill_id: str,
     request: Request,
     user: User = Depends(deps.get_current_user),

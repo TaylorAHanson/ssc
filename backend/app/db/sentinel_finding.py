@@ -29,6 +29,8 @@ class SentinelFindingModel(Base):
         # support fast server-side facet counts and filtering.
         Index("ix_sentinel_findings_request_kind", "request_id", "kind"),
         Index("ix_sentinel_findings_request_kind_severity", "request_id", "kind", "severity"),
+        # One resource's findings across runs — the certification history view.
+        Index("ix_sentinel_findings_resource_kind", "resource_id", "kind"),
     )
 
     id: Mapped[str] = Column(String, primary_key=True)

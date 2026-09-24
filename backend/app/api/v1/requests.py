@@ -329,15 +329,18 @@ def get_request(
 
 
 @router.get("/{request_id}/status")
-async def get_request_status(
+def get_request_status(
     request_id: str,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get just the status of a request."""
     request = RequestService.get_request(db, request_id)
     if not request:
         raise HTTPException(status_code=404, detail="Request not found")
-    
+    if not current_user.has_role("platform_admin") and request.requester_email != current_user.email:
+        raise HTTPException(status_code=403, detail="Not authorized to view this request")
+
     return {
         "status": request.status,
         "current_state": request.current_state,
@@ -346,7 +349,7 @@ async def get_request_status(
 
 
 @router.get("/{request_id}/graph")
-async def get_request_graph(
+def get_request_graph(
     request_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -368,7 +371,7 @@ async def get_request_graph(
 
 
 @router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
-async def create_request(
+def create_request(
     request_data: RequestCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -401,6 +404,23 @@ async def create_request(
         "status": request_obj.status,
         "message": "Request created successfully"
     }
+
+
+def _claim_pending_approval(db: Session, approval: ApprovalModel, fields: Dict[str, Any]) -> None:
+    """Apply ``fields`` to ``approval`` only if it is still pending (compare-and-set).
+
+    Two concurrent approve/reject calls (a double-click, approve racing reject, or
+    two replicas) can both read the same pending approval. Only the first may act
+    on it; the second gets a 409 instead of recording a duplicate or
+    contradictory fact.
+    """
+    claimed = (
+        db.query(ApprovalModel)
+        .filter(ApprovalModel.id == approval.id, ApprovalModel.status == "pending")
+        .update(fields)
+    )
+    if not claimed:
+        raise HTTPException(status_code=409, detail="This approval has already been acted on")
 
 
 def _authorize_approval_actor(approval: ApprovalModel, current_user: User) -> None:
@@ -448,7 +468,7 @@ def _authorize_approval_actor(approval: ApprovalModel, current_user: User) -> No
 
 
 @router.post("/{request_id}/approve", status_code=status.HTTP_200_OK)
-async def approve_request(
+def approve_request(
     request_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -492,10 +512,12 @@ async def approve_request(
 
     approved_by = current_user.email
 
-    # Update approval status immediately
-    approval.status = "approved"
-    approval.approved_by = approved_by
-    approval.approved_at = datetime.now(timezone.utc)
+    # Update approval status immediately (only if it is still pending)
+    _claim_pending_approval(db, approval, {
+        "status": "approved",
+        "approved_by": approved_by,
+        "approved_at": datetime.now(timezone.utc),
+    })
 
     # Record fact (this is the source of truth)
     add_fact(
@@ -514,7 +536,7 @@ async def approve_request(
 
 
 @router.post("/{request_id}/reject", status_code=status.HTTP_200_OK)
-async def reject_request(
+def reject_request(
     request_id: str,
     rejection_data: dict,
     current_user: User = Depends(get_current_user),
@@ -556,12 +578,14 @@ async def reject_request(
     rejected_by = current_user.email
     rejection_note = rejection_data.get("rejection_note")
     
-    # Update approval status immediately
-    approval.status = "rejected"
-    approval.rejected_by = rejected_by
-    approval.rejection_note = rejection_note
-    approval.rejected_at = datetime.now(timezone.utc)
-    
+    # Update approval status immediately (only if it is still pending)
+    _claim_pending_approval(db, approval, {
+        "status": "rejected",
+        "rejected_by": rejected_by,
+        "rejection_note": rejection_note,
+        "rejected_at": datetime.now(timezone.utc),
+    })
+
     # Record fact (this is the source of truth)
     add_fact(
         db, request_id, "request_rejected",
@@ -579,7 +603,7 @@ async def reject_request(
 
 
 @router.delete("/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_request(
+def delete_request(
     request_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -606,7 +630,7 @@ async def delete_request(
     return None
 
 @router.post("/{request_id}/complete-training", status_code=status.HTTP_200_OK)
-async def complete_training(
+def complete_training(
     request_id: str,
     db: Session = Depends(get_db)
 ):
@@ -647,7 +671,7 @@ class EditParametersRequest(_PydanticBase):
 
 
 @router.post("/{request_id}/edit-parameters", status_code=status.HTTP_200_OK)
-async def edit_parameters(
+def edit_parameters(
     request_id: str,
     body: EditParametersRequest,
     current_user: User = Depends(get_current_user),
@@ -1034,7 +1058,7 @@ async def execute_enforcement_action(
 
 
 @router.get("/{request_id}/enforcement-actions", status_code=status.HTTP_200_OK)
-async def list_enforcement_actions(
+def list_enforcement_actions(
     request_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)

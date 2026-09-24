@@ -1732,6 +1732,104 @@ export async function getContractHistory(datasetId: string): Promise<DataContrac
   return response.json();
 }
 
+// --- Certification detail (the per-data-set drawer) ---
+// Mirrors CertificationDetailResponse in backend/app/api/v1/data_contracts.py.
+
+export interface CertificationCheckRef {
+  id: string | null;
+  description: string | null;
+  category: string;
+  messages: string[];
+}
+
+export interface DqFailedRule {
+  rule?: string;
+  rule_type?: string | null;
+  table?: string | null;
+  asset?: string | null;
+  column?: string | null;
+  dimension?: string | null;
+  score?: number | null;
+  threshold?: number | null;
+  rows_failed?: number | null;
+}
+
+export type CertificationTableStatus = 'pass' | 'fail' | 'not_scanned';
+
+export interface CertificationTableOutcome {
+  name: string;
+  catalog: string | null;
+  schema_name: string | null;
+  table: string;
+  type: string | null;
+  exists: boolean | null;
+  certified: boolean | null;
+  tags: Record<string, string>;
+  status: CertificationTableStatus;
+  failed_checks: CertificationCheckRef[];
+  dq_failed_rules: DqFailedRule[];
+}
+
+export interface CertificationRun {
+  request_id: string;
+  run_at: string | null;
+  passed: boolean;
+  failed_count: number;
+  total_count: number;
+  failed_checks: CertificationCheckRef[];
+}
+
+export interface CertificationChange {
+  kind: 'first' | 'change';
+  request_id: string;
+  run_at: string | null;
+  failed_count: number;
+  newly_failing: CertificationCheckRef[];
+  resolved: CertificationCheckRef[];
+}
+
+export interface CertificationDetail {
+  dataset_id: string;
+  name: string;
+  certified: boolean;
+  last_policy_run: string | null;
+  overview: {
+    data_product: string | null;
+    domain: string | null;
+    status: string | null;
+    odcs_version: string | null;
+    purpose: string | null;
+    usage: string | null;
+    limitations: string | null;
+    tables: string[];
+    parse_error: string | null;
+  };
+  categories: { category: string; status: 'pass' | 'fail'; passed: number; failed: number }[];
+  tables: CertificationTableOutcome[];
+  dataset_checks: CertificationCheckRef[];
+  rule_results: CertificationRuleResult[];
+  certification_violations: string[] | null;
+  data_quality: { failed_rule_count?: number | null; failed_rules?: DqFailedRule[] };
+  contract: { version: number | null; created_at: string | null; created_by: string | null };
+  history: {
+    runs: CertificationRun[];
+    changes: CertificationChange[];
+    contract_versions: { version: number; created_at: string | null; created_by: string | null; is_active: boolean }[];
+  };
+}
+
+export async function getCertificationDetail(datasetId: string): Promise<CertificationDetail> {
+  const url = new URL(`${API_BASE_URL}/data-contracts/${encodeURIComponent(datasetId)}/detail`, window.location.origin);
+  const response = await fetch(url.toString(), {
+    headers: getHeaders()
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to get certification detail: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
 export async function createDataContract(datasetId: string, yamlContent: string): Promise<DataContract> {
   const response = await fetch(`${API_BASE_URL}/data-contracts`, {
     method: 'POST',
@@ -3591,6 +3689,7 @@ export const api = {
   getMetricViewDefinitions,
   getDataContracts,
   getContractHistory,
+  getCertificationDetail,
   createDataContract,
   syncDataContracts,
   deleteDataContract,

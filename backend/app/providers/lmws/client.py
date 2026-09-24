@@ -3,7 +3,7 @@ LMWS / FWS-API group & user management provider.
 
 Replaces ``EntraIdProvider``. Unlike Entra ID (which the app called directly
 over Microsoft Graph), LMWS group/user operations cannot run in-process: they
-require the Qualcomm FWS-API and a service account whose credentials live in
+require the FWS-API and a service account whose credentials live in
 the ``lmws`` Databricks secret scope. So every operation runs **as a Databricks
 job** against the vendored notebook (``lmws_group_management_job.py``), reusing
 the same ``DatabricksProvider`` submit/poll primitives that back
@@ -209,6 +209,7 @@ class LmwsProvider(BaseProvider):
             "rest_url": settings.LMWS_REST_URL,
             "cache_url": settings.LMWS_CACHE_URL,
             "fws_url": settings.LMWS_FWS_URL,
+            "notification_email_domain": settings.LMWS_NOTIFICATION_EMAIL_DOMAIN,
         }
 
     @staticmethod

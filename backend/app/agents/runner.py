@@ -200,12 +200,11 @@ class AgentRunner:
         user_identity: Optional[Dict[str, str]] = None,
         max_iterations: int = 5,
         mode: str = "self_service",
-        model_endpoint: Optional[str] = None,
         user_context_block: Optional[str] = None,
         surface_context_block: Optional[str] = None,
         dry_run: bool = False,
     ):
-        self.llm_client = AgentLLMClient(endpoint_name=model_endpoint)
+        self.llm_client = AgentLLMClient()
         self.tools = tools or []
         self.max_iterations = max_iterations
         self.user_identity = user_identity or {}
@@ -226,9 +225,8 @@ class AgentRunner:
         else:
             self.system_prompt = system_prompt
 
-        # Appended outside the branch above on purpose: an agent profile supplies
-        # its own system prompt, and it needs to know who it is talking to just
-        # as much as the default prompt does.
+        # Appended outside the branch above on purpose: a caller-supplied system
+        # prompt needs to know who it is talking to just as much as the default.
         if user_context_block:
             self.system_prompt += user_context_block
 

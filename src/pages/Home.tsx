@@ -79,7 +79,7 @@ export function Home() {
     const brandLogoUrl = useBrandingStore((s) => s.brandLogoUrl);
     const selfServiceCenter = useBrandingStore((s) => s.selfServiceCenter);
     // The Assistant / Self-Service Center view toggle is the "enhanced landing
-    // page" feature. Off by default (e.g. the EDH/Qualcomm build) so the landing
+    // page" feature. Off by default (e.g. the EDH build) so the landing
     // is Assistant-only with no toggle, regardless of any configured catalog.
     const enhancedLandingPage = useBrandingStore((s) => s.features.enhanced_landing_page === true);
     const centerEnabled =

@@ -607,7 +607,7 @@ async def test_matrix_honors_endpoint_subset_and_dry_run(client):
 # FWS-API addMembers — a different service: POST, JSON body, own error envelope
 # ---------------------------------------------------------------------------
 
-FWS = "https://tst.apigw-op.qualcomm.com/iam/v1/fws-api/entitlement"
+FWS = "https://gateway.example.com/iam/v1/fws-api/entitlement"
 
 
 @pytest.fixture

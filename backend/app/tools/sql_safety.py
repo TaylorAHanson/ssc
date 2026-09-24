@@ -46,6 +46,16 @@ def quote_literal(value: str) -> str:
     return f"'{escaped}'"
 
 
+def quote_identifier(value: str) -> str:
+    """Return ``value`` wrapped as a safe backtick-quoted SQL identifier.
+
+    Doubles embedded backticks so the value can't terminate the identifier early.
+    Use for a single name part (e.g. a catalog) interpolated into ``FROM``.
+    """
+    escaped = str(value).replace("`", "``")
+    return f"`{escaped}`"
+
+
 def valid_date(value: str) -> bool:
     """True if ``value`` is a bare ``YYYY-MM-DD`` date (no time, no quotes)."""
     return bool(_DATE_RE.match(value or ""))
@@ -93,6 +103,7 @@ def reject_dangerous_snippet(snippet: str, field: str = "filter") -> str:
 __all__ = [
     "SqlSafetyError",
     "quote_literal",
+    "quote_identifier",
     "valid_date",
     "require_date",
     "valid_identifier",

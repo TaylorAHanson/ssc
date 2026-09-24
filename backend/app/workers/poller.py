@@ -47,6 +47,14 @@ _next_sentinel_time = None
 # silently cancelled (see the note on _detached_tasks below).
 _background_tasks: set = set()
 
+
+def _spawn_background(coro) -> asyncio.Task:
+    """Start a detached upkeep task, holding a strong reference until it ends."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
 async def process_enforcement_sentinel_cron():
     """Check if it's time to run the enforcement sentinel and spawn it."""
     global _next_sentinel_time
@@ -226,7 +234,7 @@ async def start_poller():
             
             # Start sync tasks in background so they don't block request processing
             if _yaml_config.get("features", {}).get("calendar", False):
-                asyncio.create_task(sync_calendar_task())
+                _spawn_background(sync_calendar_task())
                 
             if _yaml_config.get("features", {}).get("data_discovery", False):
                 async def safe_sync_data_assets():
@@ -238,7 +246,7 @@ async def start_poller():
                         except Exception as e:
                             logger.error(f"Error in background data asset sync: {e}", exc_info=True)
                 
-                asyncio.create_task(safe_sync_data_assets())
+                _spawn_background(safe_sync_data_assets())
 
                 # Scheduled ODCS contract sync (cron-gated inside the task;
                 # no-op unless CONTRACT_SYNC_CRON is set). Shares the
@@ -253,7 +261,7 @@ async def start_poller():
                         except Exception as e:
                             logger.error(f"Error in background contract sync: {e}", exc_info=True)
 
-                asyncio.create_task(safe_sync_contracts())
+                _spawn_background(safe_sync_contracts())
 
             if _yaml_config.get("features", {}).get("sentinel", False):
                 await process_enforcement_sentinel_cron()
@@ -263,9 +271,7 @@ async def start_poller():
             # provider can't hold up request processing. Strong reference held
             # for the same reason as _detached_tasks below: asyncio keeps only a
             # weak one, and a GC'd task dies silently mid-run.
-            _maintenance_task = asyncio.create_task(user_context_maintenance_task())
-            _background_tasks.add(_maintenance_task)
-            _maintenance_task.add_done_callback(_background_tasks.discard)
+            _spawn_background(user_context_maintenance_task())
 
             await process_open_requests()
             await process_scheduled_reports()
@@ -667,7 +673,7 @@ async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
                 # long scan can outlive its Lakebase connection) so a failed
                 # release doesn't mask the real error or raise inside finally.
                 try:
-                    release_lock(db, request_id)
+                    release_lock(db, request_id, worker_id=_worker_id)
                 except Exception as rel_err:  # noqa: BLE001
                     logger.warning(
                         f"Could not release lock for {request_id}: {rel_err}"

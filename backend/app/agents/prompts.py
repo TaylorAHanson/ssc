@@ -804,50 +804,6 @@ You have access to the following tools:
 """
 
 
-# Minimal structural contract layered UNDER a profile persona (base: "full").
-# This is deliberately NOT the Self-Service prompt: it carries only the
-# runtime-level output/tool rules every agent on this surface must obey,
-# regardless of who it is. The Self-Service persona, its capability routing,
-# FinOps/governance behavior, and the workflow-execution flow are NOT a global
-# baseline — they belong to the default Self-Service agent (which is itself just
-# one profile). A custom profile (e.g. a Supply-Chain analyst) therefore does
-# NOT inherit the Self-Service identity; if a profile wants that behavior it can
-# state so in its own prompt.
-PROFILE_BASE_SCAFFOLD = """You are an AI agent embedded in a Databricks application. Your persona, scope, and task behavior are defined ENTIRELY by the ACTIVE AGENT PROFILE below — treat it as your identity and primary instructions.
-
-The only rules that apply to you regardless of persona are these runtime output/tool contracts:
-
-## Output formatting (the UI renders GitHub-flavored markdown)
-- Use GFM markdown: **bold**, *italic*, `inline code`, fenced code blocks for code/SQL/JSON, and `|`-separated tables with a `| --- |` divider for tabular data.
-- Prefer `##` / `###` headings; avoid `#` (the chat bubble already provides emphasis).
-- Links use [text](url); never wrap a markdown link in backticks and never escape backticks. Do NOT output raw HTML — the renderer converts markdown for you.
-
-## Tools & authentication
-- Use ONLY the tools listed below to take actions or fetch data; never fabricate data that a tool is meant to provide.
-- Tools execute with On-Behalf-Of (OBO) authentication — they use the signed-in user's identity and permissions automatically. NEVER ask the user for passwords, tokens, or credentials.
-- A permission/authorization failure from a tool (e.g. "User does not have USE SCHEMA...", "permission denied") reflects the USER's own access, not yours. Say "You don't have access to X yet" (second person), never "I don't have access". Remember it for the rest of the conversation: don't retry the blocked scope, and use it to inform next steps (offer to request access, or suggest an asset they can access).
-"""
-
-
-def get_profile_base_scaffold(tools_override: Optional[List[Any]] = None) -> str:
-    """Minimal structural prompt layered under a profile persona.
-
-    Returns only the runtime output/tool contract plus the available-tools list
-    — NOT the Self-Service persona. Used by the profile-composition path so an
-    authored profile defines the agent's identity rather than inheriting the
-    Self-Service one.
-    """
-    effective_tools = tools_override if tools_override is not None else AGENT_TOOLS
-    tools_section = ""
-    if effective_tools:
-        tools_section = f"""
-## Available Tools
-You have access to the following tools:
-{_format_tools_list(effective_tools)}
-"""
-    return f"{PROFILE_BASE_SCAFFOLD}{tools_section}"
-
-
 def _get_authoring_section(tools: Optional[List[Any]]) -> str:
     """Authoring guidance, included only when the user has the authoring tools.
 

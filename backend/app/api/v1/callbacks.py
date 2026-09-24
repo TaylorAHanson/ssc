@@ -23,7 +23,7 @@ class TerraformCallback(BaseModel):
     error: Optional[str] = None
 
 @router.post("/{request_id}", status_code=status.HTTP_200_OK)
-async def terraform_callback(
+def terraform_callback(
     request_id: str,
     payload: TerraformCallback,
     db: Session = Depends(get_db)

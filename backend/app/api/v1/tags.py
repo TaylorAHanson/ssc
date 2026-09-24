@@ -468,7 +468,7 @@ async def preview_tag_change(
 
 
 @router.post("/changes", response_model=TagChangeResponse)
-async def create_tag_change(
+def create_tag_change(
     payload: TagChangeCreate,
     db: Session = Depends(get_db),
     current_user=Depends(require_any_role(["platform_admin", "governance_admin"])),

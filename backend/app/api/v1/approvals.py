@@ -75,7 +75,7 @@ def _map_approval(approval_model: ApprovalModel, request_model: RequestModel) ->
 
 
 @router.get("", response_model=List[Approval])
-async def get_approvals(
+def get_approvals(
     status: Optional[str] = None,
     skip: int = 0,
     limit: Optional[int] = None,
@@ -113,7 +113,7 @@ async def get_approvals(
 
 
 @router.get("/{approval_id}", response_model=Approval)
-async def get_approval(
+def get_approval(
     approval_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)

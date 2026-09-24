@@ -7,12 +7,18 @@ Content is stored as JSON files in the app/content/ directory.
 import json
 import os
 import re
+import tempfile
+import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 # Path to content directory
 CONTENT_DIR = Path(__file__).parent.parent / "content"
+
+# Serializes saves within this process: API handlers run concurrently in the
+# threadpool, and a save is a backup-then-rewrite of the same file.
+_SAVE_LOCK = threading.Lock()
 
 
 def _get_version_filename(base_filename: str, date_str: str) -> str:
@@ -66,7 +72,12 @@ def save_content(filename: str, content: Dict[str, Any], create_version: bool = 
         filename = f"{filename}.json"
         
     filepath = CONTENT_DIR / filename
-    
+
+    with _SAVE_LOCK:
+        return _save_content_locked(filepath, filename, content, create_version)
+
+
+def _save_content_locked(filepath: Path, filename: str, content: Dict[str, Any], create_version: bool) -> bool:
     # Create backup version if requested and file exists
     if create_version and filepath.exists():
         try:
@@ -87,8 +98,20 @@ def save_content(filename: str, content: Dict[str, Any], create_version: bool = 
         # Ensure directory exists
         CONTENT_DIR.mkdir(parents=True, exist_ok=True)
         
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(content, f, indent=2, ensure_ascii=False)
+        # Write to a temp file and atomically replace, so a concurrent reader
+        # never sees a truncated file (which get_content would read as {}).
+        fd, tmp_path = tempfile.mkstemp(dir=CONTENT_DIR, prefix=f".{filename}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(content, f, indent=2, ensure_ascii=False)
+            if filepath.exists():
+                import shutil
+                shutil.copymode(filepath, tmp_path)  # mkstemp creates 0600
+            os.replace(tmp_path, filepath)
+        except BaseException:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
         return True
     except (IOError, OSError) as e:
         import logging

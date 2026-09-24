@@ -5,6 +5,7 @@ import { api, type TargetWorkspace } from '../../services/api';
 import { CertificationChecklist } from '../../components/admin/CertificationChecklist';
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { parseISO } from 'date-fns';
+import { useVisibleInterval } from '../../hooks/useVisibleInterval';
 
 // The backend serializes naive UTC datetimes (no timezone suffix). Treat any
 // such string as UTC so it isn't misread as the viewer's local wall-clock time.
@@ -333,17 +334,9 @@ export function EnforcementSentinel() {
         return () => { cancelled = true; };
     }, [selectedRunId]);
 
-    // Poll if any runs are actively running
-    useEffect(() => {
-        const hasActiveRuns = sentinelRuns.some(run => run.status !== 'completed' && run.status !== 'failed' && run.status !== 'rejected');
-        
-        if (hasActiveRuns) {
-            const interval = setInterval(() => {
-                fetchSentinelRuns(true);
-            }, 3000);
-            return () => clearInterval(interval);
-        }
-    }, [sentinelRuns, fetchSentinelRuns]);
+    // Poll if any runs are actively running (paused while the tab is hidden).
+    const hasActiveRuns = sentinelRuns.some(run => run.status !== 'completed' && run.status !== 'failed' && run.status !== 'rejected');
+    useVisibleInterval(() => { fetchSentinelRuns(true); }, 3000, hasActiveRuns);
 
     const getRunStatus = (run: any) => {
         const activeState = run.stateMachine?.states?.find((s: any) => s.isActive);

@@ -197,6 +197,15 @@ def run_startup_migrations(engine: Engine) -> None:
         # stores the JSON string the JSONType serializes.
         _json_ddl = "JSONB" if engine.dialect.name == "postgresql" else "TEXT"
         _add_column(engine, "data_assets", "certification_rule_results", _json_ddl)
+        # Data Certification detail view: per-table snapshot from the last scan,
+        # and a lookup of one resource's findings across sentinel runs.
+        _add_column(engine, "data_assets", "certification_assets", _json_ddl)
+        _add_index(
+            engine,
+            "ix_sentinel_findings_resource_kind",
+            "sentinel_findings",
+            ["resource_id", "kind"],
+        )
         # Metric Views / Domain hierarchy enrichment
         _add_column(engine, "data_assets", "subdomain", "VARCHAR")
         _add_index(engine, "ix_data_assets_subdomain", "data_assets", ["subdomain"])

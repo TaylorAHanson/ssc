@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 # against other replicas; this guards against the much more common case of one
 # replica getting several warm calls at once (multiple browser tabs).
 _IN_FLIGHT: Set[str] = set()
+# Strong references to the refresh tasks themselves. asyncio holds only a weak
+# reference to a task, so without this a refresh can be GC'd mid-run and die
+# silently — leaving its email stuck in _IN_FLIGHT.
+_REFRESH_TASKS: Set["asyncio.Task"] = set()
 
 FEATURE_FLAG = "user_context"
 
@@ -630,8 +634,9 @@ def _schedule_refresh(identity: UserIdentity, *, sections: Optional[List[str]] =
         logger.debug("user_context: no running loop; skipping refresh for %s", identity.email)
         return
     task = asyncio.create_task(refresh_profile(identity, sections=sections))
-    # Keep a reference on the task itself via a done-callback so the task is not
-    # garbage collected mid-flight, and so a crash is logged rather than lost.
+    _REFRESH_TASKS.add(task)
+    task.add_done_callback(_REFRESH_TASKS.discard)
+    # Log a crash rather than lose it.
     task.add_done_callback(_log_task_result)
 
 

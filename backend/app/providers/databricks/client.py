@@ -569,8 +569,13 @@ class DatabricksProvider(BaseProvider):
             asset_type_lower = asset_type.lower()
             parts = asset_name.split(".")
 
-            # Format tag names for SQL IN clause
-            tags_list_str = ", ".join([f"'{t}'" for t in tag_names])
+            from app.tools.sql_safety import quote_literal
+
+            # asset_name and tag_names can be agent/requester-supplied and this
+            # query runs as the service principal to pick the approver group, so
+            # every interpolated value must be escaped as a literal.
+            q = [quote_literal(p) for p in parts]
+            tags_list_str = ", ".join(quote_literal(t) for t in tag_names)
 
             # Resolve the UC system tags table + key predicate per asset type, so
             # tags (e.g. approver_group) resolve for catalogs, schemas, volumes
@@ -578,18 +583,18 @@ class DatabricksProvider(BaseProvider):
             # object's name columns (verified against system.information_schema).
             if asset_type_lower == "catalog" and len(parts) >= 1:
                 tags_table = "catalog_tags"
-                where = f"catalog_name = '{parts[0]}'"
+                where = f"catalog_name = {q[0]}"
             elif asset_type_lower == "schema" and len(parts) >= 2:
                 tags_table = "schema_tags"
-                where = f"catalog_name = '{parts[0]}' AND schema_name = '{parts[1]}'"
+                where = f"catalog_name = {q[0]} AND schema_name = {q[1]}"
             elif asset_type_lower in ("table", "view") and len(parts) >= 3:
                 tags_table = "table_tags"
-                where = (f"catalog_name = '{parts[0]}' AND schema_name = '{parts[1]}' "
-                         f"AND table_name = '{parts[2]}'")
+                where = (f"catalog_name = {q[0]} AND schema_name = {q[1]} "
+                         f"AND table_name = {q[2]}")
             elif asset_type_lower == "volume" and len(parts) >= 3:
                 tags_table = "volume_tags"
-                where = (f"catalog_name = '{parts[0]}' AND schema_name = '{parts[1]}' "
-                         f"AND volume_name = '{parts[2]}'")
+                where = (f"catalog_name = {q[0]} AND schema_name = {q[1]} "
+                         f"AND volume_name = {q[2]}")
             else:
                 logger.warning(
                     f"Cannot fetch tags for {asset_type} '{asset_name}': unsupported "

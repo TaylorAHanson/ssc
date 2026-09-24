@@ -5,7 +5,7 @@ from typing import List, Optional
 import uuid
 import yaml
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 
@@ -14,6 +14,7 @@ from app.db.data_contract import DataContractModel
 from app.db.data_asset import DataAssetModel
 from pydantic import BaseModel
 from app.api.deps import get_current_user
+from app.services.certification_detail import DEFAULT_HISTORY_RUNS, build_certification_detail
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -78,6 +79,102 @@ class DataContractCreate(BaseModel):
     yaml_content: str
 
 
+# --- Certification detail (the per-data-set drawer) ---------------------------
+# Shapes built by app.services.certification_detail; mirrored in src/services/api.ts.
+
+class CertificationCheckRef(BaseModel):
+    id: Optional[str] = None
+    description: Optional[str] = None
+    category: str = "Other"
+    messages: List[str] = []
+
+
+class CertificationTableOutcome(BaseModel):
+    name: str
+    catalog: Optional[str] = None
+    schema_name: Optional[str] = None
+    table: str
+    type: Optional[str] = None
+    exists: Optional[bool] = None
+    certified: Optional[bool] = None
+    tags: dict = {}
+    status: str  # "pass" | "fail" | "not_scanned"
+    failed_checks: List[CertificationCheckRef] = []
+    dq_failed_rules: List[dict] = []
+
+
+class CertificationCategoryStatus(BaseModel):
+    category: str
+    status: str  # "pass" | "fail"
+    passed: int
+    failed: int
+
+
+class ContractOverview(BaseModel):
+    data_product: Optional[str] = None
+    domain: Optional[str] = None
+    status: Optional[str] = None
+    odcs_version: Optional[str] = None
+    purpose: Optional[str] = None
+    usage: Optional[str] = None
+    limitations: Optional[str] = None
+    tables: List[str] = []
+    parse_error: Optional[str] = None
+
+
+class CertificationRun(BaseModel):
+    request_id: str
+    run_at: Optional[datetime] = None
+    passed: bool
+    failed_count: int
+    total_count: int
+    failed_checks: List[CertificationCheckRef] = []
+
+
+class CertificationChange(BaseModel):
+    kind: str  # "first" | "change"
+    request_id: str
+    run_at: Optional[datetime] = None
+    failed_count: int
+    newly_failing: List[CertificationCheckRef] = []
+    resolved: List[CertificationCheckRef] = []
+
+
+class ContractVersionRef(BaseModel):
+    version: int
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    is_active: bool
+
+
+class CertificationHistory(BaseModel):
+    runs: List[CertificationRun] = []
+    changes: List[CertificationChange] = []
+    contract_versions: List[ContractVersionRef] = []
+
+
+class ContractRef(BaseModel):
+    version: Optional[int] = None
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+
+
+class CertificationDetailResponse(BaseModel):
+    dataset_id: str
+    name: str
+    certified: bool
+    last_policy_run: Optional[datetime] = None
+    overview: ContractOverview
+    categories: List[CertificationCategoryStatus] = []
+    tables: List[CertificationTableOutcome] = []
+    dataset_checks: List[CertificationCheckRef] = []
+    rule_results: List[dict] = []
+    certification_violations: Optional[List[str]] = None
+    data_quality: dict = {}
+    contract: ContractRef
+    history: CertificationHistory
+
+
 def _split_dataset_tag(tag_value) -> list:
     """Split a (possibly comma-separated) ``dataset`` tag value into names.
 
@@ -138,6 +235,7 @@ def discover_dataset_groups(
     """
     from app.core.config import settings
     from app.core.workspaces import catalogs_to_scan, get_governance_uc_provider
+    from app.tools.sql_safety import quote_identifier, quote_literal
 
     # 1. Query Databricks for tables with the 'dataset' tag. This runs as the
     # GOVERNANCE service principal (the certification workspace's SP), the same
@@ -171,7 +269,16 @@ def discover_dataset_groups(
         parts = dataset_id.split(".")
         if len(parts) == 3:
             catalog_name, schema_name, table_name = parts
-            query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {catalog_name}.information_schema.table_tags WHERE tag_name IN ('dataset', 'data_set') AND catalog_name = '{catalog_name}' AND schema_name = '{schema_name}' AND table_name = '{table_name}'"
+            # dataset_id is caller-supplied: quote the catalog as an identifier
+            # and every compared value as a literal.
+            query = (
+                "SELECT catalog_name, schema_name, table_name, tag_value "
+                f"FROM {quote_identifier(catalog_name)}.information_schema.table_tags "
+                "WHERE tag_name IN ('dataset', 'data_set') "
+                f"AND catalog_name = {quote_literal(catalog_name)} "
+                f"AND schema_name = {quote_literal(schema_name)} "
+                f"AND table_name = {quote_literal(table_name)}"
+            )
             try:
                 response = provider.client.statement_execution.execute_statement(
                     statement=query,
@@ -195,7 +302,7 @@ def discover_dataset_groups(
         # includes this data set name.
         if not dataset_groups:
             for cat_name in _scan_catalogs:
-                query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {cat_name}.information_schema.table_tags WHERE tag_name IN ('dataset', 'data_set')"
+                query = f"SELECT catalog_name, schema_name, table_name, tag_value FROM {quote_identifier(cat_name)}.information_schema.table_tags WHERE tag_name IN ('dataset', 'data_set')"
                 try:
                     response = provider.client.statement_execution.execute_statement(
                         statement=query,
@@ -883,6 +990,19 @@ def certification_report(db: Session = Depends(get_db)):
     )
 
 
+@router.get("/{dataset_id}/detail", response_model=CertificationDetailResponse)
+def get_certification_detail(
+    dataset_id: str,
+    history_runs: int = Query(DEFAULT_HISTORY_RUNS, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    """Overview, per-table outcomes, and run/contract history for one data set."""
+    detail = build_certification_detail(db, dataset_id, history_runs)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Data set not found")
+    return detail
+
+
 @router.get("/{dataset_id}", response_model=List[DataContractResponse])
 def get_contract_history(dataset_id: str, db: Session = Depends(get_db)):
     """Get the version history for a specific dataset contract."""
@@ -1003,7 +1123,7 @@ def create_contract(contract: DataContractCreate, db: Session = Depends(get_db))
     return new_contract
 
 @router.post("/{dataset_id}/check-policy")
-async def check_policy(
+def check_policy(
     dataset_id: str,
     background_tasks: BackgroundTasks,
     current_user = Depends(get_current_user),
@@ -1043,7 +1163,7 @@ async def check_policy(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_contract(
+def delete_contract(
     dataset_id: str, 
     current_user = Depends(get_current_user),
     db: Session = Depends(get_db)

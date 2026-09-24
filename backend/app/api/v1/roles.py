@@ -32,7 +32,7 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 @router.get("/mapping", response_model=List[RoleMapping], dependencies=[Depends(require_role("Platform Admin"))])
-async def read_role_mappings(
+def read_role_mappings(
     skip: int = 0, 
     limit: int = 100, 
     db: Session = Depends(get_db)
@@ -42,7 +42,7 @@ async def read_role_mappings(
     return mappings
 
 @router.post("/mapping", response_model=RoleMapping, dependencies=[Depends(require_role("Platform Admin"))])
-async def create_role_mapping(
+def create_role_mapping(
     mapping_in: RoleMappingCreate,
     db: Session = Depends(get_db)
 ):
@@ -57,7 +57,7 @@ async def create_role_mapping(
     return new_mapping
 
 @router.put("/mapping/{mapping_id}", response_model=RoleMapping, dependencies=[Depends(require_role("Platform Admin"))])
-async def update_role_mapping(
+def update_role_mapping(
     mapping_id: int,
     mapping_in: RoleMappingUpdate,
     db: Session = Depends(get_db)
@@ -75,7 +75,7 @@ async def update_role_mapping(
     return mapping
 
 @router.delete("/mapping/{mapping_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_role("Platform Admin"))])
-async def delete_role_mapping(
+def delete_role_mapping(
     mapping_id: int,
     db: Session = Depends(get_db)
 ):
