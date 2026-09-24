@@ -1,7 +1,9 @@
 from typing import List, Optional
 import asyncio
+import hashlib
 import logging
 import re
+import time
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict
@@ -320,8 +322,9 @@ def list_metric_views(
             "subdomain": a.subdomain,
             "tags": a.tags or [],
             "certified": bool(a.certified),
-            "kpis": a.kpis or [],
-            "upstream_tables": a.upstream_tables or [],
+            # None = not loaded: read as the user via /metric_views/definitions.
+            "kpis": a.kpis,
+            "upstream_tables": a.upstream_tables,
             "downstream_dashboards": a.downstream_dashboards or [],
             "legacy_mappings": a.legacy_mappings or [],
             "contract_url": a.contract_url,
@@ -347,61 +350,113 @@ def _view_text_from_describe(rows: list) -> Optional[str]:
     return meta.get("view_text") if isinstance(meta, dict) else None
 
 
-async def load_metric_view_detail(asset: DataAssetModel, obo_token: Optional[str]) -> dict:
-    """Read a metric view's definition and current measure values as the user.
+# Metric view definitions read On-Behalf-Of a user, keyed by (user, asset id), so
+# the cards and the detail panel don't re-run DESCRIBE for every view the user
+# opens. Only successful reads are cached (a fresh grant takes effect at once);
+# a revoked grant can show the cached definition until it expires, but live
+# values are always queried as the user.
+_DEFINITION_TTL_SECONDS = 600
+_DEFINITION_CACHE_MAX = 5000
+_definition_cache: "dict[tuple[str, str], tuple[float, Optional[str]]]" = {}
+# Warehouse statements a single definitions batch runs at once.
+_DEFINITION_BATCH_CONCURRENCY = 6
+_DEFINITION_BATCH_MAX = 50
 
-    Both statements run On-Behalf-Of the signed-in user through the SQL
-    warehouse (``DESCRIBE ... AS JSON`` needs only the ``sql`` scope, unlike the
-    UC Tables API), so KPIs, source tables and values reflect *their* grants and
-    row filters. Only identifiers from the cache and the parsed definition are
-    interpolated — nothing from the request.
+
+def _viewer_key(req: Request) -> str:
+    """Who a cached definition was read as: the user's email, else their token."""
+    email = (getattr(req.state, "user", None) or {}).get("email")
+    if email:
+        return email.lower()
+    token = getattr(req.state, "token", None)
+    return "token:" + hashlib.sha256(token.encode()).hexdigest() if token else "local"
+
+
+def _unavailable_detail(reason: str, error: Optional[str] = None) -> dict:
+    return {"available": False, "reason": reason, "kpis": [], "upstream_tables": [],
+            "values": {}, "error": error, "error_kind": None}
+
+
+def _run_as_user(obo_token: Optional[str]) -> dict:
+    from app.core.config import settings
+
+    return dict(warehouse=settings.DATABRICKS_WAREHOUSE_ID, obo_token=obo_token,
+                require_obo=True, timeout_seconds=60)
+
+
+def _asset_fqn(asset: DataAssetModel) -> str:
+    return ".".join(_quote_ident(p) for p in (asset.catalog, asset.schema, asset.table_name))
+
+
+async def load_metric_view_definition(asset: Optional[DataAssetModel], obo_token: Optional[str],
+                                      viewer: str = "local") -> dict:
+    """KPIs and source tables of a metric view, read from its definition as the user.
+
+    The definition is read with ``DESCRIBE ... AS JSON`` through the SQL warehouse
+    (needs only the ``sql`` scope, unlike the UC Tables API), so what's shown
+    reflects *their* grants. Only identifiers from the cache are interpolated.
 
     ``available`` is False with a ``reason`` when nothing can be shown for this
-    user: ``not_found``, ``no_warehouse``, ``no_obo`` (no forwarded user token
-    on a deployed target), ``permission_denied`` or ``error``. When the
-    definition loads but the values query fails, ``available`` stays True and
-    ``error`` / ``error_kind`` describe the values failure.
+    user: ``not_found``, ``no_warehouse``, ``no_obo`` (no forwarded user token on
+    a deployed target), ``permission_denied`` or ``error``.
     """
     from app.core.config import settings
     from app.core.workspaces import get_uc_provider
     from app.providers.databricks_mcp import sp_fallback_allowed
     from app.workers.tasks.sync_data_assets import derive_metric_view_enrichments
 
-    def _unavailable(reason: str, error: Optional[str] = None) -> dict:
-        return {"available": False, "reason": reason, "kpis": [], "upstream_tables": [],
-                "values": {}, "error": error, "error_kind": None}
-
     if not asset or not is_metric_view(asset.type):
-        return _unavailable("not_found")
+        return _unavailable_detail("not_found")
     if not settings.DATABRICKS_WAREHOUSE_ID:
-        return _unavailable("no_warehouse")
+        return _unavailable_detail("no_warehouse")
     # Never read as the app SP on a deployed target; only local dev may fall back.
     if not obo_token and not sp_fallback_allowed():
-        return _unavailable("no_obo")
+        return _unavailable_detail("no_obo")
 
-    provider = get_uc_provider()
-    fqn = ".".join(_quote_ident(p) for p in (asset.catalog, asset.schema, asset.table_name))
-    run = dict(warehouse=settings.DATABRICKS_WAREHOUSE_ID, obo_token=obo_token,
-               require_obo=True, timeout_seconds=60)
+    key = (viewer, asset.id)
+    cached = _definition_cache.get(key)
+    if cached and cached[0] > time.monotonic():
+        view_text = cached[1]
+    else:
+        try:
+            described = await get_uc_provider().execute_sql(
+                f"DESCRIBE TABLE EXTENDED {_asset_fqn(asset)} AS JSON", **_run_as_user(obo_token)
+            )
+        except Exception as e:
+            logger.info("Metric view definition for %s unavailable to the user: %s", asset.id, e)
+            kind = _classify_uc_error(str(e))
+            return _unavailable_detail("permission_denied" if kind == "permission_denied" else "error", str(e))
+        view_text = _view_text_from_describe(described.get("rows") or [])
+        if len(_definition_cache) >= _DEFINITION_CACHE_MAX:
+            _definition_cache.clear()
+        _definition_cache[key] = (time.monotonic() + _DEFINITION_TTL_SECONDS, view_text)
 
-    try:
-        described = await provider.execute_sql(f"DESCRIBE TABLE EXTENDED {fqn} AS JSON", **run)
-    except Exception as e:
-        logger.info("Metric view definition for %s unavailable to the user: %s", asset.id, e)
-        kind = _classify_uc_error(str(e))
-        return _unavailable("permission_denied" if kind == "permission_denied" else "error", str(e))
+    enrichments = derive_metric_view_enrichments(asset.type, view_text)
+    return {"available": True, "reason": None, "kpis": enrichments.get("kpis") or [],
+            "upstream_tables": enrichments.get("upstream_tables") or [],
+            "values": {}, "error": None, "error_kind": None}
 
-    enrichments = derive_metric_view_enrichments(asset.type, _view_text_from_describe(described.get("rows") or []))
-    detail = {"available": True, "reason": None, "kpis": enrichments.get("kpis") or [],
-              "upstream_tables": enrichments.get("upstream_tables") or [],
-              "values": {}, "error": None, "error_kind": None}
+
+async def load_metric_view_detail(asset: Optional[DataAssetModel], obo_token: Optional[str],
+                                  viewer: str = "local") -> dict:
+    """The definition (see ``load_metric_view_definition``) plus current measure values.
+
+    Values are queried live as the user, so they reflect their row filters. When
+    the definition loads but the values query fails, ``available`` stays True and
+    ``error`` / ``error_kind`` describe the values failure.
+    """
+    from app.core.workspaces import get_uc_provider
+
+    detail = await load_metric_view_definition(asset, obo_token, viewer)
     measures = [k["measure"] for k in detail["kpis"] if k.get("measure")]
-    if not measures:
+    if not detail["available"] or not measures:
         return detail
 
     select = ", ".join(f"MEASURE({_quote_ident(m)}) AS {_quote_ident(m)}" for m in measures)
     try:
-        result = await provider.execute_sql(f"SELECT {select} FROM {fqn}", **run)
+        result = await get_uc_provider().execute_sql(
+            f"SELECT {select} FROM {_asset_fqn(asset)}", **_run_as_user(obo_token)
+        )
     except Exception as e:
         logger.info("Metric view values for %s unavailable: %s", asset.id, e)
         detail.update(error=str(e), error_kind=_classify_uc_error(str(e)))
@@ -416,7 +471,31 @@ async def load_metric_view_detail(asset: DataAssetModel, obo_token: Optional[str
 async def get_metric_view_detail(asset_id: str, req: Request, db: Session = Depends(get_db)):
     """KPIs, source tables and current values of a metric view, read as the user."""
     asset = db.query(DataAssetModel).filter(DataAssetModel.id == asset_id).first()
-    return await load_metric_view_detail(asset, getattr(req.state, "token", None))
+    return await load_metric_view_detail(asset, getattr(req.state, "token", None), _viewer_key(req))
+
+
+class MetricViewDefinitionsRequest(BaseModel):
+    asset_ids: List[str]
+
+
+@router.post("/metric_views/definitions")
+async def get_metric_view_definitions(body: MetricViewDefinitionsRequest, req: Request,
+                                      db: Session = Depends(get_db)):
+    """KPIs and source tables for a batch of metric views (e.g. the cards on screen), read as the user.
+
+    No values are queried — those load when a view is opened. Returns
+    ``{"definitions": {asset_id: <definition>}}``; see ``load_metric_view_definition``.
+    """
+    ids = list(dict.fromkeys(body.asset_ids))[:_DEFINITION_BATCH_MAX]
+    assets = {a.id: a for a in db.query(DataAssetModel).filter(DataAssetModel.id.in_(ids)).all()} if ids else {}
+    token, viewer = getattr(req.state, "token", None), _viewer_key(req)
+    sem = asyncio.Semaphore(_DEFINITION_BATCH_CONCURRENCY)
+
+    async def _one(asset_id: str):
+        async with sem:
+            return asset_id, await load_metric_view_definition(assets.get(asset_id), token, viewer)
+
+    return {"definitions": dict(await asyncio.gather(*(_one(i) for i in ids)))}
 
 
 class AccessibleAssetsResponse(BaseModel):

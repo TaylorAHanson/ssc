@@ -1514,6 +1514,21 @@ export interface MetricViewDetail {
   error_kind?: string | null;
 }
 
+export type MetricViewDefinition = Omit<MetricViewDetail, 'values' | 'error_kind'>;
+
+/** KPIs and source tables for a batch of metric views (no values), read as the current user. */
+export async function getMetricViewDefinitions(assetIds: string[]): Promise<Record<string, MetricViewDefinition>> {
+  const response = await fetch(`${API_BASE_URL}/data-assets/metric_views/definitions`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ asset_ids: assetIds }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch metric view definitions: ${response.status}`);
+  }
+  return (await response.json()).definitions;
+}
+
 /** A metric view's KPIs, source tables and current values, read as the current user. */
 export async function getMetricViewDetail(assetId: string): Promise<MetricViewDetail> {
   const url = new URL(`${API_BASE_URL}/data-assets/metric_views/detail`, window.location.origin);
@@ -3497,6 +3512,7 @@ export const api = {
   getLegacyMappings,
   getMetricViews,
   getMetricViewDetail,
+  getMetricViewDefinitions,
   getDataContracts,
   getContractHistory,
   createDataContract,

@@ -18,6 +18,14 @@ from databricks.sdk.service import jobs, workspace, compute as compute_svc
 
 logger = logging.getLogger(__name__)
 
+# Statement Execution error codes that mean the statement itself is wrong
+# (missing object, missing privilege, syntax) — retrying can't help.
+_NON_RETRYABLE_SQL_ERROR_CODES = {"BAD_REQUEST", "NOT_FOUND", "ALREADY_EXISTS", "UNAUTHENTICATED"}
+# The API waits inline for at most this long (5s is its minimum non-zero wait),
+# so quick statements return without a poll round trip while slow ones still
+# free the worker thread promptly.
+_SQL_INLINE_WAIT = "5s"
+
 
 def _build_workspace_client(**auth: Any) -> WorkspaceClient:
     """Build a WorkspaceClient with bounded HTTP + retry timeouts baked into its Config.
@@ -176,12 +184,12 @@ class DatabricksProvider(BaseProvider):
             if not warehouse_id:
                 raise ValueError("warehouse_id is required for SQL execution")
 
-            # Execute the statement in ASYNC mode (wait_timeout="0s")
+            # Wait briefly inline; anything still running falls through to polling.
             response = await asyncio.to_thread(
                 client.statement_execution.execute_statement,
                 statement=query,
                 warehouse_id=warehouse_id,
-                wait_timeout="0s" 
+                wait_timeout=_SQL_INLINE_WAIT,
             )
             
             statement_id = response.statement_id
@@ -189,6 +197,8 @@ class DatabricksProvider(BaseProvider):
             # Polling loop
             start_time = time.time()
             final_response = None
+            status_resp = response
+            poll_interval = 0.5
             
             while True:
                 # Check timeout
@@ -200,8 +210,6 @@ class DatabricksProvider(BaseProvider):
                         pass
                     raise RetryableError(f"SQL execution timed out after {timeout_seconds}s")
                 
-                # Get status
-                status_resp = await asyncio.to_thread(client.statement_execution.get_statement, statement_id=statement_id)
                 state = status_resp.status.state.value # Enum to string
                 
                 if state == "SUCCEEDED":
@@ -209,12 +217,18 @@ class DatabricksProvider(BaseProvider):
                     break
                 elif state in ("FAILED", "CANCELED", "CLOSED"):
                     error_msg = f"SQL execution failed with state {state}"
-                    if status_resp.status.error:
-                        error_msg += f": {status_resp.status.error.message}"
+                    error = status_resp.status.error
+                    if error:
+                        error_msg += f": {error.message}"
+                    code = getattr(getattr(error, "error_code", None), "value", None)
+                    if code in _NON_RETRYABLE_SQL_ERROR_CODES:
+                        raise PermanentError(error_msg)
                     raise RetryableError(error_msg)
                 else:
-                    # Wait before polling again
-                    await asyncio.sleep(2)
+                    # Back off from 0.5s to 2s between polls.
+                    await asyncio.sleep(poll_interval)
+                    poll_interval = min(poll_interval * 2, 2.0)
+                    status_resp = await asyncio.to_thread(client.statement_execution.get_statement, statement_id=statement_id)
             
             # Simplified result parsing
             # Extract columns first

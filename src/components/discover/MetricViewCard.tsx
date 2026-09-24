@@ -5,9 +5,23 @@ import {
   Database,
   LayoutDashboard,
 } from 'lucide-react';
-import type { DataAsset, MetricKpi } from '../../services/api';
+import type { DataAsset, MetricKpi, MetricViewDefinition } from '../../services/api';
 import { catalogExplorerUrl } from '../../lib/databricksLinks';
 import { useBrandingStore } from '../../stores/brandingStore';
+import { useMetricViewDefinition } from './useMetricViewDefinition';
+
+/** Why a card has no KPIs to show, once its definition has been read. */
+function noKpisMessage(definition: MetricViewDefinition): string {
+  if (definition.available) return 'This metric view defines no KPIs.';
+  switch (definition.reason) {
+    case 'permission_denied':
+      return "You don't have access to this metric view's KPIs.";
+    case 'no_obo':
+      return 'Open the app from Databricks to see KPIs with your permissions.';
+    default:
+      return "Couldn't load KPIs.";
+  }
+}
 
 interface MetricViewCardProps {
   asset: DataAsset;
@@ -32,11 +46,12 @@ export function MetricViewCard({ asset, isSelected = false, onSelect, context }:
     .replace(/_metric_view$/, '')
     .replace(/_/g, ' ');
 
-  // KPIs and source tables are read as the user when the view is opened, so the
-  // shared catalog cache leaves them null ("not loaded") rather than empty.
-  const kpis: MetricKpi[] = asset.kpis ?? [];
+  // KPIs and source tables come from the definition, read as the user (batched
+  // across the cards on screen) — the shared catalog cache doesn't hold them.
+  const definition = useMetricViewDefinition(asset.id);
+  const kpis: MetricKpi[] = definition?.kpis ?? [];
   const dashboardsCount = asset.downstream_dashboards?.length ?? 0;
-  const tablesCount = asset.upstream_tables?.length;
+  const tablesCount = definition?.available ? definition.upstream_tables.length : undefined;
 
   return (
     <div
@@ -82,10 +97,17 @@ export function MetricViewCard({ asset, isSelected = false, onSelect, context }:
         )}
 
         {/* KPIs */}
-        {kpis.length === 0 ? (
-          <p className="mb-4 text-[11px] text-slate-400 italic">
-            {asset.kpis == null ? 'Open to see KPIs and current values.' : 'No KPIs available.'}
-          </p>
+        {!definition ? (
+          <div className="mb-4 animate-pulse" aria-label="Loading KPIs">
+            <div className="h-2.5 w-16 rounded bg-slate-200 mb-2" />
+            <div className="grid grid-cols-2 gap-2">
+              {[0, 1].map((i) => (
+                <div key={i} className="h-9 rounded-xl bg-slate-100 border border-slate-200/70" />
+              ))}
+            </div>
+          </div>
+        ) : kpis.length === 0 ? (
+          <p className="mb-4 text-[11px] text-slate-400 italic">{noKpisMessage(definition)}</p>
         ) : (
         <div className="mb-4">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2">

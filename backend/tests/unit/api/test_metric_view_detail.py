@@ -2,10 +2,26 @@
 
 import asyncio
 import json
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
-from app.api.v1.data_assets import _classify_uc_error, load_metric_view_detail
+import pytest
+
+from app.api.v1 import data_assets
+from app.api.v1.data_assets import (
+    MetricViewDefinitionsRequest,
+    _classify_uc_error,
+    get_metric_view_definitions,
+    load_metric_view_detail,
+)
 from app.db.data_asset import DataAssetModel
+
+
+@pytest.fixture(autouse=True)
+def _fresh_definition_cache():
+    data_assets._definition_cache.clear()
+    yield
+    data_assets._definition_cache.clear()
 
 YAML = """
 version: 1.1
@@ -19,8 +35,8 @@ measures:
 """
 
 
-def _asset(type_="METRIC_VIEW"):
-    return DataAssetModel(id="c.s.mv", catalog="c", schema="s", table_name="mv", type=type_)
+def _asset(type_="METRIC_VIEW", name="mv"):
+    return DataAssetModel(id=f"c.s.{name}", catalog="c", schema="s", table_name=name, type=type_)
 
 
 class FakeProvider:
@@ -35,11 +51,24 @@ class FakeProvider:
         return outcome
 
 
-def _run(asset, provider, token="user-token", fallback=False, warehouse="wh"):
-    with patch("app.core.workspaces.get_uc_provider", return_value=provider), \
-         patch("app.providers.databricks_mcp.sp_fallback_allowed", return_value=fallback), \
-         patch("app.core.config.settings.DATABRICKS_WAREHOUSE_ID", warehouse):
-        return asyncio.run(load_metric_view_detail(asset, token))
+def _patched(provider, fallback=False, warehouse="wh"):
+    stack = [
+        patch("app.core.workspaces.get_uc_provider", return_value=provider),
+        patch("app.providers.databricks_mcp.sp_fallback_allowed", return_value=fallback),
+        patch("app.core.config.settings.DATABRICKS_WAREHOUSE_ID", warehouse),
+    ]
+    for p in stack:
+        p.start()
+    return stack
+
+
+def _run(asset, provider, token="user-token", fallback=False, warehouse="wh", viewer="alice@x.com"):
+    stack = _patched(provider, fallback, warehouse)
+    try:
+        return asyncio.run(load_metric_view_detail(asset, token, viewer))
+    finally:
+        for p in stack:
+            p.stop()
 
 
 def _describe(view_text=YAML):
@@ -114,3 +143,43 @@ def test_view_with_a_dropped_source_is_a_broken_dependency():
     out = _run(_asset(), FakeProvider(_describe(), RuntimeError(msg)))
     assert out["available"] and len(out["kpis"]) == 2
     assert out["error_kind"] == "broken_dependency"
+
+
+def test_definition_is_cached_per_viewer():
+    provider = FakeProvider(_describe(), {"rows": [{}]})
+    _run(_asset(), provider, viewer="alice@x.com")
+    _run(_asset(), provider, viewer="alice@x.com")
+    _run(_asset(), provider, viewer="bob@x.com")
+
+    describes = [q for q, _ in provider.calls if q.startswith("DESCRIBE")]
+    assert len(describes) == 2  # alice's second open reuses her read; bob reads his own
+
+
+def test_failed_reads_are_not_cached():
+    err = RuntimeError("User does not have SELECT on Table 'c.s.mv'.")
+    _run(_asset(), FakeProvider(describe=err))
+    out = _run(_asset(), FakeProvider(_describe(), {"rows": [{}]}))
+    assert out["available"]  # a fresh grant takes effect on the next open
+
+
+def test_batch_definitions_skip_values_and_report_each_view():
+    provider = FakeProvider(_describe())
+    assets = [_asset(name="a"), _asset("TABLE", name="t")]
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = assets
+    req = SimpleNamespace(state=SimpleNamespace(token="user-token", user={"email": "Alice@X.com"}))
+
+    stack = _patched(provider)
+    try:
+        out = asyncio.run(get_metric_view_definitions(
+            MetricViewDefinitionsRequest(asset_ids=["c.s.a", "c.s.t", "c.s.gone", "c.s.a"]), req, db))
+    finally:
+        for p in stack:
+            p.stop()
+
+    defs = out["definitions"]
+    assert list(defs) == ["c.s.a", "c.s.t", "c.s.gone"]
+    assert defs["c.s.a"]["available"] and len(defs["c.s.a"]["kpis"]) == 2
+    assert defs["c.s.t"]["reason"] == "not_found" and defs["c.s.gone"]["reason"] == "not_found"
+    assert [q for q, _ in provider.calls] == ["DESCRIBE TABLE EXTENDED `c`.`s`.`a` AS JSON"]
+    assert ("alice@x.com", "c.s.a") in data_assets._definition_cache

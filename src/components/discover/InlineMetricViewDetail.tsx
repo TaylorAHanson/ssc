@@ -13,6 +13,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { api } from '../../services/api';
+import { primeMetricViewDefinition, useMetricViewDefinition } from './useMetricViewDefinition';
 import type { DataAsset, MetricKpi, MetricViewDetail } from '../../services/api';
 import { catalogExplorerUrl } from '../../lib/databricksLinks';
 import { LineageGraph, type LineageSeedTable } from './LineageGraph';
@@ -52,7 +53,7 @@ function formatMeasureValue(raw: string | number | null | undefined, format?: Me
 }
 
 /** Why the KPI table is empty, in terms the viewer can act on. */
-function emptyKpisMessage(detail: MetricViewDetail | null): string {
+function emptyKpisMessage(detail: Pick<MetricViewDetail, 'reason'> | null): string {
   if (!detail) return 'Loading measures…';
   switch (detail.reason) {
     case 'permission_denied':
@@ -119,6 +120,9 @@ export function InlineMetricViewDetail({
         }),
       )
       .then((result) => {
+        if (result.available || result.reason !== 'error') {
+          primeMetricViewDefinition(asset.id, result);
+        }
         if (!cancelled) setLoaded({ assetId: asset.id, result });
       });
     return () => {
@@ -130,6 +134,10 @@ export function InlineMetricViewDetail({
   // Seconds spent waiting on the warehouse, shown while the detail loads.
   const [elapsed, setElapsed] = useState<{ assetId: string; seconds: number } | null>(null);
   const isLoading = detail === null;
+  // Usually already read (as the user) for the view's card, so the measures show
+  // straight away and only the live values are still being queried.
+  const definition = useMetricViewDefinition(asset.id);
+  const known = detail ?? (definition?.available ? definition : null);
   useEffect(() => {
     if (!isLoading) return;
     const start = Date.now();
@@ -161,13 +169,13 @@ export function InlineMetricViewDetail({
     .replace(/_metric_view$/i, '')
     .replace(/_/g, ' ');
 
-  const kpis: MetricKpi[] = detail?.kpis ?? [];
+  const kpis: MetricKpi[] = known?.kpis ?? [];
   // All measures in a metric view share its dimensions; show them once.
   const dimensions = Array.from(new Set(kpis.flatMap((k) => k.dimensions ?? [])));
 
   const downstreamDashboards: DashboardOrApp[] = asset.downstream_dashboards ?? [];
 
-  const upstreamTables: UpstreamTableInfo[] = detail?.upstream_tables ?? [];
+  const upstreamTables: UpstreamTableInfo[] = known?.upstream_tables ?? [];
 
   const seedTables: LineageSeedTable[] = [
     {
@@ -283,7 +291,7 @@ export function InlineMetricViewDetail({
             }`}
           >
             <TrendingUp className="w-3.5 h-3.5" />
-            <span>KPIs{detail ? ` (${kpis.length})` : ''}</span>
+            <span>KPIs{known ? ` (${kpis.length})` : ''}</span>
           </button>
 
           <button
@@ -322,7 +330,7 @@ export function InlineMetricViewDetail({
             }`}
           >
             <Database className="w-3.5 h-3.5" />
-            <span>Source Tables{detail ? ` (${upstreamTables.length})` : ''}</span>
+            <span>Source Tables{known ? ` (${upstreamTables.length})` : ''}</span>
           </button>
         </div>
 
@@ -334,12 +342,16 @@ export function InlineMetricViewDetail({
                 <Loader2 className="w-4 h-4 mt-px shrink-0 animate-spin text-primary" />
                 <div>
                   <p className="font-semibold text-slate-800">
-                    Reading measures and current values with your permissions…
+                    {known
+                      ? 'Querying current values with your permissions…'
+                      : 'Reading measures and current values with your permissions…'}
                     <span className="ml-1.5 font-normal tabular-nums text-slate-500">{elapsedSeconds}s</span>
                   </p>
                   <p className="text-[11px] text-slate-500">
                     {elapsedSeconds < SLOW_LOAD_SECONDS
-                      ? 'This usually takes 5–15 seconds.'
+                      ? known
+                        ? 'This usually takes a few seconds.'
+                        : 'This usually takes 5–15 seconds.'
                       : 'Taking longer than usual — the SQL warehouse may be starting up, which can take up to a minute.'}
                   </p>
                 </div>
@@ -376,7 +388,7 @@ export function InlineMetricViewDetail({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {isLoading &&
+                  {!known &&
                     [0, 1, 2].map((i) => (
                       <tr key={i} className="animate-pulse">
                         <td className="py-3.5 px-4">
@@ -391,10 +403,10 @@ export function InlineMetricViewDetail({
                         </td>
                       </tr>
                     ))}
-                  {!isLoading && kpis.length === 0 && (
+                  {known && kpis.length === 0 && (
                     <tr>
                       <td colSpan={3} className="py-6 px-4 text-center text-slate-400 italic">
-                        {emptyKpisMessage(detail)}
+                        {emptyKpisMessage(known)}
                       </td>
                     </tr>
                   )}
@@ -413,7 +425,11 @@ export function InlineMetricViewDetail({
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
                         <span className="font-extrabold text-slate-900 text-sm">
-                          {formatMeasureValue(kpi.measure ? detail?.values[kpi.measure] : kpi.value, kpi.format)}
+                          {detail ? (
+                            formatMeasureValue(kpi.measure ? detail.values[kpi.measure] : kpi.value, kpi.format)
+                          ) : (
+                            <span className="inline-block h-3.5 w-14 rounded bg-slate-200 animate-pulse align-middle" />
+                          )}
                         </span>
                       </td>
                       <td className="py-3 px-4 font-mono text-[11px] text-primary">
