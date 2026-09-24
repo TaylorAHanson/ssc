@@ -335,44 +335,88 @@ def _quote_ident(name: str) -> str:
     return "`" + str(name).replace("`", "``") + "`"
 
 
-@router.get("/metric_views/values")
-async def get_metric_view_values(asset_id: str, req: Request, db: Session = Depends(get_db)):
-    """Current value of each measure in a cached metric view, queried live.
+def _view_text_from_describe(rows: list) -> Optional[str]:
+    """The metric view YAML from a ``DESCRIBE TABLE EXTENDED ... AS JSON`` result."""
+    if not rows:
+        return None
+    raw = rows[0].get("json_metadata")
+    try:
+        meta = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return None
+    return meta.get("view_text") if isinstance(meta, dict) else None
 
-    Runs On-Behalf-Of the signed-in user, so values reflect their own grants
-    (and any row filters). Only the view and measure identifiers from the synced
-    definition are used to build the statement — nothing from the request is
-    interpolated. Returns ``values`` keyed by measure name, or ``error`` when the
-    query can't be run (no warehouse, no access, bad definition).
+
+async def load_metric_view_detail(asset: DataAssetModel, obo_token: Optional[str]) -> dict:
+    """Read a metric view's definition and current measure values as the user.
+
+    Both statements run On-Behalf-Of the signed-in user through the SQL
+    warehouse (``DESCRIBE ... AS JSON`` needs only the ``sql`` scope, unlike the
+    UC Tables API), so KPIs, source tables and values reflect *their* grants and
+    row filters. Only identifiers from the cache and the parsed definition are
+    interpolated — nothing from the request.
+
+    ``available`` is False with a ``reason`` when nothing can be shown for this
+    user: ``not_found``, ``no_warehouse``, ``no_obo`` (no forwarded user token
+    on a deployed target), ``permission_denied`` or ``error``. When the
+    definition loads but the values query fails, ``available`` stays True and
+    ``error`` / ``error_kind`` describe the values failure.
     """
     from app.core.config import settings
     from app.core.workspaces import get_uc_provider
+    from app.providers.databricks_mcp import sp_fallback_allowed
+    from app.workers.tasks.sync_data_assets import derive_metric_view_enrichments
 
-    asset = db.query(DataAssetModel).filter(DataAssetModel.id == asset_id).first()
+    def _unavailable(reason: str, error: Optional[str] = None) -> dict:
+        return {"available": False, "reason": reason, "kpis": [], "upstream_tables": [],
+                "values": {}, "error": error, "error_kind": None}
+
     if not asset or not is_metric_view(asset.type):
-        return {"values": {}, "error": "Metric view not found in the catalog cache."}
-    measures = [k["measure"] for k in (asset.kpis or []) if isinstance(k, dict) and k.get("measure")]
-    if not measures:
-        return {"values": {}, "error": "No measures available: the sync identity couldn't read this metric view's definition, or it defines none."}
+        return _unavailable("not_found")
     if not settings.DATABRICKS_WAREHOUSE_ID:
-        return {"values": {}, "error": "No SQL warehouse is configured."}
+        return _unavailable("no_warehouse")
+    # Never read as the app SP on a deployed target; only local dev may fall back.
+    if not obo_token and not sp_fallback_allowed():
+        return _unavailable("no_obo")
 
+    provider = get_uc_provider()
     fqn = ".".join(_quote_ident(p) for p in (asset.catalog, asset.schema, asset.table_name))
+    run = dict(warehouse=settings.DATABRICKS_WAREHOUSE_ID, obo_token=obo_token,
+               require_obo=True, timeout_seconds=60)
+
+    try:
+        described = await provider.execute_sql(f"DESCRIBE TABLE EXTENDED {fqn} AS JSON", **run)
+    except Exception as e:
+        logger.info("Metric view definition for %s unavailable to the user: %s", asset.id, e)
+        kind = _classify_uc_error(str(e))
+        return _unavailable("permission_denied" if kind == "permission_denied" else "error", str(e))
+
+    enrichments = derive_metric_view_enrichments(asset.type, _view_text_from_describe(described.get("rows") or []))
+    detail = {"available": True, "reason": None, "kpis": enrichments.get("kpis") or [],
+              "upstream_tables": enrichments.get("upstream_tables") or [],
+              "values": {}, "error": None, "error_kind": None}
+    measures = [k["measure"] for k in detail["kpis"] if k.get("measure")]
+    if not measures:
+        return detail
+
     select = ", ".join(f"MEASURE({_quote_ident(m)}) AS {_quote_ident(m)}" for m in measures)
     try:
-        result = await get_uc_provider().execute_sql(
-            f"SELECT {select} FROM {fqn}",
-            warehouse=settings.DATABRICKS_WAREHOUSE_ID,
-            obo_token=getattr(req.state, "token", None),
-            require_obo=True,
-            timeout_seconds=60,
-        )
+        result = await provider.execute_sql(f"SELECT {select} FROM {fqn}", **run)
     except Exception as e:
-        logger.info("Metric view values for %s unavailable: %s", asset_id, e)
-        return {"values": {}, "error": str(e), "error_kind": _classify_uc_error(str(e))}
+        logger.info("Metric view values for %s unavailable: %s", asset.id, e)
+        detail.update(error=str(e), error_kind=_classify_uc_error(str(e)))
+        return detail
 
     rows = result.get("rows") or []
-    return {"values": rows[0] if rows else {}, "error": None}
+    detail["values"] = rows[0] if rows else {}
+    return detail
+
+
+@router.get("/metric_views/detail")
+async def get_metric_view_detail(asset_id: str, req: Request, db: Session = Depends(get_db)):
+    """KPIs, source tables and current values of a metric view, read as the user."""
+    asset = db.query(DataAssetModel).filter(DataAssetModel.id == asset_id).first()
+    return await load_metric_view_detail(asset, getattr(req.state, "token", None))
 
 
 class AccessibleAssetsResponse(BaseModel):
@@ -636,7 +680,8 @@ def _classify_uc_error(message: str) -> str:
     m = (message or "").lower()
     if "does not exist" in m:
         return "not_found"
-    if "permission" in m or "not authorized" in m or "access denied" in m or "forbidden" in m:
+    if ("permission" in m or "not authorized" in m or "access denied" in m or "forbidden" in m
+            or "does not have" in m):  # UC: "User does not have SELECT on Table ..."
         return "permission_denied"
     return "error"
 

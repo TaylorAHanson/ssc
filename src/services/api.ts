@@ -1499,19 +1499,28 @@ export async function getLegacyMappings(params?: { domain?: string; subdomain?: 
   return response.json();
 }
 
-export interface MetricViewValues {
+export type MetricUpstreamTable = NonNullable<DataAsset['upstream_tables']>[number];
+
+/** Why a metric view's detail couldn't be read for the current user. */
+export type MetricViewUnavailableReason = 'not_found' | 'no_warehouse' | 'no_obo' | 'permission_denied' | 'error';
+
+export interface MetricViewDetail {
+  available: boolean;
+  reason: MetricViewUnavailableReason | null;
+  kpis: MetricKpi[];
+  upstream_tables: MetricUpstreamTable[];
   values: Record<string, string | number | null>;
   error: string | null;
-  error_kind?: string;
+  error_kind?: string | null;
 }
 
-/** Live value of each measure in a metric view, queried as the current user. */
-export async function getMetricViewValues(assetId: string): Promise<MetricViewValues> {
-  const url = new URL(`${API_BASE_URL}/data-assets/metric_views/values`, window.location.origin);
+/** A metric view's KPIs, source tables and current values, read as the current user. */
+export async function getMetricViewDetail(assetId: string): Promise<MetricViewDetail> {
+  const url = new URL(`${API_BASE_URL}/data-assets/metric_views/detail`, window.location.origin);
   url.searchParams.append('asset_id', assetId);
   const response = await fetch(url.toString(), { headers: getHeaders() });
   if (!response.ok) {
-    throw new Error(`Failed to fetch metric view values: ${response.status}`);
+    throw new Error(`Failed to fetch metric view detail: ${response.status}`);
   }
   return response.json();
 }
@@ -3487,7 +3496,7 @@ export const api = {
   getDomainHierarchy,
   getLegacyMappings,
   getMetricViews,
-  getMetricViewValues,
+  getMetricViewDetail,
   getDataContracts,
   getContractHistory,
   createDataContract,

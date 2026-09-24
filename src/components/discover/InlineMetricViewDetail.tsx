@@ -12,7 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '../../services/api';
-import type { DataAsset, MetricKpi, MetricViewValues } from '../../services/api';
+import type { DataAsset, MetricKpi, MetricViewDetail } from '../../services/api';
 import { catalogExplorerUrl } from '../../lib/databricksLinks';
 import { LineageGraph, type LineageSeedTable } from './LineageGraph';
 
@@ -50,6 +50,25 @@ function formatMeasureValue(raw: string | number | null | undefined, format?: Me
   return new Intl.NumberFormat(undefined, opts).format(n);
 }
 
+/** Why the KPI table is empty, in terms the viewer can act on. */
+function emptyKpisMessage(detail: MetricViewDetail | null): string {
+  if (!detail) return 'Loading measures…';
+  switch (detail.reason) {
+    case 'permission_denied':
+      return "You don't have access to this metric view — request access to see its measures.";
+    case 'no_obo':
+      return 'Measures are read with your own permissions, which requires signing in through the deployed app.';
+    case 'no_warehouse':
+      return 'Measures are unavailable: no SQL warehouse is configured.';
+    case 'not_found':
+      return 'This metric view is no longer in the catalog.';
+    case 'error':
+      return "Couldn't read this metric view's definition.";
+    default:
+      return 'This metric view defines no measures.';
+  }
+}
+
 interface UpstreamTableInfo {
   name: string;
   fqn?: string;
@@ -75,22 +94,32 @@ export function InlineMetricViewDetail({
 }: InlineMetricViewDetailProps) {
   const [detailTab, setDetailTab] = useState<'kpis' | 'lineage' | 'dashboards' | 'tables'>('kpis');
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [liveValues, setLiveValues] = useState<{ assetId: string; result: MetricViewValues } | null>(null);
+  const [loaded, setLoaded] = useState<{ assetId: string; result: MetricViewDetail } | null>(null);
 
-  // Query current measure values live (as the user) whenever a view is opened.
+  // Read the definition and current values as the user whenever a view is opened,
+  // so what's shown reflects their own grants rather than the sync identity's.
   useEffect(() => {
     let cancelled = false;
     api
-      .getMetricViewValues(asset.id)
-      .catch((e: Error) => ({ values: {}, error: e.message }))
+      .getMetricViewDetail(asset.id)
+      .catch(
+        (e: Error): MetricViewDetail => ({
+          available: false,
+          reason: 'error',
+          kpis: [],
+          upstream_tables: [],
+          values: {},
+          error: e.message,
+        }),
+      )
       .then((result) => {
-        if (!cancelled) setLiveValues({ assetId: asset.id, result });
+        if (!cancelled) setLoaded({ assetId: asset.id, result });
       });
     return () => {
       cancelled = true;
     };
   }, [asset.id]);
-  const values = liveValues?.assetId === asset.id ? liveValues.result : null;
+  const detail = loaded?.assetId === asset.id ? loaded.result : null;
 
   // Start at the top of the panel whenever a different metric view opens.
   useEffect(() => {
@@ -109,13 +138,13 @@ export function InlineMetricViewDetail({
     .replace(/_metric_view$/i, '')
     .replace(/_/g, ' ');
 
-  const kpis: MetricKpi[] = asset.kpis ?? [];
+  const kpis: MetricKpi[] = detail?.kpis ?? [];
   // All measures in a metric view share its dimensions; show them once.
   const dimensions = Array.from(new Set(kpis.flatMap((k) => k.dimensions ?? [])));
 
   const downstreamDashboards: DashboardOrApp[] = asset.downstream_dashboards ?? [];
 
-  const upstreamTables: UpstreamTableInfo[] = asset.upstream_tables ?? [];
+  const upstreamTables: UpstreamTableInfo[] = detail?.upstream_tables ?? [];
 
   const seedTables: LineageSeedTable[] = [
     {
@@ -231,7 +260,7 @@ export function InlineMetricViewDetail({
             }`}
           >
             <TrendingUp className="w-3.5 h-3.5" />
-            <span>KPIs ({kpis.length})</span>
+            <span>KPIs{detail ? ` (${kpis.length})` : ''}</span>
           </button>
 
           <button
@@ -270,7 +299,7 @@ export function InlineMetricViewDetail({
             }`}
           >
             <Database className="w-3.5 h-3.5" />
-            <span>Source Tables ({upstreamTables.length})</span>
+            <span>Source Tables{detail ? ` (${upstreamTables.length})` : ''}</span>
           </button>
         </div>
 
@@ -300,7 +329,7 @@ export function InlineMetricViewDetail({
                   {kpis.length === 0 && (
                     <tr>
                       <td colSpan={3} className="py-6 px-4 text-center text-slate-400 italic">
-                        No measures available — the metric view definition couldn't be read or defines none.
+                        {emptyKpisMessage(detail)}
                       </td>
                     </tr>
                   )}
@@ -319,9 +348,7 @@ export function InlineMetricViewDetail({
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
                         <span className="font-extrabold text-slate-900 text-sm">
-                          {!values
-                            ? 'Loading…'
-                            : formatMeasureValue(kpi.measure ? values.values[kpi.measure] : kpi.value, kpi.format)}
+                          {formatMeasureValue(kpi.measure ? detail?.values[kpi.measure] : kpi.value, kpi.format)}
                         </span>
                       </td>
                       <td className="py-3 px-4 font-mono text-[11px] text-primary">
@@ -334,15 +361,15 @@ export function InlineMetricViewDetail({
                 </tbody>
               </table>
             </div>
-            {values?.error && kpis.length > 0 && (
+            {detail?.error && (detail.reason === 'error' || kpis.length > 0) && (
               <div className="text-[11px] text-amber-700">
                 <p>
-                  Couldn't load current values
-                  {values.error_kind === 'permission_denied' ? ' — you may not have access to this metric view.' : '.'}
+                  {detail.available ? "Couldn't load current values" : "Couldn't read this metric view"}
+                  {detail.error_kind === 'permission_denied' ? ' — you may not have access to this metric view.' : '.'}
                 </p>
                 <details className="mt-1 text-slate-500">
                   <summary className="cursor-pointer select-none">Show error details</summary>
-                  <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-[10px]">{values.error}</pre>
+                  <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-[10px]">{detail.error}</pre>
                 </details>
               </div>
             )}

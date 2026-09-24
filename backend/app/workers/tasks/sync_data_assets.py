@@ -131,10 +131,13 @@ def _source_tables(spec: dict) -> list[str]:
 def derive_metric_view_enrichments(asset_type: str, view_definition: str | None) -> dict:
     """Derive KPIs and upstream source tables from a metric view's YAML definition.
 
-    Returns ``{}`` for anything that isn't a metric view. KPI values are left
-    unset — they're queried live, as the user, when the view is opened. Downstream
-    dashboards come from UC lineage (filled in by the sync), and legacy mappings
-    have no real source, so both start empty rather than invented.
+    Returns ``{}`` for anything that isn't a metric view. Called when a user
+    opens a metric view, with the definition read On-Behalf-Of that user — never
+    by the background sync, whose service principal would otherwise decide (and
+    leak) what everyone sees. KPI values are left unset; they're queried live
+    right after. Downstream dashboards come from UC lineage (filled in by the
+    sync), and legacy mappings have no real source, so both start empty rather
+    than invented.
     """
     if not is_metric_view(asset_type):
         return {}
@@ -184,22 +187,6 @@ def derive_metric_view_enrichments(asset_type: str, view_definition: str | None)
         })
 
     return enrichments
-
-
-async def _fetch_metric_view_definitions(provider, fqns: list[str]) -> dict[str, str | None]:
-    """Fetch the YAML ``view_definition`` for each metric view via the UC Tables API."""
-    sem = asyncio.Semaphore(8)
-
-    async def _one(fqn: str):
-        async with sem:
-            try:
-                info = await asyncio.to_thread(provider.client.tables.get, fqn)
-                return fqn, getattr(info, "view_definition", None)
-            except Exception as e:  # noqa: BLE001 - one bad view mustn't fail the sync
-                logger.warning("Could not fetch metric view definition for %s: %s", fqn, e)
-                return fqn, None
-
-    return dict(await asyncio.gather(*(_one(f) for f in fqns)))
 
 
 async def _fetch_downstream_dashboards(provider, fqns: list[str]) -> dict[str, list[dict]]:
@@ -389,20 +376,10 @@ async def sync_data_assets_task(force: bool = False):
             f"{r.get('catalog')}.{r.get('schema')}.{r.get('table_name')}"
             for r in rows if is_metric_view(r.get("type"))
         ]
-        definitions, dashboards_by_mv = (
-            await asyncio.gather(
-                _fetch_metric_view_definitions(provider, metric_view_fqns),
-                _fetch_downstream_dashboards(provider, metric_view_fqns),
-            )
-            if metric_view_fqns else ({}, {})
+        dashboards_by_mv = (
+            await _fetch_downstream_dashboards(provider, metric_view_fqns)
+            if metric_view_fqns else {}
         )
-        missing = sum(1 for v in definitions.values() if not v)
-        if missing:
-            logger.warning(
-                "%d of %d metric view definition(s) unavailable to the sync identity; "
-                "their KPIs will be empty until it can read them.",
-                missing, len(metric_view_fqns),
-            )
 
         if rows:
             db = get_lakebase_session()
@@ -448,17 +425,15 @@ async def sync_data_assets_task(force: bool = False):
                     asset.domain = domain
                     asset.subdomain = subdomain
 
-                    # Enrich metric views from their YAML definition. Always assign so
-                    # non-metric-views are cleared of any previously cached enrichment.
-                    enrichments = derive_metric_view_enrichments(
-                        row.get("type", "TABLE"), definitions.get(asset_id)
-                    )
-                    asset.kpis = enrichments.get("kpis")
-                    asset.upstream_tables = enrichments.get("upstream_tables")
-                    asset.downstream_dashboards = (
-                        dashboards_by_mv.get(asset_id, []) if enrichments else None
-                    )
-                    asset.legacy_mappings = enrichments.get("legacy_mappings")
+                    # KPIs and source tables come from the metric view's definition,
+                    # which is read as the viewing user when the view is opened
+                    # (/metric_views/detail). The shared cache keeps them unset (None
+                    # = "not loaded") and clears anything an earlier sync stored.
+                    is_mv = is_metric_view(row.get("type"))
+                    asset.kpis = None
+                    asset.upstream_tables = None
+                    asset.downstream_dashboards = dashboards_by_mv.get(asset_id, []) if is_mv else None
+                    asset.legacy_mappings = [] if is_mv else None
 
                     if certified:
                         asset.certified = True

@@ -32,9 +32,11 @@ export function MetricViewCard({ asset, isSelected = false, onSelect, context }:
     .replace(/_metric_view$/, '')
     .replace(/_/g, ' ');
 
+  // KPIs and source tables are read as the user when the view is opened, so the
+  // shared catalog cache leaves them null ("not loaded") rather than empty.
   const kpis: MetricKpi[] = asset.kpis ?? [];
   const dashboardsCount = asset.downstream_dashboards?.length ?? 0;
-  const tablesCount = asset.upstream_tables?.length ?? 0;
+  const tablesCount = asset.upstream_tables?.length;
 
   return (
     <div
@@ -81,7 +83,9 @@ export function MetricViewCard({ asset, isSelected = false, onSelect, context }:
 
         {/* KPIs */}
         {kpis.length === 0 ? (
-          <p className="mb-4 text-[11px] text-slate-400 italic">No KPIs available.</p>
+          <p className="mb-4 text-[11px] text-slate-400 italic">
+            {asset.kpis == null ? 'Open to see KPIs and current values.' : 'No KPIs available.'}
+          </p>
         ) : (
         <div className="mb-4">
           <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2">
@@ -147,11 +151,15 @@ export function MetricViewCard({ asset, isSelected = false, onSelect, context }:
             <LayoutDashboard className="w-3 h-3 text-amber-500" />
             {dashboardsCount} {dashboardsCount === 1 ? 'dashboard' : 'dashboards'}
           </span>
-          <span className="text-slate-300">•</span>
-          <span className="inline-flex items-center gap-1 text-slate-500">
-            <Database className="w-3 h-3 text-slate-400" />
-            {tablesCount} {tablesCount === 1 ? 'source' : 'sources'}
-          </span>
+          {tablesCount != null && (
+            <>
+              <span className="text-slate-300">•</span>
+              <span className="inline-flex items-center gap-1 text-slate-500">
+                <Database className="w-3 h-3 text-slate-400" />
+                {tablesCount} {tablesCount === 1 ? 'source' : 'sources'}
+              </span>
+            </>
+          )}
         </div>
 
         <div className="inline-flex items-center gap-1 text-primary font-semibold group-hover:translate-x-0.5 transition-transform">
