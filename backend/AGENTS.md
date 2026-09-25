@@ -50,6 +50,9 @@ first** — it is the source of truth for how the pieces fit together.
   approval gates, idempotency, and audit via the `data.agent.tools` OPA package.
   Classify honestly; `read` is the only non-mutating class. Everything routes
   through the ToolExecutor chokepoint — don't call side-effecting SDKs around it.
+  Chat shows each tool's raw output (and the transcript download includes it);
+  set `hide_result=True` when the output is guidance for the agent, not the
+  user (e.g. `get_workflow_instructions`). The model still gets the full result.
 - **Unity Catalog reads run On-Behalf-Of the user** via `uc_client_for(_obo_token)`
   in `core/workspaces.py`, always pinned to the **home** workspace (UC is
   metastore-global). Never target a remote `target_host` for UC listings, and

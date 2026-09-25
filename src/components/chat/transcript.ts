@@ -32,7 +32,8 @@ function toolSection(msg: Extract<DisplayMessage, { kind: 'tool' }>): string {
     }
     if (msg.errorMessage) lines.push(`Error: ${msg.errorMessage}`);
     const result = msg.genieResult ?? msg.toolResult;
-    if (result !== undefined) lines.push('Result:', fence(result));
+    if (msg.resultHidden) lines.push('Result: not shown (agent-only output).');
+    else if (result !== undefined) lines.push('Result:', fence(result));
     return lines.join('\n\n');
 }
 

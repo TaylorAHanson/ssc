@@ -15,7 +15,9 @@ class GetWorkflowInstructionsInput(BaseModel):
 @tool(
     name="get_workflow_instructions",
     description="Fetch step-by-step parameter requirements and validation rules for a specific workflow before invoking execute_workflow.",
-    args_schema=GetWorkflowInstructionsInput
+    args_schema=GetWorkflowInstructionsInput,
+    # The workflow's agent playbook, not something to show the requester.
+    hide_result=True,
 )
 def get_workflow_instructions(workflow_name: str) -> Dict[str, Any]:
     """

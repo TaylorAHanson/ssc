@@ -581,13 +581,16 @@ class AgentRunner:
                             err_val = result.get("error")
                             if isinstance(err_val, str) and err_val.strip():
                                 tool_error_msg = err_val
+                        hidden = bool(getattr(matching_tool, "hide_result", False))
+                        shown = None if hidden else result
                         if tool_error_msg:
                             yield ToolResultEvent(
                                 id=tool_call_id,
                                 name=fn_name,
                                 ok=False,
                                 summary=tool_error_msg[:200],
-                                result=result,
+                                result=shown,
+                                result_hidden=hidden,
                             )
                         else:
                             yield ToolResultEvent(
@@ -595,7 +598,8 @@ class AgentRunner:
                                 name=fn_name,
                                 ok=True,
                                 summary=matching_tool.friendly_completion_label,
-                                result=result,
+                                result=shown,
+                                result_hidden=hidden,
                             )
                         executed_any = True
                     except Exception as e:

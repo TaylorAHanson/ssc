@@ -44,6 +44,7 @@ class McpTool:
         is_mutating: Optional[bool] = None,
         policy_ref: Optional[str] = None,
         success_predicate: Optional[Any] = None,
+        hide_result: bool = False,
     ):
         self._func = func
         self._args_schema = args_schema
@@ -69,6 +70,7 @@ class McpTool:
         )
         self._policy_ref = policy_ref
         self._success_predicate = success_predicate
+        self._hide_result = hide_result
         
     @property
     def name(self) -> str:
@@ -107,6 +109,15 @@ class McpTool:
     def is_mutating(self) -> bool:
         """Whether this tool mutates external/app state (vs. a pure read)."""
         return self._is_mutating
+
+    @property
+    def hide_result(self) -> bool:
+        """Keep the tool's output out of the chat UI (raw output panel, transcript).
+
+        For output meant for the agent, not the user, such as a workflow's
+        agent instructions. The model still receives the full result.
+        """
+        return self._hide_result
 
     @property
     def policy_ref(self) -> Optional[str]:
@@ -268,6 +279,7 @@ def tool(
     side_effect_class: str = "read",
     is_mutating: Optional[bool] = None,
     policy_ref: Optional[str] = None,
+    hide_result: bool = False,
 ):
     """
     Decorator to register a function as a tool.
@@ -294,6 +306,9 @@ def tool(
     ``"read"`` is treated as mutating (auto-sets ``is_mutating``) and is subject
     to OPA pre-flight / approval gates. ``policy_ref`` optionally pins the tool
     to a specific OPA rule.
+
+    Set ``hide_result=True`` when the output is guidance for the agent rather
+    than something to show the user (see ``McpTool.hide_result``).
     """
     def decorator(func: Callable) -> McpTool:
         # Determine schema
@@ -344,6 +359,7 @@ def tool(
             side_effect_class,
             is_mutating,
             policy_ref,
+            hide_result=hide_result,
         )
         
     return decorator

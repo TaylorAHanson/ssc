@@ -54,6 +54,8 @@ export type DisplayMessage =
          * ``GenieDetailsPanel``.
          */
         toolResult?: unknown;
+        /** Set when the backend withheld the result (a tool marked ``hide_result``). */
+        resultHidden?: boolean;
         /**
          * Raw structured payload from a completed Genie poll. Surfaces
          * the SQL, result rows, chart spec, and per-conversation deep

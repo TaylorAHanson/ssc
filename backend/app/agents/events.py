@@ -70,6 +70,9 @@ class ToolResultEvent(BaseModel):
     summary: Optional[str] = None
     error: Optional[str] = None
     result: Optional[Any] = None
+    # The tool's output is for the agent only (``McpTool.hide_result``), so
+    # ``result`` is withheld and the UI shows no raw output for it.
+    result_hidden: bool = False
 
 
 class PendingPollEvent(BaseModel):

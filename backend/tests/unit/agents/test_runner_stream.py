@@ -170,6 +170,34 @@ async def test_run_stream_emits_tool_call_and_tool_result():
 
 
 @pytest.mark.asyncio
+async def test_a_hide_result_tool_withholds_its_output_from_the_ui_only():
+    fake_tool = _FakeTool(name="playbook", result={"instructions": "AGENT PLAYBOOK"})
+    fake_tool.hide_result = True
+    runner = _make_runner(
+        tools=[fake_tool],
+        scripted=[
+            _FakeLLMResponse(tool_calls=[
+                {"id": "tc-1", "type": "function", "function": {"name": "playbook", "arguments": {}}}
+            ]),
+            _FakeLLMResponse(content="Done."),
+        ],
+    )
+
+    events = [ev async for ev in runner.run_stream(query="hi")]
+    (result,) = [ev for ev in events if isinstance(ev, ToolResultEvent)]
+    assert result.ok and result.result is None and result.result_hidden is True
+    # The model still gets the full output on its next turn.
+    tool_msgs = [m for m in runner.llm_client.calls[1]["messages"] if m.get("role") == "tool"]
+    assert "AGENT PLAYBOOK" in tool_msgs[0]["content"]
+
+
+def test_workflow_instructions_are_marked_agent_only():
+    from app.tools.self_service.get_workflow_instructions import get_workflow_instructions
+
+    assert get_workflow_instructions.hide_result is True
+
+
+@pytest.mark.asyncio
 async def test_run_stream_emits_pending_poll_and_halts():
     """Pending-poll envelope => emits pending_poll, no tool_result, done."""
     pending_envelope = {

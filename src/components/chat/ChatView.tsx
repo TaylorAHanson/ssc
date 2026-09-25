@@ -706,6 +706,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                 errorMessage: event.error ?? undefined,
                                 label: event.summary || m.label,
                                 toolResult: event.result,
+                                resultHidden: event.result_hidden || undefined,
                                 chart: resolveChart(prev),
                             };
                         }),
@@ -738,6 +739,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                 errorMessage: event.error ?? undefined,
                                 label: event.summary || m.label,
                                 toolResult: event.result,
+                                resultHidden: event.result_hidden || undefined,
                                 chart: resolveChart(prev),
                             };
                         });

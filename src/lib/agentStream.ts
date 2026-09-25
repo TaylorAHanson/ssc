@@ -54,6 +54,8 @@ export interface ToolResultEvent {
      * an SA can inspect exactly what the agent saw.
      */
     result?: unknown;
+    /** The tool's output is for the agent only; ``result`` is withheld. */
+    result_hidden?: boolean;
 }
 
 export interface PendingPollEvent {
