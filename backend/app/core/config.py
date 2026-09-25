@@ -738,6 +738,8 @@ class Settings(BaseSettings):
     APP_CODE_REVIEW_MAX_FILE_KB: int = _app_code_review.get("max_file_kb", 200)
     APP_CODE_REVIEW_MAX_TURNS: int = _app_code_review.get("max_turns", 20)
     APP_CODE_REVIEW_TIME_LIMIT_SECONDS: int = _app_code_review.get("time_limit_seconds", 900)
+    APP_CODE_REVIEW_MODEL: str = _app_code_review.get("model", "")
+    APP_CODE_REVIEW_REASONING_EFFORT: str = _app_code_review.get("reasoning_effort", "")
 
     # Governance Tag Management (GitOps or Local Mode for UC tag changes)
     # In GitOps mode, the app opens PRs against this repo and GitHub Actions applies

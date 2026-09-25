@@ -59,6 +59,12 @@ rows = conn.cursor().execute("SELECT * FROM main.sales.orders").fetchall()
 PAT = "dapi" + "0123456789abcdef" * 2
 
 
+@pytest.fixture(autouse=True)
+def _no_failure_backoff(monkeypatch):
+    import app.services.app_code_review.reviewer as reviewer_module
+    monkeypatch.setattr(reviewer_module, "_FAILURE_BACKOFF_SECONDS", 0)
+
+
 # --- fakes ------------------------------------------------------------------
 
 def _tarball(files: Dict[str, str], symlinks: Optional[Dict[str, str]] = None) -> bytes:
@@ -255,7 +261,7 @@ def test_sp_app_with_data_access_is_a_blocker():
     scan = run_prescan({"app.yaml": APP_YAML, "app.py": SP_APP})
     assert scan.identity == "sp_with_data_access"
     blocker = scan.findings[0]
-    assert (blocker.severity, blocker.category) == ("blocker", "identity")
+    assert (blocker.severity, blocker.category) == ("blocker", "sp_data_access")
     assert blocker.remediation
 
 
@@ -464,7 +470,7 @@ async def test_repeated_model_failures_give_up():
     err = {"role": "assistant", "content": "x", "is_error": True}
     llm = FakeLLM([err] * 10)
     assert await run_reviewer(llm, SOURCE, _snapshot(files), run_prescan(files), "r", max_turns=8) is None
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 4
 
 
 @pytest.mark.asyncio
@@ -543,14 +549,24 @@ def test_conditions_with_only_minor_findings_is_compliant():
     assert _result(files, args["tool_calls"][0]["function"]["arguments"])["recommendation"] == "approve_with_notes"
 
 
-def test_an_identity_blocker_sets_the_identity_so_the_header_matches():
+def test_other_identity_or_authorization_blockers_leave_the_identity_alone():
     files = {"app.yaml": LAKEBASE_YAML, "app.py": OBO_APP, "db.py": LAKEBASE}
     args = _submit(recommendation="needs_discussion", data_access_identity="mixed", findings=[
-        {"severity": "blocker", "category": "identity", "title": "Admin page queries UC as the SP"}])
+        {"severity": "blocker", "category": "authorization", "title": "Anyone can cancel any request"},
+        {"severity": "blocker", "category": "identity", "title": "CI identity is over-privileged"}])
+    result = _result(files, args["tool_calls"][0]["function"]["arguments"])
+    assert result["data_access_identity"] == "mixed"
+    assert result["recommendation"] == "needs_discussion"
+
+
+def test_an_sp_data_access_blocker_sets_the_identity_so_the_header_matches():
+    files = {"app.yaml": LAKEBASE_YAML, "app.py": OBO_APP, "db.py": LAKEBASE}
+    args = _submit(recommendation="needs_discussion", data_access_identity="mixed", findings=[
+        {"severity": "blocker", "category": "sp_data_access", "title": "Admin page queries UC as the SP"}])
     result = _result(files, args["tool_calls"][0]["function"]["arguments"])
     assert result["data_access_identity"] == "sp_with_data_access"
     assert "Service principal reads governed data" in result["report_markdown"]
-    assert [f["title"] for f in result["findings"] if f["category"] == "identity"] == [
+    assert [f["title"] for f in result["findings"] if f["category"] in ("identity", "sp_data_access")] == [
         "Admin page queries UC as the SP"]
 
 
@@ -699,3 +715,91 @@ def test_a_refused_review_of_a_hostile_obo_app_is_never_compliant():
 def test_ordinary_readmes_are_not_flagged_as_reviewer_directed():
     readme = "# Sales app\nRun `streamlit run app.py`. Reviewed by the data team in the PR.\n"
     assert not [f for f in run_prescan({"README.md": readme}).findings if f.category == "prompt_injection"]
+
+
+# --- calibration against a real repo (terramate-api-wrapper) --------------------
+
+CI_REPORT_SCRIPT = """\
+import os, urllib.request
+token = _oauth_token(os.environ["DATABRICKS_HOST"], os.environ["DATABRICKS_CLIENT_ID"], os.environ["DATABRICKS_CLIENT_SECRET"])
+"""
+OWN_STATE_WRITER = """\
+from databricks.sdk import WorkspaceClient
+w = WorkspaceClient()
+cur.execute("SELECT step.id FROM step JOIN provisioning_request ON provisioning_request.id = step.request_id")
+"""
+
+
+def test_ci_scripts_in_a_nested_fixture_repo_are_not_the_apps_identity():
+    # The false positive this repo produced: a CI service principal calling the
+    # app, in a fixture repo that isn't deployed, read as "the app's SP reads data".
+    files = {
+        "app.yaml": 'command: ["uvicorn", "server.main:app"]\n',
+        "server/database.py": LAKEBASE,
+        "fixtures/tf-repo/.github/workflows/terraform.yml": "on: pull_request\n",
+        "fixtures/tf-repo/scripts/report_outputs.py": CI_REPORT_SCRIPT,
+        "fixtures/tf-repo/scripts/write_output.py": OWN_STATE_WRITER,
+    }
+    scan = run_prescan(files)
+    assert scan.identity == "sp_app_resources_only"
+    assert not [f for f in scan.findings if f.severity == "blocker"]
+    assert all(s.file.startswith("server/") for s in scan.sp_signals)
+
+
+def test_a_bare_table_query_is_not_governed_data_but_a_three_part_name_is():
+    from app.services.app_code_review.prescan import _DATA_PATTERNS
+    sql = dict(_DATA_PATTERNS)["Unity Catalog SQL query"]
+    assert not sql.search('cur.execute("SELECT step.id FROM step WHERE id = %s")')
+    assert not sql.search("from server.recipes.framework import AddFile, EditFile")
+    assert sql.search('q = "select a from main.sales.orders o join main.crm.accounts c on o.id = c.id"')
+    assert sql.search("MERGE INTO prod.gold.customers USING updates")
+    assert sql.search('cur.execute("SELECT * FROM main.sales.orders")')
+    assert sql.search("spark.sql('select 1 from `edh-prod`.finance.gl')")
+
+
+def test_a_secret_looking_literal_in_a_test_is_minor_but_a_real_token_is_not():
+    scan = run_prescan({"tests/unit/test_client.py": 'TOKEN = "ghp_supersecrettoken"\n',
+                        "tests/unit/test_leak.py": f'KEY = "{PAT}"\n'})
+    by_file = {f.file: f.severity for f in scan.findings if f.category == "secrets"}
+    assert by_file == {"tests/unit/test_client.py": "minor", "tests/unit/test_leak.py": "blocker"}
+
+
+@pytest.mark.parametrize("raw", ["unknown", "N/A", "TBD", " none ", "<repo>"])
+def test_placeholder_repos_are_refused_with_guidance(raw):
+    with pytest.raises(PermanentError, match="Ask the requester"):
+        parse_repo_input(raw)
+
+
+def test_endpoints_are_inventoried_with_their_guards():
+    fastapi = '''\
+@router.post("/v1/requests", status_code=202)
+def create(body: Body, requester: str = Depends(resolve_requester), session: Session = Depends(get_db)):
+    ...
+@router.post("/v1/requests/{rid}/cancel")
+def cancel(rid: str, session: Session = Depends(get_db)):
+    ...
+'''
+    flask = '@app.route("/admin", methods=["POST"])\n@login_required\ndef admin():\n    ...\n'
+    express = "router.delete('/items/:id', async (req, res) => {});\n"
+    scan = run_prescan({"server/routes.py": fastapi, "web/app.py": flask, "api/index.js": express,
+                        "tests/test_routes.py": '@app.get("/ignored")\ndef t(): ...\n'})
+    got = {(e["method"], e["path"]): e["guards"] for e in scan.endpoints}
+    assert got == {
+        ("POST", "/v1/requests"): ["resolve_requester"],
+        ("POST", "/v1/requests/{rid}/cancel"): [],
+        ("ANY", "/admin"): ["login_required"],
+        ("DELETE", "/items/:id"): [],
+    }
+
+
+def test_an_uncited_claim_that_the_sp_reads_data_becomes_unclear():
+    files = {"app.yaml": LAKEBASE_YAML, "app.py": OBO_APP, "db.py": LAKEBASE}
+    args = _submit(recommendation="needs_discussion", data_access_identity="sp_with_data_access",
+                   findings=[{"severity": "blocker", "category": "network", "title": "GitHub writes"}])
+    result = _result(files, args["tool_calls"][0]["function"]["arguments"])
+    assert result["data_access_identity"] == "unknown"
+    assert any("cited no code" in f for f in result["confidence_factors"])
+    cited = _submit(recommendation="needs_discussion", data_access_identity="sp_with_data_access",
+                    findings=[{"severity": "blocker", "category": "sp_data_access", "title": "SP reads UC",
+                               "file": "db.py", "line": 3}])
+    assert _result(files, cited["tool_calls"][0]["function"]["arguments"])["data_access_identity"] == "sp_with_data_access"

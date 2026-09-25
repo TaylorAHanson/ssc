@@ -41,9 +41,11 @@ CONTROL_LABELS = {
     "logging": "Logging & monitoring",
     "file_uploads": "File uploads",
 }
-# Findings are filed under a control, so they line up with the checklist (and
-# an identity blocker can set the identity), plus two that fit no control.
-FINDING_CATEGORIES = CONTROLS + ["prompt_injection", "other"]
+# Findings are filed under a control, so they line up with the checklist, or
+# under one of these. ``sp_data_access`` is reserved for the service principal
+# reaching governed data (it alone sets the identity), and ``authorization`` is
+# who may call what, which the controls list leaves implicit.
+FINDING_CATEGORIES = CONTROLS + ["sp_data_access", "authorization", "prompt_injection", "other"]
 
 # met / gap come from the code; confirm = can't be seen in code, the admin
 # checks it (never lowers the recommendation on its own).

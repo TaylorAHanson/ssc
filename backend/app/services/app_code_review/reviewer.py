@@ -55,9 +55,12 @@ than the reads it depends on, once you have seen their results.
 """
 
 _INLINE_BUDGET = 60_000   # chars of key-file content sent up front
-# Consecutive failed model calls (unreachable, or refused by an AI Gateway
-# guardrail) before giving up; each call already retries transport errors.
-_MAX_MODEL_FAILURES = 2
+# Consecutive failed model calls (rate limited, unreachable, or refused by an
+# AI Gateway guardrail) before giving up; each call already retries transport
+# errors. Backoff between them lets a rate limit clear instead of throwing
+# away a review that was making progress.
+_MAX_MODEL_FAILURES = 4
+_FAILURE_BACKOFF_SECONDS = 15
 _READ_LIMIT = 400         # lines per read_file call
 _GREP_LIMIT = 80          # hits per grep call
 _PATTERN_LIMIT = 200      # chars in a grep pattern (bounds pathological regexes)
@@ -121,8 +124,10 @@ _TOOLS: List[Dict[str, Any]] = [
                     "required": ["control", "status"]}},
             "findings": {"type": "array", "items": {"type": "object", "properties": {
                 "severity": {"type": "string", "enum": SEVERITIES},
-                "category": {"type": "string", "enum": FINDING_CATEGORIES,
-                             "description": "The control this finding falls under."},
+                "category": {"type": "string", "enum": FINDING_CATEGORIES, "description": (
+                    "The control this finding falls under. sp_data_access: only for the service "
+                    "principal reading or writing governed (Unity Catalog) data. authorization: who "
+                    "may call an endpoint or trigger an action.")},
                 "title": {"type": "string"},
                 "file": {"type": "string"},
                 "line": {"type": "integer"},
@@ -226,6 +231,7 @@ def required_files(snapshot: Snapshot, scan: PreScan) -> List[str]:
     from app.services.app_code_review.prescan import CODE_EXTENSIONS
 
     signalled = [s.file for s in scan.obo_signals + scan.sp_signals + scan.data_signals + scan.exception_leads]
+    signalled += [e["file"] for e in scan.endpoints]
     wanted = scan.app_config_files + scan.entrypoint_files + signalled
     code = sorted(p for p in snapshot.files if posixpath.splitext(p)[1].lower() in CODE_EXTENSIONS)
     if len(code) <= _READ_ALL_CODE_FILES:
@@ -398,7 +404,8 @@ async def run_reviewer(
                 "lowering confidence for anything you couldn't check."
             )})
         response = await llm.generate_response(
-            messages, tools=submit_only if final else _TOOLS, temperature=0.0, max_tokens=4000,
+            # Room for a reasoning model's thinking plus a full verdict.
+            messages, tools=submit_only if final else _TOOLS, temperature=0.0, max_tokens=12000,
         )
         if response.get("is_error"):
             # Retry the same turn rather than feeding the client's fallback
@@ -410,6 +417,7 @@ async def run_reviewer(
                 messages.pop()  # the out-of-budget prompt is re-added next turn
             if failures >= _MAX_MODEL_FAILURES:
                 break
+            await asyncio.sleep(min(_FAILURE_BACKOFF_SECONDS * failures, max(0.0, deadline - time.monotonic())))
             continue
         failures = 0
         tool_calls = response.get("tool_calls") or []

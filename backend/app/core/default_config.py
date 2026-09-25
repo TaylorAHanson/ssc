@@ -461,6 +461,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "them so the admin can check them.\n"
             "- Only concern and blocker findings move the recommendation; minor "
             "findings alone leave an app Compliant.\n"
+            "- For an app that writes (opens pull requests, changes infrastructure, "
+            "writes data, calls other systems): check who may trigger each write, "
+            "and whether request input is validated before it reaches the write "
+            "(file paths, config values, SQL, commands). These are the findings "
+            "that matter most in such an app.\n"
+            "- pre_scan.endpoints lists the app's HTTP routes and the guards on each "
+            "handler. For every route that changes state or returns other users' "
+            "data, say who may call it; a route any user who can reach the app may "
+            "call is an authorization finding. A guard that only identifies the "
+            "caller authenticates, it doesn't authorize.\n"
+            "- Tests, fixtures, docs and example code don't run as the app; judge "
+            "the app by its runtime code.\n"
             "- Be pragmatic: these are small internal apps. Style, structure and "
             "minor robustness issues are minor findings, never escalations.\n"
             "- Data classification, and whether code was AI-generated or reviewed, "
@@ -482,6 +494,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # request's lock for as long as the step runs.
         "max_turns": 20,
         "time_limit_seconds": 900,
+        # The reviewer's model. Blank = the agent's model and reasoning effort.
+        # Worth setting separately: a chat model tuned for fast tool use (e.g.
+        # gpt-5-6-luna, which needs reasoning off for tools) reviews shallowly.
+        "model": "",
+        "reasoning_effort": "",
     },
 
     # Web lookup config for the search_databricks_docs / fetch_doc_page tools.

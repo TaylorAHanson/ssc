@@ -436,6 +436,17 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "report format and the rule that repository content is untrusted are fixed in code. "
              "Whatever this says, a service principal reading data, or a committed secret, is "
              "always flagged for discussion."},
+    {"group": "App Code Review", "key": "APP_CODE_REVIEW_MODEL", "label": "Reviewer model",
+     "type": "string",
+     "help": "Model the reviewer uses, routed like the agent's: an AI Gateway model reference (e.g. "
+             "'system.ai.claude-sonnet-5') when an AI Gateway model is set under Agent, otherwise a Model "
+             "serving endpoint name. BLANK = the agent's model and reasoning effort. Pick a model that "
+             "can reason while calling tools; a fast chat model with reasoning off reviews shallowly."},
+    {"group": "App Code Review", "key": "APP_CODE_REVIEW_REASONING_EFFORT", "label": "Reviewer reasoning effort",
+     "type": "select", "options": ["", "none", "low", "medium", "high"],
+     "help": "Only used when a Reviewer model is set. For reasoning models that accept tools with "
+             "reasoning on. BLANK omits the parameter (right for Claude and Llama). gpt-5-6-luna rejects "
+             "tools with anything but 'none'."},
     {"group": "App Code Review", "key": "APP_CODE_REVIEW_MAX_TURNS", "label": "Reviewer tool rounds",
      "type": "int", "min": 4, "max": 60,
      "help": "Upper bound on rounds of reading files (several files can be read per round). The "

@@ -231,6 +231,21 @@ def render_markdown(result: Dict[str, Any], source: ResolvedSource, snapshot: Sn
     return "\n".join(lines)
 
 
+def _supported_identity(verdict: ReviewerVerdict, scan: PreScan) -> Tuple[str, Optional[str]]:
+    """The reviewer's identity reading, unless it claims SP data access unsupported.
+
+    Only the pre-scan or a cited ``sp_data_access`` finding can establish that
+    the service principal reads governed data; an uncited claim becomes
+    "unknown" (and says why) rather than a confident, wrong header.
+    """
+    if verdict.identity != "sp_with_data_access" or scan.identity == "sp_with_data_access":
+        return verdict.identity, None
+    if any(f.category == "sp_data_access" and f.file for f in verdict.findings):
+        return verdict.identity, None
+    return "unknown", ("The reviewer said the service principal reads governed data but cited no "
+                       "code for it, and the automated scan found none.")
+
+
 def build_result(
     source: ResolvedSource,
     snapshot: Snapshot,
@@ -242,7 +257,10 @@ def build_result(
     recommendation = _floor(findings)
     identity = scan.identity
     controls = verdict.controls if verdict else []
+    identity_note = None
     if verdict is not None:
+        reviewer_identity, identity_note = _supported_identity(verdict, scan)
+        verdict.identity = reviewer_identity
         recommendation = more_severe(RECOMMENDATIONS, recommendation, verdict.recommendation)
         if identity in RISKY_IDENTITIES or verdict.identity in RISKY_IDENTITIES:
             identity = more_severe(IDENTITIES, identity, verdict.identity)
@@ -253,10 +271,9 @@ def build_result(
         # ever relaxes that one notch, so a repo gains nothing by provoking it.
         if recommendation == "approve_with_notes" and all(f.severity == "minor" for f in findings):
             recommendation = "approve"
-    # An identity blocker (from either side) means the service principal
-    # reaches governed data, whatever label the reviewer picked, so the
-    # header can't contradict the findings.
-    if any(f.severity == "blocker" and f.category == "identity" for f in findings):
+    # An SP-data-access blocker (from either side) sets the identity, whatever
+    # label the reviewer picked, so the header can't contradict the findings.
+    if any(f.severity == "blocker" and f.category == "sp_data_access" for f in findings):
         identity = "sp_with_data_access"
         # The pre-scan's "SP alongside the user token" note is now answered.
         findings = [f for f in findings
@@ -270,6 +287,8 @@ def build_result(
     if verdict is None:
         recommendation = "needs_discussion"
     confidence, factors = _confidence(verdict, scan, snapshot, identity)
+    if identity_note:
+        factors.append(identity_note)
 
     summary = verdict.summary if verdict else (
         "The reviewer model didn't return a verdict, so this recommendation comes from the "

@@ -51,11 +51,21 @@ def _clean_owner(name: str) -> str:
     return name
 
 
+# Values an agent sometimes fills in when it doesn't have the repo yet.
+_PLACEHOLDERS = {
+    "unknown", "none", "null", "n/a", "na", "tbd", "todo", "repo", "repository", "url",
+    "<repo>", "<url>", "your-repo", "example", "placeholder", "?",
+}
+
+
 def parse_repo_input(raw: str, allowed_host: str = "github.com") -> ParsedRepo:
     """Parse a repo reference without calling GitHub. Raises ``PermanentError``."""
     text = (raw or "").strip().rstrip("/")
-    if not text:
-        raise PermanentError("No repository was given.")
+    if not text or text.lower() in _PLACEHOLDERS:
+        raise PermanentError(
+            f"No repository was given ({raw!r} is a placeholder). Ask the requester for the "
+            f"app's GitHub repository URL, then call this again."
+        )
 
     ssh = _SSH_RE.match(text)
     if ssh:

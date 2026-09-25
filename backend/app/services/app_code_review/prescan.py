@@ -60,7 +60,12 @@ _DATA_PATTERNS: List[Tuple[str, Pattern]] = [
     ("Unity Catalog table/volume API", re.compile(r"\.tables\.(get|list)\(|\bfiles\.(download|upload)\(|/Volumes/")),
     ("Genie API", re.compile(r"\bgenie\.(start_conversation|create_message|execute)|/api/2\.0/genie/")),
     ("Vector Search", re.compile(r"\bVectorSearchClient\b|vector_search_endpoints")),
-    ("SQL query", re.compile(r"\bSELECT\b.{1,200}?\bFROM\b", re.IGNORECASE)),
+    # Only a three-part (catalog.schema.table) name is Unity Catalog; a bare
+    # table name is as likely the app's own Lakebase state.
+    # Needs real SQL context: Python's `from a.b.c import x` is also "FROM a.b.c".
+    ("Unity Catalog SQL query", re.compile(
+        r"(\bSELECT\b.{0,200}?\bFROM|\bJOIN|\b(INSERT|MERGE)\s+INTO|\bUPDATE|\bTABLE)"
+        r"\s+`?[\w-]+`?\.`?[\w-]+`?\.`?[\w-]+`?(?!\s+import\b)", re.IGNORECASE)),
 ]
 
 # Patterns that can trigger a security exception (external services, write-back,
@@ -84,6 +89,17 @@ _EXCEPTION_LEAD_PATTERNS: List[Tuple[str, Pattern]] = [
     ("LLM tool calling", re.compile(
         r"\btool_choice\b|\bbind_tools\(|\bAgentExecutor\b|create_react_agent|\btools\s*=\s*\[")),
 ]
+
+# HTTP routes (FastAPI/Starlette/Flask decorators, Express handlers). Every
+# route that changes state needs an answer to "who may call this?", and that
+# is the question models most often skip when they have to find routes alone.
+_ROUTE = re.compile(
+    r"@\w+\.(get|post|put|patch|delete|route|api_route)\(\s*[\"']([^\"']+)[\"']"
+    r"|\b(?:app|router)\.(get|post|put|patch|delete)\(\s*[\"'`]([^\"'`]+)[\"'`]"
+)
+_DEPENDS = re.compile(r"\b(?:Depends|Security)\(\s*([\w.]+)")
+_GUARD_DECORATOR = re.compile(r"@(\w*(?:login_required|requires_auth|require_\w+|auth\w*|permission\w*))\b")
+_NOT_A_GUARD = re.compile(r"(?i)(^|\.)(get_)?(db|session|settings|config|engine)$")
 
 # Formats specific enough that a hit is almost certainly a real credential.
 _SECRET_PATTERNS: List[Tuple[str, Pattern]] = [
@@ -115,6 +131,36 @@ _REVIEWER_DIRECTED = re.compile(
     r"(ai|llm) reviewer|pre-?approved by (the )?security|recommendation\s*[=:]\s*['\"]?approve)"
 )
 
+# Code that doesn't run as the deployed app: tests, fixtures, docs, examples,
+# CI config, and any nested repo (a directory with its own .github). Identity
+# and data signals there describe some other identity (a test double, a CI
+# service principal), so only the app's runtime code counts toward them.
+_NON_RUNTIME_DIRS = {
+    "test", "tests", "__tests__", "spec", "specs", "e2e", "fixtures", "fixture", "testdata",
+    "examples", "example", "samples", "docs", "doc", ".github", "notebooks_dev",
+}
+_TEST_FILE = re.compile(r"(^test_.*|.*_test\.\w+$|.*\.(test|spec)\.\w+$|^conftest\.py$)")
+
+
+def non_runtime_roots(files: Dict[str, str]) -> List[str]:
+    """Directories holding a nested repository (their own ``.github/``)."""
+    roots = set()
+    for path in files:
+        parts = path.split("/")
+        if ".github" in parts:
+            i = parts.index(".github")
+            if i > 0:
+                roots.add("/".join(parts[:i]) + "/")
+    return sorted(roots)
+
+
+def is_runtime_path(path: str, nested_roots: Iterable[str] = ()) -> bool:
+    parts = path.split("/")
+    if any(p.lower() in _NON_RUNTIME_DIRS for p in parts[:-1]) or _TEST_FILE.match(parts[-1]):
+        return False
+    return not any(path.startswith(root) for root in nested_roots)
+
+
 _COMMENT_LINE = re.compile(r"^\s*(#|//|--|\*|/\*)")
 
 # SP patterns only count in files that use Databricks at all (``.authenticate``
@@ -131,6 +177,7 @@ class PreScan:
     sp_signals: List[Signal] = field(default_factory=list)
     data_signals: List[Signal] = field(default_factory=list)
     exception_leads: List[Signal] = field(default_factory=list)
+    endpoints: List[Dict[str, Any]] = field(default_factory=list)
     declared_resources: List[Dict[str, Any]] = field(default_factory=list)
     user_api_scopes: List[str] = field(default_factory=list)
     app_config_files: List[str] = field(default_factory=list)
@@ -144,6 +191,7 @@ class PreScan:
             "sp_signals": [s.to_dict() for s in self.sp_signals],
             "data_signals": [s.to_dict() for s in self.data_signals],
             "exception_leads": [s.to_dict() for s in self.exception_leads],
+            "endpoints": self.endpoints,
             "declared_resources": self.declared_resources,
             "user_api_scopes": self.user_api_scopes,
             "app_config_files": self.app_config_files,
@@ -279,9 +327,10 @@ def _bundle_app_facts(path: str, doc: Any, scan: PreScan) -> None:
             })
 
 
-def _find_secrets(files: Dict[str, str], scan: PreScan) -> None:
+def _find_secrets(files: Dict[str, str], scan: PreScan, nested_roots: Iterable[str] = ()) -> None:
     for path in sorted(files):
         name = posixpath.basename(path)
+        runtime = is_runtime_path(path, nested_roots)
         is_env_file = name == ".env" or (
             name.startswith(".env.") and not name.endswith((".example", ".sample", ".template"))
         )
@@ -298,8 +347,11 @@ def _find_secrets(files: Dict[str, str], scan: PreScan) -> None:
                     ))
             m = _GENERIC_SECRET.search(line)
             if m and not _PLACEHOLDER.search(line):
+                # Real token formats (above) are blockers anywhere; a merely
+                # secret-looking literal in a test or fixture is a test value.
+                severity = "blocker" if is_env_file else ("concern" if runtime else "minor")
                 scan.findings.append(Finding(
-                    severity="blocker" if is_env_file else "concern", category="secrets",
+                    severity=severity, category="secrets",
                     title=f"Possible hardcoded {m.group(1).lower()}",
                     why_it_matters="A literal credential in source is readable by anyone with repo access.",
                     remediation="If it's real: rotate it and load it from a secret scope instead.",
@@ -307,6 +359,46 @@ def _find_secrets(files: Dict[str, str], scan: PreScan) -> None:
                 ))
         if len(scan.findings) > 40:
             return
+
+
+def _find_endpoints(files: Dict[str, str], scan: PreScan, limit: int = 80) -> None:
+    """Each HTTP route, with the auth-looking dependencies/decorators on its handler.
+
+    ``guards`` lists names only (``Depends(require_admin)`` -> ``require_admin``);
+    whether a guard authorizes or merely authenticates is the reviewer's call.
+    """
+    for path in sorted(files):
+        if _ext(path) not in CODE_EXTENSIONS:
+            continue
+        lines = files[path].splitlines()
+        for i, line in enumerate(lines):
+            m = _ROUTE.search(line)
+            if not m:
+                continue
+            method = (m.group(1) or m.group(3) or "").upper()
+            route = m.group(2) or m.group(4) or ""
+            # This handler only: its contiguous decorator stack above the route,
+            # then forward to the next route (FastAPI dependencies sit in the
+            # parameters, Flask guards in decorators below the route line).
+            start = i
+            while start > 0 and lines[start - 1].lstrip().startswith("@"):
+                start -= 1
+            end = min(len(lines), i + 16)
+            for j in range(i + 1, end):
+                if _ROUTE.search(lines[j]):
+                    end = j
+                    break
+            decorators = [ln for ln in lines[start:end] if ln.lstrip().startswith("@")]
+            text = "\n".join(lines[i:end])
+            guards = [g for g in _DEPENDS.findall(text) if not _NOT_A_GUARD.search(g)]
+            guards += _GUARD_DECORATOR.findall("\n".join(decorators))
+            scan.endpoints.append({
+                "method": "ANY" if method in ("ROUTE", "API_ROUTE") else method,
+                "path": route[:200], "file": path, "line": i + 1,
+                "guards": sorted(set(guards))[:6],
+            })
+            if len(scan.endpoints) >= limit:
+                return
 
 
 def _find_reviewer_directed_text(files: Dict[str, str], scan: PreScan) -> None:
@@ -355,11 +447,14 @@ def run_prescan(files: Dict[str, str]) -> PreScan:
         elif _ext(path) in (".yml", ".yaml") and "apps" in files[path]:
             _bundle_app_facts(path, _load_yaml(files[path]), scan)
 
-    scan.obo_signals = _scan_lines(files, _OBO_PATTERNS, code_only=True)
-    scan.sp_signals = _scan_lines(files, _SP_PATTERNS, code_only=True, file_gate=_DATABRICKS_FILE)
-    scan.data_signals = _scan_lines(files, _DATA_PATTERNS, code_only=True)
-    scan.exception_leads = _scan_lines(files, _EXCEPTION_LEAD_PATTERNS, code_only=True, limit=40)
-    _find_secrets(files, scan)
+    nested = non_runtime_roots(files)
+    runtime = {p: t for p, t in files.items() if is_runtime_path(p, nested)}
+    scan.obo_signals = _scan_lines(runtime, _OBO_PATTERNS, code_only=True)
+    scan.sp_signals = _scan_lines(runtime, _SP_PATTERNS, code_only=True, file_gate=_DATABRICKS_FILE)
+    scan.data_signals = _scan_lines(runtime, _DATA_PATTERNS, code_only=True)
+    scan.exception_leads = _scan_lines(runtime, _EXCEPTION_LEAD_PATTERNS, code_only=True, limit=40)
+    _find_endpoints(runtime, scan)
+    _find_secrets(files, scan, nested)
     _find_reviewer_directed_text(files, scan)
     scan.identity = classify_identity(scan)
 
@@ -367,8 +462,8 @@ def run_prescan(files: Dict[str, str]) -> PreScan:
     if scan.identity == "sp_with_data_access":
         where = sp or data
         scan.findings.insert(0, Finding(
-            severity="blocker", category="identity",
-            title="The app's service principal appears to read data",
+            severity="blocker", category="sp_data_access",
+            title="The app's service principal appears to read governed data",
             why_it_matters="Data read as the app's own identity is shown to every user of the app, "
                            "whether or not they have access to it themselves.",
             remediation="Query with the signed-in user's token (on-behalf-of-user) instead, or get a "

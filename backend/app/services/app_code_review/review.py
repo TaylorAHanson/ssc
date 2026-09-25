@@ -58,7 +58,11 @@ async def review_app_code(
     try:
         if llm is None:
             from app.model_serving.agent_llm import AgentLLMClient
-            llm = AgentLLMClient()
+            model = (settings.APP_CODE_REVIEW_MODEL or "").strip()
+            llm = (
+                AgentLLMClient(model=model, reasoning_effort=settings.APP_CODE_REVIEW_REASONING_EFFORT or "")
+                if model else AgentLLMClient()
+            )
         verdict = await run_reviewer(
             llm, source, snapshot, scan,
             rubric=settings.APP_CODE_REVIEW_RUBRIC,

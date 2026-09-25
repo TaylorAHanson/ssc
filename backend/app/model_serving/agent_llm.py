@@ -20,7 +20,13 @@ logger = logging.getLogger(__name__)
 class AgentLLMClient:
     """Client for agent LLM model serving endpoint."""
     
-    def __init__(self):
+    def __init__(self, model: Optional[str] = None, reasoning_effort: Optional[str] = None):
+        """``model`` / ``reasoning_effort`` override the agent's for one caller
+        (e.g. the app code reviewer). ``model`` is routed the same way as the
+        agent's: a gateway model reference when the AI Gateway is configured,
+        otherwise a serving endpoint name. ``reasoning_effort=None`` follows the
+        agent's live setting; ``""`` omits the parameter.
+        """
         # Share the process-wide transport client (warm connection pool + cached,
         # auto-refreshing auth) instead of building a new one — with a blocking
         # OAuth round-trip — on every AgentRunner / chat request.
@@ -28,10 +34,11 @@ class AgentLLMClient:
         # Prefer the AI Gateway endpoint when configured so model routing / A-B
         # split, rate + cost limits, and input guardrails live in the gateway
         # (config, not code). Falls back to the direct serving endpoint otherwise.
-        self.endpoint_name = (
+        self.endpoint_name = model or (
             settings.AI_GATEWAY_ENDPOINT or settings.MODEL_SERVING_AGENT_LLM_ENDPOINT
         )
         self.via_gateway = bool(settings.AI_GATEWAY_ENDPOINT)
+        self._reasoning_effort = reasoning_effort
 
         if not self.endpoint_name:
             raise ValueError(
@@ -125,7 +132,10 @@ class AgentLLMClient:
         # explicitly only when configured (set "none" for gpt-5-6-luna); blank
         # omits it so non-reasoning models (Claude, Llama) aren't sent an
         # unexpected parameter they'd reject.
-        effort = (settings.AGENT_LLM_REASONING_EFFORT or "").strip()
+        effort = (
+            settings.AGENT_LLM_REASONING_EFFORT if self._reasoning_effort is None else self._reasoning_effort
+        )
+        effort = (effort or "").strip()
         if effort:
             inputs["reasoning_effort"] = effort
 
