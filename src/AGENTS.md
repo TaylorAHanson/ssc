@@ -47,3 +47,5 @@ This is the admin/self-service UI that talks to the backend at
   most "add a config knob" tasks need no frontend change.
 - Don't hardcode the product/brand name; render it from the branding the backend
   serves.
+- Render backend-supplied markdown (agent replies, approval `reports`) only
+  through `renderMarkdownSafe` (`lib/markdown.ts`); it may quote untrusted content.

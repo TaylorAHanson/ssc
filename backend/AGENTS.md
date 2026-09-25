@@ -36,6 +36,14 @@ first** — it is the source of truth for how the pieces fit together.
 
 ## Conventions that matter
 
+- **Workflow step tools live in `app/workflows/tools/`** (the Workflow Studio
+  picker's registry, exported from its `__init__`); `app/tools/` is auto-loaded
+  as chat-agent tools. Put heavy step logic in `app/services/` and keep the tool
+  a thin wrapper (e.g. `code_review.py` → `services/app_code_review/`).
+- **`AgentLLMClient.generate_response` never raises.** On failure it returns a
+  fallback message flagged `is_error: True`; check the flag before treating the
+  content as the model's words. AI Gateway input guardrails refuse some
+  security-review prompts this way.
 - **Tools are defined with `@tool`** (`app.tools.mcp`) and must declare a
   `side_effect_class` — one of `read` (default), `app_write`, `data_grant`,
   `infra`, `membership`, `notify`, `destructive`. This drives the ToolExecutor's

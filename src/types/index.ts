@@ -119,6 +119,15 @@ export type ApprovalType =
    *  done. Shares the inbox and endpoints with approvals. */
   | 'manual_task';
 
+/** A markdown report an earlier workflow step produced for approvers to read. */
+export interface StepReport {
+  step: string;
+  tool: string;
+  title: string;
+  markdown: string;
+  createdAt?: string;
+}
+
 export interface Approval {
   id: string;
   requestId: string;
@@ -148,6 +157,8 @@ export interface Approval {
   instructions?: string;
   /** `manual_task` only: SLA deadline, so an ignored task can show as overdue. */
   dueAt?: string;
+  /** Reports from earlier steps (e.g. an automated code review), latest per step. */
+  reports?: StepReport[];
 }
 
 export interface ApprovalAction {

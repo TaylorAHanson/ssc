@@ -601,12 +601,15 @@ async def process_single_request(semaphore: asyncio.Semaphore, request_id: str):
                 logger.debug(f"Request {request_id} is locked by another worker, skipping")
                 return
             
-            # Start heartbeat task for long-running operations
-            if is_long_running:
-                heartbeat_task = asyncio.create_task(
-                    _heartbeat_lock_loop(request_id, lock_timeout)
-                )
-                logger.debug(f"Started heartbeat for long-running request {request_id}")
+            # Heartbeat every run, not just ones already in PROVISIONING: a
+            # request resuming off a gate carries the gate's status, yet the
+            # step it resumes into can run past the short lock (e.g. an LLM code
+            # review). Without this a second worker takes the expired lock and
+            # runs the step again. A dead worker stops heartbeating, so its lock
+            # still expires after ``lock_timeout``.
+            heartbeat_task = asyncio.create_task(
+                _heartbeat_lock_loop(request_id, lock_timeout)
+            )
             
             try:
                 # Process the request
@@ -745,7 +748,12 @@ async def _heartbeat_lock_loop(request_id: str, timeout_minutes: int):
         request_id: Request ID to heartbeat
         timeout_minutes: Lock timeout to extend to
     """
-    heartbeat_interval = getattr(settings, 'POLLER_HEARTBEAT_INTERVAL_SECONDS', 300)
+    # Beat well inside the lock window: the configured interval (5 min) equals
+    # the short lock timeout, which would let the lock lapse between beats.
+    heartbeat_interval = min(
+        getattr(settings, 'POLLER_HEARTBEAT_INTERVAL_SECONDS', 300),
+        max(10, timeout_minutes * 60 // 3),
+    )
     
     try:
         while True:

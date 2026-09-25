@@ -172,7 +172,9 @@ class AgentLLMClient:
         return str(content or "")
 
     def _create_error_response(self, message: str) -> Dict[str, Any]:
-        return {"role": "assistant", "content": message}
+        # ``is_error`` lets non-chat callers (e.g. the app code reviewer) tell
+        # this friendly fallback apart from something the model actually said.
+        return {"role": "assistant", "content": message, "is_error": True}
 
     def _log_response_structure(self, response: Any):
         if isinstance(response, dict):

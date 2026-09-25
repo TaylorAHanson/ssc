@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRequestStore } from '../stores/requestStore';
 import { useUserStore } from '../stores/userStore';
 import { RequestDetailsModal } from '../components/RequestDetailsModal';
+import { StepReportPanel } from '../components/StepReportPanel';
 import { RequestStateList } from './Requests';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -530,6 +531,9 @@ export function Approvals() {
                           ))}
                         </dl>
                       </div>
+                    )}
+                    {approval.reports && approval.reports.length > 0 && (
+                      <StepReportPanel reports={approval.reports} />
                     )}
                   </div>
                 </div>

@@ -2,11 +2,12 @@
 Approval API endpoints.
 """
 from fastapi import APIRouter, HTTPException, Depends
-from typing import Optional, List
+from typing import Dict, Iterable, Optional, List
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.db import ApprovalModel, RequestModel
-from app.models.request import Approval, ApprovalType
+from app.db import ApprovalModel, EventModel, RequestModel
+from app.models.request import Approval, ApprovalType, StepReport
+from app.workflows.spec import STEP_REPORT_FACT
 from app.api.deps import get_current_user
 from app.models.user import User
 from app.services.approval_scope import (
@@ -38,7 +39,45 @@ def _get_workflow_params(state_context: dict | None) -> dict:
     }
 
 
-def _map_approval(approval_model: ApprovalModel, request_model: RequestModel) -> Approval:
+def _load_step_reports(db: Session, request_ids: Iterable[str]) -> Dict[str, List[StepReport]]:
+    """Reports earlier steps produced, per request: the latest per step, in step order.
+
+    One query for the whole inbox. A step re-run (Edit & Restart, a retry)
+    records a fresh report, and only its newest one is shown.
+    """
+    ids = list({rid for rid in request_ids if rid})
+    if not ids:
+        return {}
+    rows = (
+        db.query(EventModel)
+        .filter(EventModel.request_id.in_(ids), EventModel.event_type == STEP_REPORT_FACT)
+        .order_by(EventModel.created_at.asc())
+        .all()
+    )
+    latest: Dict[str, Dict[str, StepReport]] = {}
+    for row in rows:
+        data = row.event_data or {}
+        markdown = data.get("markdown")
+        if not isinstance(markdown, str):
+            continue
+        step = str(data.get("step") or "")
+        per_request = latest.setdefault(row.request_id, {})
+        per_request.pop(step, None)  # re-insert so order follows the newest run
+        per_request[step] = StepReport(
+            step=step,
+            tool=str(data.get("tool") or ""),
+            title=str(data.get("title") or step),
+            markdown=markdown,
+            createdAt=row.created_at,
+        )
+    return {rid: list(by_step.values()) for rid, by_step in latest.items()}
+
+
+def _map_approval(
+    approval_model: ApprovalModel,
+    request_model: RequestModel,
+    reports: Optional[List[StepReport]] = None,
+) -> Approval:
     """Map an ApprovalModel + RequestModel to an Approval Pydantic response."""
     return Approval(
         id=approval_model.id,
@@ -71,6 +110,7 @@ def _map_approval(approval_model: ApprovalModel, request_model: RequestModel) ->
         # is an unexplained "something is waiting on you".
         instructions=approval_model.instructions,
         dueAt=approval_model.due_at,
+        reports=reports or [],
     )
 
 
@@ -109,7 +149,8 @@ def get_approvals(
         query = query.limit(limit)
 
     results = query.all()
-    return [_map_approval(am, rm) for am, rm in results]
+    reports = _load_step_reports(db, (am.request_id for am, _ in results))
+    return [_map_approval(am, rm, reports.get(am.request_id)) for am, rm in results]
 
 
 @router.get("/{approval_id}", response_model=Approval)
@@ -143,6 +184,7 @@ def get_approval(
     if not (is_assigned or is_delegated or is_role_assigned or is_role_based):
         raise HTTPException(status_code=403, detail="Not authorized to view this approval")
         
-    return _map_approval(approval_model, request_model)
+    reports = _load_step_reports(db, [approval_model.request_id])
+    return _map_approval(approval_model, request_model, reports.get(approval_model.request_id))
 
 

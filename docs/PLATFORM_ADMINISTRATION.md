@@ -115,6 +115,22 @@ The Context Catalog is a curated, editable knowledge base the agent retrieves fr
 ### Watch a request move through its workflow
 Open any request → **Workflow** tab for the **live graph view**: the authored graph with each node annotated as done / current / pending / rejected, derived from the same fact log as the timeline. It polls until the request reaches a terminal state.
 
+### Reports on approval cards
+When a step's tool returns a report (a `report_markdown` field, e.g. the app code review below), the report is recorded on the request and shown, collapsed under **Reports**, on every later approval card for that request. The author configures nothing; just put the step before the gate that should see it. If a step re-runs (Edit & Restart, a retry), approvers see its newest report.
+
+### App code review step (`review_databricks_app_code`)
+A read-only step for "promote an app to production" workflows. Give it the requester's repo reference in whatever form they supplied (repo, branch/directory, file, PR or commit URL, `owner/repo`, or a bare name); it pins the exact commit, reviews that commit's source and reports:
+
+- **Compliant / Compliant with conditions / Exception required**, with a confidence score and the reasons confidence was lowered.
+- **Data access identity**: whose identity reads governed (Unity Catalog) data, which decides most outcomes. The app's service principal reaching its *own* resources (its Lakebase database for app state, a serving endpoint), as most apps' default `WorkspaceClient()` does, is normal; the service principal querying UC data (warehouse SQL, tables, volumes, Genie, or Lakebase synced tables) is not.
+- A per-control checklist (**Met / Gap / Confirm**; *Confirm* means code can't show it, e.g. CI/CD or SIEM, and the admin checks it), findings with file links and fixes, and an approval path.
+
+Two checks run as code before the AI reviewer and can't be talked down by it: a **service principal reading governed data** always means *Exception required*, and **committed secrets** are always blockers.
+
+The reviewer's verdict is only accepted once it has actually read the files that bear on the decision (the app definition, entrypoints, every file an identity/data/exception signal points at, and, for a normal-sized app, every code file). A premature submit is sent back with the list of unread files; if the rounds or time run out first, the report names the files it didn't read and confidence drops. The report footer shows how many it read. If the model is unreachable, or an AI Gateway guardrail refuses the request (repository text aimed at an AI reviewer can provoke this deliberately), the step still completes: the report is headed **Manual review needed**, lists the automated leads to check (outbound calls, AI SDKs, write-back SQL, uploads), and is never marked Compliant. It never runs the app's code.
+
+Tune it under **Admin → Settings → App Code Review**: the reviewer rubric (the security team's controls and exception triggers; its *Terminology* block is where you name your platform, exception process and data classes), reading rounds, a time limit, and size limits. The GitHub token needs read access to the submitted repos ([GitHub Token Permissions](./GITHUB_TOKEN_PERMISSIONS.md)).
+
 ### Audit & traceability
 - Every governed tool call appends an **audit fact** (tool, side-effect class, policy decision, result/error).
 - The request **timeline** and live graph are reconstructed from the immutable fact log.

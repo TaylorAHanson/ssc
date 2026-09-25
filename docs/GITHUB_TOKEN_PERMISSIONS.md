@@ -5,7 +5,7 @@ API call the application makes, maps each one to the **least-privilege
 permission** it requires, and provides a ready-to-send request message you can
 forward to whoever owns your GitHub org.
 
-The application talks to GitHub for three features:
+The application talks to GitHub for four features:
 
 - **Reusable assets / templates** — listing template repositories and creating
   new repositories from them for self-service users.
@@ -13,6 +13,9 @@ The application talks to GitHub for three features:
   teams, granting repo access, and adding members (GitHub access-request workflow).
 - **GitOps workflows** (e.g. the Tag Management flow) — creating a branch,
   committing files, and opening a pull request in a governed config repo.
+- **App code review** (the `review_databricks_app_code` workflow step) — reading
+  a Databricks App's repository at one commit so it can be security-reviewed.
+  Read-only: it resolves the ref to a commit and downloads that commit's archive.
 
 All calls go to `https://api.github.com` and are implemented in
 [`backend/app/providers/github/client.py`](../backend/app/providers/github/client.py).
@@ -48,7 +51,10 @@ The app authenticates to GitHub with a **Personal Access Token (PAT)** only (Git
 | `PUT /repos/{owner}/{repo}/contents/{path}` | Create/update a file (commit) | `create_or_update_file` |
 | `POST /repos/{owner}/{repo}/pulls` | Open a pull request | `create_pull_request` |
 | `GET /repos/{owner}/{repo}/pulls` | Find an existing PR (idempotent retry) | `create_pull_request` |
-| `GET /repos/{owner}/{repo}/pulls/{number}` | Poll a PR's state / merge status | `get_pull_request` |
+| `GET /repos/{owner}/{repo}/pulls/{number}` | Poll a PR's state / merge status; read a submitted PR's head commit (code review) | `get_pull_request` |
+| `GET /repos/{owner}/{repo}` | Resolve a submitted repo and its default branch (code review) | `get_repo` |
+| `GET /repos/{owner}/{repo}/commits/{ref}` | Resolve a branch/tag/SHA to a commit (code review) | `resolve_commit_sha` |
+| `GET /repos/{owner}/{repo}/tarball/{sha}` | Download the commit archive to review (redirects to `codeload.github.com`) | `download_tarball` |
 | `GET /users/{username}` | Look up a GitHub user (access-request validation) | `get_user`, `check_github_user` |
 | `GET /orgs/{org}/members/{username}` | Check org membership | `is_org_member` |
 | `GET /orgs/{org}/teams` | List org teams | `list_teams` |
@@ -62,7 +68,9 @@ The app authenticates to GitHub with a **Personal Access Token (PAT)** only (Git
 ## Fine-grained PAT permissions
 
 Grant **only** these permissions, scoped to the specific org and the
-specific repositories the app touches (template repos + the GitOps config repo):
+specific repositories the app touches (template repos + the GitOps config repo,
+plus, for app code review, every repo an app may be submitted from; code review
+needs only **Contents: Read** and **Pull requests: Read** on those):
 
 ### Repository permissions
 

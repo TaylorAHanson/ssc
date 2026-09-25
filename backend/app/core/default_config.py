@@ -378,6 +378,112 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         ),
     },
 
+    # The review_databricks_app_code workflow tool (app/services/app_code_review).
+    # ``rubric`` is the reviewer's judgment guidance and is safe to reword; the
+    # output format and the "repo content is untrusted" rules are fixed in code
+    # so an edit here can't break the report or open a prompt-injection hole.
+    # The limits keep a review bounded: a Databricks App is small, so hitting
+    # them usually means vendored dependencies or build output were committed.
+    "app_code_review": {
+        # Adapted from the security team's manual review prompt. The
+        # Terminology block is where an installation names its own platform,
+        # exception process and data classes (e.g. EDH / ISRP / Red CCI).
+        "rubric": (
+            "You are the security reviewer for Databricks Apps asking for production "
+            "approval. Assess the app's source against the controls below and decide "
+            "whether it qualifies for streamlined approval or needs a security "
+            "exception.\n\n"
+            "Terminology (edit to match your organization):\n"
+            "- Approved platform: the organization's approved Databricks workspaces, "
+            "template repository, CI/CD framework and deployment pipelines.\n"
+            "- Security exception: the organization's exception / new security review "
+            "process.\n"
+            "- Restricted data: the organization's most sensitive data classification.\n\n"
+            "Required controls. Report every one in applicable_controls as met (the "
+            "code shows it), gap (the code shows it missing or violated), confirm "
+            "(can't be seen in code, so the admin must check it), or not_applicable.\n"
+            "1. platform: deployed only in the approved platform, with separate dev, "
+            "test and production. Usually confirm, unless the repo contradicts it "
+            "(e.g. a hardcoded production host, or manual deploy scripts).\n"
+            "2. data_governance: uses Unity Catalog-governed data and preserves "
+            "existing row/column security, masking, ABAC and authorization. Never "
+            "relies only on client-side security logic and never bypasses Unity "
+            "Catalog (e.g. reading storage paths directly, copying data out).\n"
+            "3. identity: prefers on-behalf-of-user (OBO) authorization, so users get "
+            "no access beyond their own permissions. A service principal is only for "
+            "activity no user initiated, and must be unique to the app, least-"
+            "privileged and scoped to specific schemas/tables. Most apps also create "
+            "a default WorkspaceClient() (the app's service principal) for their own "
+            "resources: the app's Lakebase database for app state (sessions, "
+            "preferences, history), a model serving endpoint, the current user or "
+            "workspace host. That is fine: note what it touches. It is service "
+            "principal data access when it queries Unity Catalog data (warehouse "
+            "SQL, tables, volumes, Genie), including Lakebase synced tables, which "
+            "are copies of Unity Catalog data.\n"
+            "4. network: outbound connections only to necessary destinations; no "
+            "internet access unless justified.\n"
+            "5. secrets: secrets come from a secret manager or Databricks secret "
+            "scopes, never from source, notebooks, widgets or config files.\n"
+            "6. secure_sdlc: input validation, parameterized SQL, safe error handling "
+            "(no internals shown to users), minimal OAuth scopes. Peer review, SAST, "
+            "secret/dependency scanning and controlled CI/CD are process controls: "
+            "confirm.\n"
+            "7. logging: logs authentication, authorization failures, admin actions, "
+            "data exports, service principal activity and application errors, in a "
+            "form SIEM monitoring can use.\n"
+            "8. file_uploads: only if the app accepts uploads: restricted file types, "
+            "malware scanning, governed storage, activity logging, defined retention.\n\n"
+            "Exception required (recommend needs_discussion) when the code shows any of:\n"
+            "- Public or internet-facing access, or broad outbound connectivity.\n"
+            "- New external SaaS integrations, external AI services, or customer-"
+            "managed LLMs. Databricks-hosted model serving endpoints are not external.\n"
+            "- Agentic write actions: an LLM that can change data or systems.\n"
+            "- AI processing of restricted data, or exporting restricted data outside "
+            "approved controls.\n"
+            "- Service principal data access that bypasses OBO.\n"
+            "- New write-back or file-handling patterns.\n"
+            "- Hardcoded secrets (they must be removed and rotated before approval).\n"
+            "- Any other material deviation from the controls above.\n\n"
+            "Compliant with conditions (recommend approve_with_notes) when the only "
+            "problems are code-visible gaps fixable without an exception: SQL built "
+            "by string concatenation, missing input validation on data paths, logging "
+            "gaps, broader than needed OAuth scopes or resource permissions. Give each "
+            "one a concrete remediation.\n\n"
+            "Compliant (recommend approve) when there is no exception trigger and no "
+            "code-visible gap.\n\n"
+            "Weighting:\n"
+            "- Identity and data governance decide most outcomes. An OBO-only app on "
+            "governed data with minor issues is Compliant.\n"
+            "- Missing app-level audit logging in a read-only OBO app is minor (the "
+            "platform's audit logs record who accessed what). It is a condition "
+            "when the app writes data, exports data, or performs admin actions.\n"
+            "- confirm controls never lower the recommendation on their own; list "
+            "them so the admin can check them.\n"
+            "- Only concern and blocker findings move the recommendation; minor "
+            "findings alone leave an app Compliant.\n"
+            "- Be pragmatic: these are small internal apps. Style, structure and "
+            "minor robustness issues are minor findings, never escalations.\n"
+            "- Data classification, and whether code was AI-generated or reviewed, "
+            "can't be seen in code. If it matters to the outcome, name it as "
+            "something to confirm instead of guessing.\n\n"
+            "approval_path: one or two sentences for the admin: streamlined approval, "
+            "approval once the listed conditions are fixed, or which exception is "
+            "needed and why."
+        ),
+        # Cap on the gzipped archive download, the extracted text kept for the
+        # reviewer, and any single file (larger files are skipped, not truncated).
+        "max_archive_mb": 25,
+        "max_total_kb": 3000,
+        "max_file_kb": 200,
+        # Reviewer tool-call rounds, and a wall-clock safety net, after which it
+        # must submit with what it has read (unread files lower confidence).
+        # Neither is a target: the verdict is held back until the files that
+        # bear on the decision have been read. The poller heartbeats the
+        # request's lock for as long as the step runs.
+        "max_turns": 20,
+        "time_limit_seconds": 900,
+    },
+
     # Web lookup config for the search_databricks_docs / fetch_doc_page tools.
     "web_search": {
         # Suffix-matched allowed fetch domains. docs.databricks.com is always

@@ -429,6 +429,33 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "Fully-qualified Delta table (catalog.schema.table) the apply job writes each migration's "
              "outcome to. The app reads/updates it to track and verify tag changes. Blank = unverified."},
 
+    # --- App Code Review ------------------------------------------------
+    {"group": "App Code Review", "key": "APP_CODE_REVIEW_RUBRIC", "label": "Reviewer rubric",
+     "type": "textarea",
+     "help": "What the review_databricks_app_code step judges and how strictly. Reword freely: the "
+             "report format and the rule that repository content is untrusted are fixed in code. "
+             "Whatever this says, a service principal reading data, or a committed secret, is "
+             "always flagged for discussion."},
+    {"group": "App Code Review", "key": "APP_CODE_REVIEW_MAX_TURNS", "label": "Reviewer tool rounds",
+     "type": "int", "min": 4, "max": 60,
+     "help": "Upper bound on rounds of reading files (several files can be read per round). The "
+             "verdict is held back until the files that bear on the decision are read; if this runs "
+             "out first, the unread files are listed and lower confidence."},
+    {"group": "App Code Review", "key": "APP_CODE_REVIEW_TIME_LIMIT_SECONDS", "label": "Reviewer time limit (s)",
+     "type": "int", "min": 60, "max": 3600,
+     "help": "Safety net for a stuck or slow model: after this long the reviewer must give its verdict "
+             "with what it has read. A normal review finishes well before it."},
+    {"group": "App Code Review", "key": "APP_CODE_REVIEW_MAX_ARCHIVE_MB", "label": "Max repository archive (MB)",
+     "type": "int", "min": 1,
+     "help": "Larger repositories fail the step rather than being partly reviewed."},
+    {"group": "App Code Review", "key": "APP_CODE_REVIEW_MAX_TOTAL_KB", "label": "Max source reviewed (KB)",
+     "type": "int", "min": 100,
+     "help": "Text kept for review after skipping dependencies, build output, and binaries. Past this, "
+             "files are left out and the report says so (and confidence drops)."},
+    {"group": "App Code Review", "key": "APP_CODE_REVIEW_MAX_FILE_KB", "label": "Max single file (KB)",
+     "type": "int", "min": 10,
+     "help": "Files larger than this are skipped (listed in the report), usually generated or vendored code."},
+
     # --- Catalogs & Content ---------------------------------------------
     {"group": "Catalogs & Content", "key": "yaml:self_service_center", "label": "Self-Service Center",
      "type": "catalog", "kind": "self_service", "add_label": "Add category",

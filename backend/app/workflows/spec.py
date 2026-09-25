@@ -28,6 +28,10 @@ from langgraph.types import interrupt
 
 logger = logging.getLogger(__name__)
 
+# Fact recorded for any step whose tool result carries ``report_markdown``; the
+# approvals API surfaces these to approvers (see app/api/v1/approvals.py).
+STEP_REPORT_FACT = "step_report"
+
 
 class WorkflowState(TypedDict, total=False):
     request_id: str
@@ -306,6 +310,17 @@ def _step_node(step: Step):
             if step.success_fact:
                 add_fact(db, request_id, step.success_fact,
                          {"step": step.name, "results": step_results}, actor="system")
+            # A tool that returns ``report_markdown`` wants a human to read it:
+            # record it as its own fact so the approval inbox shows it on later
+            # gates, whether or not the author gave this step a success_fact.
+            for res in step_results:
+                if isinstance(res, dict) and isinstance(res.get("report_markdown"), str):
+                    add_fact(db, request_id, STEP_REPORT_FACT, {
+                        "step": step.name,
+                        "tool": getattr(step.tool, "name", ""),
+                        "title": str(res.get("report_title") or step.name),
+                        "markdown": res["report_markdown"],
+                    }, actor="system")
         finally:
             db.close()
         out: WorkflowState = {"results": results, "status": step.running_status}

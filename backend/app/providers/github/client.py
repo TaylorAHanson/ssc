@@ -6,6 +6,7 @@ from app.providers.base import BaseProvider
 from app.core.exceptions import RetryableError, PermanentError
 from app.core.retry import retry_on_retryable
 import base64
+from urllib.parse import quote
 import httpx
 import subprocess
 import asyncio
@@ -563,6 +564,101 @@ class GitHubProvider(BaseProvider):
                 raise RetryableError(f"GitHub server error: {str(e)}")
             else:
                 raise PermanentError(f"Failed to get pull request #{number}: {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
+    @retry_on_retryable(max_attempts=3)
+    async def get_repo(self, repo: str) -> Dict[str, Any]:
+        """Fetch repository metadata (``full_name``, ``default_branch``, ...).
+
+        GitHub answers 404 both for a repo that doesn't exist and for one the
+        token can't see, so the error says both.
+        """
+        try:
+            repo_path = await self._resolve_repo_path(repo)
+            response = await self.client.get(f"/repos/{repo_path}")
+            if response.status_code == 404:
+                raise PermanentError(
+                    f"Repository '{repo_path}' was not found, or the configured GitHub "
+                    f"token can't read it."
+                )
+            if response.status_code == 401:
+                raise PermanentError(
+                    "GitHub rejected the configured token (401): it is missing, expired or revoked."
+                )
+            if response.status_code == 403:
+                if response.headers.get("x-ratelimit-remaining") == "0":
+                    raise RetryableError("GitHub API rate limit reached; retry later.")
+                raise PermanentError(
+                    f"GitHub refused access to '{repo_path}' (403). If the org enforces SSO, "
+                    f"the token must be authorized for it."
+                )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            raise PermanentError(f"Failed to read repository '{repo}': {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
+    @retry_on_retryable(max_attempts=3)
+    async def resolve_commit_sha(self, repo: str, ref: str) -> Optional[str]:
+        """Resolve a branch, tag, or (short) SHA to a full commit SHA.
+
+        Returns ``None`` when ``ref`` doesn't name a commit, so callers can try
+        several candidate refs (branch names may contain ``/``).
+        """
+        try:
+            repo_path = await self._resolve_repo_path(repo)
+            # Git allows "#", "?" and "%" in branch names; keep "/" literal.
+            response = await self.client.get(
+                f"/repos/{repo_path}/commits/{quote(ref, safe='/')}",
+                headers={"Accept": "application/vnd.github.sha"},
+            )
+            if response.status_code in (404, 422):
+                return None
+            response.raise_for_status()
+            return response.text.strip() or None
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            raise PermanentError(f"Failed to resolve ref '{ref}' in '{repo}': {str(e)}")
+        except httpx.RequestError as e:
+            raise RetryableError(f"Request error: {str(e)}")
+
+    @retry_on_retryable(max_attempts=3)
+    async def download_tarball(self, repo: str, sha: str, max_bytes: int) -> bytes:
+        """Download the gzipped tarball of ``repo`` at ``sha``, capped at ``max_bytes``.
+
+        The endpoint redirects to codeload with a short-lived signed URL, so the
+        redirect is followed. The body is streamed and abandoned as soon as it
+        passes the cap, so an oversized repo never lands in memory.
+        """
+        try:
+            repo_path = await self._resolve_repo_path(repo)
+            chunks: List[bytes] = []
+            total = 0
+            async with self.client.stream(
+                "GET", f"/repos/{repo_path}/tarball/{sha}", follow_redirects=True,
+                timeout=120.0,
+            ) as response:
+                if response.status_code == 404:
+                    raise PermanentError(f"No tarball for '{repo_path}' at {sha}.")
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise PermanentError(
+                            f"Repository archive for '{repo_path}' is larger than the "
+                            f"{max_bytes // (1024 * 1024)} MB review limit."
+                        )
+                    chunks.append(chunk)
+            return b"".join(chunks)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise RetryableError(f"GitHub server error: {str(e)}")
+            raise PermanentError(f"Failed to download '{repo}' at {sha}: {str(e)}")
         except httpx.RequestError as e:
             raise RetryableError(f"Request error: {str(e)}")
 

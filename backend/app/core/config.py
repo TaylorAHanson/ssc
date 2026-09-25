@@ -33,6 +33,7 @@ _yaml_config = copy.deepcopy(DEFAULT_CONFIG)
 _branding = _yaml_config.get("branding", {})
 _notifications = _yaml_config.get("notifications", {})
 _web_search = _yaml_config.get("web_search", {}) or {}
+_app_code_review = _yaml_config.get("app_code_review", {}) or {}
 
 
 def _slugify_brand(value: str) -> str:
@@ -728,6 +729,15 @@ class Settings(BaseSettings):
     # "request to join team" pages). Enterprise Cloud = https://github.com;
     # override for a self-hosted GitHub Enterprise Server host.
     GITHUB_WEB_BASE_URL: str = "https://github.com"
+
+    # review_databricks_app_code workflow tool (Admin -> Settings -> App Code
+    # Review). Defaults and their rationale live in default_config.py.
+    APP_CODE_REVIEW_RUBRIC: str = _app_code_review.get("rubric", "")
+    APP_CODE_REVIEW_MAX_ARCHIVE_MB: int = _app_code_review.get("max_archive_mb", 25)
+    APP_CODE_REVIEW_MAX_TOTAL_KB: int = _app_code_review.get("max_total_kb", 3000)
+    APP_CODE_REVIEW_MAX_FILE_KB: int = _app_code_review.get("max_file_kb", 200)
+    APP_CODE_REVIEW_MAX_TURNS: int = _app_code_review.get("max_turns", 20)
+    APP_CODE_REVIEW_TIME_LIMIT_SECONDS: int = _app_code_review.get("time_limit_seconds", 900)
 
     # Governance Tag Management (GitOps or Local Mode for UC tag changes)
     # In GitOps mode, the app opens PRs against this repo and GitHub Actions applies

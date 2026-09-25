@@ -462,6 +462,10 @@ Lakebase, keyed on `request.id` as the thread id. There is no other engine.
 - **HITL** uses `interrupt()`; `POST /requests/{id}/approve` writes the `approval_received` fact
   and the graph resumes (directly, or on the next poll cycle).
 - **Idempotency** is enforced by the executor's keys, so a node re-entered after a crash does not re-act.
+- **Locking**: the poller holds a per-request lock while it advances a graph and heartbeats it for
+  every run (at a third of the lock timeout), so a long step (an LLM code review, a slow provider
+  call) is never picked up by a second worker; a crashed worker stops heartbeating and its lock
+  expires on schedule.
 - **Status mapping**: `RequestStatus` is a fixed enum the UI timeline depends on. Each graph
   declares a `node → RequestStatus` mapping so the timeline keeps rendering.
 
@@ -667,6 +671,27 @@ tools/workflows granted in Unity Catalog.
     `spawn_child_request`, `update_allowlist`, `execute_report` — each tagged with a
     `side_effect_class`, all executed through the `ToolExecutor` (kept out of `app/tools/` so they
     aren't chat-exposed pre-capability-scoping).
+  - **Step reports.** A step whose tool result carries `report_markdown` (+ optional
+    `report_title`) gets a `step_report` fact written by the generic step node, independent of
+    `success_fact`; `GET /approvals` returns the newest report per step as `reports`, and the
+    approval card renders them through the sanitizing markdown renderer. Tools that quote
+    untrusted content must neutralize it themselves (see `safe_text` in
+    `app/services/app_code_review/report.py`): the renderer blocks script, not persuasive links.
+  - **App code review** (`review_databricks_app_code`, read-only; logic in
+    `app/services/app_code_review/`). Pins a commit, reads its tarball in memory (never executed,
+    never on disk), runs a deterministic pre-scan (data-access identity: OBO vs. service
+    principal; committed secrets; exception leads), then an LLM reviewer with read-only
+    list/read/grep tools over the snapshot submits a structured verdict. A **coverage gate** holds
+    the submit back until the model has seen every file that bears on the decision (a submit batched
+    with reads, whose results it hasn't seen, is refused too); unread files at the budget's end lower
+    confidence and are listed in the report. The pre-scan is a
+    **floor**: the verdict and identity are the more severe of the two, so repository text can
+    push the model toward escalation but never below the code's findings. A model failure
+    (including an AI Gateway guardrail refusal, which a hostile repo can provoke) degrades to a
+    pre-scan-only report marked *Manual review needed* and never Compliant, instead of failing
+    the step. The instructions travel in the user turn: gateway guardrails refused them as a
+    system message. The rubric is
+    admin-editable; the output contract and untrusted-content rules are fixed in code.
 - **Workflow authoring.** `WorkflowModel` (`app/db/workflow.py`) holds key/name/goal/instructions
   + guardrail metadata (allowed_tools, policy_ref, params_schema, request_type) + draft/publish +
   version. `WorkflowService` does CRUD + publish + idempotent seed. `/api/v1/workflows`

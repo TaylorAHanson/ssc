@@ -51,6 +51,10 @@ class _ToolsModule(type(sys)):
 sys.modules[__name__].__class__ = _ToolsModule
 
 
+from app.workflows.tools.code_review import (
+    ReviewAppCodeInput,
+    review_databricks_app_code,
+)
 from app.workflows.tools.data_access import (
     GrantUcAccessInput,
     ResolveDataOwnersInput,
@@ -120,6 +124,9 @@ __all__ = [
     "_get_notification_provider",
     "_get_terramate_provider",
     "_load_request",
+    # Code review
+    "ReviewAppCodeInput",
+    "review_databricks_app_code",
     # Data access
     "GrantUcAccessInput",
     "ResolveDataOwnersInput",

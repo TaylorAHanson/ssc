@@ -55,6 +55,11 @@ execution model. Other useful docs: `DEVELOPER_QUICK_START.md`, `GOVERNANCE.md`,
   `backend/venv` before running any `python`/`pytest`/scratch script.
 - **Local DB** is SQLite at `backend/app_hub.db` (query it directly if useful);
   deployed uses Lakebase/Postgres.
+- **Step output for approvers → `report_markdown`.** A workflow tool that returns
+  `report_markdown` (+ `report_title`) has it shown on every later approval card
+  (`step_report` fact → `GET /approvals` → `StepReportPanel`); no author config.
+  Report text quoting a repo, a user or a model is untrusted: build it with
+  `safe_text` / `safe_code` (`backend/app/services/app_code_review/report.py`).
 - Only commit when explicitly asked.
 
 ## Testing

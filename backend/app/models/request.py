@@ -91,6 +91,15 @@ class StateMachineState(BaseModel):
     currentProgress: Optional[ProgressInfo] = None
 
 
+class StepReport(BaseModel):
+    """A markdown report a workflow step produced, shown to approvers."""
+    step: str
+    tool: str = ""
+    title: str
+    markdown: str
+    createdAt: Optional[datetime] = None
+
+
 class Approval(BaseModel):
     """Approval model.
     
@@ -127,6 +136,9 @@ class Approval(BaseModel):
     # shown as overdue rather than silently parking the request forever.
     instructions: Optional[str] = None
     dueAt: Optional[datetime] = None
+    # Reports earlier workflow steps produced for a human to read (any tool
+    # result carrying ``report_markdown``), latest per step.
+    reports: List[StepReport] = []
 
 
 class Request(BaseModel):
