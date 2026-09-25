@@ -19,7 +19,7 @@
  * Used by both the "Ask Your Data" tab and the Self Service / Home
  * surface — same component, different mode + welcome content.
  */
-import { ChevronDown, ExternalLink, Send, Sparkles } from 'lucide-react';
+import { ChevronDown, Download, ExternalLink, Send, Sparkles } from 'lucide-react';
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
 import { Button } from '../ui/button';
@@ -35,6 +35,7 @@ import { getSessionId } from '../../lib/chatPersistence';
 import { useBrandingStore } from '../../stores/brandingStore';
 import { useChatSession } from '../../stores/chatSessionStore';
 import type { ChatRouteInfo, DisplayMessage } from './chatTypes';
+import { downloadTranscript } from './transcript';
 import { ToolCallPill } from './ToolCallPill';
 import { GenieDetailsPanel } from './GenieDetailsPanel';
 import { ToolRawOutputPanel } from './ToolRawOutputPanel';
@@ -1304,6 +1305,19 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                             </Button>
                         </div>
                         {modePicker}
+                        {messages.length > 0 && (
+                            <div className="flex justify-end mt-1">
+                                <button
+                                    type="button"
+                                    onClick={() => downloadTranscript(messages)}
+                                    title="Download this conversation, including tool calls, as Markdown"
+                                    className="inline-flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-600 transition-colors"
+                                >
+                                    <Download className="w-3 h-3" />
+                                    Download transcript
+                                </button>
+                            </div>
+                        )}
                     </form>
                 </>
             )}
