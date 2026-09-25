@@ -45,6 +45,39 @@ from app.tools.tool_executor import ToolContext, executor
 logger = logging.getLogger(__name__)
 
 # Prefix used to recognize tool results that have already been compacted.
+# A self-referencing model can't be inlined forever; past this depth the ref
+# becomes a plain object.
+_MAX_REF_DEPTH = 8
+
+
+def _inline_schema_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Replace local ``$ref``s (``#/$defs/X``, ``#/definitions/X``) with the definition.
+
+    Pydantic emits nested models as refs into ``$defs``. Only ``properties``
+    and ``required`` are sent to the model, so the refs would dangle; Gemini
+    rejects the whole request over one ("Unknown name $ref").
+    """
+    defs = {**schema.get("definitions", {}), **schema.get("$defs", {})}
+
+    def walk(node: Any, depth: int) -> Any:
+        if isinstance(node, list):
+            return [walk(v, depth) for v in node]
+        if not isinstance(node, dict):
+            return node
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            target = defs.get(ref.rsplit("/", 1)[-1])
+            if target is None or depth >= _MAX_REF_DEPTH:
+                resolved: Dict[str, Any] = {"type": "object"}
+            else:
+                resolved = walk(target, depth + 1)
+            siblings = {k: walk(v, depth) for k, v in node.items() if k != "$ref"}
+            return {**resolved, **siblings}
+        return {k: walk(v, depth) for k, v in node.items() if k not in ("$defs", "definitions")}
+
+    return walk(schema, 0)
+
+
 _PRUNED_TOOL_PREFIX = "[truncated tool result:"
 _PRUNED_TOOL_PREVIEW_CHARS = 400
 
@@ -725,6 +758,7 @@ class AgentRunner:
                     else tool.input_schema.schema()
                 )
             )
+            schema = _inline_schema_refs(schema)
             formatted.append(
                 {
                     "type": "function",

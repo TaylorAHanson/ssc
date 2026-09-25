@@ -394,6 +394,26 @@ async def test_reviewer_reads_files_then_submits():
 
 
 @pytest.mark.asyncio
+async def test_opening_turn_names_the_round_budget_and_the_files_to_read():
+    files = {"app.yaml": APP_YAML, "app.py": OBO_APP, "lib.py": "x = 1\n"}
+    llm = FakeLLM([_submit()])
+    await run_reviewer(llm, SOURCE, _snapshot(files), run_prescan(files), "r", max_turns=7)
+    opening = llm.calls[0]["messages"][0]["content"]
+    assert '"tool_rounds": 7' in opening
+    assert '"must_read_before_submit": [\n  "lib.py"' in opening  # app.py is inlined
+
+
+@pytest.mark.asyncio
+async def test_reviewer_is_warned_before_its_rounds_run_out():
+    files = {"app.yaml": APP_YAML, "app.py": OBO_APP, "lib.py": "x = 1\n"}
+    llm = FakeLLM([_call("list_files", {})] * 4 + [_submit()])
+    await run_reviewer(llm, SOURCE, _snapshot(files), run_prescan(files), "r", max_turns=5)
+    warning = llm.calls[2]["messages"][-1]
+    assert warning["role"] == "user" and warning["content"].startswith("3 tool rounds left")
+    assert "lib.py" in warning["content"]
+
+
+@pytest.mark.asyncio
 async def test_reviewer_is_forced_to_submit_when_out_of_rounds():
     files = {"app.py": OBO_APP}
     llm = FakeLLM([_call("list_files", {}), _call("list_files", {}), _submit()])

@@ -14,7 +14,7 @@ import re
 import posixpath
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.services.app_code_review.models import (
     CONTROL_STATUSES,
@@ -49,9 +49,13 @@ why in identity_rationale.
 - Cite file paths and line numbers you actually read. Don't invent findings.
 - Keep findings to what matters for the decision; group repeated minor issues \
 into one finding.
-- Read every file that bears on the decision before you submit. Request several \
-files in one turn when you can. Call submit_review on its own, in a later turn \
-than the reads it depends on, once you have seen their results.
+- Plan your reads. The opening turn says how many tool rounds you have and \
+which files your verdict must cover. Request every file you already know you \
+need in one turn (ten or more is fine) rather than one per round.
+- What you have read stays above in this conversation. Re-read a file only for \
+lines you haven't seen yet.
+- Call submit_review on its own, in a later turn than the reads it depends on, \
+once you have seen their results.
 """
 
 _INLINE_BUDGET = 60_000   # chars of key-file content sent up front
@@ -72,6 +76,9 @@ _TRANSCRIPT_BUDGET = 400_000
 # times; after that, or once the budget runs out, it is accepted and the
 # unread files lower the report's confidence instead.
 _MAX_COVERAGE_NUDGES = 2
+# Rounds left when the model is told it is running short, so it spends the
+# rest on unread required files rather than being cut off mid-trace.
+_ROUNDS_WARNING = 3
 # Apps with at most this many code files must be read in full before submit.
 _READ_ALL_CODE_FILES = 40
 _MAX_REQUIRED_FILES = 60
@@ -241,6 +248,7 @@ def required_files(snapshot: Snapshot, scan: PreScan) -> List[str]:
 
 def build_messages(
     source: ResolvedSource, snapshot: Snapshot, scan: PreScan, rubric: str,
+    *, required: Sequence[str] = (), max_turns: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
     """The opening turn, and the files whose full content it already includes."""
     tree = "\n".join(sorted(snapshot.files)[:400])
@@ -261,6 +269,13 @@ def build_messages(
         "pre_scan": scan.to_dict(),
         "pre_scan_findings": [f.to_dict() for f in scan.findings],
     }
+    if max_turns is not None:
+        context["tool_rounds"] = max_turns
+    unseen = [p for p in required if p not in inlined]
+    if unseen:
+        # Up front, so the model batches them instead of meeting the list only
+        # when a premature submit is sent back.
+        context["must_read_before_submit"] = unseen
     # One user turn, instructions first. AI Gateway input guardrails have been
     # seen refusing this contract as a *system* message on every attempt while
     # passing it in the user turn; the deterministic floor, not message role,
@@ -369,8 +384,8 @@ async def run_reviewer(
     recorded on the verdict.
     """
     tools = _SnapshotTools(snapshot)
-    messages, inlined = build_messages(source, snapshot, scan, rubric)
     required = required_files(snapshot, scan)
+    messages, inlined = build_messages(source, snapshot, scan, rubric, required=required, max_turns=max_turns)
     submit_only = [t for t in _TOOLS if t["function"]["name"] == "submit_review"]
     deadline = time.monotonic() + time_limit_seconds
     failures = nudges = 0
@@ -458,6 +473,13 @@ async def run_reviewer(
                              "content": output[:_TOOL_OUTPUT_LIMIT]})
 
         if submit_args is None:
+            if max_turns - turn - 1 == _ROUNDS_WARNING:
+                missing = unread()
+                messages.append({"role": "user", "content": (
+                    f"{_ROUNDS_WARNING} tool rounds left. "
+                    + (f"Still unread and required: {', '.join(missing[:20])}. " if missing else "")
+                    + "Finish the reads that matter most, then call submit_review."
+                )})
             continue
         # Every tool call needs an answer, so a held-back submit gets one too.
         if others and not final:
