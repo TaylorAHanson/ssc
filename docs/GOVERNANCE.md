@@ -217,16 +217,18 @@ The **Context Catalog** (*Control Tower → Context Catalog*) is where you keep 
 
 ## 7. Settings you can change yourself
 
-The platform is designed so you rarely need an engineer. **Admin → Settings** (Platform Admin) groups the changeable settings; edits take effect immediately, no redeploy. The most governance-relevant groups:
+The platform is designed so you rarely need an engineer. **Admin → Settings** (Platform Admin) groups the changeable settings into the same sections as the sidebar (General, Discover & Analyze, Requests & Approvals, Learn & Share, Watch Tower, Control Tower, Platform); edits take effect immediately, no redeploy. Settings that belong to a feature which is switched off are collapsed under **Inactive settings** with a link to turn the feature on. The most governance-relevant pages:
 
-| Group | What you can change | Why it matters |
+| Page | What you can change | Why it matters |
 | :--- | :--- | :--- |
-| **Notifications & Governance** | Who receives Sentinel alerts and the daily digest (comma-separated emails); the digest **hour** and **timezone**; the app URL used in email "Review" buttons. | This is how you route governance signal to the right people at the right time. |
-| **Target Workspaces** | Which workspaces the Sentinel scans, their service-principal key names, and which workspace runs data certification. | Controls the scope of *all* platform governance. |
-| **System Banner** | A site-wide banner (info/warning/alert/success) with your own message. | Announce maintenance, freezes, or policy changes to everyone. |
-| **Branding & Appearance** | Names, logo, colors. | Cosmetic. |
-| **Agent** | Assistant limits and whether tool-policy enforcement is on. | Tunes how strict the pre-request coaching layer is. |
-| **Catalogs & Content** | The landing-page quick actions, community links, and embedded apps. | Curate what users see and do. |
+| **Watch Tower → OmniGuard** | Who receives Sentinel alerts and the daily digest (comma-separated emails); the digest **hour** and **timezone**; the scan schedule and auto-enforcement. | This is how you route governance signal to the right people at the right time. |
+| **General → Notifications** | Email delivery, the app URL used in email "Review" buttons, and rejection emails. | Makes sure governance emails actually arrive and link back correctly. |
+| **Watch Tower → Target Workspaces** | Which workspaces the Sentinel scans and their service-principal key names. | Controls the scope of *all* platform governance. |
+| **Watch Tower → Data Certification** | The quality table, contract sync schedule, and which workspace runs data certification. | Controls where certification runs. |
+| **General → Features & Navigation** | Which capabilities are on and which sidebar pages are shown. | Turning a capability off hides its pages and its settings. |
+| **General → Appearance** | Names, logo, colors, and the site-wide system banner. | Announce maintenance, freezes, or policy changes to everyone. |
+| **Discover & Analyze → Agent** | Assistant limits and whether tool-policy enforcement is on. | Tunes how strict the pre-request coaching layer is. |
+| **Learn & Share → Links & Embedded Apps** | Community links and embedded apps. | Curate what users see and do. |
 
 Some settings are **read-only** in the UI (environment, database, email provider, cron schedules, Git settings). Those are set at deploy time and shown for visibility only — changing them is an engineering task.
 
@@ -337,7 +339,7 @@ Add an **approved Allowlist** entry (**Watch Tower → Allowlist**) with the res
 Open the run in **Watch Tower → Sentinel**, find the violation, and use **Review & Act**. This is the only path that performs a destructive action, and it targets the right workspace automatically.
 
 **…change who gets the governance emails, or when?**
-**Admin → Settings → Notifications & Governance**: edit the recipient list (comma-separated), the digest hour, and the timezone. Takes effect immediately.
+**Admin → Settings → OmniGuard** (under *Alerts & digest*): edit the recipient list (comma-separated), the digest hour, and the timezone. Takes effect immediately.
 
 **…figure out why a workspace shows "0 findings — not confirmed clean"?**
 Open the run and read the **Scan issues** panel. It states the network reachability, the credentials used, and the exact reason (e.g. `invalid_client`). Then, as Platform Admin: confirm the target workspace's service principal in **Admin → Settings → Target Workspaces**, and in Databricks verify the service principal exists in that workspace, its OAuth secret is current, and it's authorized there. Re-run the scan to confirm the panel clears. (If you're comfortable, you can test the exact credentials in a Databricks notebook before re-running — ask engineering for the snippet.)
@@ -346,7 +348,7 @@ Open the run and read the **Scan issues** panel. It states the network reachabil
 In Databricks: create/choose the service principal, store its credential in the shared secret scope, and grant it access to the workspace. Then in **Admin → Settings → Target Workspaces**: add a row with the workspace name, host URL, environment, and the *key names* of its credentials. Run a manual Sentinel scan scoped to just that workspace to confirm it authenticates before relying on it.
 
 **…announce a change freeze or maintenance to everyone?**
-**Admin → Settings → System Banner**: turn it on, pick a style, and write the message.
+**Admin → Settings → Appearance** (under *System banner*): turn it on, pick a style, and write the message.
 
 **…change what needs approval?**
 Edit the relevant workflow in **Control Tower → Workflow Studio** (follow the [Platform Administration Guide](./PLATFORM_ADMINISTRATION.md)). Test in a lower environment before publishing to prod.

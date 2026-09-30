@@ -44,7 +44,9 @@ This is the admin/self-service UI that talks to the backend at
   surfaces as a `tsc` error during `npm run build`.
 - Admin settings are data-driven from the backend `settings_store` schema — new
   runtime settings appear in the Settings page automatically once added there, so
-  most "add a config knob" tasks need no frontend change.
+  most "add a config knob" tasks need no frontend change. The Features &
+  Navigation page is driven by the backend `CAPABILITIES` map, and the
+  `ui.tabs` served by `/branding` already hide tabs whose feature is off.
 - Don't hardcode the product/brand name; render it from the branding the backend
   serves.
 - Render backend-supplied markdown (agent replies, approval `reports`) only

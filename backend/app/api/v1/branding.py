@@ -3,6 +3,7 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter
 from app.core.config import settings, _yaml_config, dev_features_allowed
+from app.core.settings_store import effective_ui_tabs
 
 router = APIRouter()
 
@@ -136,17 +137,16 @@ async def get_branding():
         "genie_poll_timeout_seconds": _genie_poll_timeout_seconds(),
         "features": _yaml_config.get("features", {}),
         "tools": _yaml_config.get("tools", {}),
-        "ui": _yaml_config.get("ui", {}),
-        # Config-driven Self-Service Center catalog (categories + quick-action
-        # cards) shown as an alternate landing view to the Assistant chat.
-        "self_service_center": _yaml_config.get("self_service_center", {}),
+        # Tabs owned by a capability whose feature flag is off are reported
+        # hidden, so the sidebar and routes drop them along with the feature.
+        "ui": {**(_yaml_config.get("ui") or {}), "tabs": effective_ui_tabs()},
         # Config-driven Community Links page (categories of external resources).
         "community_links": _yaml_config.get("community_links", {}),
         # When true, this environment locks in-place workflow (Workflow) authoring;
         # the frontend hides edit/publish/delete and steers admins to bundle import.
         "workflow_authoring_locked": settings.WORKFLOW_AUTHORING_LOCKED,
         # Global site-wide banner ({active, type, message}). Edited live under
-        # Admin -> Settings -> System Banner; the frontend shows it when active.
+        # Admin -> Settings -> Appearance; the frontend shows it when active.
         "system_banner": _yaml_config.get("banner") or {},
         # True only in local/dev-flavored envs. Gates the "Dev Persona Mode"
         # role-override toggle in the UI (defense-in-depth; the real boundary is

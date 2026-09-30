@@ -159,20 +159,20 @@ const navItems: NavItem[] = [
   },
   // Admin - Restricted
   {
-    id: 'context_catalog',
-    title: 'Context Catalog',
-    icon: <Library className="w-5 h-5" />,
-    path: '/governance/context-catalog',
-    group: 'Control Tower',
-    allowedPersonas: ['Platform Admin', 'Governance Admin']
-  },
-  {
     id: 'admin',
     title: 'Admin',
     icon: <Settings className="w-5 h-5" />,
     path: '/admin/dashboard',
     group: 'Control Tower',
     allowedPersonas: ['Platform Admin']
+  },
+  {
+    id: 'context_catalog',
+    title: 'Context Catalog',
+    icon: <Library className="w-5 h-5" />,
+    path: '/governance/context-catalog',
+    group: 'Control Tower',
+    allowedPersonas: ['Platform Admin', 'Governance Admin']
   },
   {
     id: 'workflows',

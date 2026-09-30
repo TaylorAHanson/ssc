@@ -656,7 +656,7 @@ tools/workflows granted in Unity Catalog.
     one terminal node that records `request_rejected` and ends the graph — a denial can never rejoin
     `stages`. Two things hang off it: the platform **always tells the requester**, with the
     approver's note, from `app/services/rejection_notice.py` (copy + on/off under Admin → Settings →
-    Notifications & Governance; sent outside the `ToolExecutor` on purpose, since a notice OPA could
+    Notifications, "Rejection emails"; sent outside the `ToolExecutor` on purpose, since a notice OPA could
     deny would mean the platform can't say it said no); and a spec may declare **`on_reject`**, an
     ordered list of steps that run before that node for workflow-specific handling (a tailored
     message, closing a ticket, releasing a reservation). `on_reject` steps differ from `stages` steps

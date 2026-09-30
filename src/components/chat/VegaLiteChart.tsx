@@ -20,12 +20,19 @@ export interface VegaLiteChartProps {
     data?: Array<Record<string, unknown>>;
     /** Pixel height the chart should target. Defaults to 280px. */
     height?: number;
+    /** Called with the clicked mark's data row (not called for clicks on empty space). */
+    onDatumClick?: (datum: Record<string, unknown>) => void;
 }
 
-export function VegaLiteChart({ spec, data, height = 280 }: VegaLiteChartProps) {
+export function VegaLiteChart({ spec, data, height = 280, onDatumClick }: VegaLiteChartProps) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [ready, setReady] = useState(false);
+    // A ref so a new callback identity doesn't re-embed the chart.
+    const onDatumClickRef = useRef(onDatumClick);
+    useEffect(() => {
+        onDatumClickRef.current = onDatumClick;
+    }, [onDatumClick]);
 
     useEffect(() => {
         let cancelled = false;
@@ -68,6 +75,12 @@ export function VegaLiteChart({ spec, data, height = 280 }: VegaLiteChartProps) 
                     return;
                 }
                 viewFinalize = result.finalize;
+                result.view.addEventListener('click', (_event, item) => {
+                    const datum = (item as { datum?: unknown } | null | undefined)?.datum;
+                    if (datum && typeof datum === 'object') {
+                        onDatumClickRef.current?.(datum as Record<string, unknown>);
+                    }
+                });
                 setReady(true);
             } catch (err) {
                 if (cancelled) return;

@@ -47,7 +47,7 @@ The notebook will automatically create the secret scope, Unity Catalog infrastru
 
 ## 3. Configuration & Branding
 
-Self-Service Hub is highly customizable. Most day-to-day settings — branding, UI tabs, the Self-Service Center catalog, Community Links, embedded apps, target workspaces, and the system banner — are edited live under **Control Tower → Admin → Settings** and take effect immediately (persisted in the app database).
+Self-Service Hub is highly customizable. Most day-to-day settings — branding, features and navigation, Community Links, embedded apps, target workspaces, and the system banner — are edited live under **Control Tower → Admin → Settings** and take effect immediately (persisted in the app database).
 
 Code defaults for those settings live in `backend/app/core/default_config.py`. Deploy-time infrastructure and governance posture variables live in `databricks.yml` (see Step 3.2).
 
@@ -56,7 +56,7 @@ Code defaults for those settings live in `backend/app/core/default_config.py`. D
 1. Deploy the app (or run locally with `./dev.sh`).
 2. Sign in as a **Platform Admin**.
 3. Open **Control Tower → Admin → Settings**.
-4. Adjust **Branding & Appearance**, **Catalogs & Content** (Self-Service Center cards, Community Links, embedded apps), **Target Workspaces**, **Notifications & Governance**, and other groups as needed.
+4. Settings are grouped like the sidebar. Start with **General → Appearance** (branding, colors, system banner) and **General → Features & Navigation** (turn capabilities on or off and choose which sidebar pages show), then adjust **Learn & Share → Links & Embedded Apps**, **Watch Tower → Target Workspaces**, **General → Notifications**, and the other pages as needed. Settings for a capability that is switched off are collapsed under **Inactive settings**.
 
 *Note: Workflows are **data-driven** — the source of truth is published workflows in the database plus the seed catalog under `backend/app/workflows/graphs/catalog`. To disable a workflow, unpublish it in **Control Tower → Workflow Studio**, or set `execute_workflow: false` under the `tools` section in `default_config.py` (global kill switch — requires redeploy unless overridden via DB).*
 

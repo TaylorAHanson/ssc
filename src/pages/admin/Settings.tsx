@@ -1,30 +1,42 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import cronstrue from 'cronstrue';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { ExternalLink, Loader2, Save, RotateCcw, Lock, Info, Plus, Trash2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowRight,
+  ChevronRight,
+  ExternalLink,
+  Info,
+  Loader2,
+  Plus,
+  PowerOff,
+  RotateCcw,
+  Save,
+  Trash2,
+} from 'lucide-react';
 import { getSettings, updateSettings } from '../../services/api';
 import type {
+  Capability,
   SettingsState,
   SettingField,
   ReadonlySettingField,
   CollectionRow,
   SettingWriteValue,
-  SelfServiceCatalog,
   CommunityLinksCatalog,
   EmbeddedApp,
 } from '../../services/api';
 import { useBrandingStore } from '../../stores/brandingStore';
 import { useRequestStore } from '../../stores/requestStore';
+import { cn } from '../../lib/utils';
 import { Users } from './Users';
-import {
-  StringListField,
-  SelfServiceCenterEditor,
-  CommunityLinksEditor,
-  EmbeddedAppsEditor,
-} from './catalogEditors';
+import { StringListField, CommunityLinksEditor, EmbeddedAppsEditor } from './catalogEditors';
 
+// Pages rendered by the client rather than from the generic field list. The
+// backend's `sections` names them; these must match settings_store.py.
+const FEATURES_GROUP = 'Features & Navigation';
 const ROLES_GROUP = 'Roles & Access';
+// Also shows the read-only, deploy-time settings under its editable fields.
 const INFRA_GROUP = 'Infrastructure';
 
 type FieldValue = SettingWriteValue;
@@ -36,7 +48,8 @@ export const Settings = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Record<string, FieldValue>>({});
-  const [activeGroup, setActiveGroup] = useState<string>('Branding & Appearance');
+  const [activeGroup, setActiveGroup] = useState<string>('Appearance');
+  const [focusCapability, setFocusCapability] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -55,20 +68,22 @@ export const Settings = () => {
 
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Ordered list of groups for the left sub-nav. Editable groups come from the
-  // backend's group_order (falling back to discovery), then Roles & Access and
-  // the read-only Infrastructure section.
-  const groups = useMemo(() => {
-    if (!state) return [] as string[];
-    const editableGroups = new Set(state.fields.map((f) => f.group));
-    const ordered = state.group_order.filter((g) => editableGroups.has(g));
-    for (const g of editableGroups) {
-      if (!ordered.includes(g)) ordered.push(g);
+  const fieldsByKey = useMemo(() => {
+    const map = new Map<string, SettingField>();
+    for (const f of state?.fields || []) map.set(f.key, f);
+    return map;
+  }, [state]);
+
+  // Which capability owns each feature/tab key, for requirement checks and the
+  // "turn it on" links.
+  const capabilityByKey = useMemo(() => {
+    const map = new Map<string, Capability>();
+    for (const c of state?.capabilities || []) {
+      for (const k of c.keys) map.set(k, c);
     }
-    return [...ordered, ROLES_GROUP, INFRA_GROUP];
+    return map;
   }, [state]);
 
   const dirtyCount = Object.keys(draft).length;
@@ -83,9 +98,57 @@ export const Settings = () => {
     return (f.value ?? (f.type === 'bool' ? false : '')) as FieldValue;
   };
 
+  // Current (draft-aware) value of a feature/tab switch. A flag missing from
+  // the config counts as on, matching the backend's is_feature_enabled.
+  const switchOn = (key: string): boolean => {
+    if (key in draft) return Boolean(draft[key]);
+    const f = fieldsByKey.get(key);
+    return f ? Boolean(f.value) : true;
+  };
+
+  // A tab only counts as on while its capability's feature is also on, since
+  // the sidebar hides it otherwise.
+  const requirementMet = (key: string): boolean => {
+    if (!switchOn(key)) return false;
+    if (key.startsWith('ui.tabs.')) {
+      const feature = capabilityByKey.get(key)?.feature;
+      if (feature && !switchOn(feature)) return false;
+    }
+    return true;
+  };
+
+  const unmetRequirements = (f: SettingField): string[] => (f.requires || []).filter((k) => !requirementMet(k));
+
+  const offCapabilities = (keys: string[]): Capability[] => {
+    const seen = new Map<string, Capability>();
+    for (const k of keys) {
+      const c = capabilityByKey.get(k);
+      if (c && !seen.has(c.id)) seen.set(c.id, c);
+    }
+    return Array.from(seen.values());
+  };
+
+  const fieldsForGroup = (group: string): SettingField[] =>
+    (state?.fields || []).filter((f) => f.group === group);
+
+  // A page is "off" when every one of its settings is waiting on a capability.
+  const pageOffCapabilities = (group: string): Capability[] | null => {
+    if (group === FEATURES_GROUP || group === ROLES_GROUP) return null;
+    const fields = fieldsForGroup(group);
+    if (fields.length === 0) return null;
+    const unmet = fields.map(unmetRequirements);
+    if (unmet.some((u) => u.length === 0)) return null;
+    return offCapabilities(unmet.flat());
+  };
+
   const setValue = (key: string, value: FieldValue) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
     setMessage(null);
+  };
+
+  const goToCapability = (id: string) => {
+    setActiveGroup(FEATURES_GROUP);
+    setFocusCapability(id);
   };
 
   const handleSave = async () => {
@@ -123,35 +186,132 @@ export const Settings = () => {
     );
   }
 
-  if (error) {
+  if (error || !state) {
     return (
       <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg">
-        Error: {error}
+        Error: {error || 'Settings are unavailable.'}
       </div>
     );
   }
 
-  const fieldsForGroup = (group: string): SettingField[] =>
-    (state?.fields || []).filter((f) => f.group === group);
+  const saveActions =
+    dirtyCount > 0 ? (
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <Button variant="outline" size="sm" onClick={handleDiscard} disabled={isSaving}>
+          <RotateCcw className="w-4 h-4 mr-1" /> Discard
+        </Button>
+        <Button size="sm" onClick={handleSave} disabled={isSaving} className="bg-primary text-white">
+          {isSaving ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Save className="w-4 h-4 mr-1" />}
+          Save {dirtyCount} change{dirtyCount > 1 ? 's' : ''}
+        </Button>
+      </div>
+    ) : null;
+
+  const renderField = (f: SettingField) => {
+    const set = (v: FieldValue) => setValue(f.key, v);
+    if (f.type === 'collection') {
+      return <CollectionField key={f.key} field={f} value={(valueOf(f) as CollectionRow[]) || []} onChange={set} />;
+    }
+    if (f.type === 'string_list') {
+      return <StringListField key={f.key} field={f} value={(valueOf(f) as string[]) || []} onChange={set} />;
+    }
+    if (f.type === 'catalog') {
+      if (f.kind === 'community_links') {
+        return (
+          <CommunityLinksEditor key={f.key} field={f} value={valueOf(f) as CommunityLinksCatalog} onChange={set} />
+        );
+      }
+      if (f.kind === 'embedded_apps') {
+        return (
+          <EmbeddedAppsEditor key={f.key} field={f} value={(valueOf(f) as EmbeddedApp[]) || []} onChange={set} />
+        );
+      }
+    }
+    return <FieldRow key={f.key} field={f} value={valueOf(f)} onChange={set} />;
+  };
+
+  const renderGroupPage = (group: string) => {
+    const fields = fieldsForGroup(group);
+    const active = fields.filter((f) => unmetRequirements(f).length === 0);
+    const inactive = fields.filter((f) => unmetRequirements(f).length > 0);
+    const pageOff = pageOffCapabilities(group);
+    const inactiveCaps = offCapabilities(inactive.flatMap(unmetRequirements));
+
+    return (
+      <Card>
+        <CardHeader className="flex flex-row items-start justify-between gap-4">
+          <div>
+            <CardTitle>{group}</CardTitle>
+            {state.group_descriptions?.[group] && (
+              <p className="text-sm text-gray-500 mt-1.5 max-w-2xl leading-relaxed">
+                {state.group_descriptions[group]}
+              </p>
+            )}
+          </div>
+          {saveActions}
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {pageOff && <InactiveNote capabilities={pageOff} onGoTo={goToCapability} whole />}
+          <SectionedFields fields={active} renderField={renderField} />
+          {inactive.length > 0 && (
+            <InactiveSettings
+              count={inactive.length}
+              note={pageOff ? null : <InactiveNote capabilities={inactiveCaps} onGoTo={goToCapability} />}
+            >
+              <SectionedFields fields={inactive} renderField={renderField} />
+            </InactiveSettings>
+          )}
+          {fields.length === 0 && <p className="text-sm text-gray-500">No settings in this group.</p>}
+        </CardContent>
+      </Card>
+    );
+  };
 
   return (
     <div className="flex gap-6 min-h-[calc(100vh-240px)]">
-      {/* Sub-nav */}
-      <div className="w-60 flex-shrink-0">
+      {/* Sub-nav: sections mirror the app sidebar. */}
+      <div className="w-64 flex-shrink-0">
         <Card className="h-full">
           <CardContent className="p-2">
-            <nav className="space-y-1">
-              {groups.map((g) => (
-                <button
-                  key={g}
-                  onClick={() => setActiveGroup(g)}
-                  className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-2 ${
-                    activeGroup === g ? 'bg-primary text-white' : 'hover:bg-gray-100 text-gray-700'
-                  }`}
-                >
-                  {g === INFRA_GROUP && <Lock className="w-3.5 h-3.5 opacity-70" />}
-                  {g}
-                </button>
+            <nav className="space-y-4 py-1">
+              {state.sections.map((section) => (
+                <div key={section.title}>
+                  <h3 className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                    {section.title}
+                  </h3>
+                  <div className="space-y-0.5">
+                    {section.groups.map((g) => {
+                      const isActive = activeGroup === g;
+                      const off = pageOffCapabilities(g) !== null;
+                      return (
+                        <button
+                          key={g}
+                          onClick={() => setActiveGroup(g)}
+                          className={cn(
+                            'w-full text-left px-3 py-1.5 rounded-md text-sm transition-colors flex items-center gap-2',
+                            isActive
+                              ? 'bg-primary text-white'
+                              : off
+                                ? 'text-gray-400 hover:bg-gray-50'
+                                : 'text-gray-700 hover:bg-gray-100',
+                          )}
+                        >
+                          <span className="flex-1 truncate">{g}</span>
+                          {off && (
+                            <span
+                              className={cn(
+                                'text-[10px] font-semibold uppercase rounded px-1.5 py-0.5',
+                                isActive ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500',
+                              )}
+                            >
+                              Off
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               ))}
             </nav>
           </CardContent>
@@ -174,90 +334,338 @@ export const Settings = () => {
 
         {activeGroup === ROLES_GROUP ? (
           <Users />
-        ) : activeGroup === INFRA_GROUP ? (
-          <ReadonlyPanel fields={state?.readonly || []} />
+        ) : activeGroup === FEATURES_GROUP ? (
+          <Card>
+            <CardHeader className="flex flex-row items-start justify-between gap-4">
+              <div>
+                <CardTitle>{FEATURES_GROUP}</CardTitle>
+                {state.group_descriptions?.[FEATURES_GROUP] && (
+                  <p className="text-sm text-gray-500 mt-1.5 max-w-2xl leading-relaxed">
+                    {state.group_descriptions[FEATURES_GROUP]}
+                  </p>
+                )}
+              </div>
+              {saveActions}
+            </CardHeader>
+            <CardContent>
+              <CapabilitiesPanel
+                capabilities={state.capabilities}
+                sectionOrder={state.capability_sections}
+                switchOn={switchOn}
+                onToggle={(key, v) => setValue(key, v)}
+                focusId={focusCapability}
+                onFocusDone={() => setFocusCapability(null)}
+              />
+            </CardContent>
+          </Card>
         ) : (
           <>
-            <Card>
-              <CardHeader className="flex flex-row items-start justify-between gap-4">
-                <div>
-                  <CardTitle>{activeGroup}</CardTitle>
-                  {state?.group_descriptions?.[activeGroup] && (
-                    <p className="text-sm text-gray-500 mt-1.5 max-w-2xl leading-relaxed">
-                      {state.group_descriptions[activeGroup]}
-                    </p>
-                  )}
-                </div>
-                {dirtyCount > 0 && (
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <Button variant="outline" size="sm" onClick={handleDiscard} disabled={isSaving}>
-                      <RotateCcw className="w-4 h-4 mr-1" /> Discard
-                    </Button>
-                    <Button size="sm" onClick={handleSave} disabled={isSaving} className="bg-primary text-white">
-                      {isSaving ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Save className="w-4 h-4 mr-1" />}
-                      Save {dirtyCount} change{dirtyCount > 1 ? 's' : ''}
-                    </Button>
-                  </div>
-                )}
-              </CardHeader>
-              <CardContent className="space-y-5">
-                {fieldsForGroup(activeGroup).map((f) => {
-                  const set = (v: FieldValue) => setValue(f.key, v);
-                  if (f.type === 'collection') {
-                    return (
-                      <CollectionField key={f.key} field={f} value={(valueOf(f) as CollectionRow[]) || []} onChange={set} />
-                    );
-                  }
-                  if (f.type === 'string_list') {
-                    return (
-                      <StringListField key={f.key} field={f} value={(valueOf(f) as string[]) || []} onChange={set} />
-                    );
-                  }
-                  if (f.type === 'catalog') {
-                    if (f.kind === 'self_service') {
-                      return (
-                        <SelfServiceCenterEditor
-                          key={f.key}
-                          field={f}
-                          value={valueOf(f) as SelfServiceCatalog}
-                          onChange={set}
-                        />
-                      );
-                    }
-                    if (f.kind === 'community_links') {
-                      return (
-                        <CommunityLinksEditor
-                          key={f.key}
-                          field={f}
-                          value={valueOf(f) as CommunityLinksCatalog}
-                          onChange={set}
-                        />
-                      );
-                    }
-                    if (f.kind === 'embedded_apps') {
-                      return (
-                        <EmbeddedAppsEditor
-                          key={f.key}
-                          field={f}
-                          value={(valueOf(f) as EmbeddedApp[]) || []}
-                          onChange={set}
-                        />
-                      );
-                    }
-                  }
-                  return <FieldRow key={f.key} field={f} value={valueOf(f)} onChange={set} />;
-                })}
-                {fieldsForGroup(activeGroup).length === 0 && (
-                  <p className="text-sm text-gray-500">No settings in this group.</p>
-                )}
-              </CardContent>
-            </Card>
+            {renderGroupPage(activeGroup)}
+            {activeGroup === INFRA_GROUP && <ReadonlyPanel fields={state.readonly || []} />}
           </>
         )}
       </div>
     </div>
   );
 };
+
+// Renders fields in spec order, with a sub-heading whenever the field
+// `section` changes. Fields without a section sit above any sub-heading.
+function SectionedFields({
+  fields,
+  renderField,
+}: {
+  fields: SettingField[];
+  renderField: (f: SettingField) => ReactNode;
+}) {
+  const blocks: { section: string; fields: SettingField[] }[] = [];
+  for (const f of fields) {
+    const section = f.section || '';
+    const existing = blocks.find((b) => b.section === section);
+    if (existing) existing.fields.push(f);
+    else blocks.push({ section, fields: [f] });
+  }
+  blocks.sort((a, b) => (a.section === '' ? -1 : b.section === '' ? 1 : 0));
+
+  return (
+    <>
+      {blocks.map((b) => (
+        <div key={b.section || '_'} className="space-y-5">
+          {b.section && (
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 pt-2 border-b border-gray-200 pb-1.5">
+              {b.section}
+            </h4>
+          )}
+          {b.fields.map(renderField)}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function joinLabels(labels: string[]): string {
+  if (labels.length <= 1) return labels[0] || '';
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
+// "These apply to X, which is turned off" + a jump to each capability.
+function InactiveNote({
+  capabilities,
+  onGoTo,
+  whole = false,
+}: {
+  capabilities: Capability[];
+  onGoTo: (id: string) => void;
+  whole?: boolean;
+}) {
+  const labels = capabilities.map((c) => c.label);
+  const subject = whole ? 'This page applies' : 'These apply';
+  const verb = labels.length > 1 ? 'which are turned off' : 'which is turned off';
+  const text = labels.length
+    ? `${subject} to ${joinLabels(labels)}, ${verb}. Turn ${labels.length > 1 ? 'them' : 'it'} on in Features & Navigation to edit ${whole ? 'these settings' : 'them'}.`
+    : `${subject} to a capability that is turned off.`;
+
+  return (
+    <div
+      className={cn(
+        'flex items-start gap-2.5 rounded-md text-sm p-3',
+        whole ? 'bg-amber-50 border border-amber-200 text-amber-900' : 'bg-gray-50 border border-gray-200 text-gray-600',
+      )}
+    >
+      <PowerOff className="w-4 h-4 mt-0.5 flex-shrink-0" />
+      <div className="space-y-2">
+        <p>{text}</p>
+        {capabilities.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {capabilities.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => onGoTo(c.id)}
+                className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+              >
+                Turn on {c.label} <ArrowRight className="w-3 h-3" />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Collapsed, grayed-out, read-only list of settings whose capability is off.
+function InactiveSettings({
+  count,
+  note,
+  children,
+}: {
+  count: number;
+  note: ReactNode;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-md border border-dashed border-gray-300">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-500 hover:text-gray-700"
+      >
+        <ChevronRight className={cn('w-4 h-4 transition-transform', open && 'rotate-90')} />
+        Inactive settings ({count})
+      </button>
+      {open && (
+        <div className="px-3 pb-3 space-y-4">
+          {note}
+          <fieldset disabled aria-disabled className="opacity-60 space-y-5 select-none">
+            {children}
+          </fieldset>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Toggle({
+  checked,
+  onChange,
+  disabled = false,
+  size = 'md',
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  size?: 'md' | 'sm';
+  label?: string;
+}) {
+  const sm = size === 'sm';
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        'relative inline-flex flex-shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed',
+        sm ? 'h-5 w-9' : 'h-6 w-11',
+        checked ? 'bg-primary' : 'bg-gray-300',
+        disabled && 'opacity-50',
+      )}
+    >
+      <span
+        className={cn(
+          'inline-block transform rounded-full bg-white transition-transform',
+          sm ? 'h-3.5 w-3.5' : 'h-4 w-4',
+          checked ? (sm ? 'translate-x-[18px]' : 'translate-x-6') : sm ? 'translate-x-[3px]' : 'translate-x-1',
+        )}
+      />
+    </button>
+  );
+}
+
+// The Features & Navigation page: one row per capability, grouped by the
+// sidebar section it lives in. Feature flags are the main switch; the sidebar
+// tabs a capability owns are nested under it and only editable while it is on.
+function CapabilitiesPanel({
+  capabilities,
+  sectionOrder,
+  switchOn,
+  onToggle,
+  focusId,
+  onFocusDone,
+}: {
+  capabilities: Capability[];
+  sectionOrder: string[];
+  switchOn: (key: string) => boolean;
+  onToggle: (key: string, value: boolean) => void;
+  focusId: string | null;
+  onFocusDone: () => void;
+}) {
+  useEffect(() => {
+    if (!focusId) return;
+    document.getElementById(`capability-${focusId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const t = window.setTimeout(onFocusDone, 2500);
+    return () => window.clearTimeout(t);
+  }, [focusId, onFocusDone]);
+
+  const sections = sectionOrder
+    .map((title) => ({ title, caps: capabilities.filter((c) => c.section === title) }))
+    .filter((s) => s.caps.length > 0);
+
+  return (
+    <div className="space-y-8">
+      {sections.map((section) => {
+        const groups: { name: string; caps: Capability[] }[] = [];
+        for (const c of section.caps) {
+          const g = groups.find((x) => x.name === c.group);
+          if (g) g.caps.push(c);
+          else groups.push({ name: c.group, caps: [c] });
+        }
+        return (
+          <div key={section.title} className="space-y-3">
+            <h3 className="text-sm font-semibold text-gray-900 border-b border-gray-200 pb-1.5">{section.title}</h3>
+            {section.title === 'Other' && (
+              <p className="text-xs text-gray-500">
+                Flags and sidebar switches that aren't part of a capability above. New ones appear here automatically.
+              </p>
+            )}
+            {groups.map((g) => (
+              <div key={g.name || '_'} className="space-y-2">
+                {g.name && (
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 pt-1">{g.name}</h4>
+                )}
+                <div className="divide-y divide-gray-100 rounded-md border border-gray-200">
+                  {g.caps.map((c) => (
+                    <CapabilityRow
+                      key={c.id}
+                      capability={c}
+                      switchOn={switchOn}
+                      onToggle={onToggle}
+                      highlighted={focusId === c.id}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function CapabilityRow({
+  capability: c,
+  switchOn,
+  onToggle,
+  highlighted,
+}: {
+  capability: Capability;
+  switchOn: (key: string) => boolean;
+  onToggle: (key: string, value: boolean) => void;
+  highlighted: boolean;
+}) {
+  const on = switchOn(c.primary);
+  const sidebarOnly = c.primary.startsWith('ui.tabs.');
+  return (
+    <div
+      id={`capability-${c.id}`}
+      className={cn('p-3 transition-colors', highlighted && 'bg-primary/5 ring-2 ring-primary/40 rounded-md')}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-800">{c.label}</span>
+            {sidebarOnly && (
+              <span className="text-[10px] font-medium uppercase tracking-wide rounded bg-gray-100 text-gray-500 px-1.5 py-0.5">
+                Sidebar only
+              </span>
+            )}
+          </div>
+          {c.description && <p className="text-xs text-gray-500 max-w-2xl">{c.description}</p>}
+          {c.warning && (
+            <p className="flex items-start gap-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 max-w-2xl">
+              <AlertTriangle className="w-3.5 h-3.5 mt-px flex-shrink-0" />
+              {c.warning}
+            </p>
+          )}
+        </div>
+        <Toggle checked={on} onChange={(v) => onToggle(c.primary, v)} label={c.label} />
+      </div>
+      {c.tabs.length > 0 && (
+        <div className="mt-2.5 ml-4 pl-3 border-l-2 border-gray-100 space-y-2">
+          {c.tabs.map((t) => {
+            const tabOn = switchOn(t.key);
+            return (
+              <div key={t.key} className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <span className={cn('text-xs font-medium', on ? 'text-gray-700' : 'text-gray-400')}>{t.label}</span>
+                  {!on ? (
+                    <p className="text-[11px] text-gray-400">Available when {c.label} is on.</p>
+                  ) : (
+                    t.help && <p className="text-[11px] text-gray-500">{t.help}</p>
+                  )}
+                </div>
+                <Toggle
+                  size="sm"
+                  checked={on && tabOn}
+                  disabled={!on}
+                  onChange={(v) => onToggle(t.key, v)}
+                  label={`${c.label}: ${t.label}`}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Live, plain-English translation of a 5-field cron expression, so an admin
 // doesn't have to parse a raw expression in their head. Blank = disabled; an
@@ -326,21 +734,7 @@ function FieldRow({
       </div>
 
       {isBool ? (
-        <button
-          type="button"
-          role="switch"
-          aria-checked={Boolean(value)}
-          onClick={() => onChange(!value)}
-          className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
-            value ? 'bg-primary' : 'bg-gray-300'
-          }`}
-        >
-          <span
-            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-              value ? 'translate-x-6' : 'translate-x-1'
-            }`}
-          />
-        </button>
+        <Toggle checked={Boolean(value)} onChange={onChange} label={field.label} />
       ) : field.type === 'color' ? (
         <div className="flex items-center gap-3">
           <input
@@ -546,8 +940,8 @@ function ReadonlyPanel({ fields }: { fields: ReadonlySettingField[] }) {
       <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 text-blue-800 p-3 rounded-md text-sm">
         <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
         <span>
-          These are managed in <code className="font-mono">databricks.yml</code> and secrets. They are shown for
-          reference and take effect only on redeploy/restart.
+          The settings below are managed in <code className="font-mono">databricks.yml</code> and secrets. They are
+          shown for reference and take effect only on redeploy/restart.
         </span>
       </div>
       {grouped.map(([group, groupFields]) => (

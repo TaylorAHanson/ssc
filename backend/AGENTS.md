@@ -63,7 +63,13 @@ first** — it is the source of truth for how the pieces fit together.
   under the correct group (`EDITABLE_FIELDS`); deploy-time/secret values stay in
   `READONLY_FIELDS` / `databricks.yml`. Follow the no-code principle: make new
   knobs configurable, don't hardcode. Some field types: `cron`, `catalog`,
-  `string_list`, `collection`, `select`, `color`.
+  `string_list`, `collection`, `select`, `color`. Groups are placed in the
+  sidebar-shaped `SECTIONS`; give a field `section` for a sub-heading and
+  `requires` (feature/tab keys, or `GROUP_REQUIRES` for a whole page) so it
+  collapses under "Inactive settings" while that feature is off. A new feature
+  flag or `ui.tabs` entry belongs in a `CAPABILITIES` row (else it shows under
+  "Other" on Features & Navigation). Removed settings go in `RETIRED_KEYS` so
+  their leftover DB overrides are ignored.
 - **DB migrations:** there is **no Alembic**. Schema evolution uses the
   lightweight, idempotent helpers in `db/migrate.py` (`run_startup_migrations`),
   which add columns / rename tables *before* `create_all` at startup.

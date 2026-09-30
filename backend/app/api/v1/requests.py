@@ -215,6 +215,8 @@ def get_paginated_requests(
     type: Optional[str] = None,
     search: Optional[str] = None,
     summary: bool = False,
+    exclude_type: Optional[List[str]] = fastapi.Query(None),
+    created_after: Optional[datetime] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -224,6 +226,10 @@ def get_paginated_requests(
     a Sentinel run's full violation records) and the conversation transcript are
     omitted while aggregate counts are preserved — much smaller payloads for a
     growing table. Open a row to fetch its full record via ``GET /requests/{id}``.
+
+    ``exclude_type`` (repeatable) drops request types, so high-volume automated
+    runs don't crowd people's requests out of a page; ``created_after`` bounds
+    the page to a time window.
     """
     from sqlalchemy import or_
     from sqlalchemy.orm import defer
@@ -240,6 +246,15 @@ def get_paginated_requests(
         
     if type:
         query = query.filter(RequestModel.type == type)
+
+    if exclude_type:
+        query = query.filter(or_(RequestModel.type.is_(None), RequestModel.type.notin_(exclude_type)))
+
+    if created_after:
+        # Timestamps are stored as naive UTC.
+        if created_after.tzinfo is not None:
+            created_after = created_after.astimezone(timezone.utc).replace(tzinfo=None)
+        query = query.filter(RequestModel.created_at >= created_after)
         
     if search:
         search_term = f"%{search}%"

@@ -5,8 +5,8 @@ configuration that used to live in ``configuration.yaml``. Scalar defaults
 (brand name/colors, governance recipients, web-search limits) are surfaced as
 ``Settings`` attributes in ``config.py``; this dict backs the richer, tree-shaped
 config that consumers read as live dicts: feature flags, navigation tabs, the
-agent tool registry, the Self-Service Center / Community Links catalogs, the
-site banner, embedded apps, and per-environment service-principal coordinates.
+agent tool registry, the Community Links catalog, the site banner, embedded
+apps, and per-environment service-principal coordinates.
 
 Layering (lowest precedence first):
   1. These defaults.
@@ -49,95 +49,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "nav_color": "#001E3C",
         "info_color": "#007BFF",
         "alert_color": "#D32F2F",
-    },
-
-    # -------------------------------------------------------------------
-    # Self-Service Center: catalog of quick-action cards on the landing page.
-    # Per card: title (+ optional description) and exactly one of prompt/route
-    # (route wins if both). Optional allowed_personas gates by role.
-    # -------------------------------------------------------------------
-    "self_service_center": {
-        "enabled": True,
-        "categories": [
-            {
-                "title": "Data Access",
-                "icon": "Database",
-                "cards": [
-                    {
-                        "title": "Request Data Access",
-                        "description": "Get read/write access to a catalog, schema, table, or volume.",
-                        "prompt": "I need to request access to a data asset.",
-                    },
-                    {
-                        "title": "REST API Access",
-                        "description": "Request access to a REST API or external endpoint.",
-                        "prompt": "I need REST API access.",
-                    },
-                    {
-                        "title": "My Groups",
-                        "description": "See the identity groups you belong to.",
-                        "prompt": "What groups am I a member of?",
-                    },
-                    {
-                        "title": "My Current Access",
-                        "description": "Review the data access you already have.",
-                        "prompt": "Show me my current data access.",
-                    },
-                ],
-            },
-            {
-                "title": "Enterprise Data",
-                "icon": "Search",
-                "cards": [
-                    {
-                        "title": "Discover Enterprise Data",
-                        "description": "Browse the catalog of available data products and datasets.",
-                        "route": "/discovery",
-                    },
-                    {
-                        "title": "Marketplace Certification",
-                        "description": "Learn about certified data products (ODCS).",
-                        "prompt": "Tell me about data product certification.",
-                    },
-                    {
-                        "title": "Learn About Data Quality",
-                        "description": "Understand data quality scores and checks.",
-                        "prompt": "How does data quality scoring work here?",
-                    },
-                ],
-            },
-            {
-                "title": "Platform Services",
-                "icon": "Boxes",
-                "cards": [
-                    {
-                        "title": "Workspace Access",
-                        "description": "Request access to a Databricks workspace.",
-                        "prompt": "I need access to a workspace.",
-                    },
-                    {
-                        "title": "Provision Workspace",
-                        "description": "Request a new workspace to be provisioned.",
-                        "prompt": "I need a new workspace provisioned.",
-                    },
-                    {
-                        "title": "Create Catalog or Schema",
-                        "description": "Request a new Unity Catalog catalog or schema.",
-                        "prompt": "I want to create a new catalog or schema.",
-                    },
-                    {
-                        "title": "Service Principal",
-                        "description": "Request a new service principal.",
-                        "prompt": "I need a service principal created.",
-                    },
-                    {
-                        "title": "GitHub Repository",
-                        "description": "Request a new GitHub repository.",
-                        "prompt": "I need a new GitHub repository.",
-                    },
-                ],
-            },
-        ],
     },
 
     # -------------------------------------------------------------------
@@ -194,7 +105,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
 
     # Site-wide banner. Deploy-time defaults; a Platform Admin edits these live
-    # under Admin -> Settings -> System Banner (persisted as DB overrides).
+    # under Admin -> Settings -> Appearance (persisted as DB overrides).
     "banner": {
         "active": False,
         # info (blue), warning (yellow), alert (red), success (green).
@@ -204,19 +115,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
     # -------------------------------------------------------------------
     # Feature flags. Each turns an entire capability (its UI, API, and tools)
-    # on or off. Editable live under Admin -> Settings -> Features.
+    # on or off. Editable live under Admin -> Settings -> Features & Navigation,
+    # where settings_store.CAPABILITIES pairs each flag with the sidebar tabs it
+    # owns (a tab is hidden while its capability's flag is off).
     # -------------------------------------------------------------------
     "features": {
         "core": True,
         "governance": True,
-        "finops": True,
-        "self_service": True,
-        "workflows": True,
         "data_discovery": True,
         "calendar": True,
-        # Gates the SCHEDULED Enforcement Sentinel run in the background poller
-        # (ENFORCEMENT_SENTINEL_CRON). Off = manual runs only. The
-        # ui.tabs.sentinel flag only controls tab visibility, not the schedule.
+        # OmniGuard: gates the SCHEDULED scan in the background poller
+        # (ENFORCEMENT_SENTINEL_CRON) and the OmniGuard page. For manual runs
+        # only, leave this on and blank the cron.
         "sentinel": True,
         "ask_your_data": True,
         "run_sql": True,
@@ -236,13 +146,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "tool_registry": True,
         "training_admin": True,
         "skills": True,
-        # Verbose landing header (brand title, greeting, view toggle). False =
-        # clean, minimal landing page.
+        # Verbose landing header (brand title and greeting). False = clean,
+        # minimal landing page.
         "enhanced_landing_page": False,
     },
 
     # Navigation tab visibility. Hiding a tab only removes it from the menu; it
-    # does not disable the underlying capability (use features for that).
+    # does not disable the underlying capability (use features for that). A tab
+    # owned by a capability whose feature flag is off is also hidden.
     "ui": {
         "tabs": {
             "home": True,
@@ -256,7 +167,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "community_links": True,
             "admin": True,
             "reports": False,
-            "training_upload": True,
             "certification": True,
             "odps": True,
             "allowlist": True,
@@ -541,13 +451,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "sitemaps": [
             "https://docs.databricks.com/aws/en/sitemap.xml",
         ],
-        # Optional Algolia DocSearch public (search-only) credentials. When all
-        # three are set, full-text search is used; otherwise sitemap discovery.
-        "algolia": {
-            "app_id": "",
-            "api_key": "",
-            "index_name": "",
-        },
         "max_results": 8,
         "fetch_timeout_seconds": 15,
         "max_fetch_chars": 20000,

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { getBranding } from '../services/api';
-import type { SelfServiceCenterConfig, CommunityLinksConfig } from '../services/api';
+import type { CommunityLinksConfig } from '../services/api';
 import type { UserPersona } from '../types';
 
 /** A config-driven, iframe-embedded app surfaced in the sidebar. */
@@ -33,7 +33,6 @@ interface BrandingState {
     features: Record<string, boolean>;
     tools: Record<string, boolean>;
     uiTabs: Record<string, boolean>;
-    selfServiceCenter: SelfServiceCenterConfig;
     communityLinks: CommunityLinksConfig;
     workflowAuthoringLocked: boolean;
     /** True only in local/dev-flavored envs; gates the "Dev Persona Mode" toggle. */
@@ -62,7 +61,6 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     features: {},
     tools: {},
     uiTabs: {},
-    selfServiceCenter: {},
     communityLinks: {},
     workflowAuthoringLocked: false,
     devFeaturesEnabled: false,
@@ -106,7 +104,6 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 features: branding.features || {},
                 tools: branding.tools || {},
                 uiTabs: branding.ui?.tabs || {},
-                selfServiceCenter: branding.self_service_center || {},
                 communityLinks: branding.community_links || {},
                 workflowAuthoringLocked: branding.workflow_authoring_locked ?? false,
                 devFeaturesEnabled: branding.dev_features_enabled ?? false,

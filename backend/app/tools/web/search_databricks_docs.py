@@ -1,30 +1,22 @@
 """Tool: search the Databricks documentation for relevant pages.
 
-Two discovery providers, chosen automatically:
+Discovery is keyless: the tool keyword-ranks the doc URLs listed in the
+configured sitemap(s) (Admin -> Settings -> Agent -> Web lookup). There is no
+third-party search dependency, so nothing can break when external keys rotate.
 
-* **Algolia** (preferred, if public DocSearch creds are configured in
-  ``configuration.yaml``) — full-text search over the same index the docs
-  site itself uses, so recall matches the on-site search box.
-* **Sitemap** (default, keyless, always available) — keyword-ranks the
-  doc URLs listed in the configured sitemap(s). No third-party dependency,
-  so it can't break when Algolia keys rotate.
-
-Either way, results are URL + title (+ snippet when available). The agent
-then calls ``fetch_doc_page`` to read the most relevant hits and answer
-WITH citations. Gated by the ``web_search`` feature flag.
+Results are URL + title. The agent then calls ``fetch_doc_page`` to read the
+most relevant hits and answer WITH citations. Gated by the ``web_search``
+feature flag.
 """
 import logging
 import re
 from typing import Any, Dict, List
-from urllib.parse import quote_plus
 
-import httpx
 from pydantic import BaseModel, Field
 
 from app.tools.mcp import tool
 from app.tools.web._common import (
     get_sitemap_urls,
-    is_allowed_url,
     url_to_title,
     web_config,
 )
@@ -74,48 +66,6 @@ async def _search_sitemap(query: str, limit: int) -> List[Dict[str, Any]]:
     ]
 
 
-async def _search_algolia(query: str, limit: int, algolia: Dict[str, str]) -> List[Dict[str, Any]]:
-    """Query the docs' public Algolia DocSearch index for full-text hits."""
-    app_id = algolia["app_id"]
-    api_key = algolia["api_key"]
-    index = algolia["index_name"]
-    url = f"https://{app_id}-dsn.algolia.net/1/indexes/{index}/query"
-    allowed = web_config()["allowed_domains"]
-    try:
-        async with httpx.AsyncClient(timeout=web_config()["fetch_timeout_seconds"]) as client:
-            resp = await client.post(
-                url,
-                headers={
-                    "X-Algolia-API-Key": api_key,
-                    "X-Algolia-Application-Id": app_id,
-                    "Content-Type": "application/json",
-                },
-                json={"params": f"query={quote_plus(query)}&hitsPerPage={limit}"},
-            )
-        if resp.status_code >= 400:
-            logger.info("Algolia search returned HTTP %s; falling back to sitemap", resp.status_code)
-            return []
-        hits = resp.json().get("hits", [])
-    except Exception as e:  # noqa: BLE001
-        logger.info("Algolia search failed (%s); falling back to sitemap", e)
-        return []
-
-    results: List[Dict[str, Any]] = []
-    for h in hits:
-        hit_url = h.get("url") or ""
-        if not is_allowed_url(hit_url, allowed):
-            continue
-        hierarchy = h.get("hierarchy") or {}
-        title = " › ".join(
-            v for k in ("lvl0", "lvl1", "lvl2", "lvl3") if (v := hierarchy.get(k))
-        ) or url_to_title(hit_url)
-        snippet = (h.get("content") or "").strip()
-        results.append({"title": title, "url": hit_url, "snippet": snippet[:300]})
-        if len(results) >= limit:
-            break
-    return results
-
-
 class SearchDatabricksDocsInput(BaseModel):
     query: str = Field(
         ...,
@@ -144,16 +94,7 @@ class SearchDatabricksDocsInput(BaseModel):
 async def search_databricks_docs(query: str, limit: int = 6) -> Dict[str, Any]:
     cfg = web_config()
     limit = min(limit, cfg["max_results"])
-    algolia = cfg["algolia"]
-
-    provider = "sitemap"
-    results: List[Dict[str, Any]] = []
-    if algolia["app_id"] and algolia["api_key"] and algolia["index_name"]:
-        results = await _search_algolia(query, limit, algolia)
-        provider = "algolia"
-    if not results:
-        results = await _search_sitemap(query, limit)
-        provider = "sitemap"
+    results = await _search_sitemap(query, limit)
 
     if results:
         note = (
@@ -171,7 +112,7 @@ async def search_databricks_docs(query: str, limit: int = 6) -> Dict[str, Any]:
 
     return {
         "query": query,
-        "provider": provider,
+        "provider": "sitemap",
         "count": len(results),
         "results": results,
         "note": note,

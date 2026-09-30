@@ -915,15 +915,9 @@ class Settings(BaseSettings):
         if not sitemaps:
             sitemaps = [f"https://{self.WEB_SEARCH_DEFAULT_DOMAIN}/aws/en/sitemap.xml"]
 
-        algolia = cfg.get("algolia") or {}
         return {
             "allowed_domains": domains,
             "sitemaps": sitemaps,
-            "algolia": {
-                "app_id": str(algolia.get("app_id", "") or "").strip(),
-                "api_key": str(algolia.get("api_key", "") or "").strip(),
-                "index_name": str(algolia.get("index_name", "") or "").strip(),
-            },
             "max_results": int(cfg.get("max_results", 8) or 8),
             "fetch_timeout_seconds": float(cfg.get("fetch_timeout_seconds", 15) or 15),
             "max_fetch_chars": int(cfg.get("max_fetch_chars", 20000) or 20000),

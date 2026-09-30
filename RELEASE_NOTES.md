@@ -11,6 +11,27 @@ Format rules (the app parses this file, so keep to them):
   subheading. Plain markdown only.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 1.1.0 — 2026-09-30
+
+### Added
+
+- A new **Features & Navigation** page in **Admin → Settings** lists every capability in one place, grouped like the sidebar. Each capability has a single switch, and the sidebar pages it owns can be shown or hidden underneath it. Any new capability appears automatically under **Other**.
+- The **Admin Dashboard** has been redesigned around what needs action. It now shows charts of requests over time, by status, by type, and median time to complete, plus a **Needs attention** panel that lists stuck requests, the latest failures, and the oldest requests awaiting approval.
+- Every number and chart on the Admin Dashboard is clickable. Selecting a card, chart bar, status slice, or requester filters the request list below, and each active filter appears as a chip you can clear. Click any request to open its full details.
+- A time range selector (7, 30, or 90 days, or all time) applies to the whole dashboard. Open requests are always included so older work that is still waiting doesn't disappear. The range and filters are kept in the page address, so you can share a filtered view.
+
+### Changed
+
+- The Admin Dashboard now hides automated runs, such as scheduled policy scans and scheduled reports, by default so people's requests aren't buried. A switch shows them again, and the dashboard always says how many are hidden.
+- The dashboard's stuck-request count now works for requests waiting on an approval, and all times are shown in your local time zone. The "Active Workspaces" and estimated "Labor Saved" figures have been removed because they didn't reflect real activity.
+- **Admin** is now the first link in the **Control Tower** section of the sidebar.
+- **Admin → Settings** is now organized into the same sections as the sidebar (General, Discover & Analyze, Requests & Approvals, Learn & Share, Watch Tower, Control Tower, Platform), with sub-headings inside longer pages. The system banner now lives under **Appearance**, and each schedule sits with the feature it runs.
+- Settings for a capability that is switched off are collapsed under **Inactive settings** with a link to turn it on. A page whose capability is off is marked **Off** in the settings menu.
+- Turning a capability off now also hides its pages from the sidebar, so what people see always matches what is enabled.
+- The optional grid of quick-action cards on the home page has been removed, along with the switch between it and the chat. The home page now always opens straight into the chat.
+- The Algolia option for documentation search has been removed. Documentation lookups now always use the built-in search.
+- The Genie link and default Genie space settings are no longer editable in Settings.
+
 ## 1.0.0 — 2026-09-30
 
 The first stable release. It brings a conversational agent, governed requests and

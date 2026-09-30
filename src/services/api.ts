@@ -276,6 +276,25 @@ export async function getPaginatedRequests(params: { skip: number, limit: number
   return response.json();
 }
 
+/** List-view (summary) rows for the admin dashboard. */
+export async function getRequestSummaries(params: {
+  limit: number;
+  excludeTypes?: string[];
+  createdAfter?: Date;
+}): Promise<{ items: Request[], total: number }> {
+  const url = new URL(`${API_BASE_URL}/requests/paginated`, window.location.origin);
+  url.searchParams.set('skip', '0');
+  url.searchParams.set('limit', String(params.limit));
+  url.searchParams.set('summary', 'true');
+  params.excludeTypes?.forEach((t) => url.searchParams.append('exclude_type', t));
+  if (params.createdAfter) url.searchParams.set('created_after', params.createdAfter.toISOString());
+  const response = await fetch(url.toString(), { headers: getHeaders() });
+  if (!response.ok) {
+    throw new Error(`Failed to get requests: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export async function getRequest(requestId: string): Promise<Request> {
   const response = await fetch(`${API_BASE_URL}/requests/${requestId}`, {
     headers: getHeaders()
@@ -439,29 +458,6 @@ export interface EmbeddedAppConfig {
 }
 
 /**
- * Self-Service Center catalog config (GET /branding › self_service_center).
- * Drives the alternate landing view: categories of quick-action cards that
- * either seed the Assistant (`prompt`) or navigate to a route (`route`).
- */
-export interface SelfServiceCenterCard {
-  title: string;
-  description?: string;
-  prompt?: string;
-  route?: string;
-  icon?: string;
-  allowed_personas?: string[];
-}
-export interface SelfServiceCenterCategory {
-  title: string;
-  icon?: string;
-  cards?: SelfServiceCenterCard[];
-}
-export interface SelfServiceCenterConfig {
-  enabled?: boolean;
-  categories?: SelfServiceCenterCategory[];
-}
-
-/**
  * Community Links page config (GET /branding › community_links). Categories of
  * external resource cards, fully curated per customer in configuration.yaml.
  */
@@ -507,7 +503,6 @@ export async function getBranding(): Promise<{
   ui?: {
     tabs?: Record<string, boolean>;
   };
-  self_service_center?: SelfServiceCenterConfig;
   community_links?: CommunityLinksConfig;
   workflow_authoring_locked?: boolean;
   system_banner?: { active?: boolean; type?: 'info' | 'alert' | 'warning' | 'success'; message?: string };
@@ -541,23 +536,6 @@ export interface SettingColumn {
 }
 
 // --- Catalog value shapes (type === 'catalog') -----------------------------
-export interface SelfServiceCard {
-  title: string;
-  description?: string;
-  prompt?: string;
-  route?: string;
-  allowed_personas?: string[];
-}
-export interface SelfServiceCategory {
-  title: string;
-  icon?: string;
-  cards: SelfServiceCard[];
-}
-export interface SelfServiceCatalog {
-  enabled: boolean;
-  categories: SelfServiceCategory[];
-}
-
 export interface CommunityLink {
   title: string;
   url: string;
@@ -584,7 +562,7 @@ export interface EmbeddedApp {
   allowed_personas?: string[];
 }
 
-export type CatalogValue = SelfServiceCatalog | CommunityLinksCatalog | EmbeddedApp[];
+export type CatalogValue = CommunityLinksCatalog | EmbeddedApp[];
 
 /** Any value a setting can hold when read or written. */
 export type SettingWriteValue =
@@ -608,7 +586,11 @@ export interface SettingField {
   columns?: SettingColumn[];
   add_label?: string;
   // Present when type === 'catalog': which visual editor to render.
-  kind?: 'self_service' | 'community_links' | 'embedded_apps';
+  kind?: 'community_links' | 'embedded_apps';
+  /** Optional sub-heading within the group's page. */
+  section?: string;
+  /** Feature/tab keys (e.g. "features.sentinel") that must be on for this field to matter. */
+  requires?: string[];
   value: SettingWriteValue | null;
 }
 
@@ -619,11 +601,43 @@ export interface ReadonlySettingField {
   value: boolean | number | string | null;
 }
 
+/** One sidebar-mirroring section of the Settings sub-nav. */
+export interface SettingsSection {
+  title: string;
+  groups: string[];
+}
+
+/** A nested sidebar-visibility switch under a capability. */
+export interface CapabilityTab {
+  key: string;
+  label: string;
+  help?: string;
+}
+
+/** One row on the Features & Navigation page. */
+export interface Capability {
+  id: string;
+  section: string;
+  group: string;
+  label: string;
+  description: string;
+  warning: string;
+  /** Storage key of the row's main switch (a feature flag, or its only tab). */
+  primary: string;
+  /** Storage key of the feature flag, when the capability has one. */
+  feature: string | null;
+  tabs: CapabilityTab[];
+  /** Every storage key this capability controls. */
+  keys: string[];
+}
+
 export interface SettingsState {
   fields: SettingField[];
   readonly: ReadonlySettingField[];
-  group_order: string[];
+  sections: SettingsSection[];
   group_descriptions?: Record<string, string>;
+  capabilities: Capability[];
+  capability_sections: string[];
 }
 
 /** Get the editable settings spec + current values (Platform Admin only). */

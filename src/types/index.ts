@@ -1,6 +1,7 @@
 export type RequestStatus =
   | 'pending'
   | 'manager_approval'
+  | 'data_owner_approval'
   | 'training_pending'
   /** Parked on a `manual_task` gate: waiting on a person to do off-platform work. */
   | 'manual_task_pending'

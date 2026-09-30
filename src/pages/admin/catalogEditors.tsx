@@ -2,9 +2,6 @@ import { Button } from '../../components/ui/button';
 import { Plus, Trash2, GripVertical } from 'lucide-react';
 import type {
   SettingField,
-  SelfServiceCatalog,
-  SelfServiceCategory,
-  SelfServiceCard,
   CommunityLinksCatalog,
   CommunityCategory,
   CommunityLink,
@@ -142,114 +139,6 @@ export function StringListField({
       </div>
       <Button variant="outline" size="sm" onClick={() => onChange([...items, ''])}>
         <Plus className="w-4 h-4 mr-1" /> {field.add_label || 'Add'}
-      </Button>
-    </div>
-  );
-}
-
-// --- Self-Service Center ---------------------------------------------------
-
-const EMPTY_SS_CARD: SelfServiceCard = { title: '' };
-const EMPTY_SS_CATEGORY: SelfServiceCategory = { title: '', icon: '', cards: [] };
-
-export function SelfServiceCenterEditor({
-  field,
-  value,
-  onChange,
-}: {
-  field: SettingField;
-  value: SelfServiceCatalog;
-  onChange: (v: SelfServiceCatalog) => void;
-}) {
-  const catalog: SelfServiceCatalog = value || { enabled: true, categories: [] };
-  const categories = catalog.categories || [];
-
-  const setCategories = (next: SelfServiceCategory[]) => onChange({ ...catalog, categories: next });
-  const updateCategory = (ci: number, next: SelfServiceCategory) =>
-    setCategories(replaceAt(categories, ci, next));
-
-  return (
-    <div className="space-y-4 pb-4 border-b border-gray-100 last:border-0">
-      <div className="flex items-start justify-between gap-4">
-        <FieldHeader field={field} />
-        <EnabledToggle value={catalog.enabled ?? true} onChange={(v) => onChange({ ...catalog, enabled: v })} />
-      </div>
-
-      <div className="space-y-4">
-        {categories.map((cat, ci) => {
-          const cards = cat.cards || [];
-          const setCards = (next: SelfServiceCard[]) => updateCategory(ci, { ...cat, cards: next });
-          return (
-            <div key={ci} className="rounded-lg border border-gray-200 bg-gray-50/60">
-              <div className="flex items-center gap-2 p-3 border-b border-gray-200 bg-white rounded-t-lg">
-                <GripVertical className="w-4 h-4 text-gray-300 flex-shrink-0" />
-                <input
-                  className={`${inputCls} font-medium`}
-                  placeholder="Category title"
-                  value={cat.title}
-                  onChange={(e) => updateCategory(ci, { ...cat, title: e.target.value })}
-                />
-                <input
-                  className={`${inputCls} w-40`}
-                  placeholder="Icon (e.g. Database)"
-                  value={cat.icon || ''}
-                  onChange={(e) => updateCategory(ci, { ...cat, icon: e.target.value })}
-                />
-                <RemoveButton onClick={() => setCategories(removeAt(categories, ci))} title="Remove category" />
-              </div>
-
-              <div className="p-3 space-y-3">
-                {cards.length === 0 && <p className="text-xs text-gray-400 italic">No cards in this category.</p>}
-                {cards.map((card, ki) => (
-                  <div key={ki} className="rounded-md border border-gray-200 bg-white p-3 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <input
-                        className={`${inputCls} font-medium`}
-                        placeholder="Card title"
-                        value={card.title}
-                        onChange={(e) => setCards(replaceAt(cards, ki, { ...card, title: e.target.value }))}
-                      />
-                      <RemoveButton onClick={() => setCards(removeAt(cards, ki))} title="Remove card" />
-                    </div>
-                    <TextField
-                      label="Description"
-                      value={card.description || ''}
-                      placeholder="One-line blurb (optional)"
-                      onChange={(v) => setCards(replaceAt(cards, ki, { ...card, description: v }))}
-                    />
-                    <div className="grid grid-cols-2 gap-2">
-                      <TextField
-                        label="Prompt (seeds the Assistant)"
-                        value={card.prompt || ''}
-                        placeholder="I need to request access…"
-                        onChange={(v) => setCards(replaceAt(cards, ki, { ...card, prompt: v }))}
-                      />
-                      <TextField
-                        label="Route (in-app link — wins over prompt)"
-                        value={card.route || ''}
-                        placeholder="/discovery"
-                        onChange={(v) => setCards(replaceAt(cards, ki, { ...card, route: v }))}
-                      />
-                    </div>
-                    <TextField
-                      label="Allowed personas (comma-separated; blank = everyone)"
-                      value={personasToStr(card.allowed_personas)}
-                      placeholder="Platform Admin, Governance Admin"
-                      onChange={(v) => setCards(replaceAt(cards, ki, { ...card, allowed_personas: strToPersonas(v) }))}
-                    />
-                  </div>
-                ))}
-                <Button variant="outline" size="sm" onClick={() => setCards([...cards, { ...EMPTY_SS_CARD }])}>
-                  <Plus className="w-4 h-4 mr-1" /> Add card
-                </Button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <Button variant="outline" size="sm" onClick={() => setCategories([...categories, { ...EMPTY_SS_CATEGORY }])}>
-        <Plus className="w-4 h-4 mr-1" /> {field.add_label || 'Add category'}
       </Button>
     </div>
   );
