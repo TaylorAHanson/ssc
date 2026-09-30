@@ -15,9 +15,17 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------
 # GitHub tools
 # --------------------------------------------------------------------------
+# Values the agent sends to mean "no template". Treating them as a repo name
+# makes GitHub 404 on /repos/<owner>/<value>/generate and fails the request.
+_NO_TEMPLATE = {"", "none", "empty", "blank", "no", "no template", "n/a", "na", "null", "false"}
+
+
 class GithubRepoInput(BaseModel):
     repo_name: str = Field(..., description="Repository name to create")
-    template: Optional[str] = Field(default=None, description="Optional template repo")
+    template: Optional[str] = Field(
+        default=None,
+        description="Template repo name to generate from. Omit for an empty repository.",
+    )
     description: Optional[str] = Field(default=None, description="Repository description")
     visibility: Optional[str] = Field(default=None, description="public | private | internal")
 
@@ -41,8 +49,8 @@ async def github_create_repo(
         config["description"] = description
     if visibility:
         config["private"] = visibility.lower() != "public"
-    if template:
-        result = await provider.create_from_template(template, repo_name, config)
+    if template and template.strip().lower() not in _NO_TEMPLATE:
+        result = await provider.create_from_template(template.strip(), repo_name, config)
     else:
         result = await provider.create_repo(repo_name, config)
     return {"repo": repo_name, "result": result}

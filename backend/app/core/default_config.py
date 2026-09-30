@@ -46,6 +46,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # Accent blue aligned with the companion Command Center app's tokens.
         "primary_color": "#007BFF",
         "secondary_color": "#001E3C",
+        "nav_color": "#001E3C",
         "info_color": "#007BFF",
         "alert_color": "#D32F2F",
     },
@@ -224,6 +225,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "context_catalog": True,
         "workflow_authoring": True,
         "onboarding_suggestions": True,
+        # Pinned Items / Data Products / Datasets rails under the chat on the
+        # home (new chat) page. Discover is unaffected.
+        "home_data_catalog": True,
         # Eagerly tells the agent who the caller is (roles, open requests,
         # pending approvals, group memberships) so it stops asking.
         "user_context": True,

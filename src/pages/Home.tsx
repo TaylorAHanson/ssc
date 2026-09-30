@@ -55,6 +55,7 @@ export function Home() {
     const currentUser = useUserStore((s) => s.currentUser);
     const isInitialized = useUserStore((s) => s.isInitialized);
     const onboardingEnabled = useBrandingStore((s) => s.features?.onboarding_suggestions !== false);
+    const homeCatalogEnabled = useBrandingStore((s) => s.features?.home_data_catalog !== false);
 
     // Personalized greeting: the user's first name + a time-of-day salutation
     // and matching icon. Derived from full_name (falling back to the email
@@ -270,14 +271,16 @@ export function Home() {
                     onRoute={handleRoute}
                     formCtaLabelFor={getButtonLabel}
                     emptyStateExtras={
-                        <div className="max-w-5xl mx-auto w-full px-1 pb-6">
-                            <CatalogRails
-                                onViewDetails={(ref) =>
-                                    navigate('/discovery', { state: { viewAssetId: ref.id } })
-                                }
-                                onBrowseAll={() => navigate('/discovery')}
-                            />
-                        </div>
+                        homeCatalogEnabled ? (
+                            <div className="max-w-5xl mx-auto w-full px-1 pb-6">
+                                <CatalogRails
+                                    onViewDetails={(ref) =>
+                                        navigate('/discovery', { state: { viewAssetId: ref.id } })
+                                    }
+                                    onBrowseAll={() => navigate('/discovery')}
+                                />
+                            </div>
+                        ) : null
                     }
                 />
             </div>

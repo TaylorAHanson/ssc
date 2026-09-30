@@ -89,7 +89,7 @@ export function CertificationChecklist({ ruleRows }: { ruleRows: ChecklistRuleRo
             <ClipboardList className="w-12 h-12 text-gray-400 mb-4" />
             <h3 className="text-lg font-medium text-gray-900">No checklist data available</h3>
             <p className="text-gray-500 text-sm mt-1 max-w-sm">
-              This dataset has not recorded per-rule evaluations yet. Run the Enforcement Sentinel
+              This dataset has not recorded per-rule evaluations yet. Run OmniGuard
               to capture a full audit checklist.
             </p>
           </div>

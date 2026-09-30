@@ -135,7 +135,7 @@ async def process_enforcement_sentinel_cron():
                 new_request = RequestModel(
                     id=req_id,
                     type=RequestType.ENFORCEMENT_SENTINEL.value,
-                    title=f"Scheduled Sentinel Run",
+                    title="Scheduled OmniGuard Run",
                     status=RequestStatus.PENDING.value,
                     current_state="pending",
                     state_context={},
@@ -542,9 +542,9 @@ async def _send_failure_notification(request: RequestModel, error_message: str):
         notifier = NotificationProvider()
         to_email = settings.GOVERNANCE_EMAIL_GROUP
         
-        subject = f"[Action Required] Enforcement Sentinel Run Failed: {req_title}"
+        subject = f"[Action Required] OmniGuard Run Failed: {req_title}"
         body = (
-            f"An Enforcement Sentinel run failed and requires your attention.<br><br>"
+            f"An OmniGuard run failed and requires your attention.<br><br>"
             f"<b>Request ID:</b> {req_id}<br>"
             f"<b>Title:</b> {req_title}<br>"
             f"<b>Error:</b> {error_message}<br><br>"

@@ -141,7 +141,7 @@ const navItems: NavItem[] = [
   },
   {
     id: 'sentinel',
-    title: 'Sentinel',
+    title: 'OmniGuard',
     icon: <ShieldAlert className="w-5 h-5" />,
     path: '/governance/sentinel',
     group: 'Watch Tower',

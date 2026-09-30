@@ -494,6 +494,7 @@ export async function getBranding(): Promise<{
   brand_logo_url: string;
   brand_color_primary: string;
   brand_color_secondary: string;
+  brand_color_nav?: string;
   brand_color_info: string;
   brand_color_alert: string;
   brand_color_warning: string;
@@ -532,7 +533,8 @@ export type CollectionRow = Record<string, string | number | boolean | null>;
 export interface SettingColumn {
   key: string;
   label: string;
-  type: 'string' | 'int' | 'bool';
+  type: 'string' | 'int' | 'bool' | 'select';
+  options?: string[];
   required?: boolean;
   placeholder?: string;
   help?: string;

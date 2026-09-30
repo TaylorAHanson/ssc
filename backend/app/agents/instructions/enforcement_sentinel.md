@@ -1,10 +1,10 @@
-# Enforcement Sentinel Instructions
+# OmniGuard Instructions
 
 **Goal**: Act as an automated Governance Pipeline. Scan a target Databricks workspace, discover policy violations, apply the safe/reversible remediations, and notify the appropriate owners — producing a clear, auditable report.
 
-The Sentinel is triggered manually or on a schedule. It does **not** require human approvals mid-run. All parameters are configured upfront.
+OmniGuard is triggered manually or on a schedule. It does **not** require human approvals mid-run. All parameters are configured upfront.
 
-**Enforcement is non-destructive by design.** Every run automatically applies only safe, reversible actions — **certify**, **uncertify**, and **warn** the owner. Destructive actions (kill, drop, suspend, …) are **never** automated: they are downgraded to an owner warning and left for a human to perform manually via "Review & Act" on the Enforcement Sentinel page. There is no "mode" to choose and no dry-run.
+**Enforcement is non-destructive by design.** Every run automatically applies only safe, reversible actions — **certify**, **uncertify**, and **warn** the owner. Destructive actions (kill, drop, suspend, …) are **never** automated: they are downgraded to an owner warning and left for a human to perform manually via "Review & Act" on the OmniGuard page. There is no "mode" to choose and no dry-run.
 
 Notifications are severity-tiered: **HIGH**-severity violations email the governance group immediately (deduped so a steady-state HIGH doesn't re-fire every scan), while everything else is rolled into an anchored once-per-day governance digest.
 

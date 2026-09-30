@@ -39,6 +39,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
 from app.core.config import settings
+from app.core.workspaces import resolve_workspace_type
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +245,7 @@ def _enforcement_next_steps_html(app_url: str = "", contact: str = "") -> str:
         f"widget, you'll need to submit an exception request through the {portal}.</p>"
         f"{contact_line}"
         "<p>Thank you,</p>"
-        "<p>Governance Sentinel</p>"
+        "<p>OmniGuard</p>"
     )
 
 
@@ -394,18 +395,19 @@ async def revalidate_violation(
     # Resolve workspace context (name/type/environment) exactly as the scan does,
     # so the .rego policies see the same input shape.
     ws_name = ws_env = None
+    ws_type = resolve_workspace_type(None)
     if host:
         try:
             from app.core.workspaces import get_workspace_config
 
             cfg = get_workspace_config(host)
             if cfg is not None:
-                ws_name, ws_env = cfg.name, cfg.environment
+                ws_name, ws_env, ws_type = cfg.name, cfg.environment, cfg.workspace_type
         except Exception:  # noqa: BLE001
             pass
     opa_ws = {
         "name": ws_name,
-        "type": "enterprise" if "enterprise" in (ws_name or "") else "domain",
+        "type": ws_type,
         "environment": ws_env,
     }
 
@@ -943,7 +945,7 @@ async def _scan_and_evaluate(
             ws_name, probe["identity"], ws_host, ws_cred_source,
         )
 
-    ws_type = "enterprise" if "enterprise" in (ws_name or "") else "domain"
+    ws_type = resolve_workspace_type(ws_name, workspace_ctx.get("type"))
     # Tag stored on every check/violation so the report + email can show which
     # workspace a finding came from. The OPA input keeps its historical shape
     # (name/type/environment) that the .rego policies read.
@@ -1353,6 +1355,7 @@ async def run_discovery(request) -> Dict[str, Any]:
             "name": cert_cfg.name,
             "host": cert_cfg.host,
             "environment": cert_cfg.environment,
+            "type": cert_cfg.workspace_type,
             "credential_source": cert_cfg.credential_source,
         }
         cert_host: Optional[str] = cert_cfg.host
@@ -1361,6 +1364,7 @@ async def run_discovery(request) -> Dict[str, Any]:
             "name": home_match.name if home_match else "home",
             "host": home_host,
             "environment": home_match.environment if home_match else settings.ENVIRONMENT,
+            "type": home_match.workspace_type if home_match else None,
             "credential_source": home_match.credential_source if home_match else "global_default",
         }
         cert_host = None  # -> _new_workspace_client(None) uses the app's own SP
@@ -1408,6 +1412,7 @@ async def run_discovery(request) -> Dict[str, Any]:
                 "name": w.name,
                 "host": w.host,
                 "environment": w.environment,
+                "type": w.workspace_type,
                 "credential_source": w.credential_source,
             }
             try:
@@ -1560,7 +1565,7 @@ async def run_discovery(request) -> Dict[str, Any]:
 
     scanned_names = [w.name for w in scan_ws] if not dataset_id else [cert_ctx["name"]]
     summary = (
-        f"Sentinel scan across {len(scanned_names)} workspace(s) "
+        f"OmniGuard scan across {len(scanned_names)} workspace(s) "
         f"({', '.join(scanned_names)}): scanned {total_resources} resource(s) across "
         f"{len(policy_files)} policy file(s); {total_checks} checks "
         f"({pass_count} passed, {violation_count} failed). "
@@ -2000,7 +2005,7 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
                                         notify_body = (
                                             "<p>Hello,</p>"
                                             f"<p>Your Databricks App <strong>{resource_id}</strong> in workspace <strong>{ws_display}</strong> "
-                                            "has been automatically stopped and its permissions restricted by Governance Sentinel enforcement.</p>"
+                                            "has been automatically stopped and its permissions restricted by OmniGuard enforcement.</p>"
                                             f"<p><strong>Reason:</strong> {violation.get('reason', 'Enterprise policy non-compliance')}</p>"
                                             "<p>Only workspace administrators currently have access to this app.</p>"
                                             + _enforcement_next_steps_html(app_url, contact)
@@ -2106,7 +2111,7 @@ async def run_enforcement(db, request) -> Dict[str, Any]:
                                         notify_body = (
                                             "<p>Hello,</p>"
                                             f"<p>Your Databricks App <strong>{resource_id}</strong> in workspace <strong>{ws_display}</strong> "
-                                            "has been automatically stopped by Governance Sentinel enforcement because it has been idle.</p>"
+                                            "has been automatically stopped by OmniGuard enforcement because it has been idle.</p>"
                                             f"<p><strong>Reason:</strong> {violation.get('reason', 'App idle beyond the allowed threshold')}</p>"
                                             "<p>Your access to the app is unchanged — you can restart it at any time.</p>"
                                             + _enforcement_next_steps_html(app_url, contact)
@@ -2607,7 +2612,7 @@ def _cta_html(app_url: str, brand_color: str, label: str = "See the full report"
     if not app_url:
         return (
             '<p style="margin:26px 0 0 0;font-size:13px;line-height:1.5;color:#64748b;">'
-            "This is a summary of the latest scan. Open the Enforcement Sentinel in the "
+            "This is a summary of the latest scan. Open OmniGuard in the "
             "app for the complete, filterable list of violations.</p>"
         )
     url = _esc(app_url.rstrip("/") + "/governance/sentinel")
@@ -2656,14 +2661,14 @@ def render_digest_html(rows: List[Dict[str, Any]], brand_color: str = "#2563eb",
         return f'<p style="margin:0 0 20px 0;font-size:16px;line-height:1.5;color:#0f172a;">{text}</p>'
 
     if not rows:
-        return _lead("Daily Enforcement Sentinel digest") + _all_clear_html() + cta
+        return _lead("Daily OmniGuard digest") + _all_clear_html() + cta
 
     high = [r for r in rows if r["severity"] == "HIGH"]
     lower = [r for r in rows if r["severity"] != "HIGH"]
 
     parts = [
         _lead(
-            f'Daily Enforcement Sentinel digest &mdash; <strong>{len(rows)}</strong> '
+            f'Daily OmniGuard digest &mdash; <strong>{len(rows)}</strong> '
             "active policy violation(s) across the workspace."
         ),
         _summary_cards_html(rows),
@@ -2763,7 +2768,7 @@ async def run_notify(db, request) -> Dict[str, Any]:
         body = (
             _lead(
                 f'<strong style="color:#B91C1C;">{len(new_high)}</strong> new high-severity policy '
-                "violation(s) were detected in the latest Enforcement Sentinel scan and require attention."
+                "violation(s) were detected in the latest OmniGuard scan and require attention."
             )
             + _violations_table_html(new_high, cap=_HIGH_DETAIL_CAP)
             + cta

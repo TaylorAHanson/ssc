@@ -444,6 +444,46 @@ async def test_saving_tests_directs_the_agent_to_run_them_itself(patched_db):
 
 
 @pytest.mark.asyncio
+async def test_with_auto_run_off_saving_tests_stops_instead_of_running(patched_db, monkeypatch):
+    monkeypatch.setattr(app_settings, "WORKFLOW_TESTS_AUTO_RUN", False, raising=False)
+    await wa.save_workflow_draft.execute(
+        key="demo_flow_off", graph_spec=_valid_spec(), request_type="demo_off"
+    )
+    res = await wa.save_workflow_tests.execute(
+        key="demo_flow_off",
+        cases=[{"name": "happy", "question": "q", "expected_outcome": "e"}],
+    )
+    assert res["ok"] is True and res["saved"] == 1
+    assert "next_action" not in res
+    assert "do NOT call run_workflow_tests" in res["note"]
+    assert "Run all" in res["note"]
+
+
+@pytest.mark.asyncio
+async def test_with_auto_run_off_the_agent_cannot_start_a_run(patched_db, monkeypatch):
+    monkeypatch.setattr(app_settings, "WORKFLOW_TESTS_AUTO_RUN", False, raising=False)
+    await _seeded_workflow_with_test(patched_db, key="no_autorun_flow")
+    out = await wa.run_workflow_tests.execute(key="no_autorun_flow")
+    assert out["ok"] is False and out["auto_run_disabled"] is True
+    assert "Run all" in out["error"]
+
+
+def test_authoring_prompt_overrides_run_rule_only_when_auto_run_is_off(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.agents.prompts import _get_authoring_section
+
+    tools = [SimpleNamespace(name="save_workflow_draft")]
+    monkeypatch.setattr(app_settings, "WORKFLOW_AUTHORING_LOCKED", False, raising=False)
+    monkeypatch.setattr(app_settings, "WORKFLOW_TESTS_AUTO_RUN", True, raising=False)
+    assert "automatic runs are OFF" not in _get_authoring_section(tools)
+    monkeypatch.setattr(app_settings, "WORKFLOW_TESTS_AUTO_RUN", False, raising=False)
+    off = _get_authoring_section(tools)
+    assert "automatic runs are OFF" in off
+    assert off.index("automatic runs are OFF") > off.index("4c. THEN RUN THEM")
+
+
+@pytest.mark.asyncio
 async def test_list_tests_reports_never_run_as_unknown_not_passing(patched_db):
     _, case = await _seeded_workflow_with_test(patched_db)
     out = await wa.list_workflow_tests.execute(key="tested_flow")

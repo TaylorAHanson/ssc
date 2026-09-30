@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 _GOAL_RE = re.compile(r"\*\*Goal\*\*:\s*(.*?)(?:\n|$)")
 
+# Seeded workflows whose display name differs from the title-cased key.
+_SEED_NAMES = {"enforcement_sentinel": "OmniGuard"}
+
 # Portable bundle format tag (bumped if the export shape changes).
 BUNDLE_FORMAT = "selfservice.workflows/v1"
 
@@ -753,12 +756,14 @@ class WorkflowService:
             goal_match = _GOAL_RE.search(content)
             goal_val = goal_match.group(1).strip() if goal_match else None
 
+            default_name = key.replace("_", " ").title()
+            seed_name = _SEED_NAMES.get(key, default_name)
             row = existing.get(key)
             if row is None:
                 db.add(WorkflowModel(
                     id=str(uuid.uuid4()),
                     key=key,
-                    name=key.replace("_", " ").title(),
+                    name=seed_name,
                     goal=goal_val,
                     instructions_markdown=content,
                     status="published",
@@ -769,10 +774,18 @@ class WorkflowService:
                 continue
 
             # Re-sync catalog-managed (seed) rows; never clobber admin edits.
-            if row.source == "seed" and (row.instructions_markdown or "") != content:
+            if row.source != "seed":
+                continue
+            changed = False
+            if (row.instructions_markdown or "") != content:
                 row.instructions_markdown = content
                 if goal_val:
                     row.goal = goal_val
+                changed = True
+            if row.name == default_name and seed_name != default_name:
+                row.name = seed_name
+                changed = True
+            if changed:
                 db.add(row)
                 updated += 1
         if inserted or updated:

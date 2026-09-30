@@ -74,7 +74,7 @@ async def sentinel_enforce(**kwargs) -> Dict[str, Any]:
     name="sentinel_notify",
     side_effect_class="notify",
     description=(
-        "Send governance notifications for a sentinel run: immediate email for "
+        "Send governance notifications for an OmniGuard run: immediate email for "
         "new HIGH-severity violations (deduped by transition) + an anchored "
         "once-per-day digest to the governance group."
     ),

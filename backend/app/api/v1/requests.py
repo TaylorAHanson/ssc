@@ -197,7 +197,7 @@ def get_requests(
     if not current_user.has_role("platform_admin"):
         query = query.filter(RequestModel.requester_email == current_user.email)
     
-    requests = query.offset(skip).limit(limit).all()
+    requests = query.order_by(RequestModel.created_at.desc()).offset(skip).limit(limit).all()
     formatted = _format_requests_bulk(requests, db)
     return _orjson_response([r.model_dump(mode="json") for r in formatted])
 

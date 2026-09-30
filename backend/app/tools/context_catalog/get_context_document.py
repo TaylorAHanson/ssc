@@ -21,7 +21,7 @@ class GetContextDocumentInput(BaseModel):
     description="Retrieve the full markdown text of a Context Catalog document by its ID.",
     args_schema=GetContextDocumentInput,
     feature_flag="context_catalog",
-    friendly_label="Opening context document...",
+    friendly_label="Reading internal guidance...",
 )
 def get_context_document(document_id: str) -> Dict[str, Any]:
     """Return the full document, or an error if not found / not published."""

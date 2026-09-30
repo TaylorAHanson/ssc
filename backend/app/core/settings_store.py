@@ -52,6 +52,9 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "type": "string", "help": "URL of your wordmark/logo. Leave blank to show the name only."},
     {"group": "Branding & Appearance", "key": "BRAND_COLOR_PRIMARY", "label": "Primary color", "type": "color"},
     {"group": "Branding & Appearance", "key": "BRAND_COLOR_SECONDARY", "label": "Secondary color", "type": "color"},
+    {"group": "Branding & Appearance", "key": "BRAND_COLOR_NAV", "label": "Sidebar color", "type": "color",
+     "help": "Background of the left navigation sidebar. Hover, border, and selected-item shades are "
+             "derived from it automatically. Pick a dark color — sidebar text is white."},
     {"group": "Branding & Appearance", "key": "BRAND_COLOR_INFO", "label": "Info color", "type": "color"},
     {"group": "Branding & Appearance", "key": "BRAND_COLOR_ALERT", "label": "Alert color", "type": "color"},
     {"group": "Branding & Appearance", "key": "BRAND_COLOR_WARNING", "label": "Warning color", "type": "color"},
@@ -60,7 +63,7 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     # --- Notifications & Governance -------------------------------------
     {"group": "Notifications & Governance", "key": "GOVERNANCE_EMAIL_GROUP", "label": "Governance admin recipients",
      "type": "string",
-     "help": "Who receives Enforcement Sentinel alerts + the daily digest. Comma-separate multiple addresses."},
+     "help": "Who receives OmniGuard alerts + the daily digest. Comma-separate multiple addresses."},
     {"group": "Notifications & Governance", "key": "REJECTION_NOTIFY_REQUESTER",
      "label": "Tell requesters when a request is denied", "type": "bool",
      "help": "On (recommended) = when an approver denies a request, the requester is emailed the "
@@ -97,12 +100,12 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "type": "string", "help": "IANA timezone the digest hour is evaluated in, e.g. America/Los_Angeles."},
     {"group": "Notifications & Governance", "key": "ENFORCEMENT_SENTINEL_STALE_MINUTES", "label": "Stale-run threshold (min)",
      "type": "int", "min": 1,
-     "help": "A stuck sentinel run older than this no longer blocks the schedule."},
-    {"group": "Notifications & Governance", "key": "SENTINEL_SCAN_CONCURRENCY", "label": "Sentinel scan concurrency",
+     "help": "A stuck OmniGuard run older than this no longer blocks the schedule."},
+    {"group": "Notifications & Governance", "key": "SENTINEL_SCAN_CONCURRENCY", "label": "OmniGuard scan concurrency",
      "type": "int", "min": 1,
      "help": "Max concurrent units of work WITHIN one workspace scan (resource "
              "handlers + per-resource OPA evaluation). 1 = fully serialized."},
-    {"group": "Notifications & Governance", "key": "SENTINEL_WORKSPACE_CONCURRENCY", "label": "Sentinel workspace concurrency",
+    {"group": "Notifications & Governance", "key": "SENTINEL_WORKSPACE_CONCURRENCY", "label": "OmniGuard workspace concurrency",
      "type": "int", "min": 1,
      "help": "How many target workspaces to scan at the SAME TIME. Higher makes a "
              "run's wall-clock closer to the slowest single workspace instead of "
@@ -119,23 +122,23 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "Wall-clock cap (seconds) on one workspace's scan before it's "
              "ABANDONED as a timeout failure — contributing ZERO findings for that "
              "workspace. DEFAULT 0 (no limit): a large workspace can legitimately "
-             "take many minutes, and a cap that's too low makes the sentinel report "
+             "take many minutes, and a cap that's too low makes OmniGuard report "
              "a fraction of real violations. True hangs are already bounded per-call "
-             "by the sentinel SDK timeout, so leave this 0 unless you must bound a "
+             "by the OmniGuard SDK timeout, so leave this 0 unless you must bound a "
              "specific runaway workspace (then use a generous value like 3600)."},
-    {"group": "Notifications & Governance", "key": "SENTINEL_SDK_HTTP_TIMEOUT_SECONDS", "label": "Sentinel per-call SDK timeout (sec)",
+    {"group": "Notifications & Governance", "key": "SENTINEL_SDK_HTTP_TIMEOUT_SECONDS", "label": "OmniGuard per-call SDK timeout (sec)",
      "type": "int", "min": 0,
-     "help": "Per-HTTP-call timeout for the sentinel's own workspace clients — "
+     "help": "Per-HTTP-call timeout for OmniGuard's own workspace clients — "
              "longer than the app-wide Databricks SDK timeout because remote "
              "workspaces can be slow. Bounds ONE call, not the whole scan (that's "
-             "the per-workspace timeout above). Safe because sentinel runs on its "
+             "the per-workspace timeout above). Safe because OmniGuard runs on its "
              "own thread pool. 0 = use the app-wide default."},
     {"group": "Notifications & Governance", "key": "SENTINEL_AUTO_ENFORCE_APPS", "label": "Auto-enforce App policy",
      "type": "bool",
      "help": "OFF by default. When enabled, non-compliant Databricks Apps in production enterprise workspaces are automatically stopped and have their permissions revoked to admins only. All other resource types remain manual Review & Act only."},
     {"group": "Notifications & Governance", "key": "SENTINEL_AUTO_ENFORCE_MAX_APPS_PER_RUN", "label": "Max auto-stopped apps per run",
      "type": "int", "min": 1, "max": 20,
-     "help": "Circuit breaker cap on how many non-compliant apps can be stopped automatically in a single Sentinel run. Prevents mass outages if a policy or allowlist misfires."},
+     "help": "Circuit breaker cap on how many non-compliant apps can be stopped automatically in a single OmniGuard run. Prevents mass outages if a policy or allowlist misfires."},
     {"group": "Notifications & Governance", "key": "SENTINEL_PROTECTED_APP_NAMES", "label": "Protected app names/patterns",
      "type": "string",
      "help": "Comma-separated list of app names or glob patterns (e.g. 'edh-ssc*, mcp-server*, custom-app') that are protected and can never be stopped or revoked by automated enforcement."},
@@ -169,10 +172,10 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     # poller thread, which re-reads them every cycle — edits take effect on the
     # next poll (no redeploy). Blank disables a schedule. A bad expression is
     # rejected on save so a typo can't silently break a schedule.
-    {"group": "Scheduling", "key": "ENFORCEMENT_SENTINEL_CRON", "label": "Sentinel scan cron",
+    {"group": "Scheduling", "key": "ENFORCEMENT_SENTINEL_CRON", "label": "OmniGuard scan cron",
      "type": "cron",
-     "help": "How often the Enforcement Sentinel scans every target workspace (5-field cron, UTC). "
-             "Leave BLANK to disable the scheduled scan — manual runs still work. Requires the Sentinel feature."},
+     "help": "How often OmniGuard scans every target workspace (5-field cron, UTC). "
+             "Leave BLANK to disable the scheduled scan — manual runs still work. Requires the OmniGuard feature."},
     {"group": "Scheduling", "key": "DATA_ASSET_SYNC_CRON", "label": "Data asset sync cron",
      "type": "cron",
      "help": "How often the local data-asset cache is refreshed from Unity Catalog (5-field cron, UTC). "
@@ -233,6 +236,12 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "On = admins can run a workflow's test cases from Workflow Studio. Each case starts a real agent "
              "conversation with every mutating tool sandboxed (nothing is provisioned), so it costs model calls. "
              "Off = the Tests tab is read-only."},
+    {"group": "Workflow tests", "key": "WORKFLOW_TESTS_AUTO_RUN", "label": "Assistant runs tests automatically",
+     "type": "bool",
+     "help": "On (default) = after the Workflow Studio assistant writes test cases it runs them and waits for the "
+             "verdicts before replying, then fixes what fails — thorough, but a run can take several minutes. "
+             "Off = it writes and saves the cases and replies right away; run them yourself with Run all in the "
+             "Tests tab. Useful for demos."},
     {"group": "Workflow tests", "key": "WORKFLOW_TEST_CONCURRENCY", "label": "Cases run in parallel",
      "type": "int", "min": 1, "max": 10,
      "help": "How many cases of one 'Run all' execute at the same time. Each is a full agent turn, so raising "
@@ -368,7 +377,7 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Target Workspaces", "key": "collection:target_workspaces",
      "label": "Target workspaces",
      "type": "collection", "unique": "name", "add_label": "Add workspace",
-     "help": "Each workspace the app monitors and its service principal. The SP key fields name the client-id/secret keys inside the scope above (never the secret values). Workspaces that share an SP just reference the same key names; leave them blank to use the app's own SP. Adding a row does not grant access — the SP must already be authorized on the workspace in Databricks.",
+     "help": "Each workspace the app monitors and its service principal. The SP key fields name the client-id/secret keys inside the scope above (never the secret values). Workspaces that share an SP just reference the same key names; leave them blank to use the app's own SP. Adding a row does not grant access — the SP must already be authorized on the workspace in Databricks. Workspace type 'enterprise' turns on the stricter OmniGuard rules (no apps, Genie spaces or Lakebase in enterprise prod); Auto treats a workspace as enterprise only if its name contains 'enterprise'.",
      "columns": [
          {"key": "name", "label": "Name", "type": "string", "required": True,
           "placeholder": "prod-domain-a"},
@@ -376,6 +385,9 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
           "placeholder": "https://adb-123....azuredatabricks.net"},
          {"key": "environment", "label": "Environment", "type": "string", "required": True,
           "placeholder": "prod"},
+         {"key": "type", "label": "Workspace type", "type": "select",
+          "options": ["", "enterprise", "domain"], "placeholder": "Auto (from name)",
+          "help": "Enterprise = stricter rules"},
          {"key": "client_id_key", "label": "Client ID secret key", "type": "string",
           "placeholder": "sp_prod_client_id", "help": "Secret key NAME — not the value"},
          {"key": "client_secret_key", "label": "Client secret key", "type": "string",
@@ -384,7 +396,7 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Target Workspaces", "key": "SENTINEL_DATA_CERT_WORKSPACE",
      "label": "Data certification workspace",
      "type": "string",
-     "help": "The Enforcement Sentinel scans every target workspace for compute/apps/jobs, but data certification is Unity Catalog (metastore) scoped, so it runs ONCE against a single workspace. Enter the NAME of the target workspace that should run it, or leave blank to use the app's own home workspace. This workspace's service principal is ALSO the governance identity for other metastore-global reads — notably the data-asset cache sync that powers Discover — so it must have BROWSE on the scanned catalogs and CAN USE on the SQL warehouse. The DQ warehouse + ADOC schema always come from the global settings."},
+     "help": "OmniGuard scans every target workspace for compute/apps/jobs, but data certification is Unity Catalog (metastore) scoped, so it runs ONCE against a single workspace. Enter the NAME of the target workspace that should run it, or leave blank to use the app's own home workspace. This workspace's service principal is ALSO the governance identity for other metastore-global reads — notably the data-asset cache sync that powers Discover — so it must have BROWSE on the scanned catalogs and CAN USE on the SQL warehouse. The DQ warehouse + ADOC schema always come from the global settings."},
 
     # --- Web Lookup -----------------------------------------------------
     {"group": "Web Lookup", "key": "yaml:web_search.allowed_domains", "label": "Allowed domains",
@@ -530,11 +542,11 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "from the menu — it does not disable the underlying capability (use Features for that)."
     ),
     "Notifications & Governance": (
-        "Where governance alerts go, when the daily Enforcement Sentinel digest is sent, what a "
+        "Where governance alerts go, when the daily OmniGuard digest is sent, what a "
         "requester is told when their request is denied, and how/from whom notification email is sent."
     ),
     "Scheduling": (
-        "How often the background jobs run — the Sentinel scan, data-asset cache sync, data-contract "
+        "How often the background jobs run — the OmniGuard scan, data-asset cache sync, data-contract "
         "redraft, and calendar sync. All are standard 5-field cron in UTC; leave a field blank to disable "
         "that job. Edits are picked up by the poller on its next cycle — no redeploy needed."
     ),
@@ -577,19 +589,20 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
 # renders without a description (safe for flags added later).
 FEATURE_DESCRIPTIONS: Dict[str, str] = {
     "core": "Base platform capabilities. Keep this on — turning it off disables the core app experience.",
-    "governance": "Governance suite: data certification (ODCS/ODPS), tag management, the Enforcement Sentinel, and allowlist exceptions.",
+    "governance": "Governance suite: data certification (ODCS/ODPS), tag management, OmniGuard, and allowlist exceptions.",
     "finops": "Cost & efficiency insights — spend summaries, forecasts, and resource-efficiency metrics.",
     "self_service": "The Self-Service Center: the catalog of quick-action request cards on the landing page.",
     "workflows": "Request workflows (data access, provisioning, etc.) that route through approvals and automation.",
     "data_discovery": "Browse and search the synced Unity Catalog data catalog. Also enables the background data-asset sync.",
     "calendar": "The event calendar page and its background calendar sync.",
-    "sentinel": "The scheduled Enforcement Sentinel background scan (policy evaluation, safe auto-remediation, and the governance digest). Off = manual scans only.",
+    "sentinel": "The scheduled OmniGuard background scan (policy evaluation, safe auto-remediation, and the governance digest). Off = manual scans only.",
     "ask_your_data": "\u201cAsk Your Data\u201d — natural-language data questions answered by Databricks Genie.",
     "run_sql": "Lets the agent run read-only SQL it composes itself, on-behalf-of the user, feeding the in-chat charts.",
     "genie_summarize_answer": "Rewords Genie's answer through the agent (adds latency/cost). Off = show Genie's grounded answer verbatim.",
     "context_catalog": "Context Catalog: a curated knowledge base the agent retrieves from.",
     "workflow_authoring": "No-code, database-backed workflow authoring in the admin Workflow Studio.",
     "onboarding_suggestions": "Personalized, clickable starter prompts on the home page at login.",
+    "home_data_catalog": "The Pinned Items, Data Products, and Datasets sections below the chat on the home / new chat page. Off = a chat-only landing. The Discover page is unaffected.",
     "user_context": "Tells the agent up front who the user is \u2014 their roles, open requests, pending approvals, and group memberships \u2014 so it asks fewer questions. Cached per user and refreshed in the background.",
     "web_search": "Lets the agent search and cite Databricks documentation (and any approved domains).",
     "feedback": "In-app feedback / feature-request / bug-report capture, triaged in the admin panel.",
@@ -602,9 +615,14 @@ FEATURE_DESCRIPTIONS: Dict[str, str] = {
 
 _ACRONYMS = {"sql", "api", "ai", "odcs", "odps", "llm", "mcp", "obo", "ui", "sp"}
 
+# Flag/tab keys whose display name differs from the key itself.
+_DISPLAY_NAMES = {"sentinel": "OmniGuard"}
+
 
 def _prettify(name: str) -> str:
     """Turn a snake_case flag/tab key into a human label (with acronym casing)."""
+    if name in _DISPLAY_NAMES:
+        return _DISPLAY_NAMES[name]
     words = name.replace("-", " ").replace("_", " ").split()
     return " ".join(w.upper() if w.lower() in _ACRONYMS else w.capitalize() for w in words)
 
@@ -696,6 +714,13 @@ def _coerce_collection(field: Dict[str, Any], value: Any) -> List[Dict[str, Any]
                         cval = int(raw)
                     except (TypeError, ValueError):
                         raise ValueError(f"{label}: '{col['label']}' must be an integer (row {idx})")
+            elif ctype == "select":
+                cval = "" if raw is None else str(raw).strip()
+                if cval not in col.get("options", []):
+                    raise ValueError(
+                        f"{label}: '{col['label']}' must be one of "
+                        f"{[o for o in col.get('options', []) if o]} (row {idx})"
+                    )
             else:
                 cval = "" if raw is None else str(raw).strip()
 

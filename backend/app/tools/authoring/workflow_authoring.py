@@ -42,6 +42,12 @@ def _authoring_locked() -> bool:
 
     return bool(settings.WORKFLOW_AUTHORING_LOCKED)
 
+
+def _tests_auto_run() -> bool:
+    from app.core.config import settings
+
+    return bool(getattr(settings, "WORKFLOW_TESTS_AUTO_RUN", True))
+
 # Gate kinds + expression operators the spec language supports, surfaced to the
 # agent so it can author specs without guessing (mirrors spec_loader.GATE_TYPES
 # and expr's operator set).
@@ -942,7 +948,7 @@ async def save_workflow_tests(
             db, workflow.id, normalized, source="agent", created_by=actor,
         )
         skipped = len(normalized) - len(saved)
-        return {
+        result: Dict[str, Any] = {
             "ok": True,
             "workflow_key": workflow.key,
             "saved": len(saved),
@@ -961,6 +967,19 @@ async def save_workflow_tests(
                 [f"{skipped} case(s) were dropped for missing a question or expected outcome."]
                 if skipped > 0 else []
             ),
+        }
+        if not _tests_auto_run():
+            result["note"] = (
+                f"Saved {len(saved)} case(s). Automatic test runs are OFF in this "
+                f"environment: do NOT call run_workflow_tests. Finish your reply now — "
+                f"list the cases you wrote and your assumptions, and tell the admin they "
+                f"are in the Tests tab, ready to run with Run all. Do not describe the "
+                f"workflow as tested or verified. Any cases the admin wrote themselves "
+                f"were preserved."
+            )
+            return result
+        return {
+            **result,
             # The next step is stated as a directive with the ids ready to pass:
             # saving used to end with "tell the admin to click Run all", and that
             # was the last thing the model read, so it handed off instead of
@@ -1123,6 +1142,18 @@ async def run_workflow_tests(
             "error": (
                 "Workflow tests are disabled in this environment (Admin → Settings → "
                 "Workflow tests)."
+            ),
+        }
+    if not _tests_auto_run():
+        return {
+            "ok": False,
+            "auto_run_disabled": True,
+            "error": (
+                "The assistant doesn't run workflow tests in this environment "
+                "(Admin → Settings → Workflow tests → Assistant runs tests "
+                "automatically is off). Do not retry. Tell the admin the cases are "
+                "in the Tests tab and to run them with Run all; once they have, you "
+                "can read the verdicts with list_workflow_tests."
             ),
         }
 

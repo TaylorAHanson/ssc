@@ -95,6 +95,7 @@ class Settings(BaseSettings):
     BRAND_LOGO_URL: str = _branding.get("logo_url", os.getenv("BRAND_LOGO_URL", ""))
     BRAND_COLOR_PRIMARY: str = _branding.get("primary_color", os.getenv("BRAND_COLOR_PRIMARY", "#FF3621"))
     BRAND_COLOR_SECONDARY: str = _branding.get("secondary_color", os.getenv("BRAND_COLOR_SECONDARY", "#1B5162"))
+    BRAND_COLOR_NAV: str = _branding.get("nav_color", os.getenv("BRAND_COLOR_NAV", "#001E3C"))
     BRAND_COLOR_INFO: str = _branding.get("info_color", os.getenv("BRAND_COLOR_INFO", "#1B5162"))
     BRAND_COLOR_ALERT: str = _branding.get("alert_color", os.getenv("BRAND_COLOR_ALERT", "#98102A"))
     BRAND_COLOR_WARNING: str = _branding.get("warning_color", os.getenv("BRAND_COLOR_WARNING", "#FFAB00"))
@@ -429,6 +430,10 @@ class Settings(BaseSettings):
     # is an agent-invocation surface: it costs model calls and it is rate-limited
     # and role-gated on top of the sandbox.
     WORKFLOW_TESTS_ENABLED: bool = True
+    # When True the authoring assistant runs the cases it writes and waits for
+    # verdicts in the same turn. False = it saves them and stops; the admin runs
+    # them from the Tests tab (handy for demos, where a run takes minutes).
+    WORKFLOW_TESTS_AUTO_RUN: bool = True
     # Cases executed concurrently within one run group. Each case is a full agent
     # conversation, so this multiplies model load — keep it small.
     WORKFLOW_TEST_CONCURRENCY: int = 2

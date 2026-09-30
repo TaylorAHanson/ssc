@@ -76,6 +76,7 @@ def execute_workflow(workflow_type: str, parameters: Dict[str, Any], conversatio
             "success": True,
             "workflow_type": workflow_type,
             "request_id": request_id,
+            "request_link": f"[{request_id}](/requests/{request_id})",
             "status": "initiated",
             "message": f"Successfully initiated {workflow_type} workflow with ID {request_id}"
         }

@@ -26,6 +26,17 @@ class WorkspaceConfig(BaseModel):
     # `ping_workspaces`/logs show which SP a workspace resolved to without
     # exposing the secret.
     credential_source: Optional[str] = None
+    # "enterprise" | "domain". The OmniGuard .rego policies read it as
+    # ``input.workspace.type``.
+    workspace_type: str = "domain"
+
+
+def resolve_workspace_type(name: Optional[str], explicit: Optional[str] = None) -> str:
+    """The admin-set type if any, else enterprise only when the name says so."""
+    explicit = (explicit or "").strip().lower()
+    if explicit in ("enterprise", "domain"):
+        return explicit
+    return "enterprise" if "enterprise" in (name or "") else "domain"
 
 
 def _read_secret(scope: Optional[str], key: Optional[str]) -> Optional[str]:
@@ -180,6 +191,7 @@ def get_target_workspaces() -> List[WorkspaceConfig]:
                 client_secret=client_secret,
                 token=token,
                 credential_source=source,
+                workspace_type=resolve_workspace_type(name, ws.get("type")),
             )
         )
 
@@ -364,8 +376,9 @@ def get_workspace_config(host_or_name: str) -> Optional[WorkspaceConfig]:
     """
     workspaces = get_target_workspaces()
 
+    wanted_host = host_or_name.rstrip("/")
     for ws in workspaces:
-        if ws.host == host_or_name or ws.name == host_or_name:
+        if ws.host.rstrip("/") == wanted_host or ws.name == host_or_name:
             return ws
 
     # If not found, but we have a host URL, create a fallback config using default credentials

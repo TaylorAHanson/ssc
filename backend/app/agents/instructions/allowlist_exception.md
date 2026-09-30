@@ -1,6 +1,6 @@
 # Allowlist Exception Request Instructions
 
-**Goal**: Help the user request an exception to a governance policy so that their resource (e.g., Databricks App, long-running cluster) is not deleted by the Enforcement Sentinel.
+**Goal**: Help the user request an exception to a governance policy so that their resource (e.g., Databricks App, long-running cluster) is not deleted by OmniGuard.
 
 ---
 

@@ -101,7 +101,7 @@ export function Allowlist() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this allowlist exception? The resource may be killed by the Sentinel.')) return;
+    if (!confirm('Are you sure you want to delete this allowlist exception? The resource may be killed by OmniGuard.')) return;
     
     try {
       await deleteAllowlistEntry(id);
@@ -189,7 +189,7 @@ export function Allowlist() {
                     )}
                   </select>
                   <p className="text-[11px] text-gray-500">
-                    Must match a target workspace name so the Sentinel applies this exception when it scans that workspace.
+                    Must match a target workspace name so OmniGuard applies this exception when it scans that workspace.
                   </p>
                 </div>
                 <div className="space-y-2">

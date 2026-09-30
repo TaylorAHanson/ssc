@@ -106,7 +106,7 @@ class TagPolicy:
         problems: List[str] = []
         if self._is_reserved(key):
             problems.append(
-                f"{table}: '{key}' is a reserved tag — the Enforcement Sentinel owns "
+                f"{table}: '{key}' is a reserved tag — OmniGuard owns "
                 f"these and writes them directly."
             )
             return problems
@@ -146,7 +146,7 @@ class TagPolicy:
         if self._is_reserved(key):
             return [
                 f"{table}: '{key}' is a reserved tag and cannot be removed here — the "
-                f"Enforcement Sentinel owns it."
+                f"OmniGuard owns it."
             ]
         if self._is_protected(key):
             return [

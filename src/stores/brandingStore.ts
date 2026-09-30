@@ -20,6 +20,7 @@ interface BrandingState {
     brandLogoUrl: string;
     brandColorPrimary: string;
     brandColorSecondary: string;
+    brandColorNav: string;
     brandColorInfo: string;
     brandColorAlert: string;
     brandColorWarning: string;
@@ -49,6 +50,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     brandLogoUrl: '',
     brandColorPrimary: '#FF3621',
     brandColorSecondary: '#1B5162',
+    brandColorNav: '#001E3C',
     brandColorInfo: '#1B5162',
     brandColorAlert: '#98102A',
     brandColorWarning: '#FFAB00',
@@ -77,6 +79,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 brandLogoUrl: branding.brand_logo_url || '',
                 brandColorPrimary: branding.brand_color_primary,
                 brandColorSecondary: branding.brand_color_secondary,
+                brandColorNav: branding.brand_color_nav || '#001E3C',
                 brandColorInfo: branding.brand_color_info,
                 brandColorAlert: branding.brand_color_alert,
                 brandColorWarning: branding.brand_color_warning,
@@ -114,6 +117,9 @@ export const useBrandingStore = create<BrandingState>((set) => ({
             // Apply colors to CSS variables for Tailwind and other usages
             document.documentElement.style.setProperty('--brand-primary', branding.brand_color_primary);
             document.documentElement.style.setProperty('--brand-secondary', branding.brand_color_secondary);
+            if (branding.brand_color_nav) {
+                document.documentElement.style.setProperty('--brand-nav', branding.brand_color_nav);
+            }
             document.documentElement.style.setProperty('--brand-info', branding.brand_color_info);
             document.documentElement.style.setProperty('--brand-alert', branding.brand_color_alert);
             document.documentElement.style.setProperty('--brand-warning', branding.brand_color_warning);

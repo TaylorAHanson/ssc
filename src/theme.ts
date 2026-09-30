@@ -17,7 +17,8 @@
 
 export const theme = {
   colors: {
-    // Dark navigation surface (sidebar / vertical nav).
+    // Dark navigation surface (sidebar / vertical nav). Defaults only — at
+    // runtime the CSS vars follow the admin "Sidebar color" (BRAND_COLOR_NAV).
     nav: {
       bg: '#001E3C',
       border: '#1F2937', // ~ tailwind gray-800

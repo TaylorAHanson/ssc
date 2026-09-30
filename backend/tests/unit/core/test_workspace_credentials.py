@@ -159,3 +159,35 @@ def test_missing_scope_falls_back_to_global_default(monkeypatch):
     w = ws.get_target_workspaces()[0]
     assert w.client_id == "global-cid"
     assert w.credential_source == "global_default"
+
+
+@pytest.mark.parametrize(
+    "name, explicit, expected",
+    [
+        ("fevm-taylor", "enterprise", "enterprise"),
+        ("enterprise-prod", "domain", "domain"),
+        ("enterprise-prod", "", "enterprise"),
+        ("fevm-taylor", None, "domain"),
+        ("fevm-taylor", " Enterprise ", "enterprise"),
+        ("fevm-taylor", "bogus", "domain"),
+    ],
+)
+def test_resolve_workspace_type(name, explicit, expected):
+    assert ws.resolve_workspace_type(name, explicit) == expected
+
+
+def test_workspace_type_column_and_trailing_slash_host(monkeypatch):
+    """An explicit type is carried through, and host lookup ignores a trailing slash."""
+    _scope(monkeypatch, "")
+    _config(
+        monkeypatch,
+        {
+            "target_workspaces": [
+                {"name": "fevm-taylor", "host": "https://a.example.com/",
+                 "environment": "prod", "type": "enterprise"}
+            ],
+        },
+    )
+    w = ws.get_workspace_config("https://a.example.com")
+    assert w.name == "fevm-taylor"
+    assert w.workspace_type == "enterprise"

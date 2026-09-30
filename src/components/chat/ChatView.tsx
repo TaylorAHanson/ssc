@@ -107,6 +107,7 @@ export interface ChatViewProps {
      * the welcome + input sit near the top (Databricks One style) and
      * this node (e.g. Data Products / Datasets rails) scrolls below it,
      * instead of the input being pinned to the bottom of the surface.
+     * Pass `null` for that landing layout with nothing below the input.
      */
     emptyStateExtras?: React.ReactNode;
     /**
@@ -1075,7 +1076,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             )}
 
             {/* Empty state — welcome content + initial input */}
-            {messages.length === 0 && emptyStateExtras ? (
+            {messages.length === 0 && emptyStateExtras !== undefined ? (
                 /* Databricks One-style landing: a prominent, higher-up input
                    with rich content (Data Products / Datasets) scrolling
                    below it. */
@@ -1131,7 +1132,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                             </div>
                         )}
                     </div>
-                    <div className="mt-10">{emptyStateExtras}</div>
+                    {emptyStateExtras && <div className="mt-10">{emptyStateExtras}</div>}
                 </div>
             ) : messages.length === 0 ? (
                 <div className="flex-1 flex flex-col">

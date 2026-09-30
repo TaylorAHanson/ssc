@@ -436,7 +436,7 @@ function ChecklistTab({ detail }: { detail: CertificationDetail }) {
       {hasFailures && (
         <div className="p-4 bg-blue-50 text-blue-800 rounded-lg border border-blue-100 text-sm">
           <strong>Next steps:</strong> Once the data engineering team resolves these issues in Databricks (e.g., by adding missing
-          tags, defining RBAC, or improving data quality scores), the next Enforcement Sentinel run will automatically detect the
+          tags, defining RBAC, or improving data quality scores), the next OmniGuard run will automatically detect the
           changes and generate a Data Certification request.
         </div>
       )}

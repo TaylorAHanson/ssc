@@ -18,7 +18,7 @@ class ListContextDomainsInput(BaseModel):
     description="List available knowledge domains in the Context Catalog (e.g. FSI, Governance, Architecture) with document counts.",
     args_schema=ListContextDomainsInput,
     feature_flag="context_catalog",
-    friendly_label="Browsing the context catalog...",
+    friendly_label="Checking internal guidance...",
 )
 def list_context_domains() -> Dict[str, Any]:
     """Return the catalog domains with their descriptions and document counts."""

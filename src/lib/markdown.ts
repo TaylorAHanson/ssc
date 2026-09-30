@@ -80,6 +80,19 @@ function _safeUrl(value: string, allowDataImage: boolean): boolean {
     return false;
 }
 
+const _REQUEST_ID_RE = /^req-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The model writes request links as [req-<uuid>](/requests/req-<uuid>) and
+ *  occasionally mistypes the href copy of the 40-char id, producing a link
+ *  that 404s. When the label is a full request id, the label wins. */
+function _repairRequestLink(el: Element): void {
+    const label = (el.textContent ?? '').trim();
+    const href = el.getAttribute('href') ?? '';
+    if (_REQUEST_ID_RE.test(label) && href.startsWith('/requests/') && href !== `/requests/${label}`) {
+        el.setAttribute('href', `/requests/${label}`);
+    }
+}
+
 function _scrubElement(el: Element): void {
     const tag = el.tagName.toLowerCase();
     const allowed = ATTRS_BY_TAG[tag] ?? new Set<string>();
@@ -102,6 +115,7 @@ function _scrubElement(el: Element): void {
     // External links open in a new tab so following one doesn't unmount the SPA
     // (which would lose the user's chat history mid-conversation).
     if (tag === 'a') {
+        _repairRequestLink(el);
         const href = el.getAttribute('href') ?? '';
         if (_isAbsolute(href)) {
             el.setAttribute('target', '_blank');

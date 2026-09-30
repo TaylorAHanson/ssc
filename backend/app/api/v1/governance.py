@@ -97,7 +97,7 @@ async def send_digest_now(
     if not run:
         raise HTTPException(
             status_code=404,
-            detail="No completed Sentinel run found to build a digest from. Run a scan first.",
+            detail="No completed OmniGuard run found to build a digest from. Run a scan first.",
         )
 
     rows = _active_violations(load_run_violations(db, run))
@@ -177,7 +177,7 @@ def purge_sentinel_runs(
     in ``failed`` rather than failing the request.
     """
     if not current_user.has_role("Platform Admin"):
-        raise HTTPException(status_code=403, detail="Not authorized to purge Sentinel runs")
+        raise HTTPException(status_code=403, detail="Not authorized to purge OmniGuard runs")
 
     from app.db.enforcement_audit import EnforcementAuditModel
     from app.db.sentinel_finding import SentinelFindingModel

@@ -469,7 +469,7 @@ export function DataCertification() {
                           ) : status === 'awaiting' ? (
                             <span 
                               className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800"
-                              title="Run Enforcement Sentinel to fetch policy violations and scores"
+                              title="Run OmniGuard to fetch policy violations and scores"
                             >
                               <Info className="w-3 h-3 mr-1" /> Awaiting Scan
                             </span>
@@ -506,8 +506,8 @@ export function DataCertification() {
                             <span
                               className="text-gray-400 cursor-help"
                               title={failedCount === -1 || failedCount === '-1'
-                                ? "Couldn't fetch data quality history. Check that the table has a 'reliability_window' tag, then re-run the Enforcement Sentinel."
-                                : 'Run the Enforcement Sentinel to evaluate data quality.'}
+                                ? "Couldn't fetch data quality history. Check that the table has a 'reliability_window' tag, then re-run OmniGuard."
+                                : 'Run OmniGuard to evaluate data quality.'}
                             >
                               &mdash;
                             </span>

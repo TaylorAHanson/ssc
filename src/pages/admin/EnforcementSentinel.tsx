@@ -178,7 +178,7 @@ export function EnforcementSentinel() {
     const [purging, setPurging] = useState(false);
     const handlePurgeOldRuns = async () => {
         const keepRaw = window.prompt(
-            'Delete old Sentinel runs to speed up this page.\n\n' +
+            'Delete old OmniGuard runs to speed up this page.\n\n' +
             'How many of the MOST RECENT runs should be kept? ' +
             'Everything older (and its findings) is permanently deleted. ' +
             'Hung runs stuck mid-scan are also cleared; a genuinely in-progress scan is never touched.',
@@ -351,7 +351,7 @@ export function EnforcementSentinel() {
             // '__all__' => scan every target workspace (empty list); otherwise
             // scope to the single selected workspace by name.
             const workspaces = workspaceSel === '__all__' ? [] : [workspaceSel];
-            await api.createRequest('enforcement_sentinel' as any, 'Manual Sentinel Run', environment, {
+            await api.createRequest('enforcement_sentinel' as any, 'Manual OmniGuard Run', environment, {
                 workspaces,
                 environment: environment,
             });
@@ -364,7 +364,7 @@ export function EnforcementSentinel() {
             }
         } catch (e) {
             console.error(e);
-            alert('Failed to start Sentinel run');
+            alert('Failed to start OmniGuard run');
         } finally {
             setIsRunning(false);
         }
@@ -420,7 +420,7 @@ export function EnforcementSentinel() {
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <ShieldAlert className="w-5 h-5 text-gray-700" />
-                        Enforcement Sentinel
+                        OmniGuard
                     </CardTitle>
                     <CardDescription>
                         The Automated Governance Pipeline discovers non-compliant resources and evaluates Open Policy Agent (OPA) policies across the environment.
@@ -453,7 +453,7 @@ export function EnforcementSentinel() {
                                 variant="ghost"
                                 onClick={handlePurgeOldRuns}
                                 disabled={purging}
-                                title="Clear old Sentinel runs to speed up this page"
+                                title="Clear old OmniGuard runs to speed up this page"
                                 className="h-9 whitespace-nowrap text-gray-400 hover:text-red-600"
                             >
                                 {purging ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}
@@ -592,7 +592,7 @@ export function EnforcementSentinel() {
                             {sentinelRuns.length === 0 ? (
                                 <tr>
                                     <td colSpan={6} className="p-6 text-center text-gray-500">
-                                        No Sentinel runs found.
+                                        No OmniGuard runs found.
                                     </td>
                                 </tr>
                             ) : (
@@ -716,7 +716,7 @@ export function EnforcementSentinel() {
                             <div>
                                 <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
                                     <ShieldAlert className="w-5 h-5 text-blue-600" />
-                                    Sentinel Run Report
+                                    OmniGuard Run Report
                                 </h2>
                                 <p className="text-sm text-gray-500 mt-1">
                                     {formatPacific(selectedRun.createdAt, { month: 'long', second: '2-digit' })} • 
@@ -832,10 +832,10 @@ export function EnforcementSentinel() {
                                         <div className="flex-1 flex flex-col items-center justify-center py-20 text-center">
                                             <AlertTriangle className="w-16 h-16 text-red-500 mb-6" />
                                             <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                                                Sentinel Run Failed
+                                                OmniGuard Run Failed
                                             </h3>
                                             <p className="text-red-600 font-mono text-sm bg-red-50 p-4 rounded-md border border-red-100 max-w-2xl text-left overflow-auto">
-                                                {selectedRun.lastError?.error || 'An unexpected error occurred during the sentinel run. Check the backend logs for details.'}
+                                                {selectedRun.lastError?.error || 'An unexpected error occurred during the OmniGuard run. Check the backend logs for details.'}
                                             </p>
                                         </div>
                                     ) : selectedRun.status !== 'completed' && selectedRun.status !== 'rejected' ? (
@@ -845,7 +845,7 @@ export function EnforcementSentinel() {
                                                 {selectedRun.stateMachine?.states?.find((s: any) => s.isActive)?.name || 'Discovering Resources...'}
                                             </h3>
                                             <p className="text-gray-500 max-w-md">
-                                                The Sentinel is actively scanning the workspace. This process can take a few minutes depending on the number of resources.
+                                                OmniGuard is actively scanning the workspace. This process can take a few minutes depending on the number of resources.
                                             </p>
                                         </div>
                                     ) : (
@@ -1235,7 +1235,7 @@ export function EnforcementSentinel() {
                                                                                                     {isAuto ? 'Auto-Stopped' : isProtected ? 'Protected' : 'Executed'}
                                                                                                 </span>
                                                                                                 <span className="text-[10px] text-gray-500">
-                                                                                                    {isAuto ? `by Sentinel on ${executed.at}` : isProtected ? 'Skipped (Safety Policy)' : `by you on ${executed.at}`}
+                                                                                                    {isAuto ? `by OmniGuard on ${executed.at}` : isProtected ? 'Skipped (Safety Policy)' : `by you on ${executed.at}`}
                                                                                                 </span>
                                                                                             </div>
                                                                                         );

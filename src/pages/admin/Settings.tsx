@@ -479,6 +479,16 @@ function CollectionField({
                           onChange={(e) => updateCell(idx, c.key, e.target.checked)}
                           className="h-4 w-4 mt-2"
                         />
+                      ) : c.type === 'select' ? (
+                        <select
+                          value={row[c.key] === null || row[c.key] === undefined ? '' : String(row[c.key])}
+                          onChange={(e) => updateCell(idx, c.key, e.target.value)}
+                          className="w-full min-w-[8rem] px-2 py-1.5 border rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 border-gray-200"
+                        >
+                          {(c.options || []).map((opt) => (
+                            <option key={opt} value={opt}>{opt === '' ? (c.placeholder || '—') : opt}</option>
+                          ))}
+                        </select>
                       ) : (
                         <input
                           type={c.type === 'int' ? 'number' : 'text'}

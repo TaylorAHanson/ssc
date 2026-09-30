@@ -23,10 +23,10 @@ class SearchContextCatalogInput(BaseModel):
 
 @tool(
     name="search_context_catalog",
-    description="Search curated enterprise knowledge documents, playbooks, and architectural standards in the Context Catalog. Returns relevant text passages with citations.",
+    description="Search curated enterprise knowledge documents, playbooks, and architectural standards in the Context Catalog (internal background knowledge; users cannot see it). Returns relevant text passages.",
     args_schema=SearchContextCatalogInput,
     feature_flag="context_catalog",
-    friendly_label="Searching the context catalog...",
+    friendly_label="Checking internal guidance...",
 )
 def search_context_catalog(query: str, domain_slug: Optional[str] = None) -> Dict[str, Any]:
     """Return ranked passages matching the query."""
@@ -63,7 +63,12 @@ def search_context_catalog(query: str, domain_slug: Optional[str] = None) -> Dic
                     "anything you found. Never fabricate internal policy."
                 )
                 if not passages
-                else "Cite the document_title(s) when you use these passages."
+                else (
+                    "Internal background knowledge — the user cannot see or open these "
+                    "documents. Relay the guidance in your own words; do not mention the "
+                    "Context Catalog or name document titles. You may link a passage's "
+                    "source_url if present."
+                )
             ),
         }
     finally:

@@ -10,15 +10,17 @@
   --brand-alert: #98102A;
   --brand-warning: #FFAB00;
   --brand-success: #00A972;
+  --brand-nav: #001E3C;
 
   /* Shared design tokens (mirror of src/theme.ts).
-     Semantic names so the same palette can be reused across products. */
-  --theme-nav-bg: #001E3C;
-  --theme-nav-border: #1F2937;
+     Semantic names so the same palette can be reused across products.
+     Nav surface shades derive from the admin-editable --brand-nav. */
+  --theme-nav-bg: var(--brand-nav);
+  --theme-nav-border: color-mix(in srgb, var(--brand-nav), white 12%);
   --theme-nav-text: #FFFFFF;
   --theme-nav-text-muted: #9CA3AF;
-  --theme-nav-hover-bg: #1F2937;
-  --theme-nav-active-bg: #007BFF;
+  --theme-nav-hover-bg: color-mix(in srgb, var(--brand-nav), white 10%);
+  --theme-nav-active-bg: color-mix(in srgb, var(--brand-nav), white 25%);
   --theme-nav-active-text: #FFFFFF;
 
   --theme-heading: #001E3C;

@@ -8,6 +8,7 @@ import { formatInTimeZone } from 'date-fns-tz';
 import { Eye, X, Trash2, CheckCircle2, Circle, Loader2, AlertCircle, Clock, WandSparkles, ArrowRight } from 'lucide-react';
 import type { Request } from '../types';
 import { renderMarkdownSafe } from '../lib/markdown';
+import { getRequest } from '../services/api';
 
 import { formatDistanceToNow, differenceInHours } from 'date-fns';
 
@@ -548,7 +549,25 @@ export function Requests() {
   }, [requestId]);
 
   // Derived state: get the full object from the store's list
-  const selectedRequest = requests.find(r => r.id === selectedRequestId) || null;
+  const listedRequest = requests.find(r => r.id === selectedRequestId) || null;
+
+  // The list endpoint is capped, so a deep link to an older request may not be
+  // in it; fetch that one directly.
+  const [linkedRequest, setLinkedRequest] = useState<{ id: string; request: Request | null } | null>(null);
+  const needsLookup = !!requestId && !isLoading && !requests.some(r => r.id === requestId);
+  useEffect(() => {
+    if (!needsLookup || !requestId) return;
+    let mounted = true;
+    getRequest(requestId)
+      .then((request) => { if (mounted) setLinkedRequest({ id: requestId, request }); })
+      .catch(() => { if (mounted) setLinkedRequest({ id: requestId, request: null }); });
+    return () => {
+      mounted = false;
+    };
+  }, [needsLookup, requestId]);
+  const lookupPending = needsLookup && linkedRequest?.id !== requestId;
+  const selectedRequest = listedRequest
+    ?? (linkedRequest?.id === selectedRequestId ? linkedRequest.request : null);
 
   useEffect(() => {
     let mounted = true;
@@ -578,8 +597,8 @@ export function Requests() {
   };
 
   // We only show empty state if there are NO requests at all, not just if filter hides them
-  if (requests.length === 0 || (requestId && !selectedRequest && !isLoading)) {
-    if (isLoading) {
+  if ((requests.length === 0 && !selectedRequest) || (requestId && !selectedRequest && !isLoading)) {
+    if (isLoading || lookupPending) {
       return (
         <div className="flex items-center justify-center min-h-[400px]">
           <div className="flex items-center gap-2 text-gray-500">
