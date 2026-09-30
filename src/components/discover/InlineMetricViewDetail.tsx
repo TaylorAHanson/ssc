@@ -20,6 +20,7 @@ import { catalogExplorerUrl } from '../../lib/databricksLinks';
 import { LineageGraph, type LineageSeedTable } from './LineageGraph';
 import { useLegacyMappings } from '../../lib/catalogCache';
 import { LegacyStatusBadge } from './LegacyMappingTable';
+import { CopyLinkButton } from './CopyLinkButton';
 
 interface DashboardOrApp {
   id: string;
@@ -93,6 +94,8 @@ interface InlineMetricViewDetailProps {
   onRequestAccess?: (asset: DataAsset) => void;
   onSelectTable?: (tableName: string) => void;
   workspaceUrl: string;
+  /** Shareable URL of this metric view. */
+  shareLink?: string;
 }
 
 export function InlineMetricViewDetail({
@@ -101,6 +104,7 @@ export function InlineMetricViewDetail({
   onRequestAccess,
   onSelectTable,
   workspaceUrl,
+  shareLink,
 }: InlineMetricViewDetailProps) {
   const [detailTab, setDetailTab] = useState<'kpis' | 'lineage' | 'dashboards' | 'tables'>('kpis');
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -296,6 +300,15 @@ export function InlineMetricViewDetail({
               <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
               <span>Catalog Explorer</span>
             </a>
+          )}
+
+          {shareLink && (
+            <CopyLinkButton
+              url={shareLink}
+              title="Copy a link to this metric view"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer"
+              iconClassName="w-3.5 h-3.5 text-slate-400"
+            />
           )}
 
           {onRequestAccess && (

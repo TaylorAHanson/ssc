@@ -26,9 +26,11 @@ import {
   MessageSquarePlus,
   Eraser,
   Wrench,
+  ScrollText,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { renderNavIcon } from '../../lib/navIcons';
+import { CURRENT_VERSION } from '../../lib/releaseNotes';
 import { FeedbackModal } from '../feedback/FeedbackModal';
 
 import { useBrandingStore } from '../../stores/brandingStore';
@@ -809,6 +811,17 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               )}
 
               <div className="px-2 pt-2">
+                <Link
+                  to="/release-notes"
+                  onClick={() => setUserMenuOpen(false)}
+                  className="w-full flex items-center gap-2 text-left px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-md transition-colors font-medium"
+                >
+                  <ScrollText className="w-4 h-4" />
+                  <span className="flex-1">Release notes</span>
+                  {CURRENT_VERSION && (
+                    <span className="text-xs font-normal text-gray-400">v{CURRENT_VERSION}</span>
+                  )}
+                </Link>
                 {uiTabs?.feedback !== false && (
                   <button
                     type="button"

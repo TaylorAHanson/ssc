@@ -24,6 +24,7 @@ import { Pagination } from './Pagination';
 import { usePagination } from './usePagination';
 import { SidePanel } from './SidePanel';
 import { LegacyMappingTable } from './LegacyMappingTable';
+import { CopyLinkButton } from './CopyLinkButton';
 
 type ContentKind = 'metrics' | 'tables' | 'dashboards' | 'apps' | 'legacy';
 
@@ -215,6 +216,10 @@ interface DomainFullViewProps {
   onOpenMetricViewById?: (metricViewId: string) => void;
   /** Legacy dashboard names matching the search, per metric view — shown on its card. */
   replacesFor?: (metricViewId: string) => string[];
+  /** Shareable URL of this domain / subdomain view. */
+  viewLink?: string;
+  /** Shareable URL of an asset opened from this view. */
+  assetLink?: (asset: DataAsset) => string;
 }
 
 export function DomainFullView({
@@ -246,6 +251,8 @@ export function DomainFullView({
   legacyMappings = [],
   onOpenMetricViewById,
   replacesFor,
+  viewLink,
+  assetLink,
 }: DomainFullViewProps) {
   const currentDomainData = domainsHierarchy.find((d) => d.domain === domain) || domainsHierarchy[0];
   const currentSubdomainMeta = currentDomainData?.subdomains.find((sd) => sd.name === subdomain);
@@ -522,6 +529,16 @@ export function DomainFullView({
             <span className="hidden 2xl:inline">Certified Only</span>
           </button>
 
+          {viewLink && (
+            <CopyLinkButton
+              url={viewLink}
+              title={`Copy a link to ${subdomain || domain}`}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border bg-white text-slate-600 border-slate-200 hover:bg-slate-50 transition-all cursor-pointer"
+              iconClassName="w-3.5 h-3.5 text-slate-500"
+              labelClassName="hidden 2xl:inline"
+            />
+          )}
+
         </div>
       </div>
     </div>
@@ -704,6 +721,7 @@ export function DomainFullView({
               if (found) onSelectTable(found);
             }}
             workspaceUrl={workspaceUrl}
+            shareLink={assetLink?.(selectedMetricView)}
           />
         </SidePanel>
       )}

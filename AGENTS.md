@@ -60,7 +60,32 @@ execution model. Other useful docs: `DEVELOPER_QUICK_START.md`, `GOVERNANCE.md`,
   (`step_report` fact → `GET /approvals` → `StepReportPanel`); no author config.
   Report text quoting a repo, a user or a model is untrusted: build it with
   `safe_text` / `safe_code` (`backend/app/services/app_code_review/report.py`).
+- **Every user-visible change gets a release note** in `RELEASE_NOTES.md` — see
+  [Release notes](#release-notes) below.
 - Only commit when explicitly asked.
+
+## Release notes
+
+`RELEASE_NOTES.md` (repo root) is the single source of truth for the in-app
+**Release notes** page (`/release-notes`, linked from the account menu). The app
+parses it, so keep the format exact:
+
+- One `## <major.minor.patch> — <YYYY-MM-DD>` heading per release, **newest
+  first**. The top entry is shown as the current version.
+- Bullets go under `### Added`, `### Changed`, `### Fixed` (or a feature-area
+  subheading). Plain markdown only.
+
+When you make a user-visible change (UI, behaviour, new capability, bug fix):
+
+- **Bump per semver:** major = breaking change or major redesign; minor = new
+  user-facing feature; patch = fixes and small tweaks. If the top entry is still
+  unreleased work from the same batch of changes, add to it (raising its level if
+  needed) instead of stacking another version.
+- **Keep `package.json` `version` in sync** with the top entry.
+- **Write for end users:** concise but complete sentences that say what changed
+  and why it matters — no terse fragments, internal jargon, file paths, or the
+  hardcoded brand name. Internal-only changes (refactors, tests, tooling) don't
+  need an entry.
 
 ## Testing
 

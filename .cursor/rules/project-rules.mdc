@@ -21,3 +21,5 @@ Quick reminders (see `AGENTS.md` for the full context):
   before finishing a change that reloads FastAPI.
 - `./dev.sh --debug` enables debugpy — attach via the "Attach to Backend" config
   rather than scattering debug statements.
+- Every user-visible change gets a release note in `RELEASE_NOTES.md` (semver
+  bump, `package.json` version in sync) — see "Release notes" in `AGENTS.md`.

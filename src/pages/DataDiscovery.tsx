@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useDeferredValue, useCallback, type ReactNode } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { 
   ShieldCheck, Table as TableIcon, Info, X,
   Tag, FileText, Loader2,
@@ -27,6 +27,15 @@ import {
   useMetricViews,
   useLegacyMappings,
 } from '../lib/catalogCache';
+import {
+  DISCOVER_PATH,
+  absoluteDiscoverLink,
+  matchesSlug,
+  readDiscoverParams,
+  withDiscoverParams,
+  type DiscoverLinkTarget,
+} from '../lib/discoverLinks';
+import { CopyLinkButton } from '../components/discover/CopyLinkButton';
 import { DomainStartView } from '../components/discover/DomainStartView';
 import { DomainFullView } from '../components/discover/DomainFullView';
 import { DiscoverSearchResults } from '../components/discover/DiscoverSearchResults';
@@ -43,57 +52,150 @@ export function DataDiscovery() {
   const databricksWorkspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
 
   // Resources from cache
-  const { data: domainsHierarchy } = useDomainHierarchy();
-  const { data: metricViewsData } = useMetricViews();
+  const { data: domainsHierarchy, loading: hierarchyLoading } = useDomainHierarchy();
+  const { data: metricViewsData, loading: metricViewsLoading } = useMetricViews();
   const { data: legacyMappings } = useLegacyMappings();
+  // The catalog is served from a shared stale-while-revalidate cache so this
+  // page renders instantly on revisit and after a prefetch from the landing.
+  const { data: datasets, loading: catalogLoading } = useDiscoveryCatalog();
 
-  // Navigation and selection state (persistent across sessions via localStorage)
-  const [discoveryStage, setDiscoveryStage] = useState<'start' | 'full'>(() => {
-    const saved = localStorage.getItem('discover_stage');
-    return saved === 'full' ? 'full' : 'start';
-  });
-  const [selectedDomain, setSelectedDomain] = useState<string | null>(() => {
-    const savedStage = localStorage.getItem('discover_stage');
-    if (savedStage === 'full') {
-      return localStorage.getItem('discover_selected_domain') || null;
-    }
-    return null;
-  });
-  const [selectedSubdomain, setSelectedSubdomain] = useState<string | null>(() => {
-    const savedStage = localStorage.getItem('discover_stage');
-    if (savedStage === 'full') {
-      return localStorage.getItem('discover_selected_subdomain') || null;
-    }
-    return null;
-  });
-  const [selectedMetricView, setSelectedMetricView] = useState<DataAsset | null>(null);
+  // The URL is the source of truth for the selected domain / subdomain / asset
+  // (see lib/discoverLinks.ts); names are resolved once the catalog has loaded.
+  const [searchParams] = useSearchParams();
+  const urlTarget = useMemo(() => readDiscoverParams(searchParams), [searchParams]);
+  const domainData = useMemo(
+    () => (urlTarget.domain ? domainsHierarchy.find((d) => matchesSlug(d.domain, urlTarget.domain!)) ?? null : null),
+    [domainsHierarchy, urlTarget.domain],
+  );
+  const subdomainData = useMemo(
+    () => (domainData && urlTarget.subdomain
+      ? domainData.subdomains.find((sd) => matchesSlug(sd.name, urlTarget.subdomain!)) ?? null
+      : null),
+    [domainData, urlTarget.subdomain],
+  );
+  const selectedDomain = domainData?.domain ?? null;
+  const selectedSubdomain = subdomainData?.name ?? null;
+  const discoveryStage: 'start' | 'full' = selectedDomain ? 'full' : 'start';
+  const resolvingLink = hierarchyLoading && Boolean(urlTarget.domain);
 
-  const handleSetStage = (stage: 'start' | 'full') => {
-    setDiscoveryStage(stage);
-    localStorage.setItem('discover_stage', stage);
-    if (stage === 'start') {
-      handleSelectDomain(null);
-      handleSelectSubdomain(null);
+  // Metric views open in the domain view's panel, so they need a domain to
+  // land in; anything else opens in the details panel over whatever is shown.
+  const selectedAsset = useMemo(() => {
+    const id = urlTarget.asset;
+    if (!id || metricViewsLoading || hierarchyLoading) return null;
+    const mv = (metricViewsData as DataAsset[]).find((v) => v.id === id);
+    if (mv && (domainData || domainsHierarchy.some((d) => d.domain === mv.domain))) {
+      return { kind: 'metric' as const, asset: mv };
     }
+    const found = (datasets as DataAsset[]).find((d) => d.id === id) ?? mv;
+    return found ? { kind: 'details' as const, asset: found } : null;
+  }, [urlTarget.asset, metricViewsLoading, hierarchyLoading, metricViewsData, datasets, domainData, domainsHierarchy]);
+  const selectedMetricView = selectedAsset?.kind === 'metric' ? selectedAsset.asset : null;
+  const selectedDataset = selectedAsset?.kind === 'details' ? selectedAsset.asset : null;
+
+  // Domain picked on the start screen before launching into it (not linkable).
+  const [pickerDomain, setPickerDomain] = useState<string | null>(null);
+  const [linkNotice, setLinkNotice] = useState<string | null>(null);
+
+  // Child views often fire several selection callbacks for one click (domain,
+  // then subdomain, then close panel); merge them into a single history entry.
+  const pendingNav = useRef<{ target: DiscoverLinkTarget; replace: boolean; state?: unknown } | null>(null);
+  const navigateTo = (patch: DiscoverLinkTarget, opts: { replace?: boolean; state?: unknown } = {}) => {
+    setLinkNotice(null);
+    const queued = pendingNav.current;
+    if (queued) {
+      Object.assign(queued.target, patch);
+      queued.replace = queued.replace && Boolean(opts.replace);
+      if (opts.state !== undefined) queued.state = opts.state;
+      return;
+    }
+    pendingNav.current = { target: { ...patch }, replace: Boolean(opts.replace), state: opts.state };
+    queueMicrotask(() => {
+      const nav = pendingNav.current;
+      pendingNav.current = null;
+      if (!nav) return;
+      const current = new URLSearchParams(window.location.search);
+      const search = withDiscoverParams(current, { ...readDiscoverParams(current), ...nav.target }).toString();
+      if (search === current.toString()) return;
+      navigate({ pathname: DISCOVER_PATH, search }, { replace: nav.replace, state: nav.state });
+    });
   };
 
-  const handleSelectDomain = (domain: string | null) => {
-    setSelectedDomain(domain);
+  // Opening a panel pushes an entry flagged so that closing it steps back
+  // instead of piling up history; a panel reached by a pasted link just clears.
+  const openAsset = (id: string) => navigateTo({ asset: id }, { state: { discoverPanel: true } });
+  const closeAsset = () => {
+    if (!new URLSearchParams(window.location.search).get('asset')) return;
+    const fromPanel = (location.state as { discoverPanel?: boolean } | null)?.discoverPanel;
+    if (fromPanel && !pendingNav.current) navigate(-1);
+    else navigateTo({ asset: null }, { replace: true });
+  };
+
+  const handleBackToStart = () => {
+    setPickerDomain(null);
+    navigateTo({ domain: null, subdomain: null, asset: null });
+  };
+
+  // A bare /discovery on first load resumes the last domain view.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    if (urlTarget.domain || urlTarget.asset || localStorage.getItem('discover_stage') !== 'full') return;
+    const domain = localStorage.getItem('discover_selected_domain');
     if (domain) {
-      localStorage.setItem('discover_selected_domain', domain);
-    } else {
-      localStorage.removeItem('discover_selected_domain');
+      navigateTo({ domain, subdomain: localStorage.getItem('discover_selected_subdomain') }, { replace: true });
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const handleSelectSubdomain = (subdomain: string | null) => {
-    setSelectedSubdomain(subdomain);
-    if (subdomain) {
-      localStorage.setItem('discover_selected_subdomain', subdomain);
-    } else {
+  // Remember the current view for the resume above.
+  useEffect(() => {
+    if (hierarchyLoading) return;
+    if (selectedDomain) {
+      localStorage.setItem('discover_stage', 'full');
+      localStorage.setItem('discover_selected_domain', selectedDomain);
+      if (selectedSubdomain) localStorage.setItem('discover_selected_subdomain', selectedSubdomain);
+      else localStorage.removeItem('discover_selected_subdomain');
+    } else if (!urlTarget.domain) {
+      localStorage.setItem('discover_stage', 'start');
+      localStorage.removeItem('discover_selected_domain');
       localStorage.removeItem('discover_selected_subdomain');
     }
-  };
+  }, [hierarchyLoading, selectedDomain, selectedSubdomain, urlTarget.domain]);
+
+  // Once the catalog has loaded, rewrite the URL to its canonical form and fall
+  // back to the nearest valid ancestor for anything the link names that we
+  // can't find.
+  useEffect(() => {
+    if (hierarchyLoading) return;
+    if (urlTarget.asset && (catalogLoading || metricViewsLoading)) return;
+    const missing: string[] = [];
+    if (urlTarget.domain && !domainData) missing.push(`domain “${urlTarget.domain}”`);
+    else if (urlTarget.subdomain && domainData && !subdomainData) missing.push(`subdomain “${urlTarget.subdomain}”`);
+    if (urlTarget.asset && !selectedAsset) missing.push(`asset “${urlTarget.asset}”`);
+
+    const next: DiscoverLinkTarget = {
+      domain: selectedDomain,
+      subdomain: selectedSubdomain,
+      asset: selectedAsset ? urlTarget.asset : null,
+    };
+    if (selectedMetricView && !domainData) {
+      next.domain = selectedMetricView.domain;
+      const home = domainsHierarchy.find((d) => d.domain === selectedMetricView.domain);
+      next.subdomain = home?.subdomains.some((sd) => sd.name === selectedMetricView.subdomain)
+        ? selectedMetricView.subdomain
+        : null;
+    }
+    const search = withDiscoverParams(searchParams, next).toString();
+    if (search !== searchParams.toString()) {
+      navigate({ pathname: DISCOVER_PATH, search }, { replace: true, state: location.state });
+    }
+    if (missing.length) {
+      setLinkNotice(`Couldn't find the ${missing.join(' or ')} from this link, so we're showing the closest match.`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hierarchyLoading, catalogLoading, metricViewsLoading, searchParams, domainData, subdomainData, selectedAsset]);
 
   // The search box now does two jobs at once: it always live-filters the
   // catalog as the user types, AND it can hand the query to the agent
@@ -110,11 +212,6 @@ export function DataDiscovery() {
 
   const [showCertifiedOnly, setShowCertifiedOnly] = useState(false);
   const [showAccessibleOnly, setShowAccessibleOnly] = useState(false);
-  const [selectedDataset, setSelectedDataset] = useState<DataAsset | null>(null);
-  
-  // The catalog is served from a shared stale-while-revalidate cache so this
-  // page renders instantly on revisit and after a prefetch from the landing.
-  const { data: datasets } = useDiscoveryCatalog();
 
   // Real "accessible to me" data, computed server-side from Unity Catalog as
   // the user (OBO). When unavailable (e.g. local dev without a user token) we
@@ -432,24 +529,6 @@ export function DataDiscovery() {
     };
   }, [datasets, filteredMetricViews, selectedDomain, databricksWorkspaceUrl]);
 
-  // Open an asset's detail view by id. Used both by the catalog rails ("View
-  // details") and by deep-links from the agent landing.
-  const openDetailsById = (id: string) => {
-    const found = datasets.find((d) => d.id === id);
-    if (found) setSelectedDataset(found);
-  };
-
-  // Deep-link from the landing: navigating here with `state.viewAssetId` opens
-  // that asset's details once the catalog is available. Clear the state after
-  // so a refresh doesn't replay it.
-  useEffect(() => {
-    const viewId = (location.state as { viewAssetId?: string } | null)?.viewAssetId;
-    if (!viewId || datasets.length === 0) return;
-    openDetailsById(viewId);
-    navigate(location.pathname, { replace: true, state: {} });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.state, datasets]);
-
   const submitAgentQuery = (q: string) => {
     const trimmed = q.trim();
     if (!trimmed) return;
@@ -520,7 +599,22 @@ export function DataDiscovery() {
         </div>
       </div>
 
-      {discoveryStage === 'start' && (
+      {linkNotice && (
+        <div role="status" className="flex items-start gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-lg p-3">
+          <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-amber-600" />
+          <span className="flex-1">{linkNotice}</span>
+          <button
+            type="button"
+            onClick={() => setLinkNotice(null)}
+            className="p-0.5 rounded text-amber-600 hover:text-amber-800 transition-colors cursor-pointer"
+            title="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {discoveryStage === 'start' && !resolvingLink && (
         <div className="max-w-3xl mx-auto w-full pt-2">
           <DiscoverSearch
             variant="hero"
@@ -561,7 +655,11 @@ export function DataDiscovery() {
 
       {/* Main Content Body */}
       <div className="space-y-8 animate-in fade-in duration-300">
-        {discoveryStage === 'start' && landingSearch ? (
+        {resolvingLink ? (
+          <div className="flex items-center justify-center gap-2 py-16 text-sm text-gray-500">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading catalog…
+          </div>
+        ) : discoveryStage === 'start' && landingSearch ? (
           <DiscoverSearchResults
             term={effectiveSearchTerm.trim()}
             metricViews={landingSearch.metricViews}
@@ -569,47 +667,32 @@ export function DataDiscovery() {
             workspaceUrl={databricksWorkspaceUrl}
             selectedAssetId={selectedDataset?.id ?? null}
             onOpenMetricView={(mv) => {
-              handleSelectDomain(mv.domain || null);
-              handleSelectSubdomain(mv.subdomain || null);
               setSearchTerm('');
-              setSelectedMetricView(mv);
-              handleSetStage('full');
+              navigateTo({ domain: mv.domain, subdomain: mv.subdomain, asset: mv.id });
             }}
-            onOpenAsset={setSelectedDataset}
+            onOpenAsset={(asset) => openAsset(asset.id)}
             onClear={() => setSearchTerm('')}
             replacesFor={legacyNamesMatching}
           />
         ) : discoveryStage === 'start' ? (
           <DomainStartView
             domains={domainsHierarchy}
-            selectedDomain={selectedDomain}
-            onSelectDomain={handleSelectDomain}
-            selectedSubdomain={selectedSubdomain}
-            onSelectSubdomain={handleSelectSubdomain}
-            onLaunchFullMode={(dom, subdom) => {
-              handleSelectDomain(dom);
-              handleSelectSubdomain(subdom || null);
-              setSelectedMetricView(null);
-              handleSetStage('full');
-            }}
+            selectedDomain={pickerDomain}
+            onSelectDomain={setPickerDomain}
+            selectedSubdomain={null}
+            onSelectSubdomain={() => {}}
+            onLaunchFullMode={(dom, subdom) => navigateTo({ domain: dom, subdomain: subdom ?? null, asset: null })}
           />
         ) : (
           <DomainFullView
             domain={selectedDomain || domainsHierarchy[0]?.domain || 'Supply Chain'}
             domainsHierarchy={domainsHierarchy}
-            onSelectDomain={(d) => {
-              handleSelectDomain(d);
-              setSelectedMetricView(null);
-            }}
+            onSelectDomain={(d) => navigateTo({ domain: d, subdomain: null, asset: null })}
             subdomain={selectedSubdomain}
-            onSelectSubdomain={(sd) => {
-              handleSelectSubdomain(sd);
-              setSelectedMetricView(null);
-            }}
-            onBackToStart={() => {
-              setSelectedMetricView(null);
-              handleSetStage('start');
-            }}
+            onSelectSubdomain={(sd) => navigateTo({ subdomain: sd, asset: null })}
+            onBackToStart={handleBackToStart}
+            viewLink={absoluteDiscoverLink({ domain: selectedDomain, subdomain: selectedSubdomain })}
+            assetLink={(asset) => absoluteDiscoverLink({ domain: selectedDomain, subdomain: selectedSubdomain, asset: asset.id })}
             metricViews={filteredMetricViews}
             tables={subdomainTables}
             dashboards={dashboardsList}
@@ -621,8 +704,8 @@ export function DataDiscovery() {
             showAccessibleOnly={showAccessibleOnly}
             onToggleAccessibleOnly={() => setShowAccessibleOnly(!showAccessibleOnly)}
             selectedMetricView={selectedMetricView}
-            onSelectMetricView={setSelectedMetricView}
-            onSelectTable={setSelectedDataset}
+            onSelectMetricView={(mv) => (mv ? openAsset(mv.id) : closeAsset())}
+            onSelectTable={(tbl) => openAsset(tbl.id)}
             selectedTableId={selectedDataset?.id ?? null}
             onRequestAccess={handleRequestAccess}
             workspaceUrl={databricksWorkspaceUrl}
@@ -632,8 +715,7 @@ export function DataDiscovery() {
             legacyMappings={scopedLegacyMappings}
             replacesFor={legacyNamesMatching}
             onOpenMetricViewById={(id) => {
-              const mv = (metricViewsData as DataAsset[]).find((v) => v.id === id);
-              if (mv) setSelectedMetricView(mv);
+              if ((metricViewsData as DataAsset[]).some((v) => v.id === id)) openAsset(id);
             }}
           />
         )}
@@ -651,12 +733,10 @@ export function DataDiscovery() {
           isLoadingTableDetails={isLoadingTableDetails}
           tableDetailsError={tableDetailsError}
           workspaceUrl={databricksWorkspaceUrl}
-          onClose={() => setSelectedDataset(null)}
+          shareLink={absoluteDiscoverLink({ domain: selectedDomain, subdomain: selectedSubdomain, asset: selectedDataset.id })}
+          onClose={closeAsset}
           canRequestAccess={canRequestAccess(selectedDataset.type)}
-          onRequestAccess={() => {
-            handleRequestAccess(selectedDataset);
-            setSelectedDataset(null);
-          }}
+          onRequestAccess={() => handleRequestAccess(selectedDataset)}
         />
       )}
     </div>
@@ -672,6 +752,7 @@ interface DetailsModalProps {
   isLoadingTableDetails: boolean;
   tableDetailsError: string | null;
   workspaceUrl: string;
+  shareLink: string;
   onClose: () => void;
   canRequestAccess: boolean;
   onRequestAccess: () => void;
@@ -686,6 +767,7 @@ function DetailsModal({
   isLoadingTableDetails,
   tableDetailsError,
   workspaceUrl,
+  shareLink,
   onClose,
   canRequestAccess,
   onRequestAccess,
@@ -855,6 +937,11 @@ function DetailsModal({
                   {headerLinkLabel}
                 </a>
               )}
+              <CopyLinkButton
+                url={shareLink}
+                title="Copy a link to this asset"
+                className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline cursor-pointer"
+              />
             </div>
           </div>
           <button

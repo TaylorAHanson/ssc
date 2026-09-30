@@ -20,6 +20,7 @@ import { CatalogRails } from '../components/discover/CatalogRails';
 import { SelfServiceCenter } from '../components/discover/SelfServiceCenter';
 import { cn } from '../lib/utils';
 import { prefetchCatalog } from '../lib/catalogCache';
+import { buildDiscoverLink } from '../lib/discoverLinks';
 import { getRecentUserTopics } from '../lib/chatPersistence';
 
 type LandingView = 'assistant' | 'center';
@@ -167,7 +168,7 @@ export function Home() {
         window.setTimeout(() => chatRef.current?.submitQuery(prompt), 0);
     };
 
-    // Default (pre-merge) welcome is a single "What would you like to know?"
+    // Default (pre-merge) welcome is a single "How can I help you today?"
     // prompt. The enhanced landing replaces it with the brand title + time-of-day
     // greeting + "Welcome, <name>" stack (gated on the feature flag).
     const welcomeNode = enhancedLandingPage ? (
@@ -184,20 +185,20 @@ export function Home() {
                         </h2>
                         <p className="mt-2 flex items-center justify-center gap-2 text-base text-gray-500">
                             <Sparkles className="w-5 h-5 text-primary" />
-                            What would you like to know?
+                            How can I help you today?
                         </p>
                     </>
                 ) : (
                     <h2 className="flex items-center justify-center gap-2 text-xl font-semibold text-gray-900">
                         <Sparkles className="w-6 h-6 text-primary" />
-                        What would you like to know?
+                        How can I help you today?
                     </h2>
                 )}
             </div>
         </div>
     ) : (
         <AgentWelcome
-            title="What would you like to know?"
+            title="How can I help you today?"
             icon={<Sparkles className="w-7 h-7 text-primary" />}
         />
     );
@@ -274,10 +275,8 @@ export function Home() {
                         homeCatalogEnabled ? (
                             <div className="max-w-5xl mx-auto w-full px-1 pb-6">
                                 <CatalogRails
-                                    onViewDetails={(ref) =>
-                                        navigate('/discovery', { state: { viewAssetId: ref.id } })
-                                    }
-                                    onBrowseAll={() => navigate('/discovery')}
+                                    onViewDetails={(ref) => navigate(buildDiscoverLink({ asset: ref.id }))}
+                                    onBrowseAll={() => navigate(buildDiscoverLink())}
                                 />
                             </div>
                         ) : null

@@ -10,6 +10,7 @@ import { Training } from './pages/Training';
 import { Events } from './pages/Events';
 import { ReusableAssets } from './pages/ReusableAssets';
 import { CommunityLinks } from './pages/CommunityLinks';
+import { ReleaseNotes } from './pages/ReleaseNotes';
 import { AdminReports } from './pages/AdminReports';
 import { EmbeddedApp } from './pages/EmbeddedApp';
 import { Welcome } from './pages/Welcome';
@@ -210,6 +211,7 @@ function App() {
           <Route path="/community/events" element={<Events />} />
           <Route path="/community/assets" element={<ReusableAssets />} />
           <Route path="/community/links" element={<CommunityLinks />} />
+          <Route path="/release-notes" element={<ReleaseNotes />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>
