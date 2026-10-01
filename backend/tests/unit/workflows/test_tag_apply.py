@@ -103,3 +103,13 @@ def test_apply_handles_view_vs_table_mismatch_retry():
     assert result.applied_count == 1
     assert result.failed_count == 0
     assert "ALTER VIEW" in result.outcomes[0].sql
+
+
+def test_materialized_view_failures_are_not_retried_as_table_or_view():
+    live_state = {"main.s.mv": ObjectState(display="main.s.mv", object_type="MATERIALIZED_VIEW", exists=True)}
+    plan = build_tag_plan([{"table": "main.s.mv", "desired_tags": {"k": "v"}}], live_state)
+    provider = MagicMock()
+    provider.client.statement_execution.execute_statement.side_effect = Exception("main.s.mv is a view, not a table")
+    result = apply_tag_plan(provider=provider, plan=plan, request_id="r", actor="a", environment="dev")
+    assert result.status == "failed"
+    assert provider.client.statement_execution.execute_statement.call_count == 1

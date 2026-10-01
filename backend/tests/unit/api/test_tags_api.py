@@ -101,3 +101,70 @@ async def test_create_tag_change_local_mode(db_session, mock_admin_user):
         # Check list endpoint
         all_changes = list_tag_changes(db=db_session, current_user=mock_admin_user)
         assert any(c.id == res.id for c in all_changes)
+
+
+def _metadata_provider():
+    def execute(statement, **kwargs):
+        if "information_schema.tables" in statement:
+            rows = [["sales", "orders", "BASE TABLE"]]
+        elif "information_schema.columns" in statement and "ORDER BY ordinal_position" in statement:
+            rows = [["id", "bigint"], ["email", "string"]]
+        elif "information_schema.columns" in statement:
+            rows = [["sales", "orders", "email"]]
+        elif "information_schema.column_tags" in statement and statement.startswith("SELECT column_name"):
+            rows = [["email", "pii", "true"]]
+        elif "information_schema.column_tags" in statement:
+            rows = [["sales", "orders", "email", "pii", "true"]]
+        else:
+            rows = []
+        return MagicMock(result=MagicMock(data_array=rows), status=MagicMock(state=MagicMock(value="SUCCEEDED")))
+
+    provider = MagicMock()
+    provider.client.statement_execution.execute_statement.side_effect = execute
+    return provider
+
+
+def test_table_columns_lists_columns_with_their_tags(mock_admin_user):
+    from app.api.v1.tags import get_table_columns
+
+    with patch("app.api.v1.tags._get_provider", return_value=_metadata_provider()):
+        res = get_table_columns(table="main.sales.orders", current_user=mock_admin_user)
+    assert [(c.column, c.data_type, c.tags) for c in res.columns] == [
+        ("id", "bigint", {}),
+        ("email", "string", {"pii": "true"}),
+    ]
+
+
+def test_object_tags_rejects_unsafe_names(mock_admin_user):
+    from fastapi import HTTPException
+    from app.api.v1.tags import ObjectsRequest, get_object_tags
+
+    with pytest.raises(HTTPException) as exc:
+        get_object_tags(payload=ObjectsRequest(tables=["main.sales.orders; DROP"]), current_user=mock_admin_user)
+    assert exc.value.status_code == 400
+
+
+def test_object_tags_reads_live_type(mock_admin_user):
+    from app.api.v1.tags import ObjectsRequest, get_object_tags
+
+    with patch("app.api.v1.tags._get_provider", return_value=_metadata_provider()):
+        res = get_object_tags(payload=ObjectsRequest(tables=["main.sales.orders"]), current_user=mock_admin_user)
+    assert res.tables[0].object_type == "TABLE"
+    assert res.tables[0].exists is True
+
+
+@pytest.mark.asyncio
+async def test_preview_without_a_dataset_covers_a_column(mock_admin_user):
+    with patch("app.api.v1.tags._get_provider", return_value=_metadata_provider()), \
+         patch.object(settings, "GOVERNANCE_TAGS_LOCAL_MODE", True), \
+         patch("app.services.tag_change.engine.request_agent_review") as review:
+        review.return_value = MagicMock(to_dict=lambda: {"available": False})
+        payload = TagChangeCreate(
+            tables=[TableDesiredTags(table="main.sales.orders", column="email", desired_tags={"pii": "true", "classification": "restricted"})],
+        )
+        res = await preview_tag_change(payload=payload, current_user=mock_admin_user)
+    assert res.valid is True
+    assert res.plan["diffs"][0]["label"] == "main.sales.orders.email"
+    assert res.plan["statements"] == [
+        "ALTER TABLE `main`.`sales`.`orders` ALTER COLUMN `email` SET TAGS ('classification' = 'restricted');"
+    ]

@@ -15,7 +15,10 @@ class CalendarProvider(BaseProvider):
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
-        self.url = self.config.get("url") or settings.EVENT_CALENDAR_URL
+        url = (self.config.get("url") or settings.EVENT_CALENDAR_URL or "").strip()
+        if url.lower().startswith("webcal://"):
+            url = "https://" + url[len("webcal://"):]
+        self.url = url
 
     async def health_check(self) -> bool:
         """Verify the calendar URL is accessible."""

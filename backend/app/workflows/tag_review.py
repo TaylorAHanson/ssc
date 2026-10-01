@@ -61,14 +61,15 @@ class AgentReviewResult:
         }
 
 
-SYSTEM_PROMPT = """You review requests that change Unity Catalog governance tags on tables and views.
+SYSTEM_PROMPT = """You review requests that change Unity Catalog governance tags on tables, views, and their columns.
 You advise the human administrator; you do not approve or block anything.
 
 Judge the change on:
 1. Whether the tag values look intentional and internally consistent.
 2. Whether access-control keys (access_group, approver_group) are changing in a way that deserves attention.
 3. Whether removals lose information that will be hard to reconstruct.
-4. Consistency across tables in the dataset.
+4. Consistency across the tables (and columns) in the change.
+5. Whether a column's sensitivity classification is being lowered or removed.
 
 The syntax, the policy rules, and the tag limits have already been validated by separate deterministic checks. Do not re-report them.
 
@@ -109,7 +110,8 @@ async def request_agent_review(
     diff_lines = []
     for diff in plan.diffs.values():
         if diff.changed_keys:
-            diff_lines.append(f"Table: {diff.table} ({diff.object_type})")
+            kind = f"column of a {diff.object_type.lower()}" if diff.column else diff.object_type
+            diff_lines.append(f"Object: {diff.label} ({kind})")
             for k in diff.changed_keys:
                 old_val = diff.before.get(k, "<unset>")
                 new_val = diff.after.get(k, "<removed>")
@@ -126,7 +128,7 @@ async def request_agent_review(
     )
 
     user_content = "\n\n".join([
-        f"Dataset: {dataset_name}",
+        f"Scope: {dataset_name}",
         _fenced("Tag Diffs", diff_text),
         _fenced("SQL Statements to Run", statements_text),
         _fenced("Deterministic Risk Report", risk_text),

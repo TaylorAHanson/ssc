@@ -62,3 +62,8 @@ def test_extract_join_link():
 
     desc_no_link = "No link here"
     assert provider._extract_join_link(desc_no_link) is None
+
+
+def test_webcal_url_is_fetched_over_https():
+    provider = CalendarProvider({"url": " webcal://outlook.office365.com/owa/calendar/a/b/calendar.ics "})
+    assert provider.url == "https://outlook.office365.com/owa/calendar/a/b/calendar.ics"

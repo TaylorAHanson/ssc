@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
-from app.workflows.tag_plan import StatementPlan, TagPlan
+from app.workflows.tag_plan import StatementPlan, TagPlan, build_statement
 from app.workflows.tag_sql import _escape_sql_literal
 
 logger = logging.getLogger(__name__)
@@ -61,10 +61,12 @@ class StatementOutcome:
     sql: str
     status: str
     detail: str = ""
+    column: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "table": self.table,
+            "column": self.column,
             "operation": self.operation,
             "sql": self.sql,
             "status": self.status,
@@ -155,6 +157,7 @@ def apply_tag_plan(
             outcomes.append(
                 StatementOutcome(
                     table=stmt_plan.table,
+                    column=stmt_plan.column,
                     operation=stmt_plan.operation,
                     sql="",
                     status=NOOP,
@@ -168,6 +171,7 @@ def apply_tag_plan(
             outcomes.append(
                 StatementOutcome(
                     table=stmt_plan.table,
+                    column=stmt_plan.column,
                     operation=stmt_plan.operation,
                     sql=stmt_plan.sql,
                     status=FAILED,
@@ -191,6 +195,7 @@ def apply_tag_plan(
             outcomes.append(
                 StatementOutcome(
                     table=stmt_plan.table,
+                    column=stmt_plan.column,
                     operation=stmt_plan.operation,
                     sql=sql,
                     status=APPLIED,
@@ -202,18 +207,22 @@ def apply_tag_plan(
         except Exception as exc:
             err_text = str(exc)
             # 1. Check if view vs table mismatch
-            corrected_type = _is_object_type_mismatch(err_text)
+            # Column statements are already typed from live state in the same request,
+            # and a view column needs a different statement shape, so only table-level
+            # statements are retried.
+            # Materialized views and streaming tables have their own statement forms,
+            # so only a plain TABLE/VIEW mix-up is worth retrying.
+            retryable = not stmt_plan.column and stmt_plan.object_type in ("TABLE", "VIEW")
+            corrected_type = _is_object_type_mismatch(err_text) if retryable else None
             if corrected_type and corrected_type != stmt_plan.object_type:
                 logger.info(f"Retrying {stmt_plan.table} as ALTER {corrected_type}")
-                if stmt_plan.operation == "set":
-                    pairs = ", ".join(
-                        f"'{_escape_sql_literal(k)}' = '{_escape_sql_literal(v)}'"
-                        for k, v in stmt_plan.tags.items()
-                    )
-                    retry_sql = f"ALTER {corrected_type} {stmt_plan.table} SET TAGS ({pairs});"
-                else:
-                    keys_str = ", ".join(f"'{_escape_sql_literal(k)}'" for k in stmt_plan.keys)
-                    retry_sql = f"ALTER {corrected_type} {stmt_plan.table} UNSET TAGS ({keys_str});"
+                retry_sql = build_statement(
+                    corrected_type,
+                    stmt_plan.table,
+                    stmt_plan.operation,
+                    tags=stmt_plan.tags,
+                    keys=stmt_plan.keys,
+                )
 
                 try:
                     retry_resp = provider.client.statement_execution.execute_statement(
@@ -228,6 +237,7 @@ def apply_tag_plan(
                     outcomes.append(
                         StatementOutcome(
                             table=stmt_plan.table,
+                            column=stmt_plan.column,
                             operation=stmt_plan.operation,
                             sql=retry_sql,
                             status=APPLIED,
@@ -244,6 +254,7 @@ def apply_tag_plan(
                 outcomes.append(
                     StatementOutcome(
                         table=stmt_plan.table,
+                        column=stmt_plan.column,
                         operation=stmt_plan.operation,
                         sql=sql,
                         status=NOOP,
@@ -257,6 +268,7 @@ def apply_tag_plan(
             outcomes.append(
                 StatementOutcome(
                     table=stmt_plan.table,
+                    column=stmt_plan.column,
                     operation=stmt_plan.operation,
                     sql=sql,
                     status=FAILED,
@@ -265,7 +277,7 @@ def apply_tag_plan(
             )
             failed_count += 1
             aborted = True
-            general_error = f"{stmt_plan.table}: {err_text}"
+            general_error = f"{stmt_plan.label}: {err_text}"
 
     # Determine overall status
     if failed_count > 0:

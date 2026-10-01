@@ -2134,6 +2134,8 @@ export interface TagManagerModeResponse {
   base_branch?: string | null;
   ledger_table?: string | null;
   environment: string;
+  /** Column tags can only be applied in Local Execution Mode. */
+  columns_supported: boolean;
 }
 
 export interface TagDataset {
@@ -2145,6 +2147,50 @@ export interface TagDataset {
 export interface TableTags {
   table: string;
   tags: Record<string, string | null>;
+  object_type?: string | null;
+  exists?: boolean;
+}
+
+export interface TagSearchObject {
+  fqn: string;
+  object_type?: string | null;
+  owner?: string | null;
+  tag_keys: string[];
+  in_cache: boolean;
+}
+
+export interface TagSearchResponse {
+  query: string;
+  datasets: TagDataset[];
+  objects: TagSearchObject[];
+  total_objects: number;
+  truncated: boolean;
+  filters: string[];
+}
+
+export interface ColumnTags {
+  column: string;
+  data_type: string;
+  tags: Record<string, string | null>;
+}
+
+export interface TableColumnsResponse {
+  table: string;
+  columns: ColumnTags[];
+  error?: string | null;
+}
+
+export interface TagChangeTarget {
+  table: string;
+  column?: string | null;
+  desired_tags: Record<string, string>;
+}
+
+export interface TagChangePayload {
+  dataset_id?: string | null;
+  dataset_name?: string | null;
+  tables: TagChangeTarget[];
+  pr_title?: string;
 }
 
 export interface DatasetTablesResponse {
@@ -2156,6 +2202,8 @@ export interface DatasetTablesResponse {
 
 export interface TagDiffItem {
   table: string;
+  column?: string | null;
+  label?: string;
   object_type: string;
   exists: boolean;
   before: Record<string, string>;
@@ -2242,6 +2290,7 @@ export interface TagPreviewResponse {
 
 export interface TagStatementOutcome {
   table: string;
+  column?: string | null;
   operation: string;
   sql: string;
   status: string;
@@ -2256,6 +2305,7 @@ export interface TagChange {
   execution_mode: 'local' | 'gitops';
   pr_url?: string | null;
   pr_number?: number | null;
+  requested_by?: string | null;
   table_count: number;
   applied_count?: number;
   noop_count?: number;
@@ -2303,12 +2353,71 @@ export async function getDatasetTags(datasetId: string): Promise<DatasetTablesRe
   return response.json();
 }
 
-export async function previewTagChange(payload: {
-  dataset_id: string;
-  dataset_name?: string;
-  tables: { table: string; desired_tags: Record<string, string> }[];
-  pr_title?: string;
-}): Promise<TagPreviewResponse> {
+export async function searchTagTargets(query: string): Promise<TagSearchResponse> {
+  const response = await fetch(`${API_BASE_URL}/tags/search?q=${encodeURIComponent(query)}`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Search failed: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getObjectTags(tables: string[]): Promise<{ tables: TableTags[]; suggested_keys: string[] }> {
+  const response = await fetch(`${API_BASE_URL}/tags/objects`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ tables }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to load tags: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getTableColumnTags(table: string): Promise<TableColumnsResponse> {
+  const response = await fetch(`${API_BASE_URL}/tags/columns?table=${encodeURIComponent(table)}`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to load columns: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export interface GovernedTagInfo {
+  key: string;
+  governed: boolean;
+  /** Empty when the governed tag accepts any value. */
+  allowed_values: string[];
+  description: string;
+}
+
+export async function searchGovernedTagKeys(query: string): Promise<GovernedTagInfo[]> {
+  const response = await fetch(`${API_BASE_URL}/tags/governed/keys?q=${encodeURIComponent(query)}`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to search governed tags: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getGovernedTags(keys: string[]): Promise<GovernedTagInfo[]> {
+  const qs = keys.map((k) => `keys=${encodeURIComponent(k)}`).join('&');
+  const response = await fetch(`${API_BASE_URL}/tags/governed?${qs}`, { headers: getHeaders() });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to look up governed tags: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function previewTagChange(payload: TagChangePayload): Promise<TagPreviewResponse> {
   const response = await fetch(`${API_BASE_URL}/tags/preview`, {
     method: 'POST',
     headers: getHeaders(),
@@ -2321,12 +2430,7 @@ export async function previewTagChange(payload: {
   return response.json();
 }
 
-export async function createTagChange(payload: {
-  dataset_id: string;
-  dataset_name?: string;
-  tables: { table: string; desired_tags: Record<string, string> }[];
-  pr_title?: string;
-}): Promise<TagChange> {
+export async function createTagChange(payload: TagChangePayload): Promise<TagChange> {
   const response = await fetch(`${API_BASE_URL}/tags/changes`, {
     method: 'POST',
     headers: getHeaders(),
@@ -3730,6 +3834,11 @@ export const api = {
   getTagManagerMode,
   getTagDatasets,
   getDatasetTags,
+  searchTagTargets,
+  getObjectTags,
+  getTableColumnTags,
+  getGovernedTags,
+  searchGovernedTagKeys,
   previewTagChange,
   createTagChange,
   listTagChanges,

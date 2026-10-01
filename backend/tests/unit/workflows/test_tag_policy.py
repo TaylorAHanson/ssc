@@ -170,3 +170,49 @@ async def test_unparseable_policy_does_not_block_submission():
 def test_an_empty_policy_permits_everything():
     """A policy stripped to nothing must not start rejecting arbitrary changes."""
     assert TagPolicy.parse("").check(_change({"anything": "goes"}, unset=["whatever"])) == []
+
+
+# --- applies_to: table-only vs column keys --------------------------------------
+
+def _default():
+    from app.workflows.tag_policy import get_default_policy
+    return get_default_policy()
+
+
+def test_table_only_keys_cannot_be_set_on_a_column():
+    problems = _default().check([{"table": "main.s.t", "column": "email", "set": {"dataset": "orders"}, "unset": []}])
+    assert problems == ["main.s.t.email: 'dataset' can only be set on tables and views."]
+
+
+def test_column_classification_follows_the_key_pattern():
+    policy = _default()
+    ok = {"table": "main.s.t", "column": "email", "set": {"classification": "restricted"}, "unset": []}
+    bad = {"table": "main.s.t", "column": "email", "set": {"classification": "secret"}, "unset": []}
+    assert policy.check([ok]) == []
+    assert len(policy.check([bad])) == 1
+
+
+def test_required_table_keys_are_not_protected_on_columns():
+    change = {"table": "main.s.t", "column": "email", "set": {}, "unset": ["data_owner", "dataset"]}
+    assert _default().check([change]) == []
+
+
+def test_explicitly_protected_keys_stay_protected_on_columns():
+    from app.workflows.tag_policy import TagPolicy
+    policy = TagPolicy.parse("protected_keys: [pii]\n")
+    change = {"table": "main.s.t", "column": "email", "set": {}, "unset": ["pii"]}
+    assert len(policy.check([change])) == 1
+
+
+def test_undeclared_applies_to_means_any_target():
+    from app.workflows.tag_policy import TagPolicy
+    policy = TagPolicy.parse("known_keys:\n  tier:\n    pattern: '^(gold|silver)$'\n")
+    assert policy.check([{"table": "main.s.t", "column": "c", "set": {"tier": "gold"}, "unset": []}]) == []
+
+
+def test_default_policy_reserves_only_the_certification_tag():
+    from app.workflows.tag_policy import get_default_policy
+    policy = get_default_policy()
+    assert "reserved" in policy.check(_change({"system.certification_status": "certified"}))[0]
+    assert "reserved" in policy.check(_change({"System.Certification_Status": "certified"}))[0]
+    assert not any("reserved" in p for p in policy.check(_change({"system.deprecated": "true"})))

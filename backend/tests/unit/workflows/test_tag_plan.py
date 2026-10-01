@@ -71,7 +71,7 @@ def test_plan_with_view_object_type():
     plan = build_tag_plan(desired, live_state)
     assert plan.actionable
     assert len(plan.statements) == 1
-    assert "ALTER VIEW main.sales.orders_v SET TAGS" in plan.statements[0]
+    assert "ALTER VIEW `main`.`sales`.`orders_v` SET TAGS" in plan.statements[0]
 
 
 def test_plan_with_missing_object():
@@ -115,3 +115,191 @@ def test_plan_preserves_dataset_tag_when_omitted():
     assert any("UNSET TAGS ('old_key')" in s for s in stmts)
     assert not any("UNSET TAGS" in s and "'dataset'" in s for s in stmts)
 
+
+
+# --- Columns, quoting and name safety ------------------------------------------
+
+import pytest
+from unittest.mock import MagicMock
+
+from app.workflows.tag_plan import (
+    fetch_live_state,
+    quote_identifier,
+    target_key,
+    validate_target,
+)
+
+
+def test_column_on_a_table_uses_alter_column():
+    live_state = {
+        "main.sales.orders": ObjectState(display="main.sales.orders", object_type="TABLE", exists=True),
+        "main.sales.orders::email": ObjectState(
+            display="main.sales.orders.email", object_type="TABLE", exists=True, column="email",
+            tags={"pii": "true", "old": "x"},
+        ),
+    }
+    desired = [{"table": "main.sales.orders", "column": "email", "desired_tags": {"pii": "true", "classification": "restricted"}}]
+
+    plan = build_tag_plan(desired, live_state)
+    assert plan.has_column_changes
+    assert plan.statements == [
+        "ALTER TABLE `main`.`sales`.`orders` ALTER COLUMN `email` SET TAGS ('classification' = 'restricted');",
+        "ALTER TABLE `main`.`sales`.`orders` ALTER COLUMN `email` UNSET TAGS ('old');",
+    ]
+    diff = plan.diffs["main.sales.orders::email"]
+    assert diff.label == "main.sales.orders.email"
+    assert diff.to_dict()["column"] == "email"
+
+
+def test_view_column_unsets_before_overwriting_one_tag_at_a_time():
+    live_state = {
+        "main.sales.orders_v": ObjectState(display="main.sales.orders_v", object_type="VIEW", exists=True),
+        "main.sales.orders_v::email": ObjectState(
+            display="main.sales.orders_v.email", object_type="VIEW", exists=True, column="email",
+            tags={"classification": "internal", "stale": ""},
+        ),
+    }
+    desired = [{"table": "main.sales.orders_v", "column": "email", "desired_tags": {"classification": "restricted", "pii": ""}}]
+
+    plan = build_tag_plan(desired, live_state)
+    target = "`main`.`sales`.`orders_v`.`email`"
+    assert plan.statements == [
+        f"UNSET TAG ON COLUMN {target} `stale`;",
+        f"UNSET TAG ON COLUMN {target} `classification`;",
+        f"SET TAG ON COLUMN {target} `classification` = `restricted`;",
+        f"SET TAG ON COLUMN {target} `pii`;",
+    ]
+
+
+def test_column_dataset_tag_is_not_preserved_like_a_tables():
+    live_state = {
+        "main.sales.orders::id": ObjectState(
+            display="main.sales.orders.id", exists=True, column="id", tags={"dataset": "orders"},
+        ),
+    }
+    plan = build_tag_plan([{"table": "main.sales.orders", "column": "id", "desired_tags": {}}], live_state)
+    assert plan.diffs["main.sales.orders::id"].removed_keys == ["dataset"]
+
+
+def test_column_inherits_certification_from_its_table():
+    live_state = {
+        "main.sales.orders": ObjectState(
+            display="main.sales.orders", exists=True, all_tags={"system.certification_status": "certified"},
+        ),
+        "main.sales.orders::email": ObjectState(display="main.sales.orders.email", exists=True, column="email"),
+    }
+    plan = build_tag_plan([{"table": "main.sales.orders", "column": "email", "desired_tags": {"pii": "true"}}], live_state)
+    assert plan.diffs["main.sales.orders::email"].certified is True
+
+
+def test_missing_column_is_reported_by_label():
+    plan = build_tag_plan([{"table": "main.sales.orders", "column": "nope", "desired_tags": {"pii": "true"}}], {})
+    assert plan.missing_objects == ["main.sales.orders.nope"]
+
+
+@pytest.mark.parametrize("name", [
+    "main.sales.orders; DROP TABLE x",
+    "main.sales.`orders`",
+    "main.sales.o'rders",
+    "main.sales",
+    "main..orders",
+])
+def test_unsafe_or_malformed_table_names_are_rejected(name):
+    with pytest.raises(ValueError):
+        validate_target(name)
+
+
+def test_column_names_may_have_spaces_but_not_backticks():
+    validate_target("main.sales.orders", "Customer Email")
+    with pytest.raises(ValueError):
+        validate_target("main.sales.orders", "bad`col")
+    with pytest.raises(ValueError):
+        validate_target("main.sales.orders", "  ")
+
+
+def test_identifiers_are_backtick_quoted_and_escaped():
+    assert quote_identifier("a`b") == "`a``b`"
+    assert target_key("Main.Sales.Orders", "EMail") == "main.sales.orders::email"
+
+
+def test_fetch_live_state_reads_column_existence_and_tags():
+    def execute(statement, **kwargs):
+        if "information_schema.tables" in statement:
+            rows = [["sales", "orders", "VIEW"]]
+        elif "information_schema.columns" in statement:
+            rows = [["sales", "orders", "Email"]]
+        elif "information_schema.column_tags" in statement:
+            rows = [["sales", "orders", "Email", "pii", "true"], ["sales", "orders", "Email", "system.x", "y"]]
+        else:
+            rows = []
+        return MagicMock(result=MagicMock(data_array=rows))
+
+    provider = MagicMock()
+    provider.client.statement_execution.execute_statement.side_effect = execute
+
+    state = fetch_live_state(provider, [], [("main.sales.orders", "email")])
+    col = state["main.sales.orders::email"]
+    assert col.exists is True
+    assert col.object_type == "VIEW"
+    assert col.tags == {"pii": "true", "system.x": "y"}  # only certification is reserved
+    assert "system.x" in col.all_tags
+    assert state["main.sales.orders"].exists is True
+
+
+@pytest.mark.parametrize("table_type,keyword", [
+    ("MATERIALIZED_VIEW", "MATERIALIZED VIEW"),
+    ("STREAMING_TABLE", "STREAMING TABLE"),
+    ("METRIC_VIEW", "VIEW"),
+    ("MANAGED", "TABLE"),
+    ("EXTERNAL", "TABLE"),
+])
+def test_relation_types_get_their_own_alter_statement(table_type, keyword):
+    from app.workflows.tag_plan import relation_type
+    obj = relation_type(table_type)
+    live_state = {
+        "main.s.t": ObjectState(display="main.s.t", object_type=obj, exists=True),
+        "main.s.t::c": ObjectState(display="main.s.t.c", object_type=obj, exists=True, column="c"),
+    }
+    plan = build_tag_plan(
+        [{"table": "main.s.t", "desired_tags": {"k": "v"}},
+         {"table": "main.s.t", "column": "c", "desired_tags": {"k": "v"}}],
+        live_state,
+    )
+    if keyword == "VIEW":
+        assert plan.statements == [
+            "ALTER VIEW `main`.`s`.`t` SET TAGS ('k' = 'v');",
+            "SET TAG ON COLUMN `main`.`s`.`t`.`c` `k` = `v`;",
+        ]
+    else:
+        assert plan.statements == [
+            f"ALTER {keyword} `main`.`s`.`t` SET TAGS ('k' = 'v');",
+            f"ALTER {keyword} `main`.`s`.`t` ALTER COLUMN `c` SET TAGS ('k' = 'v');",
+        ]
+
+
+def test_live_state_keeps_materialized_view_type():
+    def execute(statement, **kwargs):
+        rows = [["s", "mv", "MATERIALIZED_VIEW"]] if "information_schema.tables" in statement else []
+        return MagicMock(result=MagicMock(data_array=rows))
+
+    provider = MagicMock()
+    provider.client.statement_execution.execute_statement.side_effect = execute
+    assert fetch_live_state(provider, ["main.s.mv"])["main.s.mv"].object_type == "MATERIALIZED_VIEW"
+
+
+def test_only_the_certification_tag_is_kept_out_of_edits():
+    live_state = {
+        "main.s.t": ObjectState(
+            display="main.s.t", exists=True,
+            tags={"system.deprecated": "true"},
+            all_tags={"system.deprecated": "true", "system.certification_status": "certified"},
+        )
+    }
+    plan = build_tag_plan(
+        [{"table": "main.s.t", "desired_tags": {"system.owner_note": "x", "system.certification_status": "certified"}}],
+        live_state,
+    )
+    diff = plan.diffs["main.s.t"]
+    assert diff.after == {"system.owner_note": "x"}
+    assert diff.removed_keys == ["system.deprecated"]
+    assert diff.certified is True

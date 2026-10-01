@@ -37,6 +37,8 @@ _DEFAULT_WEIGHTS = {
     "novel_value": 4.0,
     "unknown_key": 5.0,
     "dataset_fragmentation": 15.0,
+    "sensitivity_downgrade": 15.0,
+    "abac_impact": 25.0,
 }
 
 _DEFAULT_CAPS = {
@@ -48,6 +50,8 @@ _DEFAULT_CAPS = {
     "novel_value": 12.0,
     "unknown_key": 10.0,
     "dataset_fragmentation": 30.0,
+    "sensitivity_downgrade": 45.0,
+    "abac_impact": 75.0,
 }
 
 _LABELS = {
@@ -60,7 +64,13 @@ _LABELS = {
     "novel_value": "Values not seen elsewhere",
     "unknown_key": "Keys not in the policy",
     "dataset_fragmentation": "Dataset fragmentation",
+    "sensitivity_downgrade": "Sensitivity lowered or removed",
+    "abac_impact": "Changes tags an access policy uses",
 }
+
+# Classification values from least to most sensitive (the default policy's set).
+_SENSITIVITY_ORDER = ("public", "internal", "confidential", "restricted")
+_FALSY_VALUES = ("", "false", "no", "none", "0", "n")
 
 
 @dataclass(frozen=True)
@@ -153,6 +163,39 @@ def _fragmented_datasets(plan: TagPlan, vocabulary: TagVocabulary, dataset_key: 
     return sorted(fragmented)
 
 
+def _sensitivity_downgrades(diff: ObjectDiff) -> List[str]:
+    """Describe each change that makes data look less sensitive than it was.
+
+    Lowering or clearing a classification (or clearing a PII flag) can quietly
+    widen who sees the data — masking and access rules are often keyed on these
+    tags — so it is weighted well above an ordinary overwrite.
+    """
+    found: List[str] = []
+    for key in diff.changed_keys:
+        old = diff.before.get(key)
+        new = diff.after.get(key)
+        if old is None:
+            continue
+        lowered = key.lower()
+        if lowered == "classification":
+            old_rank = _SENSITIVITY_ORDER.index(old.lower()) if old.lower() in _SENSITIVITY_ORDER else None
+            new_rank = (
+                _SENSITIVITY_ORDER.index(new.lower())
+                if new is not None and new.lower() in _SENSITIVITY_ORDER
+                else None
+            )
+            if new is None:
+                found.append(f"`{diff.label}`: classification `{old}` removed")
+            elif old_rank is not None and new_rank is not None and new_rank < old_rank:
+                found.append(f"`{diff.label}`: classification `{old}` → `{new}`")
+        elif lowered == "pii" and old.strip().lower() not in _FALSY_VALUES:
+            if new is None:
+                found.append(f"`{diff.label}`: PII flag removed")
+            elif new.strip().lower() in _FALSY_VALUES:
+                found.append(f"`{diff.label}`: PII flag `{old}` → `{new}`")
+    return found
+
+
 def calculate_risk_score(
     plan: TagPlan,
     environment: str = "dev",
@@ -163,6 +206,7 @@ def calculate_risk_score(
     certification_key: str = "system.certification_status",
     certification_value: str = "certified",
     dataset_key: str = DATASET_KEY,
+    abac_impacts: Sequence[str] = (),
 ) -> RiskReport:
     """Calculate the deterministic risk score and breakdown for a tag change plan."""
     vocab = vocabulary or TagVocabulary()
@@ -181,17 +225,21 @@ def calculate_risk_score(
     overwrites = 0
     certified: List[str] = []
 
+    downgrades: List[str] = []
+
     for diff in diffs:
         for key in diff.changed_keys:
             if key.lower() in access_keys:
-                access_changes.append(f"`{diff.table}`.`{key}`")
+                access_changes.append(f"`{diff.label}`.`{key}`")
         for key in diff.removed_keys:
-            removals.append(f"`{diff.table}`.`{key}`")
+            removals.append(f"`{diff.label}`.`{key}`")
         overwrites += len(diff.overwritten_keys)
-        # Check certification status from all_tags
+        downgrades.extend(_sensitivity_downgrades(diff))
+        # Certification lives in a system.* tag, which the plan keeps out of
+        # ``before``; the plan records it on the diff (for a column, its table's).
         cert_val = diff.before.get(certification_key) or ""
-        if cert_val.lower() == certification_value.lower():
-            certified.append(f"`{diff.table}`")
+        if diff.certified or cert_val.lower() == certification_value.lower():
+            certified.append(f"`{diff.label}`")
 
     # Unknown policy keys
     unknown_keys: List[str] = []
@@ -254,6 +302,9 @@ def calculate_risk_score(
         _make_factor("novel_value", len(novel_values), novel_values),
         _make_factor("unknown_key", len(unknown_keys), unknown_keys),
         _make_factor("dataset_fragmentation", len(fragmented), fragmented),
+        _make_factor("sensitivity_downgrade", len(downgrades), downgrades),
+        # Precomputed by tag_abac: which changed tags a column mask or row filter keys on.
+        _make_factor("abac_impact", len(abac_impacts), list(abac_impacts)),
     ]
 
     report.raw_score = sum(f.contribution for f in report.factors)

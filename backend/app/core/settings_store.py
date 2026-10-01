@@ -319,6 +319,15 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     # poller thread, which re-reads them every cycle — edits take effect on the
     # next poll (no redeploy). Blank disables a schedule. A bad expression is
     # rejected on save so a typo can't silently break a schedule.
+    {"group": "Calendar", "key": "EVENT_CALENDAR_URL", "label": "Calendar feed URL",
+     "type": "string",
+     "help": "A published ICS (iCalendar) feed the app can download without signing in; the Event Calendar "
+             "page is built from it. Outlook: in Outlook on the web open Calendar → Settings → Shared calendars, "
+             "under 'Publish a calendar' pick the calendar and 'Can view all details', select Publish, and copy "
+             "the ICS link (ends in calendar.ics) — not the HTML link. If Publish is missing, your Microsoft 365 "
+             "admin has turned off calendar publishing. Google Calendar: use the calendar's 'Secret address in "
+             "iCal format'. webcal:// links work too. Blank = no events are synced. Applies on the next sync — "
+             "use Sync on the Event Calendar page to pull it now."},
     {"group": "Calendar", "key": "EVENT_SYNC_CRON", "label": "Calendar sync cron",
      "type": "cron",
      "help": "How often calendar/events are synced (5-field cron, UTC). Leave BLANK to disable."},
@@ -629,7 +638,7 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
     ),
     "App Code Review": "How the automated Databricks App code-review step judges a repository, and its size and time limits.",
     "Links & Embedded Apps": "The Community Links resource page and the external apps embedded (iframed) in the sidebar. Edits apply immediately.",
-    "Calendar": "How often the event calendar is synced.",
+    "Calendar": "Where the event calendar's events come from, and how often they are synced.",
     "OmniGuard": (
         "The policy scanner for your target workspaces: who is alerted, when scans run, how hard they work, "
         "and what may be remediated automatically."

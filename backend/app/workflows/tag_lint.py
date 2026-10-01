@@ -113,7 +113,7 @@ def run_lint_checks(
         findings.append(finding)
 
     for norm_key, diff in plan.diffs.items():
-        table = diff.table
+        table = diff.label
 
         # Check values to be set/updated
         for key in diff.changed_keys:

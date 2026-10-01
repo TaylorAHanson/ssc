@@ -11,6 +11,29 @@ Format rules (the app parses this file, so keep to them):
   subheading. Plain markdown only.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 1.2.0 — 2026-10-01
+
+### Tag Management
+
+- You can now tag any table or view in the governed catalogs, not just tables that belong to a dataset. A single search box lists every governed dataset when you click it and finds tables and views as you type. Tick as many results as you like: a ticked dataset adds all of its tables, a ticked table adds just that one, and both can be edited and reviewed together in one change.
+- Column tags are now supported. Open a table's **Columns** to see each column's tags and edit them, for example to mark a column as restricted. Column changes go through the same policy, typo and risk checks as table tags. They can be applied when changes are applied directly; when changes go through pull requests, column tags are shown read-only.
+- The search box also finds objects by their tags: type `main.sales.*` for a whole schema, `classification=restricted` for objects with that value, or `!data_owner` for objects missing a tag. Press Enter to add every match.
+- Filter the list by name or tag, then set or remove one tag on everything shown in a single step. Tables with many columns offer the same filter and bulk edit for their columns. Each row shows its tags at a glance, with new, changed and removed tags highlighted, and you can show only what you've changed.
+- Tags governed by a Unity Catalog tag policy are now checked before anything is applied. If a policy limits a tag to certain values, the editor suggests those values and flags any other value as you type, and the review blocks the change instead of letting it fail partway through.
+- Tag Management is now split into two tabs: **Edit Tags** for making changes and **Change History** for reviewing past changes, which now shows who submitted each one. Your edits are kept while you switch between them.
+- The key field now suggests Unity Catalog governed tags as you type, showing how many values each one allows.
+- If a column mask or row filter depends on a tag you're changing, the review now names that access policy and raises the risk score, because the change can affect who can see the data.
+- Tables whose edit would add them to, move them between, or take them out of a dataset are now clearly marked.
+- Tags on materialized views and streaming tables, and on their columns, are now applied with the statements those objects require.
+- Lowering or removing a classification or PII tag now raises the risk score, since access and masking rules often depend on those tags. Tags meant for tables, such as `dataset` or `data_owner`, can no longer be set on columns by mistake.
+
+### Fixed
+
+- Changes to certified tables are now counted in the risk score as intended.
+- When changes go through pull requests, the review now shows the exact SQL that will be committed.
+- Table and column names are now validated and quoted before any SQL is run, so names with special characters can't produce unsafe statements.
+- Trying to change the `system.certification_status` tag, which is set automatically by certification, now explains why it isn't allowed instead of producing an empty change. Other `system.` tags can now be viewed and edited like any other tag.
+
 ## 1.1.0 — 2026-09-30
 
 ### Added
@@ -26,6 +49,7 @@ Format rules (the app parses this file, so keep to them):
 - The dashboard's stuck-request count now works for requests waiting on an approval, and all times are shown in your local time zone. The "Active Workspaces" and estimated "Labor Saved" figures have been removed because they didn't reflect real activity.
 - **Admin** is now the first link in the **Control Tower** section of the sidebar.
 - **Admin → Settings** is now organized into the same sections as the sidebar (General, Discover & Analyze, Requests & Approvals, Learn & Share, Watch Tower, Control Tower, Platform), with sub-headings inside longer pages. The system banner now lives under **Appearance**, and each schedule sits with the feature it runs.
+- The Event Calendar's feed URL can now be changed under **Admin → Settings → Calendar**, next to its sync schedule, without a redeploy.
 - Settings for a capability that is switched off are collapsed under **Inactive settings** with a link to turn it on. A page whose capability is off is marked **Off** in the settings menu.
 - Turning a capability off now also hides its pages from the sidebar, so what people see always matches what is enabled.
 - The optional grid of quick-action cards on the home page has been removed, along with the switch between it and the chat. The home page now always opens straight into the chat.

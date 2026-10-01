@@ -20,33 +20,43 @@ logger = logging.getLogger(__name__)
 
 POLICY_PATH = "policy/tag_policy.yml"
 
+# Target kinds a key can be declared for with ``applies_to``.
+TABLE = "table"
+COLUMN = "column"
+
 DEFAULT_POLICY_YAML = """
-reserved_prefixes:
-  - "system."
+reserved_keys:
+  - "system.certification_status"
 key_mode: open
 known_keys:
   dataset:
     required: true
+    applies_to: [table]
     description: Logical dataset this object belongs to. Groups tables and views.
     pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
   data_owner:
     required: true
+    applies_to: [table]
     description: Accountable owner (team or group name) for the data.
     pattern: "^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$"
   approver_group:
     required: true
+    applies_to: [table]
     description: Group that approves access requests for this dataset.
     pattern: "^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$"
   access_group:
     required: true
+    applies_to: [table]
     description: Group granted access once a request is approved.
     pattern: "^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$"
   reliability_window:
     required: true
+    applies_to: [table]
     description: Freshness/reliability commitment, e.g. 24h or 7d.
     pattern: "^[0-9]+(m|h|d|w)$"
   classification:
     required: false
+    applies_to: [table, column]
     description: Sensitivity classification.
     pattern: "^(public|internal|confidential|restricted)$"
 protected_keys: []
@@ -65,6 +75,7 @@ def get_default_policy() -> "TagPolicy":
 @dataclass
 class TagPolicy:
     reserved_prefixes: List[str] = field(default_factory=list)
+    reserved_keys: List[str] = field(default_factory=list)
     key_mode: str = "open"
     known_keys: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     protected_keys: List[str] = field(default_factory=list)
@@ -79,6 +90,7 @@ class TagPolicy:
         limits = data.get("limits") or {}
         return cls(
             reserved_prefixes=list(data.get("reserved_prefixes") or []),
+            reserved_keys=[str(k).lower() for k in (data.get("reserved_keys") or [])],
             key_mode=(data.get("key_mode") or "open").strip().lower(),
             known_keys=dict(data.get("known_keys") or {}),
             protected_keys=list(data.get("protected_keys") or []),
@@ -89,20 +101,42 @@ class TagPolicy:
         )
 
     def _is_reserved(self, key: str) -> bool:
-        return any(key.startswith(p) for p in self.reserved_prefixes)
+        """Exact ``reserved_keys``, or anything under a ``reserved_prefixes`` entry."""
+        return key.lower() in self.reserved_keys or any(key.startswith(p) for p in self.reserved_prefixes)
 
     def is_reserved(self, key: str) -> bool:
         return self._is_reserved(key)
 
-    def _is_protected(self, key: str) -> bool:
-        """Protected keys may be re-valued but never removed."""
+    def _applies_to(self, key: str) -> Optional[List[str]]:
+        """The target kinds a key is declared for, or ``None`` if undeclared (any).
+
+        Kinds are ``table`` (tables and views) and ``column``; ``view`` is accepted
+        as a synonym for ``table``.
+        """
+        declared = (self.known_keys.get(key) or {}).get("applies_to")
+        if not declared:
+            return None
+        if isinstance(declared, str):
+            declared = [declared]
+        kinds = {str(k).strip().lower() for k in declared}
+        return sorted({"table" if k == "view" else k for k in kinds})
+
+    def _is_protected(self, key: str, kind: str = TABLE) -> bool:
+        """Protected keys may be re-valued but never removed.
+
+        Required keys describe what a *table* must carry, so on a column they are
+        only protected when the policy explicitly declares them for columns.
+        """
         if key in self.protected_keys:
             return True
+        if kind == COLUMN:
+            spec = self.known_keys.get(key) or {}
+            return bool(spec.get("required")) and COLUMN in (self._applies_to(key) or [])
         if key in ("dataset", "data_set"):
             return True
         return bool((self.known_keys.get(key) or {}).get("required"))
 
-    def _check_set(self, table: str, key: str, value: str) -> List[str]:
+    def _check_set(self, table: str, key: str, value: str, kind: str = TABLE) -> List[str]:
         problems: List[str] = []
         if self._is_reserved(key):
             problems.append(
@@ -123,6 +157,11 @@ class TagPolicy:
                 f"is {self.max_value_length}."
             )
 
+        applies = self._applies_to(key)
+        if applies is not None and kind not in applies:
+            where = "tables and views" if applies == [TABLE] else " and ".join(f"{k}s" for k in applies)
+            problems.append(f"{table}: '{key}' can only be set on {where}.")
+
         spec = self.known_keys.get(key)
         if spec is None:
             if self.key_mode == "strict":
@@ -142,13 +181,13 @@ class TagPolicy:
             )
         return problems
 
-    def _check_unset(self, table: str, key: str) -> List[str]:
+    def _check_unset(self, table: str, key: str, kind: str = TABLE) -> List[str]:
         if self._is_reserved(key):
             return [
                 f"{table}: '{key}' is a reserved tag and cannot be removed here — the "
                 f"OmniGuard owns it."
             ]
-        if self._is_protected(key):
+        if self._is_protected(key, kind):
             return [
                 f"{table}: '{key}' is part of the certification contract and cannot be "
                 f"removed. You can change its value, but not clear it."
@@ -162,18 +201,25 @@ class TagPolicy:
     ) -> List[str]:
         """Return every policy problem in ``changes``; empty means it would pass.
 
+        Each change is ``{"table", "set", "unset"}`` plus an optional ``"column"``.
+        ``resulting_tag_counts`` is keyed by the target's label (``table`` or
+        ``table.column``).
+
         All problems are collected rather than raising on the first, so the user
         can fix the whole change in one pass instead of one error per submit.
         """
         problems: List[str] = []
         for change in changes:
             table = change.get("table") or "(unknown table)"
+            column = change.get("column")
+            kind = COLUMN if column else TABLE
+            label = f"{table}.{column}" if column else table
             for key, value in (change.get("set") or {}).items():
-                problems.extend(self._check_set(table, key, str(value)))
+                problems.extend(self._check_set(label, key, str(value), kind))
             for key in change.get("unset") or []:
-                problems.extend(self._check_unset(table, key))
+                problems.extend(self._check_unset(label, key, kind))
 
-            count = (resulting_tag_counts or {}).get(table)
+            count = (resulting_tag_counts or {}).get(label)
             if self.max_tags_per_object and count and count > self.max_tags_per_object:
                 problems.append(
                     f"{table}: would end up with {count} tags; Unity Catalog allows at "
