@@ -567,3 +567,45 @@ def test_instructions_match_the_graph():
         md = f.read()
     assert render_execution_block(spec, request_type="preview_feature_request").strip() in md
     assert "find_preview_features" in md
+
+
+def test_settings_error_drops_sdk_config_dump():
+    class _Client:
+        class api_client:
+            @staticmethod
+            def do(*a, **k):
+                raise RuntimeError("User does not have the required permissions to access the setting. "
+                                   "Config: host=https://x, client_id=abc, client_secret=***")
+
+    with pytest.raises(settings_api.SettingsApiError) as e:
+        settings_api.set_boolean(_Client(), "ai_enrich", True)
+    assert str(e.value) == "User does not have the required permissions to access the setting."
+
+
+def test_claim_refuses_a_target_taken_after_the_check(db_session):
+    aha = _seed(db_session)
+    # Another request takes ws1 behind this session's back: the loaded row still
+    # says not_requested, so the eligibility check passes and only the claim can catch it.
+    db_session.query(PreviewFeatureTargetModel).filter_by(feature_id=aha.id, target="ws1").update(
+        {"status": "requested", "request_id": "req-other"}, synchronize_session=False)
+    with pytest.raises(request_flow.PreviewRequestError, match="already in progress"):
+        request_flow.open_request(db_session, aha, action="enable", targets=["ws1"],
+                                  justification=None, user_email="a@x.com")
+    assert db_session.query(RequestModel).filter_by(type="preview_feature_request").count() == 0
+
+
+def test_https_url_only():
+    assert feed.https_url("https://docs.databricks.com/x") == "https://docs.databricks.com/x"
+    assert feed.https_url("javascript:alert(1)") is None
+    assert feed.https_url("http://example.com") is None
+    assert feed.https_url("/aws/en/x") is None
+    assert feed.https_url(None) is None
+
+
+def test_run_sync_skips_when_one_is_running(monkeypatch):
+    async def go():
+        async with sync._lock:
+            return await sync.run_sync()
+
+    monkeypatch.setattr(sync, "_last_run", {"running": True})
+    assert asyncio.run(go()) == {"running": True}

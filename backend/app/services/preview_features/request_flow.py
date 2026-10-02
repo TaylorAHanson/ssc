@@ -120,6 +120,34 @@ def _prepare(db: Session, feature: PreviewFeatureModel, action: str,
     return targets, rows
 
 
+def _claim(db: Session, rows: Dict[str, PreviewFeatureTargetModel], targets: List[str],
+           request_id: Optional[str]) -> None:
+    """Atomically move each target to ``requested`` unless another request got there first.
+
+    The eligibility check reads, then this writes; without a compare-and-set two
+    requests opened at the same moment would both pass the check and the second
+    would silently take over the first's targets. Raises when any target was taken.
+    """
+    db.flush()  # a new account row must exist before it can be claimed
+    taken = []
+    for t in targets:
+        row = rows[t]
+        claimed = (
+            db.query(PreviewFeatureTargetModel)
+            .filter(PreviewFeatureTargetModel.id == row.id,
+                    PreviewFeatureTargetModel.status.notin_(IN_FLIGHT))
+            .update({"status": "requested", "request_id": request_id}, synchronize_session=False)
+        )
+        if not claimed:
+            taken.append(t)
+    if taken:
+        db.rollback()
+        raise PreviewRequestError("Can't request this for: " + "; ".join(
+            f"{t}: a request is already in progress" for t in taken))
+    for t in targets:
+        db.refresh(rows[t])
+
+
 def _title(feature: PreviewFeatureModel, action: str, targets: List[str]) -> str:
     verb = "Enable" if action == "enable" else "Disable"
     where = "account" if _is_account(feature) else ", ".join(targets)
@@ -160,26 +188,37 @@ def open_request(
     from app.services.request_service import RequestService
 
     targets, rows = _prepare(db, feature, action, targets)
-    request = RequestService.create_request(db, RequestCreate(
-        type=REQUEST_TYPE,
-        title=_title(feature, action, targets),
-        requester_email=user_email,
-        metadata={
-            # The workflow's declared inputs (what the chat agent passes too).
-            "feature": feature.setting_name or feature.id,
-            "action": action,
-            "targets": targets,
-            "justification": (justification or "").strip(),
-            # Extra context for approvers and the tab.
-            "feature_id": feature.id,
-            "setting_name": feature.setting_name,
-            "display_name": feature.display_name,
-            "scope": "account" if _is_account(feature) else "workspace",
-            "value_type": feature.value_type or "other",
-            "requested_by": user_name or user_email,
-            "requested_by_email": user_email,
-        },
-    ))
+    previous = {t: rows[t].status for t in targets}
+    _claim(db, rows, targets, None)
+    db.commit()
+    try:
+        request = RequestService.create_request(db, RequestCreate(
+            type=REQUEST_TYPE,
+            title=_title(feature, action, targets),
+            requester_email=user_email,
+            metadata={
+                # The workflow's declared inputs (what the chat agent passes too).
+                "feature": feature.setting_name or feature.id,
+                "action": action,
+                "targets": targets,
+                "justification": (justification or "").strip(),
+                # Extra context for approvers and the tab.
+                "feature_id": feature.id,
+                "setting_name": feature.setting_name,
+                "display_name": feature.display_name,
+                "scope": "account" if _is_account(feature) else "workspace",
+                "value_type": feature.value_type or "other",
+                "requested_by": user_name or user_email,
+                "requested_by_email": user_email,
+            },
+        ))
+    except Exception:
+        # Release the claim so the targets can be requested again.
+        db.rollback()
+        for t in targets:
+            rows[t].status = previous[t]
+        db.commit()
+        raise
     _mark_requested(db, feature, rows, targets, request.id, action, user_email)
     db.commit()
     logger.info("Opened %s request %s for '%s' on %s", action, request.id, feature.display_name, targets)
@@ -215,6 +254,7 @@ def link_request(
     if isinstance(targets, str):
         targets = [t for t in targets.split(",")]
     targets, rows = _prepare(db, feature, action, list(targets or []))
+    _claim(db, rows, targets, request_id)
     _mark_requested(db, feature, rows, targets, request_id, action, request.requester_email)
     ctx = dict(request.state_context or {})
     ctx.update({

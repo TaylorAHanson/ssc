@@ -205,8 +205,8 @@ def apply_sync(
             # Listed as a preview again (e.g. a retired row came back).
             feature.archived_at = None
             feature.archived_reason = None
-        if meta.get("docs_link") and feature.docs_link_source != "admin":
-            feature.docs_link = meta["docs_link"]
+        if feed_mod.https_url(meta.get("docs_link")) and feature.docs_link_source != "admin":
+            feature.docs_link = feed_mod.https_url(meta["docs_link"])
             feature.docs_link_source = "api"
 
     for feature in list(by_setting.values()):
@@ -260,7 +260,7 @@ def apply_sync(
                 feature.announcement_text = feature.announcement_url = feature.announced_at = None
                 continue
             feature.announcement_text = match.announcement_text[:4000]
-            feature.announcement_url = match.item.link
+            feature.announcement_url = feed_mod.https_url(match.item.link)
             feature.announced_at = match.item.published
             if match.docs_link and feature.docs_link_source not in ("admin", "api"):
                 feature.docs_link = match.docs_link
@@ -300,7 +300,7 @@ def apply_sync(
             text = preview.match.item.text
             feature.description = feature.description or text[:600]
             feature.announcement_text = text[:4000]
-            feature.announcement_url = preview.match.item.link
+            feature.announcement_url = feed_mod.https_url(preview.match.item.link)
             feature.announced_at = preview.match.item.published
             feature.last_seen_at = now
             if preview.match.docs_link and feature.docs_link_source not in ("admin",):
@@ -372,8 +372,13 @@ def apply_sync(
 
 
 async def run_sync() -> Dict[str, Any]:
-    """Run one full sync. Concurrent calls share a lock; the second waits."""
+    """Run one full sync. A call made while one is running returns its status instead."""
     global _last_run
+    if _lock.locked():
+        # A second click on "Sync now" (or the cron firing mid-run) would only
+        # repeat the same work right after; the running sync covers it.
+        logger.info("Preview sync already running; not starting another.")
+        return dict(_last_run)
     async with _lock:
         started = datetime.now(timezone.utc)
         _last_run = {**_last_run, "running": True, "started_at": started.isoformat()}

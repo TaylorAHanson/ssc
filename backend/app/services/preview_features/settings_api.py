@@ -32,6 +32,17 @@ class SettingsApiError(Exception):
     """A Settings v2 call failed (permission, unknown setting, network)."""
 
 
+def _reason(e: Exception) -> str:
+    """The error without the SDK's appended ``Config: host=..., client_id=...`` dump.
+
+    The reason is shown on the tab and in approval reports, where the client
+    configuration is noise.
+    """
+    text = str(e)
+    cut = text.find(" Config: ")
+    return (text[:cut] if cut > 0 else text).strip()
+
+
 def build_client(ws: WorkspaceConfig):
     """A WorkspaceClient for ``ws`` with the app's bounded HTTP timeouts."""
     from app.providers.databricks.client import _build_workspace_client
@@ -55,7 +66,7 @@ def list_metadata(client) -> List[Dict[str, Any]]:
         try:
             res = client.api_client.do("GET", "/api/2.1/settings-metadata", query=query) or {}
         except Exception as e:  # noqa: BLE001 - surface one error type to callers
-            raise SettingsApiError(str(e)) from e
+            raise SettingsApiError(_reason(e)) from e
         items.extend(res.get("settings_metadata") or [])
         token = res.get("next_page_token")
         if not token:
@@ -101,7 +112,7 @@ def get_value(client, name: str) -> ObservedValue:
     try:
         res = client.api_client.do("GET", f"/api/2.1/settings/{name}") or {}
     except Exception as e:  # noqa: BLE001
-        raise SettingsApiError(str(e)) from e
+        raise SettingsApiError(_reason(e)) from e
     return parse_value(res)
 
 
@@ -111,5 +122,5 @@ def set_boolean(client, name: str, value: bool) -> ObservedValue:
     try:
         res = client.api_client.do("PATCH", f"/api/2.1/settings/{name}", body=body) or {}
     except Exception as e:  # noqa: BLE001
-        raise SettingsApiError(str(e)) from e
+        raise SettingsApiError(_reason(e)) from e
     return parse_value(res)

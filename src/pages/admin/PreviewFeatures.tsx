@@ -154,6 +154,22 @@ function targetMap(f: PreviewFeature): Record<string, PreviewTarget> {
   return Object.fromEntries(f.targets.map((t) => [t.target, t]));
 }
 
+// Links come from Databricks metadata and the docs feed. Only https URLs are
+// rendered as links (the backend drops anything else too).
+const safeHref = (url?: string | null): string | undefined =>
+  url && /^https:\/\/[^\s]+$/i.test(url) ? url : undefined;
+
+/** Close a dialog on Escape. */
+function useEscape(onClose: () => void) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+}
+
 const firstLine = (text?: string | null): string => {
   if (!text) return '';
   const sentence = text.split(/(?<=[.!?])\s/)[0];
@@ -173,6 +189,7 @@ interface RequestDialogProps {
 }
 
 function RequestDialog({ feature, action, workspaces, onClose, onDone }: RequestDialogProps) {
+  useEscape(onClose);
   const targets = targetMap(feature);
   const isAccount = feature.scope === 'account';
   const options = workspaces.map((w) => ({ ws: w, reason: ineligibleReason(targets[w.name], action) }));
@@ -328,6 +345,7 @@ function ApproveDialog({
   onClose: () => void;
   onDone: (message: { text: string; requestId?: string }) => void;
 }) {
+  useEscape(onClose);
   const requests = approvableRequests(feature);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -397,8 +415,8 @@ function ApproveDialog({
 function DocsLinks({ feature }: { feature: PreviewFeature }) {
   return (
     <div className="flex flex-wrap items-center gap-4 text-sm">
-      {feature.docs_link ? (
-        <a href={feature.docs_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
+      {safeHref(feature.docs_link) ? (
+        <a href={safeHref(feature.docs_link)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
           <BookOpen className="h-4 w-4" /> Docs
           {feature.docs_link_source === 'sitemap' && <span className="text-xs text-gray-400">(suggested)</span>}
           <ExternalLink className="h-3 w-3" />
@@ -416,8 +434,8 @@ function DocsLinks({ feature }: { feature: PreviewFeature }) {
           </a>
         </span>
       )}
-      {feature.announcement_url && (
-        <a href={feature.announcement_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
+      {safeHref(feature.announcement_url) && (
+        <a href={safeHref(feature.announcement_url)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
           <Newspaper className="h-4 w-4" /> Release note
           {feature.announced_at && <span className="text-xs text-gray-400">({parseUtc(feature.announced_at).toLocaleDateString()})</span>}
           <ExternalLink className="h-3 w-3" />

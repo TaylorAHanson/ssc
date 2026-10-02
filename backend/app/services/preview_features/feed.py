@@ -126,6 +126,17 @@ def classify_scope(text: str) -> str:
     return "unknown"
 
 
+def https_url(url: Optional[str]) -> Optional[str]:
+    """``url`` if it's an absolute https URL, else None.
+
+    Every URL stored for the tab is rendered as a link, so anything else (a
+    ``javascript:`` URL, a relative path) is dropped at ingest.
+    """
+    url = (url or "").strip()
+    parsed = urlparse(url)
+    return url if parsed.scheme == "https" and parsed.netloc and not any(c.isspace() for c in url) else None
+
+
 def _absolute(href: str) -> str:
     return urljoin(DOCS_ORIGIN + "/", html.unescape(href))
 
