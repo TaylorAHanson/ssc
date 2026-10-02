@@ -491,6 +491,29 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "On = a workflow with a failing or never-run enabled case cannot be published. Off (default) = the "
              "publish confirmation warns instead, since the judge is non-deterministic."},
 
+    # --- Preview Features -----------------------------------------------
+    {"group": "Preview Features", "key": "PREVIEW_FEATURE_SYNC_CRON", "label": "Sync cron",
+     "type": "cron", "requires": ["features.preview_features"],
+     "help": "How often previews are re-read from every target workspace and the docs feed, and approved "
+             "requests re-verified (5-field cron, UTC). Leave BLANK to sync only when Sync now is clicked."},
+    {"group": "Preview Features", "key": "PREVIEW_FEATURE_FEED_URL", "label": "Release-notes feed URL",
+     "type": "string", "requires": ["features.preview_features"],
+     "help": "The Databricks docs RSS feed used for account-level previews, announcements and docs links. "
+             "Use your cloud's feed (aws, azure or gcp in the path). Must be on docs.databricks.com. "
+             "Blank skips the feed."},
+    {"group": "Preview Features", "key": "PREVIEW_FEATURE_SITEMAP_URL", "label": "Docs sitemap URL",
+     "type": "string", "requires": ["features.preview_features"],
+     "help": "The docs sitemap used to suggest a documentation page for previews that have none. "
+             "Must be on docs.databricks.com. Blank skips suggestions."},
+    {"group": "Preview Features", "key": "PREVIEW_FEATURE_SYNC_CONCURRENCY", "label": "Reads in parallel per workspace",
+     "type": "int", "min": 1, "max": 32, "requires": ["features.preview_features"],
+     "help": "How many preview values are read at the same time from one workspace (each workspace lists "
+             "around 150 previews)."},
+    {"group": "Preview Features", "key": "PREVIEW_FEATURE_RETIRE_AFTER_SYNCS", "label": "Retire after missed syncs",
+     "type": "int", "min": 1, "requires": ["features.preview_features"],
+     "help": "A preview no workspace lists for this many syncs in a row is removed from the list (kept "
+             "for history), and any open request for it is closed."},
+
     # ===================================================================
     # Platform
     # ===================================================================
@@ -546,6 +569,7 @@ GROUP_REQUIRES: Dict[str, List[str]] = {
     "Calendar": ["features.calendar"],
     "Tag Management": ["features.governance"],
     "Workflow Studio": ["features.workflow_authoring"],
+    "Preview Features": ["features.preview_features"],
 }
 
 
@@ -614,7 +638,7 @@ SECTIONS: List[Dict[str, Any]] = [
     {"title": "Requests & Approvals", "groups": ["Group Management (LMWS)", "App Code Review"]},
     {"title": "Learn & Share", "groups": ["Links & Embedded Apps", "Calendar"]},
     {"title": "Watch Tower", "groups": ["OmniGuard", "Target Workspaces", "Data Certification", "Tag Management"]},
-    {"title": "Control Tower", "groups": ["Workflow Studio"]},
+    {"title": "Control Tower", "groups": ["Workflow Studio", "Preview Features"]},
     {"title": "Platform", "groups": ["Infrastructure"]},
 ]
 
@@ -650,6 +674,11 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "ledger table it reads to confirm each apply."
     ),
     "Workflow Studio": "Whether workflows can be edited in place, the authoring assistant's budget, and how workflow test cases run.",
+    "Preview Features": (
+        "How often Databricks Beta and Public Preview features are re-read from your target workspaces, and "
+        "where announcements and docs links come from. Who approves and implements a request is set on the "
+        "Preview Feature Request workflow in Workflow Studio."
+    ),
     "Target Workspaces": (
         "The workspaces the app monitors, mainly scanned by OmniGuard (Data Certification's workspace "
         "setting also refers to them by name), plus the one secret scope holding each workspace's "
@@ -747,6 +776,8 @@ CAPABILITIES: List[Dict[str, Any]] = [
      "feature": "tool_registry", "tabs": ["tool_registry"]},
     {"id": "training_studio", "section": "Control Tower", "label": "Training Studio",
      "feature": "training_admin", "tabs": ["training_admin"]},
+    {"id": "preview_features", "section": "Control Tower", "label": "Preview Features",
+     "feature": "preview_features", "tabs": ["preview_features"]},
     {"id": "feedback", "section": "Control Tower", "label": "Feedback", "feature": "feedback",
      "tabs": [{"key": "feedback", "label": "Show 'Send feedback' in the account menu",
                "help": "Also shows the Feedback tab in Admin."}]},
@@ -789,6 +820,10 @@ FEATURE_DESCRIPTIONS: Dict[str, str] = {
     "tool_registry": "Data-driven agent-tool governance: enable tools per surface, set allowed roles, and pick SP/OBO identity.",
     "training_admin": "Admin authoring of Training tracks and courses (the learner Training page is always available).",
     "skills": "Agent Skills the agent can load at runtime from the user's Workspace folder and readable UC Volumes.",
+    "preview_features": (
+        "Tracks Databricks Beta and Public Preview features across your target workspaces, and lets admins "
+        "request turning them on or off through an approval workflow. Off = no sync and the page is hidden."
+    ),
     "enhanced_landing_page": "Shows a welcome header (brand title and greeting) above the chat on the landing page. Off = a clean, minimal landing page.",
 }
 
@@ -1115,6 +1150,7 @@ _CRON_SCHEDULE_TARGETS: Dict[str, tuple] = {
     "DATA_ASSET_SYNC_CRON": ("app.workers.tasks.sync_data_assets", "_next_sync_time"),
     "EVENT_SYNC_CRON": ("app.workers.tasks.sync_calendar", "_next_sync_time"),
     "CONTRACT_SYNC_CRON": ("app.workers.tasks.sync_contracts", "_next_contract_sync_time"),
+    "PREVIEW_FEATURE_SYNC_CRON": ("app.services.preview_features.sync", "_next_preview_sync_time"),
 }
 
 

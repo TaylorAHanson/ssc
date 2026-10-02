@@ -65,7 +65,7 @@ def test_section_layout():
         ("Requests & Approvals", ["Group Management (LMWS)", "App Code Review"]),
         ("Learn & Share", ["Links & Embedded Apps", "Calendar"]),
         ("Watch Tower", ["OmniGuard", "Target Workspaces", "Data Certification", "Tag Management"]),
-        ("Control Tower", ["Workflow Studio"]),
+        ("Control Tower", ["Workflow Studio", "Preview Features"]),
         ("Platform", ["Infrastructure"]),
     ]
 

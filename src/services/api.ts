@@ -3770,6 +3770,142 @@ export async function cloneWorkflow(workflowId: string): Promise<Workflow> {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Preview Features (Databricks Beta / Public Preview tracker)
+// ---------------------------------------------------------------------------
+
+export type PreviewTargetStatus = 'not_requested' | 'requested' | 'approved' | 'implemented' | 'rejected';
+
+export interface PreviewObservedValue {
+  effective?: boolean | null;
+  set_here?: boolean;
+  // Account targets aggregate the workspaces that list the setting.
+  workspaces_on?: number;
+  workspaces_listed?: number;
+}
+
+export interface PreviewTarget {
+  target: string;
+  available: boolean;
+  status: PreviewTargetStatus;
+  action?: 'enable' | 'disable' | null;
+  request_id?: string | null;
+  request_status?: string | null;
+  // The open request's pending inbox item ("platform_admin", "manual_task", ...).
+  pending_approval?: string | null;
+  // The current user may approve that item.
+  can_approve?: boolean;
+  requested_by?: string | null;
+  approved_by?: string | null;
+  implemented_by?: string | null;
+  observed_value?: PreviewObservedValue | null;
+  observed_at?: string | null;
+  observe_error?: string | null;
+  verification?: 'api' | 'probe' | 'attested' | 'none' | null;
+  last_verified_at?: string | null;
+  drift: boolean;
+  note?: string | null;
+}
+
+export interface PreviewFeature {
+  id: string;
+  setting_name?: string | null;
+  display_name: string;
+  description?: string | null;
+  phase?: 'BETA' | 'PUBLIC_PREVIEW' | 'PRIVATE_PREVIEW' | 'GA' | null;
+  phase_changed_at?: string | null;
+  scope: 'workspace' | 'account' | 'unknown';
+  scope_source: 'api' | 'inferred' | 'admin';
+  value_type?: string | null;
+  announcement_text?: string | null;
+  announcement_url?: string | null;
+  announced_at?: string | null;
+  docs_link?: string | null;
+  docs_link_source?: 'api' | 'docs' | 'feed' | 'sitemap' | 'admin' | null;
+  probe?: { type: string; path: string } | null;
+  first_seen_at: string;
+  last_seen_at?: string | null;
+  archived_at?: string | null;
+  archived_reason?: string | null;
+  targets: PreviewTarget[];
+}
+
+export interface PreviewSyncWorkspace {
+  name: string;
+  ok: boolean;
+  message?: string | null;
+  previews: number;
+  unreadable: number;
+  seconds: number;
+}
+
+export interface PreviewSyncStatus {
+  cron: string;
+  next_run?: string | null;
+  last_seen_at?: string | null;
+  last_run: {
+    running?: boolean;
+    started_at?: string;
+    finished_at?: string;
+    message?: string;
+    workspaces?: PreviewSyncWorkspace[];
+    new?: number;
+    archived_ga?: number;
+    archived_retired?: number;
+    verified?: number;
+  };
+}
+
+export interface PreviewFeaturesResponse {
+  features: PreviewFeature[];
+  workspaces: TargetWorkspace[];
+  sync: PreviewSyncStatus;
+}
+
+async function previewFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}/preview-features${path}`, {
+    ...init,
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Request failed: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function getPreviewFeatures(includeArchived = false): Promise<PreviewFeaturesResponse> {
+  return previewFetch(includeArchived ? '?include_archived=true' : '');
+}
+
+export async function getPreviewSyncStatus(): Promise<PreviewSyncStatus> {
+  return previewFetch('/sync');
+}
+
+export async function startPreviewSync(): Promise<PreviewSyncStatus> {
+  return previewFetch('/sync', { method: 'POST' });
+}
+
+export async function requestPreviewFeature(
+  featureId: string,
+  body: { action: 'enable' | 'disable'; targets: string[]; justification?: string },
+): Promise<{ request_id: string; targets: string[] }> {
+  return previewFetch(`/${encodeURIComponent(featureId)}/requests`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updatePreviewFeature(
+  featureId: string,
+  body: { scope?: 'workspace' | 'account'; docs_link?: string; probe_path?: string },
+): Promise<PreviewFeature> {
+  return previewFetch(`/${encodeURIComponent(featureId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -3907,4 +4043,9 @@ export const api = {
   adminDeleteTrainingMedia,
   adminSyncTrainingCatalog,
   adminTrainingConsumptionAnalytics,
+  getPreviewFeatures,
+  getPreviewSyncStatus,
+  startPreviewSync,
+  requestPreviewFeature,
+  updatePreviewFeature,
 };

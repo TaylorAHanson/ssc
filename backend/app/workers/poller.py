@@ -208,6 +208,8 @@ async def start_poller():
     # semaphore keeps a slow run from overlapping itself without blocking the
     # lightweight data-asset sync.
     contract_sync_semaphore = asyncio.Semaphore(1)
+    # Preview-feature sync reads every target workspace (~10s each); keep one at a time.
+    preview_sync_semaphore = asyncio.Semaphore(1)
 
     # Elect a single active poller cluster-wide (no-op on SQLite). Replicas that
     # aren't the leader idle here so we don't run N copies of the poll cycle.
@@ -265,6 +267,20 @@ async def start_poller():
 
             if _yaml_config.get("features", {}).get("sentinel", False):
                 await process_enforcement_sentinel_cron()
+
+            if _yaml_config.get("features", {}).get("preview_features", False):
+                async def safe_sync_preview_features():
+                    if preview_sync_semaphore.locked():
+                        return  # Already syncing
+                    async with preview_sync_semaphore:
+                        try:
+                            from app.services.preview_features.sync import preview_feature_sync_task
+
+                            await preview_feature_sync_task()
+                        except Exception as e:
+                            logger.error(f"Error in background preview-feature sync: {e}", exc_info=True)
+
+                _spawn_background(safe_sync_preview_features())
 
             # Pre-warm user profiles + prune retained user data. Self-throttled
             # (well below the poll interval) and detached, so a slow identity

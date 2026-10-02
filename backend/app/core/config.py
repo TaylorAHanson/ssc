@@ -488,7 +488,24 @@ class Settings(BaseSettings):
     # Contracts" button only). Set a cron (e.g. "0 6 * * *" for daily 6am UTC) to
     # keep contracts fresh automatically. Editable in Admin -> Settings.
     CONTRACT_SYNC_CRON: str = os.getenv("CONTRACT_SYNC_CRON", "")
-    
+
+    # Preview features tracker. A daily sync reads each target workspace's
+    # Settings v2 metadata (Beta / Public Preview / Private Preview) and values,
+    # plus the docs release-notes feed for account-level previews and docs
+    # links. Empty cron = sync only when "Sync now" is clicked. Editable in
+    # Admin -> Settings -> Preview Features.
+    PREVIEW_FEATURE_SYNC_CRON: str = os.getenv("PREVIEW_FEATURE_SYNC_CRON", "0 6 * * *")
+    PREVIEW_FEATURE_FEED_URL: str = os.getenv(
+        "PREVIEW_FEATURE_FEED_URL", "https://docs.databricks.com/aws/en/feed.xml"
+    )
+    PREVIEW_FEATURE_SITEMAP_URL: str = os.getenv(
+        "PREVIEW_FEATURE_SITEMAP_URL", "https://docs.databricks.com/aws/en/sitemap.xml"
+    )
+    # Parallel setting reads per workspace (a workspace lists ~150 previews).
+    PREVIEW_FEATURE_SYNC_CONCURRENCY: int = int(os.getenv("PREVIEW_FEATURE_SYNC_CONCURRENCY", "8"))
+    # A feature no workspace lists for this many syncs in a row is archived as retired.
+    PREVIEW_FEATURE_RETIRE_AFTER_SYNCS: int = int(os.getenv("PREVIEW_FEATURE_RETIRE_AFTER_SYNCS", "3"))
+
     # Sentinel Settings
     ENFORCEMENT_SENTINEL_CRON: str = "*/30 * * * *"  # Cron schedule to automatically run sentinel (empty = disabled)
     # Safeguard: a scheduled sentinel run is skipped while a prior run is still

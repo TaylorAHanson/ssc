@@ -70,10 +70,12 @@ Workspace + database:
 
 **Identity:** one SP per target workspace. All of them are stored in the **single** install-wide secret scope (`TARGET_WORKSPACE_SP_SECRET_SCOPE`); each target workspace names its `client_id_key` / `client_secret_key` in that scope (Admin → Settings → Target Workspaces). Workspaces that share an SP just reference the same key names.
 
-**What they do:** used **only** by the Enforcement Sentinel, which builds a client per target host and:
+**What they do:** used by the Enforcement Sentinel and the Preview Features tracker. The Sentinel builds a client per target host and:
 
 - **Scans workspace-scoped resources** in that workspace and remediates them per policy (warn / kill / disable): jobs, clusters/compute, apps, SQL warehouses, notebooks, dashboards, volumes, Genie spaces, service principals, Lakebase.
 - **For the designated data-certification workspace only** (`SENTINEL_DATA_CERT_WORKSPACE` — data certification is metastore/Unity-Catalog scoped, so it runs once, not per workspace): discovers each data product's tables, reads their tags + DQ history, and applies/removes `system.certification_status`.
+
+The **Preview Features** tracker also uses each target SP in its own workspace. The daily sync reads that workspace's preview list and values (`GET /api/2.1/settings-metadata` and `/api/2.1/settings/{name}`), which any workspace user can do. After a request is approved, it turns workspace previews on or off (`PATCH /api/2.1/settings/{name}`), which needs **workspace admin**. A workspace whose SP isn't admin falls back to a manual Implement task. Account-level previews are never changed by the app, because it has no account-admin credential.
 
 This SP is also the app's **governance identity**: every metastore-global governance read runs as it, pinned to the home host + `DATABRICKS_WAREHOUSE_ID` (see `get_governance_uc_provider`). That covers the data-asset cache sync behind Discover, data-contract (`dataset` tag) discovery, ODCS metadata drafting, and tag-manager discovery and search (tag filters read `system.information_schema.table_tags`). In Local Execution Mode the Tag Management page also *writes* table, view and column tags as this SP, which is what its `APPLY TAG` grant below is for. Grant it `BROWSE` on every governed catalog or those features quietly return nothing — Unity Catalog metadata is permission-filtered, so a missing grant looks like "no tagged tables" rather than an error.
 
@@ -120,7 +122,7 @@ GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<
 | `CAN USE` | SQL warehouse | ✓ | ✓ | Runs each SP's SQL. The cert SP needs `CAN USE` on the **home** warehouse too, since governance discovery runs there |
 | `CAN QUERY` | model-serving endpoint | ✓ | — | Assistant + ODCS drafting (app only) |
 | `READ` | target-SP secret scope | ✓ | — | App loads each target SP's credentials |
-| Workspace admin | target workspace | ✓ (home) | ✓ | Scan/remediate jobs, clusters, apps, warehouses, … |
+| Workspace admin | target workspace | ✓ (home) | ✓ | Scan/remediate jobs, clusters, apps, warehouses, …; turn approved previews on/off |
 
 `✓*` = conditional (only when the RBAC / access-controls certification check is enabled).
 `✓†` = only the Sentinel SP for the data-certification workspace (`SENTINEL_DATA_CERT_WORKSPACE`) needs the Unity Catalog grants; SPs that only scan workspace resources don't.

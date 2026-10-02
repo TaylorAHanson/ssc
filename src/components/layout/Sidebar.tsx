@@ -27,6 +27,7 @@ import {
   Eraser,
   Wrench,
   ScrollText,
+  FlaskConical,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { renderNavIcon } from '../../lib/navIcons';
@@ -187,6 +188,14 @@ const navItems: NavItem[] = [
     title: 'Tool Registry',
     icon: <Wrench className="w-5 h-5" />,
     path: '/build/tool-registry',
+    group: 'Control Tower',
+    allowedPersonas: ['Platform Admin', 'Governance Admin']
+  },
+  {
+    id: 'preview_features',
+    title: 'Preview Features',
+    icon: <FlaskConical className="w-5 h-5" />,
+    path: '/build/preview-features',
     group: 'Control Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },

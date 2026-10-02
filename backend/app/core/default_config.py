@@ -146,6 +146,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "tool_registry": True,
         "training_admin": True,
         "skills": True,
+        # Preview Features tracker: the daily preview sync and its page.
+        "preview_features": True,
         # Verbose landing header (brand title and greeting). False = clean,
         # minimal landing page.
         "enhanced_landing_page": False,
@@ -177,6 +179,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "tool_registry": True,
             "feedback": True,
             "training_admin": True,
+            "preview_features": True,
         },
     },
 
@@ -205,6 +208,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "get_credential_list": True,
         "check_workspace_path": True,
         "get_target_workspaces": True,
+        # Preview Features: explain a preview and its per-workspace status before a request.
+        "find_preview_features": True,
         # SDK "ping" of target workspaces to prove cross-VPC reachability.
         "ping_workspaces": False,
         "ping_url": True,

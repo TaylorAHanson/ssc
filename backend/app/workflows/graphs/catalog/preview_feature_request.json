@@ -1,0 +1,66 @@
+{
+  "key": "preview_feature_request",
+  "name": "preview_feature_request",
+  "complete_fact": "preview_feature_verified",
+  "stages": [
+    {
+      "kind": "step",
+      "name": "assess",
+      "tool": "assess_preview_feature",
+      "running_status": "manager_approval",
+      "writes_context": ["scope"],
+      "args": {
+        "feature": {"$var": {"path": "feature", "default": null}},
+        "action": {"$var": {"path": "action", "default": "enable"}},
+        "targets": {"$var": {"path": "targets", "default": []}},
+        "justification": {"$var": {"path": "justification", "default": ""}}
+      }
+    },
+    {
+      "kind": "gate",
+      "name": "approve",
+      "type": "platform_admin",
+      "waiting_status": "manager_approval"
+    },
+    {
+      "kind": "step",
+      "name": "mark_approved",
+      "tool": "set_preview_target_status",
+      "args": {"status": "approved"}
+    },
+    {
+      "kind": "step",
+      "name": "apply",
+      "tool": "set_preview_setting",
+      "running_status": "manual_task_pending",
+      "run_if": {"$eq": [{"$var": "scope"}, "workspace"]},
+      "writes_context": ["needs_manual", "applied_targets", "manual_targets"],
+      "args": {}
+    },
+    {
+      "kind": "gate",
+      "name": "implement",
+      "type": "manual_task",
+      "auto_approve": {"$and": [
+        {"$eq": [{"$var": "scope"}, "workspace"]},
+        {"$eq": [{"$var": "needs_manual"}, false]}
+      ]},
+      "instructions": "Make the change the reports above say is still needed. For an account-level preview, an account admin opens the account console, goes to Previews, and turns the preview on (or off, for a disable request). For a workspace listed as needing a manual change, a workspace admin opens Settings > Previews in that workspace and does the same. Mark this task done when finished; the next step checks the result, and for previews no workspace can read, your completion is recorded as the confirmation.",
+      "due_in_days": 7
+    },
+    {
+      "kind": "step",
+      "name": "verify",
+      "tool": "verify_preview_setting",
+      "args": {}
+    }
+  ],
+  "on_reject": [
+    {
+      "kind": "step",
+      "name": "mark_rejected",
+      "tool": "set_preview_target_status",
+      "args": {"status": "rejected"}
+    }
+  ]
+}

@@ -11,6 +11,19 @@ Format rules (the app parses this file, so keep to them):
   subheading. Plain markdown only.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 1.3.0 — 2026-10-02
+
+### Preview Features
+
+- A new **Preview Features** page (under Control Tower) lists the Databricks Beta, Public Preview and visible Private Preview features available in each of your target workspaces, refreshed daily. Workspace-level and account-level previews are on separate tabs, and features that become generally available drop off the list automatically.
+- Each feature shows its description, a link to its documentation when one can be found (marked "suggested" when it was matched by name), and a link to the release note that announced it. You can set your own docs link if the one found is wrong.
+- Every workspace has its own status for each feature: not requested, requested, approved or implemented. The page also shows features that are already on, and flags any that were implemented but have since been turned off.
+- Select **Request**, choose one or more workspaces and add a justification to start a request. One approval covers every workspace in the request. After approval, the app turns workspace previews on itself and checks that the change took effect. Account-level previews, and any workspace where the automatic change fails, go to an Implement task for a person to complete.
+- **Request turn off** turns a preview off through the same approval process.
+- If you can approve a request, an **Approve** button appears on the feature's row, so you don't have to leave the page.
+- You can also ask the agent to turn a preview on or off. It looks the feature up, explains what it does, its phase and where it's already on, checks it's the right feature (and suggests a better fit if there is one), and confirms the details with you before submitting the request.
+- Approvers and implementers are set on the Preview Feature Request workflow in Workflow Studio. The sync schedule and sources are under Admin → Settings → Preview Features.
+
 ## 1.2.0 — 2026-10-01
 
 ### Tag Management

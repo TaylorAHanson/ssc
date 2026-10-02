@@ -42,9 +42,11 @@ def _collect_vars(node: Any, found: List[str]) -> None:
     """Recursively collect ``$var`` references in first-seen order."""
     if isinstance(node, dict):
         for key, value in node.items():
-            if key == "$var" and isinstance(value, str):
-                if value not in found:
-                    found.append(value)
+            # Both forms: {"$var": "name"} and {"$var": {"path": "name", "default": ...}}.
+            path = value.get("path") if key == "$var" and isinstance(value, dict) else value
+            if key == "$var" and isinstance(path, str):
+                if path not in found:
+                    found.append(path)
             else:
                 _collect_vars(value, found)
     elif isinstance(node, list):
@@ -85,11 +87,26 @@ def is_auto_baseline(instructions_md: str | None) -> bool:
     return AUTO_BASELINE_MARKER in (instructions_md or "")
 
 
+def _step_outputs(spec: Dict[str, Any]) -> Set[str]:
+    """Context keys a stage writes for later stages (``writes_context``).
+
+    A gate or step that reads one of these (``data_owners`` from a resolve step,
+    ``needs_manual`` from an apply step) is reading the workflow's own output, not
+    something the agent should ask the user for.
+    """
+    out: Set[str] = set()
+    for stage in (spec or {}).get("stages", []) or []:
+        if isinstance(stage, dict):
+            out.update(k for k in (stage.get("writes_context") or []) if isinstance(k, str))
+    return out
+
+
 def _user_inputs(spec: Dict[str, Any]) -> List[str]:
-    """The user-supplied ``$var`` inputs a spec's steps reference, in first-seen order."""
+    """The user-supplied ``$var`` inputs a spec's stages reference, in first-seen order."""
     all_vars: List[str] = []
     _collect_vars((spec or {}).get("stages", []) or [], all_vars)
-    return [v for v in all_vars if v not in _PLATFORM_VARS]
+    produced = _step_outputs(spec)
+    return [v for v in all_vars if v not in _PLATFORM_VARS and v not in produced]
 
 
 def execution_contract(

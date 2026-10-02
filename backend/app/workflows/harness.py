@@ -91,6 +91,21 @@ def _install_fakes():
     settings.GOVERNANCE_TAGS_REPO = settings.GOVERNANCE_TAGS_REPO or "tag-manager"
     settings.GOVERNANCE_TAGS_BASE_BRANCH = settings.GOVERNANCE_TAGS_BASE_BRANCH or "dev"
 
+    # Preview-feature steps read and write the tracker's tables; stand in for
+    # them so the graph's shape (approve -> automatic change -> Implement skipped
+    # -> verify) runs without a database.
+    import app.services.preview_features.steps as preview_steps
+    preview_steps.assess = lambda *a, **k: {"summary": "hermetic", "targets": ["ws-1"], "scope": "workspace"}
+    preview_steps.set_status = lambda *a, **k: {"updated": 1}
+
+    async def _preview_apply(*a, **k):
+        return {"needs_manual": False, "applied_targets": ["ws-1"], "manual_targets": []}
+
+    async def _preview_verify(*a, **k):
+        return {"verified": ["ws-1"], "pending": []}
+    preview_steps.apply = _preview_apply
+    preview_steps.verify = _preview_verify
+
     fake = _FakeProvider()
     for getter in ("_get_databricks_provider", "_get_github_provider",
                    "_get_gitops_provider", "_get_notification_provider",

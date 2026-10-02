@@ -89,6 +89,17 @@
       "github_add_team_members"
     ]
   },
+  "preview_feature_request": {
+    "gates": 1,
+    "mutating": 3,
+    "status": "completed",
+    "tools": [
+      "assess_preview_feature",
+      "set_preview_target_status",
+      "set_preview_setting",
+      "verify_preview_setting"
+    ]
+  },
   "project_onboarding": {
     "gates": 4,
     "mutating": 2,

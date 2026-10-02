@@ -31,6 +31,7 @@ import { ContextCatalog } from './pages/admin/ContextCatalog';
 import { Workflows } from './pages/admin/Workflows';
 import { ToolRegistry } from './pages/admin/ToolRegistry';
 import { TrainingAdmin } from './pages/admin/TrainingAdmin';
+import { PreviewFeatures } from './pages/admin/PreviewFeatures';
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -192,6 +193,16 @@ function App() {
               element={
                 <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
                   <TrainingAdmin />
+                </ProtectedRoute>
+              }
+            />
+          )}
+          {uiTabs?.preview_features !== false && (
+            <Route
+              path="/build/preview-features"
+              element={
+                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                  <PreviewFeatures />
                 </ProtectedRoute>
               }
             />

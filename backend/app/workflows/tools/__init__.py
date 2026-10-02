@@ -109,6 +109,12 @@ from app.workflows.tools.membership import (
     add_group_membership,
     send_notification,
 )
+from app.workflows.tools.preview_features import (
+    assess_preview_feature,
+    set_preview_setting,
+    set_preview_target_status,
+    verify_preview_setting,
+)
 from app.workflows.tools.sentinel import (
     sentinel_discover,
     sentinel_enforce,
@@ -170,6 +176,11 @@ __all__ = [
     "NotifyInput",
     "add_group_membership",
     "send_notification",
+    # Preview features
+    "assess_preview_feature",
+    "set_preview_setting",
+    "set_preview_target_status",
+    "verify_preview_setting",
     # Sentinel
     "sentinel_discover",
     "sentinel_enforce",
