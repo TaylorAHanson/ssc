@@ -4,8 +4,12 @@
                                              target workspaces, and sync status
 - ``POST /preview-features/sync``             start a sync now (runs in the background)
 - ``GET  /preview-features/sync``             the last / running sync
+- ``POST /preview-features``                  add a feature by hand (not listed by Databricks yet)
 - ``POST /preview-features/{id}/requests``    open an enable or disable request
+- ``POST /preview-features/{id}/match``       replace a hand-added feature with the synced one
 - ``PATCH /preview-features/{id}``            admin overrides: scope, docs link, probe
+                                             (and name, description, phase for hand-added ones)
+- ``DELETE /preview-features/{id}``           remove a hand-added feature
 
 Gated by the ``preview_features`` feature flag. The logic lives in
 ``app.services.preview_features``; this module is HTTP.
@@ -68,6 +72,15 @@ class PreviewTarget(BaseModel):
     note: Optional[str] = None
 
 
+class MatchSuggestion(BaseModel):
+    id: str
+    display_name: str
+    setting_name: Optional[str] = None
+    scope: str
+    # First seen after the hand-added feature was created: when its setting would appear.
+    new_since_added: bool = False
+
+
 class PreviewFeature(BaseModel):
     id: str
     setting_name: Optional[str] = None
@@ -88,6 +101,14 @@ class PreviewFeature(BaseModel):
     last_seen_at: Optional[datetime] = None
     archived_at: Optional[datetime] = None
     archived_reason: Optional[str] = None
+    # "manual" when an admin added it by hand.
+    origin: Optional[str] = None
+    created_by: Optional[str] = None
+    replaced_by: Optional[str] = None
+    # Hand-added features: synced features that look like the same thing.
+    match_suggestions: List[MatchSuggestion] = []
+    # Synced features: names of hand-added features matched into this one.
+    matched_from: List[str] = []
     targets: List[PreviewTarget] = []
 
 
@@ -127,6 +148,28 @@ class PreviewFeatureUpdate(BaseModel):
     docs_link: Optional[str] = None
     # A read-only REST GET path (e.g. /api/2.0/...) whose success means the feature is on. "" clears it.
     probe_path: Optional[str] = None
+    # Hand-added features only; synced ones take these from Databricks.
+    display_name: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=4000)
+    phase: Optional[str] = None
+
+
+class ManualFeatureCreate(BaseModel):
+    display_name: str = Field(..., max_length=200)
+    description: Optional[str] = Field(default=None, max_length=4000)
+    scope: str = Field(default="workspace", description="workspace | account")
+    phase: Optional[str] = Field(default="PRIVATE_PREVIEW", description="BETA | PUBLIC_PREVIEW | PRIVATE_PREVIEW")
+    docs_link: Optional[str] = None
+
+
+class MatchRequest(BaseModel):
+    feature_id: str = Field(..., description="The synced feature that replaces the hand-added one")
+
+
+class MatchResponse(BaseModel):
+    feature: PreviewFeature
+    moved_targets: List[str]
+    request_ids: List[str]
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +218,10 @@ def _pending_approvals(db: Session, request_ids, user) -> Dict[str, Dict[str, An
 
 def _serialize(feature: PreviewFeatureModel, rows: List[PreviewFeatureTargetModel],
                request_status: Dict[str, str],
-               approvals: Optional[Dict[str, Dict[str, Any]]] = None) -> PreviewFeature:
+               approvals: Optional[Dict[str, Dict[str, Any]]] = None,
+               *,
+               suggestions: Optional[List[Dict[str, Any]]] = None,
+               matched_from: Optional[List[str]] = None) -> PreviewFeature:
     data = {c.name: getattr(feature, c.name) for c in PreviewFeatureModel.__table__.columns}
     data["scope"] = data.get("scope") or "workspace"
     data["scope_source"] = data.get("scope_source") or "api"
@@ -191,6 +237,8 @@ def _serialize(feature: PreviewFeatureModel, rows: List[PreviewFeatureTargetMode
     return PreviewFeature(
         **{k: v for k, v in data.items() if k in PreviewFeature.model_fields and k != "targets"},
         targets=targets,
+        match_suggestions=[MatchSuggestion(**s) for s in suggestions or []],
+        matched_from=matched_from or [],
     )
 
 
@@ -232,15 +280,104 @@ def list_preview_features(
 
     approvals = _pending_approvals(db, request_ids, current_user)
 
+    from app.services.preview_features import manual
+
+    suggestions = {
+        f.id: manual.suggestions(f, features) for f in features if manual.is_manual(f) and not f.archived_at
+    }
+    matched_from: Dict[str, List[str]] = {}
+    for name, real_id in (
+        db.query(PreviewFeatureModel.display_name, PreviewFeatureModel.replaced_by)
+        .filter(PreviewFeatureModel.replaced_by.isnot(None)).all()
+    ):
+        matched_from.setdefault(real_id, []).append(name)
+
     workspaces = [
         TargetWorkspace(name=w.name, environment=w.environment, host=w.host)
         for w in get_target_workspaces()
     ]
     return PreviewFeaturesResponse(
-        features=[_serialize(f, rows_by_feature.get(f.id, []), request_status, approvals) for f in features],
+        features=[
+            _serialize(f, rows_by_feature.get(f.id, []), request_status, approvals,
+                       suggestions=suggestions.get(f.id), matched_from=matched_from.get(f.id))
+            for f in features
+        ],
         workspaces=workspaces,
         sync=_sync_status(db),
     )
+
+
+def _rows(db: Session, feature: PreviewFeatureModel) -> List[PreviewFeatureTargetModel]:
+    return db.query(PreviewFeatureTargetModel).filter(PreviewFeatureTargetModel.feature_id == feature.id).all()
+
+
+@router.post("", response_model=PreviewFeature, status_code=201)
+def create_manual_feature(
+    payload: ManualFeatureCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_any_role(_ADMIN_ROLES)),
+):
+    """Add a preview Databricks doesn't list yet. It's requested like any other one."""
+    _require_feature()
+    from app.services.preview_features import manual
+
+    try:
+        feature = manual.create(
+            db, display_name=payload.display_name, description=payload.description, scope=payload.scope,
+            phase=payload.phase, docs_link=payload.docs_link, user_email=current_user.email,
+        )
+    except manual.ManualFeatureError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    db.commit()
+    db.refresh(feature)
+    return _serialize(feature, _rows(db, feature), {})
+
+
+@router.post("/{feature_id}/match", response_model=MatchResponse)
+def match_manual_feature(
+    feature_id: str,
+    payload: MatchRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_any_role(_ADMIN_ROLES)),
+):
+    """Replace a hand-added feature with the synced one, carrying its requests and statuses over."""
+    _require_feature()
+    from app.services.preview_features import manual
+
+    hand_added = _load_feature(db, feature_id)
+    real = _load_feature(db, payload.feature_id)
+    try:
+        result = manual.match(db, hand_added, real, user_email=current_user.email)
+    except manual.ManualFeatureError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    db.commit()
+    db.refresh(real)
+    return MatchResponse(
+        feature=_serialize(real, _rows(db, real), {}, matched_from=[hand_added.display_name]),
+        moved_targets=result.moved_targets,
+        request_ids=result.request_ids,
+    )
+
+
+@router.delete("/{feature_id}", status_code=204)
+def remove_manual_feature(
+    feature_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_any_role(_ADMIN_ROLES)),
+):
+    """Take a hand-added feature off the list. Its past requests keep their history."""
+    _require_feature()
+    from app.services.preview_features import manual
+
+    feature = _load_feature(db, feature_id)
+    try:
+        manual.remove(db, feature, user_email=current_user.email)
+    except manual.ManualFeatureError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    db.commit()
 
 
 @router.get("/sync", response_model=SyncStatus)
@@ -315,14 +452,26 @@ def update_preview_feature(
     db: Session = Depends(get_db),
     current_user=Depends(require_any_role(_ADMIN_ROLES)),
 ):
-    """Admin overrides that later syncs keep: scope, docs link and verification probe."""
+    """Admin overrides that later syncs keep: scope, docs link and verification probe.
+
+    Hand-added features can also be renamed, described and re-phased.
+    """
     _require_feature()
     import re
     import uuid
 
     from app.db.preview_feature import ACCOUNT_TARGET
+    from app.services.preview_features import manual
 
     feature = _load_feature(db, feature_id)
+    hand_added = manual.is_manual(feature)
+    if any(v is not None for v in (payload.display_name, payload.description, payload.phase)):
+        try:
+            manual.update(db, feature, display_name=payload.display_name,
+                          description=payload.description, phase=payload.phase)
+        except manual.ManualFeatureError as e:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(e))
     if payload.scope is not None:
         if payload.scope not in _SCOPES:
             raise HTTPException(status_code=400, detail="scope must be 'workspace' or 'account'")
@@ -332,10 +481,12 @@ def update_preview_feature(
         ).first()
         if in_flight and payload.scope != feature.scope:
             raise HTTPException(status_code=409, detail="Finish or close the open request before changing scope")
-        if payload.scope == "workspace" and not feature.setting_name:
+        if payload.scope == "workspace" and not feature.setting_name and not hand_added:
             raise HTTPException(status_code=400, detail="Only previews listed by a workspace can be workspace-scoped")
         feature.scope = payload.scope
         feature.scope_source = "admin"
+        if hand_added and payload.scope == "workspace":
+            manual.set_scope(db, feature, "workspace")
         if payload.scope == "account" and not db.query(PreviewFeatureTargetModel).filter(
             PreviewFeatureTargetModel.feature_id == feature.id,
             PreviewFeatureTargetModel.target == ACCOUNT_TARGET,
@@ -357,6 +508,9 @@ def update_preview_feature(
         feature.probe = {"type": "rest", "path": path} if path else None
     db.commit()
     db.refresh(feature)
-    rows = db.query(PreviewFeatureTargetModel).filter(PreviewFeatureTargetModel.feature_id == feature.id).all()
     logger.info("Preview feature %s updated by %s", feature.id, current_user.email)
-    return _serialize(feature, rows, {})
+    suggestions = None
+    if hand_added:
+        active = db.query(PreviewFeatureModel).filter(PreviewFeatureModel.archived_at.is_(None)).all()
+        suggestions = manual.suggestions(feature, active)
+    return _serialize(feature, _rows(db, feature), {}, suggestions=suggestions)

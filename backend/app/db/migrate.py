@@ -264,6 +264,11 @@ def run_startup_migrations(engine: Engine) -> None:
         # optional SLA so an indefinitely-parked task can be surfaced as overdue.
         _add_column(engine, "approvals", "instructions", "TEXT")
         _add_column(engine, "approvals", "due_at", "TIMESTAMP")
+        # Preview features added by hand before Databricks lists them, and the
+        # synced feature each one is later matched into.
+        _add_column(engine, "preview_features", "origin", "VARCHAR")
+        _add_column(engine, "preview_features", "created_by", "VARCHAR")
+        _add_column(engine, "preview_features", "replaced_by", "VARCHAR")
         _prune_orphaned_workflow_children(engine)
     except Exception as e:  # noqa: BLE001 - never block startup on a migration
         logger.warning("Startup migration step failed (continuing): %s", e)

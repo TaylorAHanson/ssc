@@ -14,6 +14,9 @@ One run:
 5. Fill missing docs links from the docs sitemap ("suggested").
 6. Re-verify targets whose request is approved but not yet verified.
 
+Features added by hand (``origin == "manual"``) are never edited or archived
+here; they only get a target row for each new workspace.
+
 Network calls happen outside the DB transaction; all writes are one commit.
 """
 from __future__ import annotations
@@ -34,6 +37,7 @@ from app.core.config import settings
 from app.core.workspaces import WorkspaceConfig, get_target_workspaces
 from app.db.preview_feature import ACCOUNT_TARGET, PreviewFeatureModel, PreviewFeatureTargetModel
 from app.services.preview_features import feed as feed_mod
+from app.services.preview_features import manual as manual_mod
 from app.services.preview_features import settings_api
 from app.services.preview_features.docs import exact_doc, suggest_doc
 from app.services.preview_features.status import close_inflight_requests, record_verification
@@ -229,6 +233,12 @@ def apply_sync(
             if row.status == "implemented" and value is not None and value.effective is not None:
                 wanted = row.action != "disable"
                 row.drift = value.effective != wanted
+
+    # Features added by hand aren't listed anywhere; keep them requestable in
+    # every target workspace, including ones added since.
+    for feature in features:
+        if feature.origin == manual_mod.MANUAL and not feature.archived_at and feature.scope != "account":
+            manual_mod.ensure_workspace_targets(db, feature, [s.name for s in scans])
 
     # --- 4a. GA / retired API features --------------------------------------
     retire_after = max(1, int(getattr(settings, "PREVIEW_FEATURE_RETIRE_AFTER_SYNCS", 3) or 3))

@@ -11,6 +11,20 @@ Format rules (the app parses this file, so keep to them):
   subheading. Plain markdown only.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 1.4.0 — 2026-10-05
+
+### Preview Features
+
+- You can now add a preview that Databricks hasn't announced or listed yet, such as one your account team is turning on for you. Select **Add feature**, give it a name, a description, whether it's turned on per workspace or for the account, and its phase. It's requested and approved like any other preview. Because there's no setting to switch yet, a person arranges the change, and completing the Implement task records it as done. Hand-added features are marked **Added by hand**, and you can rename, re-describe or remove them from the feature's details.
+- When Databricks starts listing the real setting, select **Match** on the hand-added feature and pick the setting it became. Likely matches are suggested, and the row shows **Setting may have appeared** when one turns up after the feature was added. Matching moves open requests, approvals and implemented statuses over to the real setting, so it can be switched and checked automatically from then on, and the hand-added entry is removed.
+- The agent can also find and request hand-added features, and explains that a person arranges the change with Databricks.
+- The Preview Features page now handles any number of target workspaces. With up to six workspaces you still get one status column per workspace. With more, the table shows one summary per feature, such as "3 Requested, 12 Already on, 85 Not requested", with the most urgent statuses first. Hover a count to see which workspaces it includes, and expand a feature to search its status in every workspace.
+- Narrow the Workspace previews tab to the workspaces you care about: filter by environment, or type part of a workspace name. Pick a single workspace to see just its column.
+- When you request a preview, you can now search the workspace list, see how many workspaces you've selected, and select every eligible workspace that matches your search.
+- If many workspaces fail to sync, the warning names the first few and keeps the full error list behind **Show errors**.
+- Account previews is now the first tab.
+- Each feature's phase (Beta, Public Preview or Private Preview) now has its own column, so the list is easier to scan.
+
 ## 1.3.0 — 2026-10-02
 
 ### Preview Features

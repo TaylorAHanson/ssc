@@ -127,17 +127,26 @@ def assess(
             lines += ["", safe_text(feature.description, 800)]
         if feature.announcement_text and feature.announcement_text != feature.description:
             lines += ["", f"_Announcement:_ {safe_text(feature.announcement_text, 800)}"]
+        manual = feature.origin == "manual"
         lines += ["", "| Target | Listed | Current value |", "|---|---|---|"]
         for r in sorted(rows, key=lambda r: r.target):
-            listed = "yes" if (r.available or r.target == ACCOUNT_TARGET) else "**no**"
+            if manual:
+                listed = "added by hand"
+            else:
+                listed = "yes" if (r.available or r.target == ACCOUNT_TARGET) else "**no**"
             lines.append(f"| {safe_text(target_label(r.target), 120)} | {listed} | {_value_label(r)} |")
         notes = []
-        if feature.scope != "account" and feature.value_type == "boolean":
+        if manual:
+            notes.append("This feature was added by hand because Databricks doesn't list it yet, so a person "
+                         "makes the change (usually by asking the Databricks account team). Completing the "
+                         "Implement task records the confirmation. If its setting appears later, an admin "
+                         "matches it and the setting is checked from then on.")
+        elif feature.scope != "account" and feature.value_type == "boolean":
             notes.append("After approval the workspace service principal changes the setting itself; "
                          "any workspace where that fails goes to a manual task.")
         elif feature.scope != "account":
             notes.append("This setting isn't a simple on/off switch, so a person makes the change.")
-        if feature.scope == "account":
+        if feature.scope == "account" and not manual:
             notes.append("Account previews are changed by an account admin in the account console, "
                          "so approval creates a manual task.")
         if action == "disable":
@@ -219,7 +228,9 @@ async def apply(request_id: str) -> Dict[str, Any]:
             asyncio.to_thread(_apply_one, feature, target, wanted) for target, wanted in work
         ))
     else:
-        results = [{"target": t, "outcome": "manual", "reason": "not an on/off setting"} for t, _ in work]
+        reason = ("added by hand; Databricks doesn't list a setting for it yet" if feature.origin == "manual"
+                  else "not an on/off setting")
+        results = [{"target": t, "outcome": "manual", "reason": reason} for t, _ in work]
 
     db = _session()
     try:
@@ -254,7 +265,12 @@ async def apply(request_id: str) -> Dict[str, Any]:
         else:
             outcome = f"**manual change needed**: {safe_text(r.get('reason'), 240)}"
         lines.append(f"| {safe_text(r['target'], 120)} | {outcome} |")
-    if manual:
+    if manual and feature.origin == "manual":
+        lines += ["", f"**What's left to do:** ask Databricks (usually your account team) to turn "
+                  f"**{safe_text(feature.display_name, 200)}** {verb} for each workspace marked *manual change "
+                  "needed*, or have a workspace admin do it under **Settings → Previews** if it shows up there. "
+                  "Then mark the Implement task done."]
+    elif manual:
         lines += ["", "**What's left to do:** in each workspace marked *manual change needed*, a workspace "
                   f"admin opens **Settings → Previews** and turns **{safe_text(feature.display_name, 200)}** "
                   f"{verb}. Then mark the Implement task done."]

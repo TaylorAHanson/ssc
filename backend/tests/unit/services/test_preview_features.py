@@ -602,6 +602,158 @@ def test_https_url_only():
     assert feed.https_url(None) is None
 
 
+# ---------------------------------------------------------------------------
+# Features added by hand, and matching them to the synced feature
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def hand_added(db_session, monkeypatch):
+    from app.services.preview_features import manual
+
+    monkeypatch.setattr(manual, "_target_workspace_names", lambda: ["ws1", "ws2", "ws3"])
+
+    def make(name="Aha connector early access", scope="workspace"):
+        f = manual.create(db_session, display_name=name, description="Told about it by the account team.",
+                          scope=scope, phase=None, docs_link=None, user_email="admin@x.com")
+        # Added before the sync found anything, as in real life.
+        f.first_seen_at = datetime.utcnow() - timedelta(days=3)
+        db_session.flush()
+        return f
+    return make
+
+
+def test_manual_feature_is_requestable_and_left_alone_by_sync(db_session, hand_added, items):
+    f = hand_added()
+    assert f.origin == "manual" and f.phase == "PRIVATE_PREVIEW" and f.scope == "workspace"
+    assert {r.target: r.available for r in db_session.query(PreviewFeatureTargetModel).filter_by(feature_id=f.id)} \
+        == {"ws1": True, "ws2": True, "ws3": True}
+    request_flow.open_request(db_session, f, action="enable", targets=["ws1", "ws2"], justification=None,
+                              user_email="a@x.com")
+
+    sync.apply_sync(db_session, [_scan("ws1", []), _scan("ws4", [])], items, [])
+    sync.apply_sync(db_session, [_scan("ws1", []), _scan("ws4", [])], items, [])
+    db_session.flush()
+    assert f.archived_at is None and f.phase == "PRIVATE_PREVIEW" and f.display_name == "Aha connector early access"
+    assert _target(db_session, f, "ws4").available is True
+    assert _target(db_session, f, "ws1").status == "requested"
+
+
+def test_manual_feature_rejects_duplicates_and_bad_input(db_session, hand_added):
+    from app.services.preview_features import manual
+
+    hand_added("Secret Thing")
+    for kwargs, why in [
+        ({"display_name": "secret   thing"}, "already on the list"),
+        ({"display_name": "  "}, "Give the feature a name"),
+        ({"display_name": "Other", "scope": "galaxy"}, "Scope must be"),
+        ({"display_name": "Other", "phase": "GA"}, "Phase must be"),
+        ({"display_name": "Other", "docs_link": "javascript:alert(1)"}, "https URL"),
+    ]:
+        args = {"description": None, "scope": "workspace", "phase": None, "docs_link": None,
+                "user_email": "a@x.com", **kwargs}
+        with pytest.raises(manual.ManualFeatureError, match=why):
+            manual.create(db_session, **args)
+
+
+def test_manual_request_goes_to_a_person_and_is_attested(step_db, hand_added):
+    f = hand_added()
+    rid = request_flow.open_request(step_db, f, action="enable", targets=["ws1"], justification=None,
+                                    user_email="a@x.com").request_id
+    assert "added by hand" in steps.assess(rid)["report_markdown"]
+    _approve(step_db, rid)
+    steps.set_status(rid, "approved")
+    res = asyncio.run(steps.apply(rid))
+    assert res["needs_manual"] is True
+    assert "Databricks doesn't list a setting" in res["manual_targets"][0]["reason"]
+    assert "account team" in res["report_markdown"]
+
+    _approve(step_db, rid, approval_type="manual_task", by="impl@x.com")
+    res = asyncio.run(steps.verify(rid))
+    row = _target(step_db, f, "ws1")
+    assert res["verified"] == ["ws1"] and row.status == "implemented" and row.verification == "attested"
+
+
+def test_match_moves_requests_onto_the_synced_feature(db_session, hand_added):
+    from app.services.preview_features import manual
+
+    f = hand_added()
+    rid = request_flow.open_request(db_session, f, action="enable", targets=["ws1", "ws2", "ws3"],
+                                    justification=None, user_email="a@x.com").request_id
+    for t in ("ws2", "ws3"):
+        _target(db_session, f, t).status = "approved"
+    db_session.flush()
+    aha = _seed(db_session)  # ws1 off, ws2 already on, ws3 doesn't list it
+
+    rbac = PreviewFeatureModel(id="rbac", setting_name="rbac", display_name="Role-based access control (RBAC)",
+                               scope="workspace", scope_source="api", first_seen_at=datetime.utcnow())
+    db_session.add(rbac)
+    db_session.flush()
+    suggested = manual.suggestions(f, db_session.query(PreviewFeatureModel).all())
+    # "access" alone doesn't make RBAC a match for "... early access".
+    assert [s["id"] for s in suggested] == [aha.id] and suggested[0]["new_since_added"] is True
+
+    result = manual.match(db_session, f, aha, user_email="admin@x.com")
+    db_session.flush()
+    assert result.moved_targets == ["ws1", "ws2", "ws3"] and result.request_ids == [rid]
+    assert f.archived_reason == "matched" and f.replaced_by == aha.id
+    assert db_session.query(PreviewFeatureTargetModel).filter_by(feature_id=f.id).count() == 0
+
+    ws1, ws2, ws3 = (_target(db_session, aha, t) for t in ("ws1", "ws2", "ws3"))
+    assert ws1.status == "requested" and ws1.request_id == rid and ws1.available is True
+    # Approved and the real setting is already on: done.
+    assert ws2.status == "implemented" and ws2.verification == "api"
+    # Not listed by that workspace yet, but the request still covers it.
+    assert ws3.status == "approved" and ws3.request_id == rid and ws3.available is False
+
+    req = db_session.get(RequestModel, rid)
+    assert req.state_context["feature"] == "aha_connector" and req.state_context["feature_id"] == aha.id
+    assert "Lakeflow Connect for Aha!" in req.title
+    assert db_session.query(EventModel).filter_by(request_id=rid, event_type="preview_feature_matched").count() == 1
+    # The workflow's next steps now work on the real setting.
+    assert steps._load(db_session, rid)[0].id == aha.id
+
+
+def test_match_refuses_scope_mismatch_and_busy_targets(db_session, hand_added, items):
+    from app.services.preview_features import manual
+
+    aha = _seed(db_session, items)
+    hub = db_session.query(PreviewFeatureModel).filter_by(feed_key="governance hub").one()
+
+    ws_manual = hand_added("Early thing")
+    request_flow.open_request(db_session, ws_manual, action="enable", targets=["ws1"], justification=None,
+                              user_email="a@x.com")
+    with pytest.raises(manual.ManualFeatureError, match="workspace-level but"):
+        manual.match(db_session, ws_manual, hub, user_email="admin@x.com")
+
+    request_flow.open_request(db_session, aha, action="enable", targets=["ws1"], justification=None,
+                              user_email="b@x.com")
+    with pytest.raises(manual.ManualFeatureError, match="already has its own open request for ws1"):
+        manual.match(db_session, ws_manual, aha, user_email="admin@x.com")
+
+    with pytest.raises(manual.ManualFeatureError, match="found by the sync"):
+        manual.match(db_session, ws_manual, hand_added("Another early thing"), user_email="admin@x.com")
+
+    # With nothing requested, scopes don't have to agree.
+    idle = hand_added("Idle thing", scope="account")
+    manual.match(db_session, idle, aha, user_email="admin@x.com")
+    assert idle.archived_reason == "matched"
+
+
+def test_remove_manual_feature_needs_no_open_request(db_session, hand_added):
+    from app.services.preview_features import manual
+
+    f = hand_added()
+    request_flow.open_request(db_session, f, action="enable", targets=["ws1"], justification=None,
+                              user_email="a@x.com")
+    with pytest.raises(manual.ManualFeatureError, match="open request"):
+        manual.remove(db_session, f, user_email="admin@x.com")
+    _target(db_session, f, "ws1").status = "rejected"
+    manual.remove(db_session, f, user_email="admin@x.com")
+    assert f.archived_reason == "removed"
+    with pytest.raises(manual.ManualFeatureError, match="Only features added by hand"):
+        manual.remove(db_session, _seed(db_session), user_email="admin@x.com")
+
+
 def test_run_sync_skips_when_one_is_running(monkeypatch):
     async def go():
         async with sync._lock:

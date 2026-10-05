@@ -84,12 +84,15 @@ def _targets(feature: PreviewFeatureModel, rows: List[PreviewFeatureTargetModel]
 
 
 def _summary(feature: PreviewFeatureModel) -> Dict[str, Any]:
-    return {
+    out = {
         "feature": feature.setting_name or feature.id,
         "name": feature.display_name,
         "phase": _PHASES.get(feature.phase or "", feature.phase),
         "scope": feature.scope,
     }
+    if feature.origin == "manual":
+        out["added_by_hand"] = True
+    return out
 
 
 def find(db: Session, query: str, workspaces: List[str], limit: int = 5) -> Dict[str, Any]:

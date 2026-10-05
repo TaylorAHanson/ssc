@@ -3827,7 +3827,29 @@ export interface PreviewFeature {
   last_seen_at?: string | null;
   archived_at?: string | null;
   archived_reason?: string | null;
+  // 'manual' when an admin added it by hand.
+  origin?: 'manual' | null;
+  created_by?: string | null;
+  replaced_by?: string | null;
+  match_suggestions?: PreviewMatchSuggestion[];
+  matched_from?: string[];
   targets: PreviewTarget[];
+}
+
+export interface PreviewMatchSuggestion {
+  id: string;
+  display_name: string;
+  setting_name?: string | null;
+  scope: string;
+  new_since_added: boolean;
+}
+
+export interface ManualPreviewFeatureCreate {
+  display_name: string;
+  description?: string;
+  scope: 'workspace' | 'account';
+  phase: 'BETA' | 'PUBLIC_PREVIEW' | 'PRIVATE_PREVIEW';
+  docs_link?: string;
 }
 
 export interface PreviewSyncWorkspace {
@@ -3898,12 +3920,45 @@ export async function requestPreviewFeature(
 
 export async function updatePreviewFeature(
   featureId: string,
-  body: { scope?: 'workspace' | 'account'; docs_link?: string; probe_path?: string },
+  body: {
+    scope?: 'workspace' | 'account';
+    docs_link?: string;
+    probe_path?: string;
+    // Hand-added features only.
+    display_name?: string;
+    description?: string;
+    phase?: string;
+  },
 ): Promise<PreviewFeature> {
   return previewFetch(`/${encodeURIComponent(featureId)}`, {
     method: 'PATCH',
     body: JSON.stringify(body),
   });
+}
+
+export async function createManualPreviewFeature(body: ManualPreviewFeatureCreate): Promise<PreviewFeature> {
+  return previewFetch('', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export async function matchPreviewFeature(
+  manualId: string,
+  featureId: string,
+): Promise<{ feature: PreviewFeature; moved_targets: string[]; request_ids: string[] }> {
+  return previewFetch(`/${encodeURIComponent(manualId)}/match`, {
+    method: 'POST',
+    body: JSON.stringify({ feature_id: featureId }),
+  });
+}
+
+export async function removePreviewFeature(featureId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/preview-features/${encodeURIComponent(featureId)}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Request failed: ${response.statusText}`);
+  }
 }
 
 export const api = {
@@ -4048,4 +4103,7 @@ export const api = {
   startPreviewSync,
   requestPreviewFeature,
   updatePreviewFeature,
+  createManualPreviewFeature,
+  matchPreviewFeature,
+  removePreviewFeature,
 };

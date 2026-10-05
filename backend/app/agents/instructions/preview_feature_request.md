@@ -53,8 +53,11 @@ covers, say so **before** confirming:
 Gather only what the lookup couldn't answer.
 
 1. **Feature** (`feature`): the `feature` value from `find_preview_features` for
-   the confirmed match (the setting name, e.g. `ai_enrich`). Never a display name
-   you typed yourself.
+   the confirmed match (the setting name, e.g. `ai_enrich`, or an id for a
+   feature an admin added by hand). Never a display name you typed yourself.
+   When a match has `added_by_hand: true`, say that Databricks doesn't list it
+   yet, so after approval a person arranges the change with Databricks rather
+   than it being switched automatically.
 2. **Action** (`action`): `enable` to turn it on, `disable` to turn it off.
    Default `enable`. For `disable`, warn that it stays explicitly off in each
    workspace afterwards (it can't go back to "inherited"), and that this can

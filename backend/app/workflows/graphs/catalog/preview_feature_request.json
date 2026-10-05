@@ -45,7 +45,7 @@
         {"$eq": [{"$var": "scope"}, "workspace"]},
         {"$eq": [{"$var": "needs_manual"}, false]}
       ]},
-      "instructions": "Make the change the reports above say is still needed. For an account-level preview, an account admin opens the account console, goes to Previews, and turns the preview on (or off, for a disable request). For a workspace listed as needing a manual change, a workspace admin opens Settings > Previews in that workspace and does the same. Mark this task done when finished; the next step checks the result, and for previews no workspace can read, your completion is recorded as the confirmation.",
+      "instructions": "Make the change the reports above say is still needed. For an account-level preview, an account admin opens the account console, goes to Previews, and turns the preview on (or off, for a disable request). For a workspace listed as needing a manual change, a workspace admin opens Settings > Previews in that workspace and does the same. For a feature that was added by hand because Databricks doesn't list it yet, ask your Databricks contact (usually the account team) to turn it on. Mark this task done when finished; the next step checks the result, and for previews no workspace can read, your completion is recorded as the confirmation.",
       "due_in_days": 7
     },
     {

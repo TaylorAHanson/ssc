@@ -2,7 +2,10 @@
 
 ``preview_features`` holds one row per feature, merged from two sources: the
 workspace Settings v2 metadata API (``setting_name`` set) and the public docs
-release-notes feed (feed-only account previews have no ``setting_name``).
+release-notes feed (feed-only account previews have no ``setting_name``). An
+admin can also add a feature by hand (``origin == "manual"``) before Databricks
+lists it anywhere; the sync never edits those, and once the real setting shows
+up the manual row is matched into it (``replaced_by``) and archived.
 
 ``preview_feature_targets`` holds one row per feature x target, where a target
 is a target-workspace name or ``__account__`` for account-scoped previews. Each
@@ -63,8 +66,13 @@ class PreviewFeatureModel(Base):
     # Consecutive syncs in which no workspace listed this setting.
     missing_syncs: Mapped[int] = Column(Integer, nullable=False, default=0)
     archived_at: Mapped[Optional[datetime]] = Column(DateTime, nullable=True)
-    # ga | retired
+    # ga | retired | matched (folded into ``replaced_by``) | removed (manual, by an admin)
     archived_reason: Mapped[Optional[str]] = Column(String, nullable=True)
+    # manual for features an admin added by hand; null for synced ones.
+    origin: Mapped[Optional[str]] = Column(String, nullable=True)
+    created_by: Mapped[Optional[str]] = Column(String, nullable=True)
+    # The synced feature a manual one was matched into.
+    replaced_by: Mapped[Optional[str]] = Column(String, nullable=True)
     raw: Mapped[Optional[dict]] = Column(JSON, nullable=True)
     updated_at: Mapped[datetime] = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
