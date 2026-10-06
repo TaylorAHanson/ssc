@@ -25,11 +25,13 @@ from app.workflows.tag_abac import abac_impacts, fetch_abac_references
 from app.workflows.tag_governed import GovernedTags, check_governed_values, fetch_governed_tags
 from app.workflows.tag_lint import LintFinding, run_lint_checks
 from app.workflows.tag_plan import (
+    CONTAINER_TYPES,
     DATASET_KEY,
     RESERVED_KEYS,
     TagPlan,
     TagVocabulary,
     build_tag_plan,
+    container_type,
     fetch_live_state,
     fetch_tag_vocabulary,
     is_reserved_key,
@@ -65,6 +67,10 @@ GITOPS_COLUMNS_UNSUPPORTED = (
     "Column tags can only be applied in Local Execution Mode. The governance "
     "repository's migration format covers table and view tags only."
 )
+GITOPS_CONTAINERS_UNSUPPORTED = (
+    "Catalog and schema tags and descriptions can only be applied in Local Execution Mode. "
+    "The governance repository's migration format covers table and view tags only."
+)
 
 
 class TagChangeError(ValueError):
@@ -73,9 +79,12 @@ class TagChangeError(ValueError):
 
 @dataclass
 class TagTarget:
+    # A catalog, schema, table or view name (the field predates catalogs and schemas).
     table: str
     desired_tags: Dict[str, str]
     column: Optional[str] = None
+    # Catalogs and schemas only. None leaves the description alone; "" clears it.
+    desired_comment: Optional[str] = None
 
 
 @dataclass
@@ -98,7 +107,12 @@ class TagChangeEvaluation:
         """The plan for display. In GitOps mode the statements shown are the ones
         committed to the governance repo, which use its own (contract) form."""
         data = self.plan.to_dict()
-        if not self.local_mode and self.changes and not self.plan.has_column_changes:
+        if (
+            not self.local_mode
+            and self.changes
+            and not self.plan.has_column_changes
+            and not self.plan.has_container_changes
+        ):
             data["statements"] = [s for s in build_tag_sql(self.changes).splitlines() if s]
         return data
 
@@ -157,11 +171,12 @@ def load_tag_policy() -> TagPolicy:
 
 
 def read_table_tags(provider, full_name: str) -> Dict[str, Optional[str]]:
-    """Read current UC tag key->value pairs for a table (excluding reserved keys)."""
+    """Read current UC tag key->value pairs for a catalog, schema or table (excluding reserved keys)."""
     tags: Dict[str, Optional[str]] = {}
+    entity_type = {"CATALOG": "catalogs", "SCHEMA": "schemas"}.get(container_type(full_name) or "", "tables")
     try:
         uc_tags = provider.client.entity_tag_assignments.list(
-            entity_type="tables", entity_name=full_name
+            entity_type=entity_type, entity_name=full_name
         )
         for t in uc_tags:
             key = getattr(t, "tag_key", None)
@@ -174,7 +189,7 @@ def read_table_tags(provider, full_name: str) -> Dict[str, Optional[str]]:
 
 def validate_targets(targets: List[TagTarget]) -> None:
     if not targets:
-        raise TagChangeError("No tables specified in payload.")
+        raise TagChangeError("No objects specified in payload.")
     if len(targets) > MAX_TARGETS:
         raise TagChangeError(
             f"This change touches {len(targets)} objects; the limit is {MAX_TARGETS}. "
@@ -185,6 +200,10 @@ def validate_targets(targets: List[TagTarget]) -> None:
             validate_target(t.table, t.column)
         except ValueError as e:
             raise TagChangeError(str(e)) from e
+        if t.desired_comment is not None and (t.column or not container_type(t.table)):
+            raise TagChangeError(
+                f"'{t.table}': descriptions can only be changed here for catalogs and schemas."
+            )
 
 
 def scope_label(
@@ -216,14 +235,15 @@ def evaluate(
     column_targets = [(t.table, t.column) for t in targets if t.column]
     live_state = fetch_live_state(provider, table_names, column_targets)
     payload = [
-        {"table": t.table, "column": t.column, "desired_tags": t.desired_tags} for t in targets
+        {"table": t.table, "column": t.column, "desired_tags": t.desired_tags, "desired_comment": t.desired_comment}
+        for t in targets
     ]
     plan = build_tag_plan(payload, live_state)
 
     changes: List[Dict[str, Any]] = []
     resulting_counts: Dict[str, int] = {}
     for diff in plan.diffs.values():
-        if diff.changed_keys:
+        if diff.has_changes:
             change: Dict[str, Any] = {
                 "table": diff.table,
                 "set": {k: diff.after[k] for k in diff.after if diff.before.get(k) != diff.after[k]},
@@ -232,6 +252,10 @@ def evaluate(
             # Table-level changes keep the exact shape the GitOps contract expects.
             if diff.column:
                 change["column"] = diff.column
+            if diff.object_type in CONTAINER_TYPES:
+                change["kind"] = diff.object_type.lower()
+            if diff.comment_changed:
+                change["comment"] = diff.comment_after
             changes.append(change)
             resulting_counts[diff.label] = len(diff.after)
 
@@ -249,6 +273,8 @@ def evaluate(
                 )
     if not local and plan.has_column_changes:
         violations.append(GITOPS_COLUMNS_UNSUPPORTED)
+    if not local and plan.has_container_changes:
+        violations.append(GITOPS_CONTAINERS_UNSUPPORTED)
 
     # Unity Catalog's own governed tags (allowed values) — otherwise only caught
     # when the statement fails, possibly after earlier statements have applied.
@@ -284,7 +310,7 @@ def evaluate(
     if abac_refs and abac_refs.unchecked:
         n = len(abac_refs.unchecked)
         warnings.append(
-            f"Couldn't read the access policies (ABAC) for {n} table{'s' if n != 1 else ''} "
+            f"Couldn't read the access policies (ABAC) for {n} object{'s' if n != 1 else ''} "
             f"({', '.join(abac_refs.unchecked[:3])}{', …' if n > 3 else ''}), so masking or row-filter "
             "impact wasn't checked there. The governance service principal needs READ METADATA on them."
         )
@@ -299,6 +325,7 @@ def evaluate(
         dataset_values=[v for v in (dataset_values or []) if v],
         dataset_key=DATASET_KEY,
         include_columns=bool(column_targets),
+        include_containers=any(container_type(t.table) for t in targets),
     )
     lint_findings = run_lint_checks(plan, vocabulary, policy)
     risk = calculate_risk_score(

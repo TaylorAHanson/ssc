@@ -152,9 +152,9 @@ const navItems: NavItem[] = [
   },
   {
     id: 'tag_management',
-    title: 'Tag Management',
+    title: 'Metadata Manager',
     icon: <Tags className="w-5 h-5" />,
-    path: '/governance/tags',
+    path: '/governance/metadata',
     group: 'Watch Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
   },

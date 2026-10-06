@@ -61,15 +61,16 @@ class AgentReviewResult:
         }
 
 
-SYSTEM_PROMPT = """You review requests that change Unity Catalog governance tags on tables, views, and their columns.
+SYSTEM_PROMPT = """You review requests that change Unity Catalog governance tags on catalogs, schemas, tables, views, and their columns, and the descriptions of catalogs and schemas.
 You advise the human administrator; you do not approve or block anything.
 
 Judge the change on:
 1. Whether the tag values look intentional and internally consistent.
 2. Whether access-control keys (access_group, approver_group) are changing in a way that deserves attention.
 3. Whether removals lose information that will be hard to reconstruct.
-4. Consistency across the tables (and columns) in the change.
+4. Consistency across the objects (and columns) in the change.
 5. Whether a column's sensitivity classification is being lowered or removed.
+6. Tags on a catalog or schema are inherited by everything inside it, so a change there reaches every table below.
 
 The syntax, the policy rules, and the tag limits have already been validated by separate deterministic checks. Do not re-report them.
 
@@ -109,13 +110,17 @@ async def request_agent_review(
     # Build prompt context
     diff_lines = []
     for diff in plan.diffs.values():
-        if diff.changed_keys:
+        if diff.has_changes:
             kind = f"column of a {diff.object_type.lower()}" if diff.column else diff.object_type
             diff_lines.append(f"Object: {diff.label} ({kind})")
             for k in diff.changed_keys:
                 old_val = diff.before.get(k, "<unset>")
                 new_val = diff.after.get(k, "<removed>")
                 diff_lines.append(f"  - {k}: {old_val} -> {new_val}")
+            if diff.comment_changed:
+                old_desc = (diff.comment_before or "<none>")[:300]
+                new_desc = (diff.comment_after or "<cleared>")[:300]
+                diff_lines.append(f"  - description: {old_desc!r} -> {new_desc!r}")
     diff_text = "\n".join(diff_lines)
 
     statements_text = "\n".join(p.sql for p in plan.actionable if p.sql)

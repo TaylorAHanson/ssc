@@ -64,7 +64,7 @@ Governance tools live in the left sidebar under two groups:
 | **Data Products (ODPS)** | The catalog of logical data products and their contracts. |
 | **Allowlist** | Approved exceptions to policy (things the Sentinel should leave alone). |
 | **Sentinel** | Run scans, read violation reports, and take action on findings. |
-| **Tag Management** | Manage the governance tags applied to data assets. |
+| **Metadata Manager** | Manage the governance tags on data assets, and catalog and schema descriptions. |
 
 **Control Tower** — configuration and building (mostly Platform Admin):
 
@@ -110,13 +110,13 @@ The heavy lifting is automated. Here is the flow and where you fit in:
 
 The **Data Products** page is the catalog of those logical products and their contracts. Use it to see what products exist, who owns them, and the state of their contracts. Think of it as the inventory that certification operates on.
 
-### 4.3 Tag Management
+### 4.3 Metadata Manager
 
-Tags are how data gets governed at scale — classification (PII and similar), ownership, domain, and the certification status itself all ride on tags. The **Tag Management** page is where you review and manage the governance tags applied across assets. Correct tags are a *precondition* for certification, so this page and the Data Certification page work hand in hand.
+Tags are how data gets governed at scale — classification (PII and similar), ownership, domain, and the certification status itself all ride on tags. The **Metadata Manager** page (formerly Tag Management) is where you review and manage the governance tags applied across catalogs, schemas, tables, views and columns, and the descriptions of catalogs and schemas. Correct tags and descriptions are a *precondition* for certification, so this page and the Data Certification page work hand in hand.
 
-The page has two tabs: **Edit Tags**, where changes are made, and **Change History**, which lists every change with who submitted it, its checks and risk, and what was applied.
+The page has two tabs: **Edit Metadata**, where changes are made, and **Change History**, which lists every change with who submitted it, its checks and risk, and what was applied.
 
-**Finding what to tag.** One search box covers everything. Click it to browse every governed dataset, or type part of a name to find datasets and any table or view in the governed catalogs (`SCAN_CATALOGS`). Each result has a checkbox meaning "in my list": tick as many as you like and they're added straight away; untick to remove. Ticking a dataset adds all of its tables, so you can mix datasets and individual tables in one change. The box also understands:
+**Finding what to edit.** One search box covers everything. Click it to browse every governed dataset, or type part of a name to find datasets and any catalog, schema, table or view in the governed catalogs (`SCAN_CATALOGS`). Catalogs and schemas are listed in their own group, above tables and views. Each result has a checkbox meaning "in my list": tick as many as you like and they're added straight away; untick to remove. Ticking a dataset adds all of its tables, so you can mix datasets and individual tables in one change. The box also understands:
 
 - `main.sales.*` — every table and view in a schema (any `*` pattern over the full name).
 - `classification=restricted` — objects carrying that tag value (`*` wildcards allowed; `data_owner=*` means "has the tag").
@@ -126,13 +126,19 @@ Press **Enter** (or **Select all**) to add every match for a pattern or filter. 
 
 **Editing.** Each object is one row showing its tags as chips (green = new, amber = new value, red = removed). Click a row to edit its tags, and open **Columns** to tag individual columns — for example to mark `email` as `classification=restricted`. To change many at once, narrow the list with the filter (by name, `key=value` or `!key`), then use **Set tag … on all N shown** to set or remove one tag on every row shown. Tables with many columns have the same filter and bar inside their **Columns** panel. **Changed only** shows just what you've edited.
 
+**Catalogs and schemas.** A catalog or schema row has a **Description** box above its tags; clearing it removes the description. Tags on a catalog or schema are inherited by every schema and table inside it, so the AI review calls out how wide the change reaches. The default policy allows only `data_owner` and `classification` on catalogs and schemas; other keys can be allowed by adding `catalog` or `schema` to their `applies_to` in the tag policy file.
+
+**Renaming a tag key.** **Rename a tag key everywhere** (under the search box) takes an old and a new key — say `domains` → `domain` — finds every catalog, schema, table, view and column carrying the old key, adds them to your list and renames the key on each, keeping its value. An object that already has the new key with a *different* value is left unchanged and reported, so nothing is silently overwritten. To rename on just part of the list, filter it and pick **Rename key** in the bulk bar instead. Either way the rename is an ordinary edit: nothing changes in Unity Catalog until you review and apply it. One change holds at most 500 objects, so a very common key may need renaming in batches.
+
 **Reviewing and applying.** **Review & Run Checks** runs the tag policy, the typo/hygiene scan, the risk score and the advisory AI review over everything you changed, and shows the exact SQL. Lowering or removing a classification (or a PII flag) is scored as higher risk, because masking and access rules are often keyed on those tags. `system.certification_status` is reserved: OmniGuard sets it when a dataset certifies and removes it when certification lapses, so it can't be edited here and is flagged as you type. Other `system.` tags are edited like any other tag. Keys the policy declares table-only (such as `dataset`, `data_owner`, `approver_group`) can't be set on columns. Values are also checked against Unity Catalog's own governed tags: if a tag policy limits a key to certain values, the editor suggests them and flags anything else as you type, and Review blocks the change rather than letting Unity Catalog reject it partway through. The key field also suggests governed tags as you type.
 
 **Access policies (ABAC).** If a column mask or row filter selects data by a tag (for example `has_tag('pii')`), changing that tag changes who can see the data. Review lists any such policy and raises the risk score. To see the policies, the governance service principal needs `READ METADATA` on the tables; otherwise Review notes that the check was skipped. Setting a governed tag also needs the `ASSIGN` permission on it, which can't be checked in advance, so Review reminds you.
 
 **Datasets.** A row whose edit adds, moves or removes its `dataset` tag is marked, because dataset membership decides which data product, contract and certification the table belongs to.
 
-**Column tags need Local Execution Mode.** In GitOps mode, changes are written as migrations to the governance repository, whose format covers table and view tags only; column tags are shown read-only there.
+**Column, catalog and schema changes need Local Execution Mode.** In GitOps mode, changes are written as migrations to the governance repository, whose format covers table and view tags only; column tags, and catalog and schema tags and descriptions, are shown read-only there, and a rename leaves them out.
+
+**Permissions.** In Local Execution Mode changes run as the governance service principal. Tagging needs `APPLY TAG` on the object; changing a catalog or schema description needs ownership of it (or `MANAGE`).
 
 ### 4.4 A note on "reliability window"
 

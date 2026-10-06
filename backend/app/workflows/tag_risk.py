@@ -210,7 +210,7 @@ def calculate_risk_score(
 ) -> RiskReport:
     """Calculate the deterministic risk score and breakdown for a tag change plan."""
     vocab = vocabulary or TagVocabulary()
-    diffs = [d for d in plan.diffs.values() if d.changed_keys]
+    diffs = [d for d in plan.diffs.values() if d.has_changes]
 
     report = RiskReport(
         environment=environment,

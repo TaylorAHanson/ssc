@@ -21,8 +21,16 @@ logger = logging.getLogger(__name__)
 POLICY_PATH = "policy/tag_policy.yml"
 
 # Target kinds a key can be declared for with ``applies_to``.
+CATALOG = "catalog"
+SCHEMA = "schema"
 TABLE = "table"
 COLUMN = "column"
+
+_KIND_PLURALS = {CATALOG: "catalogs", SCHEMA: "schemas", TABLE: "tables and views", COLUMN: "columns"}
+
+
+def _kind_order(kind: str) -> int:
+    return list(_KIND_PLURALS).index(kind) if kind in _KIND_PLURALS else len(_KIND_PLURALS)
 
 DEFAULT_POLICY_YAML = """
 reserved_keys:
@@ -36,7 +44,7 @@ known_keys:
     pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
   data_owner:
     required: true
-    applies_to: [table]
+    applies_to: [catalog, schema, table]
     description: Accountable owner (team or group name) for the data.
     pattern: "^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$"
   approver_group:
@@ -56,7 +64,7 @@ known_keys:
     pattern: "^[0-9]+(m|h|d|w)$"
   classification:
     required: false
-    applies_to: [table, column]
+    applies_to: [catalog, schema, table, column]
     description: Sensitivity classification.
     pattern: "^(public|internal|confidential|restricted)$"
 protected_keys: []
@@ -110,8 +118,8 @@ class TagPolicy:
     def _applies_to(self, key: str) -> Optional[List[str]]:
         """The target kinds a key is declared for, or ``None`` if undeclared (any).
 
-        Kinds are ``table`` (tables and views) and ``column``; ``view`` is accepted
-        as a synonym for ``table``.
+        Kinds are ``catalog``, ``schema``, ``table`` (tables and views) and
+        ``column``; ``view`` is accepted as a synonym for ``table``.
         """
         declared = (self.known_keys.get(key) or {}).get("applies_to")
         if not declared:
@@ -125,10 +133,13 @@ class TagPolicy:
         """Protected keys may be re-valued but never removed.
 
         Required keys describe what a *table* must carry, so on a column they are
-        only protected when the policy explicitly declares them for columns.
+        only protected when the policy explicitly declares them for columns. On a
+        catalog or schema they're optional, so only ``protected_keys`` apply.
         """
         if key in self.protected_keys:
             return True
+        if kind in (CATALOG, SCHEMA):
+            return False
         if kind == COLUMN:
             spec = self.known_keys.get(key) or {}
             return bool(spec.get("required")) and COLUMN in (self._applies_to(key) or [])
@@ -159,7 +170,8 @@ class TagPolicy:
 
         applies = self._applies_to(key)
         if applies is not None and kind not in applies:
-            where = "tables and views" if applies == [TABLE] else " and ".join(f"{k}s" for k in applies)
+            names = [_KIND_PLURALS.get(k, f"{k}s") for k in sorted(applies, key=_kind_order)]
+            where = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
             problems.append(f"{table}: '{key}' can only be set on {where}.")
 
         spec = self.known_keys.get(key)
@@ -201,7 +213,8 @@ class TagPolicy:
     ) -> List[str]:
         """Return every policy problem in ``changes``; empty means it would pass.
 
-        Each change is ``{"table", "set", "unset"}`` plus an optional ``"column"``.
+        Each change is ``{"table", "set", "unset"}`` plus an optional ``"column"``,
+        or ``"kind"`` (``catalog`` / ``schema``) when ``table`` names one of those.
         ``resulting_tag_counts`` is keyed by the target's label (``table`` or
         ``table.column``).
 
@@ -212,7 +225,7 @@ class TagPolicy:
         for change in changes:
             table = change.get("table") or "(unknown table)"
             column = change.get("column")
-            kind = COLUMN if column else TABLE
+            kind = COLUMN if column else (change.get("kind") or TABLE)
             label = f"{table}.{column}" if column else table
             for key, value in (change.get("set") or {}).items():
                 problems.extend(self._check_set(label, key, str(value), kind))

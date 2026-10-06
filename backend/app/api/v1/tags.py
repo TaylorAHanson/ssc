@@ -1,11 +1,15 @@
 """
-Governance Tag Management API.
+Governance Metadata Manager API.
 
-Find tables, views and datasets; read their current Unity Catalog tags (and
-their columns' tags); run rich policy & risk & hygiene checks; and submit tag
-changes either via GitOps (opening a GitHub PR) or in Local Execution Mode
-(applying changes directly to Unity Catalog when GitHub Actions / networking is
-blocked). The logic lives in ``app.services.tag_change``; this module is HTTP.
+Find catalogs, schemas, tables, views and datasets; read their current Unity
+Catalog tags (their columns' tags, and catalog/schema descriptions); run rich
+policy & risk & hygiene checks; and submit changes either via GitOps (opening a
+GitHub PR) or in Local Execution Mode (applying changes directly to Unity
+Catalog when GitHub Actions / networking is blocked). The logic lives in
+``app.services.tag_change``; this module is HTTP.
+
+Request and response fields named ``table`` hold any object name (catalog,
+schema, table or view); they predate catalogs and schemas.
 """
 import logging
 from datetime import datetime
@@ -25,7 +29,14 @@ from app.services.tag_change import engine
 from app.services.tag_change import search as tag_search
 from app.state_machines.facts import get_latest_fact
 from app.workflows.tag_governed import fetch_governed_tags, search_governed_keys
-from app.workflows.tag_plan import _normalize_fqn, fetch_columns, fetch_live_state, validate_target
+from app.workflows.tag_plan import (
+    _normalize_fqn,
+    container_type,
+    fetch_columns,
+    fetch_live_state,
+    is_reserved_key,
+    validate_target,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -48,6 +59,8 @@ class TagModeResponse(BaseModel):
     ledger_table: Optional[str] = None
     environment: str
     columns_supported: bool = False
+    # Catalog and schema tags and descriptions.
+    containers_supported: bool = False
 
 
 class TagDataset(BaseModel):
@@ -61,6 +74,7 @@ class TableTags(BaseModel):
     tags: Dict[str, Optional[str]]
     object_type: Optional[str] = None
     exists: bool = True
+    comment: Optional[str] = None  # catalogs and schemas only
 
 
 class DatasetTablesResponse(BaseModel):
@@ -85,6 +99,18 @@ class TagSearchResponse(BaseModel):
     total_objects: int
     truncated: bool
     filters: List[str] = []
+
+
+class ColumnRef(BaseModel):
+    table: str
+    column: str
+
+
+class KeyUsageResponse(BaseModel):
+    key: str
+    objects: List[TagSearchObject]
+    columns: List[ColumnRef]
+    truncated: bool
 
 
 class ObjectsRequest(BaseModel):
@@ -119,6 +145,8 @@ class TableDesiredTags(BaseModel):
     table: str
     desired_tags: Dict[str, str]
     column: Optional[str] = None
+    # Catalogs and schemas only. Omitted leaves the description alone; "" clears it.
+    desired_comment: Optional[str] = None
 
 
 class TagChangeCreate(BaseModel):
@@ -187,7 +215,12 @@ def _get_provider():
 
 def _targets(payload: TagChangeCreate) -> List[engine.TagTarget]:
     return [
-        engine.TagTarget(table=t.table.strip(), column=(t.column or None), desired_tags=t.desired_tags)
+        engine.TagTarget(
+            table=t.table.strip(),
+            column=(t.column or None),
+            desired_tags=t.desired_tags,
+            desired_comment=t.desired_comment,
+        )
         for t in payload.tables
     ]
 
@@ -201,12 +234,18 @@ def _table_tags(provider, table_names: List[str]) -> List[TableTags]:
             tags: Dict[str, Optional[str]] = dict(obj_state.tags)
         else:
             tags = engine.read_table_tags(provider, name)
+        is_container = bool(container_type(name))
         tables.append(
             TableTags(
                 table=name,
                 tags=tags,
-                object_type=obj_state.object_type if obj_state and obj_state.exists else None,
+                object_type=(
+                    obj_state.object_type
+                    if obj_state and (obj_state.exists or is_container)
+                    else None
+                ),
                 exists=bool(obj_state and obj_state.exists) or bool(tags),
+                comment=(obj_state.comment or "") if is_container and obj_state else None,
             )
         )
     return tables
@@ -235,6 +274,7 @@ def get_tag_manager_mode(
         ledger_table=settings.GOVERNANCE_TAGS_LEDGER_TABLE or None,
         environment=settings.ENVIRONMENT or "dev",
         columns_supported=local,
+        containers_supported=local,
     )
 
 
@@ -282,7 +322,7 @@ def search_tag_targets(
     db: Session = Depends(get_db),
     current_user=Depends(require_any_role(_ADMIN_ROLES)),
 ):
-    """Quick search across governed datasets, tables and views."""
+    """Quick search across governed datasets, catalogs, schemas, tables and views."""
     provider = None
     if not tag_search.parse_query(q).is_empty:
         try:
@@ -308,12 +348,41 @@ def search_tag_targets(
     )
 
 
+@router.get("/key-usage", response_model=KeyUsageResponse)
+def get_key_usage(
+    key: str = Query(..., min_length=1, description="Tag key to look for"),
+    current_user=Depends(require_any_role(_ADMIN_ROLES)),
+):
+    """Every catalog, schema, table, view and column in the governed catalogs tagged with ``key``.
+
+    Backs the bulk rename: the page loads these into the working set and renames
+    the key on each, then the change goes through the usual review.
+    """
+    key = key.strip()
+    if is_reserved_key(key):
+        raise HTTPException(status_code=400, detail=f"'{key}' is a reserved tag and can't be renamed here.")
+    try:
+        usage = tag_search.key_usage(_get_provider(), key)
+    except Exception as e:
+        logger.error(f"Failed to look up usage of tag key {key!r}: {e}")
+        raise HTTPException(status_code=502, detail=f"Couldn't read tag usage from Unity Catalog: {e}")
+    return KeyUsageResponse(
+        key=key,
+        objects=[
+            TagSearchObject(fqn=o.fqn, object_type=o.object_type, tag_keys=o.tag_keys, in_cache=o.in_cache)
+            for o in usage.objects
+        ],
+        columns=[ColumnRef(table=t, column=c) for t, c in usage.columns],
+        truncated=usage.truncated,
+    )
+
+
 @router.post("/objects", response_model=ObjectsResponse)
 def get_object_tags(
     payload: ObjectsRequest,
     current_user=Depends(require_any_role(_ADMIN_ROLES)),
 ):
-    """Current editable tags for specific tables and views."""
+    """Current editable tags (and catalog/schema descriptions) for specific objects."""
     names = list(dict.fromkeys(t.strip() for t in payload.tables if t and t.strip()))
     if len(names) > engine.MAX_TARGETS:
         raise HTTPException(status_code=400, detail=f"At most {engine.MAX_TARGETS} objects can be loaded at once.")
@@ -337,6 +406,8 @@ def get_table_columns(
         validate_target(table)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if container_type(table):
+        raise HTTPException(status_code=400, detail=f"'{table}' is a catalog or schema; only tables and views have columns.")
     try:
         columns = fetch_columns(_get_provider(), table.strip())
     except Exception as e:

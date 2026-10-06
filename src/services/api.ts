@@ -2125,7 +2125,9 @@ export async function getTableDetails(tableName: string): Promise<TableDetailsRe
 }
 
 // ---------------------------------------------------------------------------
-// Governance: Tag Management
+// Governance: Metadata Manager (tags and catalog/schema descriptions)
+//
+// Fields named `table` hold any object name: a catalog, schema, table or view.
 // ---------------------------------------------------------------------------
 
 export interface TagManagerModeResponse {
@@ -2136,6 +2138,8 @@ export interface TagManagerModeResponse {
   environment: string;
   /** Column tags can only be applied in Local Execution Mode. */
   columns_supported: boolean;
+  /** Catalog and schema tags and descriptions can only be applied in Local Execution Mode. */
+  containers_supported?: boolean;
 }
 
 export interface TagDataset {
@@ -2149,6 +2153,8 @@ export interface TableTags {
   tags: Record<string, string | null>;
   object_type?: string | null;
   exists?: boolean;
+  /** Catalogs and schemas only. */
+  comment?: string | null;
 }
 
 export interface TagSearchObject {
@@ -2184,6 +2190,15 @@ export interface TagChangeTarget {
   table: string;
   column?: string | null;
   desired_tags: Record<string, string>;
+  /** Catalogs and schemas only. Omit to leave the description alone; '' clears it. */
+  desired_comment?: string | null;
+}
+
+export interface TagKeyUsage {
+  key: string;
+  objects: TagSearchObject[];
+  columns: { table: string; column: string }[];
+  truncated: boolean;
 }
 
 export interface TagChangePayload {
@@ -2212,6 +2227,9 @@ export interface TagDiffItem {
   removed_keys: string[];
   overwritten_keys: string[];
   unchanged_keys: string[];
+  comment_before?: string | null;
+  comment_after?: string | null;
+  comment_changed?: boolean;
 }
 
 export interface TagPlanResponse {
@@ -2373,6 +2391,17 @@ export async function getObjectTags(tables: string[]): Promise<{ tables: TableTa
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
     throw new Error(`Failed to load tags: ${response.status} ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getTagKeyUsage(key: string): Promise<TagKeyUsage> {
+  const response = await fetch(`${API_BASE_URL}/tags/key-usage?key=${encodeURIComponent(key)}`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Failed to find where the tag is used: ${response.status} ${errorText}`);
   }
   return response.json();
 }
@@ -4027,6 +4056,7 @@ export const api = {
   getDatasetTags,
   searchTagTargets,
   getObjectTags,
+  getTagKeyUsage,
   getTableColumnTags,
   getGovernedTags,
   searchGovernedTagKeys,

@@ -1,7 +1,8 @@
 import { createContext } from 'react';
 
-// Working-set model for the Tag Management editor: every table, view or column
-// the admin is editing, its tags as loaded from Unity Catalog, and their edits.
+// Working-set model for the Metadata Manager editor: every catalog, schema,
+// table, view or column the admin is editing, its tags (and, for catalogs and
+// schemas, its description) as loaded from Unity Catalog, and their edits.
 
 export interface TagRow {
   key: string;
@@ -9,21 +10,35 @@ export interface TagRow {
 }
 
 export interface EditTarget {
-  /** `catalog.schema.table`, or `catalog.schema.table::column` for a column. */
+  /** Lower-cased object name (`catalog`, `catalog.schema`, `catalog.schema.table`), plus `::column` for a column. */
   key: string;
+  /** The object's name: a catalog, schema, table or view. */
   table: string;
   column?: string;
   objectType?: string | null;
   exists: boolean;
   original: Record<string, string>;
   rows: TagRow[];
+  /** Catalogs and schemas only: the description as loaded, and as edited. */
+  originalComment?: string;
+  comment?: string;
 }
 
 export interface TargetDiff {
   desired: Record<string, string>;
   set: Record<string, string>;
   unset: string[];
+  commentChanged: boolean;
   changed: boolean;
+}
+
+/** Catalog or schema (they hold tables and can have a description), by the object's name. */
+export function isContainerName(name: string): boolean {
+  return name.split('.').length < 3;
+}
+
+export function isContainer(t: { table: string; column?: string | null }): boolean {
+  return !t.column && isContainerName(t.table);
 }
 
 export function targetKey(table: string, column?: string | null): string {
@@ -44,10 +59,10 @@ export function toTagMap(tags: Record<string, string | null>): Record<string, st
 export function makeTarget(
   table: string,
   tags: Record<string, string | null>,
-  opts: { column?: string; objectType?: string | null; exists?: boolean } = {}
+  opts: { column?: string; objectType?: string | null; exists?: boolean; comment?: string | null } = {}
 ): EditTarget {
   const original = toTagMap(tags);
-  return {
+  const target: EditTarget = {
     key: targetKey(table, opts.column),
     table,
     column: opts.column,
@@ -55,6 +70,20 @@ export function makeTarget(
     exists: opts.exists ?? true,
     original,
     rows: Object.entries(original).map(([key, value]) => ({ key, value })),
+  };
+  if (isContainer(target)) {
+    target.originalComment = opts.comment ?? '';
+    target.comment = target.originalComment;
+  }
+  return target;
+}
+
+/** The target with its edits thrown away. */
+export function resetTarget(t: EditTarget): EditTarget {
+  return {
+    ...t,
+    rows: Object.entries(t.original).map(([key, value]) => ({ key, value })),
+    comment: t.originalComment,
   };
 }
 
@@ -73,7 +102,32 @@ export function diffTarget(t: EditTarget): TargetDiff {
   const unset: string[] = [];
   for (const k of Object.keys(desired)) if (t.original[k] !== desired[k]) set[k] = desired[k];
   for (const k of Object.keys(t.original)) if (!(k in desired)) unset.push(k);
-  return { desired, set, unset, changed: Object.keys(set).length > 0 || unset.length > 0 };
+  const commentChanged = t.comment !== undefined && t.comment !== (t.originalComment ?? '');
+  return {
+    desired,
+    set,
+    unset,
+    commentChanged,
+    changed: Object.keys(set).length > 0 || unset.length > 0 || commentChanged,
+  };
+}
+
+export type RenameOutcome = 'renamed' | 'conflict' | 'absent';
+
+/**
+ * Rename tag key `from` to `to`, keeping its value and position. If the target
+ * already has `to` with a different value it's a conflict and nothing changes;
+ * with the same value, `from` is just dropped.
+ */
+export function renameKeyInRows(rows: TagRow[], from: string, to: string): { rows: TagRow[]; outcome: RenameOutcome } {
+  const idx = rows.findIndex((r) => r.key.trim() === from);
+  if (idx < 0 || from === to) return { rows, outcome: 'absent' };
+  const existing = rows.find((r) => r.key.trim() === to);
+  if (existing && existing.value !== rows[idx].value) return { rows, outcome: 'conflict' };
+  const next = rows
+    .map((r, i) => (i === idx ? { key: to, value: r.value } : r))
+    .filter((r, i) => i === idx || r.key.trim() !== to);
+  return { rows: next, outcome: 'renamed' };
 }
 
 /** Set (or overwrite) one tag on a target's rows. */
@@ -90,6 +144,8 @@ export function withoutTag(rows: TagRow[], key: string): TagRow[] {
 }
 
 const TYPE_LABELS: Record<string, string> = {
+  CATALOG: 'Catalog',
+  SCHEMA: 'Schema',
   MANAGED: 'Table',
   EXTERNAL: 'Table',
   FOREIGN: 'Foreign table',
@@ -150,7 +206,7 @@ export const SuggestedKeysContext = createContext<string[]>([]);
 
 /** What a pending edit does to a table's dataset membership, if anything. */
 export function datasetMove(t: EditTarget): { from?: string; to?: string } | null {
-  if (t.column) return null;
+  if (t.column || isContainer(t)) return null;
   const desired = buildDesired(t.rows);
   for (const k of ['dataset', 'data_set']) {
     const from = t.original[k];

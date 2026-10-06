@@ -28,6 +28,10 @@ def build_tag_sql(changes: List[Dict[str, Any]]) -> str:
             # The contract has no column statement; emitting the table form here
             # would tag the whole table instead of the column.
             raise ValueError(f"Column tag changes can't be written as a GitOps migration ({table}).")
+        if len(str(table).split(".")) != 3 or "comment" in change:
+            # Nor catalog/schema statements or comments: ALTER TABLE on a
+            # two-part name would target a table in the default catalog.
+            raise ValueError(f"Only table and view tags can be written as a GitOps migration ({table}).")
         set_tags = change.get("set") or {}
         unset_tags = change.get("unset") or []
         if set_tags:

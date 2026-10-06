@@ -144,7 +144,7 @@ function App() {
           )}
           {uiTabs?.tag_management !== false && (
             <Route
-              path="/governance/tags"
+              path="/governance/metadata"
               element={
                 <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
                   <TagManagement />
@@ -152,6 +152,8 @@ function App() {
               }
             />
           )}
+          {/* Legacy redirect: the Metadata Manager used to be Tag Management. */}
+          <Route path="/governance/tags" element={<Navigate to="/governance/metadata" replace />} />
           {uiTabs?.context_catalog !== false && (
             <Route
               path="/governance/context-catalog"

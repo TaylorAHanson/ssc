@@ -1,22 +1,23 @@
-"""Quick search for the Tag Management picker: datasets, tables and views.
+"""Quick search for the Metadata Manager picker: datasets, catalogs, schemas, tables and views.
 
 One query string covers everything an admin types into the search box:
 
-- ``orders`` — datasets and tables/views whose name contains it (every word must match)
+- ``orders`` — datasets and objects whose name contains it (every word must match)
 - ``main.sales.*`` — a glob over the full name, e.g. a whole schema
 - ``classification=confidential`` — tagged with that value (``*`` wildcards allowed)
 - ``data_owner=*`` — has the tag at all
 - ``!data_owner`` — is missing the tag
 
 Names come from the local data-asset cache (synced from the governed catalogs),
-so typing is instant. Tag filters read live tag values from Unity Catalog,
-since the cache only records tag names.
+so typing is instant; catalogs and schemas are the ones the cached tables sit
+in. Tag filters read live tag values from Unity Catalog, since the cache only
+records tag names.
 """
 import fnmatch
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -24,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_scan_catalogs, settings
 from app.db.data_asset import DataAssetModel
 from app.services.tag_change.datasets import DatasetSummary, list_datasets
-from app.workflows.tag_plan import is_reserved_key
+from app.workflows.tag_plan import CATALOG, SCHEMA, is_reserved_key, sql_string_literal
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,18 @@ class SearchResult:
     filters: List[str]
 
 
+@dataclass
+class KeyUsage:
+    key: str
+    objects: List[SearchObject]  # catalogs, schemas, tables and views carrying the key
+    columns: List[Tuple[str, str]]  # (table, column) pairs carrying it
+    truncated: bool
+
+
+def _kind_rank(obj: SearchObject) -> int:
+    return {CATALOG: 0, SCHEMA: 1}.get(obj.object_type or "", 2)
+
+
 def parse_query(q: str) -> ParsedQuery:
     parsed = ParsedQuery()
     for token in (q or "").split():
@@ -114,8 +127,12 @@ def _catalog_clause(column: str) -> str:
     catalogs = get_scan_catalogs()
     if not catalogs:
         return f"{column} NOT IN ('system', 'samples')"
-    listed = ", ".join("'" + c.replace("'", "''") + "'" for c in catalogs)
+    listed = ", ".join(sql_string_literal(c) for c in catalogs)
     return f"{column} IN ({listed})"
+
+
+def _name(parts: List[Any]) -> str:
+    return ".".join(str(p) for p in parts if p not in (None, ""))
 
 
 def _live_rows(provider, query: str) -> List[List[Any]]:
@@ -134,13 +151,15 @@ def _live_rows(provider, query: str) -> List[List[Any]]:
 
 
 def _tagged_with(provider, tag_filter: TagFilter) -> Set[str]:
-    """Lower-cased FQNs of tables/views carrying ``tag_filter.key`` (and value)."""
-    key = tag_filter.key.replace("'", "''")
+    """Lower-cased names of catalogs, schemas, tables and views carrying ``tag_filter.key`` (and value)."""
+    where = f"tag_name = {sql_string_literal(tag_filter.key)} AND {_catalog_clause('catalog_name')}"
     rows = _live_rows(
         provider,
-        f"SELECT catalog_name, schema_name, table_name, tag_value "
-        f"FROM system.information_schema.table_tags "
-        f"WHERE tag_name = '{key}' AND {_catalog_clause('catalog_name')}",
+        f"SELECT catalog_name, NULL, NULL, tag_value FROM system.information_schema.catalog_tags WHERE {where} "
+        f"UNION ALL SELECT catalog_name, schema_name, NULL, tag_value "
+        f"FROM system.information_schema.schema_tags WHERE {where} "
+        f"UNION ALL SELECT catalog_name, schema_name, table_name, tag_value "
+        f"FROM system.information_schema.table_tags WHERE {where}",
     )
     wanted = (tag_filter.value or "").lower()
     found: Set[str] = set()
@@ -149,8 +168,45 @@ def _tagged_with(provider, tag_filter: TagFilter) -> Set[str]:
             continue
         value = "" if row[3] is None else str(row[3]).lower()
         if tag_filter.value is None or tag_filter.negate or fnmatch.fnmatchcase(value, wanted):
-            found.add(f"{row[0]}.{row[1]}.{row[2]}".lower())
+            found.add(_name(row[:3]).lower())
     return found
+
+
+def key_usage(provider, key: str) -> KeyUsage:
+    """Every catalog, schema, table, view and column in the governed catalogs tagged with ``key``."""
+    where = (
+        f"tag_name = {sql_string_literal(key)} AND {_catalog_clause('catalog_name')}"
+    )
+    not_info = "AND schema_name <> 'information_schema'"
+    rows = _live_rows(
+        provider,
+        f"SELECT catalog_name, NULL, NULL, NULL FROM system.information_schema.catalog_tags WHERE {where} "
+        f"UNION ALL SELECT catalog_name, schema_name, NULL, NULL "
+        f"FROM system.information_schema.schema_tags WHERE {where} {not_info} "
+        f"UNION ALL SELECT catalog_name, schema_name, table_name, NULL "
+        f"FROM system.information_schema.table_tags WHERE {where} {not_info} "
+        f"UNION ALL SELECT catalog_name, schema_name, table_name, column_name "
+        f"FROM system.information_schema.column_tags WHERE {where} {not_info} "
+        f"LIMIT {MAX_SCAN + 1}",
+    )
+    objects: Dict[str, SearchObject] = {}
+    columns: Dict[str, Tuple[str, str]] = {}
+    for row in rows[:MAX_SCAN]:
+        if len(row) < 4 or not row[0]:
+            continue
+        if row[3]:
+            table = _name(row[:3])
+            columns[f"{table}::{row[3]}".lower()] = (table, str(row[3]))
+            continue
+        name = _name(row[:3])
+        kind = CATALOG if not row[1] else SCHEMA if not row[2] else None
+        objects.setdefault(name.lower(), SearchObject(fqn=name, object_type=kind, tag_keys=[key], in_cache=False))
+    return KeyUsage(
+        key=key,
+        objects=sorted(objects.values(), key=lambda o: (_kind_rank(o), o.fqn.lower())),
+        columns=sorted(columns.values(), key=lambda c: (c[0].lower(), c[1].lower())),
+        truncated=len(rows) > MAX_SCAN,
+    )
 
 
 def _tag_names(tags: Any) -> List[str]:
@@ -182,17 +238,38 @@ def _cache_candidates(db: Session, terms: List[str]) -> List[SearchObject]:
     return results
 
 
+def _containers(pairs: List[Tuple[Any, Any]], terms: List[str]) -> List[SearchObject]:
+    """Catalogs and schemas matching ``terms``, from ``(catalog, schema)`` pairs."""
+    catalogs = sorted({str(c) for c, _ in pairs if c})
+    schemas = sorted({f"{c}.{s}" for c, s in pairs if c and s and str(s).lower() not in _SKIPPED_SCHEMAS})
+    return [SearchObject(fqn=c, object_type=CATALOG) for c in catalogs if _matches_terms(c, terms)] + [
+        SearchObject(fqn=s, object_type=SCHEMA) for s in schemas if _matches_terms(s, terms)
+    ]
+
+
+def _cache_containers(db: Session, terms: List[str]) -> List[SearchObject]:
+    pairs = (
+        db.query(DataAssetModel.catalog, DataAssetModel.schema)
+        .filter(~DataAssetModel.type.in_(_UNTAGGABLE_TYPES))
+        .distinct()
+        .all()
+    )
+    return _containers(pairs, terms)
+
+
+def _like_clause(column_sql: str, terms: List[str]) -> List[str]:
+    return [
+        f"lower({column_sql}) LIKE {sql_string_literal(_like_pattern(term))} ESCAPE '\\\\'"
+        for term in terms
+    ]
+
+
 def _live_candidates(provider, terms: List[str]) -> List[SearchObject]:
     """Fallback when the data-asset cache is empty (e.g. discovery sync is off)."""
     where = [
         _catalog_clause("table_catalog"),
         "table_schema <> 'information_schema'",
-    ]
-    for term in terms:
-        pattern = _like_pattern(term).replace("'", "''")
-        where.append(
-            f"lower(concat_ws('.', table_catalog, table_schema, table_name)) LIKE '{pattern}' ESCAPE '\\\\'"
-        )
+    ] + _like_clause("concat_ws('.', table_catalog, table_schema, table_name)", terms)
     rows = _live_rows(
         provider,
         "SELECT table_catalog, table_schema, table_name, table_type, table_owner "
@@ -200,7 +277,16 @@ def _live_candidates(provider, terms: List[str]) -> List[SearchObject]:
         + " AND ".join(where)
         + f" ORDER BY 1, 2, 3 LIMIT {MAX_SCAN}",
     )
-    return [
+    schema_rows = _live_rows(
+        provider,
+        "SELECT catalog_name, schema_name FROM system.information_schema.schemata WHERE "
+        + " AND ".join(
+            [_catalog_clause("catalog_name"), "schema_name <> 'information_schema'"]
+            + _like_clause("concat_ws('.', catalog_name, schema_name)", terms)
+        )
+        + f" ORDER BY 1, 2 LIMIT {MAX_SCAN}",
+    )
+    return _containers([(r[0], r[1]) for r in schema_rows if len(r) >= 2], terms) + [
         SearchObject(fqn=f"{r[0]}.{r[1]}.{r[2]}", object_type=r[3], owner=r[4])
         for r in rows
         if len(r) >= 5 and _matches_terms(f"{r[0]}.{r[1]}.{r[2]}", terms)
@@ -218,8 +304,8 @@ def search(db: Session, provider, q: str, limit: int = 200) -> SearchResult:
         datasets = [d for d in list_datasets(db) if _matches_terms(d.dataset_id, parsed.terms)][:20]
 
     cached = _cache_candidates(db, parsed.terms)
-    by_fqn: Dict[str, SearchObject] = {o.fqn.lower(): o for o in cached}
-    has_cache = bool(cached) or db.query(DataAssetModel.id).first() is not None
+    by_fqn: Dict[str, SearchObject] = {o.fqn.lower(): o for o in _cache_containers(db, parsed.terms) + cached}
+    has_cache = bool(by_fqn) or db.query(DataAssetModel.id).first() is not None
     if not has_cache and provider is not None:
         by_fqn = {o.fqn.lower(): o for o in _live_candidates(provider, parsed.terms)}
 
@@ -251,6 +337,10 @@ def search(db: Session, provider, q: str, limit: int = 200) -> SearchResult:
         if term.count(".") == 2 and "*" not in term and all(term.split(".")):
             candidates = [SearchObject(fqn=term, in_cache=False)]
 
+    for obj in candidates:
+        if not obj.object_type and obj.fqn.count(".") < 2:
+            obj.object_type = CATALOG if "." not in obj.fqn else SCHEMA
+    candidates.sort(key=_kind_rank)
     total = len(candidates)
     return SearchResult(
         datasets=datasets,

@@ -4,6 +4,15 @@
 > tagging of any table, view or column), except the GitOps-mode items, which
 > are deferred. Phase 3 (self-service requests through the agent) is not
 > started and is waiting on customer UX input — see [Open decisions](#open-decisions).
+>
+> **Update (2026-10-06):** the page is now the **Metadata Manager** (route
+> `/governance/metadata`; internal ids such as the `tag_management` tab key and
+> the `/tags` API are unchanged). Catalogs and schemas are targets too: a
+> 1- or 2-part `table` in a change item, with an optional `desired_comment`
+> (catalogs and schemas only) that plans a `COMMENT ON` before the tag
+> statements. Both are Local-mode only; GitOps refuses them. A key rename uses
+> `GET /tags/key-usage` to find every object and column carrying the key, then
+> stages the rename client-side as ordinary edits.
 
 **Goal:** extend tag management beyond governed datasets so that (1) Governance
 Admins can tag any individual table or view, (2) columns can be tagged, and

@@ -26,6 +26,7 @@ import {
   Eye,
   Filter,
   History,
+  Replace,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import type {
@@ -38,20 +39,39 @@ import type {
 } from '../../services/api';
 import { format, parseISO } from 'date-fns';
 import { BulkTagBar } from '../../components/admin/tags/BulkTagBar';
+import { RenameKeyPanel } from '../../components/admin/tags/RenameKeyPanel';
 import { TagSearchBox } from '../../components/admin/tags/TagSearchBox';
 import { TagTargetRow } from '../../components/admin/tags/TagTargetRow';
 import type { ColumnsState } from '../../components/admin/tags/TagTargetRow';
-import type { EditTarget, TagRow } from '../../components/admin/tags/tagModel';
+import type { EditTarget, RenameOutcome, TagRow } from '../../components/admin/tags/tagModel';
 import {
   SuggestedKeysContext,
   diffTarget,
   errorText,
+  isContainer,
   makeTarget,
   matchesFilter,
+  renameKeyInRows,
+  resetTarget,
   targetKey,
   withTag,
   withoutTag,
 } from '../../components/admin/tags/tagModel';
+
+// Objects loaded per request (the API's limit).
+const LOAD_CHUNK = 500;
+// Tables whose columns are loaded at once during a rename.
+const COLUMN_LOADS_AT_ONCE = 8;
+
+function chunks<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
 
 const parseUtc = (value: string): Date =>
   parseISO(/Z|[+-]\d{2}:?\d{2}$/.test(value) ? value : `${value}Z`);
@@ -72,6 +92,29 @@ function statusBadge(status: string, mode?: string): { label: string; className:
     default:
       return { label: 'Queued', className: 'bg-amber-100 text-amber-800 border-amber-200' };
   }
+}
+
+function CommentDiff({ before, after }: { before?: string | null; after?: string | null }) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+      <div className="border border-gray-100 rounded-lg p-2.5 bg-gray-50/50">
+        <span className="font-semibold text-gray-500 block mb-1.5">Description (Before):</span>
+        {before ? (
+          <p className="whitespace-pre-wrap text-gray-700">{before}</p>
+        ) : (
+          <p className="text-gray-400 italic">No description</p>
+        )}
+      </div>
+      <div className="border border-amber-200 rounded-lg p-2.5 bg-amber-50/40">
+        <span className="font-semibold text-amber-800 block mb-1.5">Description (After):</span>
+        {after ? (
+          <p className="whitespace-pre-wrap text-gray-900">{after}</p>
+        ) : (
+          <p className="text-gray-500 italic">The description will be removed</p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function riskBandBadge(band: string, score: number) {
@@ -110,7 +153,7 @@ function riskBandBadge(band: string, score: number) {
 }
 
 export function TagManagement() {
-  // ?tab=history opens Change History; the default is Edit Tags.
+  // ?tab=history opens Change History; the default is Edit Metadata.
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab: 'edit' | 'history' = searchParams.get('tab') === 'history' ? 'history' : 'edit';
   const goToTab = (tab: 'edit' | 'history') =>
@@ -130,8 +173,8 @@ export function TagManagement() {
   const [datasets, setDatasets] = useState<TagDataset[]>([]);
   const [suggestedKeys, setSuggestedKeys] = useState<string[]>([]);
 
-  // The working set: tables/views in display order, plus every loaded target
-  // (tables and columns) keyed by targetKey().
+  // The working set: catalogs, schemas, tables and views in display order, plus
+  // every loaded target (those and columns) keyed by targetKey().
   const [order, setOrder] = useState<string[]>([]);
   const [targets, setTargets] = useState<Record<string, EditTarget>>({});
   const [columns, setColumns] = useState<Record<string, ColumnsState>>({});
@@ -142,6 +185,7 @@ export function TagManagement() {
   const [datasetMembers, setDatasetMembers] = useState<Record<string, string[]>>({});
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [isAdding, setIsAdding] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
 
   const [filter, setFilter] = useState('');
   const [changedOnly, setChangedOnly] = useState(false);
@@ -154,7 +198,7 @@ export function TagManagement() {
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
 
   // History detail modal state
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
@@ -213,14 +257,17 @@ export function TagManagement() {
 
   // ---------------------------------------------------------- working set
 
-  /** Add tables to the working set; with `replace`, refresh ones already in it. */
+  const toTarget = (t: TableTags) =>
+    makeTarget(t.table, t.tags, { objectType: t.object_type, exists: t.exists ?? true, comment: t.comment });
+
+  /** Add objects to the working set; with `replace`, refresh ones already in it. */
   const mergeTables = (tables: TableTags[], replace = false) => {
     setTargets((prev) => {
       const next = { ...prev };
       for (const t of tables) {
         const key = targetKey(t.table);
         if (next[key] && !replace) continue;
-        next[key] = makeTarget(t.table, t.tags, { objectType: t.object_type, exists: t.exists ?? true });
+        next[key] = toTarget(t);
       }
       return next;
     });
@@ -272,7 +319,7 @@ export function TagManagement() {
     const edited = tableKeys.filter((k) => tableHasChanges(k));
     if (edited.length === 0) return true;
     return window.confirm(
-      `${edited.length} of these tables have tag edits that haven't been applied. Remove them and discard those edits?`
+      `${edited.length} of these objects have edits that haven't been applied. Remove them and discard those edits?`
     );
   };
 
@@ -291,9 +338,12 @@ export function TagManagement() {
     if (confirmDiscard([key])) removeTable(key);
   };
 
-  const loadColumns = async (tableKey: string, replace = false) => {
-    const parent = targets[tableKey];
-    if (!parent) return;
+  /** Load a table's columns into the working set; returns them as loaded from Unity Catalog. */
+  const loadColumns = async (
+    parent: { table: string; objectType?: string | null },
+    replace = false
+  ): Promise<EditTarget[]> => {
+    const tableKey = targetKey(parent.table);
     setColumns((prev) => ({
       ...prev,
       [tableKey]: { status: 'loading', keys: prev[tableKey]?.keys ?? [], dataTypes: prev[tableKey]?.dataTypes ?? {} },
@@ -319,16 +369,21 @@ export function TagManagement() {
           error: resp.error,
         },
       }));
+      return loaded;
     } catch (e) {
       setColumns((prev) => ({
         ...prev,
         [tableKey]: { status: 'error', keys: [], dataTypes: {}, error: errorText(e, 'Failed to load columns') },
       }));
+      return [];
     }
   };
 
   const changeRows = (key: string, rows: TagRow[]) =>
     setTargets((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], rows } } : prev));
+
+  const changeComment = (key: string, comment: string) =>
+    setTargets((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], comment } } : prev));
 
   const belongsTo = (key: string, tableKey: string) => key === tableKey || key.startsWith(`${tableKey}::`);
 
@@ -361,14 +416,7 @@ export function TagManagement() {
   };
 
   const discardEdits = () =>
-    setTargets((prev) =>
-      Object.fromEntries(
-        Object.entries(prev).map(([k, t]) => [
-          k,
-          { ...t, rows: Object.entries(t.original).map(([key, value]) => ({ key, value })) },
-        ])
-      )
-    );
+    setTargets((prev) => Object.fromEntries(Object.entries(prev).map(([k, t]) => [k, resetTarget(t)])));
 
   const toggleExpanded = (key: string) =>
     setExpanded((prev) => {
@@ -378,21 +426,145 @@ export function TagManagement() {
       return next;
     });
 
+  /** Can this target's tags be changed in the current mode? */
+  const isEditable = (t: EditTarget) => (t.column ? columnsEditable : isContainer(t) ? containersEditable : true);
+
   /** Set (value) or remove (null) one tag on several targets at once. */
   const applyTagTo = (keys: string[], key: string, value: string | null) =>
     setTargets((prev) => {
       const next = { ...prev };
       for (const k of keys) {
         const t = next[k];
-        if (!t) continue;
+        if (!t || !isEditable(t)) continue;
         next[k] = { ...t, rows: value === null ? withoutTag(t.rows, key) : withTag(t.rows, key, value) };
       }
       return next;
     });
 
+  /**
+   * Rename tag key `from` to `to` on several targets, keeping each value.
+   * `current` is the working set to count against when it's ahead of state.
+   */
+  const renameKeyOn = (keys: string[], from: string, to: string, current = targets) => {
+    const counts: Record<RenameOutcome | 'skipped', number> = { renamed: 0, conflict: 0, absent: 0, skipped: 0 };
+    const editable = keys.filter((k) => {
+      const t = current[k];
+      if (t && !isEditable(t)) counts.skipped++;
+      return t && isEditable(t);
+    });
+    for (const k of editable) counts[renameKeyInRows(current[k].rows, from, to).outcome]++;
+    setTargets((prev) => {
+      const next = { ...prev };
+      for (const k of editable) if (next[k]) next[k] = { ...next[k], rows: renameKeyInRows(next[k].rows, from, to).rows };
+      return next;
+    });
+    return counts;
+  };
+
+  const renameMessage = (
+    counts: ReturnType<typeof renameKeyOn>,
+    from: string,
+    to: string,
+    notes: string[] = []
+  ): { type: 'info' | 'error'; text: string } => {
+    const lines = [
+      counts.renamed
+        ? `Renamed ${from} to ${to} on ${plural(counts.renamed, 'object')}, keeping each value. Review & Run Checks to apply it.`
+        : `Nothing was renamed: no editable object in the list has the tag ${from}.`,
+    ];
+    if (counts.conflict)
+      lines.push(
+        `${plural(counts.conflict, 'object')} already had ${to} with a different value and ${
+          counts.conflict === 1 ? 'was' : 'were'
+        } left unchanged. Filter the list by ${from}=* to sort them out by hand.`
+      );
+    if (counts.skipped)
+      lines.push(
+        `${plural(counts.skipped, 'catalog or schema', 'catalogs and schemas')} ${
+          counts.skipped === 1 ? 'was' : 'were'
+        } skipped because their tags can only be changed in Local Execution Mode.`
+      );
+    if (counts.renamed > LOAD_CHUNK)
+      lines.push(
+        `One change can include at most ${LOAD_CHUNK} objects, so remove some from the list and apply the rename in batches.`
+      );
+    return { type: counts.renamed ? 'info' : 'error', text: [...lines, ...notes].join('\n') };
+  };
+
+  /** Rename on everything the list filter shows, and those tables' loaded columns. */
+  const handleListRename = (from: string, to: string) => {
+    const keys = visibleOrder.flatMap((k) => [k, ...(columnsEditable ? columns[k]?.keys ?? [] : [])]);
+    setMessage(renameMessage(renameKeyOn(keys, from, to), from, to));
+  };
+
+  /** Find every object (and, where editable, column) tagged `from`, add them, and rename it. */
+  const handleGlobalRename = async (from: string, to: string) => {
+    setIsRenaming(true);
+    setMessage(null);
+    try {
+      const usage = await api.getTagKeyUsage(from);
+      if (!usage.objects.length && !usage.columns.length) {
+        setMessage({ type: 'error', text: `Nothing to rename: no catalog, schema, table, view or column has the tag ${from}.` });
+        return;
+      }
+      const columnHits = columnsEditable ? usage.columns : [];
+      const parentNames = [...new Set(columnHits.map((c) => c.table))];
+      const wanted = [
+        ...new Map([...usage.objects.map((o) => o.fqn), ...parentNames].map((n) => [targetKey(n), n])).values(),
+      ];
+
+      const loaded: TableTags[] = [];
+      for (const chunk of chunks(
+        wanted.filter((n) => !targets[targetKey(n)]),
+        LOAD_CHUNK
+      )) {
+        const resp = await api.getObjectTags(chunk);
+        if (resp.suggested_keys?.length) setSuggestedKeys(resp.suggested_keys);
+        loaded.push(...resp.tables);
+      }
+      mergeTables(loaded);
+      setPicked((prev) => new Set([...prev, ...wanted.map((n) => targetKey(n))]));
+
+      const current: Record<string, EditTarget> = {};
+      for (const t of loaded) current[targetKey(t.table)] = toTarget(t);
+      const parents = parentNames
+        .map((n) => current[targetKey(n)] ?? targets[targetKey(n)])
+        .filter((p): p is EditTarget => Boolean(p) && columns[p.key]?.status !== 'loaded');
+      for (const batch of chunks(parents, COLUMN_LOADS_AT_ONCE)) {
+        for (const cols of await Promise.all(batch.map((p) => loadColumns(p)))) {
+          for (const c of cols) current[c.key] = c;
+        }
+      }
+      // What's already in the list, with its edits, wins over a fresh load.
+      Object.assign(current, targets);
+
+      const keys = [
+        ...usage.objects.map((o) => targetKey(o.fqn)),
+        ...columnHits.map((c) => targetKey(c.table, c.column)),
+      ];
+      const notes: string[] = [];
+      if (!columnsEditable && usage.columns.length)
+        notes.push(
+          `${plural(usage.columns.length, 'column')} tagged ${from} ${
+            usage.columns.length === 1 ? 'was' : 'were'
+          } left alone because column tags can only be changed in Local Execution Mode.`
+        );
+      if (usage.truncated)
+        notes.push(
+          'There were too many uses to load at once, so only some were renamed. Apply this change, then run the rename again to catch the rest.'
+        );
+      setMessage(renameMessage(renameKeyOn(keys, from, to, current), from, to, notes));
+    } catch (e) {
+      setMessage({ type: 'error', text: errorText(e, `Failed to rename ${from}`) });
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
   // ----------------------------------------------------------------- derived
 
   const columnsEditable = modeInfo?.columns_supported ?? false;
+  const containersEditable = modeInfo?.containers_supported ?? false;
 
   const changedTargets = useMemo(
     () => Object.values(targets).filter((t) => diffTarget(t).changed),
@@ -425,11 +597,15 @@ export function TagManagement() {
     return {
       dataset_id: singleDataset,
       dataset_name: singleDataset,
-      tables: changedTargets.map((t) => ({
-        table: t.table,
-        column: t.column ?? null,
-        desired_tags: diffTarget(t).desired,
-      })),
+      tables: changedTargets.map((t) => {
+        const d = diffTarget(t);
+        return {
+          table: t.table,
+          column: t.column ?? null,
+          desired_tags: d.desired,
+          ...(d.commentChanged ? { desired_comment: t.comment ?? '' } : {}),
+        };
+      }),
     };
   };
 
@@ -452,9 +628,12 @@ export function TagManagement() {
   const refreshWorkingSet = async () => {
     const tables = order.map((k) => targets[k]?.table).filter((t): t is string => Boolean(t));
     if (tables.length === 0) return;
-    const resp = await api.getObjectTags(tables);
-    mergeTables(resp.tables, true);
-    await Promise.all(Object.keys(columns).map((k) => loadColumns(k, true)));
+    for (const chunk of chunks(tables, LOAD_CHUNK)) mergeTables((await api.getObjectTags(chunk)).tables, true);
+    await Promise.all(
+      Object.keys(columns)
+        .filter((k) => targets[k])
+        .map((k) => loadColumns(targets[k], true))
+    );
   };
 
   const handleExecuteChange = async () => {
@@ -470,18 +649,18 @@ export function TagManagement() {
         if (result.status === 'completed') {
           setMessage({
             type: 'success',
-            text: `Tags applied to Unity Catalog for ${count} (${result.applied_count || 0} statement(s) applied, ${result.noop_count || 0} no-op).`,
+            text: `Changes applied to Unity Catalog for ${count} (${result.applied_count || 0} statement(s) applied, ${result.noop_count || 0} no-op).`,
           });
         } else {
           setMessage({
             type: 'error',
-            text: `Some tag changes failed (${result.failed_count || 0} statement(s)). Open the change below for details.`,
+            text: `Some changes failed (${result.failed_count || 0} statement(s)). Open the change in the change history for details.`,
           });
         }
       } else {
         setMessage({
           type: 'success',
-          text: `Tag change submitted for ${count}. A pull request will open shortly for governance review.`,
+          text: `Change submitted for ${count}. A pull request will open shortly for governance review.`,
         });
       }
 
@@ -489,7 +668,7 @@ export function TagManagement() {
       await loadChanges();
       await refreshWorkingSet();
     } catch (e: unknown) {
-      setMessage({ type: 'error', text: errorText(e, 'Failed to execute tag change') });
+      setMessage({ type: 'error', text: errorText(e, 'Failed to execute the change') });
     } finally {
       setIsSubmitting(false);
     }
@@ -528,10 +707,11 @@ export function TagManagement() {
         {/* Page header */}
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900 mb-2">Tag Management</h1>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Metadata Manager</h1>
             <p className="text-gray-600">
-              Find datasets, tables and views, edit their tags and their columns' tags, and review the policy, typo
-              and risk checks before anything is applied.
+              Find datasets, catalogs, schemas, tables and views, edit their tags (and columns' tags), describe
+              catalogs and schemas, rename a tag key everywhere, and review the policy, typo and risk checks before
+              anything is applied.
             </p>
           </div>
           {!isLoadingMode && (
@@ -565,7 +745,7 @@ export function TagManagement() {
               }`}
           >
             <Tags className="w-4 h-4 inline mr-2" />
-            Edit Tags
+            Edit Metadata
             {changedTargets.length > 0 && (
               <span className="ml-2 rounded-full bg-blue-100 px-1.5 py-0.5 text-[11px] font-semibold text-blue-800">
                 {changedTargets.length}
@@ -589,11 +769,15 @@ export function TagManagement() {
             className={`flex items-start gap-2.5 text-sm rounded-lg p-3 border ${
               message.type === 'success'
                 ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : message.type === 'info'
+                ? 'bg-blue-50 border-blue-200 text-blue-900'
                 : 'bg-rose-50 border-rose-200 text-rose-900'
             }`}
           >
             {message.type === 'success' ? (
               <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0 text-emerald-600" />
+            ) : message.type === 'info' ? (
+              <Replace className="w-4 h-4 mt-0.5 shrink-0 text-blue-600" />
             ) : (
               <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-rose-600" />
             )}
@@ -629,9 +813,11 @@ export function TagManagement() {
 
             {isAdding && (
               <p className="flex items-center gap-2 text-xs text-gray-500">
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" /> Loading current tags from Unity Catalog…
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" /> Loading current metadata from Unity Catalog…
               </p>
             )}
+
+            <RenameKeyPanel busy={isRenaming} columnsIncluded={columnsEditable} onRename={handleGlobalRename} />
 
             </CardContent>
           </Card>
@@ -649,7 +835,7 @@ export function TagManagement() {
                   <CardDescription className="text-xs">
                     {addedDatasets.length > 0 &&
                       `From ${addedDatasets.length > 3 ? `${addedDatasets.length} datasets` : addedDatasets.join(', ')}${picked.size ? ' and individual picks' : ''}. `}
-                    Click a row to edit its tags or open its columns.
+                    Click a row to edit its tags, its description (catalogs and schemas) or its columns.
                   </CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
@@ -682,9 +868,10 @@ export function TagManagement() {
               <div className="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
                 <BulkTagBar
                   count={visibleOrder.length}
-                  noun={visibleOrder.length === 1 ? 'table or view' : 'tables & views'}
+                  noun={visibleOrder.length === 1 ? 'object' : 'objects'}
                   onApply={(k, v) => applyTagTo(visibleOrder, k, v)}
                   onRemove={(k) => applyTagTo(visibleOrder, k, null)}
+                  onRename={handleListRename}
                 />
               </div>
             </CardHeader>
@@ -697,12 +884,14 @@ export function TagManagement() {
                   targets={targets}
                   columns={columns[k]}
                   columnsEditable={columnsEditable}
+                  containersEditable={containersEditable}
                   expanded={expanded}
                   onToggle={toggleExpanded}
                   onChangeRows={changeRows}
+                  onChangeComment={changeComment}
                   onBulk={applyTagTo}
                   onRemove={() => confirmDiscard([k]) && removeTable(k)}
-                  onLoadColumns={() => loadColumns(k)}
+                  onLoadColumns={() => loadColumns(targets[k])}
                 />
               ))}
               {visibleOrder.length === 0 && (
@@ -745,7 +934,8 @@ export function TagManagement() {
               <div>
                 <CardTitle className="text-base font-semibold">Change History</CardTitle>
                 <CardDescription className="text-xs">
-                  Every tag change submitted here, with who made it, its checks and risk, and what was applied.
+                  Every tag and description change submitted here, with who made it, its checks and risk, and what was
+                  applied.
                 </CardDescription>
               </div>
               <Button variant="outline" size="sm" onClick={loadChanges} disabled={isLoadingChanges} className="h-8 text-xs">
@@ -778,7 +968,7 @@ export function TagManagement() {
                     {!isLoadingChanges && changes.length === 0 && (
                       <tr>
                         <td colSpan={7} className="py-8 text-center text-gray-400">
-                          No tag changes recorded yet.
+                          No changes recorded yet.
                         </td>
                       </tr>
                     )}
@@ -789,7 +979,7 @@ export function TagManagement() {
                         return (
                           <tr key={c.id} className="hover:bg-gray-50/80 transition-colors">
                             <td className="py-3 px-3 font-medium text-gray-900">
-                              {c.dataset_id || c.title.replace(/^Tag change: /, '').replace(/ \(Local\)$/, '')}
+                              {c.dataset_id || c.title.replace(/^(Tag|Metadata) change: /, '').replace(/ \(Local\)$/, '')}
                             </td>
                             <td className="py-3 px-3">
                               <span
@@ -882,7 +1072,7 @@ export function TagManagement() {
                   </div>
                   <div>
                     <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                      Tag Change Review & Validation
+                      Metadata Change Review & Validation
                       <span
                         className={`text-xs px-2.5 py-0.5 rounded-full font-medium border ${
                           isLocalMode
@@ -1265,57 +1455,67 @@ export function TagManagement() {
                                     {d.removed_keys.length} removed
                                   </span>
                                 )}
+                                {d.comment_changed && (
+                                  <span className="text-amber-700 font-medium ml-2">description</span>
+                                )}
                               </div>
                             </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                              {/* Before */}
-                              <div className="border border-gray-100 rounded-lg p-3 bg-gray-50/50">
-                                <span className="font-semibold text-gray-500 block mb-2">Current Tags (Before):</span>
-                                {Object.keys(d.before || {}).length === 0 ? (
-                                  <p className="text-gray-400 italic">No tags currently set</p>
-                                ) : (
-                                  <div className="space-y-1">
-                                    {Object.entries(d.before).map(([k, v]) => (
-                                      <div key={k} className="flex items-center justify-between font-mono bg-white p-1.5 rounded border border-gray-200">
-                                        <span className="text-gray-700">{k}</span>
-                                        <span className="text-gray-900 font-semibold">{v}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
+                            {d.comment_changed && <CommentDiff before={d.comment_before} after={d.comment_after} />}
 
-                              {/* After */}
-                              <div className="border border-blue-100 rounded-lg p-3 bg-blue-50/30">
-                                <span className="font-semibold text-blue-700 block mb-2">Target Tags (After):</span>
-                                {Object.keys(d.after || {}).length === 0 ? (
-                                  <p className="text-gray-400 italic">All tags will be removed</p>
-                                ) : (
-                                  <div className="space-y-1">
-                                    {Object.entries(d.after).map(([k, v]) => {
-                                      const isNew = !(k in d.before);
-                                      const isModified = k in d.before && d.before[k] !== v;
-                                      return (
-                                        <div
-                                          key={k}
-                                          className={`flex items-center justify-between font-mono p-1.5 rounded border ${
-                                            isNew
-                                              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                                              : isModified
-                                              ? 'bg-amber-50 border-amber-200 text-amber-900'
-                                              : 'bg-white border-gray-200 text-gray-700'
-                                          }`}
-                                        >
-                                          <span>{k}</span>
-                                          <span className="font-semibold">{v}</span>
+                            {(!d.comment_changed ||
+                              d.changed_keys?.length > 0 ||
+                              d.removed_keys?.length > 0 ||
+                              Object.keys(d.before || {}).length > 0) && (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                                {/* Before */}
+                                <div className="border border-gray-100 rounded-lg p-3 bg-gray-50/50">
+                                  <span className="font-semibold text-gray-500 block mb-2">Current Tags (Before):</span>
+                                  {Object.keys(d.before || {}).length === 0 ? (
+                                    <p className="text-gray-400 italic">No tags currently set</p>
+                                  ) : (
+                                    <div className="space-y-1">
+                                      {Object.entries(d.before).map(([k, v]) => (
+                                        <div key={k} className="flex items-center justify-between font-mono bg-white p-1.5 rounded border border-gray-200">
+                                          <span className="text-gray-700">{k}</span>
+                                          <span className="text-gray-900 font-semibold">{v}</span>
                                         </div>
-                                      );
-                                    })}
-                                  </div>
-                                )}
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* After */}
+                                <div className="border border-blue-100 rounded-lg p-3 bg-blue-50/30">
+                                  <span className="font-semibold text-blue-700 block mb-2">Target Tags (After):</span>
+                                  {Object.keys(d.after || {}).length === 0 ? (
+                                    <p className="text-gray-400 italic">All tags will be removed</p>
+                                  ) : (
+                                    <div className="space-y-1">
+                                      {Object.entries(d.after).map(([k, v]) => {
+                                        const isNew = !(k in d.before);
+                                        const isModified = k in d.before && d.before[k] !== v;
+                                        return (
+                                          <div
+                                            key={k}
+                                            className={`flex items-center justify-between font-mono p-1.5 rounded border ${
+                                              isNew
+                                                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                                                : isModified
+                                                ? 'bg-amber-50 border-amber-200 text-amber-900'
+                                                : 'bg-white border-gray-200 text-gray-700'
+                                            }`}
+                                          >
+                                            <span>{k}</span>
+                                            <span className="font-semibold">{v}</span>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
                               </div>
-                            </div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -1413,7 +1613,7 @@ export function TagManagement() {
                   </div>
                   <div>
                     <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                      {historyDetail?.title || 'Tag Change Details'}
+                      {historyDetail?.title || 'Change Details'}
                       {historyDetail?.status && (
                         <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium border ${statusBadge(historyDetail.status, historyDetail.execution_mode).className}`}>
                           {statusBadge(historyDetail.status, historyDetail.execution_mode).label}
@@ -1643,6 +1843,8 @@ export function TagManagement() {
                                 {d.column ? 'Column' : d.object_type}
                               </span>
                             </div>
+
+                            {d.comment_changed && <CommentDiff before={d.comment_before} after={d.comment_after} />}
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                               <div className="border border-gray-100 rounded-lg p-2.5 bg-gray-50/50">

@@ -153,6 +153,57 @@ def test_object_tags_reads_live_type(mock_admin_user):
     assert res.tables[0].exists is True
 
 
+def test_object_tags_returns_a_schemas_description(mock_admin_user):
+    from app.api.v1.tags import ObjectsRequest, get_object_tags
+
+    def execute(statement, **kwargs):
+        rows = {
+            "information_schema.schemata": [["main", "sales", "Sales data"]],
+            "information_schema.schema_tags": [["main", "sales", "domain", "sales"]],
+        }
+        found = next((r for k, r in rows.items() if k in statement), [])
+        return MagicMock(result=MagicMock(data_array=found))
+
+    provider = MagicMock()
+    provider.client.statement_execution.execute_statement.side_effect = execute
+    with patch("app.api.v1.tags._get_provider", return_value=provider):
+        res = get_object_tags(payload=ObjectsRequest(tables=["main.sales"]), current_user=mock_admin_user)
+    t = res.tables[0]
+    assert (t.object_type, t.exists, t.comment, t.tags) == ("SCHEMA", True, "Sales data", {"domain": "sales"})
+
+
+def test_columns_are_refused_for_a_schema(mock_admin_user):
+    from fastapi import HTTPException
+    from app.api.v1.tags import get_table_columns
+
+    with pytest.raises(HTTPException) as exc:
+        get_table_columns(table="main.sales", current_user=mock_admin_user)
+    assert exc.value.status_code == 400
+
+
+def test_key_usage_refuses_the_reserved_key(mock_admin_user):
+    from fastapi import HTTPException
+    from app.api.v1.tags import get_key_usage
+
+    with pytest.raises(HTTPException) as exc:
+        get_key_usage(key="system.certification_status", current_user=mock_admin_user)
+    assert exc.value.status_code == 400
+
+
+def test_key_usage_lists_objects_and_columns(mock_admin_user):
+    from app.api.v1.tags import get_key_usage
+
+    provider = MagicMock()
+    provider.client.statement_execution.execute_statement.return_value = MagicMock(
+        result=MagicMock(data_array=[["main", "sales", None, None], ["main", "sales", "orders", "email"]])
+    )
+    with patch("app.api.v1.tags._get_provider", return_value=provider):
+        res = get_key_usage(key=" domains ", current_user=mock_admin_user)
+    assert res.key == "domains"
+    assert [(o.fqn, o.object_type) for o in res.objects] == [("main.sales", "SCHEMA")]
+    assert [(c.table, c.column) for c in res.columns] == [("main.sales.orders", "email")]
+
+
 @pytest.mark.asyncio
 async def test_preview_without_a_dataset_covers_a_column(mock_admin_user):
     with patch("app.api.v1.tags._get_provider", return_value=_metadata_provider()), \

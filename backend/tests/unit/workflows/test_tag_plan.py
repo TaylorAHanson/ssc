@@ -201,12 +201,21 @@ def test_missing_column_is_reported_by_label():
     "main.sales.orders; DROP TABLE x",
     "main.sales.`orders`",
     "main.sales.o'rders",
-    "main.sales",
+    "main.sales.orders.extra",
     "main..orders",
+    "",
+    "main;",
 ])
-def test_unsafe_or_malformed_table_names_are_rejected(name):
+def test_unsafe_or_malformed_names_are_rejected(name):
     with pytest.raises(ValueError):
         validate_target(name)
+
+
+def test_catalogs_and_schemas_are_valid_targets_but_have_no_columns():
+    validate_target("main")
+    validate_target("main.sales")
+    with pytest.raises(ValueError):
+        validate_target("main.sales", "email")
 
 
 def test_column_names_may_have_spaces_but_not_backticks():
@@ -303,3 +312,100 @@ def test_only_the_certification_tag_is_kept_out_of_edits():
     assert diff.after == {"system.owner_note": "x"}
     assert diff.removed_keys == ["system.deprecated"]
     assert diff.certified is True
+
+
+# --- Catalogs, schemas and descriptions ----------------------------------------
+
+from app.workflows.tag_plan import CATALOG, SCHEMA, sql_string_literal
+
+
+def test_string_literals_escape_backslashes_and_quotes():
+    # Databricks concatenates adjacent literals, so a doubled quote would drop the apostrophe.
+    assert sql_string_literal("It's") == "'It\\'s'"
+    assert sql_string_literal("a\\") == "'a\\\\'"
+    assert sql_string_literal("a\\'b") == "'a\\\\\\'b'"
+
+
+def test_tag_values_with_quotes_are_escaped_in_statements():
+    plan = build_tag_plan([{"table": "main.s.t", "desired_tags": {"owner": "O'Brien"}}],
+                          {"main.s.t": ObjectState(display="main.s.t", exists=True)})
+    assert plan.statements == ["ALTER TABLE `main`.`s`.`t` SET TAGS ('owner' = 'O\\'Brien');"]
+
+
+def test_catalog_and_schema_tags_use_their_own_alter_statements():
+    live_state = {
+        "main": ObjectState(display="main", object_type=CATALOG, exists=True, tags={"old": "x"}),
+        "main.sales": ObjectState(display="main.sales", object_type=SCHEMA, exists=True),
+    }
+    plan = build_tag_plan(
+        [{"table": "main", "desired_tags": {"domain": "core"}},
+         {"table": "main.sales", "desired_tags": {"domain": "sales"}}],
+        live_state,
+    )
+    assert plan.has_container_changes
+    assert plan.statements == [
+        "ALTER CATALOG `main` SET TAGS ('domain' = 'core');",
+        "ALTER CATALOG `main` UNSET TAGS ('old');",
+        "ALTER SCHEMA `main`.`sales` SET TAGS ('domain' = 'sales');",
+    ]
+
+
+def test_missing_catalog_or_schema_keeps_its_type():
+    plan = build_tag_plan([{"table": "nope.s", "desired_tags": {"k": "v"}}], {})
+    assert plan.missing_objects == ["nope.s"]
+    assert plan.statements == ["ALTER SCHEMA `nope`.`s` SET TAGS ('k' = 'v');"]
+
+
+def test_description_changes_on_catalogs_and_schemas():
+    live_state = {
+        "main": ObjectState(display="main", object_type=CATALOG, exists=True, comment="Old"),
+        "main.sales": ObjectState(display="main.sales", object_type=SCHEMA, exists=True, comment="Keep"),
+        "main.hr": ObjectState(display="main.hr", object_type=SCHEMA, exists=True, comment="Gone soon"),
+    }
+    plan = build_tag_plan(
+        [{"table": "main", "desired_tags": {}, "desired_comment": "Finance team's data"},
+         {"table": "main.sales", "desired_tags": {}, "desired_comment": "Keep"},
+         {"table": "main.hr", "desired_tags": {}, "desired_comment": ""}],
+        live_state,
+    )
+    assert plan.statements == [
+        "COMMENT ON CATALOG `main` IS 'Finance team\\'s data';",
+        "COMMENT ON SCHEMA `main`.`hr` IS NULL;",
+    ]
+    assert plan.object_count == 2
+    d = plan.diffs["main"].to_dict()
+    assert (d["comment_before"], d["comment_after"], d["comment_changed"]) == ("Old", "Finance team's data", True)
+    assert not plan.diffs["main.sales"].has_changes
+
+
+def test_description_is_left_alone_when_not_requested():
+    live_state = {"main": ObjectState(display="main", object_type=CATALOG, exists=True, comment="Old")}
+    plan = build_tag_plan([{"table": "main", "desired_tags": {"k": "v"}}], live_state)
+    assert plan.diffs["main"].comment_after is None
+    assert not any(s.startswith("COMMENT") for s in plan.statements)
+
+
+def test_fetch_live_state_reads_catalogs_and_schemas_from_system_information_schema():
+    def execute(statement, **kwargs):
+        if "information_schema.catalogs" in statement:
+            rows = [["main", "Main catalog"]]
+        elif "information_schema.catalog_tags" in statement:
+            rows = [["main", "domain", "core"], ["main", "system.certification_status", "certified"]]
+        elif "information_schema.schemata" in statement:
+            rows = [["main", "sales", None]]
+        elif "information_schema.schema_tags" in statement:
+            rows = [["main", "sales", "pii", None]]
+        else:
+            rows = []
+        return MagicMock(result=MagicMock(data_array=rows))
+
+    provider = MagicMock()
+    provider.client.statement_execution.execute_statement.side_effect = execute
+    state = fetch_live_state(provider, ["main", "main.sales", "main.gone"])
+    assert (state["main"].object_type, state["main"].exists, state["main"].comment) == (CATALOG, True, "Main catalog")
+    assert state["main"].tags == {"domain": "core"}
+    assert state["main"].all_tags["system.certification_status"] == "certified"
+    assert (state["main.sales"].object_type, state["main.sales"].comment, state["main.sales"].tags) == (SCHEMA, "", {"pii": ""})
+    assert state["main.gone"].exists is False
+    statements = [c.kwargs["statement"] for c in provider.client.statement_execution.execute_statement.call_args_list]
+    assert all("system.information_schema" in s for s in statements)

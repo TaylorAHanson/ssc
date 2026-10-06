@@ -11,6 +11,17 @@ Format rules (the app parses this file, so keep to them):
   subheading. Plain markdown only.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 1.5.0 — 2026-10-06
+
+### Metadata Manager
+
+- Tag Management is now called **Metadata Manager**, because it now edits more than tags. Old links to the page still work.
+- You can now tag catalogs and schemas, not just tables and views. Search finds them by name or by tag and lists them in their own group, and they go through the same policy, typo, access-policy and risk checks before anything is applied. Tags on a catalog or schema are inherited by everything inside it, so the AI review calls that out.
+- You can now edit the description of a catalog or schema. Open its row, change the **Description** box, and review the before and after with the rest of the change. Clearing the box removes the description.
+- New **Rename a tag key everywhere** tool: enter the old and new key (for example, `domains` to `domain`), and every catalog, schema, table, view and column carrying the old key is added to your list with the key renamed and its value kept. Anything that already has the new key with a different value is left for you to sort out by hand. Nothing is applied until you review and run the checks.
+- The bulk bar above your list can also rename a key on just the objects your filter shows.
+- Catalog and schema changes need Local Execution Mode. When changes go through pull requests, catalogs and schemas can be viewed but not edited, and column uses of a key are left out of a rename.
+
 ## 1.4.0 — 2026-10-05
 
 ### Preview Features

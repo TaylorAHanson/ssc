@@ -425,25 +425,25 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "type": "string",
      "help": "OmniGuard scans every target workspace for compute/apps/jobs, but data certification is Unity Catalog (metastore) scoped, so it runs ONCE against a single workspace. Enter the NAME of the target workspace that should run it, or leave blank to use the app's own home workspace. This workspace's service principal is ALSO the governance identity for other metastore-global reads — notably the data-asset cache sync that powers the data catalog — so it must have BROWSE on the scanned catalogs and CAN USE on the SQL warehouse. The DQ table + ADOC schema always come from the settings above."},
 
-    # --- Tag Management -------------------------------------------------
-    {"group": "Tag Management", "key": "GOVERNANCE_TAGS_LOCAL_MODE", "label": "Local execution mode",
+    # --- Metadata Manager -----------------------------------------------
+    {"group": "Metadata Manager", "key": "GOVERNANCE_TAGS_LOCAL_MODE", "label": "Local execution mode",
      "type": "bool",
-     "help": "When enabled, tag changes are planned, validated, risk-assessed, and applied directly to "
+     "help": "When enabled, tag and description changes are planned, validated, risk-assessed, and applied directly to "
              "Unity Catalog from the app without opening a GitHub PR or requiring GitHub Actions. "
              "Useful when GitHub Actions / network connectivity is blocked or unavailable."},
-    {"group": "Tag Management", "key": "GOVERNANCE_TAGS_REPO", "label": "Tag governance repo",
+    {"group": "Metadata Manager", "key": "GOVERNANCE_TAGS_REPO", "label": "Tag governance repo",
      "type": "string",
      "help": "Repository the app opens tag-change PRs against (GitOps mode) — 'owner/repo', or a bare name "
              "resolved against the GitHub org. Blank in GitOps mode = tag changes are rejected at submit."},
-    {"group": "Tag Management", "key": "GOVERNANCE_TAGS_BASE_BRANCH", "label": "Base branch",
+    {"group": "Metadata Manager", "key": "GOVERNANCE_TAGS_BASE_BRANCH", "label": "Base branch",
      "type": "string",
      "help": "Branch this deployment's PRs target in GitOps mode. The governance repo keeps one long-lived "
              "branch per environment (e.g. dev / test / stage / prod) and merging is what applies the tags."},
-    {"group": "Tag Management", "key": "GOVERNANCE_TAGS_PATH", "label": "Migrations path",
+    {"group": "Metadata Manager", "key": "GOVERNANCE_TAGS_PATH", "label": "Migrations path",
      "type": "string",
      "help": "Directory in the repo where generated .sql migrations are committed. The repo's validation "
              "workflow only looks at files under this path."},
-    {"group": "Tag Management", "key": "GOVERNANCE_TAGS_LEDGER_TABLE", "label": "Apply ledger table",
+    {"group": "Metadata Manager", "key": "GOVERNANCE_TAGS_LEDGER_TABLE", "label": "Apply ledger table",
      "type": "string",
      "help": "Fully-qualified Delta table (catalog.schema.table) the apply job writes each migration's "
              "outcome to. The app reads/updates it to track and verify tag changes. Blank = unverified."},
@@ -567,7 +567,7 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
 # field's ``requires`` in the group (on top of any per-field ``requires``).
 GROUP_REQUIRES: Dict[str, List[str]] = {
     "Calendar": ["features.calendar"],
-    "Tag Management": ["features.governance"],
+    "Metadata Manager": ["features.governance"],
     "Workflow Studio": ["features.workflow_authoring"],
     "Preview Features": ["features.preview_features"],
 }
@@ -637,7 +637,7 @@ SECTIONS: List[Dict[str, Any]] = [
     {"title": "Discover & Analyze", "groups": ["Agent", "Data Catalog"]},
     {"title": "Requests & Approvals", "groups": ["Group Management (LMWS)", "App Code Review"]},
     {"title": "Learn & Share", "groups": ["Links & Embedded Apps", "Calendar"]},
-    {"title": "Watch Tower", "groups": ["OmniGuard", "Target Workspaces", "Data Certification", "Tag Management"]},
+    {"title": "Watch Tower", "groups": ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager"]},
     {"title": "Control Tower", "groups": ["Workflow Studio", "Preview Features"]},
     {"title": "Platform", "groups": ["Infrastructure"]},
 ]
@@ -668,10 +668,11 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "and what may be remediated automatically."
     ),
     "Data Certification": "Where data-quality history comes from, how often data contracts are redrafted, and which workspace runs certification.",
-    "Tag Management": (
+    "Metadata Manager": (
         "Tag changes are committed as SQL to a governance repo and applied by that repo's workflow on merge "
         "(or applied directly in local mode). Point the app at the repo, this environment's branch, and the "
-        "ledger table it reads to confirm each apply."
+        "ledger table it reads to confirm each apply. Column, catalog and schema tags, and catalog and schema "
+        "descriptions, can only be changed in local mode."
     ),
     "Workflow Studio": "Whether workflows can be edited in place, the authoring assistant's budget, and how workflow test cases run.",
     "Preview Features": (
@@ -761,7 +762,7 @@ CAPABILITIES: List[Dict[str, Any]] = [
          {"key": "certification", "label": "Show Data Certification (ODCS)"},
          {"key": "odps", "label": "Show Data Products (ODPS)"},
          {"key": "allowlist", "label": "Show Allowlist"},
-         {"key": "tag_management", "label": "Show Tag Management"},
+         {"key": "tag_management", "label": "Show Metadata Manager"},
      ]},
     {"id": "sentinel", "section": "Watch Tower", "label": "OmniGuard", "feature": "sentinel", "tabs": ["sentinel"]},
 
@@ -799,7 +800,7 @@ CAPABILITY_SECTIONS: List[str] = [
 # description (safe for flags added later).
 FEATURE_DESCRIPTIONS: Dict[str, str] = {
     "core": "Base platform capabilities. Keep this on — turning it off disables the core app experience.",
-    "governance": "The data governance pages: data certification (ODCS), data products (ODPS), the allowlist, and tag management.",
+    "governance": "The data governance pages: data certification (ODCS), data products (ODPS), the allowlist, and the metadata manager (tags and descriptions).",
     "data_discovery": "Browse and search the synced Unity Catalog data catalog. Also enables the background data-asset sync.",
     "calendar": "The event calendar page and its background calendar sync.",
     "sentinel": (

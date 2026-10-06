@@ -69,6 +69,63 @@ def test_gitops_sql_refuses_column_changes():
         build_tag_sql([{"table": "main.s.t", "column": "c", "set": {"a": "b"}, "unset": []}])
 
 
+@pytest.mark.parametrize("change", [
+    {"table": "main.sales", "kind": "schema", "set": {"a": "b"}, "unset": []},
+    {"table": "main", "kind": "catalog", "set": {}, "unset": ["a"]},
+    {"table": "main", "kind": "catalog", "set": {}, "unset": [], "comment": "x"},
+])
+def test_gitops_sql_refuses_catalog_schema_and_description_changes(change):
+    with pytest.raises(ValueError):
+        build_tag_sql([change])
+
+
+def _uc_with_containers(statement):
+    if "information_schema.catalogs" in statement:
+        return [["main", "Old description"]]
+    if "information_schema.schemata" in statement:
+        return [["main", "sales", ""]]
+    return _uc(statement)
+
+
+def test_gitops_mode_blocks_catalog_and_schema_changes():
+    targets = [engine.TagTarget(table="main.sales", desired_tags={"domain": "sales"})]
+    evaluation = engine.evaluate(_provider(_uc_with_containers), get_default_policy(), targets, local_mode=False)
+    assert engine.GITOPS_CONTAINERS_UNSUPPORTED in evaluation.violations
+    assert evaluation.changes == [{"table": "main.sales", "set": {"domain": "sales"}, "unset": [], "kind": "schema"}]
+    # The repo-format statements can't express this, so the preview shows the plan's own.
+    assert evaluation.plan_dict()["statements"] == ["ALTER SCHEMA `main`.`sales` SET TAGS ('domain' = 'sales');"]
+
+
+def test_local_mode_changes_a_catalog_description_and_tags():
+    targets = [engine.TagTarget(table="main", desired_tags={"domain": "core"}, desired_comment="Core data")]
+    evaluation = engine.evaluate(_provider(_uc_with_containers), get_default_policy(), targets, local_mode=True)
+    assert evaluation.valid
+    assert evaluation.changes == [
+        {"table": "main", "set": {"domain": "core"}, "unset": [], "kind": "catalog", "comment": "Core data"}
+    ]
+    assert evaluation.plan.statements == [
+        "COMMENT ON CATALOG `main` IS 'Core data';",
+        "ALTER CATALOG `main` SET TAGS ('domain' = 'core');",
+    ]
+
+
+def test_description_only_change_is_a_change():
+    targets = [engine.TagTarget(table="main.sales", desired_tags={}, desired_comment="Sales data")]
+    evaluation = engine.evaluate(_provider(_uc_with_containers), get_default_policy(), targets, local_mode=True)
+    assert evaluation.plan.object_count == 1
+    assert evaluation.risk.object_count == 1
+    assert evaluation.changes[0]["comment"] == "Sales data"
+
+
+def test_descriptions_are_refused_on_tables_and_columns():
+    for target in (
+        engine.TagTarget(table="main.sales.orders", desired_tags={}, desired_comment="x"),
+        engine.TagTarget(table="main.sales.orders", column="email", desired_tags={}, desired_comment="x"),
+    ):
+        with pytest.raises(engine.TagChangeError):
+            engine.validate_targets([target])
+
+
 def test_scope_label_summarises_ad_hoc_changes():
     one = [engine.TagTarget(table="main.s.a", desired_tags={})]
     many = one + [engine.TagTarget(table="main.s.b", desired_tags={}), engine.TagTarget(table="main.s.a", column="c", desired_tags={})]
@@ -123,8 +180,53 @@ def cached_assets(db_session):
 
 def test_name_search_uses_the_cache_and_skips_untaggable_entries(cached_assets):
     result = search.search(cached_assets, None, "sales")
-    assert [o.fqn for o in result.objects] == ["main.sales.order_items", "main.sales.orders", "main.sales.orders_v"]
-    assert result.objects[1].tag_keys == ["data_owner", "dataset"]
+    assert [o.fqn for o in result.objects] == [
+        "main.sales", "main.sales.order_items", "main.sales.orders", "main.sales.orders_v",
+    ]
+    assert result.objects[0].object_type == "SCHEMA"
+    assert result.objects[2].tag_keys == ["data_owner", "dataset"]
+
+
+def test_name_search_lists_catalogs_then_schemas_then_tables(cached_assets):
+    result = search.search(cached_assets, None, "main")
+    assert [(o.fqn, o.object_type) for o in result.objects[:3]] == [
+        ("main", "CATALOG"), ("main.finance", "SCHEMA"), ("main.sales", "SCHEMA"),
+    ]
+    assert "main.information_schema" not in [o.fqn for o in result.objects]
+
+
+def test_tag_filters_also_find_catalogs_and_schemas(cached_assets):
+    rows = [["main", None, None, "core"], ["main", "sales", None, "sales"], ["main", "sales", "orders", "sales"]]
+    provider = _provider(lambda s: rows if "'domain'" in s else [])
+    result = search.search(cached_assets, provider, "domain=*")
+    assert [(o.fqn, o.object_type) for o in result.objects] == [
+        ("main", "CATALOG"), ("main.sales", "SCHEMA"), ("main.sales.orders", "MANAGED"),
+    ]
+    statement = provider.client.statement_execution.execute_statement.call_args.kwargs["statement"]
+    assert "catalog_tags" in statement and "schema_tags" in statement and "table_tags" in statement
+
+
+def test_key_usage_splits_objects_and_columns():
+    rows = [
+        ["main", None, None, None],
+        ["main", "sales", None, None],
+        ["main", "sales", "orders", None],
+        ["main", "sales", "orders", "email"],
+        ["main", "sales", "orders", "email"],
+    ]
+    usage = search.key_usage(_provider(lambda s: rows), "domains")
+    assert [(o.fqn, o.object_type) for o in usage.objects] == [
+        ("main", "CATALOG"), ("main.sales", "SCHEMA"), ("main.sales.orders", None),
+    ]
+    assert usage.columns == [("main.sales.orders", "email")]
+    assert usage.truncated is False
+
+
+def test_key_usage_escapes_the_key():
+    provider = _provider(lambda s: [])
+    search.key_usage(provider, "it's\\")
+    statement = provider.client.statement_execution.execute_statement.call_args.kwargs["statement"]
+    assert "tag_name = 'it\\'s\\\\'" in statement
 
 
 def test_words_must_all_match_and_underscores_are_literal(cached_assets):

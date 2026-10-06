@@ -64,7 +64,7 @@ def test_section_layout():
         ("Discover & Analyze", ["Agent", "Data Catalog"]),
         ("Requests & Approvals", ["Group Management (LMWS)", "App Code Review"]),
         ("Learn & Share", ["Links & Embedded Apps", "Calendar"]),
-        ("Watch Tower", ["OmniGuard", "Target Workspaces", "Data Certification", "Tag Management"]),
+        ("Watch Tower", ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager"]),
         ("Control Tower", ["Workflow Studio", "Preview Features"]),
         ("Platform", ["Infrastructure"]),
     ]

@@ -1,16 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Layers, Loader2, Search, Table2, X } from 'lucide-react';
+import { Database, FolderTree, Layers, Loader2, Search, Table2, X } from 'lucide-react';
 import { api } from '../../../services/api';
 import type { TagDataset, TagSearchResponse } from '../../../services/api';
-import { errorText, typeLabel } from './tagModel';
+import { errorText, isContainerName, typeLabel } from './tagModel';
 
 const VISIBLE_OBJECTS = 8;
+const VISIBLE_CONTAINERS = 4;
 // While typing, datasets are capped so tables stay visible; "show more" lifts it.
 const VISIBLE_DATASETS = 5;
 
 type Item =
   | { kind: 'dataset'; id: string; scope: string }
-  | { kind: 'object'; fqn: string; type: string; tagCount: number; inCache: boolean };
+  | {
+      kind: 'object';
+      group: 'container' | 'table';
+      fqn: string;
+      objectType: string;
+      type: string;
+      tagCount: number;
+      inCache: boolean;
+    };
+
+const GROUP_LABELS = { container: 'Catalogs & schemas', table: 'Tables & views' };
+
+function groupOf(item: Item): string {
+  return item.kind === 'dataset' ? 'dataset' : item.group;
+}
 
 function matchesWords(name: string, query: string): boolean {
   const lowered = name.toLowerCase();
@@ -29,7 +44,7 @@ function matchesWords(name: string, query: string): boolean {
 }
 
 // One box for everything. Click it to browse every governed dataset; type to
-// find tables and views too, by name, glob (main.sales.*), or tag
+// find catalogs, schemas, tables and views too, by name, glob (main.sales.*), or tag
 // (classification=restricted, data_owner=*, !data_owner). Each result's
 // checkbox means "in my list": ticking adds it straight away, unticking removes it.
 export function TagSearchBox({
@@ -117,14 +132,25 @@ export function TagSearchBox({
       id: d.dataset_id,
       scope: [d.catalog, d.schema_name].filter(Boolean).join('.'),
     }));
-    const objs: Item[] = (q && result ? result.objects : []).slice(0, VISIBLE_OBJECTS).map((o) => ({
+    const found = q && result ? result.objects : [];
+    const toItem = (o: TagSearchResponse['objects'][number], group: 'container' | 'table'): Item => ({
       kind: 'object',
+      group,
       fqn: o.fqn,
+      objectType: o.object_type ?? '',
       type: typeLabel(o.object_type),
       tagCount: o.tag_keys.length,
       inCache: o.in_cache,
-    }));
-    return [...ds, ...objs];
+    });
+    const containers = found
+      .filter((o) => isContainerName(o.fqn))
+      .slice(0, VISIBLE_CONTAINERS)
+      .map((o) => toItem(o, 'container'));
+    const tables = found
+      .filter((o) => !isContainerName(o.fqn))
+      .slice(0, VISIBLE_OBJECTS)
+      .map((o) => toItem(o, 'table'));
+    return [...ds, ...containers, ...tables];
   }, [matchingDatasets, datasetCount, result, q]);
 
   const allFqns = q && result ? result.objects.map((o) => o.fqn) : [];
@@ -202,6 +228,7 @@ export function TagSearchBox({
   };
 
   const totalObjects = q && result ? result.total_objects : 0;
+  const shownObjects = items.length - datasetCount;
 
   return (
     <div ref={boxRef} className="relative">
@@ -217,8 +244,8 @@ export function TagSearchBox({
           onFocus={() => setOpen(true)}
           onClick={() => setOpen(true)}
           onKeyDown={onKeyDown}
-          placeholder={`Search ${datasets.length ? `${datasets.length} datasets and ` : ''}all tables and views…`}
-          aria-label="Find datasets, tables or views"
+          placeholder={`Search ${datasets.length ? `${datasets.length} datasets, ` : ''}catalogs, schemas, tables and views…`}
+          aria-label="Find datasets, catalogs, schemas, tables or views"
           className="w-full h-11 pl-9 pr-9 rounded-lg border border-gray-300 bg-white text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
         />
         {loading ? (
@@ -235,7 +262,8 @@ export function TagSearchBox({
         ) : null}
       </div>
       <p className="mt-1.5 text-[11px] text-gray-500">
-        Click to browse datasets, or type a name. Also try <code className="text-gray-700">main.sales.*</code>,{' '}
+        Click to browse datasets, or type a name — catalogs and schemas match too. Also try{' '}
+        <code className="text-gray-700">main.sales.*</code>,{' '}
         <code className="text-gray-700">classification=restricted</code> or{' '}
         <code className="text-gray-700">!data_owner</code> (missing a tag).
       </p>
@@ -253,7 +281,7 @@ export function TagSearchBox({
           )}
           {!q && datasets.length === 0 && (
             <div className="px-3 py-3 text-xs text-gray-500">
-              No governed datasets yet — type to find tables and views.
+              No governed datasets yet — type to find catalogs, schemas, tables and views.
             </div>
           )}
 
@@ -261,11 +289,11 @@ export function TagSearchBox({
             <ul role="listbox" aria-multiselectable="true" className="max-h-96 overflow-y-auto py-1">
               {items.map((item, idx) => {
                 const header =
-                  idx === 0 && item.kind === 'dataset'
+                  idx > 0 && groupOf(items[idx - 1]) === groupOf(item)
+                    ? null
+                    : item.kind === 'dataset'
                     ? `Datasets (${matchingDatasets.length})`
-                    : idx === datasetCount && item.kind === 'object'
-                    ? 'Tables & views'
-                    : null;
+                    : GROUP_LABELS[item.group];
                 const checked = isChecked(item);
                 const busy = pending.has(pendingKey(item));
                 const tableCount = item.kind === 'dataset' ? datasetTableCount(item.id) : undefined;
@@ -307,7 +335,13 @@ export function TagSearchBox({
                         </>
                       ) : (
                         <>
-                          <Table2 className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                          {item.objectType === 'CATALOG' ? (
+                            <Database className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                          ) : item.objectType === 'SCHEMA' ? (
+                            <FolderTree className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                          ) : (
+                            <Table2 className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                          )}
                           <span className="font-mono text-gray-900 truncate">{item.fqn}</span>
                           <span className="text-[10px] uppercase text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded shrink-0">
                             {item.inCache ? item.type : 'Unverified'}
@@ -338,13 +372,13 @@ export function TagSearchBox({
           <div className="flex items-center justify-between gap-3 border-t border-gray-100 bg-gray-50/70 px-3 py-2 text-[11px] text-gray-600">
             <span>
               <strong className="text-gray-900">{listSize}</strong> in your list
-              {totalObjects > VISIBLE_OBJECTS && ` · showing ${VISIBLE_OBJECTS} of ${totalObjects} tables & views`}
+              {totalObjects > shownObjects && ` · showing ${shownObjects} of ${totalObjects} matches`}
               {q && result?.truncated && ' — narrow the search to see everything'}
             </span>
             <span className="flex items-center gap-3">
               {notYetAdded.length > 1 && (
                 <button type="button" onClick={selectAll} className="font-semibold text-blue-700 hover:text-blue-900">
-                  Select all {notYetAdded.length} tables & views
+                  Select all {notYetAdded.length} matches
                   {isPattern ? ' ↵' : ''}
                 </button>
               )}

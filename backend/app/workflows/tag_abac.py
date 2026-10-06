@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from app.workflows.tag_plan import TagPlan, _normalize_fqn
+from app.workflows.tag_plan import TagPlan, _normalize_fqn, container_type
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,11 @@ def _references(policy) -> List[TagReference]:
 
 
 def fetch_abac_references(provider, tables: List[str]) -> AbacReferences:
-    """Tag conditions of every ABAC policy that applies to each table (incl. inherited)."""
+    """Tag conditions of every ABAC policy that applies to each object (incl. inherited).
+
+    ``tables`` may also name catalogs and schemas; for those it's the policies
+    defined on them or above, whose table conditions see their (inherited) tags.
+    """
     result = AbacReferences()
     unique = sorted({_normalize_fqn(t): t for t in tables}.items())
     checked, skipped = unique[:MAX_TABLES], unique[MAX_TABLES:]
@@ -86,8 +90,9 @@ def fetch_abac_references(provider, tables: List[str]) -> AbacReferences:
 
     def load(item):
         norm, name = item
+        securable = (container_type(name) or "table").lower()
         try:
-            policies = list(provider.client.policies.list_policies("table", name, include_inherited=True))
+            policies = list(provider.client.policies.list_policies(securable, name, include_inherited=True))
         except Exception as e:  # noqa: BLE001 - advisory; reported as unchecked
             logger.info(f"Could not read ABAC policies for {name}: {e}")
             return norm, name, None

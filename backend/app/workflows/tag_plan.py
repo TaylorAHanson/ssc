@@ -1,13 +1,15 @@
 """
 Tag Plan & Diff Engine.
 
-Queries live Unity Catalog state for objects (tables, views and their columns),
-discovers current tag vocabulary across catalogs, and computes precise
-before/after diffs and narrowed SQL statements (dropping redundant SETs and
-non-existent UNSETs).
+Queries live Unity Catalog state for objects (catalogs, schemas, tables, views
+and their columns), discovers current tag vocabulary across catalogs, and
+computes precise before/after diffs and narrowed SQL statements (dropping
+redundant SETs and non-existent UNSETs).
 
-A *target* is a table or view, or one column of one. Targets are keyed by
-``target_key``: the lower-cased three-part name, plus ``::<column>`` for a column.
+A *target* is a catalog (``main``), a schema (``main.sales``), a table or view
+(``main.sales.orders``), or one column of a table or view. Targets are keyed by
+``target_key``: the lower-cased name, plus ``::<column>`` for a column. Catalogs
+and schemas can also have their description (comment) changed.
 """
 import logging
 import re
@@ -16,9 +18,12 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.config import settings
-from app.workflows.tag_sql import _escape_sql_literal
 
 logger = logging.getLogger(__name__)
+
+CATALOG = "CATALOG"
+SCHEMA = "SCHEMA"
+CONTAINER_TYPES = (CATALOG, SCHEMA)
 
 DATASET_KEY = "dataset"
 CERTIFICATION_KEY = "system.certification_status"
@@ -46,23 +51,26 @@ _UNSAFE_COLUMN_NAME = re.compile(r"[`\x00-\x1f\x7f]")
 class ObjectState:
     display: str
     exists: bool = False
-    object_type: str = "TABLE"  # relation_type() of the table/view (also for a column target)
+    # CATALOG, SCHEMA, or relation_type() of the table/view (also for a column target)
+    object_type: str = "TABLE"
     tags: Dict[str, str] = field(default_factory=dict)
     all_tags: Dict[str, str] = field(default_factory=dict)  # includes reserved (OmniGuard) tags
     column: Optional[str] = None
+    comment: Optional[str] = None  # read for catalogs and schemas only
 
 
 @dataclass
 class StatementPlan:
     table: str
     object_type: str
-    operation: str  # "set" or "unset"
+    operation: str  # "set", "unset" or "comment"
     tags: Dict[str, str] = field(default_factory=dict)
     keys: List[str] = field(default_factory=list)
     sql: str = ""
     is_noop: bool = False
     noop_reason: Optional[str] = None
     column: Optional[str] = None
+    comment: Optional[str] = None
 
     @property
     def label(self) -> str:
@@ -78,6 +86,9 @@ class ObjectDiff:
     after: Dict[str, str]
     column: Optional[str] = None
     certified: bool = False
+    comment_before: Optional[str] = None
+    # None: the description isn't part of this change; "" clears it.
+    comment_after: Optional[str] = None
 
     @property
     def label(self) -> str:
@@ -87,6 +98,14 @@ class ObjectDiff:
     def changed_keys(self) -> List[str]:
         keys = set(self.before) | set(self.after)
         return sorted(k for k in keys if self.before.get(k) != self.after.get(k))
+
+    @property
+    def comment_changed(self) -> bool:
+        return self.comment_after is not None and self.comment_after != (self.comment_before or "")
+
+    @property
+    def has_changes(self) -> bool:
+        return bool(self.changed_keys) or self.comment_changed
 
     @property
     def unchanged_keys(self) -> List[str]:
@@ -127,6 +146,9 @@ class ObjectDiff:
             "removed_keys": self.removed_keys,
             "overwritten_keys": self.overwritten_keys,
             "unchanged_keys": self.unchanged_keys,
+            "comment_before": self.comment_before,
+            "comment_after": self.comment_after,
+            "comment_changed": self.comment_changed,
         }
 
 
@@ -158,14 +180,18 @@ class TagPlan:
 
     @property
     def object_count(self) -> int:
-        return len([d for d in self.diffs.values() if d.changed_keys])
+        return len([d for d in self.diffs.values() if d.has_changes])
 
     @property
     def has_column_changes(self) -> bool:
         return any(d.column and d.changed_keys for d in self.diffs.values())
 
+    @property
+    def has_container_changes(self) -> bool:
+        return any(d.object_type in CONTAINER_TYPES and d.has_changes for d in self.diffs.values())
+
     def to_dict(self) -> Dict[str, Any]:
-        changed_diffs = [d.to_dict() for d in self.diffs.values() if d.changed_keys]
+        changed_diffs = [d.to_dict() for d in self.diffs.values() if d.has_changes]
         statements = [p.sql for p in self.actionable if p.sql]
         return {
             "summary": f"{self.statement_count} statement(s) to run across {self.object_count} object(s); {len(self.noops)} no-op(s).",
@@ -198,16 +224,28 @@ class TagVocabulary:
 # Names, keys and SQL
 # ---------------------------------------------------------------------------
 
+def name_parts(name: str) -> List[str]:
+    """``catalog``, ``catalog.schema`` or ``catalog.schema.table``, split and stripped."""
+    parts = [p.strip() for p in (name or "").strip().split(".")]
+    if not 1 <= len(parts) <= 3 or not all(parts):
+        raise ValueError(f"Expected catalog, catalog.schema or catalog.schema.table, got: '{name}'")
+    return parts
+
+
+def container_type(name: str) -> Optional[str]:
+    """CATALOG for a one-part name, SCHEMA for two parts, None for a table or view."""
+    return {1: CATALOG, 2: SCHEMA}.get(len(name_parts(name)))
+
+
 def _split_fqn(fqn: str) -> Tuple[str, str, str]:
-    parts = (fqn or "").strip().split(".")
-    if len(parts) != 3 or not all(p.strip() for p in parts):
+    parts = name_parts(fqn)
+    if len(parts) != 3:
         raise ValueError(f"Expected three-part name (catalog.schema.table), got: '{fqn}'")
-    return parts[0].strip(), parts[1].strip(), parts[2].strip()
+    return parts[0], parts[1], parts[2]
 
 
 def _normalize_fqn(fqn: str) -> str:
-    c, s, t = _split_fqn(fqn)
-    return f"{c.lower()}.{s.lower()}.{t.lower()}"
+    return ".".join(p.lower() for p in name_parts(fqn))
 
 
 def target_key(table: str, column: Optional[str] = None) -> str:
@@ -224,16 +262,18 @@ def target_label(table: str, column: Optional[str] = None) -> str:
 def validate_target(table: str, column: Optional[str] = None) -> None:
     """Raise ``ValueError`` if a target name can't be turned into SQL safely."""
     parts = (table or "").strip().split(".")
-    if len(parts) != 3 or not all(p.strip() for p in parts):
+    if not 1 <= len(parts) <= 3 or not all(p.strip() for p in parts):
         raise ValueError(
-            f"Invalid table identifier '{table}'. Must be a 3-part name: catalog.schema.table"
+            f"Invalid name '{table}'. Use catalog, catalog.schema or catalog.schema.table."
         )
     if any(_UNSAFE_NAME_PART.search(p.strip()) for p in parts):
         raise ValueError(
             f"'{table}' contains quotes, semicolons, spaces or control characters, "
-            f"which can't be used in a table name here."
+            f"which can't be used in a name here."
         )
     if column is not None:
+        if len(parts) != 3:
+            raise ValueError(f"'{table}' is a catalog or schema; only tables and views have columns.")
         if not column.strip():
             raise ValueError(f"A column name is empty for '{table}'.")
         if _UNSAFE_COLUMN_NAME.search(column):
@@ -247,15 +287,25 @@ def quote_identifier(name: str) -> str:
 
 
 def quote_fqn(fqn: str) -> str:
-    return ".".join(quote_identifier(p) for p in _split_fqn(fqn))
+    return ".".join(quote_identifier(p) for p in name_parts(fqn))
+
+
+def sql_string_literal(value: Any) -> str:
+    """A Databricks SQL string literal.
+
+    Backslash is an escape character in Databricks string literals, and two
+    adjacent literals concatenate, so ``'It''s'`` reads as ``Its``. Escape the
+    backslash first, then the quote.
+    """
+    return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 def _tag_pairs_sql(tags: Dict[str, str]) -> str:
-    return ", ".join(f"'{_escape_sql_literal(k)}' = '{_escape_sql_literal(v)}'" for k, v in tags.items())
+    return ", ".join(f"{sql_string_literal(k)} = {sql_string_literal(v)}" for k, v in tags.items())
 
 
 def _tag_keys_sql(keys: List[str]) -> str:
-    return ", ".join(f"'{_escape_sql_literal(k)}'" for k in keys)
+    return ", ".join(sql_string_literal(k) for k in keys)
 
 
 # information_schema.tables.table_type -> the relation type the plan tracks.
@@ -266,6 +316,8 @@ _RELATION_TYPES = {
     "METRIC_VIEW": "VIEW",
     "MATERIALIZED_VIEW": "MATERIALIZED_VIEW",
     "STREAMING_TABLE": "STREAMING_TABLE",
+    CATALOG: CATALOG,
+    SCHEMA: SCHEMA,
 }
 
 
@@ -274,7 +326,7 @@ def relation_type(table_type: Optional[str]) -> str:
 
 
 def sql_object_keyword(object_type: str) -> str:
-    """The ALTER keyword for a relation type: TABLE, VIEW, MATERIALIZED VIEW, STREAMING TABLE."""
+    """The ALTER keyword for an object type: CATALOG, SCHEMA, TABLE, VIEW, MATERIALIZED VIEW, STREAMING TABLE."""
     return relation_type(object_type).replace("_", " ")
 
 
@@ -315,8 +367,14 @@ def build_view_column_statement(table: str, column: str, operation: str, key: st
     return f"UNSET TAG ON COLUMN {target} {quote_identifier(key)};"
 
 
+def build_comment_statement(object_type: str, name: str, comment: str) -> str:
+    """``COMMENT ON CATALOG|SCHEMA … IS …``; an empty comment clears it (``IS NULL``)."""
+    value = sql_string_literal(comment) if comment else "NULL"
+    return f"COMMENT ON {sql_object_keyword(object_type)} {quote_fqn(name)} IS {value};"
+
+
 def _quote_sql_literal(val: str) -> str:
-    return "'" + str(val).replace("'", "''") + "'"
+    return sql_string_literal(val)
 
 
 def _build_predicate(pairs: List[Tuple[str, str]], schema_col: str = "schema_name", table_col: str = "table_name") -> str:
@@ -356,15 +414,19 @@ def fetch_live_state(
     table_names: List[str],
     column_targets: Optional[List[Tuple[str, str]]] = None,
 ) -> Dict[str, ObjectState]:
-    """Fetch live object types (TABLE/VIEW) and tags for tables and columns.
+    """Fetch live object types, tags (and catalog/schema comments) for targets.
 
-    ``column_targets`` are ``(table, column)`` pairs. Their tables are looked up
-    too (a column's SQL depends on whether its table is a view), so the result
-    also holds a state for every such table.
+    ``table_names`` may also hold catalog and schema names. ``column_targets``
+    are ``(table, column)`` pairs. Their tables are looked up too (a column's
+    SQL depends on whether its table is a view), so the result also holds a
+    state for every such table.
     """
     state: Dict[str, ObjectState] = {}
     column_targets = list(column_targets or [])
-    all_tables = list(table_names) + [t for t, _ in column_targets]
+    containers = [n for n in table_names if container_type(n)]
+    all_tables = [n for n in table_names if not container_type(n)] + [t for t, _ in column_targets]
+    if containers:
+        _fetch_container_state(provider, containers, state)
     if not all_tables:
         return state
 
@@ -415,6 +477,67 @@ def fetch_live_state(
     if column_targets:
         _fetch_column_state(provider, column_targets, state)
     return state
+
+
+def _fetch_container_state(provider, names: List[str], state: Dict[str, ObjectState]) -> None:
+    """Existence, comment and tags of catalogs and schemas, from ``system.information_schema``."""
+    catalogs: List[str] = []
+    schemas: List[Tuple[str, str]] = []
+    for name in names:
+        norm = _normalize_fqn(name)
+        if norm in state:
+            continue
+        kind = container_type(name)
+        state[norm] = ObjectState(display=name, exists=False, object_type=kind)
+        parts = name_parts(name)
+        if kind == CATALOG:
+            catalogs.append(parts[0])
+        else:
+            schemas.append((parts[0], parts[1]))
+
+    def keep_tag(key: str, tag_name: str, tag_val: Any) -> None:
+        if key in state:
+            val_str = "" if tag_val is None else str(tag_val)
+            state[key].all_tags[tag_name] = val_str
+            if not is_reserved_key(tag_name):
+                state[key].tags[tag_name] = val_str
+
+    if catalogs:
+        where = f"catalog_name IN ({', '.join(_quote_sql_literal(c) for c in catalogs)})"
+        for c_name, comment in _run_rows(
+            provider,
+            f"SELECT catalog_name, comment FROM system.information_schema.catalogs WHERE {where}",
+            "catalogs", 2,
+        ) or []:
+            key = str(c_name).lower()
+            if key in state:
+                state[key].exists = True
+                state[key].comment = comment or ""
+        for c_name, tag_name, tag_val in _run_rows(
+            provider,
+            f"SELECT catalog_name, tag_name, tag_value FROM system.information_schema.catalog_tags WHERE {where}",
+            "catalog tags", 3,
+        ) or []:
+            keep_tag(str(c_name).lower(), tag_name, tag_val)
+
+    if schemas:
+        where = _build_predicate(schemas, schema_col="catalog_name", table_col="schema_name")
+        for c_name, s_name, comment in _run_rows(
+            provider,
+            f"SELECT catalog_name, schema_name, comment FROM system.information_schema.schemata WHERE {where}",
+            "schemas", 3,
+        ) or []:
+            key = f"{str(c_name).lower()}.{str(s_name).lower()}"
+            if key in state:
+                state[key].exists = True
+                state[key].comment = comment or ""
+        for c_name, s_name, tag_name, tag_val in _run_rows(
+            provider,
+            f"SELECT catalog_name, schema_name, tag_name, tag_value FROM system.information_schema.schema_tags "
+            f"WHERE {where}",
+            "schema tags", 4,
+        ) or []:
+            keep_tag(f"{str(c_name).lower()}.{str(s_name).lower()}", tag_name, tag_val)
 
 
 def _fetch_column_state(provider, column_targets: List[Tuple[str, str]], state: Dict[str, ObjectState]) -> None:
@@ -511,28 +634,37 @@ def fetch_tag_vocabulary(
     dataset_values: Optional[List[str]] = None,
     dataset_key: str = DATASET_KEY,
     include_columns: bool = False,
+    include_containers: bool = False,
 ) -> TagVocabulary:
     """Fetch tag usage frequencies and dataset members across involved catalogs.
 
     With ``include_columns`` the usage counts also cover column tags, so a typo in
-    a column classification is caught against the values other columns use.
+    a column classification is caught against the values other columns use;
+    ``include_containers`` does the same with catalog and schema tags.
     """
     vocabulary = TagVocabulary()
     if not table_names or not keys_of_interest:
         return vocabulary
 
-    catalogs = sorted({_split_fqn(name)[0] for name in table_names})
+    catalogs = sorted({name_parts(name)[0] for name in table_names})
     key_list_sql = ", ".join(_quote_sql_literal(k) for k in keys_of_interest)
     sources = ["table_tags"] + (["column_tags"] if include_columns else [])
+    if include_containers:
+        sources += ["catalog_tags", "schema_tags"]
 
     for catalog in catalogs:
         # Aggregated tag value usage
         for source in sources:
+            # Catalog and schema tags are read metastore-wide, like the rest of their state.
+            view = (
+                f"system.information_schema.{source} WHERE catalog_name = {_quote_sql_literal(catalog)} AND"
+                if source in ("catalog_tags", "schema_tags")
+                else f"{catalog}.information_schema.{source} WHERE"
+            )
             rows = _run_rows(
                 provider,
                 f"SELECT tag_name, tag_value, count(*) AS n "
-                f"FROM {catalog}.information_schema.{source} "
-                f"WHERE tag_name IN ({key_list_sql}) "
+                f"FROM {view} tag_name IN ({key_list_sql}) "
                 f"GROUP BY tag_name, tag_value",
                 f"tag vocabulary ({source}) for {catalog}",
                 3,
@@ -599,8 +731,10 @@ def build_tag_plan(
 ) -> TagPlan:
     """Build a deterministic TagPlan from requested desired tags and live state.
 
-    Each item is ``{"table": fqn, "desired_tags": {...}}`` plus an optional
-    ``"column"`` to target one of the table's columns instead of the table.
+    Each item is ``{"table": name, "desired_tags": {...}}`` where ``name`` is a
+    catalog, schema, table or view, plus an optional ``"column"`` to target one
+    of a table's columns, and an optional ``"desired_comment"`` (catalogs and
+    schemas only) to change the description; ``""`` clears it.
     """
     plan = TagPlan()
 
@@ -617,7 +751,7 @@ def build_tag_plan(
             state = ObjectState(
                 display=label,
                 exists=False,
-                object_type=parent.object_type if (column and parent) else "TABLE",
+                object_type=parent.object_type if (column and parent) else (container_type(full_name) or "TABLE"),
                 tags={},
                 all_tags={},
                 column=column,
@@ -647,6 +781,9 @@ def build_tag_plan(
             and (cert_source.all_tags.get(CERTIFICATION_KEY) or "").lower() == "certified"
         )
 
+        desired_comment = item.get("desired_comment")
+        is_container = state.object_type in CONTAINER_TYPES
+
         # Diff calculation
         diff = ObjectDiff(
             table=full_name,
@@ -656,8 +793,17 @@ def build_tag_plan(
             after=desired,
             column=column,
             certified=certified,
+            comment_before=(state.comment or "") if is_container else None,
+            comment_after=str(desired_comment) if (is_container and desired_comment is not None) else None,
         )
         plan.diffs[key] = diff
+
+        if diff.comment_changed:
+            plan.statement_plans.append(StatementPlan(
+                table=full_name, object_type=state.object_type, operation="comment",
+                comment=diff.comment_after,
+                sql=build_comment_statement(state.object_type, full_name, diff.comment_after or ""),
+            ))
 
         # Statements calculation
         obj_type = sql_object_keyword(state.object_type)

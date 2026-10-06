@@ -216,3 +216,25 @@ def test_default_policy_reserves_only_the_certification_tag():
     assert "reserved" in policy.check(_change({"system.certification_status": "certified"}))[0]
     assert "reserved" in policy.check(_change({"System.Certification_Status": "certified"}))[0]
     assert not any("reserved" in p for p in policy.check(_change({"system.deprecated": "true"})))
+
+
+# --- applies_to: catalogs and schemas --------------------------------------------
+
+def test_catalogs_and_schemas_take_owner_and_classification_but_not_dataset():
+    policy = _default()
+    ok = {"table": "main.sales", "kind": "schema", "set": {"data_owner": "sales-eng", "classification": "internal"}, "unset": []}
+    bad = {"table": "main", "kind": "catalog", "set": {"dataset": "orders"}, "unset": []}
+    assert policy.check([ok]) == []
+    assert policy.check([bad]) == ["main: 'dataset' can only be set on tables and views."]
+
+
+def test_required_table_keys_can_be_removed_from_catalogs_and_schemas():
+    change = {"table": "main.sales", "kind": "schema", "set": {}, "unset": ["data_owner", "dataset"]}
+    assert _default().check([change]) == []
+
+
+def test_keys_declared_for_several_kinds_read_naturally():
+    from app.workflows.tag_policy import TagPolicy
+    policy = TagPolicy.parse("known_keys:\n  tier:\n    applies_to: [table, catalog, schema]\n")
+    problems = policy.check([{"table": "main.s.t", "column": "c", "set": {"tier": "gold"}, "unset": []}])
+    assert problems == ["main.s.t.c: 'tier' can only be set on catalogs, schemas and tables and views."]
