@@ -208,6 +208,54 @@ async def test_terramate_provision_rejects_invalid_type_alias():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("req_type,params", [
+    ("workspace_folder", {"business_domain": "finance"}),
+    ("unity_catalog", {"business_domain": "finance", "catalog_suffixes": ["ai"]}),
+    ("unity_catalog_schema", {"business_domain": "finance", "catalog_suffix": "ai", "schemas": ["bronze", "silver"]}),
+    ("unity_catalog_schema", {"business_domain": "finance", "catalog_name": "finance_ai_sbx", "schemas": ["gold"]}),
+])
+async def test_terramate_provision_domain_stack_types(req_type, params):
+    with patch("app.providers.terramate.client.TerramateProvider.create_request", new_callable=AsyncMock) as mock_create:
+        mock_create.return_value = {"success": True, "request_id": "req-dom", "status": "pending"}
+        result = await terramate_provision.execute(type=req_type, params=params, idempotency_key="key-dom")
+
+        assert result["ok"] is True and result["type"] == req_type
+        mock_create.assert_called_once_with(request_type=req_type, params=params, idempotency_key="key-dom")
+
+
+@pytest.mark.asyncio
+async def test_terramate_provision_never_sends_generated_uuids():
+    with patch("app.providers.terramate.client.TerramateProvider.create_request", new_callable=AsyncMock) as mock_create:
+        mock_create.return_value = {"success": True, "request_id": "req-uuid", "status": "pending"}
+        await terramate_provision.execute(
+            type="unity_catalog",
+            params={"business_domain": "finance", "uuid": "x", "stack_uuid": "y",
+                    "stack_uuids": ["z"], "business_domain_uuid": "w"},
+            idempotency_key="key-uuid",
+        )
+        mock_create.assert_called_once_with(
+            request_type="unity_catalog", params={"business_domain": "finance"}, idempotency_key="key-uuid",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("req_type,params,why", [
+    ("workspace_folder", {}, "requires 'business_domain'"),
+    ("unity_catalog", {"business_domain": "  "}, "requires 'business_domain'"),
+    ("unity_catalog_schema", {"business_domain": "finance"}, "non-empty 'schemas'"),
+    ("unity_catalog_schema", {"business_domain": "finance", "schemas": []}, "non-empty 'schemas'"),
+    ("unity_catalog_schema", {"business_domain": "finance", "schemas": ["bronze"],
+                              "catalog_suffix": "ai", "catalog_name": "finance_ai_sbx"}, "not both"),
+])
+async def test_terramate_provision_rejects_bad_domain_params(req_type, params, why):
+    with patch("app.providers.terramate.client.TerramateProvider.create_request", new_callable=AsyncMock) as mock_create:
+        result = await terramate_provision.execute(type=req_type, params=params, idempotency_key="key-bad")
+        assert "Invalid arguments for tool 'terramate_provision'" in result["error"]
+        assert why in result["error"]
+        mock_create.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_terramate_check_status_with_request_id_alias():
     """Verify terramate_check_status accepts 'request_id' as an alias."""
     with patch("app.providers.terramate.client.TerramateProvider.get_request", new_callable=AsyncMock) as mock_get:

@@ -40,13 +40,23 @@ async def terraform_apply(**kwargs) -> Dict[str, Any]:
 # --------------------------------------------------------------------------
 # Terramate Provisioning Tools (v2 API abstraction - ADR-0004)
 # --------------------------------------------------------------------------
-TerramateResourceType = Literal["schema", "workspace"]
+TerramateResourceType = Literal[
+    "schema", "workspace", "workspace_folder", "unity_catalog", "unity_catalog_schema",
+]
+
+# Types that act on an existing business domain's stacks and so need to name it.
+_DOMAIN_TYPES = ("workspace_folder", "unity_catalog", "unity_catalog_schema")
+# The API generates and persists these; a caller-supplied value must never reach it.
+_GENERATED_PARAMS = ("uuid", "stack_uuid", "stack_uuids", "business_domain_uuid")
 
 
 class TerramateProvisionInput(BaseModel):
     request_type: Optional[TerramateResourceType] = Field(
         default=None,
-        description="Resource type to provision. Allowed values: 'schema', 'workspace'.",
+        description=(
+            "Resource type to provision. Allowed values: 'schema', 'workspace', "
+            "'workspace_folder', 'unity_catalog', 'unity_catalog_schema'."
+        ),
     )
     type: Optional[TerramateResourceType] = Field(
         default=None,
@@ -55,9 +65,19 @@ class TerramateProvisionInput(BaseModel):
     parameters: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
-            "Type-specific provisioning parameters. "
+            "Type-specific provisioning parameters. 'environment' defaults to 'sbx' for every type "
+            "except 'schema'; never send uuids. "
             "For 'schema': catalog, name, owner, optional comment. "
-            "For 'workspace': name, metastore, domain_owner, groups."
+            "For 'workspace': business_domain (always send it), optional subnet_size "
+            "('small' | 'medium' | 'large', default 'small'), environment. "
+            "For 'workspace_folder': business_domain (required), optional environment, "
+            "workspace_name (default '{domain}_ws_{environment}'), folder_names (default: the standard set). "
+            "For 'unity_catalog': business_domain (required), optional environment, workspace_name, "
+            "catalog_suffixes (each adds '{domain}_{suffix}_{environment}'; the default "
+            "'{domain}_{environment}' catalog is always created). "
+            "For 'unity_catalog_schema': business_domain and schemas (required, non-empty list), "
+            "optional environment, workspace_name, and either catalog_suffix or catalog_name "
+            "(not both; omit both for the domain's default catalog)."
         ),
     )
     params: Optional[Dict[str, Any]] = Field(
@@ -74,7 +94,8 @@ class TerramateProvisionInput(BaseModel):
         resolved_type = self.request_type or self.type
         if not resolved_type:
             raise ValueError(
-                "Either 'request_type' or 'type' must be provided ('schema' or 'workspace')."
+                "Either 'request_type' or 'type' must be provided ('schema', 'workspace', "
+                "'workspace_folder', 'unity_catalog' or 'unity_catalog_schema')."
             )
         self.request_type = resolved_type
         self.type = resolved_type
@@ -84,9 +105,29 @@ class TerramateProvisionInput(BaseModel):
             if self.parameters is not None
             else (self.params if self.params is not None else {})
         )
+        resolved_params = {k: v for k, v in resolved_params.items() if k not in _GENERATED_PARAMS}
+        _check_domain_params(resolved_type, resolved_params)
         self.parameters = resolved_params
         self.params = resolved_params
         return self
+
+
+def _check_domain_params(request_type: str, params: Dict[str, Any]) -> None:
+    """Catch the mistakes the API would 422 on (or silently accept) before submitting."""
+    if request_type not in _DOMAIN_TYPES:
+        return
+    if not str(params.get("business_domain") or "").strip():
+        raise ValueError(f"'{request_type}' requires 'business_domain' in parameters.")
+    if request_type != "unity_catalog_schema":
+        return
+    schemas = params.get("schemas")
+    if not isinstance(schemas, list) or not any(str(s or "").strip() for s in schemas):
+        # The API accepts an empty list, but the PR would only create an empty schema stack.
+        raise ValueError("'unity_catalog_schema' requires a non-empty 'schemas' list in parameters.")
+    if params.get("catalog_suffix") and params.get("catalog_name"):
+        raise ValueError(
+            "'unity_catalog_schema' takes either 'catalog_suffix' or 'catalog_name', not both."
+        )
 
 
 @tool(
@@ -95,7 +136,12 @@ class TerramateProvisionInput(BaseModel):
     side_effect_class="infra",
     description=(
         "Submit an infrastructure provisioning request to the Terramate API service. "
-        "Workflow building block used to provision schemas and workspaces via GitOps. "
+        "Workflow building block used to provision, via GitOps, a business domain's workspace, "
+        "its workspace folders, its Unity Catalog catalogs, and schemas in one of those catalogs "
+        "(plus the legacy 'schema' type). These are independent requests: submit them in order "
+        "(workspace; then workspace_folder and unity_catalog; then unity_catalog_schema) and wait "
+        "for each to succeed before the next. Re-submitting workspace_folder, unity_catalog or "
+        "unity_catalog_schema only adds what isn't there yet. "
         "Accepts either 'request_type' or 'type', and 'parameters' or 'params'."
     ),
 )
