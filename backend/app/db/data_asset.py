@@ -4,6 +4,7 @@ from sqlalchemy.types import TypeDecorator
 import sqlalchemy.types as types
 import json
 from datetime import datetime
+from typing import Optional
 from app.db.base import Base
 
 class JSONType(TypeDecorator):
