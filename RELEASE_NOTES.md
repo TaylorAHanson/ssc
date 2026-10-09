@@ -11,6 +11,12 @@ Format rules (the app parses this file, so keep to them):
   subheading. Plain markdown only.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 1.6.1 — 2026-10-09
+
+### Fixed
+
+- Data certification now works when **Data certification workspace** names a workspace other than the app's own. The scan uses that workspace's service principal but runs its queries in the app's own workspace, where the configured SQL warehouse lives. Previously every metadata read failed with "warehouse not found", so no table in the certified catalogs could be checked.
+
 ## 1.6.0 — 2026-10-08
 
 ### Added

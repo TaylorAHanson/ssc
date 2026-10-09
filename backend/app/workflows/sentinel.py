@@ -466,7 +466,7 @@ async def revalidate_violation(
     }
 
 
-def _new_workspace_client(host: Optional[str] = None):
+def _new_workspace_client(host: Optional[str] = None, connect_host: Optional[str] = None):
     """Build a Databricks workspace client for a target workspace.
 
     When ``host`` is given, resolve that target workspace's credentials via
@@ -474,6 +474,10 @@ def _new_workspace_client(host: Optional[str] = None):
     the workspace's inline SP key names, with a fall-back to the app's own SP).
     When ``host`` is omitted, build from the app's own service principal — the
     app's home workspace (historical behavior).
+
+    ``connect_host`` keeps ``host``'s credentials but sends requests to a
+    different workspace — used when an identity must run against the home
+    workspace's SQL warehouse.
     """
     from app.providers.databricks.client import DatabricksProvider
 
@@ -491,7 +495,7 @@ def _new_workspace_client(host: Optional[str] = None):
         cfg = get_workspace_config(host)
         if cfg is not None:
             provider = DatabricksProvider(
-                host=cfg.host,
+                host=connect_host or cfg.host,
                 token=cfg.token,
                 client_id=cfg.client_id,
                 client_secret=cfg.client_secret,
@@ -901,7 +905,8 @@ async def _scan_and_evaluate(
     logger.info("Sentinel: workspace '%s' authenticating (host=%s)...", ws_name, ws_host)
     probe = await _probe_workspace_auth(
         workspace_client, ws_name,
-        host=ws_host or (settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL),
+        host=workspace_ctx.get("connect_host") or ws_host
+        or (settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL),
         client_id=probe_cid, client_secret=probe_csec,
     )
     if not probe["ok"]:
@@ -1336,8 +1341,10 @@ async def run_discovery(request) -> Dict[str, Any]:
             len(fallbacks), fallbacks,
         )
 
-    # The catalog/metastore-scoped data certification pass runs once. It uses the
-    # configured certification workspace's client if set, else the app's home SP.
+    # The catalog/metastore-scoped data certification pass runs once. It runs as
+    # the configured certification workspace's SP if set, else the app's home SP,
+    # but always against the home workspace: DATABRICKS_WAREHOUSE_ID is a home
+    # workspace warehouse and warehouse ids don't exist outside their workspace.
     home_host = settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL
     home_match = next((w for w in all_ws if w.host == home_host), None)
     cert_name = (getattr(settings, "SENTINEL_DATA_CERT_WORKSPACE", "") or "").strip()
@@ -1354,6 +1361,7 @@ async def run_discovery(request) -> Dict[str, Any]:
         cert_ctx = {
             "name": cert_cfg.name,
             "host": cert_cfg.host,
+            "connect_host": home_host,
             "environment": cert_cfg.environment,
             "type": cert_cfg.workspace_type,
             "credential_source": cert_cfg.credential_source,
@@ -1508,10 +1516,16 @@ async def run_discovery(request) -> Dict[str, Any]:
 
     # 2. Data certification pass (once, Unity Catalog / metastore scoped).
     try:
-        cert_client = _new_workspace_client(cert_host)
+        cert_client = (
+            _new_workspace_client(cert_host, connect_host=home_host)
+            if cert_host
+            else _new_workspace_client(None)
+        )
         logger.info(
-            "Sentinel: running data certification pass (workspace='%s', host=%s)...",
-            cert_ctx.get("name"), cert_ctx.get("host"),
+            "Sentinel: running data certification pass (workspace='%s', host=%s, "
+            "credentials=%s)...",
+            cert_ctx.get("name"), cert_ctx.get("connect_host") or cert_ctx.get("host"),
+            cert_ctx.get("credential_source"),
         )
         _cert_start = datetime.utcnow()
         try:

@@ -318,6 +318,52 @@ async def test_auth_probe_failure_records_workspace_failure(db_session):
 
 
 @pytest.mark.asyncio
+async def test_data_certification_runs_as_cert_sp_against_the_home_workspace(db_session, monkeypatch):
+    """DATABRICKS_WAREHOUSE_ID is a home-workspace warehouse, so a certification
+    workspace on another host must lend its credentials, not its host."""
+    home = "https://home.databricks.net"
+    workspaces = [_ws("home-ws", home), _ws("cert-ws", "https://cert.databricks.net")]
+    monkeypatch.setattr(sentinel.settings, "DATABRICKS_HOST", home)
+    monkeypatch.setattr(sentinel.settings, "SENTINEL_DATA_CERT_WORKSPACE", "cert-ws")
+    req = _make_request(db_session, {})
+
+    dataset_clients = []
+
+    class _RecordingDatasetHandler(_FakeDatasetHandler):
+        def __init__(self, client):
+            super().__init__(client)
+            dataset_clients.append(client)
+
+    probe = AsyncMock(return_value={
+        "ok": True, "network_reachable": True, "category": None,
+        "identity": "sp-test", "detail": "authenticated",
+    })
+    plist = [
+        patch("app.core.workspaces.get_target_workspaces", return_value=workspaces),
+        patch.object(
+            sentinel, "_new_workspace_client",
+            side_effect=lambda host=None, connect_host=None: f"creds={host or 'home'} via={connect_host or host or 'home'}",
+        ),
+        patch.object(sentinel, "_probe_workspace_auth", new=probe),
+        patch.object(sentinel, "_workspace_scoped_handler_classes", return_value=[]),
+        patch("app.providers.databricks.handlers.DatasetResourceHandler", _RecordingDatasetHandler),
+        patch("app.providers.opa.client.OpaProvider", _FakeOpa),
+        patch("app.db.session.get_lakebase_session", side_effect=lambda: _keep_open(db_session)),
+    ]
+    for p in plist:
+        p.start()
+    try:
+        await sentinel.run_discovery(req)
+    finally:
+        for p in plist:
+            p.stop()
+
+    assert dataset_clients == [f"creds=https://cert.databricks.net via={home}"]
+    cert_probe = next(c for c in probe.await_args_list if c.args[0] == dataset_clients[0])
+    assert cert_probe.kwargs["host"] == home
+
+
+@pytest.mark.asyncio
 async def test_active_violations_surfaces_workspace(db_session):
     workspaces = [_ws("prod-domain-a", "https://a.databricks.net")]
     req = _make_request(db_session, {})
