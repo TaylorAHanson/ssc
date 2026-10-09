@@ -1,9 +1,9 @@
 """Scan-report arithmetic.
 
-The scan details modal shows a violation total alongside HIGH/MEDIUM/LOW cards.
-Those used to be counted in different units — failures per policy *rule* vs.
-severity per (resource, policy) *check* — so the cards summed to less than the
-total. These tests pin the invariants that keep them consistent.
+The scan details modal shows a violation total, HIGH/MEDIUM/LOW cards, and a
+list of findings with per-policy tab counts. All of them count the same unit —
+one finding per failing (resource, policy) check — so they agree with each
+other. These tests pin that.
 """
 
 from app.workflows.sentinel import aggregate_check_counts
@@ -22,8 +22,9 @@ def _check(policy, severity, outcomes, action="WARN"):
     }
 
 
-def test_severity_breakdown_sums_to_the_violation_total():
-    # One check failing 5 of 6 rules used to report 5 violations but only 1 HIGH.
+def test_a_check_failing_several_rules_is_one_finding():
+    """The violation list shows one row per failing (resource, policy), so the
+    headline must not count that row's failed rules separately."""
     checks = [
         _check("data_certification", "HIGH", [False] * 5 + [True]),
         _check("jobs", "MEDIUM", [False, True]),
@@ -32,9 +33,21 @@ def test_severity_breakdown_sums_to_the_violation_total():
 
     counts = aggregate_check_counts(checks)
 
-    assert counts["violation_count"] == 7
-    assert counts["severity_counts"] == {"HIGH": 5, "MEDIUM": 1, "LOW": 1}
+    assert counts["violation_count"] == 3
+    assert counts["severity_counts"] == {"HIGH": 1, "MEDIUM": 1, "LOW": 1}
     assert sum(counts["severity_counts"].values()) == counts["violation_count"]
+
+
+def test_violation_count_matches_the_number_of_open_finding_rows():
+    checks = [
+        _check("data_certification", "HIGH", [False, False, False]),
+        _check("data_certification", "HIGH", [False, True]),
+        _check("dashboards", "HIGH", [False]),
+        _check("dashboards", "NONE", [True]),
+    ]
+    open_rows = [c for c in checks if c["result"] == "VIOLATION"]
+
+    assert aggregate_check_counts(checks)["violation_count"] == len(open_rows)
 
 
 def test_pass_violation_and_exempt_account_for_every_check():
@@ -46,7 +59,10 @@ def test_pass_violation_and_exempt_account_for_every_check():
 
     counts = aggregate_check_counts(checks)
 
-    assert counts["total_checks"] == 7
+    assert counts["total_checks"] == 3
+    assert counts["pass_count"] == 1
+    assert counts["violation_count"] == 1
+    assert counts["exempt_count"] == 1
     assert (
         counts["pass_count"] + counts["violation_count"] + counts["exempt_count"]
         == counts["total_checks"]
@@ -54,9 +70,8 @@ def test_pass_violation_and_exempt_account_for_every_check():
 
 
 def test_approved_exceptions_are_excluded_from_the_total_and_the_cards():
-    """An approved allowlist exception is signed-off risk. Counting its failed
-    rules in the total but giving them severity NONE is what left the cards
-    unable to add up."""
+    """An approved allowlist exception is signed-off risk. Counting it in the
+    total but giving it severity NONE would leave the cards unable to add up."""
     checks = [
         _check("apps", "NONE", [False, False, False], action="SKIPPED_ALLOWLIST"),
     ]
@@ -64,7 +79,7 @@ def test_approved_exceptions_are_excluded_from_the_total_and_the_cards():
     counts = aggregate_check_counts(checks)
 
     assert counts["violation_count"] == 0
-    assert counts["exempt_count"] == 3
+    assert counts["exempt_count"] == 1
     assert counts["severity_counts"] == {}
 
 
@@ -79,8 +94,7 @@ def test_pending_exceptions_still_count_as_open_findings():
     assert counts["severity_counts"] == {"MEDIUM": 1}
 
 
-def test_policies_without_per_rule_results_count_as_one_unit():
-    # Older/simpler policies emit no rule_results; the whole evaluation is the unit.
+def test_policies_without_per_rule_results_count_the_same_way():
     checks = [
         {"policy": "legacy", "severity": "HIGH", "action": "WARN", "result": "VIOLATION"},
         {"policy": "legacy", "severity": "NONE", "action": "ALLOW", "result": "PASS"},
@@ -101,7 +115,7 @@ def test_legacy_critical_severity_folds_into_high():
 
     counts = aggregate_check_counts(checks)
 
-    assert counts["severity_counts"] == {"HIGH": 2}
+    assert counts["severity_counts"] == {"HIGH": 1}
     assert sum(counts["severity_counts"].values()) == counts["violation_count"]
 
 

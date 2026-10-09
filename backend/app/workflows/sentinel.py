@@ -542,27 +542,17 @@ def _persist_state_context(db, request, updates: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
-def _rule_outcomes(check: Dict[str, Any]) -> List[bool]:
-    """Per-rule pass/fail outcomes for a check, falling back to one unit per
-    evaluation for policies that don't emit per-rule results yet."""
-    rr = check.get("rule_results") or []
-    if rr:
-        return [bool(r.get("passed")) for r in rr]
-    return [check["result"] == "PASS"]
-
-
 def aggregate_check_counts(checks: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Roll a run's checks up into the numbers the scan report shows.
 
-    Everything here is counted in ONE unit — the individual policy *rule* — so
-    the report's severity cards sum exactly to its violation total. A check is a
-    (resource, policy) evaluation that can fail several rules at once; counting
-    failures per rule but severity per check is what used to make HIGH+MEDIUM+LOW
-    come out lower than the headline number.
+    Everything here is counted in ONE unit — the *finding*, one (resource,
+    policy) check — which is also what each row of the report's violation list
+    is. A check that fails several rules is still one finding; its individual
+    rules are only itemised in the checklist view.
 
-    Failed rules on a resource with an approved allowlist exception are signed-off
-    risk rather than an open finding, so they're reported as ``exempt_count`` and
-    left out of both the total and the severity breakdown.
+    A failing check on a resource with an approved allowlist exception is
+    signed-off risk rather than an open finding, so it's reported as
+    ``exempt_count`` and left out of both the total and the severity breakdown.
 
     Invariants: ``total_checks == pass_count + violation_count + exempt_count``
     and ``sum(severity_counts.values()) == violation_count``.
@@ -574,18 +564,16 @@ def aggregate_check_counts(checks: List[Dict[str, Any]]) -> Dict[str, Any]:
     severity_counts: Dict[str, int] = {}
 
     for check in checks or []:
-        outcomes = _rule_outcomes(check)
-        failed = sum(1 for ok in outcomes if not ok)
-        total_checks += len(outcomes)
-        pass_count += len(outcomes) - failed
-        if not failed:
+        total_checks += 1
+        if check.get("result") == "PASS":
+            pass_count += 1
             continue
         if check.get("action") == "SKIPPED_ALLOWLIST":
-            exempt_count += failed
+            exempt_count += 1
             continue
-        violation_count += failed
+        violation_count += 1
         sev = normalize_severity(check.get("severity"))
-        severity_counts[sev] = severity_counts.get(sev, 0) + failed
+        severity_counts[sev] = severity_counts.get(sev, 0) + 1
 
     return {
         "total_checks": total_checks,
@@ -1624,10 +1612,10 @@ async def run_discovery(request) -> Dict[str, Any]:
             "workspaces_scanned": len(scanned_names),
             "workspaces_failed": len(full_fail),
             "workspaces_partial": len(partial_fail),
-            # Same unit as violation_count (failed rules), so the UI's
+            # Same unit as violation_count (findings), so the UI's
             # HIGH+MEDIUM+LOW cards sum exactly to it.
             "severity_counts": severity_counts,
-            # Failed rules suppressed by an approved allowlist exception. Not in
+            # Findings suppressed by an approved allowlist exception. Not in
             # violation_count or severity_counts; total_checks == pass_count +
             # violation_count + exempt_count.
             "exempt_count": exempt_count,

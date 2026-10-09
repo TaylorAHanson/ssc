@@ -17,6 +17,11 @@ Format rules (the app parses this file, so keep to them):
 
 - Data certification now works when **Data certification workspace** names a workspace other than the app's own. The scan uses that workspace's service principal but runs its queries in the app's own workspace, where the configured SQL warehouse lives. Previously every metadata read failed with "warehouse not found", so no table in the certified catalogs could be checked.
 
+### Changed
+
+- OmniGuard run reports now count violations the same way everywhere. The violation total, the severity cards, the run history's **Found** column and the tabs above the list all count one violation per resource and policy, which is one row of the list. Previously the totals counted every failed rule, so a data product failing three checks counted as three, and the total didn't match the list. The individual rules are still itemised in the **Checklist** view. Runs from before this change keep their original totals in the run history, so they can read higher than newer runs.
+- Passing data products waiting to be certified, and findings covered by an approved exception, now appear in their own **ready to certify** and **approved exceptions** tabs instead of in **All**, so **All** only lists open violations.
+
 ## 1.6.0 — 2026-10-08
 
 ### Added

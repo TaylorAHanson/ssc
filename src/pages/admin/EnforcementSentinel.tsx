@@ -33,6 +33,13 @@ const formatPacific = (value: string, opts?: Intl.DateTimeFormatOptions): string
 // freezes the tab, so we render this many and grow on demand ("Load more").
 const VIOLATION_PAGE_SIZE = 50;
 
+// Violation records also carry passing products awaiting certification
+// (CERTIFY) and findings under an approved exception (SKIPPED_ALLOWLIST). Neither
+// is an open finding, so neither counts toward the run's violation total.
+const isOpenFinding = (v: { action?: string }): boolean => v.action !== 'CERTIFY' && v.action !== 'SKIPPED_ALLOWLIST';
+const READY_TO_CERTIFY_TAB = '__ready_to_certify';
+const EXEMPTED_TAB = '__approved_exceptions';
+
 const formatReason = (v: any) => {
     if (v.violation_reasons && Array.isArray(v.violation_reasons) && v.violation_reasons.length > 0) {
         if (v.violation_reasons.length === 1) {
@@ -600,11 +607,8 @@ export function EnforcementSentinel() {
                                     const ctx = (run as any).stateContext || run.metadata || (run as any).state_context || {};
                                     const violations = ctx.violations || [];
 
-                                    // True failure count is the per-rule total in scan_stats. `violations.length`
-                                    // under-counts (each entry aggregates all failed rules for one resource+policy)
-                                    // and over-counts (it also includes CERTIFY/UNCERTIFY actions that aren't
-                                    // failures). Prefer scan_stats; fall back to summing per-rule reasons, then to
-                                    // the record count for older runs that predate scan_stats.
+                                    // Open findings, the same unit as the run report. Runs scanned before
+                                    // 1.6.1 stored a per-failed-rule count here, so older rows can read higher.
                                     const discoverFact = run.stateMachine?.states?.flatMap((s: any) => s.facts || []).find((f: any) => f.type === 'discover_completed');
                                     let vCount: number;
                                     if (ctx.scan_stats && typeof ctx.scan_stats.violation_count === 'number') {
@@ -612,9 +616,7 @@ export function EnforcementSentinel() {
                                     } else if (discoverFact?.data?.violation_count !== undefined) {
                                         vCount = discoverFact.data.violation_count;
                                     } else {
-                                        vCount = violations.reduce((sum: number, v: any) => (
-                                            sum + (Array.isArray(v.violation_reasons) && v.violation_reasons.length > 0 ? v.violation_reasons.length : 1)
-                                        ), 0);
+                                        vCount = violations.filter(isOpenFinding).length;
                                     }
 
                                     return (
@@ -735,10 +737,8 @@ export function EnforcementSentinel() {
                             const discoverFact = selectedRun.stateMachine?.states?.flatMap((s: any) => s.facts || []).find((f: any) => f.type === 'discover_completed');
 
                             // Flatten every (resource, policy) check into its individual policy
-                            // rules so summary counts, tab counts, and the checklist are all
-                            // per-rule (each check in a policy is represented) rather than one
-                            // pass/fail per dataset. Policies without per-rule results fall back
-                            // to a single synthetic rule row for that evaluation.
+                            // rules for the checklist view. Policies without per-rule results
+                            // fall back to a single synthetic rule row for that evaluation.
                             const ruleRows: any[] = checks.flatMap((c: any) => {
                                 const rrs = Array.isArray(c.rule_results) ? c.rule_results : [];
                                 if (rrs.length > 0) {
@@ -772,23 +772,29 @@ export function EnforcementSentinel() {
                             // `checks` here may be a page of the findings table on large runs.
                             // The discover fact carries the same numbers for runs that predate it.
                             const stats = ctx.scan_stats || {};
-                            // A failed rule under an approved allowlist exception is signed-off
-                            // risk, not an open finding. It's excluded from the violation total
-                            // and the severity cards, which is what makes them agree.
-                            const failedRows = ruleRows.filter((r: any) => !r.passed);
-                            const openFailedRows = failedRows.filter((r: any) => r.action !== 'SKIPPED_ALLOWLIST');
+                            // Every count on this page is in findings: one per failing (resource,
+                            // policy) check, which is also one row of the violation list. A
+                            // finding under an approved allowlist exception is signed-off risk
+                            // and is excluded from the total and the severity cards.
+                            const openFailedChecks = checks.filter((c: any) => c.result !== 'PASS' && c.action !== 'SKIPPED_ALLOWLIST');
 
                             const assetsScanned = stats.total_resources_scanned ?? discoverFact?.data?.total_resources_scanned ?? '—';
                             const policiesEvaluated = stats.policies_evaluated ?? discoverFact?.data?.policies_evaluated ?? '—';
-                            const totalChecks = stats.total_checks ?? discoverFact?.data?.total_checks ?? ruleRows.length ?? '—';
-                            const vCount = stats.violation_count ?? discoverFact?.data?.violation_count ?? openFailedRows.length;
-                            const passCount = stats.pass_count ?? discoverFact?.data?.pass_count ?? ruleRows.filter((r: any) => r.passed).length;
+                            const totalChecks = stats.total_checks ?? discoverFact?.data?.total_checks ?? checks.length ?? '—';
+                            const vCount = stats.violation_count ?? discoverFact?.data?.violation_count ?? openFailedChecks.length;
+                            const passCount = stats.pass_count ?? discoverFact?.data?.pass_count ?? checks.filter((c: any) => c.result === 'PASS').length;
                             // Only shown for runs that recorded it; older runs folded exempt
                             // findings into the violation total and can't be split apart now.
                             const exemptCount = typeof stats.exempt_count === 'number' ? stats.exempt_count : null;
 
-                            // Group violations by policy
-                            const violationsByPolicy = violations.reduce((acc: any, v: any) => {
+                            // The list's "All" and per-policy tabs hold open findings only, so
+                            // they match the totals above. Rows that need attention but aren't
+                            // violations get their own tabs.
+                            const openFindings = violations.filter(isOpenFinding);
+                            const readyToCertify = violations.filter((v: any) => v.action === 'CERTIFY');
+                            const exempted = violations.filter((v: any) => v.action === 'SKIPPED_ALLOWLIST');
+
+                            const violationsByPolicy = openFindings.reduce((acc: any, v: any) => {
                                 if (!acc[v.policy]) acc[v.policy] = [];
                                 acc[v.policy].push(v);
                                 return acc;
@@ -807,7 +813,11 @@ export function EnforcementSentinel() {
                             // Base set = the selected policy tab, then narrowed by the
                             // severity filter and free-text search (resource, policy,
                             // workspace, owner, action, severity, and reason text).
-                            const baseViolations: any[] = activeTab === 'all' ? violations : (violationsByPolicy[activeTab] || []);
+                            const baseViolations: any[] =
+                                activeTab === 'all' ? openFindings
+                                : activeTab === READY_TO_CERTIFY_TAB ? readyToCertify
+                                : activeTab === EXEMPTED_TAB ? exempted
+                                : (violationsByPolicy[activeTab] || []);
                             const q = violationSearch.trim().toLowerCase();
                             const matchesSearch = (v: any): boolean => {
                                 if (!q) return true;
@@ -1000,18 +1010,18 @@ export function EnforcementSentinel() {
                                                 
                                                 {/* Severity Breakdown. CRITICAL was collapsed out of the
                                                     policy rules, so severities are now HIGH / MEDIUM / LOW.
-                                                    These are counted per failed RULE — the same unit as the
+                                                    These are counted per finding — the same unit as the
                                                     Violation total above — so the three add up to it. */}
                                                 {vCount > 0 && (
                                                     <div className="grid grid-cols-3 gap-4">
                                                         {['HIGH', 'MEDIUM', 'LOW'].map(sev => {
                                                             // Prefer the breakdown from scan_stats (computed over every
                                                             // check, not just the page of findings loaded here); fall back
-                                                            // to counting the loaded rule rows for older runs.
+                                                            // to counting the loaded checks for older runs.
                                                             const sevCounts = stats.severity_counts;
                                                             const count = (sevCounts && typeof sevCounts[sev] === 'number')
                                                                 ? sevCounts[sev]
-                                                                : openFailedRows.filter((r: any) => (r.severity === sev || (sev === 'HIGH' && r.severity === 'CRITICAL'))).length;
+                                                                : openFailedChecks.filter((c: any) => (c.severity === sev || (sev === 'HIGH' && c.severity === 'CRITICAL'))).length;
                                                             const colors = sev === 'HIGH' && count > 0 ? 'bg-orange-50/30 border-orange-100' :
                                                                            sev === 'MEDIUM' && count > 0 ? 'bg-yellow-50/30 border-yellow-100' :
                                                                            sev === 'LOW' && count > 0 ? 'bg-gray-50/50 border-gray-200' :
@@ -1087,19 +1097,31 @@ export function EnforcementSentinel() {
                                                                     : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'
                                                                 }`}
                                                             >
-                                                                All ({violations.length})
+                                                                All ({openFindings.length})
                                                             </button>
-                                                            {policyGroups.map(policy => (
+                                                            {[
+                                                                ...policyGroups.map(policy => ({
+                                                                    key: policy,
+                                                                    label: policy.replace(/_/g, ' '),
+                                                                    count: violationsByPolicy[policy].length,
+                                                                })),
+                                                                ...(readyToCertify.length > 0
+                                                                    ? [{ key: READY_TO_CERTIFY_TAB, label: 'ready to certify', count: readyToCertify.length }]
+                                                                    : []),
+                                                                ...(exempted.length > 0
+                                                                    ? [{ key: EXEMPTED_TAB, label: 'approved exceptions', count: exempted.length }]
+                                                                    : []),
+                                                            ].map(tab => (
                                                                 <button
-                                                                    key={policy}
-                                                                    onClick={() => setActiveTab(policy)}
+                                                                    key={tab.key}
+                                                                    onClick={() => setActiveTab(tab.key)}
                                                                     className={`px-3 py-1 text-sm font-medium rounded-md whitespace-nowrap transition-colors flex-shrink-0 ${
-                                                                        activeTab === policy
+                                                                        activeTab === tab.key
                                                                         ? 'bg-white text-gray-900 shadow-sm ring-1 ring-gray-200'
                                                                         : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'
                                                                     }`}
                                                                 >
-                                                                    {policy.replace(/_/g, ' ')} ({violationsByPolicy[policy].length})
+                                                                    {tab.label} ({tab.count})
                                                                 </button>
                                                             ))}
                                                         </div>

@@ -42,11 +42,12 @@ def summarize_state_context(state_context: Optional[Dict[str, Any]]) -> Dict[str
     if isinstance(violations, list):
         stats = dict(meta.get("scan_stats") or {})
         if "violation_count" not in stats:
-            # Mirror the UI's per-rule count: sum violation_reasons (>=1 each).
+            # Same unit as the scan report: one per open finding. CERTIFY rows
+            # are passes awaiting action and SKIPPED_ALLOWLIST rows are exempt.
             stats["violation_count"] = sum(
-                (len(v.get("violation_reasons") or []) or 1)
+                1
                 for v in violations
-                if isinstance(v, dict)
+                if isinstance(v, dict) and v.get("action") not in ("CERTIFY", "SKIPPED_ALLOWLIST")
             )
         meta["scan_stats"] = stats
 
