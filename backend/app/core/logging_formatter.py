@@ -93,3 +93,8 @@ def setup_logging(log_level_str="INFO"):
             for handler in logger_obj.handlers[:]:
                 logger_obj.removeHandler(handler)
             logger_obj.propagate = True
+
+    # httpx logs every request at INFO, and each policy evaluation is a request
+    # to the local OPA server, so at INFO they bury the app's own log lines.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(max(log_level, logging.WARNING))

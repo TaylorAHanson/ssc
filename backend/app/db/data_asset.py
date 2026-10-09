@@ -69,3 +69,9 @@ class DataAssetModel(Base):
     sla = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=True)
     last_synced_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    @property
+    def effective_owner(self) -> Optional[str]:
+        """Accountable data owner resolved from governed tag (DATA_ASSET_OWNER_TAG) or direct owner fallback."""
+        from app.services.data_asset_owner import resolve_data_asset_owner
+        return resolve_data_asset_owner(self.owner, self.tags)

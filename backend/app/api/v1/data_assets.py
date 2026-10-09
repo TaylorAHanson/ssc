@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
 from app.workers.tasks.sync_data_assets import is_metric_view
 from app.api.deps import get_current_user
+from app.services.data_asset_owner import resolve_data_asset_owner
 from datetime import datetime
 import json
 
@@ -103,7 +104,7 @@ def list_data_assets(
             "table_name": asset.table_name,
             "type": asset.type,
             "description": asset.description,
-            "owner": asset.owner,
+            "owner": resolve_data_asset_owner(asset.owner, asset.tags),
             "domain": asset.domain,
             "subdomain": asset.subdomain,
             "tags": asset.tags if asset.tags else [],
@@ -270,7 +271,7 @@ def list_metric_views(
             "table_name": a.table_name,
             "type": "METRIC_VIEW",
             "description": a.description,
-            "owner": a.owner,
+            "owner": resolve_data_asset_owner(a.owner, a.tags),
             "domain": a.domain,
             "subdomain": a.subdomain,
             "tags": a.tags or [],
@@ -808,12 +809,15 @@ def get_databricks_table_details(table_name: str, req: Request):
         except Exception:
             pass
 
+        raw_owner = getattr(info, "owner", None)
+        resolved_owner = resolve_data_asset_owner(raw_owner, tags)
+
         return {
             **base_response,
             "comment": getattr(info, "comment", None),
             "table_type": table_type,
             "data_source_format": getattr(info, "data_source_format", None) and str(info.data_source_format),
-            "owner": getattr(info, "owner", None),
+            "owner": resolved_owner,
             "created_at": getattr(info, "created_at", None),
             "updated_at": getattr(info, "updated_at", None),
             "columns": columns,

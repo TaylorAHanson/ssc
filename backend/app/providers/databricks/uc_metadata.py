@@ -25,6 +25,7 @@ does not exist" — see :attr:`UcMetadataBatch.visible`.
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -36,6 +37,10 @@ logger = logging.getLogger(__name__)
 # information_schema stores identifiers lowercased (everything except column and
 # tag *names*), so all table/schema/catalog keys are compared lowercased.
 TableKey = Tuple[str, str, str]
+
+_TERMINAL_STATES = ("SUCCEEDED", "FAILED", "CANCELED", "CLOSED")
+_POLL_BUDGET_SECONDS = 300
+_POLL_INTERVAL_SECONDS = 2
 
 
 @dataclass
@@ -94,6 +99,52 @@ def _in_list(values: Iterable[str]) -> str:
     return ", ".join(quote_literal(v) for v in sorted(set(values)))
 
 
+def _state_of(response) -> str:
+    status = getattr(response, "status", None)
+    state = getattr(status, "state", None)
+    if state is None:
+        return "UNKNOWN"
+    return getattr(state, "value", str(state))
+
+
+def _run_statement(client, sql: str, warehouse_id: str) -> List[list]:
+    """Execute ``sql``, poll it to a terminal state, and return every result row.
+
+    ``execute_statement`` blocks for at most 50s and may return the statement
+    still PENDING/RUNNING while the warehouse keeps working on it; on a large
+    catalog the ``information_schema.columns`` read can take longer than that.
+    Results can also span several chunks.
+    """
+    response = client.statement_execution.execute_statement(
+        statement=sql, warehouse_id=warehouse_id, wait_timeout="50s"
+    )
+    statement_id = getattr(response, "statement_id", None)
+
+    deadline = time.monotonic() + _POLL_BUDGET_SECONDS
+    state = _state_of(response)
+    while state not in _TERMINAL_STATES and statement_id:
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"statement {statement_id} still {state} after {_POLL_BUDGET_SECONDS}s"
+            )
+        time.sleep(_POLL_INTERVAL_SECONDS)
+        response = client.statement_execution.get_statement(statement_id)
+        state = _state_of(response)
+
+    if state != "SUCCEEDED":
+        raise RuntimeError(getattr(response.status, "error", None) or f"statement {state}")
+
+    rows: List[list] = []
+    result = getattr(response, "result", None)
+    while result is not None:
+        rows.extend(getattr(result, "data_array", None) or [])
+        next_idx = getattr(result, "next_chunk_index", None)
+        if next_idx is None or next_idx < 0 or not statement_id:
+            break
+        result = client.statement_execution.get_statement_result_chunk_n(statement_id, next_idx)
+    return rows
+
+
 def fetch_uc_metadata(client, full_names: Iterable[str], warehouse_id: str) -> UcMetadataBatch:
     """Batch-read table metadata for ``full_names`` via ``information_schema``.
 
@@ -121,13 +172,7 @@ def fetch_uc_metadata(client, full_names: Iterable[str], warehouse_id: str) -> U
         raise ValueError("A SQL warehouse id is required to read information_schema metadata")
 
     def run(sql: str):
-        response = client.statement_execution.execute_statement(
-            statement=sql, warehouse_id=warehouse_id, wait_timeout="50s"
-        )
-        state = getattr(response.status.state, "value", str(response.status.state))
-        if state != "SUCCEEDED":
-            raise RuntimeError(getattr(response.status, "error", None) or f"statement {state}")
-        return (response.result.data_array if response.result else None) or []
+        return _run_statement(client, sql, warehouse_id)
 
     for catalog, keys in by_catalog.items():
         schemas = _in_list(k[1] for k in keys)

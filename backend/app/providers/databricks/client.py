@@ -732,19 +732,19 @@ class DatabricksProvider(BaseProvider):
         Find the owner of a Databricks object.
 
         Args:
-            object_type: Type of object (catalog, schema, table, job, dashboard, notebook, genie_space)
+            object_type: Type of object (catalog, schema, table, view, metric_view, job, dashboard, notebook, genie_space)
             object_name: Full name or ID of the object
 
         Returns:
             Dictionary with owner information and status
         """
         try:
-            if object_type == "catalog":
-                return await self._find_catalog_owner(object_name)
-            elif object_type == "schema":
-                return await self._find_schema_owner(object_name)
-            elif object_type == "table":
-                return await self._find_table_owner(object_name)
+            object_type = (object_type or "").lower()
+            if object_type in ("catalog", "schema", "table", "view", "metric_view"):
+                # REST catalogs/schemas/tables.get requires USE CATALOG (+ often
+                # SELECT). The platform identity typically has only BROWSE, which
+                # is enough for information_schema — same as the data-asset cache.
+                return await self._find_uc_owner(object_type, object_name)
             elif object_type == "job":
                 return await self._find_job_owner(object_name)
             elif object_type == "dashboard":
@@ -756,10 +756,12 @@ class DatabricksProvider(BaseProvider):
             else:
                 return {
                     "found": False,
-                    "message": f"Finding owner for '{object_type}' is not yet implemented. Supported types: catalog, schema, table, job, dashboard, notebook, genie_space.",
+                    "message": f"Finding owner for '{object_type}' is not yet implemented. Supported types: catalog, schema, table, view, metric_view, job, dashboard, notebook, genie_space.",
                     "object_type": object_type,
                     "object_name": object_name
                 }
+        except RetryableError:
+            raise
         except Exception as e:
             return {
                 "found": False,
@@ -768,72 +770,119 @@ class DatabricksProvider(BaseProvider):
                 "object_name": object_name
             }
 
-    async def _find_catalog_owner(self, name: str) -> Dict[str, Any]:
-        """Find owner of a catalog."""
-        try:
-            cat = await asyncio.to_thread(self.client.catalogs.get, name)
-            return {
-                "found": True,
-                "owner": cat.owner or "Unknown",
-                "object_type": "catalog",
-                "object_name": name
-            }
-        except Exception as e:
+    async def _find_uc_owner(self, object_type: str, object_name: str) -> Dict[str, Any]:
+        """Owner and access tags for a catalog, schema, table, or view.
+
+        Reads ``system.information_schema``, which Databricks filters to objects
+        the caller can *see* with BROWSE. Do not use the SDK ``*.get`` APIs here:
+        those require USE CATALOG and made ``find_owner`` report the app service
+        principal's missing grant as if the signed-in user lacked access.
+        """
+        kind = (object_type or "").lower()
+        parts = [p.strip() for p in (object_name or "").split(".") if p.strip()]
+        from app.tools.sql_safety import quote_literal
+
+        if kind == "catalog" and len(parts) >= 1:
+            query = (
+                "SELECT catalog_owner AS owner FROM system.information_schema.catalogs "
+                f"WHERE LOWER(catalog_name) = {quote_literal(parts[0].lower())}"
+            )
+            tag_type, tag_name = "catalog", parts[0]
+        elif kind == "schema" and len(parts) >= 2:
+            query = (
+                "SELECT schema_owner AS owner FROM system.information_schema.schemata "
+                f"WHERE LOWER(catalog_name) = {quote_literal(parts[0].lower())} "
+                f"AND LOWER(schema_name) = {quote_literal(parts[1].lower())}"
+            )
+            tag_type, tag_name = "schema", f"{parts[0]}.{parts[1]}"
+        elif kind in ("table", "view", "metric_view") and len(parts) >= 3:
+            query = (
+                "SELECT table_owner AS owner, table_type "
+                "FROM system.information_schema.tables "
+                f"WHERE LOWER(table_catalog) = {quote_literal(parts[0].lower())} "
+                f"AND LOWER(table_schema) = {quote_literal(parts[1].lower())} "
+                f"AND LOWER(table_name) = {quote_literal(parts[2].lower())}"
+            )
+            tag_type, tag_name = "table", f"{parts[0]}.{parts[1]}.{parts[2]}"
+        else:
             return {
                 "found": False,
-                "message": f"Catalog not found: {str(e)}",
-                "object_type": "catalog",
-                "object_name": name
+                "message": (
+                    f"Invalid {object_type} name '{object_name}'. "
+                    "Expected catalog, catalog.schema, or catalog.schema.object."
+                ),
+                "object_type": object_type,
+                "object_name": object_name,
             }
 
-    async def _find_schema_owner(self, full_name: str) -> Dict[str, Any]:
-        """Find owner of a schema."""
         try:
-            schema = await asyncio.to_thread(self.client.schemas.get, full_name)
-            return {
-                "found": True,
-                "owner": schema.owner or "Unknown",
-                "object_type": "schema",
-                "object_name": full_name
-            }
+            sql_result = await self.execute_sql(query)
+        except RetryableError:
+            raise
         except Exception as e:
+            logger.warning(
+                "information_schema owner lookup failed for %s '%s': %s",
+                object_type, object_name, e,
+            )
             return {
                 "found": False,
-                "message": f"Schema not found: {str(e)}",
-                "object_type": "schema",
-                "object_name": full_name
+                "message": (
+                    f"Could not look up {object_type} '{object_name}' in Unity Catalog "
+                    f"metadata: {e}"
+                ),
+                "object_type": object_type,
+                "object_name": object_name,
             }
 
-    async def _find_table_owner(self, full_name: str) -> Dict[str, Any]:
-        """Find owner and relevant tags of a table."""
-        try:
-            table = await asyncio.to_thread(self.client.tables.get, full_name)
-            result = {
-                "found": True,
-                "owner": table.owner or "Unknown",
-                "object_type": "table",
-                "object_name": full_name
-            }
-            
-            # Fetch tags if possible
-            try:
-                tags = await self.get_asset_tags("table", full_name, ["approver_group", "access_group"])
-                if tags:
-                    if "approver_group" in tags:
-                        result["approver_group"] = tags["approver_group"]
-                    if "access_group" in tags:
-                        result["access_group"] = tags["access_group"]
-            except Exception as tag_err:
-                logger.warning(f"Could not fetch tags for table {full_name}: {tag_err}")
-                
-            return result
-        except Exception as e:
+        rows = sql_result.get("rows") or []
+        if not rows:
             return {
                 "found": False,
-                "message": f"Table not found: {str(e)}",
-                "object_type": "table",
-                "object_name": full_name
+                "message": (
+                    f"No {object_type} named '{object_name}' is visible in Unity Catalog "
+                    "metadata (BROWSE). It may not exist, or it may be outside the "
+                    "catalogs this platform is configured to scan. This is not a check "
+                    "of the signed-in user's live grants."
+                ),
+                "object_type": object_type,
+                "object_name": object_name,
             }
+
+        row = rows[0] if isinstance(rows[0], dict) else {}
+        owner = (
+            row.get("owner")
+            or row.get("catalog_owner")
+            or row.get("schema_owner")
+            or row.get("table_owner")
+            or "Unknown"
+        )
+        out_type = object_type
+        table_type = row.get("table_type")
+        if table_type:
+            out_type = str(table_type)
+        result = {
+            "found": True,
+            "owner": str(owner).strip() or "Unknown",
+            "object_type": out_type,
+            "object_name": object_name,
+        }
+        return await self._attach_access_tags(result, tag_type, tag_name)
+
+    async def _attach_access_tags(
+        self, result: Dict[str, Any], asset_type: str, name: str
+    ) -> Dict[str, Any]:
+        try:
+            tags = await self.get_asset_tags(
+                asset_type, name, ["approver_group", "access_group"]
+            )
+            if tags:
+                if "approver_group" in tags:
+                    result["approver_group"] = tags["approver_group"]
+                if "access_group" in tags:
+                    result["access_group"] = tags["access_group"]
+        except Exception as tag_err:
+            logger.warning("Could not fetch tags for %s %s: %s", asset_type, name, tag_err)
+        return result
 
     async def _find_job_owner(self, job_id: str) -> Dict[str, Any]:
         """Find owner of a job."""

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.tools.sql_safety import quote_literal
 from app.core.exceptions import RetryableError
+from app.services.data_asset_owner import resolve_data_asset_owner
 import fnmatch
 
 class GetTableListInput(BaseModel):
@@ -76,7 +77,7 @@ async def get_table_list(target_host: str, catalog_name: str, schema_name: str, 
                 "schema_name": table.schema_name,
                 "table_type": table.table_type.value if hasattr(table.table_type, 'value') else str(table.table_type),
                 "comment": table.comment or "No description provided",
-                "owner": table.owner,
+                "owner": resolve_data_asset_owner(table.owner, table_tags),
                 "tags": table_tags,
                 "properties": table.properties or {}
             })

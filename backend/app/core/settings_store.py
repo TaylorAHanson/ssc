@@ -199,6 +199,12 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "so only these catalogs' assets show up there. "
              "Spaces around each name are trimmed. Leave BLANK to include every catalog the service "
              "principal can see (excluding system/samples). Applies on the next scan/sync — no restart needed."},
+    {"group": "Data Catalog", "key": "DATA_ASSET_OWNER_TAG", "label": "Data owner tag",
+     "type": "string", "requires": ["features.data_discovery"],
+     "help": "Tag name used to identify the human or team owner of a data asset (e.g. 'data_owner'). "
+             "When this tag is present on an asset, its value is displayed as the owner instead of "
+             "the direct Unity Catalog object owner. If the tag is not set or this setting is blank, "
+             "falls back to the direct owner. Applies immediately — no restart needed."},
     {"group": "Data Catalog", "key": "DATA_ASSET_LINEAGE_LOOKBACK_DAYS",
      "label": "Dashboard lineage lookback (days)", "type": "int", "min": 1, "max": 365,
      "requires": ["features.data_discovery"],

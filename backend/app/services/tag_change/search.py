@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_scan_catalogs, settings
 from app.db.data_asset import DataAssetModel
+from app.services.data_asset_owner import resolve_data_asset_owner
 from app.services.tag_change.datasets import DatasetSummary, list_datasets
 from app.workflows.tag_plan import CATALOG, SCHEMA, is_reserved_key, sql_string_literal
 
@@ -216,7 +217,13 @@ def _tag_names(tags: Any) -> List[str]:
             tags = json.loads(tags)
         except ValueError:
             return []
-    return [t for t in tags if isinstance(t, str)] if isinstance(tags, list) else []
+    if not isinstance(tags, list):
+        return []
+    out = []
+    for t in tags:
+        if isinstance(t, str):
+            out.append(t.split("=", 1)[0].split(":", 1)[0].strip())
+    return out
 
 
 def _cache_candidates(db: Session, terms: List[str]) -> List[SearchObject]:
@@ -234,7 +241,7 @@ def _cache_candidates(db: Session, terms: List[str]) -> List[SearchObject]:
         if fqn.count(".") != 2 or not _matches_terms(fqn, terms):
             continue
         keys = [t for t in _tag_names(tags) if not is_reserved_key(t)]
-        results.append(SearchObject(fqn=fqn, object_type=obj_type, owner=owner, tag_keys=sorted(keys)))
+        results.append(SearchObject(fqn=fqn, object_type=obj_type, owner=resolve_data_asset_owner(owner, tags), tag_keys=sorted(keys)))
     return results
 
 

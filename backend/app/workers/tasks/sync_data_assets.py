@@ -87,6 +87,19 @@ def infer_domain_and_subdomain(catalog: str, schema: str, table_name: str, tags:
     return domain or inferred_domain, subdomain or inferred_subdomain
 
 
+def _is_certified_in_tags(tags: list) -> bool:
+    """Check if any tag indicates certification status, supporting both bare and key=value tags."""
+    for t in (tags or []):
+        if not isinstance(t, str):
+            continue
+        key = t.split("=", 1)[0].split(":", 1)[0].strip().lower()
+        if key in ("certified", "system.certification_status", "certification_status"):
+            val = t.split("=", 1)[1].strip().lower() if "=" in t else (t.split(":", 1)[1].strip().lower() if ":" in t else "")
+            if not val or val not in ("false", "no", "0"):
+                return True
+    return False
+
+
 def is_metric_view(asset_type: str | None) -> bool:
     """A UC metric view is identified by its table type — never by its name."""
     return str(asset_type or "").upper() == "METRIC_VIEW"
@@ -371,7 +384,13 @@ async def sync_data_assets_task(force: bool = False):
                 t.comment as description,
                 t.table_owner as owner,
                 t.created as created_at,
-                collect_list(tt.tag_name) as tags
+                collect_set(
+                    case 
+                        when tt.tag_name is null then null
+                        when tt.tag_value is not null and tt.tag_value != '' then concat(tt.tag_name, '=', tt.tag_value)
+                        else tt.tag_name
+                    end
+                ) as tags
             FROM system.information_schema.tables t
             LEFT JOIN system.information_schema.table_tags tt 
               ON t.table_catalog = tt.catalog_name 
@@ -420,7 +439,7 @@ async def sync_data_assets_task(force: bool = False):
                         row.get("table_name", ""),
                         tags,
                     )
-                    certified = "Certified" in tags or "certified" in tags or "system.certification_status" in tags or "certification_status" in tags
+                    certified = _is_certified_in_tags(tags)
 
                     asset = db.query(DataAssetModel).filter(DataAssetModel.id == asset_id).first()
                     if not asset:

@@ -477,6 +477,10 @@ class Settings(BaseSettings):
     # "enterprise_prod, finance_prod". Whitespace around each name is trimmed.
     # Editable in Admin -> Settings.
     SCAN_CATALOGS: str = os.getenv("SCAN_CATALOGS", "")
+    # Tag name used to resolve human/team data owner instead of the service principal owner.
+    # Default is "data_owner". If blank or not present on an asset, falls back to the direct owner.
+    # Editable in Admin -> Settings.
+    DATA_ASSET_OWNER_TAG: str = os.getenv("DATA_ASSET_OWNER_TAG", "data_owner")
     DATA_ASSET_SYNC_CRON: str = "0 * * * *"
     # How far back the sync looks in system.access.table_lineage for dashboards
     # that read each metric view (lineage keeps a rolling year). A dashboard

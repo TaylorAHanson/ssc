@@ -94,10 +94,19 @@ violations["table_exists"] contains msg if {
 	applies["table_exists"]
 	some asset in input.resource.assets
 	asset.table_exists == false
+	not asset.metadata_error
 	# Deliberately hedged: Unity Catalog's information_schema filters invisible
 	# objects out silently, so "absent" and "no BROWSE grant" are indistinguishable
 	# from here. Naming both keeps a permissions gap from reading as a missing table.
 	msg := sprintf("Table or view '%v' was not found in Unity Catalog — it either does not exist, or the governance service principal lacks BROWSE on its catalog.", [asset.name])
+}
+
+violations["table_exists"] contains msg if {
+	applies["table_exists"]
+	some asset in input.resource.assets
+	asset.table_exists == false
+	asset.metadata_error
+	msg := sprintf("Unity Catalog metadata for '%v' could not be read during this scan, so it could not be checked: %v", [asset.name, asset.metadata_error])
 }
 
 violations["reliability_window_tag"] contains msg if {

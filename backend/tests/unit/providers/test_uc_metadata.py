@@ -164,3 +164,83 @@ def test_missing_warehouse_id_fails_loudly():
 
     with pytest.raises(ValueError, match="warehouse"):
         fetch_uc_metadata(client, ["main.sales.orders"], "")
+
+
+def _status(state):
+    return SimpleNamespace(state=SimpleNamespace(value=state), error=None)
+
+
+class SlowStatementExecution(FakeStatementExecution):
+    """Returns every statement still RUNNING from ``execute_statement``, the way
+    the real API does once its 50s wait elapses, and finishes it after
+    ``polls_needed`` ``get_statement`` calls (never, if ``None``)."""
+
+    def __init__(self, rows_by_table, polls_needed=1, chunk_size=None):
+        super().__init__(rows_by_table)
+        self.polls_needed = polls_needed
+        self.chunk_size = chunk_size
+        self.pending = {}
+        self.chunks = {}
+
+    def execute_statement(self, statement, warehouse_id, wait_timeout=None):
+        finished = super().execute_statement(statement, warehouse_id, wait_timeout)
+        statement_id = f"stmt-{len(self.statements)}"
+        self.pending[statement_id] = [0, finished.result.data_array]
+        return SimpleNamespace(statement_id=statement_id, status=_status("RUNNING"), result=None)
+
+    def _chunk(self, statement_id, rows, index):
+        size = self.chunk_size or max(len(rows), 1)
+        part = rows[index * size:(index + 1) * size]
+        more = (index + 1) * size < len(rows)
+        return SimpleNamespace(data_array=part, next_chunk_index=index + 1 if more else None)
+
+    def get_statement(self, statement_id):
+        entry = self.pending[statement_id]
+        entry[0] += 1
+        if self.polls_needed is None or entry[0] < self.polls_needed:
+            return SimpleNamespace(statement_id=statement_id, status=_status("RUNNING"), result=None)
+        return SimpleNamespace(
+            statement_id=statement_id,
+            status=_status("SUCCEEDED"),
+            result=self._chunk(statement_id, entry[1], 0),
+        )
+
+    def get_statement_result_chunk_n(self, statement_id, index):
+        return self._chunk(statement_id, self.pending[statement_id][1], index)
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    monkeypatch.setattr("app.providers.databricks.uc_metadata.time.sleep", lambda _s: None)
+
+
+def test_statement_still_running_after_the_wait_is_polled_to_completion(no_sleep):
+    client = SimpleNamespace(statement_execution=SlowStatementExecution(FULL_ROWS, polls_needed=3))
+
+    batch = fetch_uc_metadata(client, ["main.sales.orders"], WAREHOUSE)
+
+    assert batch.failed_catalogs == {}
+    assert batch.not_visible == []
+    assert batch.get("main.sales.orders").catalog_description == "Main catalog"
+
+
+def test_rows_spread_across_result_chunks_are_all_read(no_sleep):
+    client = SimpleNamespace(
+        statement_execution=SlowStatementExecution(FULL_ROWS, polls_needed=1, chunk_size=1)
+    )
+
+    batch = fetch_uc_metadata(client, ["main.sales.orders"], WAREHOUSE)
+
+    meta = batch.get("main.sales.orders")
+    assert [c.name for c in meta.columns] == ["order_id", "amount"]
+    assert meta.tags == {"dataset": "sales-order", "reliability_window": "7-days"}
+
+
+def test_statement_that_never_finishes_fails_the_catalog(no_sleep, monkeypatch):
+    monkeypatch.setattr("app.providers.databricks.uc_metadata._POLL_BUDGET_SECONDS", 0)
+    client = SimpleNamespace(statement_execution=SlowStatementExecution(FULL_ROWS, polls_needed=None))
+
+    batch = fetch_uc_metadata(client, ["main.sales.orders"], WAREHOUSE)
+
+    assert "still RUNNING" in batch.failed_catalogs["main"]
+    assert batch.not_visible == ["main.sales.orders"]

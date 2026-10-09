@@ -1736,14 +1736,15 @@ def _refresh_data_asset_quality(db, discovered_resources: List[Dict[str, Any]], 
         # manual certify action writes. Discovery already fetched these tags, so
         # this is free (no extra Databricks round-trips) and keeps the UI in
         # sync with reality on every scan, not just after a manual "Review and
-        # Act".
-        if assets:
+        # Act". When metadata couldn't be read the tags are unknown, not absent,
+        # so the cached flag is left as it was.
+        if not assets:
+            asset.certified = False
+        elif not any(a.get("metadata_error") for a in assets):
             asset.certified = all(
                 str((a.get("tags") or {}).get("system.certification_status", "")).lower() == "certified"
                 for a in assets
             )
-        else:
-            asset.certified = False
         # The certification UI surfaces this as "Last Policy Run"; a sentinel
         # scan IS a policy evaluation, so bump it here (not just on data sync).
         # Use the shared run timestamp so it matches the Sentinel run's date.

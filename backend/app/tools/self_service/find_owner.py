@@ -9,42 +9,23 @@ import logging
 logger = logging.getLogger(__name__)
 
 class FindOwnerInput(BaseModel):
-    object_type: str = Field(..., description="Type of object to check. Supported: 'catalog', 'schema', 'table', 'job', 'dashboard', 'notebook', 'genie_space'.")
-    object_name: str = Field(..., description="Full name (for catalog/schema/table/notebook) or ID (for job/dashboard/genie_space) of the object")
+    object_type: str = Field(..., description="Type of object to check. Supported: 'catalog', 'schema', 'table', 'view', 'metric_view', 'job', 'dashboard', 'notebook', 'genie_space'.")
+    object_name: str = Field(..., description="Full name (for catalog/schema/table/view/notebook) or ID (for job/dashboard/genie_space) of the object")
 
 @tool(
     name="find_owner",
-    description="Look up the owner and metadata tags (e.g. approver_group, access_group) of a Databricks object: catalog, schema, table, job, dashboard, notebook, or genie_space.",
+    description="Look up the owner and metadata tags (e.g. approver_group, access_group) of a Databricks object: catalog, schema, table, view, metric_view, job, dashboard, notebook, or genie_space. Catalog/schema/table lookups use Unity Catalog metadata (BROWSE) and are not a check of the signed-in user's USE CATALOG grant.",
     args_schema=FindOwnerInput
 )
 async def find_owner(object_type: str, object_name: str) -> Dict[str, Any]:
     """
     Finds the owner and relevant tags of a Databricks object.
 
-    IMPLEMENTATION APPROACH:
-    This tool uses the DatabricksProvider.find_object_owner() method which leverages
-    the Databricks SDK API calls (client.catalogs.get(), client.schemas.get(), etc.)
-    to retrieve object metadata including the owner.
-
-    ALTERNATIVE APPROACH:
-    The DatabricksProvider also provides get_asset_owner() method which uses
-    'DESCRIBE EXTENDED' SQL commands to fetch owner information. This approach is
-    currently used by the data access state machine.
-
-    When to use which approach:
-    - SDK API approach (this tool):
-      * Faster and more reliable for Unity Catalog objects
-      * Works for catalogs, schemas, tables, jobs, dashboards, notebooks, genie spaces
-      * Returns structured metadata directly from the SDK
-      * Used by Agent tools for interactive queries
-
-    - DESCRIBE EXTENDED approach (get_asset_owner):
-      * Uses SQL warehouse execution
-      * Works for catalogs, schemas, tables, and volumes
-      * Useful when you need to query via SQL or when SDK access is limited
-      * Currently used by state machine for data owner approval flow
-
-    Both approaches are maintained for flexibility and different use cases.
+    Unity Catalog catalog/schema/table/view lookups read
+    ``system.information_schema`` (BROWSE), not the SDK ``*.get`` APIs (those
+    require USE CATALOG and would report the *app* identity's grants, not
+    whether the signed-in user can see the object in Catalog Explorer).
+    Jobs, dashboards, notebooks, and genie spaces still use the workspace SDK.
 
     Args:
         object_type: Type of object

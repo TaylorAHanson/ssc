@@ -11,6 +11,17 @@ Format rules (the app parses this file, so keep to them):
   subheading. Plain markdown only.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 1.6.0 — 2026-10-08
+
+### Added
+
+- Data catalog assets now display their accountable human or team data owner based on the governed `data_owner` tag instead of the raw service principal or system identity. Administrators can configure or customize the owner tag name in **Admin → Settings → Data Catalog**; if the setting is blank or the tag is not set on an asset, ownership seamlessly falls back to the direct object owner.
+
+### Fixed
+
+- Asking the agent for access to a catalog object no longer fails with “you don't have USE CATALOG” when you can already see that catalog. Owner and access-group lookup now uses Unity Catalog metadata the platform can already browse, instead of a live API that required a grant the app itself doesn't have.
+- Data certification no longer reports every table in a catalog as "not found in Unity Catalog" when reading the catalog's metadata takes longer than 50 seconds. The scan now waits for slow metadata reads to finish. If a read does fail, the finding says the metadata couldn't be read and includes the error, instead of suggesting the table is missing or a permission is absent, and the product's certified status is left as it was rather than shown as uncertified.
+
 ## 1.5.0 — 2026-10-06
 
 ### Metadata Manager

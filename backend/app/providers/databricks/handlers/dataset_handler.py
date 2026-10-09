@@ -54,6 +54,11 @@ _ADOC_RECON_PROJECTIONS = (
 )
 
 
+def _short_error(error: Any, limit: int = 300) -> str:
+    text = " ".join(str(error).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def contract_table_names(dataset_def: Dict[str, Any]) -> List[str]:
     """Expand a parsed ODCS contract's ``schema`` entries to full table names.
 
@@ -551,6 +556,7 @@ ORDER BY resultPercent ASC
             )
             for asset_info, _ in pending:
                 asset_info["table_exists"] = False
+                asset_info["metadata_error"] = _short_error(e)
             return
 
         for asset_info, full_name in pending:
@@ -558,6 +564,9 @@ ORDER BY resultPercent ASC
             if meta is None:
                 asset_info["all_columns_have_descriptions"] = False
                 asset_info["table_exists"] = False
+                catalog_error = batch.failed_catalogs.get(full_name.split(".")[0].lower())
+                if catalog_error:
+                    asset_info["metadata_error"] = _short_error(catalog_error)
                 # Fallback convention check
                 if full_name.endswith("_v") or full_name.endswith("_view"):
                     asset_info["type"] = "view"

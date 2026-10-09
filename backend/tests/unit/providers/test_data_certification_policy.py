@@ -128,3 +128,36 @@ async def test_declared_asset_is_still_held_to_the_other_rules(provider):
     assert "assets_declared" not in failing
     assert {"required_tags", "reliability_window_tag", "access_controls_defined"} <= failing
     assert result["action"] != "CERTIFY"
+
+
+def table_exists_messages(result):
+    return next(r["messages"] for r in result["rule_results"] if r["id"] == "table_exists")
+
+
+@pytest.mark.asyncio
+async def test_invisible_table_is_reported_as_missing_or_no_browse(provider):
+    missing = {**COMPLIANT_ASSET, "table_exists": False, "tags": {}}
+    result = await evaluate(provider, assets=[missing])
+
+    [message] = table_exists_messages(result)
+    assert "not found in Unity Catalog" in message
+    assert result["action"] != "CERTIFY"
+
+
+@pytest.mark.asyncio
+async def test_metadata_read_failure_is_reported_as_a_scan_failure(provider):
+    """A failed metadata query says nothing about whether the table exists or
+    about grants, so it must not be reported as 'not found / lacks BROWSE'."""
+    unreadable = {
+        **COMPLIANT_ASSET,
+        "table_exists": False,
+        "tags": {},
+        "metadata_error": "statement stmt-1 still RUNNING after 300s",
+    }
+    result = await evaluate(provider, assets=[unreadable])
+
+    [message] = table_exists_messages(result)
+    assert "could not be read during this scan" in message
+    assert "still RUNNING" in message
+    assert "BROWSE" not in message
+    assert result["action"] != "CERTIFY"
