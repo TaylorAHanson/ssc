@@ -9,6 +9,7 @@ text) is untrusted and goes through ``safe_text`` / ``safe_code``.
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import re
 from datetime import datetime
@@ -26,6 +27,43 @@ logger = logging.getLogger(__name__)
 _PHASE_LABELS = {"BETA": "Beta", "PUBLIC_PREVIEW": "Public Preview", "PRIVATE_PREVIEW": "Private Preview"}
 _DOCS_URL_RE = re.compile(r"^https://docs\.databricks\.com/[A-Za-z0-9/_\-.#%]*$")
 AUTOMATION_ACTOR = "service principal"
+
+
+def _parse_approver_list(raw: Optional[str]) -> List[str]:
+    """Comma/semicolon-separated emails or a role name."""
+    return [p.strip() for p in (raw or "").replace(";", ",").split(",") if p.strip()]
+
+
+def approver_routing(scope: str, request_id: str, display_name: str, action: str) -> Dict[str, Any]:
+    """Who to email and assign, from Admin → Settings, for this preview's scope."""
+    from app.core.config import settings
+
+    attr = (
+        "PREVIEW_FEATURE_ACCOUNT_APPROVER_EMAIL"
+        if scope == "account"
+        else "PREVIEW_FEATURE_WORKSPACE_APPROVER_EMAIL"
+    )
+    approvers = _parse_approver_list(getattr(settings, attr, None))
+    emails = [a for a in approvers if "@" in a]
+    verb = "turn on" if action == "enable" else "turn off"
+    kind = "account-level" if scope == "account" else "workspace-level"
+    brand = html.escape(str(getattr(settings, "BRAND_NAME", "") or "the app"))
+    name = html.escape(display_name or "a preview")
+    app_url = (getattr(settings, "APP_BASE_URL", "") or "").rstrip("/")
+    approvals = f"{app_url}/approvals" if app_url else "/approvals"
+    request_url = f"{app_url}/requests/{html.escape(request_id)}" if app_url else f"/requests/{html.escape(request_id)}"
+    return {
+        "approvers": approvers,
+        "notify_email": ", ".join(emails),
+        "notify_subject": f"Preview feature approval needed: {display_name}",
+        "notify_body": (
+            f"<p>A request to <strong>{html.escape(verb)}</strong> <strong>{name}</strong> "
+            f"({kind}) is waiting for approval in {brand}.</p>"
+            f"<p><a href=\"{html.escape(approvals)}\">Open Pending Approvals</a>"
+            f" · <a href=\"{html.escape(request_url)}\">View request</a></p>"
+            f"<p>Request ID: {html.escape(request_id)}</p>"
+        ),
+    }
 
 
 def _session():
@@ -154,12 +192,15 @@ def assess(
                          "reset it to inherited, and an explicit off may override an account-level on.")
         if notes:
             lines += [""] + [f"- {n}" for n in notes]
+        scope = "account" if feature.scope == "account" else "workspace"
+        routing = approver_routing(scope, request_id, feature.display_name, action)
         return {
             "summary": f"{verb.capitalize()} {feature.display_name} for {len(rows)} target(s).",
             "targets": [r.target for r in rows],
-            "scope": "account" if feature.scope == "account" else "workspace",
+            "scope": scope,
             "report_title": "Preview feature request",
             "report_markdown": "\n".join(lines),
+            **routing,
         }
     finally:
         db.close()

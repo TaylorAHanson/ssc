@@ -11,7 +11,11 @@ Format rules (the app parses this file, so keep to them):
   subheading. Plain markdown only.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
-## 1.7.1 — 2026-10-13
+## 1.8.0 — 2026-10-13
+
+### Added
+
+- Preview feature requests now notify different people for **workspace** vs **account** previews. Set the addresses under **Admin → Settings → Preview Features** (Approvals). When a request is opened, those people are emailed and assigned the approval; Platform Admins can still act. Blank keeps the previous inbox-only behaviour.
 
 ### Fixed
 

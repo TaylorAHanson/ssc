@@ -461,6 +461,47 @@ def test_spec_implement_gate_skips_only_when_all_applied():
     assert [s.name for s in spec.on_reject] == ["mark_rejected"]
 
 
+def test_spec_splits_workspace_and_account_approval_and_notifies():
+    from app.workflows.graphs.specs import SPECS
+    from app.workflows.spec import Gate
+    from app.workflows.spec_loader import spec_from_dict
+
+    spec = spec_from_dict(SPECS["preview_feature_request"])
+    names = [s.name for s in spec.stages]
+    assert names[:4] == ["assess", "notify_approvers", "approve_workspace", "approve_account"]
+    notify = next(s for s in spec.stages if s.name == "notify_approvers")
+    assert notify.run_if({"notify_email": "ops@x.com"}) is True
+    assert notify.run_if({"notify_email": ""}) is False
+    ws = next(s for s in spec.stages if isinstance(s, Gate) and s.name == "approve_workspace")
+    acct = next(s for s in spec.stages if isinstance(s, Gate) and s.name == "approve_account")
+    assert ws.auto_approve({"scope": "account"}) is True
+    assert ws.auto_approve({"scope": "workspace"}) is False
+    assert acct.auto_approve({"scope": "workspace"}) is True
+    assert acct.auto_approve({"scope": "account"}) is False
+    assert ws.approvers_from({"approvers": ["a@x.com"]}) == ["a@x.com"]
+
+
+def test_approver_routing_uses_scope_settings(monkeypatch):
+    from app.core import config as cfg
+    from app.services.preview_features.steps import approver_routing
+
+    monkeypatch.setattr(cfg.settings, "PREVIEW_FEATURE_WORKSPACE_APPROVER_EMAIL", "ws@x.com, extra@x.com")
+    monkeypatch.setattr(cfg.settings, "PREVIEW_FEATURE_ACCOUNT_APPROVER_EMAIL", "acct@x.com")
+    monkeypatch.setattr(cfg.settings, "APP_BASE_URL", "https://app.example")
+    monkeypatch.setattr(cfg.settings, "BRAND_NAME", "Hub")
+    ws = approver_routing("workspace", "req-1", "Genie ZeroOps", "enable")
+    assert ws["approvers"] == ["ws@x.com", "extra@x.com"]
+    assert ws["notify_email"] == "ws@x.com, extra@x.com"
+    assert "Genie ZeroOps" in ws["notify_subject"]
+    assert "https://app.example/approvals" in ws["notify_body"]
+    acct = approver_routing("account", "req-2", "Governance Hub", "disable")
+    assert acct["approvers"] == ["acct@x.com"]
+    assert "turn off" in acct["notify_body"]
+    monkeypatch.setattr(cfg.settings, "PREVIEW_FEATURE_WORKSPACE_APPROVER_EMAIL", "")
+    blank = approver_routing("workspace", "req-3", "X", "enable")
+    assert blank["approvers"] == [] and blank["notify_email"] == ""
+
+
 # ---------------------------------------------------------------------------
 # API: who can approve from the tab
 # ---------------------------------------------------------------------------

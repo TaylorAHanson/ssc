@@ -514,6 +514,14 @@ class Settings(BaseSettings):
     PREVIEW_FEATURE_SYNC_CONCURRENCY: int = int(os.getenv("PREVIEW_FEATURE_SYNC_CONCURRENCY", "8"))
     # A feature no workspace lists for this many syncs in a row is archived as retired.
     PREVIEW_FEATURE_RETIRE_AFTER_SYNCS: int = int(os.getenv("PREVIEW_FEATURE_RETIRE_AFTER_SYNCS", "3"))
+    # Who is emailed (and assigned the approval) when a preview is requested.
+    # Blank = no email; the approval stays in the Platform Admin inbox only.
+    PREVIEW_FEATURE_WORKSPACE_APPROVER_EMAIL: str = os.getenv(
+        "PREVIEW_FEATURE_WORKSPACE_APPROVER_EMAIL", ""
+    )
+    PREVIEW_FEATURE_ACCOUNT_APPROVER_EMAIL: str = os.getenv(
+        "PREVIEW_FEATURE_ACCOUNT_APPROVER_EMAIL", ""
+    )
 
     # Sentinel Settings
     ENFORCEMENT_SENTINEL_CRON: str = "*/30 * * * *"  # Cron schedule to automatically run sentinel (empty = disabled)

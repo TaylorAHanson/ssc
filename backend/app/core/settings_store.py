@@ -524,6 +524,16 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "type": "int", "min": 1, "requires": ["features.preview_features"],
      "help": "A preview no workspace lists for this many syncs in a row is removed from the list (kept "
              "for history), and any open request for it is closed."},
+    {"group": "Preview Features", "section": "Approvals", "key": "PREVIEW_FEATURE_WORKSPACE_APPROVER_EMAIL",
+     "label": "Workspace preview approvers", "type": "string", "requires": ["features.preview_features"],
+     "help": "Who is emailed, and assigned the approval, when someone requests a workspace-level preview. "
+             "Comma-separate addresses (a distribution list is fine). Blank = no email; Platform Admins "
+             "still see it in Pending Approvals. Takes effect on the next request."},
+    {"group": "Preview Features", "section": "Approvals", "key": "PREVIEW_FEATURE_ACCOUNT_APPROVER_EMAIL",
+     "label": "Account preview approvers", "type": "string", "requires": ["features.preview_features"],
+     "help": "Who is emailed, and assigned the approval, when someone requests an account-level preview. "
+             "Comma-separate addresses (a distribution list is fine). Blank = no email; Platform Admins "
+             "still see it in Pending Approvals. Takes effect on the next request."},
 
     # ===================================================================
     # Platform
@@ -687,9 +697,10 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
     ),
     "Workflow Studio": "Whether workflows can be edited in place, the authoring assistant's budget, and how workflow test cases run.",
     "Preview Features": (
-        "How often Databricks Beta and Public Preview features are re-read from your target workspaces, and "
-        "where announcements and docs links come from. Who approves and implements a request is set on the "
-        "Preview Feature Request workflow in Workflow Studio."
+        "How often Databricks Beta and Public Preview features are re-read from your target workspaces, "
+        "where announcements and docs links come from, and who is emailed for workspace-level vs "
+        "account-level preview requests. The two approval gates themselves live on the Preview Feature "
+        "Request workflow in Workflow Studio."
     ),
     "Target Workspaces": (
         "The workspaces the app monitors, mainly scanned by OmniGuard (Data Certification's workspace "

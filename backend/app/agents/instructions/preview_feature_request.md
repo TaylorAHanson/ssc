@@ -82,10 +82,12 @@ Gather only what the lookup couldn't answer.
 Summarize in one short block and ask for a yes:
 - Feature (name + phase), action (turn on / turn off), workspaces (or "account").
 - Their justification.
-- What happens next: one approval covers all the workspaces; after approval,
-  workspace previews are switched automatically and checked; account previews
-  (or any workspace where the automatic change fails) go to a person to
-  implement in the account console or workspace settings.
+- What happens next: workspace-level and account-level previews have separate
+  approval gates. If an approver email is configured for that scope, they are
+  notified; otherwise it waits in Pending Approvals for a Platform Admin. After
+  approval, workspace previews are switched automatically and checked; account
+  previews (or any workspace where the automatic change fails) go to a person
+  to implement in the account console or workspace settings.
 
 Only call `execute_workflow` after the user confirms.
 

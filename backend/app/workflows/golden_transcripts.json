@@ -91,10 +91,11 @@
   },
   "preview_feature_request": {
     "gates": 1,
-    "mutating": 3,
+    "mutating": 4,
     "status": "completed",
     "tools": [
       "assess_preview_feature",
+      "send_notification",
       "set_preview_target_status",
       "set_preview_setting",
       "verify_preview_setting"

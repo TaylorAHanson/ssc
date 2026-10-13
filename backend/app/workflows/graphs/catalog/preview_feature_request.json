@@ -8,7 +8,7 @@
       "name": "assess",
       "tool": "assess_preview_feature",
       "running_status": "manager_approval",
-      "writes_context": ["scope"],
+      "writes_context": ["scope", "approvers", "notify_email", "notify_subject", "notify_body"],
       "args": {
         "feature": {"$var": {"path": "feature", "default": null}},
         "action": {"$var": {"path": "action", "default": "enable"}},
@@ -17,10 +17,31 @@
       }
     },
     {
+      "kind": "step",
+      "name": "notify_approvers",
+      "tool": "send_notification",
+      "run_if": {"$var": "notify_email"},
+      "args": {
+        "to_email": {"$var": "notify_email"},
+        "subject": {"$var": {"path": "notify_subject", "default": "Preview feature approval needed"}},
+        "body": {"$var": {"path": "notify_body", "default": ""}}
+      }
+    },
+    {
       "kind": "gate",
-      "name": "approve",
+      "name": "approve_workspace",
       "type": "platform_admin",
-      "waiting_status": "manager_approval"
+      "waiting_status": "manager_approval",
+      "auto_approve": {"$eq": [{"$var": "scope"}, "account"]},
+      "approvers_from": {"$var": "approvers"}
+    },
+    {
+      "kind": "gate",
+      "name": "approve_account",
+      "type": "platform_admin",
+      "waiting_status": "manager_approval",
+      "auto_approve": {"$ne": [{"$var": "scope"}, "account"]},
+      "approvers_from": {"$var": "approvers"}
     },
     {
       "kind": "step",
