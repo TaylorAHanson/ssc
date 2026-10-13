@@ -348,6 +348,11 @@ class Settings(BaseSettings):
     # Agent Settings
     AGENT_ENABLED: bool = True
     AGENT_MAX_ITERATIONS: int = 10
+    # Knowledge lookups (context catalog, docs search) are cheap for the model
+    # to fan out. Cap distinct calls per tool per turn; duplicates are skipped
+    # even under the cap. After the budget is hit the runner synthesizes an
+    # answer from results already in hand instead of looping.
+    AGENT_MAX_LOOKUP_CALLS: int = 3
     # The authoring studio needs a bigger budget than a runtime turn: one design
     # turn legitimately spends ~9 calls (building blocks, research, preview,
     # validate, save draft, save tests, run tests, then a fix + re-save), so the

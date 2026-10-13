@@ -35,6 +35,7 @@ class FetchDocPageInput(BaseModel):
     args_schema=FetchDocPageInput,
     feature_flag="web_search",
     friendly_label="Reading documentation page...",
+    is_lookup=True,
 )
 async def fetch_doc_page(url: str) -> Dict[str, Any]:
     allowed = web_config()["allowed_domains"]

@@ -225,6 +225,28 @@ export function EnforcementSentinel() {
         }
     };
 
+    const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+    const handleDeleteRun = async (run: { id: string; status?: string; createdAt?: string }) => {
+        const inProgress = !['completed', 'failed', 'rejected'].includes((run.status || '').toLowerCase());
+        const when = run.createdAt ? formatPacific(run.createdAt) : run.id;
+        const message = inProgress
+            ? `Delete the in-progress run from ${when}?\n\n` +
+              'Use this when a run is stuck (for example after a deploy). If it is still scanning, it stops at its next ' +
+              'step and its results are discarded. Its findings are permanently deleted. You can start a fresh scan right after.'
+            : `Permanently delete the run from ${when} and its findings? This cannot be undone.`;
+        if (!window.confirm(message)) return;
+        setDeletingRunId(run.id);
+        try {
+            await api.deleteSentinelRun(run.id);
+            if (selectedRunId === run.id) setSelectedRunId(null);
+            await fetchSentinelRuns();
+        } catch (e) {
+            window.alert(e instanceof Error ? e.message : 'Failed to delete the run.');
+        } finally {
+            setDeletingRunId(null);
+        }
+    };
+
     const handleSendDigest = async () => {
         setDigestSending(true);
         setDigestResult(null);
@@ -666,9 +688,20 @@ export function EnforcementSentinel() {
                                                     );
                                                 })()}
                                             </td>
-                                            <td className="p-3 text-right">
+                                            <td className="p-3 text-right whitespace-nowrap">
                                                 <Button variant="ghost" size="sm" className="h-8 text-gray-400 group-hover:text-gray-900 group-hover:bg-gray-200">
                                                     View Report <ArrowRight className="w-4 h-4 ml-2" />
+                                                </Button>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    title="Delete this run"
+                                                    aria-label="Delete this run"
+                                                    disabled={deletingRunId === run.id}
+                                                    onClick={(e) => { e.stopPropagation(); handleDeleteRun(run); }}
+                                                    className="h-8 w-8 p-0 ml-1 text-gray-300 hover:text-red-600 hover:bg-red-50"
+                                                >
+                                                    {deletingRunId === run.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
                                                 </Button>
                                             </td>
                                         </tr>

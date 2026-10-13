@@ -107,6 +107,21 @@ def _state_of(response) -> str:
     return getattr(state, "value", str(state))
 
 
+def cancel_statement(client, statement_id: Optional[str]) -> None:
+    """Best-effort cancel of a statement we've stopped waiting for.
+
+    Abandoning the poll leaves the statement running on the warehouse, and each
+    scan that times out adds more, which slows every later query until they too
+    time out.
+    """
+    if not statement_id:
+        return
+    try:
+        client.statement_execution.cancel_execution(statement_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Could not cancel abandoned statement %s: %s", statement_id, e)
+
+
 def _run_statement(client, sql: str, warehouse_id: str) -> List[list]:
     """Execute ``sql``, poll it to a terminal state, and return every result row.
 
@@ -124,6 +139,7 @@ def _run_statement(client, sql: str, warehouse_id: str) -> List[list]:
     state = _state_of(response)
     while state not in _TERMINAL_STATES and statement_id:
         if time.monotonic() >= deadline:
+            cancel_statement(client, statement_id)
             raise RuntimeError(
                 f"statement {statement_id} still {state} after {_POLL_BUDGET_SECONDS}s"
             )

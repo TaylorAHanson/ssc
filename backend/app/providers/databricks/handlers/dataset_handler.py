@@ -5,6 +5,7 @@ import yaml
 import logging
 from typing import List, Dict, Any
 from app.providers.databricks.handlers.base import BaseResourceHandler
+from app.providers.databricks.uc_metadata import cancel_statement
 from app.core.config import get_scan_catalogs, settings
 
 logger = logging.getLogger(__name__)
@@ -107,23 +108,15 @@ class DatasetResourceHandler(BaseResourceHandler):
         # Catalog metadata is also read in one batch instead of per table.
         pending_metadata: List[tuple] = []
         try:
-            from app.db.session import get_db
-            from app.db.data_contract import DataContractModel
-            
-            db = next(get_db())
-            contracts = db.query(DataContractModel).filter(DataContractModel.is_active == True).all()
-            
             contracted_datasets = {}
-            for contract in contracts:
+            for dataset_id, yaml_content in self._load_active_contracts():
                 try:
-                    dataset_def = yaml.safe_load(contract.yaml_content)
-                    full_name = contract.dataset_id
-                    contracted_datasets[full_name] = dataset_def or {}
-                    contracted_datasets[full_name]["_invalid_yaml"] = False
+                    dataset_def = yaml.safe_load(yaml_content)
+                    contracted_datasets[dataset_id] = dataset_def or {}
+                    contracted_datasets[dataset_id]["_invalid_yaml"] = False
                 except Exception as e:
-                    logger.error(f"Failed to parse Data Contract {contract.dataset_id}: {e}")
-                    full_name = contract.dataset_id
-                    contracted_datasets[full_name] = {"_invalid_yaml": True}
+                    logger.error(f"Failed to parse Data Contract {dataset_id}: {e}")
+                    contracted_datasets[dataset_id] = {"_invalid_yaml": True}
                     
             for dp_name, dataset_def in contracted_datasets.items():
                 try:
@@ -251,12 +244,32 @@ class DatasetResourceHandler(BaseResourceHandler):
 
         except Exception as e:
             logger.error(f"Failed during dataset discovery: {e}")
-            
-        finally:
-            if 'db' in locals():
-                db.close()
-                
+
         return resources
+
+    @staticmethod
+    def _load_active_contracts() -> List[tuple]:
+        """``(dataset_id, yaml_content)`` for every active contract.
+
+        The session is closed before returning. Discovery then spends minutes on
+        warehouse queries, and a session held across that sits idle in an open
+        transaction until Lakebase drops the connection, and closing a dropped
+        connection raises.
+        """
+        from app.db.session import get_db
+        from app.db.data_contract import DataContractModel
+
+        db = next(get_db())
+        try:
+            return [
+                (c.dataset_id, c.yaml_content)
+                for c in db.query(DataContractModel).filter(DataContractModel.is_active == True).all()
+            ]
+        finally:
+            try:
+                db.close()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Could not close the data contract session: %s", e)
 
     def _wrap_ranked_failed_rules(self, arms: List[str], window_days: int, full_names: List[str]) -> str:
         """Wrap already-projected UNION arms in the shared ranked/latest query.
@@ -367,6 +380,7 @@ ORDER BY resultPercent ASC
                 break
             if time.monotonic() >= deadline:
                 logger.error("Batched DQ query still %s after poll budget; treating as not fetched.", state)
+                cancel_statement(self.workspace_client, statement_id)
                 break
             time.sleep(2)
             resp = self.workspace_client.statement_execution.get_statement(statement_id)

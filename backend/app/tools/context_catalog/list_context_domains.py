@@ -19,6 +19,7 @@ class ListContextDomainsInput(BaseModel):
     args_schema=ListContextDomainsInput,
     feature_flag="context_catalog",
     friendly_label="Checking internal guidance...",
+    is_lookup=True,
 )
 def list_context_domains() -> Dict[str, Any]:
     """Return the catalog domains with their descriptions and document counts."""

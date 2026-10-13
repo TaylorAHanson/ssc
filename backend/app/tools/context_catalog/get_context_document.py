@@ -22,6 +22,7 @@ class GetContextDocumentInput(BaseModel):
     args_schema=GetContextDocumentInput,
     feature_flag="context_catalog",
     friendly_label="Reading internal guidance...",
+    is_lookup=True,
 )
 def get_context_document(document_id: str) -> Dict[str, Any]:
     """Return the full document, or an error if not found / not published."""

@@ -49,6 +49,22 @@ logger = logging.getLogger(__name__)
 # becomes a plain object.
 _MAX_REF_DEPTH = 8
 
+# Injected only on the budget wrap-up call (not persisted into history) so the
+# model answers from tool results it already has instead of emitting the old
+# "maximum processing limit" note with nothing else.
+_WRAP_UP_PROMPT = (
+    "Stop calling tools. You have used the maximum number of tool rounds "
+    "for this request. Using only the tool results already above, answer "
+    "the user's original question as completely as you can. If anything is "
+    "still missing, report what you found and what a follow-up would need. "
+    "Do not mention a processing limit."
+)
+
+_WRAP_UP_FALLBACK = (
+    "I collected results from the tools above but could not finish a full "
+    "write-up. Please ask a follow-up about the part you still need."
+)
+
 
 def _inline_schema_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
     """Replace local ``$ref``s (``#/$defs/X``, ``#/definitions/X``) with the definition.
@@ -220,6 +236,54 @@ def _extract_pending_poll(result: Any) -> Optional[Dict[str, Any]]:
     return pp
 
 
+def _append_tool_messages(
+    messages: List[Dict[str, Any]], tool_outputs: List[Dict[str, Any]]
+) -> None:
+    for output in tool_outputs:
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": output["tool_call_id"],
+                "name": output["name"],
+                "content": output["content"],
+            }
+        )
+
+
+def _lookup_call_fingerprint(fn_name: str, fn_args: Dict[str, Any]) -> str:
+    try:
+        rendered = json.dumps(fn_args, sort_keys=True, default=str)
+    except Exception:
+        rendered = str(fn_args)
+    return f"{fn_name}:{rendered}"
+
+
+def _lookup_skip_message(
+    tool: Any,
+    fn_name: str,
+    fn_args: Dict[str, Any],
+    counts: Dict[str, int],
+    seen: set,
+) -> Optional[str]:
+    """Return a skip reason for a budgeted lookup, or None to execute it."""
+    if not getattr(tool, "is_lookup", False):
+        return None
+    fingerprint = _lookup_call_fingerprint(fn_name, fn_args)
+    if fingerprint in seen:
+        return (
+            f"Skipped duplicate '{fn_name}' with the same arguments. "
+            "Use the result already returned and answer the user now."
+        )
+    cap = int(getattr(settings, "AGENT_MAX_LOOKUP_CALLS", 3) or 3)
+    cap = max(1, cap)
+    if counts.get(fn_name, 0) >= cap:
+        return (
+            f"Lookup budget reached for '{fn_name}' ({cap} calls this turn). "
+            "Do not call it again. Answer from the lookup results you already have."
+        )
+    return None
+
+
 class AgentRunner:
     """
     Executes an agent conversation loop (ReAct pattern).
@@ -317,6 +381,8 @@ class AgentRunner:
         final_content = ""
         agent_message = ""
         last_tool_calls: List[Dict[str, Any]] = []
+        lookup_counts: Dict[str, int] = {}
+        seen_lookups: set = set()
 
         # One MLflow trace per turn; child LLM/tool spans group under it. No-op
         # when tracing is disabled. trace_id is surfaced on the terminal events.
@@ -415,6 +481,7 @@ class AgentRunner:
                 tool_outputs: List[Dict[str, Any]] = []
                 executed_any = False
                 pending_poll_event: Optional[PendingPollEvent] = None
+                force_wrap_up = False
 
                 for tc in tool_calls:
                     fn_name = tc.get("function", {}).get("name", "")
@@ -477,6 +544,26 @@ class AgentRunner:
                         )
                         executed_any = True
                         continue
+
+                    skip_msg = _lookup_skip_message(
+                        matching_tool, fn_name, fn_args, lookup_counts, seen_lookups
+                    )
+                    if skip_msg:
+                        logger.info("Skipping lookup %s: %s", fn_name, skip_msg)
+                        tool_outputs.append(
+                            {
+                                "tool_call_id": tool_call_id,
+                                "name": fn_name,
+                                "content": skip_msg,
+                            }
+                        )
+                        executed_any = True
+                        force_wrap_up = True
+                        continue
+
+                    if getattr(matching_tool, "is_lookup", False):
+                        seen_lookups.add(_lookup_call_fingerprint(fn_name, fn_args))
+                        lookup_counts[fn_name] = lookup_counts.get(fn_name, 0) + 1
 
                     # Announce the call so the UI can show a running pill.
                     yield ToolCallEvent(
@@ -628,15 +715,7 @@ class AgentRunner:
                 # no matching tool messages (orphan tool_calls), which providers
                 # reject on resume, and those results would be silently lost.
                 if pending_poll_event is not None:
-                    for output in tool_outputs:
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": output["tool_call_id"],
-                                "name": output["name"],
-                                "content": output["content"],
-                            }
-                        )
+                    _append_tool_messages(messages, tool_outputs)
                     yield pending_poll_event
                     final_content = agent_message
                     tracing.end_root_span(turn_span, outputs={"pending_poll": True})
@@ -644,32 +723,28 @@ class AgentRunner:
                     yield DoneEvent(messages=messages, trace_id=trace_id)
                     return
 
-                if iteration >= self.max_iterations:
-                    logger.warning(
-                        f"Hit max iterations ({self.max_iterations}) for query"
-                    )
-                    fallback_msg = (
-                        "\n\n*Note: I've reached my maximum processing limit "
-                        "for this request. If I haven't fully answered your "
-                        "question, please try rephrasing or breaking it down.*"
-                    )
-                    final_content = (agent_message + fallback_msg).strip()
-                    break
+                _append_tool_messages(messages, tool_outputs)
 
                 if not executed_any:
                     final_content = agent_message
                     break
 
-                # Append tool outputs so the next iteration can use them.
-                for output in tool_outputs:
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": output["tool_call_id"],
-                            "name": output["name"],
-                            "content": output["content"],
-                        }
+                hit_iteration_budget = iteration >= self.max_iterations
+                if hit_iteration_budget or force_wrap_up:
+                    if hit_iteration_budget:
+                        logger.warning(
+                            "Hit max iterations (%s) for query; synthesizing from tool results",
+                            self.max_iterations,
+                        )
+                    else:
+                        logger.info(
+                            "Lookup budget hit; synthesizing from tool results already in hand"
+                        )
+                    yield StatusEvent(label="Wrapping up...")
+                    final_content = await self._synthesize_from_tools(
+                        messages, fallback=agent_message
                     )
+                    break
 
             # Normal exit: emit the final message + done.
             final_text = final_content or agent_message
@@ -683,6 +758,41 @@ class AgentRunner:
             tracing.end_root_span(turn_span)
             turn_span = None
             yield ErrorEvent(message=str(e), fatal=True)
+
+    async def _synthesize_from_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        fallback: str = "",
+    ) -> str:
+        """One no-tools LLM call so a budgeted turn still answers from results.
+
+        The wrap-up instruction is not persisted into ``messages`` (it is an
+        internal nudge, not a user turn). On LLM failure we use ``fallback``
+        or a short note pointing at the tool results already shown.
+        """
+        wrap_messages = list(messages) + [{"role": "user", "content": _WRAP_UP_PROMPT}]
+        with tracing.span(
+            "llm_wrap_up",
+            "LLM",
+            inputs={"message_count": len(wrap_messages)},
+        ) as llm_span:
+            response = await self.llm_client.generate_response(
+                messages=wrap_messages,
+                tools=None,
+                temperature=0.0,
+                max_tokens=settings.AGENT_MAX_RESPONSE_TOKENS,
+            )
+            tracing.set_span_outputs(
+                llm_span,
+                {"content": (response or {}).get("content")},
+            )
+        wrap_text = ((response or {}).get("content") or "").strip()
+        if wrap_text:
+            wrap_text = self._clean_message(wrap_text)
+        if (response or {}).get("is_error") or not wrap_text:
+            logger.warning("Budget wrap-up produced no answer; using fallback")
+            return (fallback or "").strip() or _WRAP_UP_FALLBACK
+        return wrap_text
 
     async def run(
         self,

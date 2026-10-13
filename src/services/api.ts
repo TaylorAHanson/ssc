@@ -730,6 +730,21 @@ export async function purgeSentinelRuns(
   return response.json();
 }
 
+/** Delete one Sentinel run and its findings, whatever its state (unsticks a hung run). */
+export async function deleteSentinelRun(
+  runId: string
+): Promise<{ deleted: boolean; id: string; status: string }> {
+  const response = await fetch(`${API_BASE_URL}/governance/sentinel/runs/${encodeURIComponent(runId)}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to delete Sentinel run: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export interface TargetWorkspace {
   name: string;
   environment: string;
@@ -4044,6 +4059,7 @@ export const api = {
   getDigestInfo,
   sendDigestNow,
   purgeSentinelRuns,
+  deleteSentinelRun,
   getTargetWorkspaces,
   getDatabricksDashboards,
   getDatabricksJobs,

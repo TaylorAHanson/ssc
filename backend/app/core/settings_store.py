@@ -126,6 +126,11 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Agent", "section": "Limits & guardrails", "key": "AGENT_MAX_ITERATIONS",
      "label": "Max tool iterations", "type": "int", "min": 1,
      "help": "Max reasoning/tool loops the agent runs per turn."},
+    {"group": "Agent", "section": "Limits & guardrails", "key": "AGENT_MAX_LOOKUP_CALLS",
+     "label": "Max lookup calls per tool", "type": "int", "min": 1,
+     "help": "Per-turn cap on knowledge lookups (internal guidance search, Databricks docs). "
+             "Repeated calls with the same arguments are skipped. When the cap is reached "
+             "the agent answers from results it already has instead of searching again."},
     {"group": "Agent", "section": "Limits & guardrails", "key": "AGENT_MAX_RESPONSE_TOKENS",
      "label": "Max response tokens per turn", "type": "int", "min": 256,
      "help": "Output ceiling for one LLM turn, including tool-call arguments. Saving a "

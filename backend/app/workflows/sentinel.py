@@ -1251,6 +1251,46 @@ def _timeout_failure(ws_name, ws_host, ws_cred_source, timeout_s, stage) -> Dict
     }
 
 
+def _run_was_deleted(request_id: str) -> bool:
+    """True if this run's row is gone (an admin deleted it mid-scan).
+
+    Checked at phase boundaries so a deleted run stops scanning and frees the
+    one-Sentinel-scan-at-a-time slot. A DB error reads as "not deleted" so a
+    transient hiccup can never abort a healthy scan.
+    """
+    from app.db import RequestModel
+    from app.db.session import get_lakebase_session
+
+    db = None
+    try:
+        db = get_lakebase_session()
+        return db.query(RequestModel.id).filter(RequestModel.id == request_id).first() is None
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Sentinel: could not check whether run %s still exists: %s", request_id, e)
+        return False
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _deleted_run_result(request_id: str, phase: str) -> Dict[str, Any]:
+    logger.warning(
+        "Sentinel: run %s was deleted mid-scan; stopping before %s and discarding results.",
+        request_id, phase,
+    )
+    return {
+        "violations": [],
+        "checks": [],
+        "violation_count": 0,
+        "pass_count": 0,
+        "total_resources_scanned": 0,
+        "summary": "Run was deleted mid-scan; results discarded.",
+    }
+
+
 async def run_discovery(request) -> Dict[str, Any]:
     """Discover resources across all target workspaces and evaluate OPA policies.
 
@@ -1411,6 +1451,8 @@ async def run_discovery(request) -> Dict[str, Any]:
                 "type": w.workspace_type,
                 "credential_source": w.credential_source,
             }
+            if _run_was_deleted(request_id):
+                return out
             try:
                 client = _new_workspace_client(w.host)
             except Exception as e:  # noqa: BLE001 - one unreachable workspace shouldn't abort the run
@@ -1501,6 +1543,11 @@ async def run_discovery(request) -> Dict[str, Any]:
             total_resources += r["resources"]
             scan_errors.extend(r["scan_errors"])
             ws_failures.extend(r["ws_failures"])
+
+    # The cert pass rewrites cached certification on data assets, so a deleted
+    # run must not reach it.
+    if _run_was_deleted(request_id):
+        return _deleted_run_result(request_id, "the data certification pass")
 
     # 2. Data certification pass (once, Unity Catalog / metastore scoped).
     try:

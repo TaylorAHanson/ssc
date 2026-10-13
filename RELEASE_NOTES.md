@@ -11,6 +11,17 @@ Format rules (the app parses this file, so keep to them):
   subheading. Plain markdown only.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 1.7.0 — 2026-10-12
+
+### Added
+
+- Platform Admins can delete a single OmniGuard run from **Run History** with the trash button on its row. Use it to clear the latest run, or to unstick a run that stays in progress, for example after the app was redeployed in the middle of a scan. A run that is still scanning stops before its next workspace or before data certification, throws its results away and applies no remediations, so you can start a fresh scan right after. **Clear old runs** is still there for bulk clean-up.
+
+### Fixed
+
+- A long data certification pass, for example while the SQL warehouse is slow, no longer fails outright if its database connection drops partway through. Queries the scan gives up waiting for are now cancelled rather than left running, so a slow warehouse no longer gets slower with every scan.
+- When the assistant hits its tool budget — for example after repeating the same internal-guidance search many times — it now answers from the results it already has instead of stopping with a "maximum processing limit" note. Repeated identical lookups are skipped, and knowledge lookups are capped per turn (configurable under **Admin → Settings → Agent**).
+
 ## 1.6.1 — 2026-10-09
 
 ### Fixed

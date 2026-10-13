@@ -374,6 +374,36 @@ out to be unnecessary: once Finding 1 was identified, fixing the detached model
 
 ---
 
+## 6a. A deploy mid-scan leaves the run "in progress"
+
+A deploy kills the process running the scan. Nothing marks the run terminal, so
+its row keeps its last status and lock. Recovery is automatic but slow:
+
+1. The dead worker stops heartbeating; its lock (`locked_until`) lapses after at
+   most `POLLER_LOCK_TIMEOUT_LONG_RUNNING_MINUTES` (30) for a `provisioning` run,
+   or `POLLER_LOCK_TIMEOUT_MINUTES` (5) otherwise. Until then the run looks
+   active, so the cron logs `Skipping scheduled Enforcement Sentinel run as one
+   is already active` and Run Scan requests wait behind it.
+2. The new leader re-selects the run and resumes the graph from its checkpoint
+   (`resuming stalled graph at ('discover',)`). Discovery is not resumable
+   mid-step, so the scan restarts from the beginning and takes its full duration.
+3. Another deploy during that re-run repeats the cycle.
+
+So "stuck" is usually lock lapse + a full re-scan, not a permanent hang. Two
+cases do not self-heal: a run whose `retry_count` reached `max_retries` (never
+re-selected; the cron fails it once it's past `ENFORCEMENT_SENTINEL_STALE_MINUTES`
+with no live lock), and a scan genuinely hung inside a worker (its heartbeat keeps
+the lock live, and it holds the one-scan slot until the process restarts).
+
+**Unstick:** Run History → trash button on the run (Platform Admin;
+`DELETE /api/v1/governance/sentinel/runs/{id}`). It deletes that one run and its
+findings regardless of state or lock. A scan still executing checks for its row
+before each workspace and before the data certification pass, logs `run <id> was
+deleted mid-scan; stopping before ...`, and exits, freeing the slot. A scan hung
+inside a single call can't reach that check; restart the app to clear it.
+
+---
+
 ## 7. Execution model & speed (answering "did we reintroduce blocking?")
 
 **No — the app‑wide freeze was NOT reintroduced.** The Sentinel still runs

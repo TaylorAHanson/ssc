@@ -27,6 +27,7 @@ class SearchContextCatalogInput(BaseModel):
     args_schema=SearchContextCatalogInput,
     feature_flag="context_catalog",
     friendly_label="Checking internal guidance...",
+    is_lookup=True,
 )
 def search_context_catalog(query: str, domain_slug: Optional[str] = None) -> Dict[str, Any]:
     """Return ranked passages matching the query."""

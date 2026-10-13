@@ -90,6 +90,7 @@ class SearchDatabricksDocsInput(BaseModel):
     args_schema=SearchDatabricksDocsInput,
     feature_flag="web_search",
     friendly_label="Searching Databricks docs...",
+    is_lookup=True,
 )
 async def search_databricks_docs(query: str, limit: int = 6) -> Dict[str, Any]:
     cfg = web_config()

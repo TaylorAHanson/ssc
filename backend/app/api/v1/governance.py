@@ -129,6 +129,76 @@ async def send_digest_now(
     }
 
 
+def _delete_sentinel_runs(db: Session, ids: list[str]) -> int:
+    """Delete a set of runs + all their dependent rows in one transaction.
+
+    Bulk-deletes ``sentinel_findings`` and ``enforcement_audit`` explicitly
+    rather than relying on a DB-level ``ON DELETE CASCADE``: this schema
+    evolves via ``db/migrate.py`` (no Alembic), so the cascade declared on
+    the model may not exist on the live FK constraint for tables created
+    before it was added — leaving the parent delete to fail with a foreign
+    key violation. ``approvals``/``events``/``failures`` still cascade via
+    their ORM relationships. Raises on failure so the caller can retry.
+    """
+    from app.db.enforcement_audit import EnforcementAuditModel
+    from app.db.sentinel_finding import SentinelFindingModel
+
+    for model in (SentinelFindingModel, EnforcementAuditModel):
+        db.query(model).filter(model.request_id.in_(ids)).delete(
+            synchronize_session=False
+        )
+    n = 0
+    for rid in ids:
+        obj = db.get(RequestModel, rid)
+        if obj is not None:
+            db.delete(obj)
+            n += 1
+    db.commit()
+    return n
+
+
+@router.delete("/sentinel/runs/{run_id}")
+def delete_sentinel_run(
+    run_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete ONE Enforcement Sentinel run (and its findings), whatever its state.
+
+    Platform Admin only. This is the targeted way to unstick a run: unlike the
+    bulk purge it ignores ``keep_last`` and lock liveness, so it also removes a
+    run that is wedged in progress. A scan still executing on a worker notices
+    its row is gone at its next phase boundary, stops, and discards its results,
+    which frees the one-scan-at-a-time slot for the next run.
+    """
+    if not current_user.has_role("Platform Admin"):
+        raise HTTPException(status_code=403, detail="Not authorized to delete OmniGuard runs")
+
+    run = (
+        db.query(RequestModel.id, RequestModel.status, RequestModel.locked_by)
+        .filter(
+            RequestModel.id == run_id,
+            RequestModel.type == RequestType.ENFORCEMENT_SENTINEL.value,
+        )
+        .first()
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="OmniGuard run not found")
+
+    try:
+        _delete_sentinel_runs(db, [run_id])
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.error("Failed to delete Sentinel run %s: %s", run_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete run: {exc}")
+
+    logger.info(
+        "Deleted Sentinel run %s (status=%s, locked_by=%s) by %s.",
+        run_id, run.status, run.locked_by, current_user.email,
+    )
+    return {"deleted": True, "id": run_id, "status": run.status}
+
+
 class PurgeSentinelRunsRequest(BaseModel):
     #: Keep the most recent N **terminal** runs; delete older terminal ones. This
     #: never protects a non-terminal (e.g. stuck "discovering") run — a hung run
@@ -179,9 +249,6 @@ def purge_sentinel_runs(
     if not current_user.has_role("Platform Admin"):
         raise HTTPException(status_code=403, detail="Not authorized to purge OmniGuard runs")
 
-    from app.db.enforcement_audit import EnforcementAuditModel
-    from app.db.sentinel_finding import SentinelFindingModel
-
     keep_last = max(0, body.keep_last)
     terminal = {
         RequestStatus.COMPLETED.value,
@@ -228,37 +295,13 @@ def purge_sentinel_runs(
             # A worker currently holds a live lock and force wasn't requested.
             skipped_active += 1
 
-    def _delete_runs(ids: list[str]) -> int:
-        """Delete a set of runs + all their dependent rows in one transaction.
-
-        Bulk-deletes ``sentinel_findings`` and ``enforcement_audit`` explicitly
-        rather than relying on a DB-level ``ON DELETE CASCADE``: this schema
-        evolves via ``db/migrate.py`` (no Alembic), so the cascade declared on
-        the model may not exist on the live FK constraint for tables created
-        before it was added — leaving the parent delete to fail with a foreign
-        key violation. ``approvals``/``events``/``failures`` still cascade via
-        their ORM relationships. Raises on failure so the caller can retry.
-        """
-        for model in (SentinelFindingModel, EnforcementAuditModel):
-            db.query(model).filter(model.request_id.in_(ids)).delete(
-                synchronize_session=False
-            )
-        n = 0
-        for rid in ids:
-            obj = db.get(RequestModel, rid)
-            if obj is not None:
-                db.delete(obj)
-                n += 1
-        db.commit()
-        return n
-
     deleted = 0
     failed_ids: list[str] = []
     batch = 25
     for i in range(0, len(to_delete), batch):
         chunk = to_delete[i : i + batch]
         try:
-            deleted += _delete_runs(chunk)
+            deleted += _delete_sentinel_runs(db, chunk)
         except Exception as exc:  # noqa: BLE001 — degrade to per-run below
             db.rollback()
             logger.warning(
@@ -269,7 +312,7 @@ def purge_sentinel_runs(
             # on its own so the rest still get cleared, and report the stragglers.
             for rid in chunk:
                 try:
-                    deleted += _delete_runs([rid])
+                    deleted += _delete_sentinel_runs(db, [rid])
                 except Exception as exc2:  # noqa: BLE001
                     db.rollback()
                     failed_ids.append(rid)

@@ -174,6 +174,83 @@ async def test_requested_subset_scopes_the_scan(db_session):
     assert req.state_context["workspaces_scanned"] == ["prod-domain-b"]
 
 
+@pytest.mark.asyncio
+async def test_run_deleted_mid_scan_stops_before_data_certification(db_session):
+    """An admin deleting a run mid-scan stops it at the next phase boundary, so
+    it neither rewrites data-asset certification nor persists any results."""
+    workspaces = [_ws("prod-domain-a", "https://a.databricks.net")]
+    req = _make_request(db_session, {})
+    request_id = req.id
+
+    class _DeletingComputeHandler(_FakeComputeHandler):
+        async def discover(self):
+            db_session.query(RequestModel).filter(RequestModel.id == request_id).delete()
+            db_session.commit()
+            return await super().discover()
+
+    cert_pass = MagicMock(side_effect=AssertionError("data certification ran for a deleted run"))
+
+    class _TrackingDatasetHandler(_FakeDatasetHandler):
+        async def discover(self):
+            cert_pass()
+            return []
+
+    plist = _patches(workspaces, db_session) + [
+        patch.object(sentinel, "_workspace_scoped_handler_classes", return_value=[_DeletingComputeHandler]),
+        patch("app.providers.databricks.handlers.DatasetResourceHandler", _TrackingDatasetHandler),
+    ]
+    for p in plist:
+        p.start()
+    try:
+        result = await sentinel.run_discovery(req)
+    finally:
+        for p in reversed(plist):
+            p.stop()
+
+    cert_pass.assert_not_called()
+    assert result["violations"] == [] and result["checks"] == []
+    assert "deleted mid-scan" in result["summary"]
+    assert db_session.query(RequestModel).filter(RequestModel.id == request_id).first() is None
+
+
+@pytest.mark.asyncio
+async def test_run_deleted_before_workspace_scan_skips_it(db_session):
+    workspaces = [_ws("prod-domain-a", "https://a.databricks.net")]
+    req = _make_request(db_session, {})
+    db_session.refresh(req)
+    db_session.expunge(req)
+    db_session.query(RequestModel).filter(RequestModel.id == req.id).delete()
+    db_session.commit()
+
+    _FakeComputeHandler._counter = 0
+    plist = _patches(workspaces, db_session)
+    for p in plist:
+        p.start()
+    try:
+        result = await sentinel.run_discovery(req)
+    finally:
+        for p in plist:
+            p.stop()
+
+    assert _FakeComputeHandler._counter == 0
+    assert result["total_resources_scanned"] == 0
+
+
+def test_deleted_check_survives_a_session_that_fails_to_close(db_session):
+    req = _make_request(db_session, {})
+
+    class _DeadOnClose:
+        def query(self, *args):
+            return db_session.query(*args)
+
+        def close(self):
+            raise RuntimeError("SSL connection has been closed unexpectedly")
+
+    with patch("app.db.session.get_lakebase_session", side_effect=_DeadOnClose):
+        assert sentinel._run_was_deleted(req.id) is False
+        assert sentinel._run_was_deleted("req-gone") is True
+
+
 def test_prior_severity_is_scoped_by_workspace(db_session):
     """The same resource_id+policy in two workspaces must not be conflated, but
     legacy audit rows (workspace NULL) still dedup by (resource, policy)."""

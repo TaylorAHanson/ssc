@@ -45,6 +45,7 @@ class McpTool:
         policy_ref: Optional[str] = None,
         success_predicate: Optional[Any] = None,
         hide_result: bool = False,
+        is_lookup: bool = False,
     ):
         self._func = func
         self._args_schema = args_schema
@@ -71,6 +72,7 @@ class McpTool:
         self._policy_ref = policy_ref
         self._success_predicate = success_predicate
         self._hide_result = hide_result
+        self._is_lookup = is_lookup
         
     @property
     def name(self) -> str:
@@ -118,6 +120,16 @@ class McpTool:
         agent instructions. The model still receives the full result.
         """
         return self._hide_result
+
+    @property
+    def is_lookup(self) -> bool:
+        """Whether this tool is a knowledge lookup the runner should budget.
+
+        Lookup tools (context catalog, docs search) are easy for the model to
+        fan out or repeat. The runner caps how many times they run per turn
+        and skips duplicate argument sets.
+        """
+        return self._is_lookup
 
     @property
     def policy_ref(self) -> Optional[str]:
@@ -280,6 +292,7 @@ def tool(
     is_mutating: Optional[bool] = None,
     policy_ref: Optional[str] = None,
     hide_result: bool = False,
+    is_lookup: bool = False,
 ):
     """
     Decorator to register a function as a tool.
@@ -309,6 +322,9 @@ def tool(
 
     Set ``hide_result=True`` when the output is guidance for the agent rather
     than something to show the user (see ``McpTool.hide_result``).
+
+    Set ``is_lookup=True`` for knowledge-retrieval tools the runner should
+    budget (duplicate-skip + per-turn cap via ``AGENT_MAX_LOOKUP_CALLS``).
     """
     def decorator(func: Callable) -> McpTool:
         # Determine schema
@@ -360,6 +376,7 @@ def tool(
             is_mutating,
             policy_ref,
             hide_result=hide_result,
+            is_lookup=is_lookup,
         )
         
     return decorator

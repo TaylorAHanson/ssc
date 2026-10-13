@@ -181,6 +181,7 @@ class SlowStatementExecution(FakeStatementExecution):
         self.chunk_size = chunk_size
         self.pending = {}
         self.chunks = {}
+        self.cancelled = []
 
     def execute_statement(self, statement, warehouse_id, wait_timeout=None):
         finished = super().execute_statement(statement, warehouse_id, wait_timeout)
@@ -207,6 +208,9 @@ class SlowStatementExecution(FakeStatementExecution):
 
     def get_statement_result_chunk_n(self, statement_id, index):
         return self._chunk(statement_id, self.pending[statement_id][1], index)
+
+    def cancel_execution(self, statement_id):
+        self.cancelled.append(statement_id)
 
 
 @pytest.fixture
@@ -244,3 +248,4 @@ def test_statement_that_never_finishes_fails_the_catalog(no_sleep, monkeypatch):
 
     assert "still RUNNING" in batch.failed_catalogs["main"]
     assert batch.not_visible == ["main.sales.orders"]
+    assert client.statement_execution.cancelled == ["stmt-1"]

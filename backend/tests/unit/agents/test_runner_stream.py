@@ -322,3 +322,118 @@ async def test_run_shim_drains_stream_into_legacy_dict():
     # if tools were called - none here, so just system + user).
     assert any(m.get("role") == "system" for m in result["messages"])
     assert any(m.get("role") == "user" and m.get("content") == "hi" for m in result["messages"])
+
+
+def _lookup_tool_call(i: int, query: str = "edh onboarding") -> Dict[str, Any]:
+    return {
+        "id": f"tc-lookup-{i}",
+        "type": "function",
+        "function": {
+            "name": "search_context_catalog",
+            "arguments": {"query": query},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_duplicate_lookup_calls_are_skipped_and_the_agent_wraps_up():
+    """The model repeating the same catalog search must not fan out 15 pills.
+
+    Execute the first lookup, skip the rest (no extra tool_call events), then
+    synthesize an answer from that result instead of the processing-limit note.
+    """
+    fake_tool = _FakeTool(
+        name="search_context_catalog",
+        result={"count": 1, "passages": [{"content": "sbx/dev/tst/stg/prod"}]},
+        friendly_label="Checking internal guidance...",
+    )
+    fake_tool.is_lookup = True
+    runner = _make_runner(
+        tools=[fake_tool],
+        scripted=[
+            _FakeLLMResponse(tool_calls=[_lookup_tool_call(i) for i in range(8)]),
+            _FakeLLMResponse(content="Environments are sbx, dev, tst, stg, and prod."),
+        ],
+    )
+
+    events = [ev async for ev in runner.run_stream(query="edh envs")]
+    tool_calls = [ev for ev in events if isinstance(ev, ToolCallEvent)]
+    tool_results = [ev for ev in events if isinstance(ev, ToolResultEvent)]
+    messages = [ev for ev in events if isinstance(ev, MessageEvent)]
+
+    assert len(tool_calls) == 1
+    assert len(tool_results) == 1
+    assert tool_results[0].ok is True
+    assert len(messages) == 1
+    assert "sbx" in messages[0].content.lower() or "prod" in messages[0].content.lower()
+    assert "maximum processing limit" not in messages[0].content.lower()
+    wrap_call = runner.llm_client.calls[1]
+    assert not wrap_call.get("tools")
+    assert any(
+        "maximum number of tool rounds" in (m.get("content") or "")
+        for m in wrap_call["messages"]
+        if m.get("role") == "user"
+    )
+
+
+@pytest.mark.asyncio
+async def test_lookup_budget_caps_distinct_queries_then_wraps_up(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "AGENT_MAX_LOOKUP_CALLS", 2)
+    fake_tool = _FakeTool(
+        name="search_context_catalog",
+        result={"count": 1, "passages": [{"content": "ok"}]},
+    )
+    fake_tool.is_lookup = True
+    runner = _make_runner(
+        tools=[fake_tool],
+        scripted=[
+            _FakeLLMResponse(
+                tool_calls=[
+                    _lookup_tool_call(1, "alpha"),
+                    _lookup_tool_call(2, "beta"),
+                    _lookup_tool_call(3, "gamma"),
+                    _lookup_tool_call(4, "delta"),
+                ]
+            ),
+            _FakeLLMResponse(content="Here is what I found."),
+        ],
+    )
+
+    events = [ev async for ev in runner.run_stream(query="lookup")]
+    tool_calls = [ev for ev in events if isinstance(ev, ToolCallEvent)]
+    messages = [ev for ev in events if isinstance(ev, MessageEvent)]
+
+    assert len(tool_calls) == 2
+    assert {ev.arguments.get("query") for ev in tool_calls} == {"alpha", "beta"}
+    assert messages[0].content == "Here is what I found."
+    assert "maximum processing limit" not in messages[0].content
+
+
+@pytest.mark.asyncio
+async def test_hitting_max_iterations_synthesizes_from_tool_results():
+    fake_tool = _FakeTool(name="echo", result={"echoed": "payload"})
+    runner = _make_runner(
+        tools=[fake_tool],
+        scripted=[
+            _FakeLLMResponse(
+                tool_calls=[
+                    {
+                        "id": "tc-1",
+                        "type": "function",
+                        "function": {"name": "echo", "arguments": {"q": "x"}},
+                    }
+                ]
+            ),
+            _FakeLLMResponse(content="Payload is ready."),
+        ],
+    )
+    runner.max_iterations = 1
+
+    events = [ev async for ev in runner.run_stream(query="echo it")]
+    messages = [ev for ev in events if isinstance(ev, MessageEvent)]
+
+    assert messages[0].content == "Payload is ready."
+    assert "maximum processing limit" not in messages[0].content
+    assert not runner.llm_client.calls[1].get("tools")

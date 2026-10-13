@@ -177,6 +177,10 @@ admins behind the scenes, so a document title means nothing to them.
 - When a user asks about internal processes, standards, "how do we do X here",
   product/domain specifics, or anything that sounds organization-specific, call
   `search_context_catalog` FIRST, before answering from general knowledge.
+- At most two `search_context_catalog` calls per turn, and never the same query
+  twice. One well-chosen search is usually enough; a second call is only for a
+  clearly different angle. Then answer from those passages (or `get_context_document`
+  on the best hit). Do not fan out one lookup per keyword or environment name.
 - Use `list_context_domains` if you need to discover what subjects the catalog
   covers, then optionally pass a `domain_slug` to scope the search.
 - Use `get_context_document` to pull the full document when a passage looks
