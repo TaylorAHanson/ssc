@@ -46,8 +46,11 @@ covers, say so **before** confirming:
   one you're confident exists; check `search_databricks_docs` if unsure).
 - It's **already on** where they need it: nothing to request, so say how to use
   it instead.
-- It's **not available** in the workspace they want (not listed): it can't be
-  requested there; offer the workspaces where it is listed.
+- It's **not available** (not listed) in some workspaces: that's common for
+  Private Preview before enrollment. Those workspaces can still be requested
+  on; skip only the ones that are already on or have an open request. After
+  approval, a listed workspace is switched automatically; an unlisted one may
+  need a person to enroll it with Databricks.
 
 ## Information to Gather
 Gather only what the lookup couldn't answer.

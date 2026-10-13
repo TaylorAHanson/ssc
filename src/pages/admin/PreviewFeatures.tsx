@@ -91,12 +91,17 @@ interface Chip {
 
 /** The status chip for one target, combining the request status with what the sync observed. */
 function chipFor(t: PreviewTarget | undefined): Chip {
-  if (!t) return { key: 'not_available', label: 'Not available', tone: 'gray', title: 'Not listed in this workspace' };
+  if (!t) return { key: 'not_available', label: 'Not available', tone: 'gray', title: 'Not listed in this workspace yet. You can still request it on.' };
   const disabling = t.action === 'disable';
   const eff = t.observed_value?.effective;
   // A request carried over from a hand-added feature can cover a workspace that doesn't list the setting yet.
   if (t.target !== ACCOUNT_TARGET && !t.available && !['requested', 'approved', 'implemented'].includes(t.status)) {
-    return { key: 'not_available', label: 'Not available', tone: 'gray', title: 'Not listed in this workspace' };
+    return {
+      key: 'not_available',
+      label: 'Not available',
+      tone: 'gray',
+      title: 'Not listed in this workspace yet. You can still request it on.',
+    };
   }
   switch (t.status) {
     case 'requested':
@@ -230,15 +235,17 @@ function WorkspaceBreakdown({ feature, workspaces }: { feature: PreviewFeature; 
 
 /** Mirrors the backend's eligibility check so the dialog can explain disabled boxes. */
 function ineligibleReason(t: PreviewTarget | undefined, action: 'enable' | 'disable'): string | null {
-  if (!t || (t.target !== ACCOUNT_TARGET && !t.available)) return 'Not listed in this workspace';
-  if (t.status === 'requested' || t.status === 'approved') return 'A request is already in progress';
-  const eff = t.observed_value?.effective;
-  if (action === 'enable') {
-    if (t.status === 'implemented' && !t.drift) return 'Already implemented';
-    if (eff === true && t.status !== 'implemented') return 'Already on';
+  if (action === 'disable') {
+    if (!t || (t.target !== ACCOUNT_TARGET && !t.available)) return 'Not listed in this workspace';
+    if (t.status === 'requested' || t.status === 'approved') return 'A request is already in progress';
+    const eff = t.observed_value?.effective;
+    if (!(t.status === 'implemented' || eff === true)) return 'Not on';
     return null;
   }
-  if (!(t.status === 'implemented' || eff === true)) return 'Not on';
+  if (t && (t.status === 'requested' || t.status === 'approved')) return 'A request is already in progress';
+  const eff = t?.observed_value?.effective;
+  if (t && t.status === 'implemented' && !t.drift) return 'Already implemented';
+  if (t && eff === true && t.status !== 'implemented') return 'Already on';
   return null;
 }
 

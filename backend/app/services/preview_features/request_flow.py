@@ -42,22 +42,28 @@ def _is_account(feature: PreviewFeatureModel) -> bool:
 
 
 def eligible(feature: PreviewFeatureModel, row: Optional[PreviewFeatureTargetModel], action: str) -> Optional[str]:
-    """Why ``row`` can't be part of an ``action`` request, or None if it can."""
+    """Why ``row`` can't be part of an ``action`` request, or None if it can.
+
+    Enable is allowed even when the workspace doesn't list the setting yet
+    (typical for Private Preview before enrollment). Disable still requires it
+    to actually be on.
+    """
+    if action == "disable":
+        if row is None or (row.target != ACCOUNT_TARGET and not row.available):
+            return "not listed in this workspace"
+        if row.status in IN_FLIGHT:
+            return "a request is already in progress"
+        if not (row.status == "implemented" or observed_effective(row) is True):
+            return "not on"
+        return None
     if row is None:
-        return "not listed in this workspace"
+        return None
     if row.status in IN_FLIGHT:
         return "a request is already in progress"
-    if row.target != ACCOUNT_TARGET and not row.available:
-        return "not listed in this workspace"
-    eff = observed_effective(row)
-    if action == "enable":
-        if row.status == "implemented" and not row.drift:
-            return "already implemented"
-        if eff is True and row.status != "implemented":
-            return "already on"
-    else:
-        if not (row.status == "implemented" or eff is True):
-            return "not on"
+    if row.status == "implemented" and not row.drift:
+        return "already implemented"
+    if observed_effective(row) is True and row.status != "implemented":
+        return "already on"
     return None
 
 
@@ -113,6 +119,14 @@ def _prepare(db: Session, feature: PreviewFeatureModel, action: str,
         targets = sorted({t for t in _workspace_names(targets or []) if t != ACCOUNT_TARGET})
         if not targets:
             raise PreviewRequestError("Select at least one workspace")
+        if action == "enable":
+            for t in targets:
+                if t not in rows:
+                    rows[t] = PreviewFeatureTargetModel(
+                        id=str(uuid.uuid4()), feature_id=feature.id, target=t,
+                        available=False, status="not_requested", drift=False, verify_failures=0,
+                    )
+                    db.add(rows[t])
 
     problems = [f"{t}: {why}" for t in targets if (why := eligible(feature, rows.get(t), action))]
     if problems:

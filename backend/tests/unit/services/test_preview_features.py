@@ -295,7 +295,7 @@ def test_open_request_batches_targets(db_session):
 
 @pytest.mark.parametrize("targets,action,why", [
     (["ws2"], "enable", "already on"),
-    (["ws3"], "enable", "not listed"),
+    (["ws3"], "disable", "not listed"),
     (["ws1"], "disable", "not on"),
     ([], "enable", "Select at least one"),
 ])
@@ -304,6 +304,16 @@ def test_open_request_rejects_ineligible(db_session, targets, action, why):
     with pytest.raises(request_flow.PreviewRequestError, match=why):
         request_flow.open_request(db_session, aha, action=action, targets=targets,
                                   justification=None, user_email="a@x.com")
+
+
+def test_open_request_enable_unlisted_workspace(db_session):
+    """A preview listed in one workspace can still be requested on in others."""
+    aha = _seed(db_session)
+    opened = request_flow.open_request(db_session, aha, action="enable", targets=["ws3"],
+                                       justification=None, user_email="a@x.com")
+    row = _target(db_session, aha, "ws3")
+    assert opened.targets == ["ws3"]
+    assert row.status == "requested" and row.available is False and row.request_id == opened.request_id
 
 
 def test_open_request_rejects_second_inflight(db_session):
@@ -516,7 +526,7 @@ def test_find_preview_features_explains_status(db_session, monkeypatch):
     ws = {w["workspace"]: w for w in top["workspaces"]}
     assert ws["ws1"]["can_request_turn_on"] is True
     assert ws["ws2"]["why_not_turn_on"] == "already on" and ws["ws2"]["can_request_turn_off"] is True
-    assert ws["ws3"]["listed"] is False and ws["ws3"]["can_request_turn_on"] is False
+    assert ws["ws3"]["listed"] is False and ws["ws3"]["can_request_turn_on"] is True
     assert search.find(db_session, "connector", ["ws1"])["matches"] or True  # common word alone is allowed
     assert search.find(db_session, "zzz unrelated", ["ws1"])["matches"] == []
     assert aha.id  # keep fixture referenced

@@ -11,6 +11,12 @@ Format rules (the app parses this file, so keep to them):
   subheading. Plain markdown only.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 1.7.1 — 2026-10-13
+
+### Fixed
+
+- You can request a preview **on** in workspaces that don't list it yet, even when another workspace already has it on. That used to hide the Request action and leave only **Request turn off**, which blocked Private Preview enrollment in the remaining workspaces.
+
 ## 1.7.0 — 2026-10-12
 
 ### Added
