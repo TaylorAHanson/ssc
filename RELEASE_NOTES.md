@@ -21,6 +21,8 @@ Format rules (the app parses this file, so keep to them):
 
 - A long data certification pass, for example while the SQL warehouse is slow, no longer fails outright if its database connection drops partway through. Queries the scan gives up waiting for are now cancelled rather than left running, so a slow warehouse no longer gets slower with every scan.
 - When the assistant hits its tool budget — for example after repeating the same internal-guidance search many times — it now answers from the results it already has instead of stopping with a "maximum processing limit" note. Repeated identical lookups are skipped, and knowledge lookups are capped per turn (configurable under **Admin → Settings → Agent**).
+- **Build with assistant** in Workflow Studio no longer jumps you onto a blank new workflow. If a workflow is already open, the assistant stays on that one (same as the floating **Assistant** button). From the list, it stays on the list so you can describe a new workflow or name an existing one to edit; a save or preview still opens the editor.
+- The authoring assistant no longer stops to ask whether a published workflow should be taken offline before it saves a draft. Environments where that would matter already lock workflow editing; where editing is allowed, it saves and continues. Publishing still needs an explicit go-ahead.
 
 ## 1.6.1 — 2026-10-09
 

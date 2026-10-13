@@ -265,18 +265,13 @@ export function Workflows() {
   // `undefined` means "we didn't initiate this", i.e. treat it as a human action.
   const programmaticNavRef = useRef<string | null | undefined>(undefined);
 
-  // Collapse the authoring assistant when the user LEAVES the studio for the
+  // Collapse the authoring assistant when the user LEAVES the editor for the
   // workflows list. Staying within the studio — hopping between the
   // Details/Graph tabs or clicking into the editor — keeps it open
   // (click-outside close is disabled on the shelf); leaving the page entirely
-  // unmounts the shelf.
-  //
-  // This watches the transition out of the editor, not the mere fact of not
-  // editing. "Build with assistant" opens the drawer and sets `new=1` in the URL
-  // in one handler, but `editing` is derived from the router's search params, so
-  // there is a render where showAssistant is already true and editing is still
-  // false. Closing on that condition slammed the drawer shut the instant the
-  // button opened it.
+  // unmounts the shelf. Opening the assistant from the list does not enter the
+  // editor, so this must watch the transition *out* of the editor, not "assistant
+  // is open while not editing".
   const wasEditingRef = useRef(editing);
   useEffect(() => {
     if (wasEditingRef.current && !editing && showAssistant) setShowAssistant(false);
@@ -573,18 +568,30 @@ export function Workflows() {
   // admin had typed but not saved. Sending the live draft — with the unsaved
   // fields called out — makes the on-screen state its starting point.
   const editorDraftContext = () => {
-    if (!editing) return {};
+    if (editing) {
+      return {
+        editor_draft: {
+          key: form.key,
+          name: form.name,
+          goal: form.goal,
+          request_type: form.request_type,
+          status: form.status,
+          instructions_markdown: form.instructions_markdown,
+          graph_spec: form.graph_spec,
+          unsaved_fields: adminUnsavedFields,
+        },
+      };
+    }
+    // List view: no workflow is open. The assistant should create a new one or
+    // load an existing one by name — not assume a blank draft is on screen.
     return {
-      editor_draft: {
-        key: form.key,
-        name: form.name,
-        goal: form.goal,
-        request_type: form.request_type,
-        status: form.status,
-        instructions_markdown: form.instructions_markdown,
-        graph_spec: form.graph_spec,
-        unsaved_fields: adminUnsavedFields,
-      },
+      studio_view: 'list',
+      studio_workflows: workflows.map((w) => ({
+        key: w.key,
+        name: w.name,
+        status: w.status,
+        disabled: !!w.disabled,
+      })),
     };
   };
 
@@ -832,20 +839,12 @@ export function Workflows() {
     setFocusNewTick((t) => t + 1);
   };
 
-  // Start from a conversation instead of a blank form: open a fresh draft with the
-  // assistant already expanded, so the first thing an author does is describe the
-  // workflow rather than guess at gate types.
+  // Same as the floating "Assistant" launcher: open the shelf on whatever is
+  // already on screen. If a workflow is open, that is the thing to edit. If the
+  // list is showing, the assistant can draft a new workflow or load an existing
+  // one by name (save/preview then opens the editor). Never yank the admin onto
+  // a blank "New workflow" page just because they asked the assistant.
   const buildWithAssistant = () => {
-    if (!confirmDiscard()) return;
-    loadedIdRef.current = null;
-    setFormBaselined(emptyForm);
-    setSearchParams((prev) => {
-      const params = new URLSearchParams(prev);
-      params.delete('workflow');
-      params.set('new', '1');
-      params.set('tab', 'details');
-      return params;
-    });
     setShowAssistant(true);
   };
 
@@ -1056,9 +1055,14 @@ export function Workflows() {
                   workflow out loud is the one that actually produces a playbook. */}
               <Button
                 onClick={buildWithAssistant}
-                title="Describe the workflow in plain language and let the assistant draft the graph, instructions, and tests"
+                title={
+                  editing
+                    ? 'Open the assistant on this workflow — it can see the editor, including unsaved edits'
+                    : 'Describe a new workflow, or ask the assistant to edit one from the list'
+                }
               >
-                <Sparkles className="w-4 h-4 mr-1" /> Build with assistant
+                <Sparkles className="w-4 h-4 mr-1" />{' '}
+                {editing && form.id ? 'Edit with assistant' : 'Build with assistant'}
               </Button>
             </>
           )}
@@ -1776,7 +1780,11 @@ export function Workflows() {
         closeOnClickOutside={false}
         title="Authoring assistant"
         widthStorageKey="authoring_assistant_width"
-        subtitle="Ask me to explain a field, or to draft / edit this workflow. I can see what's open in the editor — including your unsaved edits — so ask for changes on top of your own wording. When I save a draft, it opens automatically on the left."
+        subtitle={
+          editing
+            ? "I can see the workflow open on the left, including unsaved edits. Ask for changes on top of what's there, unless you clearly want a different workflow."
+            : 'No workflow is open. Ask me to draft a new one, or name an existing workflow to edit. When I save or preview, it opens on the left.'
+        }
         headerActions={
           <button
             type="button"
@@ -1803,12 +1811,21 @@ export function Workflows() {
               </p>
             </div>
           }
-          samplePrompts={[
-            'How do I add an approval gate before a provisioning step?',
-            'What tools can a workflow step call?',
-            'Draft a workflow that grants table access after manager approval.',
-            'Explain the auto-approve condition options.',
-          ]}
+          samplePrompts={
+            editing
+              ? [
+                  'Add an approval gate before the last step of this workflow.',
+                  'Tighten the runtime instructions without changing the graph.',
+                  'What does this graph do, in plain language?',
+                  'Explain the auto-approve condition options.',
+                ]
+              : [
+                  'Draft a workflow that grants table access after manager approval.',
+                  'How do I add an approval gate before a provisioning step?',
+                  'What tools can a workflow step call?',
+                  'Explain the auto-approve condition options.',
+                ]
+          }
         />
       </AssistantShelf>
     </div>

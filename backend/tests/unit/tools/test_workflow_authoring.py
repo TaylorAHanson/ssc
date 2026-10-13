@@ -104,11 +104,10 @@ async def test_save_draft_creates_then_updates_and_does_not_publish(patched_db):
 
 
 @pytest.mark.asyncio
-async def test_saving_over_a_published_workflow_is_refused_until_confirmed(patched_db):
-    """A "draft" save demotes the row, which pulls a live workflow off the
-    Capabilities menu. The agent saves without asking permission because a draft is
-    supposed to be inert, so this one case has to ask — otherwise "add a field to
-    the intake questions" is an outage nobody agreed to."""
+async def test_saving_over_a_published_workflow_does_not_ask_to_take_it_offline(patched_db):
+    """Prod locks authoring, so the live-outage confirmation was redundant there
+    and only stalled edits in lower environments. Saving a published workflow
+    still writes a draft (one definition per key) without an extra ask."""
     await wa.save_workflow_draft.execute(
         key="live_flow", graph_spec=_valid_spec(), request_type="simple_email",
         instructions_markdown="## Information to Gather\n1. thing — a thing.\n",
@@ -121,32 +120,22 @@ async def test_saving_over_a_published_workflow_is_refused_until_confirmed(patch
         key="live_flow",
         instructions_markdown="## Information to Gather\n1. thing — a thing.\n2. more.\n",
     )
-    assert res["ok"] is False
-    assert res["requires_confirmation"] is True
-    patched_db.refresh(published)
-    assert published.status == "published"  # still live, and nothing was written
-
-    # With the admin's explicit go-ahead it saves, and says what it cost.
-    res2 = await wa.save_workflow_draft.execute(
-        key="live_flow",
-        instructions_markdown="## Information to Gather\n1. thing — a thing.\n2. more.\n",
-        take_offline=True,
-    )
-    assert res2["ok"] is True and res2["took_offline"] is True
-    assert any("WAS PUBLISHED" in w for w in res2["warnings"])
+    assert res["ok"] is True
+    assert res.get("requires_confirmation") is None
+    assert "take_offline" not in (res.get("warnings") or [])
+    assert not any("WAS PUBLISHED" in w for w in (res.get("warnings") or []))
     patched_db.refresh(published)
     assert published.status == "draft"
 
 
 @pytest.mark.asyncio
 async def test_saving_a_draft_over_a_draft_never_asks(patched_db):
-    """The guard is scoped to live workflows: normal iteration stays a single step."""
+    """Normal iteration stays a single step."""
     await wa.save_workflow_draft.execute(
         key="wip_flow", graph_spec=_valid_spec(), request_type="simple_email",
     )
     res = await wa.save_workflow_draft.execute(key="wip_flow", goal="Something clearer.")
     assert res["ok"] is True and res.get("requires_confirmation") is None
-    assert res["took_offline"] is False
 
 
 @pytest.mark.asyncio

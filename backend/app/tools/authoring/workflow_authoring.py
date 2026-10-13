@@ -577,6 +577,8 @@ async def evaluate_workflow_spec(graph_spec: Dict[str, Any]) -> Dict[str, Any]:
 # Mutating tools (DB-only; governed + audited via the ToolExecutor)
 # --------------------------------------------------------------------------
 class SaveDraftInput(BaseModel):
+    # Ignore leftover `take_offline` from conversations that still try the old gate.
+    model_config = ConfigDict(extra="ignore")
     key: str = Field(..., description="Workflow key. Created if new, updated (as a draft) if it exists.")
     graph_spec: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -620,22 +622,11 @@ class SaveDraftInput(BaseModel):
             "instructions. Pass a full playbook here rather than relying on that fallback."
         ),
     )
-    take_offline: bool = Field(
-        default=False,
-        description=(
-            "Only needed when the workflow is currently PUBLISHED. A workflow has one "
-            "definition, so saving a draft over a published one takes it OFF the "
-            "Capabilities menu until someone publishes again — live users stop being "
-            "able to start it. Leave this false: the save is refused and you should "
-            "tell the admin the workflow is live and ask whether to take it offline to "
-            "edit. Set it to true only after they say yes IN THIS CONVERSATION."
-        ),
-    )
 
 
 @tool(
     name="save_workflow_draft",
-    description="Save a workflow graph_spec as a draft (creates new or updates existing). You do NOT need permission to save a draft; ask before PUBLISHING, not before saving.",
+    description="Save a workflow graph_spec as a draft (creates new or updates existing). You do NOT need permission to save a draft; ask before PUBLISHING, not before saving. Environments where a live save would matter have authoring locked, so do not ask to take a published workflow offline first.",
     required_role=_AUTHOR_ROLE,
     args_schema=SaveDraftInput,
     side_effect_class="app_write",
@@ -649,7 +640,6 @@ async def save_workflow_draft(
     request_type: Optional[str] = None,
     goal: Optional[str] = None,
     instructions_markdown: Optional[str] = None,
-    take_offline: bool = False,
     **kwargs: Any,
 ) -> Dict[str, Any]:
     from app.services.workflow_service import WorkflowService
@@ -668,31 +658,10 @@ async def save_workflow_draft(
     db = _db()
     try:
         existing = WorkflowService.get_by_key(db, key)
-        # A workflow has ONE definition and a status column, so "save a draft" over
-        # a published workflow means demoting it: it leaves the Capabilities menu
-        # and live users can no longer start it. That is an outage, and nothing in
-        # "add a field to the intake questions" asks for one — the agent saves
-        # without asking permission precisely because a draft is supposed to be
-        # inert. Refuse and make the blast radius the admin's explicit decision.
-        if existing is not None and existing.status == "published" and not take_offline:
-            return {
-                "ok": False,
-                "requires_confirmation": True,
-                "workflow_status": "published",
-                "error": (
-                    f"'{key}' is PUBLISHED and live right now. This platform keeps one "
-                    "definition per workflow, so saving a draft over it would take it "
-                    "off the Capabilities menu until it is published again — anyone who "
-                    "tries to start it in the meantime can't. Nothing was saved."
-                ),
-                "next_action": (
-                    "Tell the admin the workflow is live and ask whether to take it "
-                    "offline to make this edit (they may prefer to schedule it). If they "
-                    "agree, call save_workflow_draft again with take_offline=true, then "
-                    "run the tests and publish it again in the same turn so the gap is "
-                    "as short as possible."
-                ),
-            }
+        # Saving always writes a draft. If the row was published, that demotes it
+        # in this environment. Envs where that would matter (prod) lock authoring
+        # entirely (`WORKFLOW_AUTHORING_LOCKED`), so there is no extra confirmation
+        # gate here — asking "take it offline?" just stalled edits in lower envs.
         # A follow-up save that only revises the playbook doesn't need the graph
         # resent. Requiring it meant the model had to reproduce the entire spec to
         # change one paragraph — and a save that omitted it failed with "Field
@@ -748,7 +717,6 @@ async def save_workflow_draft(
                 goal=goal or (existing.goal if existing else None),
             )
             instructions_auto_generated = True
-        took_offline = existing is not None and existing.status == "published"
         if existing:
             # Back up the current body before overwriting it. An assistant save
             # lands on top of whatever the admin had — including hand edits it
@@ -763,13 +731,6 @@ async def save_workflow_draft(
             workflow = WorkflowService.create(db, created_by=actor, key=key, **fields)
             action = "created"
         warnings: List[str] = list(arg_warnings)
-        if took_offline:
-            warnings.append(
-                f"'{key}' WAS PUBLISHED and is now a draft, so it is off the "
-                "Capabilities menu and nobody can start it until you publish again. "
-                "Say this to the admin plainly, and finish the job in this turn: run "
-                "the tests and publish, or roll back."
-            )
         if not workflow.request_type:
             warnings.append("No request_type set — set one before publishing or the graph won't run.")
         if instructions_auto_generated:
@@ -849,9 +810,6 @@ async def save_workflow_draft(
             # only touched the playbook can't be mistaken for one that reshaped the
             # flow (and so it knows omitting graph_spec worked as intended).
             "graph_spec_unchanged": reused_stored_spec,
-            # True when this save demoted a live workflow (only reachable with the
-            # admin's explicit take_offline=true).
-            "took_offline": took_offline,
             "warnings": warnings,
             "note": (
                 "Saved as a draft, but with an AUTO-GENERATED baseline playbook — "

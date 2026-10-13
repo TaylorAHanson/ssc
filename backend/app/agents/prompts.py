@@ -258,9 +258,17 @@ Hard rules:
   field only when you intend to leave it unchanged.
   WHERE TO GET "what is already there": if an `OPEN DRAFT IN THE WORKFLOW EDITOR`
   section appears below, THAT is the admin's working copy and your starting point —
-  it includes hand edits they have not saved yet. Only fall back to `get_workflow`
-  when there is no open draft, or when they ask about a DIFFERENT workflow than the
-  one they have open.
+  it includes hand edits they have not saved yet. Default to EDITING that open
+  workflow. Tweaks ("add a gate", "fix the instructions", "make it…") are edits of
+  what is on screen. Start a brand-new workflow (a different `key`) only when they
+  clearly ask to create/build something else, or name a different existing workflow.
+  Only fall back to `get_workflow` when there is no open draft, or when they ask
+  about a DIFFERENT workflow than the one they have open.
+- If a `WORKFLOW STUDIO — LIST VIEW` section appears instead, nothing is open in
+  the editor. They may want a NEW workflow or to EDIT one they name (or that
+  matches the list). Do not invent a blank open draft. For an edit, `get_workflow`
+  then save; for a new build, author and `save_workflow_draft` (the editor will
+  open on that draft).
 - NEVER discard or overwrite the admin's own wording. If your change would replace
   prose they wrote, say in one line what you are keeping and what you are changing,
   and keep their sentences wherever they still apply. When in doubt, ADD to their
@@ -338,8 +346,7 @@ Hard rules:
   The full chain for a build request is:
     validate -> preview -> evaluate -> `save_workflow_draft` ->
     `save_workflow_tests` -> `run_workflow_tests` -> report.
-  Only PUBLISHING — and taking an ALREADY-PUBLISHED workflow offline to edit it
-  (see below) — needs explicit confirmation. Your reply MUST then contain —
+  Only PUBLISHING needs explicit confirmation. Your reply MUST then contain —
   every time, without being asked:
     1. a PLAIN-LANGUAGE summary of the flow (stages/gates, who approves, the
        fields gathered, and what runs);
@@ -366,17 +373,10 @@ Hard rules:
   you: the admin gets a description of a workflow that doesn't exist, with no
   tests and no evidence it works. PUBLISHING is the one step that needs explicit
   confirmation. Say plainly what you saved and what the tests found.
-- EDITING A WORKFLOW THAT IS ALREADY PUBLISHED IS DIFFERENT, because a workflow
-  has ONE definition: saving a draft over a live workflow takes it off the
-  Capabilities menu, so until someone publishes again, users who ask for it are
-  told it doesn't exist. `save_workflow_draft` therefore REFUSES on a published
-  workflow and returns `requires_confirmation`. That is not an error to work
-  around — do NOT retry with `take_offline=true` on your own. Tell the admin the
-  workflow is live, what you propose to change, and that editing takes it offline
-  until it is republished; ask whether to proceed now. If they say yes, save with
-  `take_offline=true` and then close the gap in the same turn: run the tests and
-  publish (or roll back if they fail). Design work on a NEW or still-draft
-  workflow needs none of this — save freely.
+  Do not pause to ask whether a published workflow should be taken offline first:
+  environments where a live edit would matter have authoring locked, and
+  `save_workflow_draft` is refused there with a lock error. Where authoring is
+  unlocked, save the draft and keep going (tests, then wait for publish confirmation).
 - When you `save_workflow_draft`, always set `request_type` (any string — it is
   REQUIRED before the workflow can run), a friendly `name`, and a `goal`.
 - THE `goal` IS THE ROUTING LINE — treat it as a design decision, not a caption.
@@ -1132,8 +1132,62 @@ def render_editor_draft_block(draft: Optional[Dict[str, Any]]) -> str:
         "- If the admin asks for a small change, make a small change. Returning a "
         "wholesale rewrite of their instructions is a failure, even if the rewrite is "
         "good.",
+        "- Default to editing THIS workflow. Only switch `key` / start from scratch if "
+        "they clearly asked to create a different workflow, not to change this one.",
         "",
     ])
+    return "\n".join(lines)
+
+
+_LIST_VIEW_WORKFLOW_CAP = 80
+
+
+def render_studio_list_block(workflows: Optional[Any]) -> str:
+    """Tell the authoring agent the studio is on the list, not an open editor.
+
+    Without this, a list-view chat looks like "no draft" and the model may still
+    assume it should author into a blank page. The catalog of keys lets it match
+    "edit catalog access" to a real workflow.
+    """
+    if not isinstance(workflows, list):
+        workflows = []
+    lines = [
+        "",
+        "## WORKFLOW STUDIO — LIST VIEW",
+        "The admin is on the workflows list. Nothing is open in the editor.",
+        "- If they ask to CREATE / BUILD / DRAFT a workflow, author a new one "
+        "(new `key`) and `save_workflow_draft` — the studio will open that draft.",
+        "- If they ask to EDIT / CHANGE / FIX an existing workflow, call "
+        "`get_workflow` for that key (match against the list below) and then save. "
+        "Do not start a blank new workflow for an edit request.",
+        "- If it is ambiguous, ask one short question naming the closest existing "
+        "workflow vs creating a new one.",
+        "",
+        "Published and draft workflows in this studio:",
+    ]
+    shown = 0
+    for item in workflows:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        if not key:
+            continue
+        name = str(item.get("name") or "").strip()
+        status = str(item.get("status") or "draft").strip()
+        disabled = " (turned off)" if item.get("disabled") else ""
+        label = f"{key} — {name}" if name and name != key else key
+        lines.append(f"- {label} [{status}]{disabled}")
+        shown += 1
+        if shown >= _LIST_VIEW_WORKFLOW_CAP:
+            remaining = max(0, len(workflows) - shown)
+            if remaining:
+                lines.append(
+                    f"- …and {remaining} more (call `search_similar_workflows` if you need them)"
+                )
+            break
+    if shown == 0:
+        lines.append("- (none yet)")
+    lines.append("")
     return "\n".join(lines)
 
 

@@ -11,7 +11,11 @@ only publishing waits for confirmation.
 Text-matching tests are blunt, but the alternative here is a behavior regression
 nobody notices until a demo.
 """
-from app.agents.prompts import get_agent_prompt
+from app.agents.prompts import (
+    get_agent_prompt,
+    render_editor_draft_block,
+    render_studio_list_block,
+)
 from app.tools.authoring import workflow_authoring as wa
 
 
@@ -71,3 +75,48 @@ def test_gate_type_fields_are_documented_where_the_agent_looks():
     assert "course_code" in " ".join(details["training"]["extra_fields"])
     # And an approval gate must not advertise fields it would be rejected for.
     assert details["platform_admin"]["extra_fields"] == []
+
+
+def test_authoring_prompt_defaults_to_the_open_draft():
+    prompt = _authoring_prompt()
+    assert "Default to EDITING" in prompt
+    assert "WORKFLOW STUDIO — LIST VIEW" in prompt
+
+
+def test_authoring_prompt_does_not_ask_to_take_published_workflows_offline():
+    prompt = _authoring_prompt()
+    assert "take_offline" not in prompt
+    assert "EDITING A WORKFLOW THAT IS ALREADY PUBLISHED IS DIFFERENT" not in prompt
+    assert "do not pause to ask whether a published workflow should be taken offline" in prompt.lower()
+
+
+def test_open_draft_block_tells_the_agent_not_to_start_from_scratch():
+    block = render_editor_draft_block(
+        {
+            "key": "catalog_access",
+            "name": "Catalog access",
+            "goal": "Grant catalog access",
+            "graph_spec": {"stages": [{"kind": "gate", "type": "manager", "name": "mgr"}]},
+            "instructions_markdown": "Gather the catalog name.",
+        }
+    )
+    assert "OPEN DRAFT IN THE WORKFLOW EDITOR" in block
+    assert "catalog_access" in block
+    assert "Default to editing THIS workflow" in block
+
+
+def test_blank_new_form_is_not_an_open_draft():
+    assert render_editor_draft_block({"key": "", "graph_spec": {"stages": []}}) == ""
+
+
+def test_list_view_block_names_existing_workflows():
+    block = render_studio_list_block(
+        [
+            {"key": "catalog_access", "name": "Catalog access", "status": "published"},
+            {"key": "new_workspace", "name": "new_workspace", "status": "draft", "disabled": True},
+        ]
+    )
+    assert "WORKFLOW STUDIO — LIST VIEW" in block
+    assert "catalog_access" in block
+    assert "turned off" in block
+    assert "Do not start a blank new workflow for an edit request" in block

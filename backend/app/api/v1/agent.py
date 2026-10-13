@@ -386,11 +386,25 @@ async def _build_runner_and_history(
     # unreadable dict repr on top of the formatted block we build here.
     surface_context_block: Optional[str] = None
     if is_authoring and isinstance(request.context, dict):
-        editor_draft = request.context.pop("editor_draft", None)
-        if editor_draft:
-            from app.agents.prompts import render_editor_draft_block
+        from app.agents.prompts import (
+            render_editor_draft_block,
+            render_studio_list_block,
+        )
 
-            surface_context_block = render_editor_draft_block(editor_draft) or None
+        # Popped so the runner does not dump these as raw "key: {dict}" lines.
+        editor_draft = request.context.pop("editor_draft", None)
+        request.context.pop("studio_view", None)
+        studio_workflows = request.context.pop("studio_workflows", None)
+        parts: List[str] = []
+        if editor_draft:
+            block = render_editor_draft_block(editor_draft)
+            if block:
+                parts.append(block)
+        elif studio_workflows is not None:
+            block = render_studio_list_block(studio_workflows)
+            if block:
+                parts.append(block)
+        surface_context_block = "\n".join(parts) or None
 
     visible_tools = _resolve_visible_tools(db, current_user, surface)
 
