@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { useRequestStore } from '../stores/requestStore';
+import { GUIDE_APPROVALS, useGuideEnabled } from '../lib/guide';
 import { useUserStore } from '../stores/userStore';
 import { RequestDetailsModal } from '../components/RequestDetailsModal';
 import { StepReportPanel } from '../components/StepReportPanel';
@@ -30,6 +32,7 @@ const waitingDays = (createdAt: string) => {
 
 
 export function Approvals() {
+  const guideEnabled = useGuideEnabled();
   const approvals = useRequestStore((state) => state.approvals);
   const requests = useRequestStore((state) => state.requests);
   const delegations = useRequestStore((state) => state.delegations);
@@ -235,7 +238,17 @@ export function Approvals() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Approvals & Delegations</h1>
-          <p className="text-gray-600">Review requests or manage your Out-of-Office delegations</p>
+          <p className="text-gray-600">
+            Review requests or manage your Out-of-Office delegations
+            {guideEnabled && (
+              <>
+                {' · '}
+                <Link to={GUIDE_APPROVALS} className="text-accent hover:underline">
+                  How approvals work
+                </Link>
+              </>
+            )}
+          </p>
         </div>
         <Button
           onClick={() => setShowDelegationForm(!showDelegationForm)}

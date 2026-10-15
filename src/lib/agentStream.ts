@@ -75,6 +75,8 @@ export interface ReasoningEvent {
 export interface MessageEvent {
     type: 'message';
     content: string;
+    /** Short replies in the user's voice, rendered as clickable next steps. */
+    suggestions?: string[];
 }
 
 export interface RouteEvent {
@@ -143,6 +145,8 @@ export interface AgentChatMessage {
      * ``user → assistant(tool_calls) → tool`` linkage.
      */
     tool_calls?: AgentChatToolCall[];
+    /** For 'agent' messages only — the next-step replies that turn offered. */
+    suggestions?: string[];
 }
 
 export interface StreamConversationRequest {

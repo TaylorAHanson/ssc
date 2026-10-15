@@ -21,6 +21,7 @@ import { LineageGraph, type LineageSeedTable } from './LineageGraph';
 import { useLegacyMappings } from '../../lib/catalogCache';
 import { LegacyStatusBadge } from './LegacyMappingTable';
 import { CopyLinkButton } from './CopyLinkButton';
+import { scrollContainerOf } from '../../hooks/useViewScroll';
 
 interface DashboardOrApp {
   id: string;
@@ -159,9 +160,10 @@ export function InlineMetricViewDetail({
   const [dimensionsExpandedFor, setDimensionsExpandedFor] = useState<string | null>(null);
   const dimensionsExpanded = dimensionsExpandedFor === asset.id;
 
-  // Start at the top of the panel whenever a different metric view opens.
+  // Start at the top of the panel whenever a different metric view opens. Only
+  // the panel's own scroller: scrollIntoView may also move the list behind it.
   useEffect(() => {
-    containerRef.current?.scrollIntoView({ block: 'start' });
+    if (containerRef.current) scrollContainerOf(containerRef.current).scrollTop = 0;
   }, [asset.id]);
 
   const catalogUrl = catalogExplorerUrl(

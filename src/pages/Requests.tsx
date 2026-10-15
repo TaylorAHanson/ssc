@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import { useRequestStore } from '../stores/requestStore';
+import { GUIDE_REQUESTS, useGuideEnabled } from '../lib/guide';
 import { useVisibleInterval } from '../hooks/useVisibleInterval';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -519,6 +520,7 @@ export function RequestStateList({ request }: { request: Request }) {
 }
 
 export function Requests() {
+  const guideEnabled = useGuideEnabled();
   const requests = useRequestStore((state) => state.requests);
   const fetchRequests = useRequestStore((state) => state.fetchRequests);
   const deleteRequest = useRequestStore((state) => state.deleteRequest);
@@ -654,6 +656,14 @@ export function Requests() {
           <h1 className="text-3xl font-bold text-gray-900 mb-2">My Requests</h1>
           <p className="text-gray-600">
             Track the status of every request you've submitted.
+            {guideEnabled && (
+              <>
+                {' '}
+                <Link to={GUIDE_REQUESTS} className="text-accent hover:underline">
+                  How requests work
+                </Link>
+              </>
+            )}
           </p>
         </div>
         <div className="flex bg-gray-100 p-1 rounded-full border border-gray-200 shadow-inner shrink-0 self-start sm:self-auto">

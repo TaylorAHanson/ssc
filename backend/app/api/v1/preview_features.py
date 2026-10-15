@@ -261,7 +261,7 @@ def list_preview_features(
 ):
     """Every tracked preview (GA and retired ones only with include_archived)."""
     _require_feature()
-    from app.core.workspaces import get_target_workspaces
+    from app.core.workspaces import get_target_workspace_info
 
     q = db.query(PreviewFeatureModel)
     if not include_archived:
@@ -294,7 +294,7 @@ def list_preview_features(
 
     workspaces = [
         TargetWorkspace(name=w.name, environment=w.environment, host=w.host)
-        for w in get_target_workspaces()
+        for w in get_target_workspace_info(enrich=False)
     ]
     return PreviewFeaturesResponse(
         features=[

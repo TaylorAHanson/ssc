@@ -187,12 +187,13 @@ async def start_poller():
     _feat = _yaml_config.get("features", {}) or {}
     _contract_cron = (getattr(settings, "CONTRACT_SYNC_CRON", "") or "").strip()
     logger.info(
-        "Poller sync features: calendar=%s, data_discovery=%s (asset_cron=%s, contract_cron=%s), sentinel=%s. "
-        "Contract sync is %s — %s.",
+        "Poller sync features: calendar=%s, data_discovery=%s (asset_cron=%s, contract_cron=%s, "
+        "workspace_cache=%s), sentinel=%s. Contract sync is %s — %s.",
         _feat.get("calendar", False),
         _feat.get("data_discovery", False),
         getattr(settings, "DATA_ASSET_SYNC_CRON", ""),
         _contract_cron or "(disabled)",
+        "on" if getattr(settings, "WORKSPACE_CACHE_ENABLED", True) else "off",
         _feat.get("sentinel", False),
         "SCHEDULED" if _contract_cron else "MANUAL-only",
         "runs on contract_cron above" if _contract_cron

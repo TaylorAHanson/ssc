@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import type { DomainHierarchy, SubdomainMeta } from '../../services/api';
+import { scrollContainerOf } from '../../hooks/useViewScroll';
 
 interface DomainStartViewProps {
   domains: DomainHierarchy[];
@@ -92,16 +93,16 @@ export function DomainStartView({
   onLaunchFullMode,
 }: DomainStartViewProps) {
   const currentDomainData = domains.find((d) => d.domain === selectedDomain);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const step2Ref = useRef<HTMLDivElement | null>(null);
   const isInitialMount = useRef(true);
 
-  // Smoothly scroll to Step 2 when a domain is selected, or back to top when deselected
+  // Smoothly scroll to Step 2 when a domain is selected, or back to top when
+  // deselected. Mounting with one already selected (going back) keeps the
+  // position the page restored.
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
-      if (selectedDomain && step2Ref.current) {
-        step2Ref.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
       return;
     }
 
@@ -111,13 +112,13 @@ export function DomainStartView({
       }, 100);
       return () => clearTimeout(timer);
     } else if (!selectedDomain) {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' });
+      scrollContainerOf(rootRef.current).scrollTo({ top: 0, behavior: 'smooth' });
     }
   }, [selectedDomain]);
 
   return (
     <div
+      ref={rootRef}
       className={`max-w-6xl mx-auto space-y-8 transition-all duration-500 ease-out ${
         selectedDomain
           ? 'pt-2 sm:pt-4 pb-28'

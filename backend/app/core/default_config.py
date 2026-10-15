@@ -135,6 +135,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "context_catalog": True,
         "workflow_authoring": True,
         "onboarding_suggestions": True,
+        # Clickable next-step replies under the agent's latest message. Off
+        # also drops the instruction from the agent prompt.
+        "next_step_suggestions": True,
         # Pinned Items / Data Products / Datasets rails under the chat on the
         # home (new chat) page. Discover is unaffected.
         "home_data_catalog": True,
@@ -167,6 +170,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "event_calendar": True,
             "templates_assets": False,
             "community_links": True,
+            "guide": True,
             "admin": True,
             "reports": False,
             "certification": True,
@@ -218,6 +222,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "list_workspaces": True,
         "search_events": True,
         "search_requests": True,
+        # Run before every workflow submission; execute_workflow repeats it as a gate.
+        "check_duplicate_requests": True,
         "group_lookup": True,
         "member_lookup": True,
         # Platform-admin diagnostics for the N2K-aware LMWS membership endpoints.
@@ -444,6 +450,25 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # gpt-5-6-luna, which needs reasoning off for tools) reviews shallowly.
         "model": "",
         "reasoning_effort": "",
+    },
+
+    # Duplicate-request check: the check_duplicate_requests tool and the gate in
+    # execute_workflow. Open statuses count at any age; finished ones (completed,
+    # rejected, failed) only within lookback_days of their last update. Rejected
+    # and failed are left out by default, since resubmitting after either is the
+    # normal next step.
+    "duplicate_check": {
+        "enabled": True,
+        "lookback_days": 14,
+        "statuses": [
+            "pending",
+            "manager_approval",
+            "data_owner_approval",
+            "training_pending",
+            "manual_task_pending",
+            "provisioning",
+            "completed",
+        ],
     },
 
     # Web lookup config for the search_databricks_docs / fetch_doc_page tools.

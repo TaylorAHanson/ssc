@@ -345,11 +345,11 @@ async def list_target_workspaces(
     never included.
     """
     _require_governance_admin(current_user)
-    from app.core.workspaces import get_target_workspaces
+    from app.core.workspaces import get_target_workspace_info
 
     workspaces = [
         {"name": w.name, "environment": w.environment, "host": w.host}
-        for w in get_target_workspaces()
+        for w in get_target_workspace_info(enrich=False)
     ]
     cert_workspace = (getattr(settings, "SENTINEL_DATA_CERT_WORKSPACE", "") or "").strip()
     return {"workspaces": workspaces, "data_certification_workspace": cert_workspace}

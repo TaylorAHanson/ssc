@@ -7,6 +7,7 @@ from typing import List, Dict, Any
 from app.providers.databricks.handlers.base import BaseResourceHandler
 from app.providers.databricks.uc_metadata import cancel_statement
 from app.core.config import get_scan_catalogs, settings
+from app.services.odcs import contract_schema_objects, contract_servers, field_text
 
 logger = logging.getLogger(__name__)
 
@@ -67,18 +68,18 @@ def contract_table_names(dataset_def: Dict[str, Any]) -> List[str]:
     entry's own catalog/schema when set, else the first ``servers`` entry's.
     Entries that can't be qualified are skipped.
     """
-    servers = dataset_def.get("servers", []) or []
-    default_catalog = servers[0].get("catalog", "") if servers else ""
-    default_schema = servers[0].get("schema", "") if servers else ""
+    servers = contract_servers(dataset_def)
+    default_catalog = field_text(servers[0].get("catalog")) if servers else ""
+    default_schema = field_text(servers[0].get("schema")) if servers else ""
 
     tables: List[str] = []
-    for this_schema in dataset_def.get("schema", []) or []:
-        physical_table = this_schema.get("physicalName")
+    for this_schema in contract_schema_objects(dataset_def):
+        physical_table = field_text(this_schema.get("physicalName"))
         if not physical_table:
             continue
 
-        table_catalog = this_schema.get("catalog")
-        table_schema = this_schema.get("schema")
+        table_catalog = field_text(this_schema.get("catalog"))
+        table_schema = field_text(this_schema.get("schema"))
 
         if table_catalog and table_schema:
             if "." in physical_table:
@@ -129,20 +130,18 @@ class DatasetResourceHandler(BaseResourceHandler):
                         "assets": []
                     }
                     
-                    servers = dataset_def.get("servers", [])
-                    default_catalog = servers[0].get("catalog", "") if servers else ""
-                    default_schema = servers[0].get("schema", "") if servers else ""
-                    
-                    schemas = dataset_def.get("schema", [])
+                    servers = contract_servers(dataset_def)
+                    default_catalog = field_text(servers[0].get("catalog")) if servers else ""
+                    default_schema = field_text(servers[0].get("schema")) if servers else ""
                     
                     # We will loop through all physical tables and aggregate metadata
-                    for this_schema in schemas:
-                        physical_table = this_schema.get("physicalName")
+                    for this_schema in contract_schema_objects(dataset_def):
+                        physical_table = field_text(this_schema.get("physicalName"))
                         if not physical_table:
                             continue
                             
-                        table_catalog = this_schema.get("catalog")
-                        table_schema = this_schema.get("schema")
+                        table_catalog = field_text(this_schema.get("catalog"))
+                        table_schema = field_text(this_schema.get("schema"))
                         
                         if table_catalog and table_schema:
                             catalog = table_catalog

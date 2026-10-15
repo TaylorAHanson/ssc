@@ -35,6 +35,7 @@ This is the admin/self-service UI that talks to the backend at
 | `services/` | `api.ts` — the typed backend client. |
 | `stores/` | Zustand state stores. |
 | `hooks/`, `lib/` | Shared hooks and utilities. |
+| `guide/` | The in-app Guide (`/guide`): bundles and renders `docs/guide/*.md`. |
 | `types/` | Shared TypeScript types. |
 | `theme.ts`, `App.tsx`, `main.tsx` | Theme + app entry. |
 
@@ -51,3 +52,6 @@ This is the admin/self-service UI that talks to the backend at
   serves.
 - Render backend-supplied markdown (agent replies, approval `reports`) only
   through `renderMarkdownSafe` (`lib/markdown.ts`); it may quote untrusted content.
+- A user-visible feature change should update the matching `docs/guide/` page,
+  which the in-app Guide bundles at build time. Write `{{brand_name}}`, not the
+  name, and run `backend/tests/unit/test_guide_links.py` to catch broken links.

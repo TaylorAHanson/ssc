@@ -24,6 +24,8 @@ export type DisplayMessage =
         id: string;
         content: string;
         timestamp: string;
+        /** Next-step replies offered as chips; shown only on the latest message. */
+        suggestions?: string[];
     }
     | {
         kind: 'tool';

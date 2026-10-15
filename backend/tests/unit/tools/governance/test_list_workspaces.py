@@ -4,7 +4,9 @@ from app.tools.governance.list_workspaces import list_workspaces
 
 @pytest.mark.asyncio
 async def test_list_workspaces():
-    with patch("app.tools.governance.list_workspaces.DatabricksProvider") as MockP:
+    with patch("app.tools.governance.list_workspaces.DatabricksProvider") as MockP, patch(
+        "app.services.workspace_cache.read_cached_workspaces", return_value=([], None)
+    ):
         mock_data = {
             "rows": [
                 {

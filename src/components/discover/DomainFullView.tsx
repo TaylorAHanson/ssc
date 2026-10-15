@@ -307,11 +307,11 @@ export function DomainFullView({
   );
 
   // Every section pages the same way; each resets when the scope or its contents change.
-  const pageKey = (n: number) => `${domain}|${subdomain}|${n}`;
-  const mvPages = usePagination(sortedMetricViews, PAGE_SIZE, pageKey(sortedMetricViews.length));
-  const tablePages = usePagination(tables, PAGE_SIZE, pageKey(tables.length));
-  const dashboardPages = usePagination(dashboardsList, PAGE_SIZE, pageKey(dashboardsList.length));
-  const appPages = usePagination(appsList, PAGE_SIZE, pageKey(appsList.length));
+  const pageKey = (kind: ContentKind, n: number) => `${kind}|${domain}|${subdomain}|${n}`;
+  const mvPages = usePagination(sortedMetricViews, PAGE_SIZE, pageKey('metrics', sortedMetricViews.length));
+  const tablePages = usePagination(tables, PAGE_SIZE, pageKey('tables', tables.length));
+  const dashboardPages = usePagination(dashboardsList, PAGE_SIZE, pageKey('dashboards', dashboardsList.length));
+  const appPages = usePagination(appsList, PAGE_SIZE, pageKey('apps', appsList.length));
 
   // Opening a metric view makes sure metric views are shown — except from the
   // legacy table, where the side panel is enough and the table should stay put.

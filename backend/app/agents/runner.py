@@ -38,6 +38,7 @@ from app.agents.events import (
 )
 from app.agents import tracing
 from app.agents.prompts import get_agent_prompt
+from app.agents.suggestions import split_suggestions, suggestions_enabled
 from app.core.config import settings
 from app.model_serving.agent_llm import AgentLLMClient
 from app.tools.tool_executor import ToolContext, executor
@@ -746,12 +747,16 @@ class AgentRunner:
                     )
                     break
 
-            # Normal exit: emit the final message + done.
-            final_text = final_content or agent_message
+            # Normal exit: emit the final message + done. The suggestions block
+            # is always stripped, even with the feature off, so a stray one from
+            # the model can never reach the user's bubble.
+            final_text, suggestions = split_suggestions(final_content or agent_message)
+            if not suggestions_enabled():
+                suggestions = []
             tracing.end_root_span(turn_span, outputs={"final_message": final_text})
             turn_span = None
             if final_text:
-                yield MessageEvent(content=final_text)
+                yield MessageEvent(content=final_text, suggestions=suggestions or None)
             yield DoneEvent(messages=messages, trace_id=trace_id)
         except Exception as e:
             logger.error(f"AgentRunner.run_stream failed: {e}", exc_info=True)
@@ -813,6 +818,7 @@ class AgentRunner:
         into the streaming mental model.
         """
         final_content = ""
+        suggestions: List[str] = []
         tool_calls: List[Dict[str, Any]] = []
         messages: List[Dict[str, Any]] = []
         pending_poll: Optional[Dict[str, Any]] = None
@@ -824,6 +830,7 @@ class AgentRunner:
         ):
             if isinstance(ev, MessageEvent):
                 final_content = ev.content
+                suggestions = ev.suggestions or []
             elif isinstance(ev, ToolCallEvent):
                 last_tool_call_event = ev
                 tool_calls.append(
@@ -851,6 +858,7 @@ class AgentRunner:
 
         return {
             "content": final_content,
+            "suggestions": suggestions,
             "tool_calls": tool_calls,
             "messages": messages,
             "pending_poll": pending_poll,

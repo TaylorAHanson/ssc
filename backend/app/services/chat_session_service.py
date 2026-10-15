@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.agents.suggestions import with_suggestions_block
 from app.core.config import settings
 from app.db.chat_session import CHAT_SURFACES, ChatSessionModel
 from app.services.user_context import normalize_email
@@ -224,7 +225,9 @@ def transcript_to_history(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
         elif kind == "agent":
             out.append({
                 "role": "assistant",
-                "content": message.get("content") or "",
+                "content": with_suggestions_block(
+                    message.get("content") or "", message.get("suggestions")
+                ),
                 "timestamp": message.get("timestamp"),
                 "type": "agent",
             })

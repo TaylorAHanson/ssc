@@ -28,6 +28,7 @@ import {
   Wrench,
   ScrollText,
   FlaskConical,
+  BookOpen,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { renderNavIcon } from '../../lib/navIcons';
@@ -116,6 +117,7 @@ const navItems: NavItem[] = [
   { id: 'event_calendar', title: 'Event Calendar', icon: <Calendar className="w-5 h-5" />, path: '/community/events', group: 'Learn & Share' },
   { id: 'templates_assets', title: 'Templates & Assets', icon: <FileText className="w-5 h-5" />, path: '/community/assets', group: 'Learn & Share' },
   { id: 'community_links', title: 'Community Links', icon: <MessageSquare className="w-5 h-5" />, path: '/community/links', group: 'Learn & Share' },
+  { id: 'guide', title: 'Guide', icon: <BookOpen className="w-5 h-5" />, path: '/guide', group: 'Learn & Share' },
 
   // Governance - Restricted
   {
@@ -568,6 +570,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   ? false
                   : item.path === '/admin/dashboard'
                     ? location.pathname.startsWith('/admin')
+                    : item.id === 'guide'
+                      ? location.pathname.startsWith('/guide')
                     : item.id === 'home'
                       // The agent landing renders at both '/' and '/request'.
                       ? location.pathname === '/' || location.pathname === '/request'
@@ -820,6 +824,16 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               )}
 
               <div className="px-2 pt-2">
+                {uiTabs?.guide !== false && (
+                  <Link
+                    to="/guide"
+                    onClick={() => setUserMenuOpen(false)}
+                    className="w-full flex items-center gap-2 text-left px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-md transition-colors font-medium"
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    Guide
+                  </Link>
+                )}
                 <Link
                   to="/release-notes"
                   onClick={() => setUserMenuOpen(false)}

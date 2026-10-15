@@ -1,6 +1,6 @@
 # Governance Operating Guide
 
-**Who this guide is for:** Governance and Platform Admins who run day-to-day governance on this platform. It is written for a governance professional, **not** a software engineer — no coding or infrastructure knowledge is assumed. Where a technical term is unavoidable, it is defined in plain language (see the [Glossary](#glossary) at the end).
+**Who this guide is for:** Governance and Platform Admins who run day-to-day governance on this platform. It is written for a governance professional, **not** a software engineer — no coding or infrastructure knowledge is assumed. Where a technical term is unavoidable, it is defined in plain language (see the [Glossary](#10-glossary) at the end).
 
 **What this guide is:** a set of *operating instructions* — what each governance tool does, where to click, and how to respond to what you see. It is not an architecture document. For how the system is built, see `ARCHITECTURE.md`. For authoring approval workflows, see the [Platform Administration Guide](./PLATFORM_ADMINISTRATION.md).
 
@@ -63,7 +63,7 @@ Governance tools live in the left sidebar under two groups:
 | **Data Certification (ODCS)** | Review and track which datasets are certified. |
 | **Data Products (ODPS)** | The catalog of logical data products and their contracts. |
 | **Allowlist** | Approved exceptions to policy (things the Sentinel should leave alone). |
-| **Sentinel** | Run scans, read violation reports, and take action on findings. |
+| **OmniGuard** | The Sentinel's page: run scans, read violation reports, and take action on findings. |
 | **Metadata Manager** | Manage the governance tags on data assets, and catalog and schema descriptions. |
 
 **Control Tower** — configuration and building (mostly Platform Admin):
@@ -163,7 +163,7 @@ So a scan is safe to run any time. The worst it does unattended is send emails a
 
 ### 5.2 Running a scan and reading the report
 
-Go to **Watch Tower → Sentinel**.
+Go to **Watch Tower → OmniGuard**.
 
 - **Run a scan.** Use the run button. By default it scans **all configured target workspaces**. Under Advanced options you can scope a manual run to a single workspace (pick from the dropdown) or the home workspace.
 - **Run history table.** Each row is one scan, showing when it ran, which workspace(s) it covered, how many findings, and an **Issues** column (see §5.5).

@@ -61,7 +61,10 @@ execution model. Other useful docs: `DEVELOPER_QUICK_START.md`, `GOVERNANCE.md`,
   Report text quoting a repo, a user or a model is untrusted: build it with
   `safe_text` / `safe_code` (`backend/app/services/app_code_review/report.py`).
 - **Every user-visible change gets a release note** in `RELEASE_NOTES.md` — see
-  [Release notes](#release-notes) below.
+ [Release notes](#release-notes) below.
+- **User-visible changes also update the matching `docs/guide/` page**, shown
+ in-app at `/guide`. Write `{{brand_name}}`, never the name;
+ `backend/tests/unit/test_guide_links.py` fails on broken guide links.
 - Only commit when explicitly asked.
 
 ## Release notes
@@ -82,10 +85,19 @@ When you make a user-visible change (UI, behaviour, new capability, bug fix):
   unreleased work from the same batch of changes, add to it (raising its level if
   needed) instead of stacking another version.
 - **Keep `package.json` `version` in sync** with the top entry.
-- **Write for end users:** concise but complete sentences that say what changed
-  and why it matters — no terse fragments, internal jargon, file paths, or the
-  hardcoded brand name. Internal-only changes (refactors, tests, tooling) don't
-  need an entry.
+- **Write for end users, and give the rationale.** Each bullet answers, in
+ complete sentences: **what** changed; **why** — what was wrong, missing or
+ confusing before, or the reason behind a trade-off; and **what now** — what the
+ reader will notice, where to find it, how to turn it off, or what happens to
+ existing data. A bullet that only names the change ("Added X", "Improved Y")
+ isn't enough; two to four sentences is normal. No terse fragments, internal
+ jargon, file paths, or the hardcoded brand name. Internal-only changes
+ (refactors, tests, tooling) don't need an entry.
+  - Too thin: "Added a duplicate request check."
+  - Right: "Before submitting a request, the assistant now checks whether one
+    is already open for the same resource. Duplicates used to reach approvers,
+    who had to reject them by hand. If it finds a match it links it and asks
+    whether you still want to submit."
 
 ## Testing
 

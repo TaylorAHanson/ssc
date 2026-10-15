@@ -115,13 +115,16 @@ class SelfServiceResponsesAgent(ResponsesAgent):
         agen = runner.run_stream(
             query=query, history=history, context=None, obo_token=obo_token
         )
+        suggestions: List[str] = []
         try:
             while True:
                 try:
                     ev = loop.run_until_complete(agen.__anext__())
                 except StopAsyncIteration:
                     break
-                yield from self._map_event(ev)
+                if isinstance(ev, MessageEvent) and ev.suggestions:
+                    suggestions = ev.suggestions
+                yield from self._map_event(ev, suggestions)
         finally:
             try:
                 loop.run_until_complete(agen.aclose())
@@ -129,7 +132,9 @@ class SelfServiceResponsesAgent(ResponsesAgent):
                 pass
             loop.close()
 
-    def _map_event(self, ev: Any) -> Generator[ResponsesAgentStreamEvent, None, None]:
+    def _map_event(
+        self, ev: Any, suggestions: Optional[List[str]] = None
+    ) -> Generator[ResponsesAgentStreamEvent, None, None]:
         if isinstance(ev, ReasoningEvent):
             yield ResponsesAgentStreamEvent(
                 type="response.output_item.done",
@@ -165,8 +170,11 @@ class SelfServiceResponsesAgent(ResponsesAgent):
                 item=self.create_text_output_item(text=ev.content, id=item_id),
             )
         elif type(ev).__name__ == "DoneEvent":
+            custom: Dict[str, Any] = {}
             tid = getattr(ev, "trace_id", None)
             if tid:
-                yield ResponsesAgentStreamEvent(
-                    type="response.done", custom_outputs={"trace_id": tid}
-                )
+                custom["trace_id"] = tid
+            if suggestions:
+                custom["suggestions"] = list(suggestions)
+            if custom:
+                yield ResponsesAgentStreamEvent(type="response.done", custom_outputs=custom)

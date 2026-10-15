@@ -36,6 +36,8 @@ import { useBrandingStore } from '../../stores/brandingStore';
 import { useChatSession } from '../../stores/chatSessionStore';
 import type { ChatRouteInfo, DisplayMessage } from './chatTypes';
 import { downloadTranscript } from './transcript';
+import { NextStepSuggestions, PromptChip } from './PromptChip';
+import { sanitizeSuggestions, splitSuggestions } from './suggestions';
 import { ToolCallPill } from './ToolCallPill';
 import { GenieDetailsPanel } from './GenieDetailsPanel';
 import { ToolRawOutputPanel } from './ToolRawOutputPanel';
@@ -203,16 +205,21 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     // How long to keep polling Genie before surfacing a timeout. Configurable
     // via tools.ask_your_data.poll_timeout_seconds (not a Databricks limit).
     const geniePollTimeoutSeconds = useBrandingStore((s) => s.geniePollTimeoutSeconds);
-    const messagesEndRef = useRef<HTMLDivElement | null>(null);
+    const nextStepsEnabled = useBrandingStore((s) => s.features?.next_step_suggestions !== false);
+    const inputRef = useRef<HTMLTextAreaElement | null>(null);
+    const messageListRef = useRef<HTMLDivElement | null>(null);
     const modeDropdownRef = useRef<HTMLDivElement | null>(null);
     // Held in a ref so even a continuation turn fired from an older closure reads
     // the host's *current* page state rather than a stale snapshot.
     const extraContextRef = useRef(extraContext);
     extraContextRef.current = extraContext;
 
+    // Scroll only the message list: scrollIntoView would also scroll the page
+    // around an embedded chat (e.g. on Discover).
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages, statusLabel]);
+        const list = messageListRef.current;
+        list?.scrollTo({ top: list.scrollHeight, behavior: 'smooth' });
+    }, [messages, statusLabel, isStreaming]);
 
     // NOTE: deliberately NO abort-on-unmount here. A running turn must outlive a
     // route change (the whole point of lifting state into the store); the loop
@@ -408,6 +415,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     type: 'agent',
                     content: m.content,
                     timestamp: m.timestamp,
+                    ...(m.suggestions?.length ? { suggestions: m.suggestions } : {}),
                 });
             } else if (m.kind === 'tool' && m.poll && m.pollResolution === 'complete') {
                 if (skipToolCallIds.has(m.toolCallId)) continue;
@@ -790,7 +798,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 // the authoring assistant produces). The cross-bubble guards
                 // below only compare whole bubbles, so they can't catch a repeat
                 // that lives within one MessageEvent — this does.
-                const content = collapseSelfDuplication(event.content);
+                const split = splitSuggestions(event.content);
+                if (!split.content) break;
+                const suggestions = sanitizeSuggestions(event.suggestions ?? split.suggestions);
+                const content = collapseSelfDuplication(split.content);
                 const incomingSig = normalizeForDedup(content);
                 const apply = () =>
                     setMessages((prev) => {
@@ -839,6 +850,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                 id: `${Date.now()}-m`,
                                 content,
                                 timestamp: new Date().toISOString(),
+                                ...(suggestions.length ? { suggestions } : {}),
                             },
                         ];
                     });
@@ -992,6 +1004,25 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         await submitTurn(text);
     };
 
+    const lastMessage = messages[messages.length - 1];
+    const nextSteps =
+        nextStepsEnabled && !isStreaming && !pendingPoll && lastMessage?.kind === 'agent'
+            ? (lastMessage.suggestions ?? [])
+            : [];
+
+    const handleNextStep = (text: string) => {
+        if (isStreaming || pendingPoll) return;
+        // The chip unmounts as soon as the turn starts; keep keyboard focus in the chat.
+        inputRef.current?.focus();
+        void submitTurn(text);
+    };
+
+    const handleSamplePrompt = (text: string) => {
+        if (isStreaming || pendingPoll) return;
+        setDraft('');
+        void submitTurn(text);
+    };
+
     // Expose a tiny imperative API so the parent can submit a query
     // programmatically — used by Self Service to forward `autoQuery`
     // navigation state and to wire its rich discovery cards into the
@@ -1113,21 +1144,12 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                         {samplePrompts && samplePrompts.length > 0 && (
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full mt-4">
                                 {samplePrompts.map((q) => (
-                                    <button
+                                    <PromptChip
                                         key={q}
-                                        type="button"
-                                        onClick={() => {
-                                            if (isStreaming || pendingPoll) return;
-                                            setDraft('');
-                                            void submitTurn(q);
-                                        }}
+                                        text={q}
+                                        onSelect={handleSamplePrompt}
                                         disabled={isStreaming || !!pendingPoll}
-                                        className="relative p-2.5 rounded-xl border border-gray-200 hover:shadow-md hover:bg-white/80 hover:border-primary/50 transition-all duration-200 text-left group disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        <div className="text-[13px] font-medium text-gray-900 group-hover:text-primary transition-colors">
-                                            {q}
-                                        </div>
-                                    </button>
+                                    />
                                 ))}
                             </div>
                         )}
@@ -1146,21 +1168,12 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     {samplePrompts && samplePrompts.length > 0 && (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-2xl w-full mx-auto mt-4">
                             {samplePrompts.map((q) => (
-                                <button
+                                <PromptChip
                                     key={q}
-                                    type="button"
-                                    onClick={() => {
-                                        if (isStreaming || pendingPoll) return;
-                                        setDraft('');
-                                        void submitTurn(q);
-                                    }}
+                                    text={q}
+                                    onSelect={handleSamplePrompt}
                                     disabled={isStreaming || !!pendingPoll}
-                                    className="relative p-2.5 rounded-xl border border-gray-200 hover:shadow-md hover:bg-white/80 hover:border-primary/50 transition-all duration-200 text-left group disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                    <div className="text-[13px] font-medium text-gray-900 group-hover:text-primary transition-colors">
-                                        {q}
-                                    </div>
-                                </button>
+                                />
                             ))}
                         </div>
                     )}
@@ -1204,8 +1217,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                         a single collapsible block to keep the column
                         compact. The most recent step is always shown;
                         earlier steps reveal on demand. */}
-                    <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
+                    <div ref={messageListRef} className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
                         {renderMessages(messages, pollElapsedLabel, pendingPoll?.tool_call_id)}
+
+                        <NextStepSuggestions suggestions={nextSteps} onSelect={handleNextStep} />
 
                         {/* Live Genie progress as it works. Genie keeps its
                             final answer empty until the end and streams its
@@ -1265,8 +1280,6 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                         )}
 
                         {routeCtaNode}
-
-                        <div ref={messagesEndRef} />
                     </div>
 
                     {/* Input — "New Chat" sits inline with Send to mirror
@@ -1275,6 +1288,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     <form onSubmit={handleSubmit} className="border-t border-gray-200/50 pt-4 mt-4">
                         <div className="flex gap-2 items-center">
                             <Textarea
+                                ref={inputRef}
                                 value={draft}
                                 onChange={(e) => setDraft(e.target.value)}
                                 placeholder={placeholder}

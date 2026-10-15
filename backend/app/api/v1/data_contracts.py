@@ -15,6 +15,7 @@ from app.db.data_asset import DataAssetModel
 from pydantic import BaseModel
 from app.api.deps import get_current_user
 from app.services.certification_detail import DEFAULT_HISTORY_RUNS, build_certification_detail
+from app.services.odcs import contract_schema_objects, field_text
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -547,8 +548,8 @@ async def run_sync_contracts_background(dataset_groups: dict, force: bool, speci
                     parsed_yaml = yaml.safe_load(existing_contract.yaml_content)
                     if "schema" in parsed_yaml and isinstance(parsed_yaml["schema"], list):
                         yaml_table_names = set()
-                        for table_def in parsed_yaml["schema"]:
-                            phys_name = table_def.get("physicalName", "")
+                        for table_def in contract_schema_objects(parsed_yaml):
+                            phys_name = field_text(table_def.get("physicalName"))
                             if phys_name:
                                 yaml_table_names.add(phys_name)
                         

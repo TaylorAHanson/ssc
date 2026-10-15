@@ -194,6 +194,22 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Agent", "section": "Web lookup", "key": "yaml:web_search.max_fetch_chars", "label": "Max fetch chars",
      "type": "int", "min": 1000, "requires": ["features.web_search"],
      "help": "Cap on extracted page text handed to the model."},
+    {"group": "Agent", "section": "Duplicate requests", "key": "DUPLICATE_CHECK_ENABLED",
+     "label": "Check for duplicate requests", "type": "bool",
+     "help": "On (recommended) = before the agent submits a request it looks for open or recently finished "
+             "requests of the same workflow for the same resource, by this user or anyone else. If it finds "
+             "one it shows it and only submits once the user says to go ahead anyway. Other people's "
+             "requests are described without their ID or requester unless the user is a Platform Admin. "
+             "Off = requests are submitted without the check."},
+    {"group": "Agent", "section": "Duplicate requests", "key": "DUPLICATE_CHECK_LOOKBACK_DAYS",
+     "label": "Finished-request lookback (days)", "type": "int", "min": 0,
+     "help": "How long a finished request (completed, or rejected/failed if listed below) still counts as a "
+             "duplicate after its last update. Open requests count at any age. 0 = only open requests count."},
+    {"group": "Agent", "section": "Duplicate requests", "key": "DUPLICATE_CHECK_STATUSES",
+     "label": "Statuses that count as duplicates", "type": "string_list", "add_label": "Add status",
+     "help": "Request statuses that count as a possible duplicate. Options: pending, manager_approval, "
+             "data_owner_approval, training_pending, manual_task_pending, provisioning, completed, rejected, "
+             "failed. Rejected and failed are left out by default because resubmitting is the usual next step."},
 
     # --- Data Catalog ---------------------------------------------------
     {"group": "Data Catalog", "key": "SCAN_CATALOGS", "label": "Scanned catalogs",
@@ -218,8 +234,19 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "listed. Lineage keeps up to 365 days. Applies on the next sync."},
     {"group": "Data Catalog", "key": "DATA_ASSET_SYNC_CRON", "label": "Data asset sync cron",
      "type": "cron", "requires": ["features.data_discovery"],
-     "help": "How often the local data-asset cache is refreshed from Unity Catalog (5-field cron, UTC). "
-             "Leave BLANK to disable."},
+     "help": "How often the local data-asset cache (and the cached workspace list, if on) is refreshed "
+             "from Unity Catalog (5-field cron, UTC). Leave BLANK to disable."},
+    {"group": "Data Catalog", "key": "WORKSPACE_CACHE_ENABLED", "label": "Cache the account's workspace list",
+     "type": "bool", "requires": ["features.data_discovery"],
+     "help": "On = each data asset sync also saves the account's workspace list (system.access.workspaces_latest, "
+             "read by the same service principal), so the agent can list workspaces or check whether one already "
+             "exists instantly. Off = every lookup queries that table live as the signed-in user, which can take "
+             "a minute or more while the SQL warehouse starts. Applies immediately."},
+    {"group": "Data Catalog", "key": "WORKSPACE_CACHE_MAX_AGE_MINUTES", "label": "Workspace list max age (minutes)",
+     "type": "int", "min": 5, "requires": ["features.data_discovery"],
+     "help": "How old the cached workspace list may get before the agent ignores it and queries live. Keep this "
+             "above the data asset sync interval (hourly by default) so the normal gap between syncs never "
+             "triggers a slow live query. Applies immediately."},
 
     # ===================================================================
     # Requests & Approvals
@@ -675,7 +702,7 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
     ),
     ROLES_GROUP: "Who holds which role, and what each role can see and do.",
     "Notifications": "How email is delivered, the base URL used in email links, and what a requester is told when a request is denied.",
-    "Agent": "The AI agent's model, limits and guardrails, what it knows about the user up front, and where it may look things up on the web.",
+    "Agent": "The AI agent's model, limits and guardrails, what it knows about the user up front, where it may look things up on the web, and how it checks for duplicate requests.",
     "Data Catalog": "Which Unity Catalog catalogs are governed and how often the searchable data catalog is refreshed from them.",
     "Group Management (LMWS)": (
         "How the app runs LMWS/FWS-API group & user management — natively in-app, or as a Databricks job "
@@ -759,6 +786,8 @@ CAPABILITIES: List[Dict[str, Any]] = [
      "label": "Skills", "feature": "skills"},
     {"id": "onboarding_suggestions", "section": "Discover & Analyze", "group": "Agent capabilities",
      "label": "Starter prompts", "feature": "onboarding_suggestions"},
+    {"id": "next_step_suggestions", "section": "Discover & Analyze", "group": "Agent capabilities",
+     "label": "Suggest next steps", "feature": "next_step_suggestions"},
 
     # --- Requests & Approvals ------------------------------------------
     {"id": "my_requests", "section": "Requests & Approvals", "label": "My Requests",
@@ -777,6 +806,9 @@ CAPABILITIES: List[Dict[str, Any]] = [
     {"id": "community_links", "section": "Learn & Share", "label": "Community Links",
      "tabs": ["community_links"],
      "description": "The Community Links page. Its content is edited under Links & Embedded Apps."},
+    {"id": "guide", "section": "Learn & Share", "label": "Guide", "tabs": ["guide"],
+     "description": "The in-app user guide. Hiding it removes its sidebar link, the Guide link in the "
+                    "account menu and the help links on other pages; the page stays reachable at /guide."},
 
     # --- Watch Tower ----------------------------------------------------
     {"id": "governance", "section": "Watch Tower", "label": "Data governance", "feature": "governance",
@@ -836,6 +868,7 @@ FEATURE_DESCRIPTIONS: Dict[str, str] = {
     "context_catalog": "Context Catalog: a curated knowledge base the agent retrieves from.",
     "workflow_authoring": "No-code, database-backed workflow authoring in the admin Workflow Studio.",
     "onboarding_suggestions": "Personalized, clickable starter prompts on the home page at login.",
+    "next_step_suggestions": "After each agent reply, show 2\u20134 clickable next steps tailored to the conversation (for example, the options of a question the agent just asked). Clicking one sends it as the user's next message. Off = no chips and no extra instruction in the agent prompt.",
     "home_data_catalog": "The Pinned Items, Data Products, and Datasets sections below the chat on the home / new chat page. Off = a chat-only landing. The data catalog page is unaffected.",
     "user_context": "Tells the agent up front who the user is \u2014 their roles, open requests, pending approvals, and group memberships \u2014 so it asks fewer questions. Cached per user and refreshed in the background.",
     "web_search": "Lets the agent search and cite Databricks documentation (and any approved domains).",

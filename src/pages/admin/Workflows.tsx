@@ -41,6 +41,7 @@ import { VersionHistoryModal } from '../../components/admin/VersionHistoryModal'
 import { ImportWorkflowsModal } from '../../components/admin/ImportWorkflowsModal';
 import WorkflowTestsPanel from '../../components/admin/WorkflowTestsPanel';
 import { useBrandingStore } from '../../stores/brandingStore';
+import { GUIDE_WORKFLOW_STUDIO, useGuideEnabled } from '../../lib/guide';
 import { Lock, Sparkles, RefreshCw } from 'lucide-react';
 import { LabelWithHelp, AskAgentHint } from '../../components/ui/help-tip';
 import { ChatView } from '../../components/chat/ChatView';
@@ -534,6 +535,7 @@ export function Workflows() {
   // change only via an all-or-nothing bundle import. We hide edit/publish/delete
   // and keep inspection, dry-run, export, and import available.
   const authoringLocked = useBrandingStore((s) => s.workflowAuthoringLocked);
+  const guideEnabled = useGuideEnabled();
 
   const dirty = useMemo(() => JSON.stringify(form) !== baseline, [form, baseline]);
 
@@ -1028,14 +1030,16 @@ export function Workflows() {
             Edit and publish here instead of changing instruction files and redeploying.
           </p>
           <div className="mt-2 flex items-center gap-4">
-            <a
-              href="/governance/context-catalog"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-gray-400 hover:text-accent hover:underline"
-            >
-              Read the authoring guide
-            </a>
+            {guideEnabled && (
+              <a
+                href={GUIDE_WORKFLOW_STUDIO}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-gray-400 hover:text-accent hover:underline"
+              >
+                Read the authoring guide
+              </a>
+            )}
             <AskAgentHint onClick={() => setShowAssistant((v) => !v)} />
           </div>
         </div>

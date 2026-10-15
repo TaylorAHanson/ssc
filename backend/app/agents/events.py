@@ -105,10 +105,17 @@ class ReasoningEvent(BaseModel):
 
 
 class MessageEvent(BaseModel):
-    """Final assistant text for the turn."""
+    """Final assistant text for the turn.
+
+    ``suggestions`` are short replies in the user's voice that the UI renders
+    as clickable chips under this message; a click sends the text verbatim as
+    the next user turn. The runner parses them out of the model's reply (see
+    :mod:`app.agents.suggestions`), so ``content`` never carries the raw block.
+    """
 
     type: Literal["message"] = "message"
     content: str
+    suggestions: Optional[List[str]] = None
 
 
 class RouteEvent(BaseModel):

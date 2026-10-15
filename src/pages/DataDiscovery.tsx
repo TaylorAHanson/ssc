@@ -27,9 +27,11 @@ import {
   useMetricViews,
   useLegacyMappings,
 } from '../lib/catalogCache';
+import { useViewScroll } from '../hooks/useViewScroll';
 import {
   DISCOVER_PATH,
   absoluteDiscoverLink,
+  buildDiscoverLink,
   matchesSlug,
   readDiscoverParams,
   withDiscoverParams,
@@ -129,6 +131,18 @@ export function DataDiscovery() {
     const fromPanel = (location.state as { discoverPanel?: boolean } | null)?.discoverPanel;
     if (fromPanel && !pendingNav.current) navigate(-1);
     else navigateTo({ asset: null }, { replace: true });
+  };
+
+  // Likewise, a subdomain opened from its domain's overview is flagged so that
+  // clearing it steps back, returning the overview to where it was left.
+  const selectSubdomain = (subdomain: string | null) => {
+    const fromOverview = (location.state as { discoverDrillIn?: boolean } | null)?.discoverDrillIn;
+    if (!subdomain && fromOverview && !pendingNav.current) {
+      navigate(-1);
+      return;
+    }
+    const drillIn = Boolean(subdomain && !urlTarget.subdomain && !urlTarget.asset && !pendingNav.current);
+    navigateTo({ subdomain, asset: null }, drillIn ? { state: { discoverDrillIn: true } } : {});
   };
 
   const handleBackToStart = () => {
@@ -382,6 +396,16 @@ export function DataDiscovery() {
     };
   }, [effectiveSearchTerm, metricViewsData, datasets, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds, legacyNamesMatching]);
 
+  // Drill-ins only change query params, so the route never remounts and the
+  // layout keeps its scroll offset: give each view its own position instead.
+  const pageRef = useRef<HTMLDivElement | null>(null);
+  const scrollView = urlTarget.domain
+    ? buildDiscoverLink({ domain: urlTarget.domain, subdomain: urlTarget.subdomain })
+    : landingSearch
+      ? 'search'
+      : `start:${pickerDomain ?? ''}`;
+  useViewScroll(scrollView, pageRef);
+
   const filteredMetricViews = useMemo(() => {
     return metricViewsData.filter((mv) => {
       if (selectedDomain && mv.domain !== selectedDomain) {
@@ -588,7 +612,7 @@ export function DataDiscovery() {
   };
 
   return (
-    <div className="space-y-6 pb-20">
+    <div ref={pageRef} className="space-y-6 pb-20">
       {/* Page header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-1">
         <div>
@@ -689,7 +713,7 @@ export function DataDiscovery() {
             domainsHierarchy={domainsHierarchy}
             onSelectDomain={(d) => navigateTo({ domain: d, subdomain: null, asset: null })}
             subdomain={selectedSubdomain}
-            onSelectSubdomain={(sd) => navigateTo({ subdomain: sd, asset: null })}
+            onSelectSubdomain={selectSubdomain}
             onBackToStart={handleBackToStart}
             viewLink={absoluteDiscoverLink({ domain: selectedDomain, subdomain: selectedSubdomain })}
             assetLink={(asset) => absoluteDiscoverLink({ domain: selectedDomain, subdomain: selectedSubdomain, asset: asset.id })}

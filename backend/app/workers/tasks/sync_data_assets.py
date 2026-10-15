@@ -300,6 +300,38 @@ def _cache_is_fresh(now: datetime) -> bool:
         last = last.replace(tzinfo=timezone.utc)
     return now - last < _BOOT_SYNC_MIN_AGE
 
+
+def _workspace_cache_needs_warm() -> bool:
+    from app.services import workspace_cache
+
+    if not workspace_cache.enabled():
+        return False
+    try:
+        return workspace_cache.is_empty()
+    except Exception as e:  # noqa: BLE001 - the next scheduled sync fills it anyway
+        logger.warning("Could not check the workspace cache at boot: %s", e)
+        return False
+
+
+async def _refresh_workspace_cache(provider=None) -> None:
+    """Refresh the cached account workspace list as the same identity as the asset sync.
+
+    Has its own error handling so a workspace-list failure never fails the asset
+    sync, and an asset-sync failure doesn't skip this.
+    """
+    from app.services import workspace_cache
+
+    if not workspace_cache.enabled():
+        return
+    try:
+        if provider is None:
+            from app.core.workspaces import get_governance_uc_provider
+            provider = get_governance_uc_provider()
+        await workspace_cache.refresh_workspace_cache(provider)
+    except Exception as e:  # noqa: BLE001 - never let the workspace list break the sync
+        logger.error(f"Error refreshing the workspace cache: {e}", exc_info=True)
+
+
 async def sync_data_assets_task(force: bool = False):
     """
     Task to sync data assets from Databricks Information Schema into local Lakebase cache.
@@ -315,6 +347,9 @@ async def sync_data_assets_task(force: bool = False):
         if not _cache_is_fresh(now):
             force = True
             logger.info("Data asset cache is stale or empty at boot; syncing now.")
+        elif _workspace_cache_needs_warm():
+            logger.info("Workspace cache is empty at boot; filling it now.")
+            await _refresh_workspace_cache()
     if not force:
         if not cron_expr:
             return # Disabled
@@ -344,6 +379,7 @@ async def sync_data_assets_task(force: bool = False):
         except CroniterBadCronError:
             pass
     
+    provider = None
     try:
         # Run as the governance SP (the SENTINEL_DATA_CERT_WORKSPACE target
         # workspace's service principal) rather than the app's own SP. Unity
@@ -538,3 +574,5 @@ async def sync_data_assets_task(force: bool = False):
         logger.warning(f"Data asset sync skipped — Databricks access denied: {e}")
     except Exception as e:
         logger.error(f"Error during data asset sync task: {e}", exc_info=True)
+
+    await _refresh_workspace_cache(provider)

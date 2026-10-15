@@ -31,6 +31,22 @@ class WorkspaceConfig(BaseModel):
     workspace_type: str = "domain"
 
 
+class TargetWorkspaceInfo(BaseModel):
+    """A configured target workspace without credentials, for listing and pickers.
+
+    Has no credential fields, so it can't be handed to a client by mistake;
+    resolve a :class:`WorkspaceConfig` with :func:`get_workspace_config` to
+    connect. ``workspace_id`` / ``status`` come from the cached account
+    workspace list when its URL matches ``host``.
+    """
+    name: str
+    host: str
+    environment: str
+    workspace_type: str = "domain"
+    workspace_id: Optional[str] = None
+    status: Optional[str] = None
+
+
 def resolve_workspace_type(name: Optional[str], explicit: Optional[str] = None) -> str:
     """The admin-set type if any, else enterprise only when the name says so."""
     explicit = (explicit or "").strip().lower()
@@ -163,6 +179,46 @@ def _resolve_credentials(
     return cid, csec, None, f"workspace_sp:{scope}"
 
 
+def _configured_target_workspaces() -> List[Dict[str, Any]]:
+    return _yaml_config.get("target_workspaces", []) or []
+
+
+def _build_workspace_config(ws: Dict[str, Any]) -> WorkspaceConfig:
+    """One configured workspace with its credentials resolved (may read secrets)."""
+    client_id, client_secret, token, source = _resolve_credentials(ws)
+    name = ws.get("name", "unknown")
+    environment = ws.get("environment", "unknown")
+    logger.debug(
+        "Workspace %s (%s) resolved credentials from %s", name, environment, source
+    )
+    return WorkspaceConfig(
+        name=name,
+        host=ws.get("host", ""),
+        environment=environment,
+        client_id=client_id,
+        client_secret=client_secret,
+        token=token,
+        credential_source=source,
+        workspace_type=resolve_workspace_type(name, ws.get("type")),
+    )
+
+
+def _default_workspace_config() -> Optional[WorkspaceConfig]:
+    """The home workspace under the name ``default``, used when none are configured."""
+    host = settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL
+    if not host:
+        return None
+    return WorkspaceConfig(
+        name="default",
+        host=host,
+        environment=settings.ENVIRONMENT,
+        client_id=settings.DATABRICKS_CLIENT_ID or None,
+        client_secret=settings.DATABRICKS_CLIENT_SECRET or None,
+        token=settings.DATABRICKS_TOKEN or None,
+        credential_source="global_default",
+    )
+
+
 def get_target_workspaces() -> List[WorkspaceConfig]:
     """
     Get the configured target workspaces (Admin -> Settings -> Target Workspaces,
@@ -171,45 +227,63 @@ def get_target_workspaces() -> List[WorkspaceConfig]:
 
     Each workspace's credentials are resolved via :func:`_resolve_credentials`
     using the install-wide secret scope + the workspace's inline SP key names.
+    Only call this when you're about to connect to every workspace; to list or
+    pick one, use :func:`get_target_workspace_info`, which reads no secrets.
     """
-    workspaces_config = _yaml_config.get("target_workspaces", []) or []
-
-    workspaces: List[WorkspaceConfig] = []
-    for ws in workspaces_config:
-        client_id, client_secret, token, source = _resolve_credentials(ws)
-        name = ws.get("name", "unknown")
-        environment = ws.get("environment", "unknown")
-        logger.debug(
-            "Workspace %s (%s) resolved credentials from %s", name, environment, source
-        )
-        workspaces.append(
-            WorkspaceConfig(
-                name=name,
-                host=ws.get("host", ""),
-                environment=environment,
-                client_id=client_id,
-                client_secret=client_secret,
-                token=token,
-                credential_source=source,
-                workspace_type=resolve_workspace_type(name, ws.get("type")),
-            )
-        )
+    workspaces = [_build_workspace_config(ws) for ws in _configured_target_workspaces()]
 
     # If no workspaces configured, add the default one.
-    if not workspaces and (settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL):
-        workspaces.append(
-            WorkspaceConfig(
-                name="default",
-                host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-                environment=settings.ENVIRONMENT,
-                client_id=settings.DATABRICKS_CLIENT_ID or None,
-                client_secret=settings.DATABRICKS_CLIENT_SECRET or None,
-                token=settings.DATABRICKS_TOKEN or None,
-                credential_source="global_default",
-            )
-        )
+    if not workspaces:
+        default = _default_workspace_config()
+        if default is not None:
+            workspaces.append(default)
 
     return workspaces
+
+
+def get_target_workspace_info(enrich: bool = True) -> List[TargetWorkspaceInfo]:
+    """The configured target workspaces' names and hosts, without credentials.
+
+    Reads config only, never the secret scope, so it costs no network calls.
+    Same list and fallback as :func:`get_target_workspaces`. With ``enrich``,
+    adds ``workspace_id`` / ``status`` from the cached account workspace list
+    (one local DB read; skipped quietly if the cache is off or unreadable).
+    """
+    infos = [
+        TargetWorkspaceInfo(
+            name=ws.get("name", "unknown"),
+            host=ws.get("host", ""),
+            environment=ws.get("environment", "unknown"),
+            workspace_type=resolve_workspace_type(ws.get("name", "unknown"), ws.get("type")),
+        )
+        for ws in _configured_target_workspaces()
+    ]
+    if not infos:
+        default = _default_workspace_config()
+        if default is not None:
+            infos.append(
+                TargetWorkspaceInfo(
+                    name=default.name, host=default.host, environment=default.environment,
+                )
+            )
+    if enrich and infos:
+        _enrich_from_workspace_cache(infos)
+    return infos
+
+
+def _enrich_from_workspace_cache(infos: List[TargetWorkspaceInfo]) -> None:
+    from app.services.workspace_cache import cached_by_host, normalize_host
+
+    try:
+        by_host = cached_by_host()
+    except Exception as e:  # noqa: BLE001 - enrichment is optional
+        logger.debug("Workspace cache unavailable for target-workspace enrichment: %s", e)
+        return
+    for info in infos:
+        hit = by_host.get(normalize_host(info.host))
+        if hit:
+            info.workspace_id = hit.get("workspace_id")
+            info.status = hit.get("status")
 
 
 def get_home_workspace_config() -> WorkspaceConfig:
@@ -373,13 +447,20 @@ def uc_client_for(obo_token: Optional[str]):
 def get_workspace_config(host_or_name: str) -> Optional[WorkspaceConfig]:
     """
     Get the configuration for a specific workspace by host URL or name.
-    """
-    workspaces = get_target_workspaces()
 
+    Resolves credentials for the matching workspace only, not every configured one.
+    """
     wanted_host = host_or_name.rstrip("/")
-    for ws in workspaces:
-        if ws.host.rstrip("/") == wanted_host or ws.name == host_or_name:
-            return ws
+    configured = _configured_target_workspaces()
+    for ws in configured:
+        if (ws.get("host") or "").rstrip("/") == wanted_host or ws.get("name", "unknown") == host_or_name:
+            return _build_workspace_config(ws)
+    if not configured:
+        default = _default_workspace_config()
+        if default is not None and (
+            default.host.rstrip("/") == wanted_host or default.name == host_or_name
+        ):
+            return default
 
     # If not found, but we have a host URL, create a fallback config using default credentials
     if host_or_name.startswith("https://"):

@@ -34,6 +34,7 @@ _branding = _yaml_config.get("branding", {})
 _notifications = _yaml_config.get("notifications", {})
 _web_search = _yaml_config.get("web_search", {}) or {}
 _app_code_review = _yaml_config.get("app_code_review", {}) or {}
+_duplicate_check = _yaml_config.get("duplicate_check", {}) or {}
 
 
 def _slugify_brand(value: str) -> str:
@@ -491,6 +492,13 @@ class Settings(BaseSettings):
     # that read each metric view (lineage keeps a rolling year). A dashboard
     # nobody opened in this window isn't listed. Editable in Admin -> Settings.
     DATA_ASSET_LINEAGE_LOOKBACK_DAYS: int = int(os.getenv("DATA_ASSET_LINEAGE_LOOKBACK_DAYS", "90"))
+    # The data-asset sync also caches the account's workspace list
+    # (system.access.workspaces_latest), read as the same governance SP, so
+    # list_workspaces answers without a warehouse round trip. Older than the max
+    # age, the tool goes back to its live OBO query. Keep the max age above the
+    # sync interval. Editable in Admin -> Settings.
+    WORKSPACE_CACHE_ENABLED: bool = os.getenv("WORKSPACE_CACHE_ENABLED", "true").lower() == "true"
+    WORKSPACE_CACHE_MAX_AGE_MINUTES: int = int(os.getenv("WORKSPACE_CACHE_MAX_AGE_MINUTES", "180"))
     # Data contract (ODCS) sync. Rediscovers 'dataset'-tagged tables and redrafts
     # their ODCS contracts. This calls the LLM once per dataset, so it is heavier
     # than the data-asset cache sync — default OFF (empty = manual "Sync Data
@@ -779,6 +787,12 @@ class Settings(BaseSettings):
     APP_CODE_REVIEW_TIME_LIMIT_SECONDS: int = _app_code_review.get("time_limit_seconds", 900)
     APP_CODE_REVIEW_MODEL: str = _app_code_review.get("model", "")
     APP_CODE_REVIEW_REASONING_EFFORT: str = _app_code_review.get("reasoning_effort", "")
+
+    # Duplicate-request check before a workflow is submitted (Admin -> Settings ->
+    # Agent). Defaults and their rationale live in default_config.py.
+    DUPLICATE_CHECK_ENABLED: bool = _duplicate_check.get("enabled", True)
+    DUPLICATE_CHECK_LOOKBACK_DAYS: int = _duplicate_check.get("lookback_days", 14)
+    DUPLICATE_CHECK_STATUSES: List[str] = list(_duplicate_check.get("statuses", []))
 
     # Governance Tag Management (GitOps or Local Mode for UC tag changes)
     # In GitOps mode, the app opens PRs against this repo and GitHub Actions applies

@@ -1,0 +1,67 @@
+# Discover data
+
+The **Discover** page is the data catalog. Open it from **View & Search
+Catalog** in the sidebar to browse data by business area, search for a
+specific asset, and see where data comes from and who looks after it.
+
+## Search the catalog
+
+Type in **Search metric views, tables, dashboards…** at the top of the page.
+Results appear as you type. Press `/` anywhere on the page to jump to the
+search box.
+
+If nothing matches, or you'd rather describe what you need, press Enter or
+**Ask AI**. An **Agent Assistant** panel opens on the page and answers from
+the catalog. You can ask follow-up questions there.
+
+## Browse by business area
+
+Data is organized into business domains, such as finance or sales, and each
+domain into subdomains.
+
+1. Under **What domain are you interested in?**, pick a domain card.
+2. In **Step 2**, pick a subdomain and select **Launch**, or select
+   **Explore All** to see the whole domain.
+
+The domain view lists everything in that area by type: **Metric Views**,
+**Tables & Views**, **Dashboards** and **Apps**. Some organizations also list
+**Legacy Dashboards** from older reporting tools. Click a type to show or hide
+it. Use **All Domains** and **All Subdomains** at the top to move back up.
+
+Two switches narrow the list:
+
+- **Accessible to me** shows only the data you already have permission to
+  query.
+- **Certified Only** shows only data that has been certified as meeting your
+  organization's standards for quality, documentation and access control.
+
+Unless your screen is very wide, these switches show only an icon. Hover over
+one to see what it does.
+
+## Asset details
+
+Click an asset to open its details. Depending on the asset, you'll see some of
+these tabs:
+
+- **Overview**: the description, owner and tags.
+- **Columns** (or **Schema** for a dataset): the fields it contains.
+- **Lineage**: where the data comes from and what uses it. Click **Sources**
+  on a table to see what feeds it, or **Consumers** to see what depends on it.
+- **Quality**: service levels and data quality checks, where they're defined.
+- **Team & Support**: the people responsible for a dataset and how to get
+  help.
+
+**Open in Catalog Explorer** opens the asset in Databricks.
+
+## Request access
+
+If you can't query an asset yet, select **Request Access** on it. This opens
+the assistant with an access request already written for you. Check it,
+answer any questions, and confirm. Your request then appears under **My
+Requests**. See [Requests and approvals](requests-and-approvals.md).
+
+## Share what you're looking at
+
+Every domain, subdomain and asset has its own link. Select **Copy link** to
+copy it. Anyone who opens the link lands on the same view, as long as they
+have access to {{brand_name}}.

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.data_contract import DataContractModel
+from app.services.odcs import contract_schema_objects, contract_servers, field_text
 
 logger = logging.getLogger(__name__)
 
@@ -33,18 +34,17 @@ def extract_contract_info(contract: DataContractModel) -> Tuple[Optional[str], O
         logger.warning(f"Could not parse contract YAML for {contract.dataset_id}: {e}")
         return None, None, []
 
-    servers = data.get("servers", [])
-    default_catalog = servers[0].get("catalog", "") if servers else ""
-    default_schema = servers[0].get("schema", "") if servers else ""
+    servers = contract_servers(data)
+    default_catalog = field_text(servers[0].get("catalog")) if servers else ""
+    default_schema = field_text(servers[0].get("schema")) if servers else ""
 
     tables: List[str] = []
-    schemas = data.get("schema", [])
-    for s in schemas:
-        physical_table = s.get("physicalName") or s.get("name")
+    for s in contract_schema_objects(data):
+        physical_table = field_text(s.get("physicalName")) or field_text(s.get("name"))
         if not physical_table:
             continue
-        table_catalog = s.get("catalog") or default_catalog
-        table_schema = s.get("schema") or default_schema
+        table_catalog = field_text(s.get("catalog")) or default_catalog
+        table_schema = field_text(s.get("schema")) or default_schema
         if "." in physical_table:
             parts = physical_table.split(".")
             if len(parts) == 3:

@@ -1,6 +1,6 @@
 # Workspace Access Instructions
 
-**Goal**: Request access to an existing Databricks workspace.
+**Goal**: Request access to a Databricks workspace that already exists, including your business domain's workspace; to create a new workspace use workspace_provision.
 
 ## Information to Gather
 1. **Target Workspace**: Which workspace do you need access to?

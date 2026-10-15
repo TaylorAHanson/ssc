@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/layout/Layout';
 import { Home } from './pages/Home';
@@ -32,6 +32,8 @@ import { Workflows } from './pages/admin/Workflows';
 import { ToolRegistry } from './pages/admin/ToolRegistry';
 import { TrainingAdmin } from './pages/admin/TrainingAdmin';
 import { PreviewFeatures } from './pages/admin/PreviewFeatures';
+
+const Guide = lazy(() => import('./pages/Guide').then((m) => ({ default: m.Guide })));
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -225,6 +227,7 @@ function App() {
           <Route path="/community/assets" element={<ReusableAssets />} />
           <Route path="/community/links" element={<CommunityLinks />} />
           <Route path="/release-notes" element={<ReleaseNotes />} />
+          <Route path="/guide/*" element={<Suspense fallback={null}><Guide /></Suspense>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>

@@ -49,8 +49,12 @@ export function buildTranscriptMarkdown(messages: DisplayMessage[], title: strin
         switch (msg.kind) {
             case 'user':
                 return `## User · ${msg.timestamp}\n\n${msg.content}`;
-            case 'agent':
-                return `## Agent · ${msg.timestamp}\n\n${msg.content}`;
+            case 'agent': {
+                const offered = msg.suggestions?.length
+                    ? `\n\n_Suggested replies: ${msg.suggestions.join(' · ')}_`
+                    : '';
+                return `## Agent · ${msg.timestamp}\n\n${msg.content}${offered}`;
+            }
             case 'reasoning':
                 return `> _Reasoning:_ ${msg.text.replace(/\n/g, '\n> ')}`;
             case 'tool':

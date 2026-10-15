@@ -280,7 +280,8 @@ def _test_identity() -> Dict[str, str]:
 # the agent can gather inputs perfectly and then have no way to finish, so every
 # happy-path case would fail for a reason that has nothing to do with the workflow.
 # It is mutating, so the sandbox simulates it and the judge sees the arguments.
-_ESSENTIAL_TEST_TOOLS = ("get_workflow_instructions", "execute_workflow")
+# The read-only duplicate check is one the prompt requires before every submit.
+_ESSENTIAL_TEST_TOOLS = ("get_workflow_instructions", "check_duplicate_requests", "execute_workflow")
 
 
 def _resolve_test_tools(

@@ -7,6 +7,7 @@ from app.tools.mcp import tool
 from app.model_serving.agent_llm import AgentLLMClient
 from app.core.config import settings
 from app.core.exceptions import RetryableError
+from app.services.odcs import contract_schema_objects, field_text
 
 logger = logging.getLogger(__name__)
 
@@ -204,10 +205,10 @@ async def draft_odcs_contract(
                     valid_names = {m["dataset_id"] for m in datasets_metadata}
                     
                     filtered_schema = []
-                    for table_def in parsed_yaml["schema"]:
-                        phys_name = table_def.get("physicalName", "")
-                        table_catalog = table_def.get("catalog", "")
-                        table_schema = table_def.get("schema", "")
+                    for table_def in contract_schema_objects(parsed_yaml):
+                        phys_name = field_text(table_def.get("physicalName"))
+                        table_catalog = field_text(table_def.get("catalog"))
+                        table_schema = field_text(table_def.get("schema"))
                         
                         if table_catalog and table_schema and "." not in phys_name:
                             full_name = f"{table_catalog}.{table_schema}.{phys_name}"
@@ -400,10 +401,10 @@ slaProperties:
                             valid_names = {m["dataset_id"] for m in datasets_metadata}
 
                             filtered_schema = []
-                            for table_def in final_yaml["schema"]:
-                                phys_name = table_def.get("physicalName", "")
-                                table_catalog = table_def.get("catalog", "")
-                                table_schema = table_def.get("schema", "")
+                            for table_def in contract_schema_objects(final_yaml):
+                                phys_name = field_text(table_def.get("physicalName"))
+                                table_catalog = field_text(table_def.get("catalog"))
+                                table_schema = field_text(table_def.get("schema"))
 
                                 if table_catalog and table_schema and "." not in phys_name:
                                     full_name = f"{table_catalog}.{table_schema}.{phys_name}"

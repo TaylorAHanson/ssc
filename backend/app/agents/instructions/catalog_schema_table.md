@@ -15,7 +15,7 @@
     *   If **Catalog**: N/A.
 4.  **Name**: What is the name of the new asset?
     *   *Validation*: Alphanumeric and underscores only.
-    *   *Existence Check (REQUIRED)*: Before calling `execute_workflow`, you MUST use `get_catalog_list` or `get_schema_list` (passing the `target_host` and optional pattern filter) to verify the catalog or schema doesn't already exist.
+    *   *Existence Check (REQUIRED)*: As soon as you know the name and workspace, use `get_catalog_list` or `get_schema_list` (passing the `target_host` and optional pattern filter) to verify the catalog or schema doesn't already exist. If it does, say so and ask whether they need access to it or a different name, before asking for the remaining fields.
 5.  **Data Classification**: The sensitivity level of the data that will be stored here.
     *   *Options*: `green`, `yellow`, `red`, `black`.
 5.  **Owner**: Which LMWS group/list should own this asset?

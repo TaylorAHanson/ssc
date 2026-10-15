@@ -20,6 +20,7 @@ from app.agents.prompts import (
     default_onboarding_suggestions,
 )
 from app.agents.runner import AgentRunner
+from app.agents.suggestions import with_suggestions_block
 from app.core.config import settings
 from app.core.feature_flags import is_feature_enabled
 from app.model_serving.agent_llm import AgentLLMClient
@@ -155,6 +156,9 @@ class ChatMessage(BaseModel):
     # ``messages with role 'tool' must be a response to a preceding
     # message with 'tool_calls'``.
     tool_calls: Optional[List[Dict[str, Any]]] = None
+    # The next-step chips this agent turn offered. Folded back into the
+    # assistant message for the model; see ``with_suggestions_block``.
+    suggestions: Optional[List[str]] = None
 
 class ConversationRequest(BaseModel):
     query: str
@@ -179,6 +183,7 @@ class AgentResponse(BaseModel):
     follow_up_questions: Optional[List[FollowUpQuestion]] = None
     form_route: Optional[Dict[str, str]] = None
     requires_more_info: bool = True
+    suggestions: Optional[List[str]] = None
 
 @router.get("/tools")
 def get_agent_tools(
@@ -485,7 +490,11 @@ def _resolve_history(
                 role = "user" if msg.type == "user" else "assistant"
                 entry: Dict[str, Any] = {
                     "role": role,
-                    "content": msg.content,
+                    "content": (
+                        with_suggestions_block(msg.content, msg.suggestions)
+                        if msg.type == "agent"
+                        else msg.content
+                    ),
                     "timestamp": msg.timestamp,
                     "type": msg.type,
                 }
@@ -562,6 +571,7 @@ async def handle_conversation(
             follow_up_questions=follow_up_questions,
             form_route=form_route,
             requires_more_info=requires_more_info,
+            suggestions=result.get("suggestions") or None,
         )
         
     except HTTPException:
@@ -639,7 +649,7 @@ async def stream_conversation(
                             ).encode("utf-8")
                         # Replace the original message with the cleaned
                         # one so the user never sees the raw JSON block.
-                        event = MessageEvent(content=cleaned)
+                        event = event.model_copy(update={"content": cleaned})
                 yield serialize_sse(event).encode("utf-8")
         except Exception as e:
             logger.error(f"Agent stream failed mid-flight: {e}", exc_info=True)

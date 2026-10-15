@@ -9,7 +9,30 @@ Format rules (the app parses this file, so keep to them):
   The top entry is shown as the current version and must match `package.json`.
 - Group bullets under `### Added`, `### Changed`, `### Fixed`, or a feature-area
   subheading. Plain markdown only.
+- Every bullet gives the rationale: what changed, why (what was wrong or missing
+  before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
+
+## 1.9.0 — 2026-10-15
+
+### Added
+
+- **Suggested next steps in chat.** After each reply, the assistant now offers two to four next steps as buttons, such as "Request access to ws-supplychain-prod" or "Find the table owner". When it asks you to choose, the options become the buttons, so you can answer in one click instead of typing. Clicking a button sends its text as your message, so the assistant still asks you to confirm before it submits anything. Admins can turn this off under **Admin → Settings → Features & Navigation** with **Suggest next steps**.
+- **Duplicate request check.** Before submitting a request, the assistant now checks for open or recently completed requests for the same resource. Duplicates used to reach approvers, who had to spot and reject them by hand, and you could wait on a request that someone else had already filed. If you already have a matching request, the assistant links it. If a colleague does, it tells you one exists and its status without naming them. Either way, nothing is submitted until you choose to submit anyway, wait, or change the request. Admins can turn the check off, and choose how far back it looks and which statuses count, under **Admin → Settings → Agent** (Duplicate requests).
+- **A built-in Guide.** A new **Guide**, in the sidebar and the account menu, explains how to ask the assistant, find data, make and track requests, and handle approvals, with a separate section for admins. Until now, the only help was scattered across release notes and word of mouth. The Guide ships with the app, so it always describes the version you're using. You can search it and share a link to any section. **My Requests**, **Approvals** and **Workflow Studio** link straight to the relevant section. Admins can hide it under **Admin → Settings → Features & Navigation**.
+
+### Changed
+
+- **The assistant clarifies before it starts a request.** When a request could mean more than one thing, or the assistant finds that what you asked for already exists, it now tells you what it found and asks which option you want. Before, it often picked a workflow straight away and listed every detail it needed, even when it had just found that you might not need a new resource at all. For example, asking for "a new domain called supply chain" when a supply chain workspace already exists now gets you a choice: access to that workspace, a new environment for it, or a catalog for its data. It asks for the details only once you've picked.
+- **Workspace lookups are much faster.** The assistant's list of the account's workspaces, for example when it checks whether a workspace already exists, now comes from a copy that the background catalog sync keeps up to date. Each lookup used to run a live query on a SQL warehouse, which could take a minute or more when the warehouse was asleep. The assistant still fetches the latest list when it needs changes made since the last sync, or when you ask for it. Admins can turn the cached list off or set how old it may get under **Admin → Settings → Data Catalog**.
+- Listing your target workspaces, in the assistant and in the OmniGuard and Preview Features pickers, no longer looks up each workspace's credentials, so the list now appears straight away.
+
+### Fixed
+
+- Opening a subdomain on **Discover** now takes you to the top of its metric views. Before, the page kept the scroll position from the domain picker, so you landed partway down the list. Switching domain or subdomain and opening a search result also start at the top. Going back, with the browser's Back button or by clearing the subdomain, returns you to where you were in the previous list, including the page of results you were on.
+- The assistant panel on **Discover** no longer drags the whole page down while it replies. It now scrolls only its own conversation.
+- **Read the authoring guide** in Workflow Studio opened the Context Catalog. It now opens the workflow authoring section of the Guide.
+- **Metadata Manager** no longer fails to load its dataset list when a single data contract has an empty or malformed table entry, such as a stray `-` under `schema`. One bad contract used to break the list for every dataset. Malformed entries are now skipped and the rest of the contract is read as usual. OmniGuard data certification, the contract table check and contract drafting skip those entries the same way. Before, they could miss the contract's tables. Fixing the contract is still worthwhile, because a table listed only in a malformed entry isn't picked up.
 
 ## 1.8.0 — 2026-10-13
 

@@ -40,8 +40,8 @@ export function DiscoverSearchResults({
   onClear,
   replacesFor,
 }: DiscoverSearchResultsProps) {
-  const mvPages = usePagination(metricViews, PAGE_SIZE, `${term}|${metricViews.length}`);
-  const assetPages = usePagination(assets, PAGE_SIZE, `${term}|${assets.length}`);
+  const mvPages = usePagination(metricViews, PAGE_SIZE, `metrics|${term}|${metricViews.length}`);
+  const assetPages = usePagination(assets, PAGE_SIZE, `assets|${term}|${assets.length}`);
   const total = metricViews.length + assets.length;
 
   return (
