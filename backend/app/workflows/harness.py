@@ -95,7 +95,8 @@ def _install_fakes():
     # them so the graph's shape (approve -> automatic change -> Implement skipped
     # -> verify) runs without a database.
     import app.services.preview_features.steps as preview_steps
-    preview_steps.assess = lambda *a, **k: {"summary": "hermetic", "targets": ["ws-1"], "scope": "workspace"}
+    preview_steps.assess = lambda *a, **k: {"summary": "hermetic", "targets": ["ws-1"], "scope": "workspace",
+                                            "notify_email": "approver@corp.com"}
     preview_steps.set_status = lambda *a, **k: {"updated": 1}
 
     async def _preview_apply(*a, **k):
@@ -105,6 +106,14 @@ def _install_fakes():
         return {"verified": ["ws-1"], "pending": []}
     preview_steps.apply = _preview_apply
     preview_steps.verify = _preview_verify
+
+    # Access-change steps plan against and write to the Access Rules ledger;
+    # stand in for them so the graph's shape (plan -> group approval -> apply)
+    # runs without a database.
+    import app.services.rbac.requests as rbac_requests
+    rbac_requests.plan_step = lambda *a, **k: {
+        "approvers": ["uc-approvers"], "nothing_to_change": False, "report_markdown": "hermetic"}
+    rbac_requests.apply_step = lambda *a, **k: {"change_set_id": "cs-hermetic", "message": "hermetic"}
 
     fake = _FakeProvider()
     for getter in ("_get_databricks_provider", "_get_github_provider",

@@ -192,8 +192,8 @@ def _sync_status(db: Session) -> SyncStatus:
 
 def _pending_approvals(db: Session, request_ids, user) -> Dict[str, Dict[str, Any]]:
     """Per request: its pending inbox item and whether ``user`` may act on it."""
-    from app.api.v1.requests import _authorize_approval_actor
-    from app.db import ApprovalModel
+    from app.api.v1.requests import _authorize_approval_actor, self_approval_blocked
+    from app.db import ApprovalModel, RequestModel
 
     out: Dict[str, Dict[str, Any]] = {}
     if not request_ids:
@@ -204,12 +204,17 @@ def _pending_approvals(db: Session, request_ids, user) -> Dict[str, Dict[str, An
         .order_by(ApprovalModel.created_at.asc())
         .all()
     )
+    requesters = dict(
+        db.query(RequestModel.id, RequestModel.requester_email)
+        .filter(RequestModel.id.in_([a.request_id for a in pending]))
+        .all()
+    )
     for approval in pending:
         if approval.request_id in out:
             continue
         try:
             _authorize_approval_actor(approval, user)
-            allowed = True
+            allowed = not self_approval_blocked(requesters.get(approval.request_id), user)
         except HTTPException:
             allowed = False
         out[approval.request_id] = {"type": approval.approval_type, "can_approve": allowed}

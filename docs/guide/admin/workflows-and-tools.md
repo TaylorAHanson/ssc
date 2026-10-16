@@ -13,7 +13,7 @@ request. A workflow has two parts:
   assistant follows when someone asks for it, such as which details to collect.
 - **Workflow graph**: the steps it runs, in order. A step is either an
   approval the request waits for, such as a manager or data owner, or an
-  action, such as granting access.
+  action, such as creating a schema or recording an access change.
 
 Each published workflow becomes something the assistant can do. People can
 then ask for it in chat.

@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _GOAL_RE = re.compile(r"\*\*Goal\*\*:\s*(.*?)(?:\n|$)")
 
 # Seeded workflows whose display name differs from the title-cased key.
-_SEED_NAMES = {"enforcement_sentinel": "OmniGuard"}
+_SEED_NAMES = {"enforcement_sentinel": "OmniGuard", "rbac_access_change": "Access change"}
 
 # Portable bundle format tag (bumped if the export shape changes).
 BUNDLE_FORMAT = "selfservice.workflows/v1"
@@ -43,12 +43,28 @@ _BODY_FIELDS = (
 # :meth:`consolidate_legacy_workflows` reconciles them. Add a row here whenever a
 # workflow is renamed so the rename self-heals across environments.
 LEGACY_WORKFLOW_ALIASES = {
-    "request_data_access": "data_access_request",
     "create_workspace": "workspace_provision",
     "onboarding": "project_onboarding",
     "create_catalog_schema": "catalog_schema_table",
     "data_deduplication_sentinel": "asset_deduplication",
 }
+
+# Workflows removed from the product. Their bundled spec and instructions are
+# gone, but a row may still be published in an environment's DB (seeded on an
+# earlier boot, or forked by an admin); :meth:`retire_workflows` unpublishes and
+# disables those rows so they leave the agent's registry. Requests already filed
+# under these types keep rendering, with a generic timeline.
+#
+# The data-access workflows granted Unity Catalog privileges live, to individual
+# users. Securable access now goes only through the Access Rules ledger and its
+# Terraform export (ADR-0005, D4/D5). ``request_data_access`` is the legacy
+# instruction-only key that used to fold into ``data_access_request``.
+RETIRED_WORKFLOW_KEYS = frozenset({
+    "data_access_request",
+    "batch_data_access",
+    "catalog_schema_table_access",
+    "request_data_access",
+})
 
 
 def _rewrite_subworkflow_refs(node: Any, alias_map: Dict[str, str]) -> bool:
@@ -909,7 +925,7 @@ class WorkflowService:
                 db.add(target)
             # Carry the goal too — it's what surfaces the workflow in the agent's
             # capabilities menu. Without it the catalog twin is invisible and the
-            # agent routes to a sound-alike (e.g. data_access -> batch_data_access).
+            # agent routes to a sound-alike workflow instead.
             if legacy.goal and not (target.goal or "").strip():
                 target.goal = legacy.goal
                 db.add(target)
@@ -949,6 +965,57 @@ class WorkflowService:
             db.commit()
             logger.info("Consolidated %d legacy workflow alias(es) / refs", changed)
         return changed
+
+    @staticmethod
+    def retire_workflows(db: Session) -> int:
+        """Unpublish and disable every DB row for :data:`RETIRED_WORKFLOW_KEYS`.
+
+        Matches on ``key`` or ``request_type``, so an admin fork saved under a
+        different key but still serving a retired type is caught too. The row and
+        its version history stay for reference; ``disabled`` keeps it out of the
+        registry even if someone re-publishes it. Idempotent: rows that are
+        already draft and disabled are skipped, so later boots write nothing.
+        Returns the number of rows retired.
+        """
+        from sqlalchemy import or_
+
+        from app.workflows.spec_loader import subworkflow_refs
+
+        keys = sorted(RETIRED_WORKFLOW_KEYS)
+        rows = (
+            db.query(WorkflowModel)
+            .filter(or_(WorkflowModel.key.in_(keys), WorkflowModel.request_type.in_(keys)))
+            .all()
+        )
+        retired: List[str] = []
+        for workflow in rows:
+            if workflow.status != "published" and workflow.disabled:
+                continue
+            retired.append(f"{workflow.key} (was {workflow.status})")
+            workflow.status = "draft"
+            workflow.disabled = True
+            db.add(workflow)
+        if retired:
+            db.commit()
+            logger.info(
+                "Retired %d workflow(s): unpublished and disabled %s",
+                len(retired), ", ".join(retired),
+            )
+
+        # A published workflow that composes a retired one fails at run time when
+        # it reaches that stage. Nothing here can safely rewrite it, so say so.
+        for workflow in (
+            db.query(WorkflowModel)
+            .filter(WorkflowModel.status == "published", WorkflowModel.graph_spec.isnot(None))
+            .all()
+        ):
+            dangling = sorted(set(subworkflow_refs(workflow.graph_spec)) & RETIRED_WORKFLOW_KEYS)
+            if dangling:
+                logger.warning(
+                    "Workflow '%s' composes retired workflow(s) %s; that stage will fail "
+                    "until the workflow is edited.", workflow.key, ", ".join(dangling),
+                )
+        return len(retired)
 
     @staticmethod
     def last_published_map(db: Session, workflow_ids: List[str]) -> Dict[str, Optional[str]]:

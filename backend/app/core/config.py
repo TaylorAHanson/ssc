@@ -35,6 +35,7 @@ _notifications = _yaml_config.get("notifications", {})
 _web_search = _yaml_config.get("web_search", {}) or {}
 _app_code_review = _yaml_config.get("app_code_review", {}) or {}
 _duplicate_check = _yaml_config.get("duplicate_check", {}) or {}
+_rbac = _yaml_config.get("rbac", {}) or {}
 
 
 def _slugify_brand(value: str) -> str:
@@ -793,6 +794,35 @@ class Settings(BaseSettings):
     DUPLICATE_CHECK_ENABLED: bool = _duplicate_check.get("enabled", True)
     DUPLICATE_CHECK_LOOKBACK_DAYS: int = _duplicate_check.get("lookback_days", 14)
     DUPLICATE_CHECK_STATUSES: List[str] = list(_duplicate_check.get("statuses", []))
+
+    # Access Rules (Admin -> Settings -> Access Rules). Defaults and their
+    # rationale live in default_config.py.
+    RBAC_ENVIRONMENTS: List[dict] = copy.deepcopy(_rbac.get("environments", []))
+    RBAC_UC_SHEET_PATTERN: str = _rbac.get("uc_sheet_pattern", "UC_Securables_RBAC_{suffix}")
+    RBAC_WS_SHEET_PATTERN: str = _rbac.get("ws_sheet_pattern", "WS_Securables_RBAC_{suffix}")
+    RBAC_METASTORE_SHEET: str = _rbac.get("metastore_sheet", "UC_metastore_RBAC")
+    RBAC_METASTORE_EXPORT_PATH: str = _rbac.get("metastore_export_path", "")
+    RBAC_EXPORT_CRON: str = _rbac.get("export_cron", "0 * * * *")
+    RBAC_EXPORT_ON_CHANGE: bool = _rbac.get("export_on_change", False)
+    RBAC_CSV_BOM: bool = _rbac.get("csv_bom", False)
+    RBAC_CSV_LINE_ENDING: str = _rbac.get("csv_line_ending", "crlf")
+    RBAC_EXPORT_ARCHIVE_DAYS: int = _rbac.get("export_archive_days", 90)
+    RBAC_UC_APPROVER_GROUP: str = _rbac.get("uc_approver_group", "")
+    RBAC_METASTORE_APPROVER_GROUP: str = _rbac.get("metastore_approver_group", "")
+    RBAC_WS_APPROVER_GROUP: str = _rbac.get("ws_approver_group", "")
+    RBAC_VIEWER_ROLES: List[str] = list(_rbac.get("viewer_roles", []))
+    RBAC_ALLOW_RESET: bool = _rbac.get("allow_reset", False)
+    RBAC_MAX_CHANGES_PER_COMMIT: int = _rbac.get("max_changes_per_commit", 200)
+    RBAC_MIN_REASON_LENGTH: int = _rbac.get("min_reason_length", 10)
+    RBAC_MIN_JUSTIFICATION_LENGTH: int = _rbac.get("min_justification_length", 20)
+    RBAC_HARD_DENIED_PRIVILEGES: List[str] = list(_rbac.get("hard_denied_privileges", []))
+    RBAC_SYSTEM_GROUPS: List[str] = list(_rbac.get("system_groups", []))
+    RBAC_DEFAULT_OWNER: str = _rbac.get("default_owner", "")
+    RBAC_NAMING_RULES: List[dict] = copy.deepcopy(_rbac.get("naming_rules", []))
+    RBAC_HEADER_ALIASES: List[dict] = copy.deepcopy(_rbac.get("header_aliases", []))
+
+    # Requesters can't approve their own requests (any workflow). Platform-wide.
+    APPROVALS_DENY_SELF_APPROVAL: bool = True
 
     # Governance Tag Management (GitOps or Local Mode for UC tag changes)
     # In GitOps mode, the app opens PRs against this repo and GitHub Actions applies

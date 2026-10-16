@@ -13,10 +13,10 @@ the UI instead of changing code and redeploying.
 
 Adding a workflow therefore requires **no enum entry and no code change** — drop
 a JSON file in ``catalog/`` (or, at runtime, author + publish one in the UI/agent;
-a published DB ``graph_spec`` overrides this seed). Every executable workflow —
-including data access, whose runtime multi-owner resolution is expressed with a
-``resolve_data_owners`` step + a gate ``approvers_from`` expression — lives here
-as data, never as a dedicated code graph.
+a published DB ``graph_spec`` overrides this seed). Every executable workflow
+lives here as data, never as a dedicated code graph; runtime approver routing is
+expressed with a step that ``writes_context`` + a gate ``approvers_from``
+expression (see ``preview_feature_request``).
 """
 from __future__ import annotations
 
@@ -117,9 +117,9 @@ def stage_specs(request_type) -> list:
 
 
 def editable_states(request_type) -> list:
-    """Stages from which a platform_admin may Edit & Restart (platform_admin gates)."""
+    """Stages from which a platform_admin may Edit & Restart (platform_admin gates not marked ``editable: false``)."""
     key = getattr(request_type, "value", request_type)
     if key not in SPECS:
         return []
     return [s["name"] for s in SPECS[key].get("stages", [])
-            if s.get("kind") == "gate" and s.get("type") == "platform_admin"]
+            if s.get("kind") == "gate" and s.get("type") == "platform_admin" and s.get("editable", True)]

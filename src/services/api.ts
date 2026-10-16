@@ -6,6 +6,11 @@ import type {
   Request, RequestType, Environment, Approval, Delegation, DelegationCreate,
   ReportSubscription, ReportSubscriptionCreate, ReportSubscriptionUpdate, ExecutionSummary
 } from '../types';
+import type {
+  RbacChangeSetDetail, RbacChangeSetIn, RbacChangeSetPreview, RbacChangeSetResult, RbacCompareResult,
+  RbacExportRun, RbacExportStatus, RbacHistoryPage, RbacImportPreview, RbacImportResult, RbacImportSummary,
+  RbacPathCheckResult, RbacPermissions, RbacRulesPage, RbacSheetInfo,
+} from '../types/rbac';
 
 import { useUserStore } from '../stores/userStore';
 
@@ -356,6 +361,32 @@ export async function approveRequest(requestId: string): Promise<void> {
   if (!response.ok) {
     throw new Error(`Failed to approve request: ${response.statusText}`);
   }
+}
+
+export interface BulkApproveResult {
+  request_id: string;
+  ok: boolean;
+  status_code: number;
+  detail: string;
+}
+
+/** Approve up to 100 requests; each succeeds or fails on its own. */
+export async function bulkApproveRequests(
+  requestIds: string[],
+  comment?: string,
+): Promise<{ results: BulkApproveResult[] }> {
+  const response = await fetch(`${API_BASE_URL}/requests/approve-bulk`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ request_ids: requestIds, comment: comment || undefined }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(
+      typeof error.detail === 'string' ? error.detail : `Failed to approve requests: ${response.statusText}`,
+    );
+  }
+  return response.json();
 }
 
 export async function rejectRequest(requestId: string, reason?: string): Promise<void> {
@@ -4005,6 +4036,160 @@ export async function removePreviewFeature(featureId: string): Promise<void> {
   }
 }
 
+// --- Access Rules -----------------------------------------------------------
+
+// Carries the HTTP status and structured detail (409: { message, rule_id, current };
+// 422: { message, preview }) so callers can show conflicts and findings.
+export class RbacApiError extends Error {
+  status: number;
+  detail: unknown;
+
+  constructor(status: number, message: string, detail: unknown) {
+    super(message);
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+async function rbacFetch<T>(path: string, init?: RequestInit, contentType: string = 'application/json'): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}/rbac${path}`, {
+    ...init,
+    headers: getHeaders(contentType),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({ detail: response.statusText }));
+    const detail = body?.detail;
+    const message =
+      typeof detail === 'string'
+        ? detail
+        : (detail && typeof detail === 'object' && 'message' in detail && String(detail.message)) ||
+          `Request failed: ${response.statusText}`;
+    throw new RbacApiError(response.status, message, detail);
+  }
+  return response.json();
+}
+
+function rbacForm(fields: Record<string, string | Blob>): FormData {
+  const form = new FormData();
+  Object.entries(fields).forEach(([key, value]) => form.append(key, value));
+  return form;
+}
+
+export async function getRbacPermissions(): Promise<RbacPermissions> {
+  return rbacFetch('/permissions');
+}
+
+export async function getRbacSheets(): Promise<RbacSheetInfo[]> {
+  return rbacFetch('/sheets');
+}
+
+export async function getRbacRules(params: {
+  sheet?: string;
+  q?: string;
+  includeDeleted?: boolean;
+  offset?: number;
+  limit?: number;
+} = {}): Promise<RbacRulesPage> {
+  const search = new URLSearchParams();
+  if (params.sheet) search.set('sheet', params.sheet);
+  if (params.q) search.set('q', params.q);
+  if (params.includeDeleted) search.set('include_deleted', 'true');
+  if (params.offset !== undefined) search.set('offset', String(params.offset));
+  if (params.limit !== undefined) search.set('limit', String(params.limit));
+  const qs = search.toString();
+  return rbacFetch(`/rules${qs ? `?${qs}` : ''}`);
+}
+
+export async function validateRbacChanges(body: RbacChangeSetIn): Promise<RbacChangeSetPreview> {
+  return rbacFetch('/changes/validate', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export async function commitRbacChanges(body: RbacChangeSetIn): Promise<RbacChangeSetResult> {
+  return rbacFetch('/changes', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export async function getRbacHistory(offset = 0, limit = 50): Promise<RbacHistoryPage> {
+  return rbacFetch(`/history?offset=${offset}&limit=${limit}`);
+}
+
+export async function getRbacChangeSet(changeSetId: string): Promise<RbacChangeSetDetail> {
+  return rbacFetch(`/history/${encodeURIComponent(changeSetId)}`);
+}
+
+export async function validateRbacRevert(changeSetId: string, reason: string): Promise<RbacChangeSetPreview> {
+  return rbacFetch(`/history/${encodeURIComponent(changeSetId)}/revert/validate`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export async function revertRbacChangeSet(changeSetId: string, reason: string): Promise<RbacChangeSetResult> {
+  return rbacFetch(`/history/${encodeURIComponent(changeSetId)}/revert`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export async function getRbacImports(): Promise<RbacImportSummary[]> {
+  return rbacFetch('/imports');
+}
+
+export async function previewRbacImport(file: File): Promise<RbacImportPreview> {
+  return rbacFetch('/imports/preview', { method: 'POST', body: rbacForm({ file }) }, '');
+}
+
+export async function runRbacImport(
+  file: File,
+  previewId: string,
+  mode: 'initial' | 'reset',
+  confirmation = '',
+): Promise<RbacImportResult> {
+  return rbacFetch(
+    '/imports',
+    { method: 'POST', body: rbacForm({ file, preview_id: previewId, mode, confirmation }) },
+    '',
+  );
+}
+
+export async function getRbacExports(): Promise<RbacExportStatus> {
+  return rbacFetch('/exports');
+}
+
+export async function runRbacExport(force = false): Promise<RbacExportRun> {
+  return rbacFetch('/exports', { method: 'POST', body: JSON.stringify({ force }) });
+}
+
+export async function testRbacExportPath(target: string): Promise<RbacPathCheckResult> {
+  return rbacFetch('/exports/test-path', { method: 'POST', body: JSON.stringify({ target }) });
+}
+
+export async function compareRbacExport(sheet: string, file: File): Promise<RbacCompareResult> {
+  return rbacFetch('/exports/compare', { method: 'POST', body: rbacForm({ sheet, file }) }, '');
+}
+
+// Downloads an archived export file through the authenticated API (never by path).
+export async function downloadRbacExportFile(exportId: string, fileId: string): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/rbac/exports/${encodeURIComponent(exportId)}/files/${encodeURIComponent(fileId)}`,
+    { headers: getHeaders('') },
+  );
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(typeof body?.detail === 'string' ? body.detail : `Download failed: ${response.statusText}`);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const objectUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = match ? match[1] : 'export.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(objectUrl);
+}
+
 export const api = {
   createRequest,
   getRequests,
@@ -4013,6 +4198,7 @@ export const api = {
   getRequest,
   getRequestGraph,
   approveRequest,
+  bulkApproveRequests,
   rejectRequest,
   deleteRequest,
   getApprovals,
@@ -4152,4 +4338,21 @@ export const api = {
   createManualPreviewFeature,
   matchPreviewFeature,
   removePreviewFeature,
+  getRbacPermissions,
+  getRbacSheets,
+  getRbacRules,
+  validateRbacChanges,
+  commitRbacChanges,
+  getRbacHistory,
+  getRbacChangeSet,
+  validateRbacRevert,
+  revertRbacChangeSet,
+  getRbacImports,
+  previewRbacImport,
+  runRbacImport,
+  getRbacExports,
+  runRbacExport,
+  testRbacExportPath,
+  compareRbacExport,
+  downloadRbacExportFile,
 };

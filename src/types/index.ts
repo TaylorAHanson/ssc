@@ -154,6 +154,12 @@ export interface Approval {
   workflowParameters?: Record<string, any>;
   /** Explanation of why this approval was superseded by a parameter edit. */
   supersededNote?: string;
+  /** The current user submitted this request. */
+  isOwnRequest?: boolean;
+  /** The current user can't approve it (their own request, with self-approval blocked). */
+  selfApprovalBlocked?: boolean;
+  /** A Platform Admin may Edit & Restart the request from this approval. */
+  canEditParameters?: boolean;
   /** `manual_task` only: the work the assignee must complete, shown verbatim. */
   instructions?: string;
   /** `manual_task` only: SLA deadline, so an ignored task can show as overdue. */

@@ -562,6 +562,138 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "Comma-separate addresses (a distribution list is fine). Blank = no email; Platform Admins "
              "still see it in Pending Approvals. Takes effect on the next request."},
 
+    # --- Access Rules ----------------------------------------------------
+    {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_ENVIRONMENTS",
+     "label": "Environments", "type": "collection", "unique": "key", "add_label": "Add environment",
+     "help": "One row per environment in the access-rules workbook. The sheet suffix builds that environment's "
+             "sheet names from the patterns below (e.g. Dev → UC_Securables_RBAC_Dev). Aliases are other "
+             "spellings of the environment, comma-separated. The export path is the folder its CSVs are "
+             "written to (a UC Volume or Workspace path); blank = its sheets are not exported. Self-service "
+             "off = requests can't change it. Write privileges off = requests can't add MODIFY or other write "
+             "privileges. Service principals off = only groups can be granted. Two-person rule on = a direct "
+             "edit becomes a request another approver must approve.",
+     "columns": [
+         {"key": "key", "label": "Key", "type": "string", "required": True, "placeholder": "dev"},
+         {"key": "aliases", "label": "Aliases", "type": "string", "placeholder": "development"},
+         {"key": "sheet_suffix", "label": "Sheet suffix", "type": "string", "required": True, "placeholder": "Dev"},
+         {"key": "export_path", "label": "Export path", "type": "string",
+          "placeholder": "/Volumes/catalog/schema/volume/rbac/dev"},
+         {"key": "self_service", "label": "Self-service", "type": "bool"},
+         {"key": "write_privileges", "label": "Write privileges", "type": "bool"},
+         {"key": "service_principals", "label": "Service principals", "type": "bool"},
+         {"key": "two_person_rule", "label": "Two-person rule", "type": "bool"},
+     ]},
+    {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_UC_SHEET_PATTERN",
+     "label": "UC sheet name pattern", "type": "string",
+     "help": "Name of each environment's UC securables sheet. {suffix} is the environment's sheet suffix."},
+    {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_WS_SHEET_PATTERN",
+     "label": "Workspace sheet name pattern", "type": "string",
+     "help": "Name of each environment's workspace securables sheet. {suffix} is the environment's sheet suffix."},
+    {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_METASTORE_SHEET",
+     "label": "Metastore sheet name", "type": "string",
+     "help": "Name of the single sheet that holds metastore-level rules for every environment."},
+    {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_METASTORE_EXPORT_PATH",
+     "label": "Metastore export path", "type": "string",
+     "help": "Folder the metastore sheet's CSV is written to. It belongs to no single environment, so it has "
+             "its own path. Blank = not exported."},
+    {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_EXPORT_CRON",
+     "label": "Export schedule", "type": "cron",
+     "help": "When every sheet is written to its CSV (5-field cron, UTC). A run is skipped when nothing has "
+             "changed since the last successful export. Leave BLANK to export only with Export now."},
+    {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_EXPORT_ON_CHANGE",
+     "label": "Also export after every change", "type": "bool",
+     "help": "On = an export also runs shortly after any change is recorded, instead of waiting for the schedule."},
+    {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_CSV_BOM",
+     "label": "Write a byte-order mark", "type": "bool",
+     "help": "Off (default) matches Excel's 'CSV UTF-8' export without a byte-order mark. Turn on only if "
+             "Compare with a manual export reports a missing byte-order mark."},
+    {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_CSV_LINE_ENDING",
+     "label": "Line ending", "type": "select", "options": ["crlf", "lf"],
+     "help": "CRLF (default) is what Excel writes, after every row including the last. Change only if "
+             "Compare with a manual export reports a line-ending difference."},
+    {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_EXPORT_ARCHIVE_DAYS",
+     "label": "Keep exported files (days)", "type": "int", "min": 0,
+     "help": "How long each exported CSV stays downloadable from the Exports tab. 0 = forever."},
+    {"group": "Access Rules", "section": "Approvers & access", "key": "RBAC_UC_APPROVER_GROUP",
+     "label": "UC securables approver group", "type": "string",
+     "help": "Exact display name of the Databricks group that approves requests for UC securables (catalogs, "
+             "schemas, tables, views, volumes, functions) and edits those rows directly. Add approvers to this "
+             "group directly; membership through a nested group may not be recognised. Blank = Platform Admins "
+             "only. Takes effect on the next request."},
+    {"group": "Access Rules", "section": "Approvers & access", "key": "RBAC_METASTORE_APPROVER_GROUP",
+     "label": "Metastore approver group", "type": "string",
+     "help": "Exact display name of the Databricks group that approves requests for metastore-level objects "
+             "(connections, external locations, storage credentials) and edits the metastore sheet directly. "
+             "Add approvers to this group directly; membership through a nested group may not be recognised. "
+             "Blank = Platform Admins only."},
+    {"group": "Access Rules", "section": "Approvers & access", "key": "RBAC_WS_APPROVER_GROUP",
+     "label": "Workspace securables approver group", "type": "string",
+     "help": "Exact display name of the Databricks group that approves requests for workspace assignments, "
+             "entitlements and other workspace securables, and edits those rows directly. Add approvers to this "
+             "group directly; membership through a nested group may not be recognised. Blank = Platform Admins "
+             "only."},
+    {"group": "Access Rules", "section": "Approvers & access", "key": "RBAC_VIEWER_ROLES",
+     "label": "Viewer roles", "type": "string_list", "add_label": "Add role",
+     "help": "App roles that can see every sheet, its history and its exports without editing."},
+    {"group": "Access Rules", "section": "Approvers & access", "key": "RBAC_MAX_CHANGES_PER_COMMIT",
+     "label": "Max row changes per save", "type": "int", "min": 1, "max": 5000,
+     "help": "The most rows a single direct edit, revert or request can change."},
+    {"group": "Access Rules", "section": "Approvers & access", "key": "RBAC_MIN_REASON_LENGTH",
+     "label": "Minimum reason length (direct edits)", "type": "int", "min": 0,
+     "help": "Characters required in the reason for a direct edit or a revert."},
+    {"group": "Access Rules", "section": "Policy", "key": "RBAC_MIN_JUSTIFICATION_LENGTH",
+     "label": "Minimum justification length (requests)", "type": "int", "min": 0,
+     "help": "Characters required in a request's business justification."},
+    {"group": "Access Rules", "section": "Policy", "key": "RBAC_HARD_DENIED_PRIVILEGES",
+     "label": "Never-granted privileges", "type": "string_list", "add_label": "Add privilege",
+     "help": "Privileges no request or direct edit can add. Existing rows that hold them still import (with a "
+             "finding), and removing them is always allowed."},
+    {"group": "Access Rules", "section": "Policy", "key": "RBAC_SYSTEM_GROUPS",
+     "label": "System groups", "type": "string_list", "add_label": "Add group",
+     "help": "Groups no request or direct edit may add to or remove from any rule (case-insensitive)."},
+    {"group": "Access Rules", "section": "Policy", "key": "RBAC_DEFAULT_OWNER",
+     "label": "Default owner", "type": "string",
+     "help": "Owner written on new UC and metastore rows. Blank = the owner already used on that catalog, "
+             "otherwise the sheet's most common owner."},
+    {"group": "Access Rules", "section": "Policy", "key": "RBAC_NAMING_RULES",
+     "label": "Naming rules", "type": "collection", "add_label": "Add rule",
+     "help": "Checks on new or changed values. The pattern is a regular expression the whole value must match; "
+             "{env} stands for the row's environment key. Securable types limits the rule (comma-separated, "
+             "blank = all). Exceptions are values that always pass (comma-separated). Deny blocks requests and "
+             "edits; warn only flags them. Imports are always flagged, never blocked.",
+     "columns": [
+         {"key": "field", "label": "Field", "type": "select", "required": True,
+          "options": ["principal_name", "catalog", "schema_name", "object_name", "workspace_name", "owner"]},
+         {"key": "pattern", "label": "Pattern", "type": "string", "required": True,
+          "placeholder": "^grp_.*_{env}$"},
+         {"key": "securable_types", "label": "Securable types", "type": "string", "placeholder": "schema,view"},
+         {"key": "exceptions", "label": "Exceptions", "type": "string"},
+         {"key": "severity", "label": "Severity", "type": "select", "required": True,
+          "options": ["warn", "deny"]},
+         {"key": "message", "label": "Message", "type": "string"},
+     ]},
+    {"group": "Access Rules", "section": "Import", "key": "RBAC_HEADER_ALIASES",
+     "label": "Header aliases", "type": "collection", "add_label": "Add alias",
+     "help": "Other header spellings the workbook import should recognise, if a column is ever renamed. The "
+             "export always writes the header text captured at import.",
+     "columns": [
+         {"key": "field", "label": "Field", "type": "select", "required": True,
+          "options": ["environment_value", "securable_type", "catalog", "schema_name", "object_name",
+                      "workspace_name", "owner", "principal_type", "principal_name", "privilege"]},
+         {"key": "header", "label": "Header text", "type": "string", "required": True},
+     ]},
+    {"group": "Access Rules", "section": "Import", "key": "RBAC_ALLOW_RESET",
+     "label": "Allow reset and re-import", "type": "bool",
+     "help": "On = a Platform Admin can replace every rule with a fresh workbook import. That discards every "
+             "change made in the app since the seed import (it can be reverted from History). Keep off in "
+             "production."},
+
+    # --- Approvals --------------------------------------------------------
+    {"group": "Approvals", "key": "APPROVALS_DENY_SELF_APPROVAL",
+     "label": "Block approving your own request", "type": "bool",
+     "help": "On (default) = nobody can approve a request they submitted, in any workflow, including Platform "
+             "Admins; another approver must. Rejecting your own request (withdrawing it) is still allowed."},
+
     # ===================================================================
     # Platform
     # ===================================================================
@@ -618,6 +750,7 @@ GROUP_REQUIRES: Dict[str, List[str]] = {
     "Metadata Manager": ["features.governance"],
     "Workflow Studio": ["features.workflow_authoring"],
     "Preview Features": ["features.preview_features"],
+    "Access Rules": ["features.rbac"],
 }
 
 
@@ -683,9 +816,10 @@ ROLES_GROUP = "Roles & Access"
 SECTIONS: List[Dict[str, Any]] = [
     {"title": "General", "groups": ["Appearance", FEATURES_GROUP, ROLES_GROUP, "Notifications"]},
     {"title": "Discover & Analyze", "groups": ["Agent", "Data Catalog"]},
-    {"title": "Requests & Approvals", "groups": ["Group Management (LMWS)", "App Code Review"]},
+    {"title": "Requests & Approvals", "groups": ["Approvals", "Group Management (LMWS)", "App Code Review"]},
     {"title": "Learn & Share", "groups": ["Links & Embedded Apps", "Calendar"]},
-    {"title": "Watch Tower", "groups": ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager"]},
+    {"title": "Watch Tower", "groups": ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager",
+                                        "Access Rules"]},
     {"title": "Control Tower", "groups": ["Workflow Studio", "Preview Features"]},
     {"title": "Platform", "groups": ["Infrastructure"]},
 ]
@@ -709,6 +843,12 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "against a vendored notebook on serverless or classic compute. Applies to the next run."
     ),
     "App Code Review": "How the automated Databricks App code-review step judges a repository, and its size and time limits.",
+    "Approvals": "Rules that apply to every approval, in every workflow.",
+    "Access Rules": (
+        "The group-to-securable access rules that replace the RBAC workbook: which environments and sheets "
+        "exist, where and when each sheet's CSV is written for the Terraform pipeline, which Databricks group "
+        "approves and edits each type of rule, and the policy every request and direct edit is checked against."
+    ),
     "Links & Embedded Apps": "The Community Links resource page and the external apps embedded (iframed) in the sidebar. Edits apply immediately.",
     "Calendar": "Where the event calendar's events come from, and how often they are synced.",
     "OmniGuard": (
@@ -819,6 +959,7 @@ CAPABILITIES: List[Dict[str, Any]] = [
          {"key": "tag_management", "label": "Show Metadata Manager"},
      ]},
     {"id": "sentinel", "section": "Watch Tower", "label": "OmniGuard", "feature": "sentinel", "tabs": ["sentinel"]},
+    {"id": "rbac", "section": "Watch Tower", "label": "Access Rules", "feature": "rbac", "tabs": ["access_rules"]},
 
     # --- Control Tower --------------------------------------------------
     {"id": "admin", "section": "Control Tower", "label": "Admin", "tabs": ["admin"],
@@ -879,6 +1020,11 @@ FEATURE_DESCRIPTIONS: Dict[str, str] = {
     "preview_features": (
         "Tracks Databricks Beta and Public Preview features across your target workspaces, and lets admins "
         "request turning them on or off through an approval workflow. Off = no sync and the page is hidden."
+    ),
+    "rbac": (
+        "Access Rules: the group-to-securable rules (UC, metastore and workspace) that replace the RBAC "
+        "workbook, the access-change request workflow, direct edits by each type's approver group, and the "
+        "scheduled CSV export the Terraform pipeline reads. Off = no export, no requests, and the page is hidden."
     ),
     "enhanced_landing_page": "Shows a welcome header (brand title and greeting) above the chat on the landing page. Off = a clean, minimal landing page.",
 }
@@ -1207,6 +1353,7 @@ _CRON_SCHEDULE_TARGETS: Dict[str, tuple] = {
     "EVENT_SYNC_CRON": ("app.workers.tasks.sync_calendar", "_next_sync_time"),
     "CONTRACT_SYNC_CRON": ("app.workers.tasks.sync_contracts", "_next_contract_sync_time"),
     "PREVIEW_FEATURE_SYNC_CRON": ("app.services.preview_features.sync", "_next_preview_sync_time"),
+    "RBAC_EXPORT_CRON": ("app.services.rbac.csv_export", "_next_export_time"),
 }
 
 

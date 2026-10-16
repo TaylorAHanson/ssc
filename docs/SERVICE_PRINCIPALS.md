@@ -22,6 +22,7 @@ A target workspace that has no dedicated SP configured falls back to the **App S
 - **Hosts the warehouse and metastore access** used by governance discovery — but note that the discovery *identity* is the governance SP (§2), not the App SP. The data-asset cache sync, data-contract discovery, ODCS metadata drafting, and tag-manager discovery all authenticate as the certification workspace's SP against the **home** host and warehouse. The App SP only performs them when `SENTINEL_DATA_CERT_WORKSPACE` is blank and the governance provider falls back to it.
 - **Calls the model-serving endpoint** (`MODEL_SERVING_AGENT_LLM_ENDPOINT`) for the assistant and ODCS contract drafting.
 - **Reads/writes app state** in its Lakebase (Postgres) database.
+- **Writes the Access Rules CSV export** to each configured export path (`RBAC_ENVIRONMENTS[].export_path` and `RBAC_METASTORE_EXPORT_PATH`), and lists workspace groups to check that the three access rule approver groups exist. It never runs a `GRANT` for access rules: the external Terraform pipeline applies the exported files.
 - **Is the Sentinel's fallback identity** for the home workspace and for any target workspace with no dedicated SP. Certification (tag writes, DQ-history reads, RBAC grants reads) actually runs as the **data-certification workspace SP** (§2); the App SP only performs it when `SENTINEL_DATA_CERT_WORKSPACE` is blank and it falls back to itself.
 
 ### Grants for the App SP
@@ -55,6 +56,17 @@ The certification-write grants (`USE CATALOG`, `USE SCHEMA`, `APPLY TAG`, `SELEC
 -- GRANT USE CATALOG, USE SCHEMA, APPLY TAG ON CATALOG <catalog> TO `<app-sp>`;
 -- GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<app-sp>`;
 -- GRANT MANAGE ON CATALOG <catalog> TO `<app-sp>`;   -- only if the RBAC check is enabled
+```
+
+Access Rules export (only when `features.rbac` is on and an export path is set). Each environment's path, and the metastore sheet's, needs write access. **Test** on the Access Rules page's Exports tab writes and deletes a probe file to prove it:
+
+```sql
+-- Export path on a UC volume, e.g. /Volumes/<catalog>/<schema>/<volume>/rbac/dev
+GRANT USE CATALOG ON CATALOG <catalog> TO `<app-sp>`;
+GRANT USE SCHEMA ON SCHEMA <catalog>.<schema> TO `<app-sp>`;
+GRANT READ VOLUME, WRITE VOLUME ON VOLUME <catalog>.<schema>.<volume> TO `<app-sp>`;
+-- Export path in the workspace, e.g. /Workspace/Shared/rbac/dev:
+--   give the App SP CAN MANAGE on that folder (workspace UI → folder → Share).
 ```
 
 Workspace + database:
@@ -123,9 +135,12 @@ GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<
 | `CAN QUERY` | model-serving endpoint | ✓ | — | Assistant + ODCS drafting (app only) |
 | `READ` | target-SP secret scope | ✓ | — | App loads each target SP's credentials |
 | Workspace admin | target workspace | ✓ (home) | ✓ | Scan/remediate jobs, clusters, apps, warehouses, …; turn approved previews on/off |
+| `READ VOLUME`, `WRITE VOLUME` (+ `USE CATALOG`, `USE SCHEMA`) | each Access Rules export volume | ✓§ | — | Write the Access Rules CSVs the Terraform pipeline reads |
+| `CAN MANAGE` | each Access Rules export workspace folder | ✓§ | — | Same, when the export path is a workspace folder |
 
 `✓*` = conditional (only when the RBAC / access-controls certification check is enabled).
 `✓†` = only the Sentinel SP for the data-certification workspace (`SENTINEL_DATA_CERT_WORKSPACE`) needs the Unity Catalog grants; SPs that only scan workspace resources don't.
+`✓§` = only for the export paths you configure, and only when Access Rules (`features.rbac`) is on.
 `‡` = the App SP needs these **only** when it is also the governance/certification identity — i.e. no dedicated certification-workspace SP is configured (`SENTINEL_DATA_CERT_WORKSPACE` blank), so discovery and certification fall back to the App SP. In the recommended setup they live on the cert SP instead.
 
 **Never needed:** `SELECT` (or ownership) on the governed data tables/views. Discovery is covered by `BROWSE`; certification is covered by `APPLY TAG`.

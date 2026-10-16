@@ -32,6 +32,7 @@ import { Workflows } from './pages/admin/Workflows';
 import { ToolRegistry } from './pages/admin/ToolRegistry';
 import { TrainingAdmin } from './pages/admin/TrainingAdmin';
 import { PreviewFeatures } from './pages/admin/PreviewFeatures';
+import { AccessRules } from './pages/admin/AccessRules';
 
 const Guide = lazy(() => import('./pages/Guide').then((m) => ({ default: m.Guide })));
 
@@ -123,6 +124,11 @@ function App() {
                 </ProtectedRoute>
               }
             />
+          )}
+          {/* Access is checked by the page against /rbac/permissions: approver-group
+              members can open it without an admin persona. */}
+          {uiTabs?.access_rules !== false && (
+            <Route path="/governance/access-rules" element={<AccessRules />} />
           )}
           {uiTabs?.certification !== false && (
             <Route

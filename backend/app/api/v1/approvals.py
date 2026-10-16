@@ -8,17 +8,30 @@ from app.db.session import get_db
 from app.db import ApprovalModel, EventModel, RequestModel
 from app.models.request import Approval, ApprovalType, StepReport
 from app.workflows.spec import STEP_REPORT_FACT
+from app.workflows.graphs import editable_states
 from app.api.deps import get_current_user
 from app.models.user import User
 from app.services.approval_scope import (
     allowed_approval_types,
     approval_visibility_filter,
+    in_group,
 )
+from app.api.v1.requests import is_own_request, self_approval_blocked
 import logging
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class InboxApproval(Approval):
+    """An approval as the current user sees it in the inbox."""
+    # The current user filed this request.
+    isOwnRequest: bool = False
+    # ...and APPROVALS_DENY_SELF_APPROVAL is on: they may reject (withdraw) it, not approve it.
+    selfApprovalBlocked: bool = False
+    # A Platform Admin may Edit & Restart the request from this gate.
+    canEditParameters: bool = False
 
 # Keys excluded from the editable workflow parameters view.
 # These are internal/system fields that should not surface to approvers.
@@ -77,9 +90,11 @@ def _map_approval(
     approval_model: ApprovalModel,
     request_model: RequestModel,
     reports: Optional[List[StepReport]] = None,
-) -> Approval:
+    current_user: Optional[User] = None,
+) -> InboxApproval:
     """Map an ApprovalModel + RequestModel to an Approval Pydantic response."""
-    return Approval(
+    requester = request_model.requester_email
+    return InboxApproval(
         id=approval_model.id,
         requestId=approval_model.request_id,
         requestTitle=request_model.title,
@@ -111,10 +126,14 @@ def _map_approval(
         instructions=approval_model.instructions,
         dueAt=approval_model.due_at,
         reports=reports or [],
+        isOwnRequest=bool(current_user) and is_own_request(requester, current_user),
+        selfApprovalBlocked=bool(current_user) and self_approval_blocked(requester, current_user),
+        canEditParameters=(approval_model.approval_type == "platform_admin"
+                           and bool(editable_states(request_model.type))),
     )
 
 
-@router.get("", response_model=List[Approval])
+@router.get("", response_model=List[InboxApproval])
 def get_approvals(
     status: Optional[str] = None,
     skip: int = 0,
@@ -150,10 +169,10 @@ def get_approvals(
 
     results = query.all()
     reports = _load_step_reports(db, (am.request_id for am, _ in results))
-    return [_map_approval(am, rm, reports.get(am.request_id)) for am, rm in results]
+    return [_map_approval(am, rm, reports.get(am.request_id), current_user) for am, rm in results]
 
 
-@router.get("/{approval_id}", response_model=Approval)
+@router.get("/{approval_id}", response_model=InboxApproval)
 def get_approval(
     approval_id: str,
     current_user: User = Depends(get_current_user),
@@ -178,13 +197,13 @@ def get_approval(
 
     is_assigned = approval_model.assigned_to_email == current_user.email
     is_delegated = approval_model.delegated_to_email == current_user.email
-    is_role_assigned = approval_model.assigned_to_role in current_user.entitlements
+    is_role_assigned = in_group(current_user.entitlements, approval_model.assigned_to_role)
     is_role_based = approval_model.approval_type in allowed_types
     
     if not (is_assigned or is_delegated or is_role_assigned or is_role_based):
         raise HTTPException(status_code=403, detail="Not authorized to view this approval")
         
     reports = _load_step_reports(db, [approval_model.request_id])
-    return _map_approval(approval_model, request_model, reports.get(approval_model.request_id))
+    return _map_approval(approval_model, request_model, reports.get(approval_model.request_id), current_user)
 
 

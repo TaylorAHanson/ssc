@@ -45,14 +45,14 @@ async def seed_data(db: Session):
     # Request types are data-driven strings (validated against the registry).
     types = [
         ("workspace_provision", "New Data Lab: Project Phoenix", Environment.DEV),
-        ("data_access_request", "Access to Sales Leads 2024", Environment.PROD),
+        ("workspace_access", "Access to Sales Prod Workspace", Environment.PROD),
         ("github_repo_creation", "Repository for ML-Pipeline-V2", Environment.TEST),
         ("service_principal", "Service Principal for ADF Integration", Environment.STAGE),
         ("project_onboarding", "Team Onboarding: Finance Analytics", Environment.DEV),
         ("workspace_access", "Access to Enterprise-Dev Workspace", Environment.DEV),
         ("catalog_schema_table", "Create Gold Catalog for Marketing", Environment.PROD),
         ("workspace_provision", "Sandbox for Spark Experiments", Environment.TEST),
-        ("data_access_request", "PII Data Access for Audit", Environment.PROD),
+        ("tag_creation", "PII Classification Tag for Audit", Environment.PROD),
         ("github_repo_creation", "New Repo for Infra-as-Code", Environment.STAGE),
     ]
     

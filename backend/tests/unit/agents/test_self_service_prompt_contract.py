@@ -57,3 +57,23 @@ def test_workspace_provision_playbook_clarifies_scope_first():
     ).read_text()
     assert playbook.index("## Scope Check") < playbook.index("## Information to Gather")
     assert "Do NOT list this workflow's fields in that message" in playbook
+
+
+class _Tool:
+    def __init__(self, name):
+        self.name = name
+
+
+def test_access_rules_section_only_with_the_access_tools():
+    assert prompts._get_access_rules_section([_Tool("search_data_assets")]) == ""
+    section = prompts._get_access_rules_section([_Tool("find_access"), _Tool("preview_access_change")])
+    assert section == prompts.ACCESS_RULES_INSTRUCTIONS
+
+
+def test_access_rules_section_pins_the_request_contract():
+    text = prompts.ACCESS_RULES_INSTRUCTIONS
+    assert text.index("`find_access` first") < text.index("`preview_access_change`")
+    assert "never by individual" in text and "Never propose a rule naming a person." in text
+    assert "Never write, suggest or embellish" in text
+    assert "once per\n  proposal" in text and "`group_ref`" in text and "`submit_items`" in text
+    assert "never grant or revoke anything live" in text

@@ -6,7 +6,7 @@ so graph nodes invoke it through the shared ``ToolExecutor`` — getting OPA
 pre-flight, idempotency, and audit for free.
 
 They intentionally live OUTSIDE ``app.tools/`` so auto-discovery (``load_tools``)
-does NOT register them as chat-agent tools: a raw ``grant_uc_access`` /
+does NOT register them as chat-agent tools: a raw ``add_group_membership`` /
 ``terraform_apply`` must not be directly callable by the conversational agent
 until per-workflow capability scoping (M3) exists. Graphs import them explicitly.
 
@@ -51,17 +51,10 @@ class _ToolsModule(type(sys)):
 sys.modules[__name__].__class__ = _ToolsModule
 
 
+from app.workflows.tools.approver_groups import resolve_owner_groups_from_assets
 from app.workflows.tools.code_review import (
     ReviewAppCodeInput,
     review_databricks_app_code,
-)
-from app.workflows.tools.data_access import (
-    GrantUcAccessInput,
-    ResolveDataOwnersInput,
-    _normalize_assets,
-    grant_uc_access,
-    resolve_data_owners,
-    resolve_owner_groups_from_assets,
 )
 from app.workflows.tools.github import (
     GithubAccessInput,
@@ -115,6 +108,10 @@ from app.workflows.tools.preview_features import (
     set_preview_target_status,
     verify_preview_setting,
 )
+from app.workflows.tools.rbac import (
+    apply_access_change,
+    rbac_plan_access_change,
+)
 from app.workflows.tools.sentinel import (
     sentinel_discover,
     sentinel_enforce,
@@ -133,12 +130,7 @@ __all__ = [
     # Code review
     "ReviewAppCodeInput",
     "review_databricks_app_code",
-    # Data access
-    "GrantUcAccessInput",
-    "ResolveDataOwnersInput",
-    "_normalize_assets",
-    "grant_uc_access",
-    "resolve_data_owners",
+    # Approver resolution
     "resolve_owner_groups_from_assets",
     # Infra & Terramate & Terraform
     "CreateSpInput",
@@ -181,6 +173,9 @@ __all__ = [
     "set_preview_setting",
     "set_preview_target_status",
     "verify_preview_setting",
+    # Access Rules requests
+    "apply_access_change",
+    "rbac_plan_access_change",
     # Sentinel
     "sentinel_discover",
     "sentinel_enforce",

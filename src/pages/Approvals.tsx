@@ -10,11 +10,26 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
-import { CheckCircle2, ClipboardCheck, UserPlus, Clock, Check, X, Shield, Database, Badge, Calendar, Trash2, ArrowRight, Pencil, Settings2, AlertCircle } from 'lucide-react';
+import { CheckCircle2, ClipboardCheck, UserPlus, Clock, Check, X, Shield, Database, Badge, Calendar, Trash2, ArrowRight, Pencil, Settings2, AlertCircle, ListChecks } from 'lucide-react';
 import { format } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
-import { api } from '../services/api';
+import { api, type BulkApproveResult } from '../services/api';
 import type { Approval, ApprovalAction, Delegation } from '../types';
+
+/** An inbox item, with the backend's per-user flags. */
+type InboxApproval = Approval & {
+  /** The current user filed this request. */
+  isOwnRequest?: boolean;
+  /** ...and self-approval is blocked: they may reject (withdraw) it, not approve it. */
+  selfApprovalBlocked?: boolean;
+};
+
+const SELF_APPROVAL_MESSAGE = "You can't approve your own request. Another approver must.";
+const BULK_APPROVE_MAX = 100;
+
+// Manual tasks are confirmed one at a time against their instructions, so they
+// stay out of bulk approval.
+const isBulkCandidate = (a: InboxApproval) => a.status === 'pending' && a.approvalType !== 'manual_task';
 
 const isOverdue = (dueAt: string) => new Date(dueAt).getTime() < Date.now();
 
@@ -33,7 +48,7 @@ const waitingDays = (createdAt: string) => {
 
 export function Approvals() {
   const guideEnabled = useGuideEnabled();
-  const approvals = useRequestStore((state) => state.approvals);
+  const approvals = useRequestStore((state) => state.approvals) as InboxApproval[];
   const requests = useRequestStore((state) => state.requests);
   const delegations = useRequestStore((state) => state.delegations);
   const fetchApprovals = useRequestStore((state) => state.fetchApprovals);
@@ -59,6 +74,16 @@ export function Approvals() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [delegationsToMe, setDelegationsToMe] = useState<Delegation[]>([]);
+
+  // Bulk approve: selected approval ids, then a confirm step and a results step.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkStage, setBulkStage] = useState<'confirm' | 'results' | null>(null);
+  const [bulkComment, setBulkComment] = useState('');
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkResults, setBulkResults] = useState<BulkApproveResult[]>([]);
+  // Titles of the requests sent, so results still read well after the list refreshes.
+  const [bulkTitles, setBulkTitles] = useState<Record<string, string>>({});
 
   const { currentUser } = useUserStore();
   const currentUserEmail = currentUser?.email || "admin@example.com";
@@ -126,6 +151,72 @@ export function Approvals() {
   const completedApprovals = approvals
     .filter((a) => a.status !== 'pending')
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+  const bulkCandidates = pendingApprovals.filter(isBulkCandidate);
+  const bulkSelectable = bulkCandidates.filter((a) => !a.selfApprovalBlocked);
+  // Derived from the current list, so items that stopped being pending drop out.
+  const selectedApprovals = bulkSelectable.filter((a) => selectedIds.has(a.id));
+  const allSelected = bulkSelectable.length > 0 && selectedApprovals.length === bulkSelectable.length;
+  const someSelected = selectedApprovals.length > 0 && !allSelected;
+  const tooManySelected = selectedApprovals.length > BULK_APPROVE_MAX;
+
+  const toggleSelected = (approvalId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(approvalId)) next.delete(approvalId);
+      else next.add(approvalId);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedIds(allSelected ? new Set() : new Set(bulkSelectable.map((a) => a.id)));
+  };
+
+  const openBulkConfirm = () => {
+    setBulkComment('');
+    setBulkError(null);
+    setBulkResults([]);
+    setBulkStage('confirm');
+  };
+
+  const closeBulk = () => {
+    if (bulkProcessing) return;
+    if (bulkStage === 'results') setSelectedIds(new Set());
+    setBulkStage(null);
+    setBulkError(null);
+  };
+
+  const submitBulkApprove = async () => {
+    const requestIds = [...new Set(selectedApprovals.map((a) => a.requestId))];
+    if (requestIds.length === 0) return;
+    setBulkProcessing(true);
+    setBulkError(null);
+    setBulkTitles(Object.fromEntries(selectedApprovals.map((a) => [a.requestId, a.requestTitle])));
+    try {
+      const { results } = await api.bulkApproveRequests(requestIds, bulkComment.trim() || undefined);
+      setBulkResults(results);
+      setBulkStage('results');
+      await fetchAllData();
+    } catch (error) {
+      setBulkError(error instanceof Error ? error.message : 'The approvals could not be sent.');
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!bulkStage) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !bulkProcessing) {
+        if (bulkStage === 'results') setSelectedIds(new Set());
+        setBulkStage(null);
+        setBulkError(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [bulkStage, bulkProcessing]);
 
   const handleAction = async (approval: Approval, action: 'approve' | 'reject' | 'delegate' | 'edit') => {
     setSelectedApproval(approval);
@@ -218,7 +309,6 @@ export function Approvals() {
       'System configuration changes',
     ],
     data_owner: [
-      'Data access requests for platform_catalog',
       'Catalog/schema/table creation in platform_catalog',
       'Data sharing requests for platform_catalog',
       'Data certification requests (Data SME Review)',
@@ -451,10 +541,61 @@ export function Approvals() {
               <span>{agingSummary}</span>
             </div>
           )}
+          {bulkCandidates.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-gray-200 bg-white px-4 py-2">
+              <label
+                className={`flex items-center gap-2 text-sm ${bulkSelectable.length === 0 ? 'cursor-not-allowed text-gray-400' : 'cursor-pointer text-gray-700'}`}
+                title={bulkSelectable.length === 0 ? SELF_APPROVAL_MESSAGE : undefined}
+              >
+                <input
+                  type="checkbox"
+                  className="w-4 h-4"
+                  checked={allSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someSelected;
+                  }}
+                  onChange={toggleSelectAll}
+                  disabled={bulkSelectable.length === 0}
+                />
+                Select all you can approve ({bulkSelectable.length})
+              </label>
+              <div className="flex items-center gap-3">
+                {tooManySelected && (
+                  <span className="text-xs text-red-600" role="status">
+                    Select at most {BULK_APPROVE_MAX} at a time.
+                  </span>
+                )}
+                <Button
+                  onClick={openBulkConfirm}
+                  disabled={selectedApprovals.length === 0 || tooManySelected}
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                >
+                  <ListChecks className="w-4 h-4 mr-2" />
+                  Approve selected ({selectedApprovals.length})
+                </Button>
+              </div>
+            </div>
+          )}
           {pendingApprovals.map((approval) => (
             <Card key={approval.id} className="border-l-4 border-l-primary">
               <CardHeader>
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between gap-3">
+                  {isBulkCandidate(approval) && (
+                    <span
+                      className="pt-1.5"
+                      title={approval.selfApprovalBlocked ? SELF_APPROVAL_MESSAGE : undefined}
+                    >
+                      <input
+                        type="checkbox"
+                        className={`w-4 h-4 ${approval.selfApprovalBlocked ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                        aria-label={`Select "${approval.requestTitle}" to approve`}
+                        aria-describedby={approval.selfApprovalBlocked ? `self-approval-${approval.id}` : undefined}
+                        checked={!approval.selfApprovalBlocked && selectedIds.has(approval.id)}
+                        disabled={approval.selfApprovalBlocked}
+                        onChange={() => toggleSelected(approval.id)}
+                      />
+                    </span>
+                  )}
                   <div className="flex-1">
                     <CardTitle className="text-lg flex items-center gap-2 flex-wrap">
                       {approval.requestTitle}
@@ -556,13 +697,17 @@ export function Approvals() {
                   {/* A manual task is completed, not authorized — the same
                       approve/reject endpoints record the fact the poller waits
                       on, so only the wording changes. */}
-                  <Button
-                    onClick={() => handleAction(approval, 'approve')}
-                    className="bg-green-600 hover:bg-green-700 text-white"
-                  >
-                    <Check className="w-4 h-4 mr-2" />
-                    {approval.approvalType === 'manual_task' ? 'Mark done' : 'Approve'}
-                  </Button>
+                  <span title={approval.selfApprovalBlocked ? SELF_APPROVAL_MESSAGE : undefined}>
+                    <Button
+                      onClick={() => handleAction(approval, 'approve')}
+                      disabled={approval.selfApprovalBlocked}
+                      aria-describedby={approval.selfApprovalBlocked ? `self-approval-${approval.id}` : undefined}
+                      className="bg-green-600 hover:bg-green-700 text-white"
+                    >
+                      <Check className="w-4 h-4 mr-2" />
+                      {approval.approvalType === 'manual_task' ? 'Mark done' : 'Approve'}
+                    </Button>
+                  </span>
                   <Button
                     onClick={() => handleAction(approval, 'reject')}
                     variant="outline"
@@ -581,7 +726,7 @@ export function Approvals() {
                   </Button>
 
                   {/* Edit & Restart — platform_admin only */}
-                  {userRoles.includes('platform_admin') && approval.approvalType === 'platform_admin' && (
+                  {userRoles.includes('platform_admin') && approval.canEditParameters && (
                     <Button
                       onClick={() => handleAction(approval, 'edit')}
                       variant="outline"
@@ -606,9 +751,117 @@ export function Approvals() {
                     View Details
                   </Button>
                 </div>
+                {approval.selfApprovalBlocked && (
+                  <p id={`self-approval-${approval.id}`} className="mt-2 text-xs text-gray-500">
+                    {SELF_APPROVAL_MESSAGE} Rejecting it withdraws your request.
+                  </p>
+                )}
               </CardContent>
             </Card>
           ))}
+        </div>
+      )}
+
+      {bulkStage && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <Card
+            className="w-full max-w-lg mx-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="bulk-approve-title"
+          >
+            <CardHeader>
+              <CardTitle id="bulk-approve-title">
+                {bulkStage === 'confirm'
+                  ? `Approve ${selectedApprovals.length} request${selectedApprovals.length === 1 ? '' : 's'}`
+                  : 'Bulk approval results'}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {bulkStage === 'confirm' && (
+                <>
+                  <p className="text-sm text-gray-600">
+                    Each request is approved on its own, exactly as if you approved it individually. If one can't
+                    be approved, the others still go through.
+                  </p>
+                  <ul className="max-h-64 overflow-y-auto divide-y divide-gray-100 rounded border border-gray-200">
+                    {selectedApprovals.map((a) => (
+                      <li key={a.id} className="px-3 py-2 text-sm">
+                        <p className="font-medium text-gray-900">{a.requestTitle}</p>
+                        <p className="text-xs text-gray-500">
+                          {a.requestType.replace(/_/g, ' ')} · requested by {a.requestedByEmail || a.requestedBy}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                  <div>
+                    <label htmlFor="bulk-approve-comment" className="block text-sm font-medium text-gray-700 mb-2">
+                      Comment <span className="text-gray-400 font-normal">(optional)</span>
+                    </label>
+                    <Textarea
+                      id="bulk-approve-comment"
+                      autoFocus
+                      placeholder="Recorded with each approval..."
+                      value={bulkComment}
+                      onChange={(e) => setBulkComment(e.target.value)}
+                      maxLength={2000}
+                      className="w-full min-h-[80px]"
+                    />
+                  </div>
+                  {bulkError && (
+                    <p role="alert" className="rounded bg-red-50 border border-red-200 p-2 text-sm text-red-700">
+                      {bulkError}
+                    </p>
+                  )}
+                  <div className="flex gap-2 pt-2">
+                    <Button
+                      onClick={submitBulkApprove}
+                      disabled={bulkProcessing || selectedApprovals.length === 0 || tooManySelected}
+                      className="bg-green-600 hover:bg-green-700"
+                    >
+                      {bulkProcessing ? 'Approving...' : 'Confirm Approval'}
+                    </Button>
+                    <Button variant="outline" onClick={closeBulk} disabled={bulkProcessing}>
+                      Cancel
+                    </Button>
+                  </div>
+                </>
+              )}
+
+              {bulkStage === 'results' && (() => {
+                const approved = bulkResults.filter((r) => r.ok);
+                const failed = bulkResults.filter((r) => !r.ok);
+                return (
+                  <>
+                    <p className="text-sm text-gray-700" role="status">
+                      Approved {approved.length} of {bulkResults.length}.
+                      {failed.length > 0 && ` ${failed.length} couldn't be approved.`}
+                    </p>
+                    <ul className="max-h-72 overflow-y-auto divide-y divide-gray-100 rounded border border-gray-200">
+                      {bulkResults.map((r) => (
+                        <li key={r.request_id} className="flex items-start gap-2 px-3 py-2 text-sm">
+                          {r.ok ? (
+                            <Check className="w-4 h-4 mt-0.5 shrink-0 text-green-600" aria-hidden="true" />
+                          ) : (
+                            <X className="w-4 h-4 mt-0.5 shrink-0 text-red-600" aria-hidden="true" />
+                          )}
+                          <div>
+                            <p className="font-medium text-gray-900">{bulkTitles[r.request_id] || r.request_id}</p>
+                            <p className={`text-xs ${r.ok ? 'text-green-700' : 'text-red-700'}`}>
+                              {r.ok ? 'Approved' : `Not approved: ${r.detail}`}
+                            </p>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="flex pt-2">
+                      <Button onClick={closeBulk} autoFocus>Done</Button>
+                    </div>
+                  </>
+                );
+              })()}
+            </CardContent>
+          </Card>
         </div>
       )}
 

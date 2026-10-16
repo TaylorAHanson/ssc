@@ -18,8 +18,12 @@ from datetime import datetime, timezone
 import json
 import logging
 
+from pydantic import BaseModel, Field
+
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.models.user import User
+from app.services.approval_scope import in_group
 from app.services.state_summary import summarize_state_context
 
 logger = logging.getLogger(__name__)
@@ -445,9 +449,12 @@ def _authorize_approval_actor(approval: ApprovalModel, current_user: User) -> No
     captured by the agent and stored in approval.assigned_to_email). Data-owner
     approval tasks are addressed to the asset owner returned by Unity Catalog
     (stored in assigned_to_email or, when only a group/role is known,
-    assigned_to_role). Anyone else attempting to act on the approval is
-    rejected here so the state machine can't be advanced by an unrelated user.
-    Platform admins retain an override for break-glass scenarios.
+    assigned_to_role). ``assigned_to_role`` may name an app role or a
+    Databricks group the caller belongs to (matched case-insensitively against
+    their entitlements, as the inbox's visibility filter does). Anyone else
+    attempting to act on the approval is rejected here so the state machine
+    can't be advanced by an unrelated user. Platform admins retain an override
+    for break-glass scenarios.
     """
     if current_user.has_role("platform_admin"):
         return
@@ -458,7 +465,9 @@ def _authorize_approval_actor(approval: ApprovalModel, current_user: User) -> No
 
     if assignee_email and actor_email == assignee_email:
         return
-    if assignee_role and current_user.has_role(assignee_role):
+    if assignee_role and (
+        current_user.has_role(assignee_role) or in_group(current_user.entitlements, assignee_role)
+    ):
         return
 
     if not assignee_email and not assignee_role:
@@ -482,22 +491,22 @@ def _authorize_approval_actor(approval: ApprovalModel, current_user: User) -> No
     )
 
 
-@router.post("/{request_id}/approve", status_code=status.HTTP_200_OK)
-def approve_request(
-    request_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Approve a request using fact-based approach.
+SELF_APPROVAL_DETAIL = "You can't approve your own request. Another approver must."
+BULK_APPROVE_MAX = 100
 
-    Records a fact (approval_received) - this is the source of truth.
-    The state machine will reconcile state based on facts.
 
-    Authorization: only the assignee of the current pending approval (e.g. the
-    manager for manager_approval, the data owner for data_owner_approval) may
-    approve. Platform admins may override.
-    """
+def is_own_request(requester_email: Optional[str], current_user: User) -> bool:
+    mine = (current_user.email or "").strip().lower()
+    return bool(mine) and (requester_email or "").strip().lower() == mine
+
+
+def self_approval_blocked(requester_email: Optional[str], current_user: User) -> bool:
+    """``APPROVALS_DENY_SELF_APPROVAL`` stops the requester approving (not rejecting) their own request."""
+    return bool(settings.APPROVALS_DENY_SELF_APPROVAL) and is_own_request(requester_email, current_user)
+
+
+def _approve(db: Session, request_id: str, current_user: User, comment: Optional[str] = None) -> Dict[str, str]:
+    """Approve one request and commit. Raises HTTPException when it can't."""
     # Find all pending approvals for this request
     pending_approvals = (
         db.query(ApprovalModel)
@@ -511,6 +520,11 @@ def approve_request(
 
     if not pending_approvals:
         raise HTTPException(status_code=404, detail="No pending approval found for this request")
+
+    # Segregation of duties, ahead of the platform-admin override below.
+    requester_email = db.query(RequestModel.requester_email).filter(RequestModel.id == request_id).scalar()
+    if self_approval_blocked(requester_email, current_user):
+        raise HTTPException(status_code=403, detail=SELF_APPROVAL_DETAIL)
 
     # Find the first pending approval the user is authorized to act on
     approval = None
@@ -534,20 +548,85 @@ def approve_request(
         "approved_at": datetime.now(timezone.utc),
     })
 
+    fact = {
+        "approval_type": approval.approval_type,
+        "approved_by": approved_by,
+        "approved_at": datetime.now(timezone.utc).isoformat()
+    }
+    if comment and comment.strip():
+        fact["comment"] = comment.strip()
     # Record fact (this is the source of truth)
-    add_fact(
-        db, request_id, "approval_received",
-        {
-            "approval_type": approval.approval_type,
-            "approved_by": approved_by,
-            "approved_at": datetime.now(timezone.utc).isoformat()
-        },
-        actor=approved_by
-    )
+    add_fact(db, request_id, "approval_received", fact, actor=approved_by)
 
     db.commit()
 
     return {"status": "approved", "message": "Approval recorded. State will be updated by poller."}
+
+
+@router.post("/{request_id}/approve", status_code=status.HTTP_200_OK)
+def approve_request(
+    request_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Approve a request using fact-based approach.
+
+    Records a fact (approval_received) - this is the source of truth.
+    The state machine will reconcile state based on facts.
+
+    Authorization: only the assignee of the current pending approval (e.g. the
+    manager for manager_approval, the data owner for data_owner_approval) may
+    approve. Platform admins may override. With ``APPROVALS_DENY_SELF_APPROVAL``
+    on, nobody (platform admins included) may approve their own request.
+    """
+    return _approve(db, request_id, current_user)
+
+
+class BulkApproveIn(BaseModel):
+    request_ids: List[str] = Field(min_length=1, max_length=BULK_APPROVE_MAX)
+    comment: Optional[str] = Field(default=None, max_length=2000)
+
+
+class BulkApproveItem(BaseModel):
+    request_id: str
+    ok: bool
+    status_code: int
+    detail: str
+
+
+class BulkApproveOut(BaseModel):
+    results: List[BulkApproveItem]
+
+
+@router.post("/approve-bulk", response_model=BulkApproveOut, status_code=status.HTTP_200_OK)
+def approve_requests_bulk(
+    body: BulkApproveIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Approve several requests, each exactly as ``POST /{id}/approve`` would.
+
+    Each id commits (or rolls back) on its own, so one failure doesn't affect the
+    others; the response reports the outcome per id, in the order given.
+    """
+    results: List[BulkApproveItem] = []
+    for request_id in dict.fromkeys(body.request_ids):
+        try:
+            out = _approve(db, request_id, current_user, comment=body.comment)
+            results.append(BulkApproveItem(request_id=request_id, ok=True, status_code=200, detail=out["message"]))
+        except HTTPException as exc:
+            db.rollback()
+            results.append(BulkApproveItem(
+                request_id=request_id, ok=False, status_code=exc.status_code, detail=str(exc.detail),
+            ))
+        except Exception:  # noqa: BLE001 - report it against this id and carry on
+            db.rollback()
+            logger.exception("Bulk approve failed for request %s", request_id)
+            results.append(BulkApproveItem(
+                request_id=request_id, ok=False, status_code=500, detail="The approval couldn't be recorded.",
+            ))
+    return BulkApproveOut(results=results)
 
 
 @router.post("/{request_id}/reject", status_code=status.HTTP_200_OK)

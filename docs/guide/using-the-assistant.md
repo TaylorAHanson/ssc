@@ -57,6 +57,14 @@ requests for the same thing. If you already have one, it links it. If a
 colleague does, it tells you one exists and its status. Either way, it asks
 whether to submit anyway, wait, or change your request.
 
+Access to data and workspace items is given to groups, not to individual
+people. If you ask for access to a table or schema for yourself, the assistant
+tells you which groups already have it, so you can ask to join one. To give a
+group access, name the group, what it needs and why. If the group already has
+that access, the assistant says so. An ask that covers both workspace and data
+access becomes linked requests, one for each, because different people approve
+them.
+
 The assistant then shows you its plan. Nothing changes until you confirm.
 
 Once you confirm, the request is created and tracked under **My Requests**.

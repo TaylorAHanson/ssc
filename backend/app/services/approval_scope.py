@@ -10,7 +10,7 @@ now normalize their identity into plain strings and share the rules below.
 """
 from typing import Any, Iterable, List, Optional, Sequence
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 from app.db import ApprovalModel
 
@@ -63,6 +63,21 @@ def normalize_roles(roles: Optional[Iterable[Any]]) -> List[str]:
     return [normalize_role(r) for r in (roles or []) if normalize_role(r)]
 
 
+def normalize_group(name: Any) -> str:
+    """Fold a Databricks group display name for comparison (trimmed, case-insensitive)."""
+    return str(name or "").strip().lower()
+
+
+def in_group(entitlements: Optional[Iterable[Any]], group: Any) -> bool:
+    """Whether ``group`` is among the user's entitlements (email + Databricks groups).
+
+    A gate routes an approval to a group by storing its display name in
+    ``assigned_to_role``; this is the membership test for seeing and acting on it.
+    """
+    wanted = normalize_group(group)
+    return bool(wanted) and any(normalize_group(e) == wanted for e in (entitlements or []))
+
+
 def is_platform_admin(roles: Optional[Iterable[Any]]) -> bool:
     return PLATFORM_ADMIN in normalize_roles(roles)
 
@@ -87,10 +102,16 @@ def approval_visibility_filter(
     Visible when the approval is assigned to them, delegated to them, addressed
     to a group they belong to, or of a type their role owns. Apply to a query
     that already joins ``ApprovalModel``.
+
+    Group names match case-insensitively, as ``in_group`` does for acting on the
+    approval. The exact-match arm stays because SQLite's ``lower()`` folds ASCII only.
     """
+    groups = [str(e) for e in (entitlements or []) if e]
+    folded = sorted({normalize_group(g) for g in groups if normalize_group(g)})
     return or_(
         ApprovalModel.assigned_to_email == email,
         ApprovalModel.delegated_to_email == email,
-        ApprovalModel.assigned_to_role.in_(list(entitlements or [])),
+        ApprovalModel.assigned_to_role.in_(groups),
+        func.lower(func.trim(ApprovalModel.assigned_to_role)).in_(folded),
         ApprovalModel.approval_type.in_(allowed_approval_types(roles)),
     )

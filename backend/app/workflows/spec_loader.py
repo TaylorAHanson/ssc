@@ -64,6 +64,9 @@ class SpecError(ValueError):
 _GATE_KEYS = {
     "kind", "name", "type", "waiting_status", "auto_approve", "approvers_from",
     "approver", "course_code", "course_name",
+    # false: Platform Admins can't Edit & Restart a request waiting here (the
+    # approved plan must be exactly what was filed).
+    "editable",
     # manual_task only: what the assignee has to actually do, and an optional
     # SLA in days used for aging/escalation visibility in the inbox.
     "instructions", "due_in_days",
@@ -204,6 +207,8 @@ def _validate_gate(stage: Dict[str, Any], where: str) -> None:
         _validate_expr(stage["approvers_from"], f"{where}.approvers_from", allow_item=False)
     if "approver" in stage and stage["approver"] is not None:
         _validate_gate_approver(stage["approver"], f"{where}.approver")
+    if "editable" in stage and not isinstance(stage["editable"], bool):
+        raise SpecError(f"{where}.editable must be true or false")
     # Training gates may pin a specific LMS course. ``course_code`` is the
     # machine identifier matched against the requester's completions;
     # ``course_name`` is optional display copy.

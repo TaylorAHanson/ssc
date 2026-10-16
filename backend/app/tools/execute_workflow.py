@@ -46,7 +46,7 @@ def _possible_duplicates(db, workflow_type: str, parameters: Dict[str, Any], kwa
 
 @tool(
     name="execute_workflow",
-    description="Initiate a governed self-service workflow (e.g. 'request_data_access', 'workspace_provision') with validated user parameters.",
+    description="Initiate a governed self-service workflow (e.g. 'workspace_access', 'workspace_provision') with validated user parameters.",
     args_schema=ExecuteWorkflowInput,
     # Gateway to every provisioning workflow (catalog/schema/volume/SP/repo,
     # Terraform apply, UC grants, identity-group membership). The downstream

@@ -501,11 +501,11 @@ Phase C: Execution
 
 Phase D: Post-Execution
 - After `execute_workflow` returns, render the success message in plain markdown — no `#` heading, no raw HTML. Bold the section title and use a tight bulleted summary so the chat bubble stays compact. Example:
-  > **Request submitted.** Your data access request is now in progress.
+  > **Request submitted.** Your workspace access request is now in progress.
   >
   > - **Request**: [req-12345](/requests/req-12345)
-  > - **Resource**: `enterprise_stg.gold_order_management.sales_order_cancel_pushout`
-  > - **Access**: read
+  > - **Workspace**: `ws-supplychain-prod`
+  > - **Approval**: your manager
   > - **Duration**: permanent
   >
   > If you want, I can find a [training course](/community/training) for the report workflow or check the request status later.
@@ -851,6 +851,9 @@ You have access to the following tools:
     # Skill-loading guidance (only when the read-only skills tools are present)
     skills_section = _get_skills_section(effective_tools)
 
+    # Access-rule guidance (only when the access-rule tools are present)
+    access_rules_section = _get_access_rules_section(effective_tools)
+
     return f"""{SYSTEM_PROMPT}
 
 {CORE_INSTRUCTIONS}
@@ -859,6 +862,7 @@ You have access to the following tools:
 {tools_section}
 {authoring_section}
 {skills_section}
+{access_rules_section}
 {capabilities_section}
 {context_domains_section}
 {web_search_section}
@@ -866,6 +870,44 @@ You have access to the following tools:
 {content_section}
 {_get_next_step_suggestions_section()}
 """
+
+
+ACCESS_RULES_INSTRUCTIONS = """
+## Access to data and workspace items (access rules)
+Access to Unity Catalog securables, metastore objects and workspace items is held by
+groups (and, where an environment allows it, service principals), never by individual
+people. It is recorded as access rules, which Terraform applies after each export. You
+never grant or revoke anything live.
+
+- For any question or request about who can reach a securable, or what a group can
+  reach, call `find_access` first. Its results are the access rules (desired state), not
+  live grants; say so if the user asks whether access is active right now.
+- If the group already holds the access, directly or through a parent securable, say so
+  and stop. Don't file a request that would change nothing.
+- When someone asks for access for themselves, explain that access goes to groups, show
+  which groups already hold it (from `find_access`), and offer to help them join one.
+  Never propose a rule naming a person.
+- To change access, call `preview_access_change` with the group, securable, privileges
+  and environment. Show each proposal's report, including prerequisites it adds and
+  anything already in place, and follow its `next_step`.
+- Ask for the justification in the user's own words. Never write, suggest or embellish
+  it.
+- After an explicit yes, call `execute_workflow` with `rbac_access_change` once per
+  proposal, with that proposal's `submit_items`, the justification and the shared
+  `group_ref`. An ask that spans types (for example workspace access plus a schema
+  grant) becomes one request per type, each approved by its own group: explain that, file
+  them together, and give the user every request link.
+- A request completes when the change is recorded. Tell the user it reaches Databricks
+  after the next export and Terraform run, not immediately.
+"""
+
+
+def _get_access_rules_section(tools: Optional[List[Any]]) -> str:
+    """Access-rule guidance, included only when the access-rule tools are available."""
+    names = {getattr(t, "name", "") for t in (tools or [])}
+    if "find_access" not in names and "preview_access_change" not in names:
+        return ""
+    return ACCESS_RULES_INSTRUCTIONS
 
 
 def _get_authoring_section(tools: Optional[List[Any]]) -> str:
@@ -926,16 +968,16 @@ workflow:
    expression operators. Rely on it rather than any external guide.
 1b. CHECK FOR SIMILAR, BUT STILL DRAFT: call `search_similar_workflows` with the
    admin's description. If a close match comes back, mention it in ONE line as an
-   FYI ("Heads up, `data_access_request` already covers table access — say the word
-   and I'll edit that instead"). But when the admin asked to CREATE / DRAFT / build
+   FYI ("Heads up, `workspace_access` already covers joining an existing workspace —
+   say the word and I'll edit that instead"). But when the admin asked to CREATE / DRAFT / build
    a NEW workflow (especially "from scratch"), DO NOT stop to recommend reuse and
    DO NOT wait for a reply — proceed to build and `preview_workflow_spec` a real
    `graph_spec` this same turn so the editor on the left populates. A reuse
    suggestion is never a reason to end the turn without a drafted, previewed spec.
 1b-ii. BIAS TO A PREVIEWABLE DRAFT — don't get stuck asking questions. When
-   details are unspecified (key, approval chain, grant scope), make reasonable,
-   clearly-stated assumptions (e.g. key `table_access_request`, manager approval,
-   SELECT on a table), build the spec, `preview_workflow_spec` it, and THEN invite
+   details are unspecified (key, approval chain, target), make reasonable,
+   clearly-stated assumptions (e.g. key `team_group_request`, manager approval,
+   add the requester to the named group), build the spec, `preview_workflow_spec` it, and THEN invite
    the admin to correct the assumptions. The editor must never be left blank while
    you interrogate the admin — draft first, refine after. Only block on a question
    when the request is truly unbuildable without it.
@@ -1307,7 +1349,7 @@ def _format_tools_list(tools: List[Any]) -> str:
 _FALLBACK_SUGGESTIONS_COMMON: List[Dict[str, str]] = [
     {"label": "Get started", "prompt": "I'm new to Databricks — where should I start?"},
     {"label": "Find data", "prompt": "What data is available to me?"},
-    {"label": "Request access", "prompt": "I need read access to a table — how do I request it?"},
+    {"label": "Request access", "prompt": "I need access to a Databricks workspace — how do I request it?"},
     {"label": "My requests", "prompt": "Show me the status of my recent requests."},
 ]
 

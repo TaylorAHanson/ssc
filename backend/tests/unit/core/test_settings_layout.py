@@ -62,9 +62,10 @@ def test_section_layout():
     assert [(s["title"], s["groups"]) for s in ss.SECTIONS] == [
         ("General", ["Appearance", ss.FEATURES_GROUP, ss.ROLES_GROUP, "Notifications"]),
         ("Discover & Analyze", ["Agent", "Data Catalog"]),
-        ("Requests & Approvals", ["Group Management (LMWS)", "App Code Review"]),
+        ("Requests & Approvals", ["Approvals", "Group Management (LMWS)", "App Code Review"]),
         ("Learn & Share", ["Links & Embedded Apps", "Calendar"]),
-        ("Watch Tower", ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager"]),
+        ("Watch Tower", ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager",
+                         "Access Rules"]),
         ("Control Tower", ["Workflow Studio", "Preview Features"]),
         ("Platform", ["Infrastructure"]),
     ]

@@ -1,0 +1,34 @@
+{
+  "key": "rbac_access_change",
+  "name": "rbac_access_change",
+  "complete_fact": "rbac_change_recorded",
+  "stages": [
+    {
+      "kind": "step",
+      "name": "plan",
+      "tool": "rbac_plan_access_change",
+      "writes_context": ["approvers", "nothing_to_change"],
+      "args": {
+        "items": {"$var": {"path": "items", "default": null}},
+        "justification": {"$var": {"path": "justification", "default": ""}},
+        "group_ref": {"$var": {"path": "group_ref", "default": null}}
+      }
+    },
+    {
+      "kind": "gate",
+      "name": "approve",
+      "type": "platform_admin",
+      "waiting_status": "manager_approval",
+      "editable": false,
+      "auto_approve": {"$var": {"path": "nothing_to_change", "default": false}},
+      "approvers_from": {"$var": "approvers"}
+    },
+    {
+      "kind": "step",
+      "name": "apply",
+      "tool": "apply_access_change",
+      "success_fact": "rbac_ledger_updated",
+      "args": {}
+    }
+  ]
+}

@@ -4,6 +4,9 @@ These guard the no-code core: every catalog spec must validate, resolve its
 tools, and compile to a graph; and the validator must reject malformed specs
 before they can be published or run.
 """
+import json
+from pathlib import Path
+
 import pytest
 
 from app.workflows.graphs.specs import SPECS, catalog_child_resolver, stage_specs
@@ -322,19 +325,25 @@ def test_writes_context_rejects_non_string_list(bad):
         validate_spec_dict(spec)
 
 
-# --- data access: now data, not a dedicated code graph -------------------
+# --- runtime approver routing: a step resolves approvers, a gate reads them ---
+# The fixture's tools are stand-ins picked for their side-effect class (a read
+# lookup, a data_grant fan-out); only the engine wiring is under test.
 
-def test_data_access_is_data_defined_with_resolve_gate_grant():
-    """The former dedicated data_access graph is now a graph_spec: a
-    resolve_owners step lifts data_owners into context, a manager gate and a
-    data_owner gate (reading owners via approvers_from) both authorize, and grants
-    fan out per asset."""
-    data = SPECS["data_access_request"]
-    spec = spec_from_dict(data)            # validates + compiles
-    build_spec_graph(spec)                 # builds a StateGraph
+_MULTI_OWNER_FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "workflows" / "multi_owner_grant.json"
+
+
+def _multi_owner_spec() -> dict:
+    return json.loads(_MULTI_OWNER_FIXTURE.read_text())
+
+
+def test_multi_owner_spec_resolves_gate_approvers_and_fans_out():
+    """A read step lifts data_owners into context, a manager gate and a
+    data_owner gate (reading owners via approvers_from) both authorize, and the
+    grant fans out per asset."""
+    spec = spec_from_dict(_multi_owner_spec())   # validates + compiles
+    build_spec_graph(spec)                       # builds a StateGraph
     resolve, manager_gate, gate, grant = spec.stages
 
-    assert resolve.tool.name == "resolve_data_owners"
     assert resolve.writes_context == ["data_owners"]
     assert resolve.tool.is_mutating is False  # owner discovery is read-only
 
@@ -344,7 +353,8 @@ def test_data_access_is_data_defined_with_resolve_gate_grant():
     assert gate.approvers_from is not None
     assert gate.approvers_from({"data_owners": ["owners-grp"]}) == ["owners-grp"]
 
-    assert grant.tool.name == "grant_uc_access"
+    assert grant.tool.side_effect_class == "data_grant"
+    assert grant.approvals == ["manager", "data_owner"]
     assert grant.for_each is not None
     assets = [{"asset_name": "main.sales.orders", "asset_type": "table"}]
     assert grant.for_each({"assets": assets}) == assets
@@ -357,12 +367,59 @@ def test_data_access_is_data_defined_with_resolve_gate_grant():
                     "principal": "u@corp.com", "access_level": "read"}
 
 
-def test_resolve_data_owners_is_registered_read_tool():
-    assert has_tool("resolve_data_owners")
-    meta = {t["name"]: t for t in available_tools()}["resolve_data_owners"]
-    assert meta["is_mutating"] is False
-    assert meta["side_effect_class"] == "read"
-    assert set(meta["args"]) == {"assets", "asset_name", "asset_type", "data_owners"}
+@pytest.mark.asyncio
+async def test_multi_owner_spec_runs_end_to_end():
+    """The same spec on a real graph: owners resolved by the step reach the
+    data_owner gate's interrupt payload, and the grant runs once per asset with
+    both approvals attached."""
+    from unittest.mock import MagicMock, patch
+
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.types import Command
+
+    calls = []
+
+    async def fake_run(tool, tool_ctx, **kwargs):
+        calls.append({"tool": tool.name, "kwargs": kwargs, "approvals": list(tool_ctx.approvals)})
+        if tool.name == "terraform_plan":
+            return {"ok": True, "data_owners": ["owners-grp"]}
+        return {"granted": kwargs.get("asset_name")}
+
+    assets = [{"asset_name": "main.sales.orders", "asset_type": "table"},
+              {"asset_name": "main.sales.returns", "asset_type": "table"}]
+    graph = build_spec_graph(spec_from_dict(_multi_owner_spec()))
+    compiled = graph.compile(checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": "req-1"}}
+
+    async def payload():
+        state = await compiled.aget_state(config)
+        return [i.value for t in state.tasks for i in (t.interrupts or ())][0]
+
+    with patch("app.db.session.get_db", side_effect=lambda: iter([MagicMock()])), \
+            patch("app.state_machines.facts.add_fact"), \
+            patch("app.tools.tool_executor.executor.run", side_effect=fake_run), \
+            patch("app.tools.tool_executor.is_tool_failure", return_value=None):
+        await compiled.ainvoke(
+            {"request_id": "req-1", "status": "pending", "context": {
+                "assets": assets, "access_level": "read",
+                "requested_by_email": "u@corp.com", "manager_email": "boss@corp.com"}},
+            config,
+        )
+        manager = await payload()
+        await compiled.ainvoke(Command(resume={"approved": True}), config)
+        owners = await payload()
+        await compiled.ainvoke(Command(resume={"approved": True}), config)
+        state = await compiled.aget_state(config)
+
+    assert manager["type"] == "manager" and manager["approvers"] == ["boss@corp.com"]
+    assert owners["type"] == "data_owner" and owners["approvers"] == ["owners-grp"]
+    assert calls[0]["tool"] == "terraform_plan"
+    assert calls[0]["kwargs"]["assets"] == assets
+    grants = calls[1:]
+    assert [c["kwargs"]["asset_name"] for c in grants] == ["main.sales.orders", "main.sales.returns"]
+    assert all(c["kwargs"]["principal"] == "u@corp.com" for c in grants)
+    assert all(c["approvals"] == ["manager", "data_owner"] for c in grants)
+    assert state.values["status"] == "completed"
 
 
 def test_for_each_and_item_args_closures():

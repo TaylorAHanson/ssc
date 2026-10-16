@@ -142,9 +142,9 @@ def seed_db():
                     ),
                     RequestModel(
                         id=str(uuid.uuid4()),
-                        title="Access to Finance Data",
-                        type="data_access_request",
-                        status="data_owner_approval",
+                        title="Access to Finance Workspace",
+                        type="workspace_access",
+                        status="manager_approval",
                         created_at=datetime.now(timezone.utc) - timedelta(days=1),
                         updated_at=datetime.now(timezone.utc)
                     ),

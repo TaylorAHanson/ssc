@@ -80,7 +80,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     title: 'For admins',
     admin: true,
-    slugs: ['admin', 'admin/settings-and-access', 'admin/workflows-and-tools', 'admin/governance'],
+    slugs: ['admin', 'admin/settings-and-access', 'admin/workflows-and-tools', 'admin/governance', 'admin/access-rules'],
   },
   {
     title: 'Admin reference',

@@ -60,3 +60,10 @@ views and columns.
 Depending on how your environment is set up, changes are applied directly or
 submitted as pull requests for review. Some edits, such as column, catalog and
 schema tags, are only possible when changes are applied directly.
+
+## Access Rules
+
+**Access Rules** records which groups hold which privileges on Unity Catalog
+securables, metastore objects and workspace items, and exports it for the
+Terraform pipeline. Unlike the other Watch Tower pages, members of the access
+rule approver groups can open it too. See [Access rules](access-rules.md).

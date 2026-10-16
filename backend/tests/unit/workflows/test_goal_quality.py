@@ -24,7 +24,7 @@ def _findings(result, severity=None):
 
 
 def test_empty_goal_is_critical_because_the_menu_line_is_blank():
-    out = score_goal("", key="data_access_request")
+    out = score_goal("", key="table_access_request")
     assert out["score"] == 0 and out["tier"] == "poor"
     assert out["findings"][0]["severity"] == "critical"
     assert "Capabilities menu" in out["findings"][0]["message"]
@@ -49,7 +49,7 @@ def test_a_discriminating_goal_scores_well():
     out = score_goal(
         "Request read access to an existing schema, table, view, or volume for one "
         "user — not bulk sharing and not creating the asset.",
-        key="data_access_request",
+        key="table_access_request",
         siblings=[("workspace_provision", "Provision a new Databricks Workspace.")],
     )
     assert out["tier"] == "excellent"

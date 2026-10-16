@@ -29,6 +29,7 @@ import {
   ScrollText,
   FlaskConical,
   BookOpen,
+  KeyRound,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { renderNavIcon } from '../../lib/navIcons';
@@ -94,6 +95,9 @@ interface NavItem {
   icon: React.ReactNode;
   group: string;
   allowedPersonas?: UserPersona[]; // If undefined, allowed for all
+  // Shown by a backend permission check instead of persona (e.g. Access Rules,
+  // which approver-group members see without holding an admin role).
+  gate?: 'access_rules';
   // Exactly one of `path` (internal route) or `href` (external URL) should
   // be set. External items render as `<a target="_blank">` and pick up a
   // small external-link glyph next to the label when the rail is expanded.
@@ -159,6 +163,14 @@ const navItems: NavItem[] = [
     path: '/governance/metadata',
     group: 'Watch Tower',
     allowedPersonas: ['Platform Admin', 'Governance Admin']
+  },
+  {
+    id: 'access_rules',
+    title: 'Access Rules',
+    icon: <KeyRound className="w-5 h-5" />,
+    path: '/governance/access-rules',
+    group: 'Watch Tower',
+    gate: 'access_rules',
   },
   // Admin - Restricted
   {
@@ -252,6 +264,27 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   // role-override header outside dev envs, so hide the toggle everywhere else.
   const devFeaturesEnabled = useBrandingStore((s) => s.devFeaturesEnabled);
   const brandingLoaded = useBrandingStore((s) => s.hasLoaded);
+
+  const accessRulesTabOn = uiTabs?.access_rules !== false;
+  const [canViewAccessRules, setCanViewAccessRules] = useState(false);
+  useEffect(() => {
+    if (!accessRulesTabOn || !currentUser) {
+      setCanViewAccessRules(false);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getRbacPermissions()
+      .then((p) => {
+        if (!cancelled) setCanViewAccessRules(p.can_view);
+      })
+      .catch(() => {
+        if (!cancelled) setCanViewAccessRules(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessRulesTabOn, currentUser, activeRoleOverride]);
 
   // Once branding confirms this is a non-dev environment, clear any stale
   // dev-mode override persisted in localStorage (e.g. carried over from a lower
@@ -421,6 +454,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       return false;
     }
 
+    if (item.gate === 'access_rules') return canViewAccessRules;
     if (!item.allowedPersonas) return true;
     return item.allowedPersonas.includes(currentPersona);
   });

@@ -9,7 +9,7 @@ fake = Faker()
 # Request types are data-driven strings; a representative sample for test fixtures.
 _SAMPLE_TYPES = [
     "workspace_access", "workspace_provision", "service_principal",
-    "data_access_request", "github_repo_creation", "report_execution",
+    "tag_creation", "github_repo_creation", "report_execution",
 ]
 
 class RequestFactory:

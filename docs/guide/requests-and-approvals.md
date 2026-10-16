@@ -68,7 +68,25 @@ request, the card may also show:
 
 Platform admins also see **Edit & Restart** on platform approvals. It changes
 the request's parameters, replaces the current approval and restarts the
-planning step with the new values.
+planning step with the new values. Access rule changes don't offer it: what
+gets approved must be exactly what was asked for, so to change one, reject it
+and file a new one.
+
+You can't approve a request you submitted yourself; another approver must.
+Its **Approve** button is turned off and says why. You can still reject your
+own request to withdraw it. An admin can change this under
+[Approvals](admin/settings-and-access.md#approvals) in Settings.
+
+### Approve several at once
+
+Tick the box on each approval you want to approve, or **Select all you can
+approve**, then select **Approve selected**. You see the list and confirm, and
+then the result for each one. Any that couldn't be approved say why, and the
+rest go ahead. Rejecting is always one at a time, since each rejection needs
+its own reason.
+
+Some approvals go to a Databricks group rather than a role, such as access
+rule changes. If you're in that group, you see them here.
 
 ### Manual tasks
 

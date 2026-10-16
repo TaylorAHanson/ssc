@@ -151,6 +151,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "skills": True,
         # Preview Features tracker: the daily preview sync and its page.
         "preview_features": True,
+        # Access Rules: the group-to-securable ledger, its scheduled CSV export,
+        # the rbac_access_change workflow and the Access Rules page.
+        "rbac": True,
         # Verbose landing header (brand title and greeting). False = clean,
         # minimal landing page.
         "enhanced_landing_page": False,
@@ -184,6 +187,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "feedback": True,
             "training_admin": True,
             "preview_features": True,
+            "access_rules": True,
         },
     },
 
@@ -214,6 +218,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "get_target_workspaces": True,
         # Preview Features: explain a preview and its per-workspace status before a request.
         "find_preview_features": True,
+        # Access Rules: who holds what in the ledger, and a dry run of a change
+        # before an rbac_access_change request.
+        "find_access": True,
+        "preview_access_change": True,
         # SDK "ping" of target workspaces to prove cross-VPC reachability.
         "ping_workspaces": False,
         "ping_url": True,
@@ -469,6 +477,82 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "provisioning",
             "completed",
         ],
+    },
+
+    # Access Rules (Admin -> Settings -> Access Rules). The ledger replaces the
+    # RBAC workbook; each managed sheet is exported as its own CSV, identical to
+    # a manual "Save as CSV" from Excel, for the Terraform pipeline to read.
+    "rbac": {
+        # One row per environment. ``sheet_suffix`` builds the per-environment
+        # sheet names from the patterns below; ``aliases`` match Environment
+        # cells and request wording. A blank export path means that
+        # environment's sheets are not exported (the Exports tab says so).
+        "environments": [
+            {"key": "dev", "aliases": "development", "sheet_suffix": "Dev", "export_path": "",
+             "self_service": True, "write_privileges": True, "service_principals": True,
+             "two_person_rule": False},
+            {"key": "tst", "aliases": "test,qa", "sheet_suffix": "Tst", "export_path": "",
+             "self_service": True, "write_privileges": True, "service_principals": False,
+             "two_person_rule": False},
+            {"key": "stg", "aliases": "stage,staging", "sheet_suffix": "Stg", "export_path": "",
+             "self_service": True, "write_privileges": True, "service_principals": False,
+             "two_person_rule": False},
+            {"key": "prd", "aliases": "prod,production", "sheet_suffix": "Prd", "export_path": "",
+             "self_service": True, "write_privileges": False, "service_principals": False,
+             "two_person_rule": False},
+        ],
+        "uc_sheet_pattern": "UC_Securables_RBAC_{suffix}",
+        "ws_sheet_pattern": "WS_Securables_RBAC_{suffix}",
+        "metastore_sheet": "UC_metastore_RBAC",
+        # The metastore sheet covers every environment, so it has its own path.
+        "metastore_export_path": "",
+        # Hourly, like the original. A run with no ledger change since the last
+        # successful export is skipped. Blank = export only on demand.
+        "export_cron": "0 * * * *",
+        "export_on_change": False,
+        # Excel writes UTF-8 CSV without a byte-order mark and ends every row,
+        # including the last, with CRLF. Change these only if Compare with a
+        # manual export points at them.
+        "csv_bom": False,
+        "csv_line_ending": "crlf",
+        # How long each exported file is kept for download. 0 = forever.
+        "export_archive_days": 90,
+        # Databricks group display names. Members approve requests of that
+        # type and edit its rows. Blank = Platform Admins only.
+        "uc_approver_group": "",
+        "metastore_approver_group": "",
+        "ws_approver_group": "",
+        # App roles that can view (not edit) every sheet.
+        "viewer_roles": ["Governance Admin"],
+        # Reset + re-import discards every change made since the seed import.
+        "allow_reset": False,
+        "max_changes_per_commit": 200,
+        "min_reason_length": 10,
+        "min_justification_length": 20,
+        # Never granted through a request or an edit (existing rows import with
+        # a finding). Removing them is always allowed.
+        "hard_denied_privileges": [
+            "ALL_PRIVILEGES",
+            "MANAGE",
+            "CREATE_CATALOG",
+            "CREATE_EXTERNAL_LOCATION",
+            "CREATE_STORAGE_CREDENTIAL",
+            "CREATE_CONNECTION",
+            "CREATE_SHARE",
+            "CREATE_RECIPIENT",
+            "CREATE_PROVIDER",
+            "SET_SHARE_PERMISSION",
+        ],
+        # Groups self-service never adds to or removes from (case-insensitive).
+        "system_groups": ["account users", "users", "admins"],
+        # Owner written on new UC / metastore rows. Blank = the owner already
+        # used on that catalog, else the sheet's most common owner.
+        "default_owner": "",
+        # [{"field", "pattern" (regex, may use {env}), "securable_types"
+        #   (comma-separated, blank = all), "severity" (deny | warn), "message"}]
+        "naming_rules": [],
+        # Extra header spellings: [{"field": "<canonical field>", "header": "<header text>"}]
+        "header_aliases": [],
     },
 
     # Web lookup config for the search_databricks_docs / fetch_doc_page tools.

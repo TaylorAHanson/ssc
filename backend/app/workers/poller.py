@@ -211,6 +211,8 @@ async def start_poller():
     contract_sync_semaphore = asyncio.Semaphore(1)
     # Preview-feature sync reads every target workspace (~10s each); keep one at a time.
     preview_sync_semaphore = asyncio.Semaphore(1)
+    # Access-rules CSV export writes every managed sheet; keep one at a time.
+    rbac_export_semaphore = asyncio.Semaphore(1)
 
     # Elect a single active poller cluster-wide (no-op on SQLite). Replicas that
     # aren't the leader idle here so we don't run N copies of the poll cycle.
@@ -282,6 +284,20 @@ async def start_poller():
                             logger.error(f"Error in background preview-feature sync: {e}", exc_info=True)
 
                 _spawn_background(safe_sync_preview_features())
+
+            if _yaml_config.get("features", {}).get("rbac", False):
+                async def safe_rbac_export():
+                    if rbac_export_semaphore.locked():
+                        return  # Already exporting
+                    async with rbac_export_semaphore:
+                        try:
+                            from app.services.rbac.csv_export import rbac_export_task
+
+                            await rbac_export_task()
+                        except Exception as e:
+                            logger.error(f"Error in background access-rules export: {e}", exc_info=True)
+
+                _spawn_background(safe_rbac_export())
 
             # Pre-warm user profiles + prune retained user data. Self-throttled
             # (well below the poll interval) and detached, so a slow identity

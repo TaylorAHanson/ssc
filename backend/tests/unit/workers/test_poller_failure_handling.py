@@ -120,7 +120,7 @@ def test_ensure_approval_task_creates_pending_row_for_human_gate(db_session):
     from app.db.approval import ApprovalModel
 
     req = RequestFactory.create(
-        db_session, type="data_access_request", status="data_owner_approval",
+        db_session, type="table_access_request", status="data_owner_approval",
         requester_email="alice@corp.com",
     )
     payload = {"type": "data_owner", "gate": "await_approval",

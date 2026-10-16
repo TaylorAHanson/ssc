@@ -199,8 +199,10 @@ A new side-effect class also needs `MUTATING_SIDE_EFFECT_CLASSES` in
 
 1. Step: resolve targets, then `preview_tag_change`. This writes the risk band
    and flags into the workflow context.
-2. Gate: `data_owner`, with `approvers_from` coming from `resolve_data_owners`
-   on the target tables.
+2. Gate: `data_owner`, with `approvers_from` coming from an owner-resolution
+   step on the target tables. (`resolve_data_owners`, which did this for the
+   data-access workflows, was removed with them in 1.10.0; Phase 3 would add
+   its own step, or reuse `resolve_owner_groups_from_assets`.)
 3. Gate: **`governance_admin`**, a new gate type (`GATE_TYPES` in
    `workflows/spec_loader.py` doesn't have it). It auto-approves unless any of
    these apply:
@@ -252,7 +254,7 @@ Waiting on customer input, especially on UX:
 
 1. **Execution identity for self-service.** Choose one:
    - The service principal always applies after approvals. This matches Tag
-     Manager and `grant_uc_access`.
+     Manager.
    - The user applies on their own behalf (OBO) when they already hold
      `APPLY TAG` (and `ASSIGN` for governed keys). This skips approvals and
      makes UC grants the limit.

@@ -105,26 +105,26 @@ class TestMatching:
         assert result["possible_duplicates"][0]["matched_fields"]["targets"] == ["adb-2.net/"]
 
     def test_assets_given_as_dicts_or_names_match(self, db_session):
-        _req(db_session, type="data_access_request", requester=ME,
+        _req(db_session, type="table_access_request", requester=ME,
              ctx={"assets": [{"asset_name": "main.sales.orders"}], "access_level": "read"})
-        result = _find(db_session, "data_access_request",
+        result = _find(db_session, "table_access_request",
                        {"assets": ["main.sales.orders", "main.sales.returns"], "access_level": "read"})
         assert result["count"] == 1
 
     def test_same_workspace_alone_does_not_make_different_tables_duplicates(self, db_session):
         host = "https://adb-1.net"
-        _req(db_session, type="data_access_request", requester=ME,
+        _req(db_session, type="table_access_request", requester=ME,
              ctx={"target_host": host, "asset_name": "main.sales.orders", "access_level": "read"})
-        result = _find(db_session, "data_access_request",
+        result = _find(db_session, "table_access_request",
                        {"target_host": host, "assets": [{"asset_name": "main.hr.people"}], "access_level": "read"})
         assert result["count"] == 0
 
     def test_asset_key_variants_compare_as_one_field(self, db_session):
         host = "https://adb-1.net"
-        _req(db_session, type="data_access_request", requester=ME,
+        _req(db_session, type="table_access_request", requester=ME,
              ctx={"target_host": host, "access_level": "read",
                   "assets": [{"asset_type": "table", "asset_name": "main.sales.orders"}]})
-        result = _find(db_session, "data_access_request",
+        result = _find(db_session, "table_access_request",
                        {"target_host": host, "asset_name": "main.sales.orders", "access_level": "read"})
         assert result["count"] == 1
         assert result["possible_duplicates"][0]["matched_fields"]["asset"] == ["main.sales.orders"]

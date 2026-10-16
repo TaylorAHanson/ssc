@@ -8,7 +8,7 @@ imported Python object, so the registry resolves that name back to the concrete
 Two sources contribute to the registry:
 
 1. **Code-defined tools** — introspected from ``app.workflows.tools`` (hardcoded
-   provider wrappers like ``grant_uc_access``, ``terraform_apply``, etc.).
+   provider wrappers like ``add_group_membership``, ``terraform_apply``, etc.).
 2. **DB-registered MCP tools** — rows in ``ToolRegistryModel`` with
    ``enabled=True`` and ``enabled_for_workflow_execution=True``. These are tools
    discovered from remote MCP servers (via the Tool Registry UI) that an admin has

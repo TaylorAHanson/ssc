@@ -62,6 +62,18 @@ exactly as it's named in Databricks (a group name, role or user email), and
 pick the **Internal Role**. Everyone in that group gets the role. Roles decide
 which sidebar sections people see and which approvals they can act on.
 
+## Approvals
+
+**Requests & Approvals → Approvals** holds settings that apply to every
+workflow. **Block approving your own request** is on by default: nobody can
+approve a request they submitted, Platform Admins included, so another
+approver must. Rejecting your own request, which withdraws it, is still
+allowed.
+
+Some approvals go to a Databricks group rather than a role, such as the
+approver groups for [access rules](access-rules.md). Anyone in that group sees
+the approval and can act on it; there's no role mapping to add.
+
 ## Other settings
 
 The remaining pages each sit with the feature they configure. The ones admins

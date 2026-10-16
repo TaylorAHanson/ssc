@@ -52,8 +52,7 @@ _MAX_SENTENCES = 2
 # Content-word overlap (Jaccard) at which two menu lines read as the same
 # capability. Tuned against the seeded catalog, where every pair at or above this
 # is one a human would also mix up (workspace access vs. provision vs. folder
-# creation; catalog-schema-table access vs. data access) and everything below is
-# a coincidence of shared vocabulary. Near misses are reported in the summary
+# creation) and everything below is a coincidence of shared vocabulary. Near misses are reported in the summary
 # rather than penalized, so a save isn't noisy about unrelated workflows.
 _COLLISION_RATIO = 0.40
 _NEAR_MISS_RATIO = 0.30

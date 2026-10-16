@@ -23,6 +23,22 @@ logger = logging.getLogger(__name__)
 
 _TERMINAL = {"completed", "rejected", "failed"}
 
+# Facts recorded after a request completes (e.g. the access-rules export picking up
+# its change), shown under the Completed step.
+_COMPLETION_FACTS = {"rbac_exported"}
+
+
+def _completion_facts(facts) -> List[Dict[str, Any]]:
+    return [
+        {
+            "type": f.event_type,
+            "timestamp": f.created_at.isoformat() if f.created_at else None,
+            "data": f.event_data or {},
+        }
+        for f in facts
+        if f.event_type in _COMPLETION_FACTS
+    ]
+
 
 def _humanize(node_id: str) -> str:
     return node_id.replace("_", " ").title()
@@ -80,11 +96,17 @@ def render_state(request, db, facts=None, spec_dict=None) -> StateMachineState:
     # Determine the active node. Walk to the first unsatisfied stage — for an
     # in-flight request that's the active stage; for a FAILED/REJECTED request
     # it's the stage where it stopped, so downstream stages aren't painted as
-    # completed. (Steps carry a ``success_fact`` so a failed step — e.g.
-    # resolve_owners — is correctly identified as the stopping point rather than
-    # assumed done.)
+    # completed. (Steps carry a ``success_fact`` so a failed step is correctly
+    # identified as the stopping point rather than assumed done.)
+    stage_ids = [s["name"] for s in specs]
     if status == "completed":
         current = "completed"
+    elif not specs and status not in _TERMINAL:
+        # No spec governs this type any more (e.g. a retired workflow): show the
+        # request's last known status rather than claiming it reached Completed.
+        current = status or "pending"
+        if current != "pending":
+            stage_ids = [current]
     else:
         current = "completed"
         for s in specs:
@@ -103,7 +125,7 @@ def render_state(request, db, facts=None, spec_dict=None) -> StateMachineState:
             current = status
 
     # Ordered UI ids.
-    ids: List[str] = ["pending"] + [s["name"] for s in specs] + ["completed"]
+    ids: List[str] = ["pending"] + stage_ids + ["completed"]
     if current in ("rejected", "failed") and current not in ids:
         ids.append(current)
 
@@ -111,6 +133,7 @@ def render_state(request, db, facts=None, spec_dict=None) -> StateMachineState:
     # Map each gate node to its gate type so the UI can identify approval
     # steps (and surface their approver) regardless of the stage's name/id.
     gate_types = {s["name"]: s.get("gate_type") for s in specs if s.get("kind") == "gate"}
+    completed_facts = _completion_facts(facts) if status == "completed" else []
     states_view: List[StateInfo] = []
     for idx, node_id in enumerate(ids):
         states_view.append(StateInfo(
@@ -122,7 +145,7 @@ def render_state(request, db, facts=None, spec_dict=None) -> StateMachineState:
             isFinal=node_id in _TERMINAL,
             completedAt=None,
             startedAt=request.created_at if idx == 0 else None,
-            facts=None,
+            facts=(completed_facts or None) if node_id == "completed" else None,
             gateType=gate_types.get(node_id),
         ))
 
@@ -136,8 +159,9 @@ def _resolve_spec_dict(request, db) -> Dict[str, Any]:
     """The serializable graph_spec actually governing this request.
 
     Prefers a published workflow's authored ``graph_spec`` (the no-code override),
-    then the code catalog, then a synthesized shape for dedicated graphs
-    (e.g. data_access) so the UI always has something to draw.
+    then the code catalog, then a synthesized shape. A type with no spec at all
+    (a retired or deleted workflow) gets an empty stage list, which the views
+    render generically, so its historical requests still open.
     """
     from app.workflows.graphs import published_graph_spec
     from app.workflows.graphs.specs import SPECS

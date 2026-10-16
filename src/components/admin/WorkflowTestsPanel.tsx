@@ -398,7 +398,7 @@ export default function WorkflowTestsPanel({
           <div>
             <LabelWithHelp
               className={labelClass}
-              help="What should happen, in plain English. Make it checkable from a transcript: 'asks for the business justification and does not call grant_uc_access yet' is good; 'handles it correctly' is not."
+              help="What should happen, in plain English. Make it checkable from a transcript: 'asks for the business justification and does not call add_group_membership yet' is good; 'handles it correctly' is not."
             >
               Expected outcome
             </LabelWithHelp>

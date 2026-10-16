@@ -16,15 +16,6 @@
       "send_notification"
     ]
   },
-  "batch_data_access": {
-    "gates": 1,
-    "mutating": 1,
-    "status": "completed",
-    "tools": [
-      "resolve_data_owners",
-      "grant_uc_access"
-    ]
-  },
   "campaign": {
     "gates": 1,
     "mutating": 1,
@@ -42,30 +33,12 @@
       "terraform_apply"
     ]
   },
-  "catalog_schema_table_access": {
-    "gates": 1,
-    "mutating": 1,
-    "status": "completed",
-    "tools": [
-      "resolve_data_owners",
-      "grant_uc_access"
-    ]
-  },
   "credential_creation": {
     "gates": 2,
     "mutating": 1,
     "status": "completed",
     "tools": [
       "create_uc_object"
-    ]
-  },
-  "data_access_request": {
-    "gates": 2,
-    "mutating": 1,
-    "status": "completed",
-    "tools": [
-      "resolve_data_owners",
-      "grant_uc_access"
     ]
   },
   "enforcement_sentinel": {
@@ -109,6 +82,15 @@
       "terraform_plan",
       "terraform_apply",
       "create_uc_object"
+    ]
+  },
+  "rbac_access_change": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "rbac_plan_access_change",
+      "apply_access_change"
     ]
   },
   "report_execution": {

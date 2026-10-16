@@ -161,3 +161,23 @@ def test_timeline_advances_past_gate_after_approval(monkeypatch):
     # The notify step has no success_fact (transient), so the flow has nothing left
     # to wait on and the current position is the terminal completed node.
     assert sm.currentState == "completed"
+
+
+def test_completed_step_carries_access_rules_export_fact(monkeypatch):
+    from datetime import datetime
+
+    exported = _Fact("rbac_exported", {"export_id": "x1", "files": ["UC_Securables_RBAC_Dev"]})
+    exported.created_at = datetime(2026, 10, 16, 12, 0, 0)
+    approval = _Fact("approval_received", {"approval_type": "manager"})
+    approval.created_at = None
+    monkeypatch.setattr("app.state_machines.facts.get_facts", lambda db, rid: [approval, exported])
+    monkeypatch.setattr("app.workflows.graphs.published_graph_spec", lambda db, rt: _DB_ONLY_SPEC)
+
+    sm = render.render_state(_DbOnlyReq("completed"), db=None)
+    done = next(s for s in sm.states if s.id == "completed")
+    assert done.facts == [{
+        "type": "rbac_exported",
+        "timestamp": "2026-10-16T12:00:00",
+        "data": {"export_id": "x1", "files": ["UC_Securables_RBAC_Dev"]},
+    }]
+    assert all(s.facts is None for s in sm.states if s.id != "completed")

@@ -11,6 +11,7 @@ Admin screens appear in two sidebar sections, depending on your role:
 | Section | Pages | Who sees it |
 | --- | --- | --- |
 | Watch Tower | **Data Certification (ODCS)**, **Data Products (ODPS)**, **Allowlist**, **OmniGuard**, **Metadata Manager** | Platform admins and governance admins |
+| Watch Tower | **Access Rules** | Platform admins, viewer roles and members of the access rule approver groups |
 | Control Tower | **Admin** | Platform admins |
 | Control Tower | **Context Catalog**, **Workflow Studio**, **Tool Registry**, **Preview Features**, **Training Studio** | Platform admins and governance admins |
 
@@ -49,6 +50,9 @@ are:
   Tool Registry, Context Catalog, Training Studio and Preview Features.
 - [Governance tools](governance.md): OmniGuard, the Allowlist, Data
   Certification, Data Products and Metadata Manager.
+- [Access rules](access-rules.md): which groups hold which privileges, the
+  approver group for each type, and the CSV export the Terraform pipeline
+  reads.
 
 The **Admin reference** section of this guide has the full, longer documents
 these pages summarize.

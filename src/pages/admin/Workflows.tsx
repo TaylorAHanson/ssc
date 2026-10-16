@@ -1824,7 +1824,7 @@ export function Workflows() {
                   'Explain the auto-approve condition options.',
                 ]
               : [
-                  'Draft a workflow that grants table access after manager approval.',
+                  'Draft a workflow that adds the requester to a group after manager approval.',
                   'How do I add an approval gate before a provisioning step?',
                   'What tools can a workflow step call?',
                   'Explain the auto-approve condition options.',

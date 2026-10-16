@@ -221,7 +221,7 @@ export function RequestStateList({ request }: { request: Request }) {
         type: undefined,
         order: stateSteps.length + 1,
         completedAt: completionState?.completedAt,
-        facts: []
+        facts: completionState?.facts ?? []
       });
     }
 
@@ -482,8 +482,12 @@ export function RequestStateList({ request }: { request: Request }) {
                               [{formatInTimeZone(parseUtcDate(fact.timestamp), 'America/Los_Angeles', 'HH:mm:ss')}]
                             </span>
                             <div className="text-gray-700">
-                              <span className="font-semibold text-gray-900">{fact.type.replace(/_/g, ' ')}</span>
-                              {fact.type === 'repo_created' ? (
+                              <span className="font-semibold text-gray-900">
+                                {fact.type === 'rbac_exported' ? 'Exported for Terraform' : fact.type.replace(/_/g, ' ')}
+                              </span>
+                              {fact.type === 'rbac_exported' ? (
+                                <>: <span>{(fact.data.files as unknown as string[] | undefined)?.join(', ')}</span></>
+                              ) : fact.type === 'repo_created' ? (
                                 <>: <a href={fact.data.repo_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
                                   {fact.data.repo_name}
                                 </a></>

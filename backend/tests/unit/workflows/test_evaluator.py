@@ -45,13 +45,13 @@ def test_ungated_destructive_is_critical_risk(monkeypatch):
 def test_gate_before_risky_step_lowers_risk():
     ungated = {
         "name": "grant",
-        "stages": [_step("grant", "grant_uc_access", success_fact="granted")],
+        "stages": [_step("grant", "update_allowlist", success_fact="granted")],
     }
     gated = {
         "name": "grant",
         "stages": [
             _gate("mgr", "manager"),
-            _step("grant", "grant_uc_access", success_fact="granted"),
+            _step("grant", "update_allowlist", success_fact="granted"),
         ],
     }
     r_ungated = evaluate_spec(ungated)
@@ -83,7 +83,7 @@ def test_always_true_auto_approve_is_flagged():
         "name": "rubber_stamp",
         "stages": [
             _gate("mgr", "manager", auto_approve={"$literal": True}),
-            _step("grant", "grant_uc_access", success_fact="granted"),
+            _step("grant", "update_allowlist", success_fact="granted"),
         ],
     }
     report = evaluate_spec(spec)
@@ -111,7 +111,7 @@ def test_data_owner_gate_without_approver_is_flagged():
         "name": "owned",
         "stages": [
             _gate("owner", "data_owner"),
-            _step("grant", "grant_uc_access", success_fact="granted"),
+            _step("grant", "update_allowlist", success_fact="granted"),
         ],
     }
     report = evaluate_spec(spec)
@@ -137,7 +137,7 @@ def test_clean_gated_workflow_has_no_safety_findings():
             _gate("mgr", "manager"),
             _step(
                 "grant",
-                "grant_uc_access",
+                "update_allowlist",
                 success_fact="granted",
                 args={
                     "asset_type": "table",

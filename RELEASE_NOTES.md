@@ -13,6 +13,21 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 1.10.0 — 2026-10-16
+
+### Added
+
+- **Access Rules replaces the RBAC workbook.** A new **Access Rules** page in Watch Tower holds which groups have which privileges on Unity Catalog securables, the metastore and workspace items, sheet by sheet, exactly as the workbook laid them out. Until now, access changes meant editing a shared spreadsheet by hand, marking additions in red, and exporting each sheet to CSV for the Terraform pipeline. Now every change is checked against the same rules, recorded with who made it and why, and can be reverted from the **History** tab. A Platform Admin imports the workbook once to seed the page; after that the workbook is retired and nobody needs to edit it.
+- **Access rule CSVs export on a schedule.** The app writes one CSV per sheet, named after the sheet and laid out like a manual export from Excel, to a folder you set for each environment. The Terraform pipeline reads them without change. Exports run on the schedule set under **Admin → Settings → Access Rules**, optionally after every change, or on demand with **Export now**. To prove the files match before you switch the pipeline over, **Compare with a manual export** on the **Exports** tab checks a hand-exported CSV against the app's and explains any difference.
+- **Ask the assistant to give a group access.** Name the group, what it needs and why, and the assistant checks whether the group already has it, shows the planned change (adding prerequisites such as `USE_SCHEMA` for you), and files the request once you confirm. Approval records the change straight away, and the next export carries it to Terraform. An ask that spans workspace and data access becomes linked requests, one per type, because each type has its own approvers.
+- **A Databricks group approves each type of access rule.** UC securables, the metastore and workspace securables each have an approver group setting under **Admin → Settings → Access Rules**. Members of that group see and approve its requests in **Approvals**, and can edit its rules directly on the Access Rules page, with no role mapping to add. A type with no group set falls back to Platform Admins, and the page warns when a group is unset or can't be found. **Edit & Restart** isn't offered on these requests, because what gets approved must be exactly what was asked for; to change one, reject it and file a new one.
+- **Approve several requests at once.** In **Approvals**, tick the requests you want and select **Approve selected**. You confirm the list, then see the result for each one; any that can't be approved say why and the rest go ahead. Clearing a queue used to take a confirmation per request. Rejecting is still one at a time, because each rejection needs a reason.
+
+### Changed
+
+- **You can no longer approve your own request.** This applies to every workflow and to Platform Admins too; another approver must approve it. Before, a requester who was also an approver could sign off their own change. You can still reject your own request to withdraw it. Admins can turn this off under **Admin → Settings → Requests & Approvals → Approvals** with **Block approving your own request**.
+- **Data access is now given to groups, not to individual people.** The workflows that granted Unity Catalog access live, to a person or a group, have been removed: data access request, batch data access, and catalog, schema and table access. Those live grants were undone by the next Terraform run, since Terraform owns access, so the record and Databricks disagreed. If you ask for access for yourself, the assistant now tells you which groups already have it so you can ask to join one. Requests made under the removed workflows keep their history and still open from **My Requests**, but any that were still waiting won't go further.
+
 ## 1.9.0 — 2026-10-15
 
 ### Added
