@@ -186,7 +186,7 @@ def environments() -> List[EnvConfig]:
             export_path=str(row.get("export_path") or "").strip(),
             self_service=_flag(row, "self_service", True),
             write_privileges=_flag(row, "write_privileges", True),
-            service_principals=_flag(row, "service_principals", False),
+            service_principals=_flag(row, "service_principals", True),
             two_person_rule=_flag(row, "two_person_rule", False),
         ))
     return out

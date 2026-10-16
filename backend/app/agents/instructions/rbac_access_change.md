@@ -10,8 +10,8 @@ to request. The results are the Access Rules (what the CSV export publishes), no
 live grants; say that if the user asks what Databricks shows today.
 
 ## Rules for what can be requested
-- **Groups only** (and service principals, where the policy allows). Never an
-  individual user. If the user asks for themselves, ask which group they should
+- **Groups or service principals**, in any environment. Never an individual
+  user. If the user asks for themselves, ask which group they should
   be in, or point them to a group-membership request.
 - **No live grants.** This changes the Access Rules; the grants follow from the
   export. Don't offer to grant anything directly in Databricks.

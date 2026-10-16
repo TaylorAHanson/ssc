@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 Plane = Literal["uc", "uc_metastore", "workspace"]
 Severity = Literal["deny", "warn"]
 # Which write path a policy evaluation is for. Imports are warn-only.
-WritePath = Literal["request", "admin_edit", "import"]
+WritePath = Literal["request", "admin_edit"]
 
 CANONICAL_FIELDS = (
     "environment_value",

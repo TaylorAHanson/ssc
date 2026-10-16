@@ -17,18 +17,20 @@ from app.db.rbac import (
     RbacRuleModel,
     RbacSheetModel,
 )
-from app.models.rbac import Finding
 from app.services.rbac import audit, csv_export, workbook_import
 from app.services.rbac.workbook_import import CONFIRMATION_PHRASE, ImportFailed
 
 from .synthetic_workbook import (
     METASTORE_SHEET,
     MULTILINE_NOTE,
+    OWNER,
     QUOTED_NOTE,
+    WS_HEADERS,
     SyntheticSheet,
     build_workbook,
     data_rows,
     import_initial,
+    synthetic_sheets,
     uc_sheet,
     write_workbook,
     ws_sheet,
@@ -38,9 +40,7 @@ ACTOR = "admin@example.com"
 
 
 @pytest.fixture(autouse=True)
-def no_policy(monkeypatch):
-    """Import mechanics must not depend on policy content."""
-    monkeypatch.setattr("app.services.rbac.policy.evaluate", lambda changes, **kw: [])
+def no_export_trigger(monkeypatch):
     monkeypatch.setattr(csv_export, "_change_pending_since", None)
 
 
@@ -134,49 +134,26 @@ def test_workbook_without_managed_sheets_is_refused(db_session):
         workbook_import.preview(db_session, data, "scratch.xlsx", actor=ACTOR)
 
 
-def test_policy_findings_are_mapped_to_sheet_and_row(db_session, monkeypatch):
-    def fake_evaluate(changes, *, path, **kw):
-        assert path == "import"
-        out = []
-        for i, (before, after) in enumerate(changes):
-            assert before is None
-            if after.sheet == uc_sheet("Prd") and after.object_name == "fiscal_month":
-                # Imports are warn-only, whatever the policy says.
-                out.append(Finding(severity="deny", code="naming_rule", message="Bad name.", change_index=i,
-                                   field="object_name"))
-        return out
-
-    monkeypatch.setattr("app.services.rbac.policy.evaluate", fake_evaluate)
-    data, _ = build_workbook()
-    preview = workbook_import.preview(db_session, data, "rbac.xlsx", actor=ACTOR)
-    finding = next(f for f in preview.findings if f.code == "naming_rule")
-    assert finding.sheet == uc_sheet("Prd")
-    assert finding.row_number == 3
-    assert finding.severity == "warn"
-    assert next(s for s in preview.sheets if s.sheet == uc_sheet("Prd")).warnings == 1
+def test_the_workbook_is_not_judged_against_the_access_policy(db_session):
+    # Service principals on tst/stg/prd and in the metastore sheet, a user, a hard-denied
+    # privilege and a mistyped securable type: all of it is the source of truth as it stands.
+    sheets = synthetic_sheets()
+    sheets[ws_sheet("Dev")].rows.append(
+        ["dev", "group", "grp_dev_misc", "ws_dev", "service princlegalal", "sp_dev_jobs", "USER"])
+    sheets[uc_sheet("Prd")].rows.append(
+        ["prd", "catalog", "cat_prd", None, None, OWNER, "user", "someone@example.com", "ALL PRIVILEGES"])
+    preview = workbook_import.preview(db_session, write_workbook(sheets), "rbac.xlsx", actor=ACTOR)
+    assert {f.code for f in preview.findings} == {"unknown_header", "duplicate_row"}
 
 
-def test_findings_are_capped(db_session, monkeypatch):
-    monkeypatch.setattr(
-        "app.services.rbac.policy.evaluate",
-        lambda changes, **kw: [Finding(severity="warn", code="naming_rule", message="x", change_index=0)] * 600,
-    )
-    data, _ = build_workbook()
-    preview = workbook_import.preview(db_session, data, "rbac.xlsx", actor=ACTOR)
+def test_findings_are_capped(db_session):
+    row = ["dev", "group", "grp_dev_engineers", "ws_dev", "workspace", "ws_dev", "USER"]
+    sheets = {ws_sheet("Dev"): SyntheticSheet(rows=[list(WS_HEADERS), *[list(row) for _ in range(601)]])}
+    preview = workbook_import.preview(db_session, write_workbook(sheets), "rbac.xlsx", actor=ACTOR)
     assert len(preview.findings) == workbook_import.MAX_PREVIEW_FINDINGS
-    assert preview.findings_total >= 600
+    assert preview.findings_total == 600
     stored = db_session.get(RbacImportModel, preview.import_id)
     assert len(stored.findings) == workbook_import.MAX_STORED_FINDINGS
-
-
-def test_policy_crash_does_not_block_the_import(db_session, monkeypatch):
-    def broken(changes, **kw):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr("app.services.rbac.policy.evaluate", broken)
-    data, _ = build_workbook()
-    preview = workbook_import.preview(db_session, data, "rbac.xlsx", actor=ACTOR)
-    assert "policy_unavailable" in {f.code for f in preview.findings}
 
 
 # --- Initial import -----------------------------------------------------------

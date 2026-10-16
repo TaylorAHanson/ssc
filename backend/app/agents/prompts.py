@@ -875,8 +875,7 @@ You have access to the following tools:
 ACCESS_RULES_INSTRUCTIONS = """
 ## Access to data and workspace items (access rules)
 Access to Unity Catalog securables, metastore objects and workspace items is held by
-groups (and, where an environment allows it, service principals), never by individual
-people. It is recorded as access rules, which Terraform applies after each export. You
+groups and service principals, never by individual people. It is recorded as access rules, which Terraform applies after each export. You
 never grant or revoke anything live.
 
 - For any question or request about who can reach a securable, or what a group can

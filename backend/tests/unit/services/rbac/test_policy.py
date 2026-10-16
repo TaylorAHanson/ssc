@@ -57,52 +57,46 @@ def only(findings, code):
 SEVERITY_CASES = [
     # (id, changes, code, {path: severity})
     ("hard-denied", created(privileges="USE_SCHEMA;MANAGE"), "hard_denied_privilege",
-     {"request": "deny", "admin_edit": "deny", "import": "warn"}),
+     {"request": "deny", "admin_edit": "deny"}),
     ("all-privileges-with-a-space", created(kind="catalog", schema="", privileges="ALL PRIVILEGES"),
-     "hard_denied_privilege", {"request": "deny", "admin_edit": "deny", "import": "warn"}),
+     "hard_denied_privilege", {"request": "deny", "admin_edit": "deny"}),
     ("deprecated", created(privileges="USAGE"), "deprecated_privilege",
-     {"request": "deny", "admin_edit": "deny", "import": "warn"}),
+     {"request": "deny", "admin_edit": "deny"}),
     ("user", created(ptype="user", principals="someone@example.com"), "principal_type_not_allowed",
-     {"request": "deny", "admin_edit": "deny", "import": "warn"}),
+     {"request": "deny", "admin_edit": "deny"}),
     ("unknown-principal-type", created(ptype="role"), "principal_type_not_allowed",
-     {"request": "deny", "admin_edit": "deny", "import": "warn"}),
+     {"request": "deny", "admin_edit": "deny"}),
     ("system-group-added", created(principals="users"), "system_group",
-     {"request": "deny", "admin_edit": "deny", "import": "warn"}),
+     {"request": "deny", "admin_edit": "deny"}),
     ("system-group-removed", [(row(principals="users;g_a"), row(principals="g_a"))], "system_group",
-     {"request": "deny", "admin_edit": "deny", "import": "warn"}),
+     {"request": "deny", "admin_edit": "deny"}),
     ("missing-cells", created(privileges=""), "missing_cells",
-     {"request": "deny", "admin_edit": "deny", "import": "warn"}),
+     {"request": "deny", "admin_edit": "deny"}),
     ("unknown-privilege", created(kind="volume", obj="raw", privileges="SELECT"), "unknown_privilege",
-     {"request": "deny", "admin_edit": "warn", "import": "warn"}),
+     {"request": "deny", "admin_edit": "warn"}),
     ("unknown-securable-type", created(kind="widget"), "unknown_securable_type",
-     {"request": "deny", "admin_edit": "warn", "import": "warn"}),
+     {"request": "deny", "admin_edit": "warn"}),
     ("type-on-another-types-sheet", created(kind="connection", schema="", privileges="USE_CONNECTION"),
-     "securable_type_wrong_sheet", {"request": "deny", "admin_edit": "deny", "import": "warn"}),
+     "securable_type_wrong_sheet", {"request": "deny", "admin_edit": "deny"}),
     ("sp-where-not-allowed", created(ptype="service principal", principals="sp_x", env="prd"),
-     "principal_type_not_allowed", {"request": "deny", "admin_edit": "warn", "import": "warn"}),
+     "principal_type_not_allowed", {"request": "deny", "admin_edit": "warn"}),
     ("self-service-off", created(env="tst"), "self_service_disabled",
-     {"request": "deny", "admin_edit": "warn", "import": "warn"}),
+     {"request": "deny", "admin_edit": "warn"}),
     ("write-privileges-off", created(env="prd", privileges="USE_SCHEMA;MODIFY"), "write_privilege_disabled",
-     {"request": "deny", "admin_edit": "warn", "import": "warn"}),
+     {"request": "deny", "admin_edit": "warn"}),
     ("broad-grant", created(kind="catalog", schema="", privileges="USE_CATALOG;SELECT"), "broad_grant",
-     {"request": "warn", "admin_edit": "warn", "import": "warn"}),
+     {"request": "warn", "admin_edit": "warn"}),
 ]
 
 
 @pytest.mark.parametrize("changes, code, severities",
                          [pytest.param(c, code, s, id=i) for i, c, code, s in SEVERITY_CASES])
-@pytest.mark.parametrize("path", ["request", "admin_edit", "import"])
+@pytest.mark.parametrize("path", ["request", "admin_edit"])
 def test_rule_severity_by_path(changes, code, severities, path):
     findings = only(policy.evaluate(changes, path=path), code)
     assert findings, f"expected {code}"
     assert {f.severity for f in findings} == {severities[path]}
     assert all(f.change_index == 0 and f.message for f in findings)
-
-
-def test_import_downgrades_everything_to_warn():
-    changes = created(ptype="user", principals="users", privileges="USAGE;MANAGE", kind="widget")
-    findings = policy.evaluate(changes, path="import", justification="x", reason="y")
-    assert findings and {f.severity for f in findings} == {"warn"}
 
 
 def test_clean_change_has_no_findings():

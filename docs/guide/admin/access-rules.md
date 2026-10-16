@@ -121,10 +121,11 @@ The workbook is imported once, to seed the rules. Only Platform Admins see this
 tab.
 
 1. Upload the workbook. The preview lists, per sheet, the rows found, the
-   headers captured, duplicates, and rows that break current rules. Tabs that
-   aren't managed sheets, such as a scratch tab, are listed as skipped.
-2. Import. Rows that break current rules are imported with a finding, never
-   dropped, so existing access is kept exactly.
+   headers captured and any duplicate rows. Tabs that aren't managed sheets,
+   such as a scratch tab, are listed as skipped.
+2. Import. The workbook is the source of truth, so every row is copied exactly
+   as it is. Rows aren't checked against the access rules: those rules apply to
+   changes made after the import, so existing access is kept exactly.
 
 **Reset and re-import** replaces every rule with a new workbook. It's off by
 default (**Allow reset and re-import** in Settings), needs a typed confirmation, and is blocked while access requests are

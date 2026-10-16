@@ -243,9 +243,10 @@ publisher sits behind a small interface so a PR publisher can be added later).
 ### D3. Import the workbook once; reset and re-import is guarded
 
 An admin uploads the workbook, or points at a Volume path, and first sees a
-**preview**: rows per sheet, the captured header layout, duplicates, and rows that
-break current rules. Imported rows are **flagged, never rejected**; production data
-must load.
+**preview**: rows per sheet, the captured header layout and duplicates. The workbook
+is the source of truth, so imported rows are **copied as they are and not judged
+against the policy** (D7); production data must load, and a seed import that
+reports thousands of policy warnings on approved access only buries real problems.
 
 Headers are mapped to canonical fields using the confirmed layouts above as in-code
 defaults. Admins can add aliases if a header is ever renamed. The import records the
@@ -386,9 +387,9 @@ would disagree about the truth.
 
 `services/rbac/policy.py` evaluates a change set and returns findings per atom with
 severity `deny` or `warn`. Every write path calls it: the preview tool (chat
-pre-check), the `plan` step, the `apply` step (re-check), the admin edit API, and
-import (warn-only). There is no other copy: no ORM hook, no Rego content rules, no
-inline fallback.
+pre-check), the `plan` step, the `apply` step (re-check) and the admin edit API.
+The workbook import doesn't call it (D3). There is no other copy: no ORM hook, no
+Rego content rules, no inline fallback.
 
 The policy judges **what a change adds**: new atoms and changed values. Atoms a
 change leaves alone are not re-judged, so existing rows that predate a rule (for
@@ -402,10 +403,11 @@ defaults and no customer naming hardcoded:
   Databricks UC model). Deprecated tokens are denied with a hint, e.g. `USAGE` →
   `USE_CATALOG` / `USE_SCHEMA`.
 - Hard-denied privileges (default: `ALL_PRIVILEGES`, `MANAGE`, `CREATE_CATALOG`, …).
-- Allowed principal types, per environment. The default is `group` everywhere and
-  `service principal` in `dev` only, matching the original's rule. Existing workbook
-  rows outside this policy (the WS dev sheets hold many service principals) import
-  as findings, not errors. `user` is never allowed.
+- Allowed principal types, per environment. The default is `group` and `service
+  principal` everywhere. The original allowed service principals in `dev` only,
+  but the workbook grants them in every environment and users need to request
+  them; an environment's **Service principals** switch can still turn them off.
+  `user` is never allowed.
 - System groups that self-service may never touch.
 - Policy per environment: self-service on/off, write privileges allowed, and
   whether admin edits need a second approver.
@@ -589,8 +591,10 @@ Choices made while building, within the decisions above:
   as plain numbers, and formulas as their cached values. The confirmed sheets are all
   text, so none of this is expected to matter; **Compare with a manual export** shows
   it if it does.
-- **Import findings.** Besides policy findings, an empty managed sheet and a policy
-  check that could not run are reported as warnings; neither blocks the import.
+- **Import findings.** Only facts about the copy are reported: an empty managed
+  sheet, an unrecognised column and an identical row. None blocks the import. Policy
+  findings were dropped from the import after the first run against the real
+  workbook reported over 3,000 warnings on access that was already approved.
 - **Export after every change** is detected on the replica running the poller; a
   change made on another replica goes out with the next scheduled run.
 - **Approver fallback.** With no group set for a type, the plan step returns an empty
@@ -613,7 +617,7 @@ Choices made while building, within the decisions above:
 - **The securable type decides the type of rule.** A caller can't route an item to
   another type's sheet and approvers by naming a plane: a mismatch is refused. On
   the grid, a row whose securable type belongs to another type of sheet is refused
-  on commit and flagged on import.
+  on commit.
 - **Export watermark on Postgres.** Postgres assigns event ids at insert, so a
   later id can commit first. Ledger writes hold an advisory lock in shared mode
   until they commit. The export takes it exclusively just to read the watermark,

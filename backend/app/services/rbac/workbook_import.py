@@ -2,7 +2,10 @@
 
 Reads every column of each managed sheet (hidden ones too, as Excel's CSV
 export does) and records the sheet's header text and order in ``rbac_sheets``
-so the export reproduces it. Rows are flagged, never rejected.
+so the export reproduces it. The workbook is the source of truth, so rows are
+copied as they are and never checked against the access policy; the only
+findings are about the copy itself (empty sheets, unrecognised columns,
+identical rows).
 """
 from __future__ import annotations
 
@@ -32,10 +35,9 @@ from app.models.rbac import (
     ImportResult,
     ImportSheetSummary,
     ImportSummary,
-    RuleRow,
     SheetColumn,
 )
-from app.services.rbac import audit, inflight, layout, policy
+from app.services.rbac import audit, inflight, layout
 
 logger = logging.getLogger(__name__)
 
@@ -181,42 +183,6 @@ def _read_sheet(ws: Any, spec: layout.SheetSpec) -> Tuple[_Sheet, List[Finding]]
     return sheet, findings
 
 
-def _policy_findings(sheets: List[_Sheet]) -> List[Finding]:
-    """Policy findings for every imported row (warn-only), mapped back to sheet + row number."""
-    flat: List[Tuple[_Sheet, _Row]] = []
-    changes: List[Tuple[None, RuleRow]] = []
-    for sheet in sheets:
-        for row in sheet.rows:
-            flat.append((sheet, row))
-            changes.append((None, RuleRow(
-                sheet=sheet.spec.name,
-                plane=sheet.spec.plane,
-                environment=row.environment,
-                position=row.position,
-                extra=row.extra,
-                **row.cells,
-            )))
-    if not changes:
-        return []
-    try:
-        raw = policy.evaluate(changes, path="import")
-    except Exception:  # noqa: BLE001 - a policy bug must not block loading production data
-        logger.exception("Access policy checks failed during a workbook import")
-        return [Finding(
-            severity="warn", code="policy_unavailable",
-            message="The access policy checks couldn't run, so imported rows weren't checked against them.",
-        )]
-    out: List[Finding] = []
-    for finding in raw or []:
-        update: Dict[str, Any] = {"severity": "warn"}
-        idx = finding.change_index
-        if idx is not None and 0 <= idx < len(flat):
-            sheet, row = flat[idx]
-            update.update(sheet=sheet.spec.name, row_number=row.position + 1, change_index=None)
-        out.append(finding.model_copy(update=update))
-    return out
-
-
 def _parse(data: bytes) -> _Workbook:
     try:
         import openpyxl
@@ -253,21 +219,11 @@ def _parse(data: bytes) -> _Workbook:
         names = ", ".join(s.name for s in layout.managed_sheets()[:3])
         raise ImportFailed(f"None of the workbook's tabs is a managed sheet (expected names like {names}).")
 
-    unplaced: List[Finding] = []
-    for finding in _policy_findings(sheets):
-        if finding.sheet in sheet_findings:
-            sheet_findings[finding.sheet].append(finding)
-        else:
-            unplaced.append(finding)
-
     findings: List[Finding] = []
     for sheet in sheets:
         found = sheet_findings[sheet.spec.name]
-        # Sheet-level findings first, then by row (sort is stable).
-        found.sort(key=lambda f: f.row_number or 0)
         sheet.warnings = len(found)
         findings.extend(found)
-    findings.extend(unplaced)
 
     missing = [s.name for s in layout.managed_sheets() if s.name not in seen]
     return _Workbook(sheets=sheets, skipped=skipped, missing=missing, findings=findings)

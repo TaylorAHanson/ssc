@@ -64,8 +64,9 @@ export function ImportTab({ permissions, notify, onOpenHistory }: {
             <p className="mt-1 max-w-3xl text-sm text-gray-500">
               This loads the workbook once, as the starting point. From then on the rules are edited here, History
               replaces the red-text convention, and the workbook is retired. Every managed sheet is read, hidden
-              columns included, and nothing changes until you confirm the preview. Rows that break today’s rules are
-              loaded and flagged, never dropped.
+              columns included, and nothing changes until you confirm the preview. The workbook is the source of truth,
+              so its rows are copied exactly as they are and aren’t checked against the access rules; those apply to
+              changes made after the import.
             </p>
           </div>
           <div>
@@ -253,14 +254,10 @@ function ImportPreviewView({ preview, file, canReset, onImported }: {
           <div>
             <SectionTitle>Findings</SectionTitle>
             <p className="mb-2 text-xs text-gray-500">
-              Imports are never blocked: these rows load as they are, flagged so you can fix them later on the Rules tab.
+              Things the copy keeps from the workbook, such as an unrecognised column or an identical row. They
+              don’t stop the import, and the export reproduces them.
             </p>
-            <FindingList
-              findings={preview.findings}
-              total={preview.findings_total}
-              context={findingContext}
-              denyHint="Would be refused as a new change, but imports load them anyway."
-            />
+            <FindingList findings={preview.findings} total={preview.findings_total} context={findingContext} />
           </div>
         )}
 

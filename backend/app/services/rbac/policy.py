@@ -7,8 +7,10 @@ All rules come from settings; the privilege vocabulary is an in-code registry.
 Severity depends on the write path:
 
 - hard rules deny on ``request`` and ``admin_edit``;
-- self-service rules deny on ``request`` and warn on ``admin_edit``;
-- ``import`` is warn-only, so production data always loads.
+- self-service rules deny on ``request`` and warn on ``admin_edit``.
+
+The workbook import isn't a write path here: the workbook is the source of
+truth, so its rows are copied without being judged.
 """
 from __future__ import annotations
 
@@ -128,11 +130,11 @@ WRITE_PRIVILEGES: frozenset = frozenset(
 # Granting these on a whole catalog reaches every schema in it.
 BROAD_CATALOG_PRIVILEGES = frozenset({"SELECT", "MODIFY", "READ_VOLUME", "WRITE_VOLUME", "EXECUTE"})
 
-_HARD: Dict[str, Severity] = {"request": "deny", "admin_edit": "deny", "import": "warn"}
-_SELF_SERVICE: Dict[str, Severity] = {"request": "deny", "admin_edit": "warn", "import": "warn"}
-_REQUEST_ONLY: Dict[str, Severity] = {"request": "deny", "admin_edit": "warn", "import": "warn"}
-_ADMIN_EDIT_ONLY: Dict[str, Severity] = {"request": "warn", "admin_edit": "deny", "import": "warn"}
-_WARN: Dict[str, Severity] = {"request": "warn", "admin_edit": "warn", "import": "warn"}
+_HARD: Dict[str, Severity] = {"request": "deny", "admin_edit": "deny"}
+_SELF_SERVICE: Dict[str, Severity] = {"request": "deny", "admin_edit": "warn"}
+_REQUEST_ONLY: Dict[str, Severity] = {"request": "deny", "admin_edit": "warn"}
+_ADMIN_EDIT_ONLY: Dict[str, Severity] = {"request": "warn", "admin_edit": "deny"}
+_WARN: Dict[str, Severity] = {"request": "warn", "admin_edit": "warn"}
 
 _REQUIRED_FIELDS = ("securable_type", "principal_name", "privilege")
 _PACKED_FIELDS = ("principal_name", "privilege")
@@ -351,7 +353,7 @@ class _Evaluator:
         self._compiled: Dict[str, Optional[re.Pattern]] = {}
 
     def severity(self, table: Dict[str, Severity]) -> Severity:
-        return "warn" if self.path == "import" else table.get(self.path, "warn")
+        return table.get(self.path, "warn")
 
     def add(self, change: Optional[_Change], code: str, table: Dict[str, Severity], message: str, **kw) -> None:
         key = (code, change.index if change else None, cell_key(kw.get("principal")),
@@ -512,8 +514,7 @@ def evaluate(
     """Findings for a batch of ``(before, after)`` row pairs.
 
     ``before`` is None for a new row and ``after`` is None for a deleted row.
-    Each finding's ``change_index`` is the pair's index in ``changes``. On the
-    ``import`` path every finding is downgraded to ``warn``. ``justification``
+    Each finding's ``change_index`` is the pair's index in ``changes``. ``justification``
     (requests) and ``reason`` (direct edits) are checked against their minimum
     lengths when given.
 
