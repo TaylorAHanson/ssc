@@ -23,7 +23,7 @@ import {
 } from './staging';
 import { EmptyState, ErrorBanner, Notice, Skeleton, Spinner, type ToastMessage } from './ui';
 import { useLoad } from './useLoad';
-import { PLANE_GROUP_LABELS, SETTINGS_PATH, errorMessage, loadSheets, plural } from './utils';
+import { SETTINGS_PATH, errorMessage, loadSheets, plural } from './utils';
 
 const RULES_PAGE = 5000;
 
@@ -150,8 +150,6 @@ export function RulesTab({ permissions, sheetName, onSheetChange, staged, setSta
       {sheet && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
           <span className="font-mono text-sm font-medium text-gray-900">{sheet.name}</span>
-          <span>{PLANE_GROUP_LABELS[sheet.plane]}</span>
-          {sheet.environment && <span>Environment {sheet.environment}</span>}
           <span>
             {sheet.export_path ? (
               <>Exported to <code className="text-gray-700">{sheet.export_path}</code></>

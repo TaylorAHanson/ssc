@@ -1,47 +1,88 @@
+import type { ReactNode } from 'react';
 import { Lock } from 'lucide-react';
-import type { RbacSheetInfo } from '../../types/rbac';
+import type { RbacPlane, RbacSheetInfo } from '../../types/rbac';
 import { cn } from '../../lib/utils';
 import { PLANE_GROUP_LABELS, PLANE_ORDER } from './utils';
 
-/** The managed sheets, grouped by type, with environment and row count. */
+/** Picks a managed sheet in two steps: the type of rule, then the environment. */
 export function SheetPicker({ sheets, selected, onSelect }: {
   sheets: RbacSheetInfo[];
   selected: string | null;
   onSelect: (name: string) => void;
 }) {
-  const groups = PLANE_ORDER.map((plane) => ({ plane, sheets: sheets.filter((s) => s.plane === plane) })).filter(
-    (g) => g.sheets.length > 0,
-  );
+  const current = sheets.find((s) => s.name === selected) ?? null;
+  const planes = PLANE_ORDER.filter((plane) => sheets.some((s) => s.plane === plane));
+  const inPlane = current ? sheets.filter((s) => s.plane === current.plane) : [];
+
+  const selectPlane = (plane: RbacPlane) => {
+    if (plane === current?.plane) return;
+    const candidates = sheets.filter((s) => s.plane === plane);
+    const next = candidates.find((s) => s.environment && s.environment === current?.environment) ?? candidates[0];
+    if (next) onSelect(next.name);
+  };
+
   return (
-    <div className="flex flex-wrap gap-x-6 gap-y-3">
-      {groups.map((g) => (
-        <div key={g.plane} role="group" aria-label={PLANE_GROUP_LABELS[g.plane]}>
-          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">{PLANE_GROUP_LABELS[g.plane]}</div>
-          <div className="flex flex-wrap gap-1.5">
-            {g.sheets.map((s) => {
-              const active = s.name === selected;
-              return (
-                <button
-                  key={s.name}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => onSelect(s.name)}
-                  title={s.editable ? undefined : 'View only for you'}
-                  className={cn(
-                    'flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-left text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
-                    active ? 'border-primary bg-primary/5 text-gray-900' : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50',
-                  )}
-                >
-                  <span className="font-mono text-xs">{s.name}</span>
-                  {s.environment && <span className="rounded bg-gray-100 px-1.5 text-[11px] text-gray-600">{s.environment}</span>}
-                  <span className="text-xs text-gray-500">{s.row_count.toLocaleString()} rows</span>
-                  {!s.editable && <Lock className="h-3 w-3 text-gray-400" aria-label="View only" />}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+      <Segmented label="Type">
+        {planes.map((plane) => (
+          <Segment key={plane} active={plane === current?.plane} onClick={() => selectPlane(plane)}>
+            {PLANE_GROUP_LABELS[plane]}
+          </Segment>
+        ))}
+      </Segmented>
+      {inPlane.length > 1 || inPlane[0]?.environment ? (
+        <Segmented label="Environment">
+          {inPlane.map((s) => (
+            <Segment
+              key={s.name}
+              active={s.name === selected}
+              onClick={() => onSelect(s.name)}
+              title={`${s.name}: ${s.row_count.toLocaleString()} rows${s.editable ? '' : ' (view only for you)'}`}
+            >
+              {s.environment ?? s.name}
+              <span className="text-xs text-gray-400">{s.row_count.toLocaleString()}</span>
+              {!s.editable && <Lock className="h-3 w-3 text-gray-400" aria-label="View only" />}
+            </Segment>
+          ))}
+        </Segmented>
+      ) : (
+        current && <span className="text-xs text-gray-500">One sheet for every environment</span>
+      )}
     </div>
+  );
+}
+
+function Segmented({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs font-medium text-gray-500">{label}</span>
+      <div role="group" aria-label={label} className="inline-flex rounded-md border border-gray-200 bg-gray-50 p-0.5">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Segment({ active, onClick, title, children }: {
+  active: boolean;
+  onClick: () => void;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      title={title}
+      className={cn(
+        'flex items-center gap-1.5 rounded px-2.5 py-1 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+        active
+          ? 'bg-white font-medium text-primary shadow-sm ring-1 ring-gray-300'
+          : 'text-gray-600 hover:text-gray-900',
+      )}
+    >
+      {children}
+    </button>
   );
 }

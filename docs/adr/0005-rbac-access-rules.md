@@ -499,7 +499,8 @@ to viewer roles, and to members of any of the three approver groups; editing is 
 type (D8). A header strip shows each type's approver group and warns when one is
 unset or can't be found. The page has four tabs:
 
-- **Rules:** one tab per sheet; column filters, search, inline editing for editors,
+- **Rules:** a Type selector, then an Environment selector, to pick the sheet; column
+  filters, search, inline editing for editors,
   a tray of staged changes, a review drawer with a reason field, and markers on rows
   that an in-flight request will change.
 - **History:** change sets with a diff and revert.

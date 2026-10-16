@@ -61,7 +61,10 @@ Requesters can't approve their own requests. See
 
 ## Rules tab
 
-Pick a sheet to see its rows exactly as the workbook had them, including packed
+Pick a sheet with the **Type** selector (UC securables, workspace securables or
+the UC metastore), then the **Environment** selector, which shows each sheet's
+row count; the metastore has one sheet for every environment. You see its rows
+exactly as the workbook had them, including packed
 cells such as `USE_SCHEMA;SELECT` or a list of groups. Search across every
 column, or filter by column. A marker on a row means an open request will
 change it.
