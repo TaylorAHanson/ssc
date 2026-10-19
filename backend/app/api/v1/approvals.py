@@ -3,9 +3,10 @@ Approval API endpoints.
 """
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict, Iterable, Optional, List
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.db import ApprovalModel, EventModel, RequestModel
+from app.db import ApprovalModel, EventModel, RequestModel, WorkflowModel
 from app.models.request import Approval, ApprovalType, StepReport
 from app.workflows.spec import STEP_REPORT_FACT
 from app.workflows.graphs import editable_states
@@ -32,6 +33,8 @@ class InboxApproval(Approval):
     selfApprovalBlocked: bool = False
     # A Platform Admin may Edit & Restart the request from this gate.
     canEditParameters: bool = False
+    # Display name of the workflow behind requestType; None when no workflow row has one.
+    workflowName: Optional[str] = None
 
 # Keys excluded from the editable workflow parameters view.
 # These are internal/system fields that should not surface to approvers.
@@ -86,11 +89,69 @@ def _load_step_reports(db: Session, request_ids: Iterable[str]) -> Dict[str, Lis
     return {rid: list(by_step.values()) for rid, by_step in latest.items()}
 
 
+def _load_workflow_names(db: Session, request_types: Iterable[str]) -> Dict[str, str]:
+    """Each request type's workflow display name, for the inbox's workflow filter.
+
+    One query for the whole inbox. A type can be served by several rows (a
+    draft fork, or a workflow whose ``key`` is the type): a ``request_type``
+    match beats a ``key`` match, and published beats draft. Types with no named
+    row are left out; the UI falls back to the type itself.
+    """
+    wanted = {t for t in request_types if t}
+    if not wanted:
+        return {}
+    rows = (
+        db.query(WorkflowModel.key, WorkflowModel.request_type, WorkflowModel.name, WorkflowModel.status)
+        .filter(or_(WorkflowModel.request_type.in_(wanted), WorkflowModel.key.in_(wanted)))
+        .all()
+    )
+    best: Dict[str, tuple] = {}
+    for key, request_type, name, status in rows:
+        name = (name or "").strip()
+        if not name:
+            continue
+        for matched, by_type in ((request_type, True), (key, False)):
+            if matched not in wanted:
+                continue
+            rank = (by_type, status == "published")
+            if matched not in best or rank > best[matched][0]:
+                best[matched] = (rank, name)
+    return {t: name for t, (_, name) in best.items()}
+
+
+def _load_approver_labels(db: Session, rows: Iterable[tuple]) -> Dict[str, str]:
+    """``approval id -> who approves`` for approvals whose gate takes its group from the access rule type.
+
+    Read from each request type's governing spec (a published workflow, else the
+    catalog), once per type in the inbox.
+    """
+    from app.services.rbac.requests import approver_label
+    from app.workflows.graphs import published_graph_spec
+    from app.workflows.graphs.specs import SPECS
+
+    gate_types: Dict[str, set] = {}
+    labels: Dict[str, str] = {}
+    for approval, request in rows:
+        if request.type not in gate_types:
+            spec = published_graph_spec(db, request.type) or SPECS.get(request.type) or {}
+            gate_types[request.type] = {
+                stage.get("type") for stage in spec.get("stages") or []
+                if isinstance(stage, dict) and stage.get("kind") == "gate"
+                and isinstance(stage.get("approver"), dict)
+                and stage["approver"].get("source") == "access_rule_type"
+            }
+        if approval.approval_type in gate_types[request.type]:
+            labels[approval.id] = approver_label(request.state_context, approval.assigned_to_role)
+    return labels
+
+
 def _map_approval(
     approval_model: ApprovalModel,
     request_model: RequestModel,
     reports: Optional[List[StepReport]] = None,
     current_user: Optional[User] = None,
+    workflow_name: Optional[str] = None,
+    approver_label: Optional[str] = None,
 ) -> InboxApproval:
     """Map an ApprovalModel + RequestModel to an Approval Pydantic response."""
     requester = request_model.requester_email
@@ -130,6 +191,8 @@ def _map_approval(
         selfApprovalBlocked=bool(current_user) and self_approval_blocked(requester, current_user),
         canEditParameters=(approval_model.approval_type == "platform_admin"
                            and bool(editable_states(request_model.type))),
+        workflowName=workflow_name,
+        approverLabel=approver_label,
     )
 
 
@@ -169,7 +232,12 @@ def get_approvals(
 
     results = query.all()
     reports = _load_step_reports(db, (am.request_id for am, _ in results))
-    return [_map_approval(am, rm, reports.get(am.request_id), current_user) for am, rm in results]
+    names = _load_workflow_names(db, (rm.type for _, rm in results))
+    labels = _load_approver_labels(db, results)
+    return [
+        _map_approval(am, rm, reports.get(am.request_id), current_user, names.get(rm.type), labels.get(am.id))
+        for am, rm in results
+    ]
 
 
 @router.get("/{approval_id}", response_model=InboxApproval)
@@ -204,6 +272,9 @@ def get_approval(
         raise HTTPException(status_code=403, detail="Not authorized to view this approval")
         
     reports = _load_step_reports(db, [approval_model.request_id])
-    return _map_approval(approval_model, request_model, reports.get(approval_model.request_id), current_user)
+    names = _load_workflow_names(db, [request_model.type])
+    labels = _load_approver_labels(db, [result])
+    return _map_approval(approval_model, request_model, reports.get(approval_model.request_id), current_user,
+                         names.get(request_model.type), labels.get(approval_model.id))
 
 

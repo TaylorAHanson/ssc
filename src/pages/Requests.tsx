@@ -384,7 +384,7 @@ export function RequestStateList({ request }: { request: Request }) {
                               <Circle className="w-4 h-4 text-gray-300" />
                             )}
                             <span className="font-medium text-gray-700">
-                              {approval.assignedToEmail || approval.assignedToRole || 'Any Platform Admin'}
+                              {approval.assignedToEmail || approval.approverLabel || approval.assignedToRole || 'Any Platform Admin'}
                             </span>
                           </div>
                           <span className={`text-xs font-medium ${

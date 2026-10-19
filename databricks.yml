@@ -1,6 +1,6 @@
 bundle:
   name: edh-ssc
-  databricks_cli_version: ">=0.283.0"  # Apps with app.config support
+  databricks_cli_version: ">=0.294.0"  # Apps telemetry_export_destinations (app.config needs 0.283.0)
 
 resources:
 
@@ -162,6 +162,10 @@ resources:
           # Per-env target-workspace SP creds (sp_dbxgrc_<env>_*), same scope.
           - name: TARGET_WORKSPACE_SP_SECRET_SCOPE
             value: "${var.controltower_secret_scope}"
+          # Lakebase Change Data Feed readiness: tables the app marks REPLICA
+          # IDENTITY FULL at startup ("none" = off). See var.lakebase_cdf_tables.
+          - name: LAKEBASE_CDF_TABLES
+            value: "${var.lakebase_cdf_tables}"
 
       user_api_scopes:
         - "sql"
@@ -423,6 +427,36 @@ variables:
   lmws_fws_url:
     description: "FWS-API entitlement base URL. Optional; set per target."
     default: ""
+  # App telemetry export (OTel logs/metrics/traces -> UC managed Delta tables,
+  # runbook in docs/PLATFORM_SETUP.md). Read only by each target's
+  # telemetry_export_destinations block, which ships commented out: the app
+  # update during `bundle deploy` may reject a destination catalog/schema that
+  # doesn't exist, so a target carries the block only once its values are real.
+  telemetry_catalog:
+    description: >-
+      Unity Catalog catalog for the app's telemetry tables (otel_logs,
+      otel_metrics, otel_spans; created on first export). Managed storage in the
+      workspace's region. The app SP needs USE CATALOG on it.
+    default: "REPLACE_WITH_TELEMETRY_CATALOG"
+  telemetry_schema:
+    description: >-
+      Schema in telemetry_catalog for the telemetry tables. The app SP needs
+      USE SCHEMA, CREATE TABLE, SELECT and MODIFY on it.
+    default: "REPLACE_WITH_TELEMETRY_SCHEMA"
+  lakebase_cdf_tables:
+    description: >-
+      App tables the backend marks REPLICA IDENTITY FULL at startup so a Lakebase
+      Change Data Feed on the app's Postgres schema captures them; the feed skips
+      every other table in the schema, including the LangGraph checkpoints.
+      "none" = off; "default" = requests, events, approvals, enforcement_audit and
+      the rbac_rules / rbac_change_sets / rbac_rule_events ledger; or a
+      comma-separated list ("default,failures"). Never blank: Apps reject empty
+      env values.
+    default: "none"
+  # NOTE: the Change Data Feed's destination catalog/schema are deliberately NOT
+  # variables. The feed is started in the Lakebase UI (or its REST API), which
+  # nothing in this bundle drives, so a value here would be read by nothing. The
+  # runbook in docs/PLATFORM_SETUP.md covers choosing and granting them.
 
 targets:
   local:
@@ -489,6 +523,10 @@ targets:
       lmws_rest_url: "REPLACE_WITH_LMWS_REST_URL"
       lmws_cache_url: "REPLACE_WITH_LMWS_CACHE_URL"
       lmws_fws_url: "REPLACE_WITH_LMWS_FWS_URL"
+      # App telemetry destination: replace both, then uncomment
+      # telemetry_export_destinations under resources below.
+      telemetry_catalog: "REPLACE_WITH_DEV_TELEMETRY_CATALOG"
+      telemetry_schema: "REPLACE_WITH_DEV_TELEMETRY_SCHEMA"
     resources:
       apps:
         edh-ssc:
@@ -507,6 +545,12 @@ targets:
                 value: "${var.lmws_cache_url}"
               - name: LMWS_FWS_URL
                 value: "${var.lmws_fws_url}"
+          # Uncomment once telemetry_catalog / telemetry_schema above are real:
+          # telemetry_export_destinations:
+          #   - unity_catalog:
+          #       logs_table: "${var.telemetry_catalog}.${var.telemetry_schema}.otel_logs"
+          #       metrics_table: "${var.telemetry_catalog}.${var.telemetry_schema}.otel_metrics"
+          #       traces_table: "${var.telemetry_catalog}.${var.telemetry_schema}.otel_spans"
         mcp-server:
           permissions:
             - level: CAN_USE
@@ -538,6 +582,18 @@ targets:
       lakebase_database_id: "db-zm1o-5e047bf1j3"
       controltower_secret_scope: "controltower_secret_scope_stg"
       governance_tags_base_branch: "stage"
+      # App telemetry destination: replace both, then uncomment the resources
+      # block below.
+      telemetry_catalog: "REPLACE_WITH_STAGE_TELEMETRY_CATALOG"
+      telemetry_schema: "REPLACE_WITH_STAGE_TELEMETRY_SCHEMA"
+    # resources:
+    #   apps:
+    #     edh-ssc:
+    #       telemetry_export_destinations:
+    #         - unity_catalog:
+    #             logs_table: "${var.telemetry_catalog}.${var.telemetry_schema}.otel_logs"
+    #             metrics_table: "${var.telemetry_catalog}.${var.telemetry_schema}.otel_metrics"
+    #             traces_table: "${var.telemetry_catalog}.${var.telemetry_schema}.otel_spans"
 
   prod:
     mode: production
@@ -560,9 +616,19 @@ targets:
       enforcement_sentinel_cron: "*/30 * * * *"
       governance_tags_base_branch: "prod"
       workflow_authoring_locked: "true"
+      # App telemetry destination: replace both, then uncomment
+      # telemetry_export_destinations under resources below.
+      telemetry_catalog: "REPLACE_WITH_PROD_TELEMETRY_CATALOG"
+      telemetry_schema: "REPLACE_WITH_PROD_TELEMETRY_SCHEMA"
     resources:
       apps:
         edh-ssc:
+          # Uncomment once telemetry_catalog / telemetry_schema above are real:
+          # telemetry_export_destinations:
+          #   - unity_catalog:
+          #       logs_table: "${var.telemetry_catalog}.${var.telemetry_schema}.otel_logs"
+          #       metrics_table: "${var.telemetry_catalog}.${var.telemetry_schema}.otel_metrics"
+          #       traces_table: "${var.telemetry_catalog}.${var.telemetry_schema}.otel_spans"
           # Prod runs on LARGE (4 vCPU / 12 GB) instead of the default MEDIUM
           # (2 vCPU / 6 GB): the Enforcement Sentinel holds a full multi-workspace
           # scan's findings in memory before persisting, and prod scans are the

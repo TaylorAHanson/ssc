@@ -83,6 +83,17 @@ def test_setting_changes_apply_without_restart(monkeypatch):
     assert approvers.approver_group("uc") == "New UC Group"
 
 
+@pytest.mark.parametrize("plane, group, label", [
+    ("uc", UC_GROUP, f"UC securables approvers: {UC_GROUP}"),
+    ("uc_metastore", MS_GROUP, f"UC metastore approvers: {MS_GROUP}"),
+    ("workspace", None, "Platform Admins (no Workspace securables group set)"),
+    (None, "grp_x", "Access rule approvers: grp_x"),
+    (None, None, "Platform Admins"),
+])
+def test_approval_label_names_the_types_group_or_the_platform_admin_fallback(plane, group, label):
+    assert approvers.approval_label(plane, group) == label
+
+
 def test_is_member_is_case_insensitive_and_trimmed():
     user = _user(groups=["uc approvers "])
     assert approvers.is_member(user, UC_GROUP) is True

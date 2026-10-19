@@ -1,15 +1,23 @@
 """Tests for the Access Rules policy module (ADR 0005 D7)."""
 
+import copy
 import logging
 
 import pytest
 
 from app.core.config import settings
+from app.core.default_config import DEFAULT_CONFIG
 from app.models.rbac import RuleRow
 from app.services.rbac import layout, policy
 
 UC_DEV = "UC_Securables_RBAC_Dev"
 OWNER = "metastore_admins"
+DEFAULT_ALLOWED = DEFAULT_CONFIG["rbac"]["allowed_privileges"]
+# What the removed never-granted list held by default; the default allow list leaves them out.
+OLD_NEVER_GRANTED = {
+    "ALL_PRIVILEGES", "MANAGE", "CREATE_CATALOG", "CREATE_EXTERNAL_LOCATION", "CREATE_STORAGE_CREDENTIAL",
+    "CREATE_CONNECTION", "CREATE_SHARE", "CREATE_RECIPIENT", "CREATE_PROVIDER", "SET_SHARE_PERMISSION",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -22,7 +30,7 @@ def _settings(monkeypatch):
         {"key": "prd", "sheet_suffix": "Prd", "self_service": True, "write_privileges": False,
          "service_principals": False},
     ])
-    monkeypatch.setattr(settings, "RBAC_HARD_DENIED_PRIVILEGES", ["ALL_PRIVILEGES", "MANAGE", "CREATE_CATALOG"])
+    monkeypatch.setattr(settings, "RBAC_ALLOWED_PRIVILEGES", copy.deepcopy(DEFAULT_ALLOWED))
     monkeypatch.setattr(settings, "RBAC_SYSTEM_GROUPS", ["account users", "users", "admins"])
     monkeypatch.setattr(settings, "RBAC_NAMING_RULES", [])
     monkeypatch.setattr(settings, "RBAC_MIN_JUSTIFICATION_LENGTH", 20)
@@ -56,10 +64,12 @@ def only(findings, code):
 
 SEVERITY_CASES = [
     # (id, changes, code, {path: severity})
-    ("hard-denied", created(privileges="USE_SCHEMA;MANAGE"), "hard_denied_privilege",
+    ("not-allowed", created(privileges="USE_SCHEMA;MANAGE"), "privilege_not_allowed",
      {"request": "deny", "admin_edit": "deny"}),
     ("all-privileges-with-a-space", created(kind="catalog", schema="", privileges="ALL PRIVILEGES"),
-     "hard_denied_privilege", {"request": "deny", "admin_edit": "deny"}),
+     "privilege_not_allowed", {"request": "deny", "admin_edit": "deny"}),
+    ("not-valid-on-the-type", created(kind="volume", obj="raw", privileges="SELECT"), "privilege_not_allowed",
+     {"request": "deny", "admin_edit": "deny"}),
     ("deprecated", created(privileges="USAGE"), "deprecated_privilege",
      {"request": "deny", "admin_edit": "deny"}),
     ("user", created(ptype="user", principals="someone@example.com"), "principal_type_not_allowed",
@@ -72,8 +82,6 @@ SEVERITY_CASES = [
      {"request": "deny", "admin_edit": "deny"}),
     ("missing-cells", created(privileges=""), "missing_cells",
      {"request": "deny", "admin_edit": "deny"}),
-    ("unknown-privilege", created(kind="volume", obj="raw", privileges="SELECT"), "unknown_privilege",
-     {"request": "deny", "admin_edit": "warn"}),
     ("unknown-securable-type", created(kind="widget"), "unknown_securable_type",
      {"request": "deny", "admin_edit": "warn"}),
     ("type-on-another-types-sheet", created(kind="connection", schema="", privileges="USE_CONNECTION"),
@@ -109,7 +117,7 @@ def test_adding_a_principal_to_a_manage_row_flags_only_the_new_atom():
     before = row(principals="sp_a", privileges="MANAGE;USE_CONNECTION", kind="connection", catalog="conn",
                  schema="", plane="uc_metastore", env="dev", ptype="service principal")
     after = before.model_copy(update={"principal_name": "sp_a;sp_b"})
-    findings = only(policy.evaluate([(before, after)], path="admin_edit"), "hard_denied_privilege")
+    findings = only(policy.evaluate([(before, after)], path="admin_edit"), "privilege_not_allowed")
     assert [(f.principal, f.privilege) for f in findings] == [("sp_b", "MANAGE")]
 
 
@@ -122,7 +130,7 @@ def test_unrelated_edit_on_a_manage_row_is_not_judged():
 def test_moving_a_row_to_another_securable_judges_every_atom():
     before = row(privileges="USE_SCHEMA;MANAGE")
     after = before.model_copy(update={"schema_name": "finance"})
-    findings = only(policy.evaluate([(before, after)], path="admin_edit"), "hard_denied_privilege")
+    findings = only(policy.evaluate([(before, after)], path="admin_edit"), "privilege_not_allowed")
     assert [(f.principal, f.privilege) for f in findings] == [("g_a", "MANAGE")]
 
 
@@ -191,9 +199,11 @@ def test_write_privileges_in_a_read_only_environment(privilege, flagged):
     assert bool(findings) is flagged
 
 
-def test_unknown_privilege_on_a_type_outside_the_registry_is_skipped():
-    findings = policy.evaluate(created(kind="widget", privileges="ANYTHING"), path="request")
-    assert codes(findings) == [("unknown_securable_type", "deny")]
+@pytest.mark.parametrize("path", ["request", "admin_edit"])
+def test_nothing_is_grantable_on_an_unknown_securable_type(path):
+    findings = policy.evaluate(created(kind="widget", privileges="ANYTHING"), path=path)
+    assert ("privilege_not_allowed", "deny") in codes(findings)
+    assert "unknown_securable_type" in {f.code for f in findings}
 
 
 def test_view_accepts_modify_as_the_workbook_does():
@@ -245,7 +255,7 @@ def test_findings_carry_index_sheet_and_rule_id():
     ]
     findings = policy.evaluate(changes, path="admin_edit")
     assert [(f.code, f.change_index, f.rule_id, f.sheet, f.principal, f.privilege) for f in findings] == [
-        ("hard_denied_privilege", 1, "r7", UC_DEV, "g_a", "MANAGE"),
+        ("privilege_not_allowed", 1, "r7", UC_DEV, "g_a", "MANAGE"),
         ("system_group", 2, "r8", UC_DEV, "admins", None),
     ]
 
@@ -358,3 +368,180 @@ def test_registry_types_are_known_securable_types():
     assert set(policy.PRIVILEGES) <= set(layout.SECURABLE_TYPES)
     for kind in ("catalog", "schema", "table", "view", "volume", "workspace", "workspace entitlement"):
         assert policy.PRIVILEGES[kind]
+
+
+# --- allow list -----------------------------------------------------------------
+
+def _allow(monkeypatch, **rows):
+    """Replace the allow list: ``_allow(monkeypatch, schema="USE_SCHEMA, SELECT")``."""
+    monkeypatch.setattr(settings, "RBAC_ALLOWED_PRIVILEGES", [
+        {"securable_type": kind.replace("_", " "), "privileges": privileges} for kind, privileges in rows.items()
+    ])
+
+
+def test_default_allow_list_keeps_todays_behaviour():
+    allowed = policy.allowed_privileges()
+    for kind, registry in policy.PRIVILEGES.items():
+        expected = {p for p in registry if policy.normalize_privilege(p) not in OLD_NEVER_GRANTED}
+        assert set(allowed.get(kind, [])) == expected, kind
+    assert "recipient" not in allowed and "provider" not in allowed
+
+
+def test_a_privilege_added_to_the_allow_list_later_becomes_grantable(monkeypatch):
+    _allow(monkeypatch, schema="USE_SCHEMA, SELECT")
+    changes = created(privileges="USE_SCHEMA;SELECT;NEW_PRIVILEGE")
+    [finding] = policy.evaluate(changes, path="admin_edit")
+    assert (finding.code, finding.severity, finding.privilege) == ("privilege_not_allowed", "deny", "NEW_PRIVILEGE")
+
+    _allow(monkeypatch, schema="USE_SCHEMA, SELECT, new privilege")
+    assert policy.evaluate(changes, path="request") == []
+    assert policy.canonical_privilege("schema", "New_Privilege") == "NEW_PRIVILEGE"
+
+
+def test_a_new_workspace_permission_takes_the_allow_lists_spelling(monkeypatch):
+    _allow(monkeypatch, cluster="CAN_ATTACH_TO, CAN_FOO")
+    assert policy.canonical_privilege("cluster", "can_foo") == "CAN_FOO"
+    assert policy.canonical_privilege("cluster", "can_bar") == "can_bar"
+
+
+def test_removing_a_privilege_from_the_allow_list_blocks_new_grants_only(monkeypatch):
+    _allow(monkeypatch, schema="USE_SCHEMA")
+    assert only(policy.evaluate(created(), path="request"), "privilege_not_allowed")
+    before = row(principals="g_a;g_b")
+    assert policy.evaluate([(before, before.model_copy(update={"principal_name": "g_a"}))], path="request") == []
+    assert policy.evaluate([(before, before.model_copy(update={"owner": "other"}))], path="request") == []
+
+
+def test_allow_list_matching_is_tolerant(monkeypatch):
+    monkeypatch.setattr(settings, "RBAC_ALLOWED_PRIVILEGES", [
+        {"securable_type": "SCHEMA", "privileges": " use schema ;select"},
+        {"securable_type": "workspace_entitlement", "privileges": "WORKSPACE_ACCESS"},
+    ])
+    assert policy.allowed_privileges() == {
+        "schema": ["USE_SCHEMA", "SELECT"], "workspace entitlement": ["workspace_access"],
+    }
+    assert policy.evaluate(created(privileges="use_schema;Select"), path="request") == []
+    changes = created(kind="workspace entitlement", privileges="Workspace_Access", plane="workspace", catalog="",
+                      schema="", owner="", workspace="ws-dev")
+    assert policy.evaluate(changes, path="request") == []
+
+
+def test_not_allowed_message_lists_the_types_privileges():
+    [finding] = policy.evaluate(created(kind="table", obj="t", privileges="MANAGE"), path="request")
+    assert "MANAGE isn't allowed on a table. Allowed on a table: APPLY_TAG, MODIFY, SELECT." in finding.message
+    assert "Admin → Settings → Access Rules → Allowed privileges" in finding.message
+
+
+def test_not_allowed_message_caps_a_long_list(monkeypatch):
+    _allow(monkeypatch, schema=", ".join(f"P{i:02d}" for i in range(25)))
+    [finding] = policy.evaluate(created(privileges="USE_SCHEMA"), path="request")
+    assert "P19 and 5 more." in finding.message and "P20" not in finding.message
+
+
+def test_a_type_without_a_row_takes_nothing_new(monkeypatch):
+    _allow(monkeypatch, schema="USE_SCHEMA, SELECT", external_location="")
+    findings = policy.evaluate(created(kind="external location", catalog="loc", schema="", plane="uc_metastore",
+                                       privileges="READ_FILES"), path="admin_edit")
+    [finding] = only(findings, "privilege_not_allowed")
+    assert finding.severity == "deny"
+    assert finding.message.startswith("Nothing can be granted on an external location yet")
+
+
+def test_an_allow_listed_deprecated_token_is_the_admins_call(monkeypatch):
+    _allow(monkeypatch, catalog="USE_CATALOG, USAGE")
+    assert policy.evaluate(created(kind="catalog", schema="", privileges="USAGE"), path="request") == []
+
+
+# --- sheet options ----------------------------------------------------------------
+
+def test_sheet_options_follow_the_allow_list_and_environments(monkeypatch):
+    _allow(monkeypatch, schema="USE_SCHEMA, select", view="SELECT", connection="USE_CONNECTION",
+           workspace="USER, ADMIN", folder="CAN_READ", recipient="")
+    monkeypatch.setattr(settings, "RBAC_ENVIRONMENTS", [
+        {"key": "dev", "sheet_suffix": "Dev", "service_principals": True,
+         "workspaces": "ws-dev, ws-dev-2, WS-DEV", "catalogs": "sales_dev"},
+        {"key": "prd", "sheet_suffix": "Prd", "service_principals": False},
+    ])
+
+    uc = policy.sheet_options(layout.sheet_spec("UC_Securables_RBAC_Dev"))
+    assert uc.model_dump() == {
+        "environments": ["dev"],
+        "securable_types": ["schema", "view"],
+        "principal_types": {"dev": ["group", "service principal"]},
+        "privileges": {"schema": ["USE_SCHEMA", "SELECT"], "view": ["SELECT"]},
+        "workspaces": [],
+        "catalogs": ["sales_dev"],
+    }
+    ws = policy.sheet_options(layout.sheet_spec("WS_Securables_RBAC_Dev"))
+    assert (ws.securable_types, ws.workspaces, ws.catalogs) == (["workspace", "folder"], ["ws-dev", "ws-dev-2"], [])
+    assert ws.privileges == {"workspace": ["USER", "ADMIN"], "folder": ["CAN_READ"]}
+    prd = policy.sheet_options(layout.sheet_spec("WS_Securables_RBAC_Prd"))
+    assert (prd.environments, prd.principal_types, prd.workspaces) == (["prd"], {"prd": ["group"]}, [])
+    meta = policy.sheet_options(layout.sheet_spec("UC_metastore_RBAC"))
+    assert meta.environments == ["dev", "prd"]
+    assert meta.principal_types == {"dev": ["group", "service principal"], "prd": ["group"]}
+    assert (meta.securable_types, meta.workspaces, meta.catalogs) == (["connection"], [], [])
+
+
+# --- configured names -------------------------------------------------------------
+
+def _names(monkeypatch, workspaces="", catalogs=""):
+    monkeypatch.setattr(settings, "RBAC_ENVIRONMENTS", [
+        {"key": "dev", "sheet_suffix": "Dev", "workspaces": workspaces, "catalogs": catalogs},
+    ])
+
+
+def ws_row(kind="workspace", workspace="ws-dev", obj="ws-dev", privileges="USER", **kw):
+    return row(kind=kind, workspace=workspace, obj=obj, privileges=privileges, plane="workspace",
+               catalog="", schema="", owner="", **kw)
+
+
+@pytest.mark.parametrize("path, severity", [("request", "deny"), ("admin_edit", "warn")])
+def test_a_workspace_outside_the_configured_list(monkeypatch, path, severity):
+    _names(monkeypatch, workspaces="ws-dev, ws-dev-2")
+    findings = only(policy.evaluate([(None, ws_row(rid=None, workspace="ws-typo", obj="ws-typo"))], path=path),
+                    "value_not_in_options")
+    assert [(f.field, f.severity, f.principal) for f in findings] == [
+        ("workspace_name", severity, "g_a"), ("object_name", severity, "g_a"),
+    ]
+    assert 'WorkspaceName "ws-typo"' in findings[0].message and "ws-dev, ws-dev-2" in findings[0].message
+
+
+def test_configured_names_match_case_insensitively(monkeypatch):
+    _names(monkeypatch, workspaces="ws-dev", catalogs="Sales_Dev")
+    assert policy.evaluate([(None, ws_row(rid=None, workspace="WS-DEV", obj="ws-dev"))], path="request") == []
+    assert policy.evaluate(created(catalog="sales_dev"), path="request") == []
+
+
+def test_securable_name_is_checked_only_on_workspace_types(monkeypatch):
+    _names(monkeypatch, workspaces="ws-dev")
+    folder = ws_row(rid=None, kind="folder", obj="/Shared/reports", privileges="CAN_READ")
+    assert policy.evaluate([(None, folder)], path="request") == []
+    entitlement = ws_row(rid=None, kind="workspace entitlement", obj="ws-other", privileges="workspace_access")
+    assert [f.field for f in only(policy.evaluate([(None, entitlement)], path="request"),
+                                  "value_not_in_options")] == ["object_name"]
+
+
+def test_catalog_outside_the_configured_list(monkeypatch):
+    _names(monkeypatch, catalogs="sales_dev, finance_dev")
+    [finding] = only(policy.evaluate(created(catalog="main"), path="request"), "value_not_in_options")
+    assert (finding.field, finding.severity) == ("catalog", "deny")
+    assert 'Catalog "main"' in finding.message and "sales_dev, finance_dev" in finding.message
+    moved = row(catalog="sales_dev").model_copy(update={"catalog": "main"})
+    assert only(policy.evaluate([(row(catalog="sales_dev"), moved)], path="request"), "value_not_in_options")
+
+
+def test_names_already_in_a_row_are_not_judged(monkeypatch):
+    _names(monkeypatch, workspaces="ws-dev", catalogs="sales_dev")
+    legacy = ws_row(workspace="ws-legacy", obj="ws-legacy")
+    assert policy.evaluate([(legacy, legacy.model_copy(update={"principal_name": "g_a;g_b"}))],
+                           path="request") == []
+    uc_legacy = row(catalog="main")
+    assert policy.evaluate([(uc_legacy, uc_legacy.model_copy(update={"principal_name": "g_a;g_b"}))],
+                           path="request") == []
+
+
+def test_blank_lists_leave_names_free(monkeypatch):
+    _names(monkeypatch)
+    assert policy.evaluate([(None, ws_row(rid=None, workspace="anything", obj="anything"))], path="request") == []
+    assert policy.evaluate(created(catalog="anything"), path="request") == []

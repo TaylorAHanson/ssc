@@ -25,7 +25,12 @@ The approver group is a Databricks group, named exactly as it appears in
 Databricks. Its members approve requests of that type and can edit that type's
 rules directly. The strip at the top of the page shows each type's group and
 warns when one isn't set or can't be found in Databricks. A type with no group
-falls back to Platform Admins.
+falls back to Platform Admins, and Platform Admins can approve every type.
+
+The access request workflow reads these settings when each request reaches its
+approval step, so you change approvers here, not in the workflow. In the
+workflow editor that step shows as **Access rule approvers** and lists the
+three groups.
 
 ## Who can use the page
 
@@ -42,7 +47,7 @@ Nobody else sees the page in the sidebar.
 People ask the assistant for access, for example "give `grp_finance_analysts`
 SELECT on the `sales` schema in prod". The assistant first checks the rules: if
 the group already has that access, it says so instead of filing a request.
-Otherwise it shows the planned change, including any prerequisite it adds
+Otherwise it shows the proposed change, including any prerequisite it adds
 (such as `USE_SCHEMA` alongside `SELECT`), and asks for confirmation and a
 justification in the requester's own words.
 
@@ -50,11 +55,18 @@ A request covers one type. If an ask spans types, such as workspace access plus
 a schema grant, the assistant files one request per type and links them, since
 each type has different approvers. Each part is approved on its own.
 
-The approval card shows the planned change, the approver group and any linked
-requests. Approving it records the change in the rules straight away; the
-request then completes and names the next scheduled export. When that export
-runs, the request's timeline shows it. Terraform applies the change on its next
-run.
+Each request then goes through three steps:
+
+1. **Prepare** works out the exact row changes and who approves.
+2. **Approve** waits for the approver group of the request's type. The approval
+   card shows the prepared change, any linked requests, and who approves, such
+   as "UC securables approvers: `grp_uc_admins`", or "Platform Admins (no UC
+   securables group set)" when that type has no group.
+3. **Record** writes the approved change into the rules straight away. The
+   request then completes and names the next scheduled export.
+
+When that export runs, the request's timeline shows it. Terraform applies the
+change on its next run.
 
 Requesters can't approve their own requests. See
 [Approvals](settings-and-access.md#approvals) in Settings.
@@ -72,11 +84,46 @@ change it.
 If you can edit the sheet:
 
 1. Edit cells inline, add rows, duplicate a row or delete one. Your edits stay
-   staged in the tray at the bottom, even if you switch sheets.
+   staged in the tray at the bottom until you save or discard them; switching
+   sheets or tabs asks before discarding them.
 2. Select **Review** to check the changes against the same rules that requests
-   follow. Blocking findings, such as a hard-denied privilege or an individual
-   user, must be fixed first. Warnings don't block.
+   follow. Blocking findings, such as a privilege that isn't on the allow list
+   or an individual user, must be fixed first. Warnings don't block, including
+   a workspace or catalog name that isn't in the environment's list.
 3. Give a reason and commit. The whole set is saved together, or not at all.
+
+Where a column has a set list of values, editing a cell offers that list
+instead of free text:
+
+- **Environment**: any environment on the metastore sheet; on an
+  environment's own sheet, just that environment.
+- **Securable type**: the types this sheet holds.
+- **Principal type**: `group`, plus `service principal` where the row's
+  environment allows service principals.
+- **Privilege**: a checklist of what the allow list permits on the row's
+  securable type; tick as many as you need. A privilege already on the row
+  that the allow list doesn't include stays ticked and marked in red. You can
+  remove it, but you can't add it back.
+- **Workspace name**, and the securable name on a `workspace` or
+  `workspace entitlement` row: the workspaces set up for the environment.
+- **Catalog**, on UC securables sheets: the catalogs set up for the
+  environment.
+
+Workspace names and catalogs stay free text until an environment has a list.
+A value already on the row that isn't in the list shows as the current choice,
+and it stays as it is unless you pick another. The other columns, such as
+schema, object, owner and principal names, are free text that suggests the
+values already used on the sheet; you can still type a new one. In a list,
+the arrow keys move and typing jumps to a value; Space ticks a privilege,
+Enter saves and Esc cancels.
+
+When your changes put a value outside its list, for example a privilege the
+row's new securable type doesn't allow, the grid marks it in red so you can
+fix it before you review. Values you haven't touched aren't marked.
+
+The lists come from **Admin → Settings → Watch Tower → Access Rules**: the
+**Allowed privileges (allow only)** setting, and the **Workspaces** and
+**Catalogs** columns of **Environments**.
 
 If someone else changed a row after you loaded it, the commit stops and shows
 you their version. You can keep your edit on top of theirs or drop it.
@@ -142,15 +189,29 @@ uses:
   suffix (`Dev`, `Prd`, …), its export path, and its policy: whether
   self-service requests are allowed, whether write privileges and service
   principals are, and whether direct edits need a second approver
-  (**Two-person rule**).
+  (**Two-person rule**). **Workspaces** and **Catalogs** (comma-separated)
+  are the names the grid offers in its dropdowns on that environment's
+  sheets. When a list is set, only those names can be added: a request using
+  another name is blocked, and a direct edit gets a warning. Leave a list
+  blank to let people type any name.
 - **Metastore export path**, **Export schedule**, **Also export after every
   change**, **Write a byte-order mark**, **Line ending**, and how long exported
   files are kept.
 - The three approver groups and **Viewer roles**.
 - **Max row changes per save**, and the minimum reason and justification
   lengths.
-- **Never-granted privileges**, **System groups** nobody may change, the
-  **Default owner** and **Naming rules**.
+- **Allowed privileges (allow only)**: one row per securable type, listing
+  the only privileges a request or direct edit can add on it. The grid offers
+  these as its choices. A type with no row can't be granted anything new, and
+  a privilege Databricks adds later can't be granted until you add it here.
+  Removing a privilege is always allowed, and existing rules are left as they
+  are, even where they hold a privilege the list no longer includes. The
+  default list covers every privilege {{brand_name}} knows except
+  `ALL_PRIVILEGES`, `MANAGE`, `SET_SHARE_PERMISSION` and the metastore's
+  `CREATE_CATALOG`, `CREATE_EXTERNAL_LOCATION`, `CREATE_STORAGE_CREDENTIAL`,
+  `CREATE_CONNECTION`, `CREATE_SHARE`, `CREATE_RECIPIENT` and `CREATE_PROVIDER`.
+- **System groups** nobody may change, the **Default owner** and **Naming
+  rules**.
 - **Header aliases**, for a renamed workbook column, and **Allow reset and
   re-import**.
 

@@ -65,6 +65,9 @@ class Gate:
     #   "approver_group_tag" -> resolve the UC ``approver_group`` tag off the
     #                           request's assets (``approver_assets_from``),
     #                           optionally falling back to the asset owner.
+    #   "access_rule_type"   -> the approver group set in Admin -> Settings for
+    #                           the request's type of access rule
+    #                           (``approver_rule_type_from``); none when unset.
     # The gate node resolves this to a list of approver identifiers and surfaces
     # them in the interrupt payload (``approvers``/``data_owners``). Takes
     # precedence over ``approvers_from`` when set.
@@ -72,6 +75,7 @@ class Gate:
     approver_group: Optional[str] = None
     approver_assets_from: Optional[Callable[[Dict[str, Any]], Any]] = None
     approver_fallback_to_owner: bool = True
+    approver_rule_type_from: Optional[Callable[[Dict[str, Any]], Any]] = None
     # For ``type == "training"`` gates: the specific LMS course this gate requires.
     # When set, the gate is auto-satisfied once the requester has a completion for
     # ``course_code`` (looked up via the training provider), instead of requiring a
@@ -86,6 +90,8 @@ class Gate:
     # Optional SLA in days, used for aging/escalation visibility. A manual task can
     # park a request indefinitely, so the inbox needs to be able to show "overdue".
     due_in_days: Optional[int] = None
+    # Former node ids: a checkpoint waiting in one of them resumes here.
+    renamed_from: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -109,6 +115,8 @@ class Step:
     # graph ``context`` so later stages can read them — e.g. a resolve_owners
     # step writing ``data_owners`` for a downstream gate's ``approvers_from``.
     writes_context: Optional[List[str]] = None
+    # Former node ids: a checkpoint waiting in one of them resumes here.
+    renamed_from: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -222,14 +230,21 @@ def _gate_node(gate: Gate):
 async def _resolve_gate_approvers(gate: "Gate", ctx: Dict[str, Any]) -> List[str]:
     """Resolve a gate's approver identifier(s) to a flat list of strings.
 
-    Precedence: the declarative ``approver_source`` (``group`` literal or
-    ``approver_group_tag`` UC-tag lookup) wins; otherwise fall back to the
-    ``approvers_from`` expression for backward compatibility. Group/role names
-    and owner emails are both returned as-is — the approval layer decides how to
-    route each (email -> assignee, otherwise -> role/group).
+    Precedence: the declarative ``approver_source`` (``group`` literal,
+    ``approver_group_tag`` UC-tag lookup or ``access_rule_type`` setting) wins;
+    otherwise fall back to the ``approvers_from`` expression for backward
+    compatibility. Group/role names and owner emails are both returned as-is —
+    the approval layer decides how to route each (email -> assignee, otherwise
+    -> role/group).
     """
     if gate.approver_source == "group":
         return [gate.approver_group] if gate.approver_group else []
+    if gate.approver_source == "access_rule_type":
+        from app.services.rbac.approvers import approver_group
+
+        plane = gate.approver_rule_type_from(ctx) if gate.approver_rule_type_from else ctx.get("plane")
+        group = approver_group(plane) if isinstance(plane, str) and plane else None
+        return [group] if group else []
     if gate.approver_source == "approver_group_tag":
         # Lazy import keeps the pure graph module free of provider/IO imports.
         from app.workflows.tools import resolve_owner_groups_from_assets
@@ -508,22 +523,26 @@ def build_spec_graph(
     reject_entry = "rejected"
     if spec.on_reject:
         for idx, step in enumerate(spec.on_reject):
-            g.add_node(step.name, _reject_step_node(step))
             nxt_reject = (
                 spec.on_reject[idx + 1].name if idx + 1 < len(spec.on_reject) else "rejected"
             )
-            g.add_edge(step.name, nxt_reject)
+            for node_id in (step.name, *step.renamed_from):
+                g.add_node(node_id, _reject_step_node(step))
+                g.add_edge(node_id, nxt_reject)
         reject_entry = spec.on_reject[0].name
 
     for i, stage in enumerate(spec.stages):
         nxt = next_entry(i)
         if isinstance(stage, Gate):
-            g.add_node(stage.name, _gate_node(stage))
-            g.add_conditional_edges(
-                stage.name,
-                _gate_router(stage.name, nxt),
-                {"next": nxt, "rejected": reject_entry},
-            )
+            # A former name is only ever entered by a checkpoint taken under it: LangGraph
+            # triggers each node by its own name, so no new edge has to point there.
+            for node_id in (stage.name, *stage.renamed_from):
+                g.add_node(node_id, _gate_node(stage))
+                g.add_conditional_edges(
+                    node_id,
+                    _gate_router(stage.name, nxt),
+                    {"next": nxt, "rejected": reject_entry},
+                )
         elif isinstance(stage, SubWorkflow):
             if _depth + 1 > _MAX_SUBWORKFLOW_DEPTH:
                 raise SpecError(
@@ -572,8 +591,9 @@ def build_spec_graph(
                 {"next": nxt, "rejected": reject_entry},
             )
         else:  # Step
-            g.add_node(stage.name, _step_node(stage))
-            g.add_edge(stage.name, nxt)
+            for node_id in (stage.name, *stage.renamed_from):
+                g.add_node(node_id, _step_node(stage))
+                g.add_edge(node_id, nxt)
 
     g.add_edge(START, entries[0] if entries else "complete")
     g.add_edge("complete", END)

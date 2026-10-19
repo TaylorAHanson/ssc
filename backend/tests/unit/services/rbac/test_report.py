@@ -87,7 +87,7 @@ def test_report_lists_blocked_items_and_loose_denies():
         items=[bad], added_prerequisites=[], diffs=[], blocked=True,
         outcomes=[ItemOutcome(index=0, item=bad, status="blocked", reason="MANAGE can't be requested.")],
         findings=[
-            Finding(severity="deny", code="hard_denied_privilege", message="MANAGE can't be requested.",
+            Finding(severity="deny", code="privilege_not_allowed", message="MANAGE can't be requested.",
                     change_index=0),
             Finding(severity="deny", code="justification_too_short", message="Say why in at least 20 characters."),
         ],

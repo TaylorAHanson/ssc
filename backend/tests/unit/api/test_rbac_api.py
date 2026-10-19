@@ -5,6 +5,7 @@ Each test gets a private in-memory database: the ledger commits and rolls back
 its own transactions, which would discard the shared ``db_session`` fixture's
 outer transaction. Group membership is mocked through ``User.entitlements``.
 """
+import copy
 import io
 import tempfile
 
@@ -20,6 +21,7 @@ import app.db  # noqa: F401  (registers every model on Base.metadata)
 from app.api.deps import get_current_user
 from app.api.v1 import rbac as rbac_api
 from app.core.config import _yaml_config, settings
+from app.core.default_config import DEFAULT_CONFIG
 from app.core.exceptions import PermanentError
 from app.db import RequestModel
 from app.db.base import Base
@@ -80,7 +82,8 @@ def _settings(monkeypatch):
     monkeypatch.setattr(settings, "RBAC_MAX_CHANGES_PER_COMMIT", 200)
     monkeypatch.setattr(settings, "RBAC_MIN_REASON_LENGTH", 10)
     monkeypatch.setattr(settings, "RBAC_MIN_JUSTIFICATION_LENGTH", 20)
-    monkeypatch.setattr(settings, "RBAC_HARD_DENIED_PRIVILEGES", ["ALL_PRIVILEGES", "MANAGE"])
+    monkeypatch.setattr(settings, "RBAC_ALLOWED_PRIVILEGES",
+                        copy.deepcopy(DEFAULT_CONFIG["rbac"]["allowed_privileges"]))
     monkeypatch.setattr(settings, "RBAC_SYSTEM_GROUPS", ["account users", "users", "admins"])
     monkeypatch.setattr(settings, "RBAC_NAMING_RULES", [])
     monkeypatch.setattr(settings, "RBAC_HEADER_ALIASES", [])
@@ -275,6 +278,60 @@ def test_sheets_mark_the_members_planes_editable(api, db):
     assert sheets[WS_DEV]["editable"] is False
     assert sheets[META]["export_target"] == "metastore"
     assert not any(s["editable"] for s in api(VIEWER).get(f"{BASE}/sheets").json())
+
+
+def test_sheets_carry_the_dropdown_options(api, monkeypatch):
+    envs = [dict(e) for e in ENVIRONMENTS]
+    envs[0].update(workspaces="ws-dev, ws-dev-analytics", catalogs="sales_dev, finance_dev")
+    monkeypatch.setattr(settings, "RBAC_ENVIRONMENTS", envs)
+    sheets = {s["name"]: s["options"] for s in api(VIEWER).get(f"{BASE}/sheets").json()}
+
+    uc = sheets[UC_DEV]
+    assert set(uc) == {"environments", "securable_types", "principal_types", "privileges", "workspaces", "catalogs"}
+    assert uc["environments"] == ["dev"]
+    assert uc["securable_types"][:3] == ["catalog", "schema", "table"]
+    assert "connection" not in uc["securable_types"] and set(uc["privileges"]) == set(uc["securable_types"])
+    assert "SELECT" in uc["privileges"]["schema"] and "MANAGE" not in uc["privileges"]["schema"]
+    assert uc["principal_types"] == {"dev": ["group", "service principal"]}
+    assert (uc["catalogs"], uc["workspaces"]) == (["sales_dev", "finance_dev"], [])
+
+    ws = sheets[WS_DEV]
+    assert "workspace entitlement" in ws["securable_types"]
+    assert ws["privileges"]["workspace"] == ["ADMIN", "USER"]
+    assert (ws["workspaces"], ws["catalogs"]) == (["ws-dev", "ws-dev-analytics"], [])
+    assert sheets["WS_Securables_RBAC_Prd"]["principal_types"] == {"prd": ["group"]}
+    assert sheets["WS_Securables_RBAC_Prd"]["workspaces"] == []
+
+    meta = sheets[META]
+    assert meta["environments"] == ["dev", "prd"]
+    assert meta["principal_types"] == {"dev": ["group", "service principal"], "prd": ["group"]}
+    assert "connection" in meta["securable_types"] and (meta["workspaces"], meta["catalogs"]) == ([], [])
+
+
+def test_a_privilege_added_to_the_allow_list_is_offered_and_accepted(api, monkeypatch):
+    client = api(UC_MEMBER)
+    change = body(uc_create(privilege="USE_SCHEMA;SELECT;NEW_PRIVILEGE"))
+    preview = client.post(f"{BASE}/changes/validate", json=change).json()
+    assert preview["blocked"] is True
+    assert [f["privilege"] for f in preview["findings"] if f["code"] == "privilege_not_allowed"] == ["NEW_PRIVILEGE"]
+
+    rows = copy.deepcopy(DEFAULT_CONFIG["rbac"]["allowed_privileges"])
+    schema = next(r for r in rows if r["securable_type"] == "schema")
+    schema["privileges"] += ", NEW_PRIVILEGE"
+    monkeypatch.setattr(settings, "RBAC_ALLOWED_PRIVILEGES", rows)
+    assert client.post(f"{BASE}/changes/validate", json=change).json()["blocked"] is False
+    options = {s["name"]: s["options"] for s in client.get(f"{BASE}/sheets").json()}[UC_DEV]
+    assert options["privileges"]["schema"][-1] == "NEW_PRIVILEGE"
+
+
+def test_a_workspace_off_the_configured_list_warns_on_a_direct_edit(api, db, monkeypatch):
+    envs = [dict(e) for e in ENVIRONMENTS]
+    envs[0]["workspaces"] = "ws-dev-analytics"
+    monkeypatch.setattr(settings, "RBAC_ENVIRONMENTS", envs)
+    preview = api(WS_MEMBER).post(f"{BASE}/changes/validate", json=body(ws_create())).json()
+    flagged = [f for f in preview["findings"] if f["code"] == "value_not_in_options"]
+    assert {(f["field"], f["severity"]) for f in flagged} == {("workspace_name", "warn"), ("object_name", "warn")}
+    assert preview["blocked"] is False and "ws-dev-analytics" in flagged[0]["message"]
 
 
 def test_rules_filter_search_and_cap_the_page_size(api, db):
@@ -550,28 +607,28 @@ def test_two_person_revert_files_a_request_and_leaves_the_ledger_untouched(api, 
     assert db.query(RequestModel).count() == 1
 
 
-def test_a_filed_revert_applies_once_another_member_approves(api, db, two_person_dev, steps):
+def test_a_filed_revert_is_recorded_once_another_member_approves(api, db, two_person_dev, steps):
     original = _original(db, uc_create())
     cs_id, created_id = original.change_set_id, original.diffs[0].rule_id
     request_id = api(UC_MEMBER).post(f"{BASE}/history/{cs_id}/revert",
                                      json={"reason": "Created on the wrong schema"}).json()["request_id"]
 
-    assert rq.plan_step(request_id)["approvers"] == [UC_GROUP]
+    assert rq.prepare_step(request_id)["approvers"] == [UC_GROUP]
     _approve(db, request_id, UC_MEMBER)
     with pytest.raises(PermanentError, match="someone other than the requester"):
-        rq.apply_step(request_id)
+        rq.record_step(request_id)
     db.expire_all()
     assert db.get(RbacRuleModel, created_id).status == "active"
 
     _approve(db, request_id, EVERY_GROUP)
-    applied = rq.apply_step(request_id)
+    recorded = rq.record_step(request_id)
     db.expire_all()
     assert db.get(RbacRuleModel, created_id).status == "deleted"
-    assert db.get(RbacChangeSetModel, cs_id).reverted_by == applied["change_set_id"]
-    assert rq.apply_step(request_id)["already_applied"]
+    assert db.get(RbacChangeSetModel, cs_id).reverted_by == recorded["change_set_id"]
+    assert rq.record_step(request_id)["already_recorded"]
     history = api(VIEWER).get(f"{BASE}/history").json()
     assert history["total"] == 2
-    revert = next(cs for cs in history["change_sets"] if cs["id"] == applied["change_set_id"])
+    revert = next(cs for cs in history["change_sets"] if cs["id"] == recorded["change_set_id"])
     assert (revert["source"], revert["actor"]) == ("revert", UC_MEMBER.email)
     assert revert["reason"] == f"Created on the wrong schema (request {request_id})"
 
@@ -582,7 +639,7 @@ def test_a_two_person_revert_across_types_is_one_request_for_platform_admins(api
     assert res.status_code == 200 and res.json()["request_id"]
     request = db.get(RequestModel, res.json()["request_id"])
     assert request.state_context["plane"] is None
-    assert rq.plan_step(request.id)["approvers"] == []
+    assert rq.prepare_step(request.id)["approvers"] == []
     assert rule_count(db) == 2 and db.get(RbacChangeSetModel, original.change_set_id).reverted_by is None
 
 

@@ -69,10 +69,17 @@ GRANT READ VOLUME, WRITE VOLUME ON VOLUME <catalog>.<schema>.<volume> TO `<app-s
 --   give the App SP CAN MANAGE on that folder (workspace UI → folder → Share).
 ```
 
+App telemetry export (only for a target whose `telemetry_export_destinations` block is enabled in `databricks.yml`; runbook in [PLATFORM_SETUP.md §7](./PLATFORM_SETUP.md#7-optional-export-app-logs-and-lakebase-history-to-unity-catalog)). The app writes its OpenTelemetry logs to `otel_logs`, `otel_metrics` and `otel_spans` in this schema:
+
+```sql
+GRANT USE CATALOG ON CATALOG <telemetry_catalog> TO `<app-sp>`;
+GRANT USE SCHEMA, CREATE TABLE, SELECT, MODIFY ON SCHEMA <telemetry_catalog>.<telemetry_schema> TO `<app-sp>`;
+```
+
 Workspace + database:
 
 - **Workspace admin** on the home workspace (it is the app host and may enforce there).
-- Ownership / connect on its **Lakebase** Postgres database (created with the app).
+- Ownership / connect on its **Lakebase** Postgres database (created with the app). Ownership of its tables is also what lets the app set `REPLICA IDENTITY FULL` for a Lakebase Change Data Feed (`lakebase_cdf_tables`). The feed needs no Unity Catalog grant on the App SP; the person who starts it needs the destination grants.
 
 > **Not required:** `SELECT` on the governed tables/views themselves. `BROWSE` covers discovery; `APPLY TAG` (on the certification identity) covers certification.
 
@@ -137,10 +144,12 @@ GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<
 | Workspace admin | target workspace | ✓ (home) | ✓ | Scan/remediate jobs, clusters, apps, warehouses, …; turn approved previews on/off |
 | `READ VOLUME`, `WRITE VOLUME` (+ `USE CATALOG`, `USE SCHEMA`) | each Access Rules export volume | ✓§ | — | Write the Access Rules CSVs the Terraform pipeline reads |
 | `CAN MANAGE` | each Access Rules export workspace folder | ✓§ | — | Same, when the export path is a workspace folder |
+| `USE SCHEMA`, `CREATE TABLE`, `SELECT`, `MODIFY` (+ `USE CATALOG`) | app telemetry schema | ✓¶ | — | Write the app's OpenTelemetry logs, metrics and spans to Unity Catalog |
 
 `✓*` = conditional (only when the RBAC / access-controls certification check is enabled).
 `✓†` = only the Sentinel SP for the data-certification workspace (`SENTINEL_DATA_CERT_WORKSPACE`) needs the Unity Catalog grants; SPs that only scan workspace resources don't.
 `✓§` = only for the export paths you configure, and only when Access Rules (`features.rbac`) is on.
+`✓¶` = only for targets with app telemetry export enabled (`telemetry_export_destinations` in `databricks.yml`).
 `‡` = the App SP needs these **only** when it is also the governance/certification identity — i.e. no dedicated certification-workspace SP is configured (`SENTINEL_DATA_CERT_WORKSPACE` blank), so discovery and certification fall back to the App SP. In the recommended setup they live on the cert SP instead.
 
 **Never needed:** `SELECT` (or ownership) on the governed data tables/views. Discovery is covered by `BROWSE`; certification is covered by `APPLY TAG`.

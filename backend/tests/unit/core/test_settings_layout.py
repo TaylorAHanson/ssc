@@ -242,3 +242,23 @@ def test_validate_key_rejects_retired_keys():
 
 def test_web_search_config_has_no_algolia():
     assert "algolia" not in settings.web_search_config()
+
+
+def test_a_leftover_never_granted_privileges_override_is_ignored(caplog):
+    db = _FakeDb([_Row("RBAC_HARD_DENIED_PRIVILEGES", ["SELECT"])])
+    with caplog.at_level(logging.INFO, logger=ss.logger.name):
+        assert ss.load_overrides(db) == 0
+    assert not hasattr(settings, "RBAC_HARD_DENIED_PRIVILEGES")
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_access_rules_defaults_pass_their_field_specs():
+    allow_list = ss._EDITABLE_BY_KEY["RBAC_ALLOWED_PRIVILEGES"]
+    rows = DEFAULT_CONFIG["rbac"]["allowed_privileges"]
+    assert ss._coerce(allow_list, rows) == rows
+    environments = ss._coerce(ss._EDITABLE_BY_KEY["RBAC_ENVIRONMENTS"], DEFAULT_CONFIG["rbac"]["environments"])
+    assert [e["key"] for e in environments] == ["dev", "tst", "stg", "prd"]
+    with pytest.raises(ValueError, match="duplicate"):
+        ss._coerce(allow_list, [{"securable_type": "schema", "privileges": "SELECT"}] * 2)
+    with pytest.raises(ValueError, match="must be one of"):
+        ss._coerce(allow_list, [{"securable_type": "widget", "privileges": "SELECT"}])

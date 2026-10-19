@@ -116,6 +116,9 @@ class Approval(BaseModel):
     requestedByEmail: str
     assignedToEmail: Optional[str] = None
     assignedToRole: Optional[str] = None
+    # Who approves, when the gate's group comes from a setting (the access rule type's
+    # approver group); None -> the UI labels the approval by its type.
+    approverLabel: Optional[str] = None
     approvedBy: Optional[str] = None
     approvedAt: Optional[datetime] = None
     rejectedBy: Optional[str] = None

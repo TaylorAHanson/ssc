@@ -95,6 +95,13 @@ def _format_request(
     approvals = []
     if hasattr(req, "approvals") and req.approvals:
         from app.models.request import Approval
+        approver_labels: dict = {}
+        if not summary:  # the label reads state_context, which list views never load
+            from app.api.v1.approvals import _load_approver_labels
+            try:
+                approver_labels = _load_approver_labels(db, [(a, req) for a in req.approvals])
+            except Exception as e:  # noqa: BLE001 - a missing label falls back to the role
+                logger.warning("Couldn't label approvers for request %s: %s", req.id, e)
         for app in req.approvals:
             approvals.append(Approval(
                 id=app.id,
@@ -106,6 +113,7 @@ def _format_request(
                 requestedByEmail=app.requested_by_email or "",
                 assignedToEmail=app.assigned_to_email,
                 assignedToRole=app.assigned_to_role,
+                approverLabel=approver_labels.get(app.id),
                 approvedBy=app.approved_by,
                 approvedAt=app.approved_at,
                 rejectedBy=app.rejected_by,

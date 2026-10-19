@@ -109,14 +109,17 @@ from app.workflows.tools.preview_features import (
     verify_preview_setting,
 )
 from app.workflows.tools.rbac import (
-    apply_access_change,
-    rbac_plan_access_change,
+    RENAMED_TOOLS as _RBAC_RENAMED_TOOLS,
+    rbac_prepare_access_change,
+    record_access_change,
 )
 from app.workflows.tools.sentinel import (
     sentinel_discover,
     sentinel_enforce,
     sentinel_notify,
 )
+
+RENAMED_TOOLS = {**_RBAC_RENAMED_TOOLS}
 
 __all__ = [
     # Common getters / helpers
@@ -174,8 +177,10 @@ __all__ = [
     "set_preview_target_status",
     "verify_preview_setting",
     # Access Rules requests
-    "apply_access_change",
-    "rbac_plan_access_change",
+    "rbac_prepare_access_change",
+    "record_access_change",
+    # Former tool names (old -> current), resolved by the tool registry
+    "RENAMED_TOOLS",
     # Sentinel
     "sentinel_discover",
     "sentinel_enforce",

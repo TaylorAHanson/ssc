@@ -72,6 +72,7 @@ Open `databricks.yml` in the root of your repository and update the `variables` 
 - `ai_gateway_endpoint` (default empty) — if set, the agent's LLM calls route through this AI Gateway endpoint (model routing/A-B, rate + cost limits, and input guardrails are configured **on the gateway**, not in app code). Leave empty to call `model_serving_endpoint` directly.
 - `mlflow_tracing_enabled` (default `false`) / `mlflow_experiment` — enable one MLflow trace per agent turn into the given experiment.
 - `identity_provider` (default `noop`) — pluggable identity-group backend: `noop`, `rest` (SCIM/Entra/Okta), or `lmws`.
+- `telemetry_catalog` / `telemetry_schema` (per target, `REPLACE_WITH_...` placeholders) and `lakebase_cdf_tables` (default `none`) — optional exports of the app's logs and of its Lakebase change history to Unity Catalog. See [Section 7](#7-optional-export-app-logs-and-lakebase-history-to-unity-catalog).
 
 ---
 
@@ -171,3 +172,88 @@ python -m scripts.register_responses_agent \
 The script logs the agent (models-from-code), registers it to Unity Catalog, attaches the LLM/gateway serving endpoints as resources for auth passthrough, and (with `--deploy`) provisions the serving endpoint.
 
 > **AI Gateway note:** The new Unity AI Gateway serving objects aren't yet declarable in a Databricks Asset Bundle, which is why this step is a script rather than part of `databricks.yml`. To route the *running app* through a gateway you only need to set the `ai_gateway_endpoint` variable — no code change.
+
+---
+
+## 7. (Optional) Export App Logs and Lakebase History to Unity Catalog
+
+Two independent, opt-in exports. Both write Unity Catalog managed Delta tables, and neither is needed to run the app.
+
+| | App telemetry export | Lakebase Change Data Feed |
+|---|---|---|
+| Captures | The app's OpenTelemetry logs (spans and metrics only with custom instrumentation) | Every insert, update and delete on the app tables you list |
+| Configured in | `databricks.yml`, per target | One `databricks.yml` variable, plus **Start** in the Lakebase UI |
+| Lands in | `otel_logs`, `otel_metrics`, `otel_spans` | `lb_<table>_history`, one per source table |
+
+### Step 7.1: App telemetry export (OpenTelemetry → Unity Catalog)
+
+**Requirements:** the workspace is in a [region that supports app telemetry](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/observability#requirements); the destination schema has managed storage in the workspace's region; Databricks CLI 0.294.0+ (the bundle pins this).
+
+1. **Choose a destination** catalog and schema per environment. Environments can share one schema: every row carries the app name in `service_name`.
+2. **Grant access.** The app's service principal (Step 5.1) writes the tables; the identity that runs `bundle deploy` (the CI/CD SP, or you) needs `CREATE TABLE` so the tables can be created on first export:
+   ```sql
+   GRANT USE CATALOG ON CATALOG <telemetry_catalog> TO `<app-sp>`;
+   GRANT USE SCHEMA, CREATE TABLE, SELECT, MODIFY ON SCHEMA <telemetry_catalog>.<telemetry_schema> TO `<app-sp>`;
+   GRANT USE CATALOG ON CATALOG <telemetry_catalog> TO `<deployer>`;
+   GRANT USE SCHEMA, CREATE TABLE ON SCHEMA <telemetry_catalog>.<telemetry_schema> TO `<deployer>`;
+   ```
+3. **Fill in the placeholders** in `databricks.yml` under the target (`dev`, `stage` or `prod`): set `telemetry_catalog` and `telemetry_schema` (they ship as `REPLACE_WITH_<ENV>_TELEMETRY_CATALOG` / `REPLACE_WITH_<ENV>_TELEMETRY_SCHEMA`), then uncomment that target's `telemetry_export_destinations` block (in `stage` the whole commented `resources:` block). The block ships commented out because the app update during `bundle deploy` may reject a destination that doesn't exist, so a target carries it only once its values are real.
+4. **Deploy** the target as usual. Telemetry starts flowing once the app redeploys.
+5. **Verify** in Databricks SQL after opening the app once:
+   ```sql
+   SELECT * FROM <telemetry_catalog>.<telemetry_schema>.otel_logs LIMIT 10;
+
+   -- Recent errors for one environment's app:
+   SELECT time, body FROM <telemetry_catalog>.<telemetry_schema>.otel_logs
+   WHERE service_name = '<app-name>' AND severity_text = 'ERROR'
+   ORDER BY time DESC LIMIT 100;
+   ```
+
+`otel_spans` and `otel_metrics` stay empty until OpenTelemetry instrumentation is added to the app; the agent's own traces go to MLflow (`mlflow_tracing_enabled`), not here. Ingestion is billed as Lakeflow Connect (Jobs Serverless SKU), each log line is capped at 1 MB, and Databricks recommends predictive optimization on the three tables.
+
+### Step 7.2: Lakebase Change Data Feed (app tables → `lb_<table>_history`)
+
+[Lakebase Change Data Feed](https://docs.databricks.com/aws/en/oltp/projects/lakehouse-sync) (Public Preview; called *Lakehouse Sync* during its Beta) streams changes from Lakebase Postgres into append-only Delta tables named `lb_<table>_history`. Each row is a source row plus `_pg_change_type` (`insert`, `update_preimage`, `update_postimage` or `delete`), `_pg_lsn`, `_pg_xid`, `_timestamp` and `_sort_by`. A feed covers one Postgres schema and can't be declared in a bundle: you start it in the Lakebase UI, or through the CDF operations of the Postgres REST API. The app's part is making its tables eligible.
+
+**Where the app's data lives.** Database: the one attached as the app's `postgres` resource (`lakebase_database_id` in `databricks.yml`; normally `databricks_postgres`). Schema: **`selfservice`** (the `DB_SCHEMA` setting), not `public`. The same schema holds the LangGraph checkpoint tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`), which are large and rewritten on every workflow step. The feed skips any table without `REPLICA IDENTITY FULL`, which is how they stay out. **Don't** run the Databricks docs' "all tables in a schema" loop or install their auto-apply event trigger on `selfservice`: either would pull the checkpoints in.
+
+**Requirements:**
+- A workspace admin enables the **Lakebase Change Data Feed** preview on the workspace Previews page.
+- The Lakebase project runs Postgres 16, 17 or 18. Check with `SHOW server_version;` in the Lakebase SQL editor.
+- Whoever starts the feed has `CAN MANAGE` on the Lakebase project (the bundle grants it to the deploying user) and `USE CATALOG`, `USE SCHEMA` and `CREATE TABLE` on the destination.
+- The destination catalog doesn't use default storage, and its managed storage isn't reachable only through a private endpoint (for example AWS PrivateLink). The feed can't write to either. Use a catalog whose managed location is publicly reachable.
+
+1. **Opt the tables in.** Set `lakebase_cdf_tables` for the target in `databricks.yml` and deploy:
+   ```yaml
+   targets:
+     prod:
+       variables:
+         lakebase_cdf_tables: "default"
+   ```
+   `default` means `requests`, `events`, `approvals`, `enforcement_audit`, `rbac_rules`, `rbac_change_sets` and `rbac_rule_events`. You can list table names instead, or combine them (`"default,failures"`); `none`, the shipped value, turns this off. On startup the app runs `ALTER TABLE ... REPLICA IDENTITY FULL` on each listed table that isn't already full. Only the table owner can do that, and the app's service principal owns them. The backend log reports `Lakebase CDF: REPLICA IDENTITY FULL in schema selfservice: set now [...]`, plus a warning for any table it couldn't find or alter (it retries on the next start). The current value is shown read-only under **Admin → Settings → Infrastructure**.
+   - **Trade-off on `requests`:** full replica identity makes Postgres write the whole old row to the write-ahead log on every update and delete, and the feed stores before and after images. Enforcement Sentinel request rows carry a very large `state_context` (it can reach hundreds of MB), so their updates get expensive and their history rows are huge. If that matters, list tables explicitly and leave out `requests`. `events`, which is insert-only, still records each request's lifecycle.
+   - Taking a table off the list doesn't switch it back. It stays `FULL` (and in the feed) until its owner runs `ALTER TABLE ... REPLICA IDENTITY DEFAULT`.
+2. **Choose and grant the destination** catalog and schema. They're picked in the Start dialog, which is why they aren't bundle variables:
+   ```sql
+   GRANT USE CATALOG ON CATALOG <cdf_catalog> TO `<you>`;
+   GRANT USE SCHEMA, CREATE TABLE ON SCHEMA <cdf_catalog>.<cdf_schema> TO `<you>`;
+   ```
+   The history tables hold full row contents, including request conversations and approval comments. Grant `SELECT` on them as carefully as you would grant access to the app database.
+3. **Start the feed.** Open **Lakebase Postgres** from the app switcher, then the app's project (its name is `database_instances.edh_ssc_db.name` in `databricks.yml`) and the `production` branch. Click the branch name to open **Branch overview**, open the **Lakebase CDF** tab and click **Start**. Choose the app's database, schema `selfservice`, and your destination catalog and schema, then click **Start**. A schema has only one feed: tables you opt in later join it automatically, so never click **Start** again for them.
+4. **Verify.** In the Lakebase SQL editor:
+   ```sql
+   -- 'f' = full replica identity (in the feed); 'd' = default (skipped)
+   SELECT c.relname, c.relreplident FROM pg_class c
+   JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'selfservice' AND c.relkind = 'r' ORDER BY 1;
+
+   SELECT * FROM wal2delta.tables;  -- SNAPSHOTTING, then STREAMING, per table
+   ```
+   Then in Databricks SQL:
+   ```sql
+   SELECT _pg_change_type, _timestamp, id, status
+   FROM <cdf_catalog>.<cdf_schema>.lb_requests_history
+   ORDER BY _sort_by DESC LIMIT 10;
+   ```
+
+A table appears only once it has at least one row. An app upgrade that adds a column to a captured table triggers a full re-snapshot of that table. Never add row filters or column masks to the `lb_*_history` tables, or turn on Delta change data feed on them: the first stops the feed writing to that table and the second breaks re-snapshots. JSON columns arrive as `STRING`. To stop the feed, use **Disable** on the same tab; it stops the feed for every schema in the project.

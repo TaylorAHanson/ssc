@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useRequestStore } from '../stores/requestStore';
 import { GUIDE_APPROVALS, useGuideEnabled } from '../lib/guide';
 import { useUserStore } from '../stores/userStore';
@@ -22,7 +22,20 @@ type InboxApproval = Approval & {
   isOwnRequest?: boolean;
   /** ...and self-approval is blocked: they may reject (withdraw) it, not approve it. */
   selfApprovalBlocked?: boolean;
+  /** Display name of the workflow behind `requestType`, when it has one. */
+  workflowName?: string | null;
 };
+
+const workflowLabel = (a: InboxApproval) => {
+  if (a.workflowName?.trim()) return a.workflowName.trim();
+  const words = (a.requestType || '').replace(/_/g, ' ').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+
+// The inbox is for triage, so a workflow's count is what's waiting; only one
+// with nothing pending falls back to how many were completed.
+const countLabel = (pending: number, completed: number) =>
+  pending > 0 || completed === 0 ? `${pending} pending` : `${completed} completed`;
 
 const SELF_APPROVAL_MESSAGE = "You can't approve your own request. Another approver must.";
 const BULK_APPROVE_MAX = 100;
@@ -88,6 +101,42 @@ export function Approvals() {
   const { currentUser } = useUserStore();
   const currentUserEmail = currentUser?.email || "admin@example.com";
 
+  // Workflow filter: ?workflow=<request type>, so a filtered inbox survives a
+  // reload and can be shared. A value with no approvals behind it shows everything.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const workflowSelectRef = useRef<HTMLSelectElement>(null);
+  const workflowOptions = (() => {
+    const byType = new Map<string, { value: string; label: string; pending: number; completed: number }>();
+    for (const a of approvals) {
+      const option = byType.get(a.requestType) ?? { value: a.requestType, label: workflowLabel(a), pending: 0, completed: 0 };
+      if (a.status === 'pending') option.pending += 1;
+      else option.completed += 1;
+      byType.set(a.requestType, option);
+    }
+    return [...byType.values()].sort((x, y) => x.label.localeCompare(y.label));
+  })();
+  const workflowFilter = workflowOptions.find((o) => o.value === searchParams.get('workflow')) ?? null;
+  const inWorkflow = (a: InboxApproval) => !workflowFilter || a.requestType === workflowFilter.value;
+
+  const setWorkflowFilter = (value: string | null) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set('workflow', value);
+      else next.delete('workflow');
+      return next;
+    }, { replace: true });
+    // Drop selections the new filter hides, so bulk approve only covers what's on screen.
+    if (value) {
+      const visible = new Set(approvals.filter((a) => a.requestType === value).map((a) => a.id));
+      setSelectedIds((prev) => new Set([...prev].filter((id) => visible.has(id))));
+    }
+  };
+
+  const clearWorkflowFilter = () => {
+    setWorkflowFilter(null);
+    workflowSelectRef.current?.focus();
+  };
+
   const fetchAllData = useCallback(async () => {
     await Promise.all([
       fetchApprovals(),
@@ -125,8 +174,9 @@ export function Approvals() {
   // Oldest first: the thing that has been blocking a requester the longest is the
   // thing to look at, and a manual task with nothing chasing it can otherwise sit
   // at the bottom of the list forever.
+  const pendingTotal = approvals.filter((a) => a.status === 'pending').length;
   const pendingApprovals = approvals
-    .filter((a) => a.status === 'pending')
+    .filter((a) => a.status === 'pending' && inWorkflow(a))
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   // One line at the top of the inbox so aging registers before you start clicking.
@@ -148,13 +198,15 @@ export function Approvals() {
     return `${parts.join('; ')}.`;
   })();
 
+  const completedTotal = approvals.length - pendingTotal;
   const completedApprovals = approvals
-    .filter((a) => a.status !== 'pending')
+    .filter((a) => a.status !== 'pending' && inWorkflow(a))
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
   const bulkCandidates = pendingApprovals.filter(isBulkCandidate);
   const bulkSelectable = bulkCandidates.filter((a) => !a.selfApprovalBlocked);
-  // Derived from the current list, so items that stopped being pending drop out.
+  // Derived from the current (filtered) list, so items that stopped being pending,
+  // or that the workflow filter hides, drop out.
   const selectedApprovals = bulkSelectable.filter((a) => selectedIds.has(a.id));
   const allSelected = bulkSelectable.length > 0 && selectedApprovals.length === bulkSelectable.length;
   const someSelected = selectedApprovals.length > 0 && !allSelected;
@@ -522,7 +574,7 @@ export function Approvals() {
         </CardContent>
       </Card>
 
-      {pendingApprovals.length === 0 && completedApprovals.length === 0 && (
+      {approvals.length === 0 && (
         <Card>
           <CardContent className="py-12 text-center">
             <CheckCircle2 className="w-12 h-12 text-gray-400 mx-auto mb-4" />
@@ -532,9 +584,61 @@ export function Approvals() {
         </Card>
       )}
 
+      {approvals.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3">
+          <label htmlFor="approvals-workflow-filter" className="text-sm font-medium text-gray-700">
+            Workflow
+          </label>
+          <select
+            id="approvals-workflow-filter"
+            ref={workflowSelectRef}
+            value={workflowFilter?.value ?? ''}
+            onChange={(e) => setWorkflowFilter(e.target.value || null)}
+            className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-700 ring-offset-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+          >
+            <option value="">All workflows ({countLabel(pendingTotal, completedTotal)})</option>
+            {workflowOptions.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label} ({countLabel(o.pending, o.completed)})
+              </option>
+            ))}
+          </select>
+          {workflowFilter && (
+            <Button variant="ghost" size="sm" onClick={clearWorkflowFilter} className="text-gray-700">
+              <X className="w-4 h-4 mr-1" />
+              Clear filter
+            </Button>
+          )}
+          <span className="sr-only" role="status">
+            {workflowFilter
+              ? `Showing ${pendingApprovals.length + completedApprovals.length} of ${approvals.length} approvals: ${workflowFilter.label}`
+              : ''}
+          </span>
+        </div>
+      )}
+
+      {workflowFilter && pendingApprovals.length === 0 && (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <CheckCircle2 className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <p className="text-lg text-gray-600 mb-2">No pending approvals for {workflowFilter.label}</p>
+            <p className="text-sm text-gray-500 mb-4">
+              {pendingTotal > 0
+                ? `${pendingTotal} ${pendingTotal === 1 ? 'is' : 'are'} waiting in other workflows.`
+                : "You're all caught up!"}
+            </p>
+            <Button variant="outline" onClick={clearWorkflowFilter}>
+              Show all workflows
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {pendingApprovals.length > 0 && (
         <div className="space-y-4">
-          <h2 className="text-xl font-semibold text-gray-900">Pending ({pendingApprovals.length})</h2>
+          <h2 className="text-xl font-semibold text-gray-900">
+            Pending ({pendingApprovals.length}{workflowFilter ? ` of ${pendingTotal}` : ''})
+          </h2>
           {agingSummary && (
             <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-md px-4 py-2 text-sm flex items-start gap-2">
               <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
@@ -557,7 +661,7 @@ export function Approvals() {
                   onChange={toggleSelectAll}
                   disabled={bulkSelectable.length === 0}
                 />
-                Select all you can approve ({bulkSelectable.length})
+                Select all you can approve{workflowFilter ? ` in ${workflowFilter.label}` : ''} ({bulkSelectable.length})
               </label>
               <div className="flex items-center gap-3">
                 {tooManySelected && (
@@ -622,7 +726,7 @@ export function Approvals() {
                         <span className="font-medium">Requested by:</span> {approval.requestedBy} ({approval.requestedByEmail})
                       </p>
                       <p>
-                        <span className="font-medium">Type:</span> {approval.requestType.replace(/_/g, ' ')}
+                        <span className="font-medium">Type:</span> {workflowLabel(approval)}
                       </p>
                       <p>
                         <span className="font-medium">
@@ -636,7 +740,7 @@ export function Approvals() {
                               ? 'bg-amber-100 text-amber-800'
                               : 'bg-gray-100 text-gray-800'
                           }`}>
-                          {roleLabels[approval.approvalType] || approval.approvalType.replace(/_/g, ' ')}
+                          {approval.approverLabel || roleLabels[approval.approvalType] || approval.approvalType.replace(/_/g, ' ')}
                         </span>
                       </p>
                       {approval.dueAt && (
@@ -789,7 +893,7 @@ export function Approvals() {
                       <li key={a.id} className="px-3 py-2 text-sm">
                         <p className="font-medium text-gray-900">{a.requestTitle}</p>
                         <p className="text-xs text-gray-500">
-                          {a.requestType.replace(/_/g, ' ')} · requested by {a.requestedByEmail || a.requestedBy}
+                          {workflowLabel(a)} · requested by {a.requestedByEmail || a.requestedBy}
                         </p>
                       </li>
                     ))}
@@ -877,7 +981,9 @@ export function Approvals() {
 
       {completedApprovals.length > 0 && (
         <div className="space-y-4 mt-8">
-          <h2 className="text-xl font-semibold text-gray-900">Completed ({completedApprovals.length})</h2>
+          <h2 className="text-xl font-semibold text-gray-900">
+            Completed ({completedApprovals.length}{workflowFilter ? ` of ${completedTotal}` : ''})
+          </h2>
           {completedApprovals.map((approval) => (
             <Card key={approval.id} className="border-l-4 border-l-gray-300">
               <CardHeader>

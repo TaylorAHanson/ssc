@@ -1,6 +1,6 @@
 """The approver-facing report for an ``rbac_access_change`` request (ADR 0005 D10).
 
-The workflow's plan step returns it as ``report_markdown``, so it shows on the
+The workflow's prepare step returns it as ``report_markdown``, so it shows on the
 approval card. Everything quoted from a requester, an editing admin or the
 ledger (principals, securables, sheet names, justifications, finding messages)
 is untrusted and goes through ``safe_text`` / ``safe_code``. Plain bullet lists,

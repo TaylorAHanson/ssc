@@ -64,16 +64,18 @@ class SpecError(ValueError):
 _GATE_KEYS = {
     "kind", "name", "type", "waiting_status", "auto_approve", "approvers_from",
     "approver", "course_code", "course_name",
-    # false: Platform Admins can't Edit & Restart a request waiting here (the
-    # approved plan must be exactly what was filed).
+    # false: Platform Admins can't Edit & Restart a request waiting here (what's
+    # approved must be exactly what was filed).
     "editable",
     # manual_task only: what the assignee has to actually do, and an optional
     # SLA in days used for aging/escalation visibility in the inbox.
     "instructions", "due_in_days",
+    # Former names of this stage, so a request checkpointed under one still resumes.
+    "renamed_from",
 }
 _STEP_KEYS = {
     "kind", "name", "tool", "approvals", "running_status", "success_fact",
-    "args", "for_each", "item_args", "run_if", "writes_context",
+    "args", "for_each", "item_args", "run_if", "writes_context", "renamed_from",
 }
 _SUBWORKFLOW_KEYS = {"kind", "name", "ref", "input", "writes_context", "running_status", "run_if"}
 
@@ -118,6 +120,7 @@ def validate_spec_dict(data: Any) -> None:
         raise SpecError("spec.stages must be a list")
 
     seen: set = set()
+    renamed: Dict[str, str] = {}
     for i, stage in enumerate(stages):
         where = f"stages[{i}]"
         if not isinstance(stage, dict):
@@ -140,11 +143,30 @@ def validate_spec_dict(data: Any) -> None:
             _validate_subworkflow(stage, where)
         else:
             _validate_step(stage, where)
+        _collect_renamed_from(stage, where, renamed)
 
-    _validate_on_reject(data, seen)
+    _validate_on_reject(data, seen, renamed)
+    for old, where in renamed.items():
+        if old in seen:
+            raise SpecError(f"{where}.renamed_from: '{old}' is still the name of a stage")
 
 
-def _validate_on_reject(data: Dict[str, Any], stage_names: set) -> None:
+def _collect_renamed_from(stage: Dict[str, Any], where: str, renamed: Dict[str, str]) -> None:
+    """Validate a stage's ``renamed_from`` and record each old name (they share the stage namespace)."""
+    old_names = stage.get("renamed_from")
+    if old_names is None:
+        return
+    if not isinstance(old_names, list) or not all(isinstance(n, str) and n.strip() for n in old_names):
+        raise SpecError(f"{where}.renamed_from must be a list of non-empty strings")
+    for old in old_names:
+        if old in ("complete", "rejected", "pending", "completed"):
+            raise SpecError(f"{where}.renamed_from: '{old}' is reserved")
+        if old in renamed:
+            raise SpecError(f"{where}.renamed_from: '{old}' is already a former name of another stage")
+        renamed[old] = where
+
+
+def _validate_on_reject(data: Dict[str, Any], stage_names: set, renamed: Dict[str, str]) -> None:
     """Validate the rejection path: steps that run when a gate denies the request.
 
     Steps only — a gate here would ask for approval of a decision already made, and
@@ -173,7 +195,7 @@ def _validate_on_reject(data: Dict[str, Any], stage_names: set) -> None:
             raise SpecError(f"{where}.name is required")
         if name in ("complete", "rejected", "pending", "completed"):
             raise SpecError(f"{where}: '{name}' is reserved")
-        if name in seen or name in stage_names:
+        if name in seen or name in stage_names or name in renamed:
             raise SpecError(f"{where}: duplicate stage name '{name}'")
         seen.add(name)
         if stage.get("approvals"):
@@ -183,6 +205,10 @@ def _validate_on_reject(data: Dict[str, Any], stage_names: set) -> None:
                 "that did not happen. Remove it."
             )
         _validate_step(stage, where)
+        _collect_renamed_from(stage, where, renamed)
+    for old, where in renamed.items():
+        if old in seen:
+            raise SpecError(f"{where}.renamed_from: '{old}' is still the name of a stage")
 
 
 def _validate_gate(stage: Dict[str, Any], where: str) -> None:
@@ -251,7 +277,7 @@ def _validate_gate(stage: Dict[str, Any], where: str) -> None:
 
 
 def _validate_gate_approver(approver: Any, where: str) -> None:
-    """Validate a gate's declarative ``approver`` block (group | tag source)."""
+    """Validate a gate's declarative ``approver`` block (group | tag | access rule type source)."""
     if not isinstance(approver, dict):
         raise SpecError(f"{where} must be an object")
     source = approver.get("source")
@@ -264,8 +290,11 @@ def _validate_gate_approver(approver: Any, where: str) -> None:
             _validate_expr(approver["assets_from"], f"{where}.assets_from", allow_item=False)
         if "fallback_to_owner" in approver and not isinstance(approver["fallback_to_owner"], bool):
             raise SpecError(f"{where}.fallback_to_owner must be a boolean")
+    elif source == "access_rule_type":
+        if "rule_type_from" in approver and approver["rule_type_from"] is not None:
+            _validate_expr(approver["rule_type_from"], f"{where}.rule_type_from", allow_item=False)
     else:
-        raise SpecError(f"{where}.source must be 'group' or 'approver_group_tag'")
+        raise SpecError(f"{where}.source must be 'group', 'approver_group_tag' or 'access_rule_type'")
 
 
 def _validate_step(stage: Dict[str, Any], where: str) -> None:
@@ -404,6 +433,7 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
                 course_name=stage.get("course_name"),
                 instructions=stage.get("instructions"),
                 due_in_days=stage.get("due_in_days"),
+                renamed_from=list(stage.get("renamed_from") or []),
             )
             approver = stage.get("approver")
             if approver:
@@ -415,6 +445,9 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
                     assets_spec = approver.get("assets_from", {"$var": "assets"})
                     gate.approver_assets_from = _value_fn(assets_spec)
                     gate.approver_fallback_to_owner = approver.get("fallback_to_owner", True)
+                elif source == "access_rule_type":
+                    rule_type_spec = approver.get("rule_type_from") or {"$var": "plane"}
+                    gate.approver_rule_type_from = _value_fn(rule_type_spec)
             stages.append(gate)
             if stage["type"] not in preceding_gate_types:
                 preceding_gate_types.append(stage["type"])
@@ -459,6 +492,7 @@ def _step_from_dict(stage: Dict[str, Any], approvals: List[str]) -> Step:
         running_status=stage.get("running_status", "provisioning"),
         approvals=approvals,
         success_fact=stage.get("success_fact"),
+        renamed_from=list(stage.get("renamed_from") or []),
     )
     if stage.get("for_each") is not None:
         step.for_each = _for_each_fn(stage["for_each"])

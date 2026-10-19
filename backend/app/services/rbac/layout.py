@@ -104,6 +104,9 @@ SECURABLE_TYPES: Dict[str, str] = {
     "app": PLANE_WORKSPACE,
 }
 
+# Workspace-sheet securable types whose SecurableName is a workspace name.
+WORKSPACE_NAMED_TYPES = frozenset({"workspace", "workspace entitlement"})
+
 # Built-in header spellings, matched after normalizing (lowercase, no spaces,
 # underscores or hyphens). Admin aliases (RBAC_HEADER_ALIASES) are added on top.
 _BUILTIN_HEADER_FIELDS: Dict[str, str] = {
@@ -140,6 +143,9 @@ class EnvConfig:
     write_privileges: bool
     service_principals: bool
     two_person_rule: bool
+    # Names offered on this environment's workspace / UC sheets; () = typed freely.
+    workspaces: Tuple[str, ...] = ()
+    catalogs: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -173,6 +179,26 @@ def _split_csv(value: object) -> Tuple[str, ...]:
     return tuple(p.strip() for p in parts if p and p.strip())
 
 
+def _options(value: object) -> Tuple[str, ...]:
+    """Comma-separated names, first spelling kept on a case-insensitive repeat."""
+    seen: set = set()
+    out: List[str] = []
+    for name in _split_csv(value):
+        if name.lower() not in seen:
+            seen.add(name.lower())
+            out.append(name)
+    return tuple(out)
+
+
+def option_spelling(options: Sequence[str], value: str) -> str:
+    """``value`` spelled as in ``options`` when one matches case-insensitively, else unchanged."""
+    needle = (value or "").strip().lower()
+    for option in options:
+        if option.lower() == needle:
+            return option
+    return value
+
+
 def environments() -> List[EnvConfig]:
     out: List[EnvConfig] = []
     for row in settings.RBAC_ENVIRONMENTS or []:
@@ -188,6 +214,8 @@ def environments() -> List[EnvConfig]:
             write_privileges=_flag(row, "write_privileges", True),
             service_principals=_flag(row, "service_principals", True),
             two_person_rule=_flag(row, "two_person_rule", False),
+            workspaces=_options(row.get("workspaces")),
+            catalogs=_options(row.get("catalogs")),
         ))
     return out
 

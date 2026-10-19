@@ -107,13 +107,13 @@ def _install_fakes():
     preview_steps.apply = _preview_apply
     preview_steps.verify = _preview_verify
 
-    # Access-change steps plan against and write to the Access Rules ledger;
-    # stand in for them so the graph's shape (plan -> group approval -> apply)
-    # runs without a database.
+    # Access-change steps read and write the Access Rules ledger; stand in for
+    # them so the graph's shape (prepare -> group approval -> record) runs
+    # without a database.
     import app.services.rbac.requests as rbac_requests
-    rbac_requests.plan_step = lambda *a, **k: {
-        "approvers": ["uc-approvers"], "nothing_to_change": False, "report_markdown": "hermetic"}
-    rbac_requests.apply_step = lambda *a, **k: {"change_set_id": "cs-hermetic", "message": "hermetic"}
+    rbac_requests.prepare_step = lambda *a, **k: {
+        "plane": "uc", "nothing_to_change": False, "report_markdown": "hermetic"}
+    rbac_requests.record_step = lambda *a, **k: {"change_set_id": "cs-hermetic", "message": "hermetic"}
 
     fake = _FakeProvider()
     for getter in ("_get_databricks_provider", "_get_github_provider",

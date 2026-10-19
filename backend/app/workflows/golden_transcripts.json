@@ -89,8 +89,8 @@
     "mutating": 1,
     "status": "completed",
     "tools": [
-      "rbac_plan_access_change",
-      "apply_access_change"
+      "rbac_prepare_access_change",
+      "record_access_change"
     ]
   },
   "report_execution": {

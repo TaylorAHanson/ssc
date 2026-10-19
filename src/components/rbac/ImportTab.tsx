@@ -283,7 +283,7 @@ function ImportPreviewView({ preview, file, canReset, onImported }: {
             {preview.in_flight_requests > 0 && (
               <p className="text-sm text-red-800">
                 {plural(preview.in_flight_requests, 'access request is', 'access requests are')} still in flight. Finish
-                or reject them first: they were planned against the current rows, which a reset would replace.
+                or reject them first: they were prepared against the current rows, which a reset would replace.
               </p>
             )}
             {!resetBlocked && !phrase && (

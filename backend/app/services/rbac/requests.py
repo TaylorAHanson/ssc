@@ -1,4 +1,4 @@
-"""Filing ``rbac_access_change`` requests, and the workflow's plan and apply steps (ADR 0005 D4, D8).
+"""Filing ``rbac_access_change`` requests, and the workflow's prepare and record steps (ADR 0005 D4, D8).
 
 One workflow carries two shapes of request:
 
@@ -8,16 +8,17 @@ One workflow carries two shapes of request:
 * a direct edit held by the two-person rule: ``changes`` (a ChangeSetIn dict)
   and its ``plane``, filed by the Access Rules page for the editing admin. Only
   ``submit_row_changes`` files these. It records a ``rbac_direct_edit_filed``
-  fact with a digest of the edit, and the plan step refuses ``changes`` without
+  fact with a digest of the edit, and the prepare step refuses ``changes`` without
   a matching fact, so a chat submission can't pass itself off as an admin edit;
 * a revert held by the two-person rule: ``revert_of`` (a change set id) and its
   ``plane`` (None when the change set spans several types; Platform Admins
   approve those), filed from History by ``submit_revert`` with the same fact.
 
-The plan step stores what will happen in the request's state context under
-``inflight.PLAN_CONTEXT_KEY`` (every shape keeps its row diffs under
-``diffs``), so the grid marks the rows. The apply step reads the plan back from
-the request, never from its arguments, so it can't go beyond what approvers saw.
+The prepare step works out the exact row changes and who approves, and stores
+them in the request's state context under ``inflight.PREPARED_CONTEXT_KEY``
+(every shape keeps its row diffs under ``diffs``), so the grid marks the rows.
+The record step reads the prepared change back from the request, never from its
+arguments, so it can't go beyond what approvers saw.
 """
 from __future__ import annotations
 
@@ -40,14 +41,16 @@ from app.services.rbac.ledger import ChangeBlocked, LedgerError, VersionConflict
 logger = logging.getLogger(__name__)
 
 WORKFLOW_ID = inflight.WORKFLOW_ID
-PLAN_CONTEXT_KEY = inflight.PLAN_CONTEXT_KEY
+PREPARED_CONTEXT_KEY = inflight.PREPARED_CONTEXT_KEY
 DIRECT_EDIT_FACT = "rbac_direct_edit_filed"
-PLAN_FACT = "rbac_plan_recorded"
+PREPARED_FACT = "rbac_change_prepared"
+# Requests prepared before the rename carry their digest under this fact.
+LEGACY_PREPARED_FACT = "rbac_plan_recorded"
 KIND_ITEMS = "items"
 KIND_CHANGES = "changes"
 KIND_REVERT = "revert"
 OVERLAP_CODE = "inflight_overlap"
-# execute_workflow's placeholder title, replaced by a descriptive one at plan time.
+# execute_workflow's placeholder title, replaced by a descriptive one when the change is prepared.
 _AGENT_TITLE_PREFIX = "Agent Request:"
 _TITLE_LIMIT = 200
 
@@ -72,7 +75,7 @@ def _deny_text(findings: Sequence[Finding]) -> str:
 
 
 def _requested_items(proposal: AccessProposal) -> List[AccessItem]:
-    """The proposal's items without the prerequisites the planner added (re-planning adds them again)."""
+    """The proposal's items without the prerequisites it added (preparing the change again adds them back)."""
     return [i for i in proposal.items if i not in proposal.added_prerequisites]
 
 
@@ -118,7 +121,8 @@ def _request(db: Session, request_id: Optional[str]):
 
     request = db.get(RequestModel, request_id) if request_id else None
     if request is None:
-        raise PermanentError(f"Request {request_id} doesn't exist, so its access change can't be planned or applied.")
+        raise PermanentError(f"Request {request_id} doesn't exist, so its access change can't be prepared or "
+                             "recorded.")
     return request
 
 
@@ -135,37 +139,38 @@ def _approver(db: Session, request_id: str) -> Optional[str]:
     return data.get("approved_by") or data.get("actor")
 
 
-def _plan_digest(plan: Any) -> str:
-    return hashlib.sha256(json.dumps(plan, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+def _prepared_digest(prepared: Any) -> str:
+    return hashlib.sha256(json.dumps(prepared, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
-def _store_plan(db: Session, request, plan: Dict[str, Any], *, title: Optional[str] = None) -> None:
-    """Store the plan on the request, and its digest as a fact apply checks it against."""
+def _store_prepared(db: Session, request, prepared: Dict[str, Any], *, title: Optional[str] = None) -> None:
+    """Store the prepared change on the request, and its digest as a fact the record step checks it against."""
     from app.state_machines.facts import add_fact
 
     ctx = dict(request.state_context or {})
-    ctx[PLAN_CONTEXT_KEY] = plan
+    ctx.pop(inflight.LEGACY_PREPARED_CONTEXT_KEY, None)
+    ctx[PREPARED_CONTEXT_KEY] = prepared
     request.state_context = ctx
     if title and (not request.title or request.title.startswith(_AGENT_TITLE_PREFIX)):
         request.title = title[:_TITLE_LIMIT]
     db.commit()
-    # Digest what the database hands back, so apply compares like with like.
+    # Digest what the database hands back, so the record step compares like with like.
     db.refresh(request)
-    add_fact(db, request.id, PLAN_FACT, {"digest": _plan_digest((request.state_context or {}).get(PLAN_CONTEXT_KEY))},
-             actor="system")
+    digest = _prepared_digest((request.state_context or {}).get(PREPARED_CONTEXT_KEY))
+    add_fact(db, request.id, PREPARED_FACT, {"digest": digest}, actor="system")
 
 
-def _check_plan_unchanged(db: Session, request, plan: Dict[str, Any]) -> None:
+def _check_prepared_unchanged(db: Session, request, prepared: Dict[str, Any]) -> None:
     from app.state_machines.facts import get_latest_fact
 
-    fact = get_latest_fact(db, request.id, PLAN_FACT)
-    if fact is None or (fact.event_data or {}).get("digest") != _plan_digest(plan):
-        raise PermanentError("This request's stored plan was changed after it was planned, so it won't be "
-                             "applied. File the change again.")
+    fact = get_latest_fact(db, request.id, PREPARED_FACT) or get_latest_fact(db, request.id, LEGACY_PREPARED_FACT)
+    if fact is None or (fact.event_data or {}).get("digest") != _prepared_digest(prepared):
+        raise PermanentError("This request's prepared change was edited after it was prepared, so it won't be "
+                             "recorded. File the change again.")
 
 
 def _without_self_overlap(db: Session, findings: Sequence[Finding], request_id: str) -> List[Finding]:
-    """Drop this request from in-flight overlap warnings (its own stored plan isn't an overlap)."""
+    """Drop this request from in-flight overlap warnings (its own prepared change isn't an overlap)."""
     touched = inflight.touched_rule_ids(db)
     out: List[Finding] = []
     for finding in findings:
@@ -207,9 +212,9 @@ def _siblings(db: Session, request, group_ref: Optional[str]) -> List[report.Sib
 
 
 def _context_plane(ctx: Dict[str, Any]) -> str:
-    plan = ctx.get(PLAN_CONTEXT_KEY) or {}
-    if plan.get("plane"):
-        return plan["plane"]
+    prepared = inflight.prepared_change(ctx) or {}
+    if prepared.get("plane"):
+        return prepared["plane"]
     if ctx.get("plane"):
         return ctx["plane"]
     for item in ctx.get("items") or []:
@@ -218,6 +223,11 @@ def _context_plane(ctx: Dict[str, Any]) -> str:
             if plane:
                 return plane
     return ""
+
+
+def approver_label(state_context: Optional[Dict[str, Any]], assigned_group: Optional[str]) -> str:
+    """Who approves this request, for the approval card: the group it was routed to, by type of rule."""
+    return approvers.approval_label(_context_plane(state_context or {}) or None, assigned_group)
 
 
 def _validation_text(exc: ValidationError) -> str:
@@ -258,9 +268,9 @@ def preview_access_change(db: Session, change: AccessChangeIn, *, requester: Opt
     """The AccessPreview for the agent: one proposal per type, each with its report and what to submit.
 
     Row diffs stay out (the report shows them); ``submit_items`` is each
-    proposal's ``items`` parameter (prerequisites are re-added when it's planned).
+    proposal's ``items`` parameter (prerequisites are re-added when the request is prepared).
     """
-    preview = ledger.plan_access_change(db, change, requester=requester)
+    preview = ledger.prepare_access_change(db, change, requester=requester)
     proposals: List[Dict[str, Any]] = []
     for proposal in preview.proposals:
         siblings = [(None, other.plane) for other in preview.proposals if other is not proposal]
@@ -294,7 +304,8 @@ def _next_step(proposals: Sequence[Dict[str, Any]], group_ref: Optional[str]) ->
     if not to_file:
         return "Nothing to request: everything asked for is already in place. Tell the user; don't submit."
     if any(p["needs_justification"] for p in to_file):
-        return ("Present the plan, then ask the user for their own justification (never write it for them) "
+        return ("Present each proposal's report_markdown, then ask the user for their own justification (never "
+                "write it for them) "
                 "and preview again with it before submitting.")
     submit = (
         f"Then call execute_workflow once per proposal with submit=true ({len(to_file)} in total): workflow_type "
@@ -321,7 +332,7 @@ def submit_access_change(
 ) -> str:
     """File one type's part of an access change for approval and return the request id.
 
-    ``proposal`` comes from ``ledger.plan_access_change``. A mixed-type ask is
+    ``proposal`` comes from ``ledger.prepare_access_change``. A mixed-type ask is
     one call per proposal with the same ``group_ref``. Raises AccessRequestError
     for a blocked or mixed-type proposal, nothing to change, or no justification.
     """
@@ -343,7 +354,7 @@ def submit_access_change(
         "justification": reason,
         "requested_by_email": requester_email,
         "requested_by": requester_email,
-        PLAN_CONTEXT_KEY: {**proposal.model_dump(mode="json"), "kind": KIND_ITEMS},
+        PREPARED_CONTEXT_KEY: {**proposal.model_dump(mode="json"), "kind": KIND_ITEMS},
     }
     if group_ref:
         metadata["group_ref"] = group_ref
@@ -378,7 +389,7 @@ def submit_row_changes(db: Session, change: ChangeSetIn, *, plane: str, requeste
         "justification": change.reason or "",
         "requested_by_email": requester_email,
         "requested_by": requester_email,
-        PLAN_CONTEXT_KEY: _direct_plan(preview, plane=plane),
+        PREPARED_CONTEXT_KEY: _direct_prepared(preview, plane=plane),
     }
     title = f"Access Rules edit: {count} {label} row{'' if count == 1 else 's'} (second approval)"
     request_id = _file(db, title=title, requester_email=requester_email, metadata=metadata)
@@ -393,7 +404,7 @@ def submit_row_changes(db: Session, change: ChangeSetIn, *, plane: str, requeste
     return request_id
 
 
-def _direct_plan(preview: ChangeSetPreview, *, plane: str, report_markdown: str = "") -> Dict[str, Any]:
+def _direct_prepared(preview: ChangeSetPreview, *, plane: str, report_markdown: str = "") -> Dict[str, Any]:
     return {
         "kind": KIND_CHANGES,
         "plane": plane,
@@ -458,7 +469,7 @@ def submit_revert(
         "justification": (reason or "").strip(),
         "requested_by_email": requester_email,
         "requested_by": requester_email,
-        PLAN_CONTEXT_KEY: _revert_plan(preview, change_set_id=change_set_id, planes=planes),
+        PREPARED_CONTEXT_KEY: _revert_prepared(preview, change_set_id=change_set_id, planes=planes),
     }
     title = (f"Access Rules revert: {count} {_planes_label(planes)} row{'' if count == 1 else 's'} "
              f"from change set {change_set_id} (second approval)")
@@ -475,7 +486,7 @@ def submit_revert(
     return request_id
 
 
-def _revert_plan(
+def _revert_prepared(
     preview: ChangeSetPreview, *, change_set_id: str, planes: List[str], report_markdown: str = "",
 ) -> Dict[str, Any]:
     single = len(planes) == 1
@@ -492,40 +503,41 @@ def _revert_plan(
     }
 
 
-# --- Plan step ---------------------------------------------------------------------
+# --- Prepare step ------------------------------------------------------------------
 
 
-def plan_step(
+def prepare_step(
     request_id: Optional[str],
     *,
     items: Optional[List[Dict[str, Any]]] = None,
     justification: Optional[str] = None,
     group_ref: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Validate and plan the request, store the plan on it, and say who approves.
+    """Work out the request's exact row changes, store them on it, and say who approves.
 
     Raises PermanentError (the request fails with the message) for invalid
-    items, a change set spanning more than one type, or a blocked plan.
+    items, a change set spanning more than one type, or a blocked change.
     """
     db = _session()
     try:
         request = _request(db, request_id)
         ctx = request.state_context or {}
         if ctx.get("revert_of"):
-            return _plan_revert(db, request, ctx)
+            return _prepare_revert(db, request, ctx)
         if ctx.get("changes"):
-            return _plan_direct_edit(db, request, ctx)
-        return _plan_items(db, request, items, justification, group_ref)
+            return _prepare_direct_edit(db, request, ctx)
+        return _prepare_items(db, request, items, justification, group_ref)
     finally:
         db.close()
 
 
 def _approvers(group: Optional[str]) -> List[str]:
-    # Empty -> the gate's approval has no assignee, which only Platform Admins can act on.
+    # For specs that still route the gate with approvers_from. Empty -> the gate's
+    # approval has no assignee, which only Platform Admins can act on.
     return [group] if group else []
 
 
-def _plan_items(db: Session, request, items, justification, group_ref) -> Dict[str, Any]:
+def _prepare_items(db: Session, request, items, justification, group_ref) -> Dict[str, Any]:
     if not items:
         raise PermanentError("This request lists no access changes. Submit it again with the items to change.")
     try:
@@ -534,7 +546,7 @@ def _plan_items(db: Session, request, items, justification, group_ref) -> Dict[s
         raise PermanentError(f"The access items aren't valid: {_validation_text(exc)}") from None
     requester = _requester(request)
     try:
-        preview = ledger.plan_access_change(db, ask, requester=requester)
+        preview = ledger.prepare_access_change(db, ask, requester=requester)
     except LedgerError as exc:
         raise PermanentError(str(exc)) from None
     if len(preview.proposals) > 1:
@@ -550,9 +562,9 @@ def _plan_items(db: Session, request, items, justification, group_ref) -> Dict[s
     proposal.report_markdown = report.render_proposal_report(
         proposal, siblings=_siblings(db, request, group_ref), justification=ask.justification, requester=requester,
     )
-    _store_plan(db, request, {**proposal.model_dump(mode="json"), "kind": KIND_ITEMS},
-                title=_items_title(_requested_items(proposal)))
-    logger.info("Access Rules: planned request %s (%s, %d row edit(s), approvers %s)",
+    _store_prepared(db, request, {**proposal.model_dump(mode="json"), "kind": KIND_ITEMS},
+                    title=_items_title(_requested_items(proposal)))
+    logger.info("Access Rules: prepared request %s (%s, %d row edit(s), approvers %s)",
                 request.id, proposal.plane, len(proposal.diffs), proposal.approver_group or report.NO_GROUP)
     label = report.plane_label(proposal.plane)
     return {
@@ -592,7 +604,7 @@ def _revert_again(change_set_id: str) -> str:
     return f"Open change set {change_set_id} in History on the Access Rules page and revert it again."
 
 
-def _plan_revert(db: Session, request, ctx: Dict[str, Any]) -> Dict[str, Any]:
+def _prepare_revert(db: Session, request, ctx: Dict[str, Any]) -> Dict[str, Any]:
     change_set_id = str(ctx.get("revert_of"))
     plane = ctx.get("plane") or None
     if plane is not None and plane not in PLANES:
@@ -622,9 +634,9 @@ def _plan_revert(db: Session, request, ctx: Dict[str, Any]) -> Dict[str, Any]:
         preview, change_set_id=change_set_id, original_reason=original.reason, original_actor=original.actor,
         planes=planes, approver_group=group, editor=editor, reason=reason,
     )
-    _store_plan(db, request, _revert_plan(preview, change_set_id=change_set_id, planes=planes,
-                                          report_markdown=markdown))
-    logger.info("Access Rules: planned revert %s of change set %s (%s, %d rows, approvers %s)",
+    _store_prepared(db, request, _revert_prepared(preview, change_set_id=change_set_id, planes=planes,
+                                                  report_markdown=markdown))
+    logger.info("Access Rules: prepared revert %s of change set %s (%s, %d rows, approvers %s)",
                 request.id, change_set_id, ", ".join(planes), len(preview.diffs),
                 group or "Platform Admins")
     label = _planes_label(planes)
@@ -642,7 +654,7 @@ def _plan_revert(db: Session, request, ctx: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _plan_direct_edit(db: Session, request, ctx: Dict[str, Any]) -> Dict[str, Any]:
+def _prepare_direct_edit(db: Session, request, ctx: Dict[str, Any]) -> Dict[str, Any]:
     plane = ctx.get("plane")
     if plane not in PLANES:
         raise PermanentError("This direct edit doesn't say which type of rule it changes.")
@@ -669,8 +681,8 @@ def _plan_direct_edit(db: Session, request, ctx: Dict[str, Any]) -> Dict[str, An
     group = approvers.approver_group(plane)
     markdown = report.render_change_set_report(preview, plane=plane, approver_group=group, editor=editor,
                                                reason=change.reason)
-    _store_plan(db, request, _direct_plan(preview, plane=plane, report_markdown=markdown))
-    logger.info("Access Rules: planned direct edit %s (%s, %d rows, approvers %s)",
+    _store_prepared(db, request, _direct_prepared(preview, plane=plane, report_markdown=markdown))
+    logger.info("Access Rules: prepared direct edit %s (%s, %d rows, approvers %s)",
                 request.id, plane, len(preview.diffs), group or report.NO_GROUP)
     label = report.plane_label(plane)
     return {
@@ -685,25 +697,25 @@ def _plan_direct_edit(db: Session, request, ctx: Dict[str, Any]) -> Dict[str, An
     }
 
 
-# --- Apply step --------------------------------------------------------------------
+# --- Record step -------------------------------------------------------------------
 
 
-def apply_step(request_id: Optional[str]) -> Dict[str, Any]:
-    """Write the approved plan to the ledger. Idempotent on the request id."""
+def record_step(request_id: Optional[str]) -> Dict[str, Any]:
+    """Write the approved, prepared change into the access rules. Idempotent on the request id."""
     db = _session()
     try:
         request = _request(db, request_id)
-        plan = (request.state_context or {}).get(PLAN_CONTEXT_KEY)
-        if not isinstance(plan, dict) or not plan:
-            raise PermanentError("This request has no stored plan, so there's nothing approved to apply.")
-        _check_plan_unchanged(db, request, plan)
-        if plan.get("kind") == KIND_REVERT:
-            result = _apply_revert(db, request, plan)
-        elif plan.get("kind") == KIND_CHANGES:
-            result = _apply_direct_edit(db, request, plan)
+        prepared = inflight.prepared_change(request.state_context)
+        if prepared is None:
+            raise PermanentError("This request has no prepared change, so there's nothing approved to record.")
+        _check_prepared_unchanged(db, request, prepared)
+        if prepared.get("kind") == KIND_REVERT:
+            result = _record_revert(db, request, prepared)
+        elif prepared.get("kind") == KIND_CHANGES:
+            result = _record_direct_edit(db, request, prepared)
         else:
-            result = _apply_items(db, request, plan)
-        if result.get("change_set_id") and not result.get("already_applied"):
+            result = _record_items(db, request, prepared)
+        if result.get("change_set_id") and not result.get("already_recorded"):
             note = export_note(db)
             if note:
                 result["message"] = f"{result['message']} {note}"
@@ -735,11 +747,11 @@ def _existing_change_set(db: Session, request_id: str) -> Optional[RbacChangeSet
     )
 
 
-def _apply_items(db: Session, request, plan: Dict[str, Any]) -> Dict[str, Any]:
+def _record_items(db: Session, request, prepared: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        approved = AccessProposal.model_validate({k: v for k, v in plan.items() if k != "kind"})
+        approved = AccessProposal.model_validate({k: v for k, v in prepared.items() if k != "kind"})
     except ValidationError as exc:
-        raise PermanentError(f"The stored plan isn't valid: {_validation_text(exc)}") from None
+        raise PermanentError(f"The prepared change isn't valid: {_validation_text(exc)}") from None
     approver = _approver(db, request.id)
     requester = _requester(request)
     if _two_person_diffs(approved.diffs) and (not approver or _same_person(approver, requester)):
@@ -747,7 +759,7 @@ def _apply_items(db: Session, request, plan: Dict[str, Any]) -> Dict[str, Any]:
                              "than the requester must approve it.")
     actor = approver or requester
     try:
-        result = ledger.apply_access_change(db, request_id=request.id, approved=approved, actor=actor)
+        result = ledger.record_access_change(db, request_id=request.id, approved=approved, actor=actor)
     except ChangeBlocked as exc:
         raise PermanentError(f"An access policy now blocks this change. {_deny_text(exc.preview.findings)}") from None
     except VersionConflict as exc:
@@ -759,41 +771,41 @@ def _apply_items(db: Session, request, plan: Dict[str, Any]) -> Dict[str, Any]:
         {"index": s.index, "status": s.status, "reason": s.reason, "item": _plain_item(s.item)}
         for s in result.skipped
     ]
-    if result.already_applied:
-        message = f"Already applied as change set {result.change_set_id}."
+    if result.already_recorded:
+        message = f"Already recorded as change set {result.change_set_id}."
     elif result.change_set_id:
-        message = f"Updated {len(result.applied)} ledger row(s) in change set {result.change_set_id}."
+        message = f"Updated {len(result.recorded)} ledger row(s) in change set {result.change_set_id}."
     else:
         message = "Nothing changed: everything requested was already true in the ledger."
-    if skipped and not result.already_applied:
+    if skipped and not result.already_recorded:
         message += " Skipped: " + "; ".join(f"{s['item']} ({s['reason']})" for s in skipped) + "."
-    logger.info("Access Rules: request %s apply -> change set %s (%d rows, %d skipped, already applied %s)",
-                request.id, result.change_set_id, len(result.applied), len(skipped), result.already_applied)
+    logger.info("Access Rules: request %s recorded as change set %s (%d rows, %d skipped, already recorded %s)",
+                request.id, result.change_set_id, len(result.recorded), len(skipped), result.already_recorded)
     return {
         "change_set_id": result.change_set_id,
-        "applied_rows": len(result.applied),
+        "recorded_rows": len(result.recorded),
         "skipped": skipped,
-        "already_applied": result.already_applied,
+        "already_recorded": result.already_recorded,
         "message": message,
     }
 
 
-def _apply_direct_edit(db: Session, request, plan: Dict[str, Any]) -> Dict[str, Any]:
+def _record_direct_edit(db: Session, request, prepared: Dict[str, Any]) -> Dict[str, Any]:
     existing = _existing_change_set(db, request.id)
     if existing is not None:
-        return {"change_set_id": existing.id, "applied_rows": 0, "skipped": [], "already_applied": True,
-                "message": f"Already applied as change set {existing.id}."}
+        return {"change_set_id": existing.id, "recorded_rows": 0, "skipped": [], "already_recorded": True,
+                "message": f"Already recorded as change set {existing.id}."}
     ctx = request.state_context or {}
     try:
         change = ChangeSetIn.model_validate(ctx.get("changes"))
     except ValidationError as exc:
         raise PermanentError(f"The saved edit isn't valid: {_validation_text(exc)}") from None
-    _check_filed_by_editor(db, request.id, str(plan.get("plane")), change)
+    _check_filed_by_editor(db, request.id, str(prepared.get("plane")), change)
     editor = _requester(request)
     approver = _approver(db, request.id)
-    if not plan.get("diffs"):
+    if not prepared.get("diffs"):
         # Approved as "nothing to change": never write rows nobody reviewed.
-        return {"change_set_id": None, "applied_rows": 0, "skipped": [], "already_applied": False,
+        return {"change_set_id": None, "recorded_rows": 0, "skipped": [], "already_recorded": False,
                 "message": "Nothing changed: the edit matched the ledger already."}
     if not approver or _same_person(approver, editor):
         raise PermanentError("The two-person rule needs someone other than the editor to approve this edit.")
@@ -810,23 +822,23 @@ def _apply_direct_edit(db: Session, request, plan: Dict[str, Any]) -> Dict[str, 
         message = f"Updated {len(result.diffs)} ledger row(s) in change set {result.change_set_id}."
     else:
         message = "Nothing changed: the edit matches the ledger already."
-    logger.info("Access Rules: direct edit %s by %s applied as change set %s (%d rows, approved by %s)",
+    logger.info("Access Rules: direct edit %s by %s recorded as change set %s (%d rows, approved by %s)",
                 request.id, editor, result.change_set_id, len(result.diffs), approver or "auto")
     return {
         "change_set_id": result.change_set_id,
-        "applied_rows": len(result.diffs),
+        "recorded_rows": len(result.diffs),
         "skipped": [],
-        "already_applied": False,
+        "already_recorded": False,
         "message": message,
     }
 
 
-def _apply_revert(db: Session, request, plan: Dict[str, Any]) -> Dict[str, Any]:
+def _record_revert(db: Session, request, prepared: Dict[str, Any]) -> Dict[str, Any]:
     ctx = request.state_context or {}
     change_set_id = ctx.get("revert_of")
-    if not change_set_id or plan.get("revert_of") != change_set_id:
-        raise PermanentError("This revert's stored plan doesn't match the request, so there's nothing approved "
-                             "to apply.")
+    if not change_set_id or prepared.get("revert_of") != change_set_id:
+        raise PermanentError("This revert's prepared change doesn't match the request, so there's nothing "
+                             "approved to record.")
     original = db.get(RbacChangeSetModel, change_set_id)
     if original is None:
         raise PermanentError(f"Change set {change_set_id} doesn't exist, so it can't be reverted.")
@@ -834,10 +846,10 @@ def _apply_revert(db: Session, request, plan: Dict[str, Any]) -> Dict[str, Any]:
     if original.reverted_by:
         done = db.get(RbacChangeSetModel, original.reverted_by)
         if done is not None and marker in (done.reason or ""):
-            return {"change_set_id": done.id, "applied_rows": 0, "skipped": [], "already_applied": True,
-                    "message": f"Already applied: change set {change_set_id} was reverted as change set {done.id}."}
+            return {"change_set_id": done.id, "recorded_rows": 0, "skipped": [], "already_recorded": True,
+                    "message": f"Already recorded: change set {change_set_id} was reverted as change set {done.id}."}
         raise PermanentError(f"Change set {change_set_id} was already reverted outside this request (change set "
-                             f"{original.reverted_by}), so there's nothing left to apply.")
+                             f"{original.reverted_by}), so there's nothing left to record.")
     editor = _requester(request)
     approver = _approver(db, request.id)
     if not approver or _same_person(approver, editor):
@@ -847,18 +859,18 @@ def _apply_revert(db: Session, request, plan: Dict[str, Any]) -> Dict[str, Any]:
         result = ledger.revert_change_set(db, change_set_id, actor=editor, reason=f"{reason} {marker}".strip())
     except VersionConflict as exc:
         raise PermanentError(f"{exc} Rows in that change set changed after the revert was approved, so it can't "
-                             "be applied. " + _revert_again(change_set_id)) from None
+                             "be recorded. " + _revert_again(change_set_id)) from None
     except ChangeBlocked as exc:
         raise PermanentError(f"An access policy now blocks this revert. {_deny_text(exc.preview.findings)}") from None
     except LedgerError as exc:
         raise PermanentError(str(exc)) from None
-    logger.info("Access Rules: revert %s by %s applied: change set %s reverted as %s (%d rows, approved by %s)",
+    logger.info("Access Rules: revert %s by %s recorded: change set %s reverted as %s (%d rows, approved by %s)",
                 request.id, editor, change_set_id, result.change_set_id, len(result.diffs), approver)
     return {
         "change_set_id": result.change_set_id,
-        "applied_rows": len(result.diffs),
+        "recorded_rows": len(result.diffs),
         "skipped": [],
-        "already_applied": False,
+        "already_recorded": False,
         "message": (f"Reverted change set {change_set_id}: updated {len(result.diffs)} ledger row(s) in change set "
                     f"{result.change_set_id}."),
     }

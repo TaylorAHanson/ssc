@@ -2,7 +2,10 @@
 
 It judges what a change *adds* (new atoms and changed values), never atoms a
 change leaves alone. Removing atoms is always allowed, except on system groups.
-All rules come from settings; the privilege vocabulary is an in-code registry.
+All rules come from settings. Which privileges a change may add is an allow
+list per securable type (``RBAC_ALLOWED_PRIVILEGES``); the in-code registry
+only supplies that list's defaults, privilege spellings and deprecated-token
+hints. ``sheet_options`` gives the grid the same values as dropdown choices.
 
 Severity depends on the write path:
 
@@ -21,7 +24,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from app.core.config import settings
 from app.db.rbac import PLANE_METASTORE, PLANE_UC, PLANE_WORKSPACE
-from app.models.rbac import CANONICAL_FIELDS, Finding, RuleRow, Severity, WritePath
+from app.models.rbac import CANONICAL_FIELDS, Finding, RuleRow, Severity, SheetOptions, WritePath
 from app.services.rbac import layout
 from app.services.rbac.cells import (
     atoms,
@@ -43,7 +46,9 @@ _WS_FILE_ACL = frozenset({"CAN_READ", "CAN_RUN", "CAN_EDIT", "CAN_MANAGE"})
 
 # securable_type (workbook spelling) -> privileges valid on it, following the
 # Databricks Unity Catalog privilege model and workspace ACLs. Workspace
-# entitlements are lowercase, as the workbook writes them.
+# entitlements are lowercase, as the workbook writes them. It doesn't decide
+# what can be granted (the RBAC_ALLOWED_PRIVILEGES allow list does); it gives
+# that list's defaults and the spelling of known tokens.
 PRIVILEGES: Dict[str, frozenset] = {
     # UC securables
     "catalog": frozenset(_CONTAINER | {"BROWSE", "CREATE_SCHEMA", "USE_CATALOG"}),
@@ -140,6 +145,12 @@ _REQUIRED_FIELDS = ("securable_type", "principal_name", "privilege")
 _PACKED_FIELDS = ("principal_name", "privilege")
 _KNOWN_PRINCIPAL_TYPES = ("group", "service principal", "user")
 
+# Findings list the values that are allowed, so the assistant can offer them;
+# longer lists are cut at this many.
+_MAX_LISTED = 20
+_ALLOW_LIST_SETTING = "Admin → Settings → Access Rules → Allowed privileges"
+_ENVIRONMENTS_SETTING = "Admin → Settings → Access Rules → Environments"
+
 
 def normalize_privilege(token: Optional[str]) -> str:
     """Comparison key for a privilege: trimmed, uppercase, spaces -> underscores."""
@@ -162,24 +173,43 @@ _BY_PLANE: Dict[str, Dict[str, str]] = _index_by_plane()
 _WRITE_KEYS = frozenset(normalize_privilege(p) for p in WRITE_PRIVILEGES)
 
 
-def canonical_privilege(securable_type: Optional[str], token: str) -> str:
-    """The registry spelling of ``token`` on ``securable_type`` (``select`` -> ``SELECT``,
-    ``Workspace_Access`` -> ``workspace_access``).
-
-    Falls back to any spelling the registry knows on the type's plane, then to
-    uppercase-with-underscores on UC / metastore types, else the trimmed token.
-    """
-    raw = (token or "").strip()
-    key = normalize_privilege(raw)
-    kind = layout.normalize_securable_type(securable_type or "")
+def _registry_spelling(kind: str, key: str) -> Optional[str]:
     if key in _BY_TYPE.get(kind, {}):
         return _BY_TYPE[kind][key]
     plane = layout.SECURABLE_TYPES.get(kind)
     if plane and key in _BY_PLANE.get(plane, {}):
         return _BY_PLANE[plane][key]
-    if plane in (PLANE_UC, PLANE_METASTORE):
+    return None
+
+
+def _spelling(kind: str, token: str) -> str:
+    raw = (token or "").strip()
+    key = normalize_privilege(raw)
+    known = _registry_spelling(kind, key)
+    if known:
+        return known
+    if layout.SECURABLE_TYPES.get(kind) in (PLANE_UC, PLANE_METASTORE):
         return key
     return raw
+
+
+def canonical_privilege(securable_type: Optional[str], token: str) -> str:
+    """The registry spelling of ``token`` on ``securable_type`` (``select`` -> ``SELECT``,
+    ``Workspace_Access`` -> ``workspace_access``).
+
+    Falls back to any spelling the registry knows on the type's plane, then to the
+    allow list's spelling on the type (a privilege the registry doesn't know), then
+    to uppercase-with-underscores on UC / metastore types, else the trimmed token.
+    """
+    kind = layout.normalize_securable_type(securable_type or "")
+    key = normalize_privilege(token)
+    known = _registry_spelling(kind, key)
+    if known:
+        return known
+    for allowed in allowed_privileges().get(kind, ()):
+        if normalize_privilege(allowed) == key:
+            return allowed
+    return _spelling(kind, token)
 
 
 def is_write_privilege(token: Optional[str]) -> bool:
@@ -187,15 +217,50 @@ def is_write_privilege(token: Optional[str]) -> bool:
     return key in _WRITE_KEYS or key.startswith("CREATE_")
 
 
-def is_valid_privilege(securable_type: Optional[str], token: Optional[str]) -> Optional[bool]:
-    """Whether the registry allows ``token`` on the type; None when the type isn't in the registry."""
-    kind = layout.normalize_securable_type(securable_type or "")
-    if kind not in _BY_TYPE:
-        return None
-    return normalize_privilege(token) in _BY_TYPE[kind]
-
-
 # --- settings -----------------------------------------------------------------
+
+
+def allowed_privileges() -> Dict[str, List[str]]:
+    """Securable type (workbook spelling) -> the privileges a change may add on it.
+
+    From ``RBAC_ALLOWED_PRIVILEGES``, in allow-list order, with the registry's
+    spelling where it knows the token. A type with no row, or whose row lists
+    nothing, is left out: nothing new can be granted on it.
+    """
+    out: Dict[str, List[str]] = {}
+    for raw in settings.RBAC_ALLOWED_PRIVILEGES or []:
+        if not isinstance(raw, dict):
+            continue
+        kind = layout.normalize_securable_type(str(raw.get("securable_type") or ""))
+        if not kind:
+            continue
+        privileges = out.setdefault(kind, [])
+        keys = {normalize_privilege(p) for p in privileges}
+        value = raw.get("privileges")
+        tokens = value if isinstance(value, (list, tuple)) else re.split(r"[,;]", str(value or ""))
+        for token in tokens:
+            key = normalize_privilege(str(token))
+            if key and key not in keys:
+                keys.add(key)
+                privileges.append(_spelling(kind, str(token)))
+    return {kind: privileges for kind, privileges in out.items() if privileges}
+
+
+def sheet_options(spec: layout.SheetSpec) -> SheetOptions:
+    """The values the grid offers on a managed sheet: the ones ``evaluate`` accepts."""
+    envs = [e for e in layout.environments() if spec.environment is None or e.key == spec.environment]
+    env = envs[0] if spec.environment is not None and envs else None
+    allowed = allowed_privileges()
+    kinds = [kind for kind in allowed if layout.SECURABLE_TYPES.get(kind) == spec.plane]
+    return SheetOptions(
+        environments=[e.key for e in envs],
+        securable_types=kinds,
+        principal_types={e.key: ["group", "service principal"] if e.service_principals else ["group"]
+                         for e in envs},
+        privileges={kind: list(allowed[kind]) for kind in kinds},
+        workspaces=list(env.workspaces) if env is not None and spec.plane == PLANE_WORKSPACE else [],
+        catalogs=list(env.catalogs) if env is not None and spec.plane == PLANE_UC else [],
+    )
 
 
 def _as_list(value: object) -> List[str]:
@@ -337,6 +402,16 @@ def _label(plane: str, fld: str) -> str:
     return fld
 
 
+def _a(kind: str) -> str:
+    return f"{'an' if kind[:1] in 'aeiou' else 'a'} {kind}"
+
+
+def _listing(values: Sequence[str]) -> str:
+    more = len(values) - _MAX_LISTED
+    shown = ", ".join(values[:_MAX_LISTED])
+    return f"{shown} and {more} more" if more > 0 else shown
+
+
 def _is_empty(row: RuleRow, fld: str) -> bool:
     value = getattr(row, fld) or ""
     return not split_cell(value) if fld in _PACKED_FIELDS else not value.strip()
@@ -347,7 +422,9 @@ class _Evaluator:
         self.path = path
         self.findings: List[Finding] = []
         self._seen: Set[Tuple] = set()
-        self.hard_denied = {normalize_privilege(p) for p in _as_list(settings.RBAC_HARD_DENIED_PRIVILEGES)}
+        self.allowed = allowed_privileges()
+        self.allowed_keys = {kind: {normalize_privilege(p) for p in privileges}
+                             for kind, privileges in self.allowed.items()}
         self.system_groups = {cell_key(g) for g in _as_list(settings.RBAC_SYSTEM_GROUPS)}
         self.naming_rules = _naming_rules()
         self._compiled: Dict[str, Optional[re.Pattern]] = {}
@@ -393,6 +470,7 @@ class _Evaluator:
         if after is not None:
             self.check_privileges(change, after)
             self.check_environment(change)
+            self.check_options(change, after)
             self.check_naming(change, after)
 
     def check_cells(self, change: _Change, after: RuleRow) -> None:
@@ -437,24 +515,31 @@ class _Evaluator:
                          f"PrincipalType is {shown}. Use group or service principal.",
                          principal=principal, field="principal_type")
 
+    def not_allowed(self, privilege: str, kind: str) -> str:
+        if not kind:
+            return f"{privilege} can't be granted on a row with no securable type."
+        if kind not in layout.SECURABLE_TYPES:
+            return f'{privilege} can\'t be granted on "{kind}": it isn\'t a securable type Access Rules cover.'
+        allowed = self.allowed.get(kind)
+        if not allowed:
+            return (f"Nothing can be granted on {_a(kind)} yet, so {privilege} can't be added. A Platform Admin "
+                    f"can allow privileges on it under {_ALLOW_LIST_SETTING}.")
+        return (f"{privilege} isn't allowed on {_a(kind)}. Allowed on {_a(kind)}: {_listing(allowed)}. "
+                f"A Platform Admin can add {privilege} under {_ALLOW_LIST_SETTING}.")
+
     def check_privileges(self, change: _Change, after: RuleRow) -> None:
         kind = layout.normalize_securable_type(after.securable_type)
         env = change.env
+        allowed = self.allowed_keys.get(kind, set())
         for principal, privilege in change.added:
             key = normalize_privilege(privilege)
             kw = {"principal": principal, "privilege": privilege, "field": "privilege"}
-            if change.plane != PLANE_WORKSPACE and key in DEPRECATED:
-                self.add(change, "deprecated_privilege", _HARD,
-                         f"{privilege} is deprecated. {DEPRECATED[key]}", **kw)
-                continue
-            if key in self.hard_denied:
-                self.add(change, "hard_denied_privilege", _HARD,
-                         f"{privilege} can't be granted through Access Rules. Remove it.", **kw)
-            if kind in _BY_TYPE and key not in _BY_TYPE[kind]:
-                valid = ", ".join(sorted(PRIVILEGES[kind], key=str.upper))
-                hint = f" Valid privileges: {valid}." if valid else " It takes no grants."
-                self.add(change, "unknown_privilege", _SELF_SERVICE,
-                         f"{privilege} isn't a valid privilege on a {kind}.{hint}", **kw)
+            if key not in allowed:
+                if change.plane != PLANE_WORKSPACE and key in DEPRECATED:
+                    self.add(change, "deprecated_privilege", _HARD,
+                             f"{privilege} is deprecated. {DEPRECATED[key]}", **kw)
+                    continue
+                self.add(change, "privilege_not_allowed", _HARD, self.not_allowed(privilege, kind), **kw)
             if env is not None and not env.write_privileges and is_write_privilege(privilege):
                 self.add(change, "write_privilege_disabled", _SELF_SERVICE,
                          f"{privilege} is a write privilege, and write privileges are turned off in {env.key}.", **kw)
@@ -473,6 +558,31 @@ class _Evaluator:
                 self.add(change, "self_service_disabled", _SELF_SERVICE, message, principal=principal)
         elif change.added or change.changed_fields:
             self.add(change, "self_service_disabled", _SELF_SERVICE, message)
+
+    def check_options(self, change: _Change, after: RuleRow) -> None:
+        """New or changed names must be among the environment's configured workspaces / catalogs."""
+        env = change.env
+        if env is None:
+            return
+        changed = set(change.changed_fields)
+        checks: List[Tuple[str, Tuple[str, ...], str]] = []
+        if change.plane == PLANE_WORKSPACE and env.workspaces:
+            if "workspace_name" in changed:
+                checks.append(("workspace_name", env.workspaces, "Workspaces"))
+            if (layout.normalize_securable_type(after.securable_type) in layout.WORKSPACE_NAMED_TYPES
+                    and changed & {"object_name", "securable_type"}):
+                checks.append(("object_name", env.workspaces, "Workspaces"))
+        if change.plane == PLANE_UC and env.catalogs and "catalog" in changed:
+            checks.append(("catalog", env.catalogs, "Catalogs"))
+        for fld, options, setting in checks:
+            value = (getattr(after, fld) or "").strip()
+            if not value or cell_key(value) in {cell_key(o) for o in options}:
+                continue
+            message = (f'{_label(change.plane, fld)} "{value}" isn\'t one of the {setting.lower()} set up for '
+                       f"{env.key}. Use one of: {_listing(options)}. A Platform Admin can add it to {env.key}'s "
+                       f"{setting} under {_ENVIRONMENTS_SETTING}.")
+            for principal in change.added_principals or [None]:
+                self.add(change, "value_not_in_options", _SELF_SERVICE, message, field=fld, principal=principal)
 
     def check_naming(self, change: _Change, after: RuleRow) -> None:
         kind = layout.normalize_securable_type(after.securable_type)

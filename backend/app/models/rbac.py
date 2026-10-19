@@ -68,7 +68,7 @@ class Rule(RuleRow):
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
-    # Open rbac_access_change requests whose plan touches this row.
+    # Open rbac_access_change requests whose prepared change touches this row.
     pending_request_ids: List[str] = Field(default_factory=list)
 
 
@@ -79,8 +79,8 @@ class RulesPage(BaseModel):
 
 class Finding(BaseModel):
     severity: Severity
-    # Stable machine code, e.g. hard_denied_privilege, principal_type_not_allowed,
-    # system_group, naming_rule, unknown_privilege, deprecated_privilege,
+    # Stable machine code, e.g. privilege_not_allowed, principal_type_not_allowed,
+    # system_group, naming_rule, deprecated_privilege, value_not_in_options,
     # self_service_disabled, write_privilege_disabled, justification_too_short,
     # duplicate_row, unknown_header, inflight_overlap, broad_grant, mixed_planes.
     code: str
@@ -213,7 +213,7 @@ class AccessProposal(BaseModel):
     # No group configured for this type: Platform Admins approve.
     approver_fallback: bool = False
     # Normalized items for this plane, including added prerequisites. This is the
-    # request's ``items`` parameter, and the plan apply intersects with.
+    # request's ``items`` parameter, and what the record step intersects with.
     items: List[AccessItem]
     added_prerequisites: List[AccessItem] = Field(default_factory=list)
     outcomes: List[ItemOutcome] = Field(default_factory=list)
@@ -229,13 +229,13 @@ class AccessPreview(BaseModel):
     proposals: List[AccessProposal]
 
 
-class ApplyResult(BaseModel):
+class RecordResult(BaseModel):
     change_set_id: Optional[str] = None
-    applied: List[RowDiff] = Field(default_factory=list)
-    # Items that became no-ops, or fell outside the approved plan, since approval.
+    recorded: List[RowDiff] = Field(default_factory=list)
+    # Items that became no-ops, or fell outside the approved change, since approval.
     skipped: List[ItemOutcome] = Field(default_factory=list)
     # The request's change set already exists (idempotent re-run).
-    already_applied: bool = False
+    already_recorded: bool = False
 
 
 class AccessMatch(BaseModel):
@@ -287,6 +287,27 @@ class SheetColumn(BaseModel):
     field: Optional[str] = None
 
 
+class SheetOptions(BaseModel):
+    """The values the grid offers on a sheet: the ones policy accepts in new or changed cells.
+
+    Securable and principal types use the workbook's spelling ("workspace entitlement",
+    "service principal"). An empty ``workspaces`` / ``catalogs`` list means typed freely.
+    """
+
+    # The environment keys rows on this sheet can use: its own, or every key on the metastore sheet.
+    environments: List[str] = Field(default_factory=list)
+    # Types on this sheet's plane with at least one allowed privilege, in allow-list order.
+    securable_types: List[str] = Field(default_factory=list)
+    # Environment key -> "group", plus "service principal" where the environment allows them.
+    principal_types: Dict[str, List[str]] = Field(default_factory=dict)
+    # Securable type -> the privileges the allow list permits on it (types in securable_types only).
+    privileges: Dict[str, List[str]] = Field(default_factory=dict)
+    # Workspace sheets: the environment's configured workspaces.
+    workspaces: List[str] = Field(default_factory=list)
+    # UC securables sheets: the environment's configured catalogs.
+    catalogs: List[str] = Field(default_factory=list)
+
+
 class SheetInfo(BaseModel):
     name: str
     plane: Plane
@@ -296,6 +317,7 @@ class SheetInfo(BaseModel):
     export_target: str
     export_path: str = ""
     editable: bool = False
+    options: SheetOptions = Field(default_factory=SheetOptions)
 
 
 # --- Import -------------------------------------------------------------------

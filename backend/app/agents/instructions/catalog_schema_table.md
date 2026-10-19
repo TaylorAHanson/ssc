@@ -47,4 +47,4 @@
 This workflow does not grant or revoke access. Access to catalogs, schemas and other
 securables is given to groups through the access-rules workflow: use `find_access`
 to see who already has it, then `preview_access_change`, and submit
-`rbac_access_change` once the user confirms the plan.
+`rbac_access_change` once the user confirms the proposed change.

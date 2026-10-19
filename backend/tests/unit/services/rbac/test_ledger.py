@@ -1,6 +1,8 @@
 """Tests for the Access Rules ledger: reads, direct edits, history / revert,
 access-change plan / apply and find-access (ADR 0005 D1, D4, D7-D10)."""
 
+import copy
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -8,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 import app.db  # noqa: F401  (registers every model on Base.metadata)
 from app.core.config import settings
+from app.core.default_config import DEFAULT_CONFIG
 from app.db import RequestModel
 from app.db.base import Base
 from app.db.rbac import RbacChangeSetModel, RbacRuleEventModel, RbacRuleModel, RbacSheetModel
@@ -64,10 +67,20 @@ def _settings(monkeypatch):
     monkeypatch.setattr(settings, "RBAC_MAX_CHANGES_PER_COMMIT", 200)
     monkeypatch.setattr(settings, "RBAC_MIN_REASON_LENGTH", 10)
     monkeypatch.setattr(settings, "RBAC_MIN_JUSTIFICATION_LENGTH", 20)
-    monkeypatch.setattr(settings, "RBAC_HARD_DENIED_PRIVILEGES", ["ALL_PRIVILEGES", "MANAGE"])
+    monkeypatch.setattr(settings, "RBAC_ALLOWED_PRIVILEGES",
+                        copy.deepcopy(DEFAULT_CONFIG["rbac"]["allowed_privileges"]))
     monkeypatch.setattr(settings, "RBAC_SYSTEM_GROUPS", ["account users", "users", "admins"])
     monkeypatch.setattr(settings, "RBAC_NAMING_RULES", [])
     monkeypatch.setattr(settings, "RBAC_DEFAULT_OWNER", "")
+
+
+def _without(kind: str, privilege: str) -> list:
+    """The default allow list with ``privilege`` taken off ``kind``'s row."""
+    rows = copy.deepcopy(DEFAULT_CONFIG["rbac"]["allowed_privileges"])
+    for r in rows:
+        if r["securable_type"] == kind:
+            r["privileges"] = ", ".join(p.strip() for p in r["privileges"].split(",") if p.strip() != privilege)
+    return rows
 
 
 @pytest.fixture(autouse=True)
@@ -129,19 +142,19 @@ def item(principal="g_new", privileges=("SELECT",), **kw):
     return AccessItem(principal_name=principal, privileges=list(privileges), **fields)
 
 
-def plan(db, *items, justification=JUSTIFICATION):
-    return ledger.plan_access_change(db, AccessChangeIn(items=list(items), justification=justification),
-                                     requester="requester@example.com")
+def prepare(db, *items, justification=JUSTIFICATION):
+    return ledger.prepare_access_change(db, AccessChangeIn(items=list(items), justification=justification),
+                                        requester="requester@example.com")
 
 
 def stored(proposal):
-    """The proposal as the workflow stores it in request context and hands it to apply."""
+    """The proposal as the workflow stores it in request context and hands it to the record step."""
     return AccessProposal.model_validate(proposal.model_dump(mode="json"))
 
 
 def open_request(db, request_id, *rule_ids, status="pending_approval"):
     db.add(RequestModel(id=request_id, type="rbac_access_change", status=status,
-                        state_context={"rbac_plan": {"diffs": [{"rule_id": r} for r in rule_ids]}}))
+                        state_context={"prepared_change": {"diffs": [{"rule_id": r} for r in rule_ids]}}))
     db.commit()
 
 
@@ -233,7 +246,7 @@ def test_preview_shows_diffs_policy_and_inflight_findings(db):
     assert diff.before["principal_name"] == "g_analysts" and diff.before["version"] == 1
     assert diff.after["principal_name"] == "g_analysts;g_new" and diff.after["version"] == 2
     assert preview.blocked
-    denied = [f for f in preview.findings if f.code == "hard_denied_privilege"]
+    denied = [f for f in preview.findings if f.code == "privilege_not_allowed"]
     assert denied and all(f.severity == "deny" and f.change_index == 1 and f.rule_id == row.id for f in denied)
     [overlap] = [f for f in preview.findings if f.code == "inflight_overlap"]
     assert overlap.severity == "warn" and "req-1" in overlap.message and overlap.change_index == 1
@@ -511,15 +524,15 @@ def test_reverting_a_reset_restores_rows_that_predate_the_policy(db):
     assert restored.status == "active" and restored.privilege == "MANAGE;USE_CONNECTION"
 
 
-# --- Access changes: plan ------------------------------------------------------------
+# --- Access changes: prepare ---------------------------------------------------------
 
 
-def test_plan_grant_appends_to_the_matching_packed_row(db):
+def test_prepare_grant_appends_to_the_matching_packed_row(db):
     seed(db, position=1, kind="catalog", schema="", principals="g_analysts;g_new", privileges="USE_CATALOG")
     target = seed(db, position=2, principals="g_analysts;g_finance")
     seed(db, position=3, principals="g_ops", privileges="USE_SCHEMA;SELECT;MODIFY")
 
-    preview = plan(db, item(environment="development", securable_type="Schema", catalog=" sales_dev ",
+    preview = prepare(db, item(environment="development", securable_type="Schema", catalog=" sales_dev ",
                             privileges=["select"]))
 
     assert preview.group_ref is None
@@ -537,12 +550,12 @@ def test_plan_grant_appends_to_the_matching_packed_row(db):
     assert proposal.report_markdown == ""
 
 
-def test_plan_new_rows_carry_prerequisites_owner_and_environment(db, monkeypatch):
+def test_prepare_new_rows_carry_prerequisites_owner_and_environment(db, monkeypatch):
     seed(db, position=1, principals="g_analysts", owner="sales_owners")
     seed(db, position=2, catalog="hr_dev", principals="g_hr")
     seed(db, position=3, catalog="hr_dev", schema="people", principals="g_hr")
 
-    [proposal] = plan(db, item(securable_type="view", object_name="fiscal_month")).proposals
+    [proposal] = prepare(db, item(securable_type="view", object_name="fiscal_month")).proposals
     assert [(a.securable_type, a.privileges) for a in proposal.added_prerequisites] == [
         ("catalog", ["USE_CATALOG"]), ("schema", ["USE_SCHEMA"]),
     ]
@@ -556,17 +569,17 @@ def test_plan_new_rows_carry_prerequisites_owner_and_environment(db, monkeypatch
     assert {d.after["owner"] for d in proposal.diffs} == {"sales_owners"}
     assert all(d.environment == "dev" and d.after["environment_value"] == "dev" for d in proposal.diffs)
 
-    [fresh] = plan(db, item(catalog="fresh_dev", schema_name="s")).proposals
+    [fresh] = prepare(db, item(catalog="fresh_dev", schema_name="s")).proposals
     assert {d.after["owner"] for d in fresh.diffs} == {OWNER}
 
     monkeypatch.setattr(settings, "RBAC_DEFAULT_OWNER", "platform_owners")
-    [configured] = plan(db, item(catalog="fresh_dev", schema_name="s")).proposals
+    [configured] = prepare(db, item(catalog="fresh_dev", schema_name="s")).proposals
     assert {d.after["owner"] for d in configured.diffs} == {"platform_owners"}
 
 
-def test_plan_mixed_types_returns_one_linked_proposal_per_type(db):
+def test_prepare_mixed_types_returns_one_linked_proposal_per_type(db):
     seed(db, position=1, kind="catalog", schema="", principals="g_new", privileges="USE_CATALOG")
-    preview = plan(
+    preview = prepare(
         db,
         item(principal="sp_etl_dev", securable_type="workspace", catalog="", schema_name="",
              workspace_name="ws-dev", principal_type="sp", privileges=["user"]),
@@ -585,8 +598,8 @@ def test_plan_mixed_types_returns_one_linked_proposal_per_type(db):
     assert [i.plane for i in ws.items] == ["workspace"]
 
 
-def test_plan_metastore_grant_without_an_environment(db):
-    [proposal] = plan(db, item(securable_type="connection", catalog="conn_dev", schema_name="", environment=None,
+def test_prepare_metastore_grant_without_an_environment(db):
+    [proposal] = prepare(db, item(securable_type="connection", catalog="conn_dev", schema_name="", environment=None,
                                privileges=["use connection"])).proposals
     assert proposal.plane == "uc_metastore" and not proposal.blocked
     assert proposal.approver_fallback
@@ -595,10 +608,10 @@ def test_plan_metastore_grant_without_an_environment(db):
     assert (diff.after["catalog"], diff.after["privilege"], diff.after["owner"]) == ("conn_dev", "USE_CONNECTION", "")
 
 
-def test_plan_blocks_a_hard_denied_privilege(db):
-    [proposal] = plan(db, item(privileges=["MANAGE"]), item(principal="g_other")).proposals
+def test_prepare_blocks_a_privilege_outside_the_allow_list(db):
+    [proposal] = prepare(db, item(privileges=["MANAGE"]), item(principal="g_other")).proposals
     assert proposal.blocked
-    denied = [f for f in proposal.findings if f.code == "hard_denied_privilege"]
+    denied = [f for f in proposal.findings if f.code == "privilege_not_allowed"]
     assert denied and all(f.severity == "deny" and f.principal == "g_new" for f in denied)
     schema_outcomes = {o.item.principal_name: o for o in proposal.outcomes if o.item.securable_type == "schema"}
     assert schema_outcomes["g_new"].status == "blocked" and "MANAGE" in schema_outcomes["g_new"].reason
@@ -606,8 +619,27 @@ def test_plan_blocks_a_hard_denied_privilege(db):
     assert all(proposal.items[o.index] == o.item for o in proposal.outcomes)
 
 
-def test_plan_reports_items_it_cannot_resolve(db):
-    preview = plan(
+def test_prepare_spells_configured_workspaces_and_blocks_others(db, monkeypatch):
+    monkeypatch.setattr(settings, "RBAC_ENVIRONMENTS", [{"key": "dev", "sheet_suffix": "Dev", "workspaces": "ws-dev"}])
+    ws = dict(securable_type="workspace", catalog="", schema_name="", privileges=["USER"])
+    [proposal] = prepare(db, item(workspace_name="WS-DEV", object_name="Ws-Dev", **ws),
+                      item(principal="g_other", workspace_name="ws-typo", object_name="ws-typo", **ws)).proposals
+    outcomes = {o.item.principal_name: o for o in proposal.outcomes}
+    assert outcomes["g_new"].status == "change"
+    assert (outcomes["g_new"].item.workspace_name, outcomes["g_new"].item.object_name) == ("ws-dev", "ws-dev")
+    assert outcomes["g_other"].status == "blocked" and "ws-typo" in outcomes["g_other"].reason
+    assert {f.code for f in proposal.findings if f.severity == "deny"} == {"value_not_in_options"}
+
+
+def test_prepare_spells_a_configured_catalog(db, monkeypatch):
+    monkeypatch.setattr(settings, "RBAC_ENVIRONMENTS", [{"key": "dev", "sheet_suffix": "Dev", "catalogs": "Sales_Dev"}])
+    [proposal] = prepare(db, item(catalog="sales_dev")).proposals
+    assert not proposal.blocked
+    assert {i.catalog for i in proposal.items} == {"Sales_Dev"}
+
+
+def test_prepare_reports_items_it_cannot_resolve(db):
+    preview = prepare(
         db,
         item(environment="moon"),
         item(securable_type="spaceship", privileges=["FLY"]),
@@ -621,54 +653,54 @@ def test_plan_reports_items_it_cannot_resolve(db):
     assert "dev, prd" in proposal.outcomes[0].reason
 
 
-def test_plan_takes_the_type_of_rule_from_the_securable_type_not_the_caller(db):
+def test_prepare_takes_the_type_of_rule_from_the_securable_type_not_the_caller(db):
     seed(db, position=1, kind="catalog", schema="", principals="g_new", privileges="USE_CATALOG")
-    [proposal] = plan(db, item(plane="uc_metastore"), justification=JUSTIFICATION).proposals
+    [proposal] = prepare(db, item(plane="uc_metastore"), justification=JUSTIFICATION).proposals
     assert proposal.plane == "uc" and proposal.blocked
     assert "plane_mismatch" in codes(proposal.findings)
     assert all(d.sheet == UC_DEV for d in proposal.diffs)
 
 
-def test_plan_short_justification_blocks_every_change(db):
+def test_prepare_short_justification_blocks_every_change(db):
     seed(db, position=1, kind="catalog", schema="", principals="g_new", privileges="USE_CATALOG")
-    [proposal] = plan(db, item(), justification="because").proposals
+    [proposal] = prepare(db, item(), justification="because").proposals
     assert proposal.blocked
     [finding] = [f for f in proposal.findings if f.code == "justification_too_short"]
     assert finding.severity == "deny"
     assert [o.status for o in proposal.outcomes] == ["blocked"]
 
 
-# --- Access changes: apply -------------------------------------------------------------
+# --- Access changes: record ------------------------------------------------------------
 
 
-def test_apply_writes_the_approved_plan_once(db, exports):
+def test_record_writes_the_approved_change_once(db, exports):
     seed(db, position=1, kind="catalog", schema="", principals="g_new", privileges="USE_CATALOG")
     target = seed(db, position=2)
-    [proposal] = plan(db, item()).proposals
+    [proposal] = prepare(db, item()).proposals
 
-    result = ledger.apply_access_change(db, request_id="req-9", approved=stored(proposal), actor="approver@x.com")
-    assert result.change_set_id and not result.already_applied and result.skipped == []
-    assert [d.rule_id for d in result.applied] == [target.id]
+    result = ledger.record_access_change(db, request_id="req-9", approved=stored(proposal), actor="approver@x.com")
+    assert result.change_set_id and not result.already_recorded and result.skipped == []
+    assert [d.rule_id for d in result.recorded] == [target.id]
     assert ledger.get_rule(db, target.id).principal_name == "g_analysts;g_new"
     cs = db.get(RbacChangeSetModel, result.change_set_id)
     assert (cs.source, cs.source_ref, cs.reason) == ("request", "req-9", "Approved access request req-9")
     assert ledger.get_rule(db, target.id).updated_by == "approver@x.com"
 
-    again = ledger.apply_access_change(db, request_id="req-9", approved=stored(proposal), actor="approver@x.com")
-    assert again.already_applied and again.change_set_id == result.change_set_id
-    assert [d.rule_id for d in again.applied] == [target.id]
+    again = ledger.record_access_change(db, request_id="req-9", approved=stored(proposal), actor="approver@x.com")
+    assert again.already_recorded and again.change_set_id == result.change_set_id
+    assert [d.rule_id for d in again.recorded] == [target.id]
     assert db.query(RbacChangeSetModel).count() == 1
     assert ledger.get_rule(db, target.id).version == 2
     assert exports == [1]
 
 
-def test_apply_skips_what_an_admin_already_added(db):
+def test_record_skips_what_an_admin_already_added(db):
     seed(db, position=1, kind="catalog", schema="", principals="g_new;g_two", privileges="USE_CATALOG")
     target = seed(db, position=2)
-    [proposal] = plan(db, item(), item(principal="g_two")).proposals
+    [proposal] = prepare(db, item(), item(principal="g_two")).proposals
 
     commit(db, RowChange(op="update", rule_id=target.id, version=1, cells={"principal_name": "g_analysts;g_new"}))
-    result = ledger.apply_access_change(db, request_id="req-1", approved=stored(proposal), actor=ADMIN)
+    result = ledger.record_access_change(db, request_id="req-1", approved=stored(proposal), actor=ADMIN)
 
     assert [(o.index, o.item.principal_name, o.status, o.reason) for o in result.skipped] == [
         (0, "g_new", "noop", "already in place"),
@@ -676,43 +708,43 @@ def test_apply_skips_what_an_admin_already_added(db):
     assert ledger.get_rule(db, target.id).principal_name == "g_analysts;g_new;g_two"
 
 
-def test_apply_never_goes_beyond_the_approved_plan(db):
+def test_record_never_goes_beyond_the_approved_change(db):
     seed(db, position=1, kind="catalog", schema="", principals="g_new;g_sneaky", privileges="USE_CATALOG")
     target = seed(db, position=2)
-    [proposal] = plan(db, item()).proposals
+    [proposal] = prepare(db, item()).proposals
     widened = stored(proposal).model_copy(update={"items": [
         *proposal.items, item(principal="g_sneaky", privileges=["USE_SCHEMA", "SELECT"], plane="uc"),
     ]})
 
-    result = ledger.apply_access_change(db, request_id="req-2", approved=widened, actor=ADMIN)
+    result = ledger.record_access_change(db, request_id="req-2", approved=widened, actor=ADMIN)
     assert [(o.index, o.item.principal_name, o.reason) for o in result.skipped] == [
-        (1, "g_sneaky", "outside the approved plan"),
+        (1, "g_sneaky", "outside the approved change"),
     ]
     assert ledger.get_rule(db, target.id).principal_name == "g_analysts;g_new"
     assert ledger.find_access(db, principal_name="g_sneaky", securable_type="schema").matches == []
 
 
-def test_apply_recreates_a_row_removed_since_approval_with_the_same_atoms(db):
+def test_record_recreates_a_row_removed_since_approval_with_the_same_atoms(db):
     seed(db, position=1, kind="catalog", schema="", principals="g_new", privileges="USE_CATALOG")
     target = seed(db, position=2)
-    [proposal] = plan(db, item()).proposals
+    [proposal] = prepare(db, item()).proposals
     commit(db, RowChange(op="delete", rule_id=target.id, version=1))
 
-    result = ledger.apply_access_change(db, request_id="req-3", approved=stored(proposal), actor=ADMIN)
-    [diff] = result.applied
+    result = ledger.record_access_change(db, request_id="req-3", approved=stored(proposal), actor=ADMIN)
+    [diff] = result.recorded
     assert diff.op == "create" and result.skipped == []
     assert (diff.after["principal_name"], diff.after["privilege"]) == ("g_new", "USE_SCHEMA;SELECT")
 
 
-def test_apply_rechecks_policy(db, monkeypatch):
+def test_record_rechecks_policy(db, monkeypatch):
     seed(db, position=1, kind="catalog", schema="", principals="g_new", privileges="USE_CATALOG")
     target = seed(db, position=2)
-    [proposal] = plan(db, item()).proposals
-    monkeypatch.setattr(settings, "RBAC_HARD_DENIED_PRIVILEGES", ["SELECT"])
+    [proposal] = prepare(db, item()).proposals
+    monkeypatch.setattr(settings, "RBAC_ALLOWED_PRIVILEGES", _without("schema", "SELECT"))
 
     with pytest.raises(ledger.ChangeBlocked) as exc:
-        ledger.apply_access_change(db, request_id="req-4", approved=stored(proposal), actor=ADMIN)
-    assert "hard_denied_privilege" in codes(exc.value.preview.findings)
+        ledger.record_access_change(db, request_id="req-4", approved=stored(proposal), actor=ADMIN)
+    assert "privilege_not_allowed" in codes(exc.value.preview.findings)
     assert ledger.get_rule(db, target.id).principal_name == "g_analysts"
     assert db.query(RbacChangeSetModel).count() == 0
 

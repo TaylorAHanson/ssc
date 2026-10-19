@@ -202,7 +202,7 @@ Therefore every tool is tagged with a **`side_effect_class`** that determines it
 | `side_effect_class` | Examples | Identity today | Primary bound |
 |---|---|---|---|
 | `read` | catalog/table/list, search, audit reads | OBO user | **OBO + UC** |
-| `data_grant` | Access-rule ledger write (`apply_access_change`) | app (Lakebase) | **OPA approval gate + capability scope** (see decision below) |
+| `data_grant` | Access-rule ledger write (`record_access_change`) | app (Lakebase) | **OPA approval gate + capability scope** (see decision below) |
 | `infra` | Terraform apply, workspace/volume/SP/repo create | Git bot / app SP | **OPA approval gate + scoped creds** (no UC bound) |
 | `membership` | LMWS group changes | app SP → job → LMWS service account | **OPA approval gate** (no UC bound) |
 | `destructive` | enforcement `kill`, deletes | app SP | **Hard approval gate + reversibility/compensation** |
@@ -213,7 +213,7 @@ Therefore every tool is tagged with a **`side_effect_class`** that determines it
 The app never runs a `GRANT` on a securable. Access to UC securables, metastore objects and
 workspace items is recorded as **access rules** (the `rbac_rules` ledger), which an external
 Terraform pipeline applies from CSV files the app exports on a schedule. A live grant would be
-drift that the next Terraform run removes. `data_grant` therefore covers `apply_access_change`,
+drift that the next Terraform run removes. `data_grant` therefore covers `record_access_change`,
 which writes the approved change to the ledger, and stays bounded by a **mandatory OPA approval
 gate plus capability scoping**. OBO+UC remains the bound for `read` tools. See
 [ADR-0005](adr/0005-rbac-access-rules.md).
@@ -330,15 +330,15 @@ Wiring:
 
 ```python
 @tool(
-    name="apply_access_change",
+    name="record_access_change",
     description="Record an approved access-rule change in the ledger.",
-    args_schema=ApplyAccessChangeInput,
+    args_schema=RecordAccessChangeInput,
     is_mutating=True,
     side_effect_class="data_grant",     # drives the guardrail bound
     policy_ref="agent/tools/data_grant", # Rego package
     required_role=None,
 )
-async def apply_access_change(...): ...
+async def record_access_change(...): ...
 ```
 
 Every tool is classified; `is_mutating` (not a heuristic exclusion list) drives whether the
@@ -353,7 +353,7 @@ Tool *availability* is data-driven, not hardcoded. A single DB-backed catalog
 - **One catalog, three origins.** `app/tools/catalog.py` unifies the two code definition sites
   into one name -> `McpTool` resolver: `origin="local"` (chat tools auto-discovered by
   `load_tools()`) and `origin="workflow"` (provider-backed workflow building blocks defined in
-  `app/workflows/tools/`, e.g. `apply_access_change`, `terraform_apply`). `origin="mcp"` rows are
+  `app/workflows/tools/`, e.g. `record_access_change`, `terraform_apply`). `origin="mcp"` rows are
   tools discovered from a registered Databricks MCP server, wrapped by a `RemoteMcpTool` adapter
   (`app/tools/external/`). All three expose the same `McpTool` surface and flow through the same
   `ToolExecutor` (OPA pre-flight, audit, idempotency).
@@ -487,7 +487,7 @@ sequenceDiagram
 
     U->>A: Give grp_sales_analysts SELECT on the sales schema in prd
     A->>X: find_access, preview_access_change (read)
-    A-->>U: Plan (prerequisites, no-ops) — confirm?
+    A-->>U: Proposed change (prerequisites, no-ops) — confirm?
     U->>A: Confirm + justification
     A->>X: execute_workflow(rbac_access_change)
     X->>DB: Create request + request_submitted fact
@@ -503,14 +503,14 @@ sequenceDiagram
         P->>G: Load checkpoint, step graph
     end
 
-    G->>X: plan step → writes approvers (the type's Databricks group) + report_markdown
-    G->>DB: interrupt() → approval row (assigned_to_role = approver group)
+    G->>X: prepare step → row changes + the type of rule (plane) + report_markdown
+    G->>DB: gate (approver source access_rule_type) → interrupt() → approval row (assigned_to_role = the type's approver group)
 
     Note over U,DB: A member of that group approves via POST /approve
 
     DB->>DB: approval_received fact
     P->>G: Resume from checkpoint
-    G->>X: apply_access_change (re-plan, ledger write, idempotent)
+    G->>X: record_access_change (re-check, ledger write, idempotent)
     X->>DB: tool_call_executed + status completed
     P->>DB: Scheduled export → one CSV per sheet + rbac_exported fact
 ```
@@ -654,9 +654,12 @@ tools/workflows granted in Unity Catalog.
     (`app/workflows/tool_registry.py`) resolves a step's tool by name; `spec_from_dict` +
     `validate_spec_dict` (`app/workflows/spec_loader.py`) compile a serializable spec into the
     runtime `WorkflowSpec`. A step can lift resolved approvers into context (`writes_context`)
-    for a gate's `approvers_from` expression; `rbac_access_change`'s plan step does this to route
-    each request to its type's Databricks approver group, and `preview_feature_request` to the
-    workspace or account preview approvers. `for_each` fans a step out over a list.
+    for a gate's `approvers_from` expression; `preview_feature_request` does this to route to the
+    workspace or account preview approvers. A gate can instead declare an `approver` source: a
+    fixed `group`, the data's `approver_group_tag`, or `access_rule_type`, the approver group set
+    per type of access rule, which `rbac_access_change` uses. A stage's `renamed_from` lists its
+    former names, so a request checkpointed under one still resumes. `for_each` fans a step out
+    over a list.
   - **The rejection path.** Every gate's refusal edge (and a nested workflow's rejection) routes to
     one terminal node that records `request_rejected` and ends the graph — a denial can never rejoin
     `stages`. Two things hang off it: the platform **always tells the requester**, with the
@@ -670,7 +673,7 @@ tools/workflows granted in Unity Catalog.
     validation error), and a failure among them is logged and skipped rather than raised, so a broken
     cleanup step can't re-file a DENIED request as FAILED. The gate mirrors `rejection_reason` and
     `rejected_gate` into `context` so those steps can quote or branch on the decision.
-  - Provider operations are wrapped as mutating tools (`app/workflows/tools/`): `apply_access_change`,
+  - Provider operations are wrapped as mutating tools (`app/workflows/tools/`): `record_access_change`,
     `terraform_plan/apply`, `create_uc_object`, `create_service_principal`, `github_*`,
     `add_group_membership`, `send_notification`, `sentinel_*`, `run_notebook_job`,
     `spawn_child_request`, `update_allowlist`, `execute_report` — each tagged with a

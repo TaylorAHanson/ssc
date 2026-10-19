@@ -128,7 +128,10 @@ export function stageCreate(staged: StagedChange[], key: string, sheet: string, 
   return [...staged, { op: 'create', key, sheet, cells }];
 }
 
-/** Cells for an added row: every column the sheet models, with environment and owner copied from its first row. */
+/**
+ * Cells for an added row: every column the sheet models, with environment and owner copied
+ * from its first row; an empty environment sheet starts with its own environment.
+ */
 export function newRowCells(sheet: RbacSheetInfo, rules: RbacRule[]): Partial<RbacCells> {
   const first = rules[0];
   const cells: Partial<RbacCells> = {};
@@ -136,6 +139,7 @@ export function newRowCells(sheet: RbacSheetInfo, rules: RbacRule[]): Partial<Rb
     if (!col.field) continue;
     cells[col.field] = first && (col.field === 'environment_value' || col.field === 'owner') ? first[col.field] ?? '' : '';
   }
+  if (!first && sheet.environment && 'environment_value' in cells) cells.environment_value = sheet.environment;
   return cells;
 }
 

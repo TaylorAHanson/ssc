@@ -45,6 +45,18 @@ def _code_registry() -> Dict[str, Any]:
     return reg
 
 
+@lru_cache(maxsize=1)
+def _renamed_tools() -> Dict[str, str]:
+    """Former code-tool names -> current ones. They resolve, but aren't offered to authors."""
+    import app.workflows.tools as T
+
+    return dict(getattr(T, "RENAMED_TOOLS", {}))
+
+
+def _current_name(name: str) -> str:
+    return _renamed_tools().get(name, name)
+
+
 # ---------------------------------------------------------------------------
 # 2. DB-registered MCP tools (dynamic, queried on demand)
 # ---------------------------------------------------------------------------
@@ -113,12 +125,13 @@ def _db_tools(db: Optional[Any] = None) -> Dict[str, Any]:
 def get_tool(name: str, db: Any = None) -> Any:
     """Return the tool for ``name`` or raise KeyError.
 
-    Checks code-defined tools first, then DB-registered MCP tools.
+    Checks code-defined tools first (a former name resolves to its current tool),
+    then DB-registered MCP tools.
     """
     # Fast path: code-defined tools (no DB hit)
     code = _code_registry()
-    if name in code:
-        return code[name]
+    if _current_name(name) in code:
+        return code[_current_name(name)]
     # Slow path: DB-registered tools
     db_tools = _db_tools(db)
     if name in db_tools:
@@ -127,8 +140,8 @@ def get_tool(name: str, db: Any = None) -> Any:
 
 
 def has_tool(name: str, db: Any = None) -> bool:
-    """Check if a tool exists (code-defined OR DB-registered)."""
-    if name in _code_registry():
+    """Check if a tool exists (code-defined, including a former name, OR DB-registered)."""
+    if _current_name(name) in _code_registry():
         return True
     return name in _db_tools(db)
 

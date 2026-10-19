@@ -241,6 +241,11 @@ class Settings(BaseSettings):
     # roles hit this), so the app creates/owns its own schema. Override per
     # deployment (e.g. DB_SCHEMA=edh_ssc). Must be a bare SQL identifier.
     DB_SCHEMA: str = "selfservice"
+    # App tables to mark REPLICA IDENTITY FULL at startup so a Lakebase Change
+    # Data Feed on DB_SCHEMA captures them: "none", "default" (see
+    # app.db.migrate.DEFAULT_CDF_TABLES) and/or table names, comma-separated.
+    # Postgres only. The feed skips every table in the schema that isn't listed.
+    LAKEBASE_CDF_TABLES: str = ""
     
     # Databricks Settings
     # SECRET: Set in .env file
@@ -815,7 +820,7 @@ class Settings(BaseSettings):
     RBAC_MAX_CHANGES_PER_COMMIT: int = _rbac.get("max_changes_per_commit", 200)
     RBAC_MIN_REASON_LENGTH: int = _rbac.get("min_reason_length", 10)
     RBAC_MIN_JUSTIFICATION_LENGTH: int = _rbac.get("min_justification_length", 20)
-    RBAC_HARD_DENIED_PRIVILEGES: List[str] = list(_rbac.get("hard_denied_privileges", []))
+    RBAC_ALLOWED_PRIVILEGES: List[dict] = copy.deepcopy(_rbac.get("allowed_privileges", []))
     RBAC_SYSTEM_GROUPS: List[str] = list(_rbac.get("system_groups", []))
     RBAC_DEFAULT_OWNER: str = _rbac.get("default_owner", "")
     RBAC_NAMING_RULES: List[dict] = copy.deepcopy(_rbac.get("naming_rules", []))

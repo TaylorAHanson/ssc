@@ -8,10 +8,10 @@ Modules:
 - ``cells``: atom semantics of packed ``;`` cells, and the deterministic
   row-edit planner that turns grants and revokes into workbook-style edits.
 - ``policy``: the single policy module every write path calls.
-- ``ledger``: reads, direct edits (preview / commit / revert), access-change
-  plan and apply, history and find-access.
+- ``ledger``: reads, direct edits (preview / commit / revert), preparing and
+  recording access changes, history and find-access.
 - ``approvers``: the approver group per type, view / edit rights, group lookup.
 - ``workbook_import``: one-time workbook import with preview, and guarded reset.
 - ``csv_export``: the scheduled full-snapshot CSV export, path test and compare.
-- ``report``: the approver-facing plan report (report_markdown).
+- ``report``: the approver-facing report of a prepared change (report_markdown).
 """

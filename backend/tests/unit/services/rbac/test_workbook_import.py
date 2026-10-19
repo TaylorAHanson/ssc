@@ -99,7 +99,9 @@ def test_preview_reports_sheets_skipped_tabs_and_findings(db_session):
     assert ("unknown_header", uc_sheet("Dev")) in codes
     assert ("duplicate_row", uc_sheet("Stg")) in codes
     dup = next(f for f in preview.findings if f.code == "duplicate_row")
-    assert dup.row_number == 2 and dup.severity == "warn"
+    # Excel's numbering: the header is row 1, so the second data row is row 3.
+    assert dup.row_number == 3 and dup.severity == "warn"
+    assert dup.message.startswith("Row 3 is identical to row 2.")
     assert preview.findings_total == len(preview.findings)
 
     stored = db_session.get(RbacImportModel, preview.import_id)
@@ -135,8 +137,8 @@ def test_workbook_without_managed_sheets_is_refused(db_session):
 
 
 def test_the_workbook_is_not_judged_against_the_access_policy(db_session):
-    # Service principals on tst/stg/prd and in the metastore sheet, a user, a hard-denied
-    # privilege and a mistyped securable type: all of it is the source of truth as it stands.
+    # Service principals on tst/stg/prd and in the metastore sheet, a user, a privilege outside
+    # the allow list and a mistyped securable type: all of it is the source of truth as it stands.
     sheets = synthetic_sheets()
     sheets[ws_sheet("Dev")].rows.append(
         ["dev", "group", "grp_dev_misc", "ws_dev", "service princlegalal", "sp_dev_jobs", "USER"])
@@ -144,6 +146,15 @@ def test_the_workbook_is_not_judged_against_the_access_policy(db_session):
         ["prd", "catalog", "cat_prd", None, None, OWNER, "user", "someone@example.com", "ALL PRIVILEGES"])
     preview = workbook_import.preview(db_session, write_workbook(sheets), "rbac.xlsx", actor=ACTOR)
     assert {f.code for f in preview.findings} == {"unknown_header", "duplicate_row"}
+
+
+def test_row_numbers_count_blank_rows_like_excel(db_session):
+    row = ["dev", "group", "grp_dev_engineers", "ws_dev", "workspace", "ws_dev", "USER"]
+    sheets = {ws_sheet("Dev"): SyntheticSheet(rows=[list(WS_HEADERS), list(row), [None] * 7, list(row)])}
+    preview = workbook_import.preview(db_session, write_workbook(sheets), "rbac.xlsx", actor=ACTOR)
+    dup = next(f for f in preview.findings if f.code == "duplicate_row")
+    assert dup.row_number == 4
+    assert dup.message.startswith("Row 4 is identical to row 2.")
 
 
 def test_findings_are_capped(db_session):

@@ -32,7 +32,7 @@ class PreviewAccessChangeInput(BaseModel):
         "one proposal per type of rule (UC securables, UC metastore, workspace securables), each with "
         "its approver group (or the Platform Admin fallback), outcomes per item (change / already true "
         "/ blocked), added prerequisites, findings, a summary and report_markdown, plus group_ref when "
-        "there is more than one proposal. Present the plan, get an explicit yes, then file one "
+        "there is more than one proposal. Present each proposal's report, get an explicit yes, then file one "
         "rbac_access_change request per proposal with that proposal's submit_items, the user's "
         "justification and the shared group_ref. next_step says exactly what to do."
     ),

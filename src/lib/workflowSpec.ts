@@ -279,6 +279,8 @@ export function specToFlow(spec: WorkflowGraphSpec): { nodes: FlowNode[]; edges:
         sublabel = `${manual ? 'manual task' : s.type} · ${approver.group}`;
       } else if (approver?.source === 'approver_group_tag') {
         sublabel = `${manual ? 'manual task' : s.type} · owner tag`;
+      } else if (approver?.source === 'access_rule_type') {
+        sublabel = 'Access rule approvers';
       }
       nodes.push({
         id, label: s.name, sublabel, kind: 'gate', x: COL_X, y: row * ROW,

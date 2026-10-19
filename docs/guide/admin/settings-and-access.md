@@ -72,7 +72,8 @@ allowed.
 
 Some approvals go to a Databricks group rather than a role, such as the
 approver groups for [access rules](access-rules.md). Anyone in that group sees
-the approval and can act on it; there's no role mapping to add.
+the approval and can act on it; there's no role mapping to add. The approval
+card names the group, or says Platform Admins approve because none is set.
 
 ## Other settings
 

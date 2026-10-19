@@ -131,8 +131,8 @@ Values seen in the metastore sheet:
 - Rows cover every environment in one sheet (names end in `_stg`, `_prd`, …).
 - A metastore-level object such as a `connection` carries its name in `Catalog`,
   with `SchemaName` empty.
-- Service principals hold `MANAGE;USE_CONNECTION`. `MANAGE` is hard-denied for new
-  changes by default (D7), so these rows import with a finding, not an error.
+- Service principals hold `MANAGE;USE_CONNECTION`. `MANAGE` is not on the default
+  allow list for new changes (D7), so these rows import with a finding, not an error.
 
 ## Decisions
 
@@ -301,19 +301,25 @@ on a schema), `preview_access_change` returns one proposal per type. The assista
 files them together as linked requests that share a `group_ref`. Each report lists
 its sibling requests. Each type's group approves only its own part, and outcomes
 are independent: a rejected workspace part does not undo an approved UC part. A
-mixed change set reaching `plan` is refused with "split by type".
+mixed change set reaching `prepare` is refused with "split by type".
 
 Stages:
-1. `plan` (read): validate, add prerequisites, and diff against the ledger. It looks
-   up the approver group for the request's type from settings and writes it to
-   context (`writes_context: ["approvers"]`). It also writes a `report_markdown`
-   plan for approvers.
-2. Approval gate: `approvers_from: {"$var": "approvers"}`.
-3. `apply`: re-plan against the current ledger, then write it in one transaction,
-   idempotent on the request id.
+1. `prepare` (read): validate, add prerequisites, and diff against the ledger, so
+   the request carries its exact row changes. It writes the request's type of rule
+   to context (`writes_context: ["plane", "nothing_to_change"]`) and returns a
+   `report_markdown` of the prepared change for approvers.
+2. Approval gate, type `platform_admin`, with
+   `approver: {"source": "access_rule_type"}`: the engine looks up the approver
+   group for the request's type from settings (D6).
+3. `record`: work the change out again against the current ledger, then write it
+   in one transaction, idempotent on the request id. The next export carries it to
+   Terraform.
 
-This is the same pattern `preview_feature_request` uses, so the workflow engine
-needs no change.
+`access_rule_type` is a declarative approver source alongside `group` and
+`approver_group_tag`, so the spec itself says who approves and the workflow editor
+can show it. It is the only engine change. The gate type stays `platform_admin`:
+that type already lets the routed group's members and Platform Admins approve, and
+hides Edit & Restart.
 
 **Retired:** `data_access_request`, `batch_data_access` and
 `catalog_schema_table_access`, which grant securables live and to individual users.
@@ -341,15 +347,17 @@ would disagree about the truth.
 
 - **Three settings name the approver groups:** `RBAC_UC_APPROVER_GROUP`,
   `RBAC_METASTORE_APPROVER_GROUP` and `RBAC_WS_APPROVER_GROUP`. Each takes a
-  Databricks group's exact display name. The settings are read when `plan` runs,
-  so a change applies to the next request without a redeploy.
+  Databricks group's exact display name. The settings are read when a request
+  reaches its approval gate, so a change applies to the next request without a
+  redeploy.
 - **Routing uses what the platform already has.** The poller stores the group name
   in the approval's `assigned_to_role`. The inbox shows the approval, and lets a
   user act on it, when that name is among the user's Databricks groups, which
   `current_user.me()` returns at sign-in (`approval_visibility_filter`,
   `_authorize_approval_actor`). No membership sync and no role mapping are needed.
 - **If a type has no group configured,** the approval falls back to Platform Admins,
-  who can already act on any approval. The plan report says so.
+  who can already act on any approval. The report of the prepared change says so,
+  and the approval card reads "Platform Admins (no … group set)".
 - The Access Rules page shows each type's group, and warns when the app cannot find
   that group in Databricks. A typo would otherwise leave approvals visible only to
   Platform Admins. The check lists the app workspace's groups (cached for five
@@ -380,14 +388,14 @@ would disagree about the truth.
   type would sink the others, and later approvers would wait on earlier ones.
 - *Later:* per-environment approver overrides (for example a stricter group for
   `prd`), as an optional field in the environments setting. Also risk-tiered routing. The policy module gains an `escalate` severity, and a
-  second gate (for example a security group) auto-approves unless the plan contains
-  escalated items.
+  second gate (for example a security group) auto-approves unless the prepared change
+  contains escalated items.
 
 ### D7. One policy module, configured from settings, enforced on every write path
 
 `services/rbac/policy.py` evaluates a change set and returns findings per atom with
 severity `deny` or `warn`. Every write path calls it: the preview tool (chat
-pre-check), the `plan` step, the `apply` step (re-check) and the admin edit API.
+pre-check), the `prepare` step, the `record` step (re-check) and the admin edit API.
 The workbook import doesn't call it (D3). There is no other copy: no ORM hook, no
 Rego content rules, no inline fallback.
 
@@ -399,10 +407,16 @@ Removing atoms is always allowed, except on system groups.
 Rules, all editable in Admin → Settings → Access Rules, with generic in-code
 defaults and no customer naming hardcoded:
 
-- Privilege vocabulary for each securable type (in-code registry following the
-  Databricks UC model). Deprecated tokens are denied with a hint, e.g. `USAGE` →
-  `USE_CATALOG` / `USE_SCHEMA`.
-- Hard-denied privileges (default: `ALL_PRIVILEGES`, `MANAGE`, `CREATE_CATALOG`, …).
+- Allowed privileges per securable type, **allow only**: a change can add only the
+  privileges listed for its type, and a type with no row takes nothing new. The
+  default is the in-code registry (following the Databricks UC model) minus
+  `ALL_PRIVILEGES`, `MANAGE`, `SET_SHARE_PERMISSION` and the metastore's
+  `CREATE_CATALOG`-style privileges. A privilege Databricks adds later is blocked
+  until a Platform Admin lists it. The registry now only supplies the defaults,
+  spellings and deprecation hints: a deprecated token not on the list is denied
+  with a hint, e.g. `USAGE` → `USE_CATALOG` / `USE_SCHEMA`.
+- Per environment, the workspace and catalog names a change may add; blank leaves
+  them free (D14).
 - Allowed principal types, per environment. The default is `group` and `service
   principal` everywhere. The original allowed service principals in `dev` only,
   but the workbook grants them in every environment and users need to request
@@ -420,7 +434,7 @@ defaults and no customer naming hardcoded:
 *Rejected:* Rego for content rules. Locally OPA runs in shadow mode, so the rules
 would not enforce there, which is how the original ended up with an inline fallback
 that drifted. Admin-editable rules also fit the settings store better than a policy
-redeploy. The `ToolExecutor` + OPA chokepoint still governs the mutating `apply`
+redeploy. The `ToolExecutor` + OPA chokepoint still governs the mutating `record`
 tool like any other. *Dropped:* the "3+ consonants" junk-data regex. It rejects
 real words, and naming rules cover the real need.
 
@@ -437,7 +451,7 @@ Admins edit the grid directly, which is the requirement, under these safeguards:
 - **Concurrency:** each write is
   `UPDATE … WHERE id = :id AND version = :v`, and a mismatched row count returns 409
   with the current row. This closes the read-then-write race in the original.
-- **The same policy module** applies. Hard denies cannot be bypassed from the grid;
+- **The same policy module** applies. The privilege allow list cannot be bypassed from the grid;
   changing policy is itself an audited settings change.
 - **Limits:** a maximum number of changes per commit; an unsaved-changes guard when
   switching sheets or leaving the page.
@@ -448,11 +462,12 @@ Admins edit the grid directly, which is the requirement, under these safeguards:
   approver group must approve it; self-approval is blocked.
 - Admin edits reach Terraform through the same export as requests.
 
-### D9. Plan → confirm → apply; apply never goes beyond what was approved
+### D9. Preview → confirm → record; recording never goes beyond what was approved
 
 The agent previews the change set, the user confirms, then the agent submits; there
-is no shortcut that skips confirmation. At `apply`, the plan is recomputed against
-the current ledger and only the **intersection** with the approved plan is applied.
+is no shortcut that skips confirmation. At `record`, the change is worked out again
+against the current ledger and only the **intersection** with the approved change is
+written.
 Items that are now no-ops, for example because an admin already added the rule, are
 reported, never widened. Idempotency is keyed on the request id and runs through the
 `ToolExecutor`.
@@ -461,8 +476,8 @@ reported, never widened. Idempotency is keyed on the request id and runs through
 
 | Tool | Class | Where |
 |---|---|---|
-| `preview_access_change` | read | chat pre-check **and** the `plan` workflow step (same service) |
-| `apply_access_change` | data_grant | workflow step only |
+| `preview_access_change` | read | chat pre-check **and** the `prepare` workflow step (same service) |
+| `record_access_change` | data_grant | workflow step only |
 | `find_access` | read | chat: which groups hold which privileges on securable X, and what group G can reach |
 
 Three new tools instead of about 20. `find_access` lets the agent check the ledger
@@ -519,7 +534,7 @@ sorting, filtering and staged editing. No global CSS overrides.
 Everything goes in Admin → Settings → **Access Rules**, gated by `features.rbac`:
 
 - environments (key, aliases, sheet suffix, export path, self-service, write
-  privileges, two-person rule)
+  privileges, two-person rule, the workspace and catalog names the grid offers)
 - metastore export path (`RBAC_METASTORE_EXPORT_PATH`), export cron, export on
   change, CSV byte-order mark and line ending, archiving
 - approver groups: `RBAC_UC_APPROVER_GROUP`, `RBAC_METASTORE_APPROVER_GROUP`,
@@ -528,8 +543,8 @@ Everything goes in Admin → Settings → **Access Rules**, gated by `features.r
 - viewer roles
 - allow reset
 - maximum changes per commit, minimum reason and justification length
-- hard-denied privileges, allowed principal types, system groups, default owner,
-  naming rules, header aliases
+- allowed privileges per securable type (`RBAC_ALLOWED_PRIVILEGES`), allowed
+  principal types, system groups, default owner, naming rules, header aliases
 
 `APPROVALS_DENY_SELF_APPROVAL` lives in the Approvals group.
 
@@ -597,22 +612,23 @@ Choices made while building, within the decisions above:
   workbook reported over 3,000 warnings on access that was already approved.
 - **Export after every change** is detected on the replica running the poller; a
   change made on another replica goes out with the next scheduled run.
-- **Approver fallback.** With no group set for a type, the plan step returns an empty
-  approver list, so the approval is unassigned and only Platform Admins can act on it;
-  the plan report says so.
+- **Approver fallback.** With no group set for a type, the gate's `access_rule_type`
+  source resolves no approver, so the approval is unassigned and only Platform Admins
+  can act on it; the report and the approval card say so.
 - **Nothing to change.** When every item is already in place, the gate approves
-  itself and `apply` writes nothing, so approvers never see a no-op.
+  itself and `record` writes nothing, so approvers never see a no-op.
 - **Two-person requests can't be forged.** `submit_row_changes` (and the revert
-  equivalent) records a server-side filing fact with a digest of the change; the plan
-  step refuses a direct-edit request without a matching fact, so the agent can't file
-  one. `apply` also refuses when the approver is the editor, on top of the
+  equivalent) records a server-side filing fact with a digest of the change; the
+  prepare step refuses a direct-edit request without a matching fact, so the agent
+  can't file one. `record` also refuses when the approver is the editor, on top of the
   platform-wide self-approval block. A request filed from chat that touches a
   two-person environment gets the same check, so it holds even with that block off.
-- **The approved plan is what gets applied.** The gate is marked `editable: false`,
+- **The approved change is what gets recorded.** The gate is marked `editable: false`,
   so Edit & Restart isn't offered: editing a waiting request and approving it would
   let one Platform Admin author and approve the same change. As a second layer, the
-  plan step records a digest of the stored plan as a fact. `apply` refuses a plan
-  that no longer matches it, and checks a direct edit against its filing fact again.
+  prepare step records a digest of the prepared change as a fact
+  (`rbac_change_prepared`). `record` refuses a change that no longer matches it, and
+  checks a direct edit against its filing fact again.
   The requester is always the request row's requester, never a context value.
 - **The securable type decides the type of rule.** A caller can't route an item to
   another type's sheet and approvers by naming a plane: a mismatch is refused. On
@@ -623,18 +639,45 @@ Choices made while building, within the decisions above:
   until they commit. The export takes it exclusively just to read the watermark,
   so no uncommitted id sits below it. SQLite already has a single writer.
 - **Reverts follow the two-person rule too.** Where it applies, a revert files a
-  request instead of writing; approving it applies the revert, whose reason ends with
+  request instead of writing; approving it records the revert, whose reason ends with
   the request id. A revert spanning types can't be split the way a commit can, so it
   becomes one request that Platform Admins approve. A second open revert of the same
   change set is refused.
 - **Agent guidance** is a prompt section that appears only when `find_access` or
   `preview_access_change` is available to the user.
+- **Renamed steps.** The steps were first called `plan` and `apply` (tools
+  `rbac_plan_access_change` and `apply_access_change`, fact `rbac_plan_recorded`,
+  context key `rbac_plan`, approvers routed with `approvers_from`). They were renamed
+  to `prepare` and `record` because people read them as a Terraform plan and apply.
+  Old requests keep working: the old tool names still resolve (but aren't offered
+  in the editor), each step lists its old name in `renamed_from` so a request
+  checkpointed in it resumes, and `record` accepts a change prepared under the old
+  key and fact. The prepare step still returns `approvers`, for an admin copy of the
+  workflow that routes with `approvers_from`.
 - **Retired workflows.** At startup, published rows for the three retired workflows
   (and admin copies of them) are set to draft and disabled, once. Their historical
   requests still open; one still in progress shows its last status, not Completed.
   The `catalog_schema_table` workflow keeps creating catalogs and schemas, but its
   grant and revoke instructions are removed, since those wrote grants to a second
   Terraform source (D5).
+- **Allow only, not never-grant** (customer feedback). A deny list let every new or
+  unlisted privilege through, so `RBAC_ALLOWED_PRIVILEGES` (one row per securable
+  type) replaced `RBAC_HARD_DENIED_PRIVILEGES`, and one `privilege_not_allowed`
+  finding (deny on both paths) replaced `hard_denied_privilege` and
+  `unknown_privilege`. Its message lists what the type allows. Unknown or empty
+  securable types are denied on direct edits too, where they used to warn. A saved
+  override of the old key is retired and skipped at startup. Write-privilege
+  detection still uses the registry and `CREATE_*`, so a newly allowed write
+  privilege outside both isn't treated as a write.
+- **Dropdown choices come from settings.** `GET /sheets` returns each sheet's
+  `options`: its environments, the securable types and privileges on the allow list
+  for its plane, the principal types per environment, and the environment's
+  workspaces (WS sheets) or catalogs (UC sheets). Policy enforces the same lists, so
+  a hand-built request can't step outside them. A new or changed `WorkspaceName`,
+  workspace or workspace-entitlement `SecurableName`, or UC `Catalog` outside a
+  configured list raises `value_not_in_options` (requests blocked, direct edits
+  warned). Matching is case-insensitive, and request items take the configured
+  spelling.
 
 ## Verification
 

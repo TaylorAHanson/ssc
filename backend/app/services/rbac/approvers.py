@@ -47,6 +47,14 @@ def approver_group(plane: str) -> Optional[str]:
     return name or None
 
 
+def approval_label(plane: Optional[str], group: Optional[str]) -> str:
+    """``UC securables approvers: grp_x``, or ``Platform Admins (no UC securables group set)``."""
+    label = PLANE_LABELS.get(plane or "")
+    if group:
+        return f"{label} approvers: {group}" if label else f"Access rule approvers: {group}"
+    return f"Platform Admins (no {label} group set)" if label else "Platform Admins"
+
+
 def is_member(user: User, group: Optional[str]) -> bool:
     """Whether ``group`` is among the user's Databricks groups (``user.entitlements``), case-insensitive."""
     return in_group(user.entitlements, group)

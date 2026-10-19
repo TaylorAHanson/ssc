@@ -8,10 +8,14 @@ existing tables/columns in place so data survives the rename.
 
 Each step is guarded by an inspector check so it is safe to run on every boot
 and on fresh databases (where the old tables never existed).
+
+``apply_replica_identity_full`` (opt-in Lakebase Change Data Feed readiness) is
+the exception: it runs *after* ``create_all``, since it needs the tables to exist.
 """
 from __future__ import annotations
 
 import logging
+import re
 
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
@@ -272,3 +276,125 @@ def run_startup_migrations(engine: Engine) -> None:
         _prune_orphaned_workflow_children(engine)
     except Exception as e:  # noqa: BLE001 - never block startup on a migration
         logger.warning("Startup migration step failed (continuing): %s", e)
+
+
+# --- Lakebase Change Data Feed readiness ------------------------------------
+
+# What ``LAKEBASE_CDF_TABLES=default`` stands for. LangGraph's checkpoint tables
+# share the app schema and are left out on purpose: they are large and rewritten
+# on every graph step, and the feed skips any table without full replica identity.
+DEFAULT_CDF_TABLES: tuple[str, ...] = (
+    "requests",
+    "events",
+    "approvals",
+    "enforcement_audit",
+    "rbac_rules",
+    "rbac_change_sets",
+    "rbac_rule_events",
+)
+
+_PG_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def resolve_cdf_tables(raw: str | None) -> list[str]:
+    """Expand a ``LAKEBASE_CDF_TABLES`` value into an ordered, de-duplicated list.
+
+    Comma-separated tokens: ``default`` expands to ``DEFAULT_CDF_TABLES``,
+    ``none`` and blanks are ignored, anything else is a table name.
+    """
+    tables: list[str] = []
+    for token in (raw or "").split(","):
+        token = token.strip()
+        if not token or token.lower() == "none":
+            continue
+        for name in DEFAULT_CDF_TABLES if token.lower() == "default" else (token,):
+            if name not in tables:
+                tables.append(name)
+    return tables
+
+
+def apply_replica_identity_full(
+    engine: Engine,
+    tables_setting: str | None = None,
+    schema: str | None = None,
+) -> dict[str, list[str]]:
+    """Set ``REPLICA IDENTITY FULL`` on the opted-in app tables (Postgres only).
+
+    A Lakebase Change Data Feed only captures tables with full replica identity,
+    and only a table's owner can change it — on a deployed app that is the app's
+    own service principal, so the app does it at startup. Runs *after*
+    ``create_all`` so a fresh database is covered on first boot. Idempotent and
+    never raises: a table that can't be altered is logged and retried next boot.
+    """
+    from app.core.config import settings
+    from app.db.session import get_db_schema
+
+    result: dict[str, list[str]] = {
+        "altered": [], "already_full": [], "missing": [], "failed": [], "invalid": [],
+    }
+    raw = settings.LAKEBASE_CDF_TABLES if tables_setting is None else tables_setting
+    requested = resolve_cdf_tables(raw)
+    if not requested:
+        return result
+    if engine.dialect.name != "postgresql":
+        logger.info(
+            "LAKEBASE_CDF_TABLES is set but the app database is %s, not Postgres; "
+            "skipping REPLICA IDENTITY.", engine.dialect.name,
+        )
+        return result
+
+    result["invalid"] = [t for t in requested if not _PG_IDENT_RE.match(t)]
+    if result["invalid"]:
+        logger.warning("Lakebase CDF: ignoring invalid table name(s): %s", result["invalid"])
+    tables = [t for t in requested if t not in result["invalid"]]
+    schema = schema or get_db_schema()
+
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT c.relname, c.relreplident FROM pg_class c "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = :schema AND c.relkind = 'r'"
+                ),
+                {"schema": schema},
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001 - never block startup
+        logger.warning(
+            "Lakebase CDF: could not read replica identity in schema %s (continuing): %s",
+            schema, e,
+        )
+        result["failed"] = tables
+        return result
+    identity = {name: ident for name, ident in rows}
+
+    for table in tables:
+        if table not in identity:
+            result["missing"].append(table)
+        elif identity[table] == "f":
+            result["already_full"].append(table)
+        else:
+            try:
+                with engine.begin() as conn:
+                    # ALTER TABLE queues behind every open transaction on the
+                    # table; cap the wait so a busy table can't stall startup.
+                    conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                    conn.execute(text(f'ALTER TABLE "{schema}"."{table}" REPLICA IDENTITY FULL'))
+                result["altered"].append(table)
+            except Exception as e:  # noqa: BLE001 - never block startup
+                result["failed"].append(table)
+                logger.warning(
+                    "Lakebase CDF: could not set REPLICA IDENTITY FULL on %s.%s "
+                    "(continuing; retried next boot): %s", schema, table, e,
+                )
+
+    logger.info(
+        "Lakebase CDF: REPLICA IDENTITY FULL in schema %s: set now %s, already full %s",
+        schema, result["altered"], result["already_full"],
+    )
+    if result["missing"]:
+        logger.warning(
+            "Lakebase CDF: table(s) not found in schema %s, skipped: %s",
+            schema, result["missing"],
+        )
+    return result

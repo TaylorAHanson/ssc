@@ -48,6 +48,9 @@ import WorkflowGraphPreview from './WorkflowGraphPreview';
 import WorkflowTestModal from './WorkflowTestModal';
 import WorkflowEvaluationModal from './WorkflowEvaluationModal';
 import { HelpTip, LabelWithHelp, AskAgentHint } from '../ui/help-tip';
+import { Link } from 'react-router-dom';
+import type { RbacPlanePermission } from '../../types/rbac';
+import { SETTINGS_PATH } from '../rbac/utils';
 
 // `inputBase` has no width so it can be combined with flex/explicit widths
 // without the `w-full` conflict that otherwise collapses flex children.
@@ -664,7 +667,60 @@ const HUMAN_GATE_TYPES: GateType[] = [
   'manual_task',
 ];
 
-type ApproverSource = 'default' | 'group' | 'approver_group_tag';
+type ApproverSource = 'default' | 'group' | 'approver_group_tag' | 'access_rule_type';
+
+/** The approver group configured for each type of access rule, as an `access_rule_type` gate resolves it. */
+function AccessRuleApprovers() {
+  const [planes, setPlanes] = useState<RbacPlanePermission[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getRbacPermissions()
+      .then((p) => {
+        if (!cancelled) setPlanes(p.planes);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <div className="space-y-1.5 text-[11px] text-gray-600">
+      <p>
+        Each request goes to the approver group for its type of rule. Platform Admins can always approve,
+        and are the only approvers for a type whose group isn't set.
+      </p>
+      {planes ? (
+        <ul className="space-y-0.5">
+          {planes.map((p) => (
+            <li key={p.plane}>
+              <span className="font-medium text-gray-700">{p.label}:</span>{' '}
+              {p.approver_group ? (
+                <span className="font-mono">{p.approver_group}</span>
+              ) : (
+                <span className="text-amber-700">not set, Platform Admins</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-gray-400">{failed ? "Couldn't load the approver groups." : 'Loading approver groups…'}</p>
+      )}
+      <p>
+        Set them in{' '}
+        <Link to={SETTINGS_PATH} className="text-accent hover:underline">
+          Admin → Settings → Access Rules
+        </Link>
+        .
+      </p>
+    </div>
+  );
+}
 
 function GateApproverField({
   gate,
@@ -692,6 +748,8 @@ function GateApproverField({
     } else if (next === 'group') {
       const group = gate.approver?.source === 'group' ? gate.approver.group : '';
       onChange({ approver: { source: 'group', group } });
+    } else if (next === 'access_rule_type') {
+      onChange({ approver: { source: 'access_rule_type' } });
     } else {
       const fallback =
         gate.approver?.source === 'approver_group_tag'
@@ -711,7 +769,7 @@ function GateApproverField({
           help={
             isManual
               ? "Who does the manual work. 'Specific group' assigns the task to any member of a group you name — pick this one. 'Default' falls back to platform admins, which is rarely who should be doing the work."
-              : "Who can approve this human gate. 'Default' uses the gate type's built-in routing (e.g. manager → the requester's manager). 'Specific group' sends it to any member of a group you name. 'From data's approver_group tag' resolves the group from the Unity Catalog approver_group tag on the requested assets."
+              : "Who can approve this human gate. 'Default' uses the gate type's built-in routing (e.g. manager → the requester's manager). 'Specific group' sends it to any member of a group you name. 'From data's approver_group tag' resolves the group from the Unity Catalog approver_group tag on the requested assets. 'Access rule approvers' sends it to the approver group set for the request's type of access rule; use it after the step that prepares an access change."
           }
         >
           {isManual ? 'Assigned to' : 'Approver group'}
@@ -726,6 +784,9 @@ function GateApproverField({
           </option>
           <option value="group">Specific group</option>
           <option value="approver_group_tag">From data's approver_group tag</option>
+          {(!isManual || source === 'access_rule_type') && (
+            <option value="access_rule_type">Access rule approvers (by type of rule)</option>
+          )}
         </select>
         {isManual && source === 'default' && (
           <div className="text-[11px] text-amber-600 mt-1">
@@ -772,6 +833,8 @@ function GateApproverField({
           set
         </label>
       )}
+
+      {source === 'access_rule_type' && <AccessRuleApprovers />}
     </div>
   );
 }

@@ -116,6 +116,30 @@ def test_no_group_configured_falls_back_to_platform_admins(db_session):
     assert _status(db_session, "req-1") == "approved"
 
 
+def test_the_card_names_the_access_rule_approvers_for_the_requests_type(db_session):
+    _add(db_session, "req-uc", approval_type="platform_admin")
+    _add(db_session, "req-ws", role=None, approval_type="platform_admin")
+    _add(db_session, "req-other")
+    db_session.get(RequestModel, "req-uc").state_context = {"prepared_change": {"plane": "uc"}}
+    db_session.get(RequestModel, "req-ws").state_context = {"items": [{"securable_type": "workspace"}]}
+    db_session.commit()
+
+    labels = {a.requestId: a.approverLabel
+              for a in get_approvals(status="pending", current_user=ADMIN, db=db_session)}
+    assert labels == {"req-uc": f"UC securables approvers: {GROUP}",
+                      "req-ws": "Platform Admins (no Workspace securables group set)",
+                      # Only the gate that takes its group from the type of rule gets a label.
+                      "req-other": None}
+    assert get_approval("appr-req-uc", current_user=MEMBER, db=db_session).approverLabel == (
+        f"UC securables approvers: {GROUP}")
+
+    # The requester's own view of the request names the same approvers.
+    [shown] = requests_api._format_request(db_session.get(RequestModel, "req-ws"), db_session).approvals
+    assert shown.approverLabel == "Platform Admins (no Workspace securables group set)"
+    summary = requests_api._format_request(db_session.get(RequestModel, "req-ws"), db_session, summary=True)
+    assert summary.approvals[0].approverLabel is None
+
+
 # --- Self-approval ------------------------------------------------------------------
 
 

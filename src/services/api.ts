@@ -3114,7 +3114,11 @@ export type GateApprover =
       source: 'approver_group_tag';
       assets_from?: SpecExpr | null;
       fallback_to_owner?: boolean;
-    };
+    }
+  /** The approver group set per type of access rule (Admin → Settings → Access
+   *  Rules), picked by the request's type (`rule_type_from`, default `plane`).
+   *  Platform Admins approve when that type's group is blank. */
+  | { source: 'access_rule_type'; rule_type_from?: SpecExpr | null };
 
 export interface WorkflowGateStage {
   kind: 'gate';

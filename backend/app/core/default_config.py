@@ -487,17 +487,23 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # sheet names from the patterns below; ``aliases`` match Environment
         # cells and request wording. A blank export path means that
         # environment's sheets are not exported (the Exports tab says so).
+        # ``workspaces`` / ``catalogs`` (comma-separated) are the names the grid
+        # offers, and the only ones a change may add; blank = typed freely.
         "environments": [
             {"key": "dev", "aliases": "development", "sheet_suffix": "Dev", "export_path": "",
+             "workspaces": "", "catalogs": "",
              "self_service": True, "write_privileges": True, "service_principals": True,
              "two_person_rule": False},
             {"key": "tst", "aliases": "test,qa", "sheet_suffix": "Tst", "export_path": "",
+             "workspaces": "", "catalogs": "",
              "self_service": True, "write_privileges": True, "service_principals": True,
              "two_person_rule": False},
             {"key": "stg", "aliases": "stage,staging", "sheet_suffix": "Stg", "export_path": "",
+             "workspaces": "", "catalogs": "",
              "self_service": True, "write_privileges": True, "service_principals": True,
              "two_person_rule": False},
             {"key": "prd", "aliases": "prod,production", "sheet_suffix": "Prd", "export_path": "",
+             "workspaces": "", "catalogs": "",
              "self_service": True, "write_privileges": False, "service_principals": True,
              "two_person_rule": False},
         ],
@@ -529,19 +535,62 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_changes_per_commit": 200,
         "min_reason_length": 10,
         "min_justification_length": 20,
-        # Never granted through a request or an edit (existing rows import with
-        # a finding). Removing them is always allowed.
-        "hard_denied_privileges": [
-            "ALL_PRIVILEGES",
-            "MANAGE",
-            "CREATE_CATALOG",
-            "CREATE_EXTERNAL_LOCATION",
-            "CREATE_STORAGE_CREDENTIAL",
-            "CREATE_CONNECTION",
-            "CREATE_SHARE",
-            "CREATE_RECIPIENT",
-            "CREATE_PROVIDER",
-            "SET_SHARE_PERMISSION",
+        # Allow only: a request or direct edit can add only the privileges listed
+        # for its securable type, so a type with no row (or a privilege
+        # Databricks adds later) can't be granted until an admin lists it.
+        # Removing privileges is always allowed. The defaults are the in-code
+        # registry (policy.PRIVILEGES) without ALL_PRIVILEGES, MANAGE,
+        # SET_SHARE_PERMISSION and the metastore's CREATE_CATALOG / _EXTERNAL_LOCATION /
+        # _STORAGE_CREDENTIAL / _CONNECTION / _SHARE / _RECIPIENT / _PROVIDER;
+        # recipients and providers take no grants.
+        "allowed_privileges": [
+            {"securable_type": "catalog", "privileges": (
+                "APPLY_TAG, BROWSE, CREATE_FUNCTION, CREATE_MATERIALIZED_VIEW, CREATE_MODEL, CREATE_SCHEMA, "
+                "CREATE_TABLE, CREATE_VOLUME, EXECUTE, EXTERNAL_USE_SCHEMA, MODIFY, READ_VOLUME, REFRESH, "
+                "SELECT, USE_CATALOG, USE_SCHEMA, WRITE_VOLUME")},
+            {"securable_type": "schema", "privileges": (
+                "APPLY_TAG, CREATE_FUNCTION, CREATE_MATERIALIZED_VIEW, CREATE_MODEL, CREATE_TABLE, "
+                "CREATE_VOLUME, EXECUTE, EXTERNAL_USE_SCHEMA, MODIFY, READ_VOLUME, REFRESH, SELECT, "
+                "USE_SCHEMA, WRITE_VOLUME")},
+            {"securable_type": "table", "privileges": "APPLY_TAG, MODIFY, SELECT"},
+            {"securable_type": "view", "privileges": "APPLY_TAG, MODIFY, SELECT"},
+            {"securable_type": "materialized view", "privileges": "APPLY_TAG, REFRESH, SELECT"},
+            {"securable_type": "streaming table", "privileges": "APPLY_TAG, REFRESH, SELECT"},
+            {"securable_type": "volume", "privileges": "APPLY_TAG, READ_VOLUME, WRITE_VOLUME"},
+            {"securable_type": "function", "privileges": "EXECUTE"},
+            {"securable_type": "model", "privileges": "APPLY_TAG, EXECUTE"},
+            {"securable_type": "registered model", "privileges": "APPLY_TAG, EXECUTE"},
+            {"securable_type": "metastore", "privileges": (
+                "CREATE_CLEAN_ROOM, CREATE_SERVICE_CREDENTIAL, MANAGE_ALLOWLIST, USE_MARKETPLACE_ASSETS, "
+                "USE_PROVIDER, USE_RECIPIENT, USE_SHARE")},
+            {"securable_type": "connection", "privileges": "CREATE_FOREIGN_CATALOG, USE_CONNECTION"},
+            {"securable_type": "external location", "privileges": (
+                "BROWSE, CREATE_EXTERNAL_TABLE, CREATE_EXTERNAL_VOLUME, CREATE_FOREIGN_SECURABLE, "
+                "CREATE_MANAGED_STORAGE, EXTERNAL_USE_LOCATION, READ_FILES, WRITE_FILES")},
+            {"securable_type": "storage credential", "privileges": "CREATE_EXTERNAL_TABLE, READ_FILES, WRITE_FILES"},
+            {"securable_type": "service credential", "privileges": "ACCESS"},
+            {"securable_type": "share", "privileges": "SELECT"},
+            {"securable_type": "workspace", "privileges": "ADMIN, USER"},
+            {"securable_type": "workspace entitlement", "privileges": (
+                "allow_cluster_create, allow_instance_pool_create, databricks_sql_access, workspace_access, "
+                "workspace_consume")},
+            {"securable_type": "cluster", "privileges": "CAN_ATTACH_TO, CAN_MANAGE, CAN_RESTART"},
+            {"securable_type": "cluster policy", "privileges": "CAN_USE"},
+            {"securable_type": "instance pool", "privileges": "CAN_ATTACH_TO, CAN_MANAGE"},
+            {"securable_type": "job", "privileges": "CAN_MANAGE, CAN_MANAGE_RUN, CAN_VIEW, IS_OWNER"},
+            {"securable_type": "pipeline", "privileges": "CAN_MANAGE, CAN_RUN, CAN_VIEW, IS_OWNER"},
+            {"securable_type": "sql warehouse", "privileges": "CAN_MANAGE, CAN_MONITOR, CAN_USE, CAN_VIEW, IS_OWNER"},
+            {"securable_type": "notebook", "privileges": "CAN_EDIT, CAN_MANAGE, CAN_READ, CAN_RUN"},
+            {"securable_type": "directory", "privileges": "CAN_EDIT, CAN_MANAGE, CAN_READ, CAN_RUN"},
+            {"securable_type": "folder", "privileges": "CAN_EDIT, CAN_MANAGE, CAN_READ, CAN_RUN"},
+            {"securable_type": "repo", "privileges": "CAN_EDIT, CAN_MANAGE, CAN_READ, CAN_RUN"},
+            {"securable_type": "dashboard", "privileges": "CAN_EDIT, CAN_MANAGE, CAN_READ, CAN_RUN"},
+            {"securable_type": "genie space", "privileges": "CAN_EDIT, CAN_MANAGE, CAN_RUN, CAN_VIEW"},
+            {"securable_type": "secret scope", "privileges": "READ, WRITE"},
+            {"securable_type": "serving endpoint", "privileges": "CAN_MANAGE, CAN_QUERY, CAN_VIEW"},
+            {"securable_type": "service principal", "privileges": (
+                "CAN_MANAGE, CAN_USE, roles/servicePrincipal.manager, roles/servicePrincipal.user")},
+            {"securable_type": "app", "privileges": "CAN_MANAGE, CAN_USE"},
         ],
         # Groups self-service never adds to or removes from (case-insensitive).
         "system_groups": ["account users", "users", "admins"],

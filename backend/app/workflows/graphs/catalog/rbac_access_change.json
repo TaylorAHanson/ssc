@@ -5,9 +5,10 @@
   "stages": [
     {
       "kind": "step",
-      "name": "plan",
-      "tool": "rbac_plan_access_change",
-      "writes_context": ["approvers", "nothing_to_change"],
+      "name": "prepare",
+      "renamed_from": ["plan"],
+      "tool": "rbac_prepare_access_change",
+      "writes_context": ["plane", "nothing_to_change"],
       "args": {
         "items": {"$var": {"path": "items", "default": null}},
         "justification": {"$var": {"path": "justification", "default": ""}},
@@ -21,12 +22,13 @@
       "waiting_status": "manager_approval",
       "editable": false,
       "auto_approve": {"$var": {"path": "nothing_to_change", "default": false}},
-      "approvers_from": {"$var": "approvers"}
+      "approver": {"source": "access_rule_type"}
     },
     {
       "kind": "step",
-      "name": "apply",
-      "tool": "apply_access_change",
+      "name": "record",
+      "renamed_from": ["apply"],
+      "tool": "record_access_change",
       "success_fact": "rbac_ledger_updated",
       "args": {}
     }

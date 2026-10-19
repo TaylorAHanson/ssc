@@ -45,6 +45,19 @@ many there are. The page lists them under **Pending**, with your finished
 decisions under **Completed**. **My Roles & Approval Capabilities** shows which
 kinds of request your roles let you approve.
 
+### Filter by workflow
+
+To work through one kind of request at a time, pick it from **Workflow** above
+the lists. It lists each workflow you have approvals for, by the name your
+admins gave it, with how many are waiting. **Pending** and **Completed** then
+show only that workflow, and their headings show how many of the total you're
+seeing. Select **Clear filter**, or **All workflows** in the list, to see
+everything again.
+
+The filter is saved in the page's web address, so it stays on when you reload
+and you can send a colleague a link to the same view. When nothing is left
+pending for that workflow, the page says so and offers **Show all workflows**.
+
 ### What's on an approval card
 
 Each card shows who made the request, the type of request and approval, and
@@ -83,10 +96,14 @@ Tick the box on each approval you want to approve, or **Select all you can
 approve**, then select **Approve selected**. You see the list and confirm, and
 then the result for each one. Any that couldn't be approved say why, and the
 rest go ahead. Rejecting is always one at a time, since each rejection needs
-its own reason.
+its own reason. With a workflow filter on, only the approvals you can see are
+selected and approved; anything the filter hides is left alone.
 
-Some approvals go to a Databricks group rather than a role, such as access
-rule changes. If you're in that group, you see them here.
+Some approvals go to a Databricks group rather than a role. Access rule
+changes, for example, go to the approver group for their type of rule, and the
+card says which, such as "UC securables approvers: `grp_uc_admins`". When that
+type has no group, it says Platform Admins approve. If you're in that group,
+you see them here.
 
 ### Manual tasks
 

@@ -151,8 +151,10 @@ def _read_sheet(ws: Any, spec: layout.SheetSpec) -> Tuple[_Sheet, List[Finding]]
                      "Its values are kept as they are and exported unchanged."),
         ))
 
+    # Findings name the row as Excel numbers it: the header is row 1, and blank rows still count.
     first_seen: Dict[str, int] = {}
-    for values in ws.iter_rows(min_row=2, max_row=max_row, max_col=width, values_only=True):
+    for excel_row, values in enumerate(
+            ws.iter_rows(min_row=2, max_row=max_row, max_col=width, values_only=True), start=2):
         texts = [_cell_text(v) for v in values]
         # Excel would write an empty row in the used range as ",,,"; it carries no rule.
         if not any(texts):
@@ -174,12 +176,12 @@ def _read_sheet(ws: Any, spec: layout.SheetSpec) -> Tuple[_Sheet, List[Finding]]
         if row_hash in first_seen:
             sheet.duplicates += 1
             findings.append(Finding(
-                severity="warn", code="duplicate_row", sheet=spec.name, row_number=position + 1,
-                message=(f"Row {position + 1} is identical to row {first_seen[row_hash]}. "
+                severity="warn", code="duplicate_row", sheet=spec.name, row_number=excel_row,
+                message=(f"Row {excel_row} is identical to row {first_seen[row_hash]}. "
                          "Both are kept so the export matches the workbook."),
             ))
         else:
-            first_seen[row_hash] = position + 1
+            first_seen[row_hash] = excel_row
     return sheet, findings
 
 

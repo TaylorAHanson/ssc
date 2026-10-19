@@ -295,16 +295,81 @@ def test_gate_approver_tag_source_compiles_assets_closure():
     ]
 
 
+@pytest.mark.parametrize("plane, ctx, expected", [
+    ("uc", {"plane": "uc"}, ["uc-approvers"]),
+    ("uc_metastore", {"plane": "uc_metastore"}, []),
+    (None, {}, []),
+])
+def test_gate_access_rule_type_source_routes_to_that_types_group(monkeypatch, plane, ctx, expected):
+    import asyncio
+    from app.services.rbac import approvers
+    from app.workflows.spec import _resolve_gate_approvers
+
+    monkeypatch.setattr(approvers, "approver_group", lambda p: {"uc": "uc-approvers"}.get(p))
+    spec = _good_spec()
+    spec["stages"][0]["approver"] = {"source": "access_rule_type"}
+    validate_spec_dict(spec)  # no raise
+    gate = spec_from_dict(spec).stages[0]
+    assert gate.approver_source == "access_rule_type"
+    # Blank group (or no type): no approvers, so only Platform Admins can act on it.
+    assert asyncio.run(_resolve_gate_approvers(gate, ctx)) == expected
+
+
+def test_gate_access_rule_type_source_can_read_the_type_from_elsewhere(monkeypatch):
+    import asyncio
+    from app.services.rbac import approvers
+    from app.workflows.spec import _resolve_gate_approvers
+
+    monkeypatch.setattr(approvers, "approver_group", lambda p: {"workspace": "ws-approvers"}.get(p))
+    spec = _good_spec()
+    spec["stages"][0]["approver"] = {"source": "access_rule_type", "rule_type_from": {"$var": "change.plane"}}
+    gate = spec_from_dict(spec).stages[0]
+    ctx = {"plane": "uc", "change": {"plane": "workspace"}}
+    assert asyncio.run(_resolve_gate_approvers(gate, ctx)) == ["ws-approvers"]
+
+
 @pytest.mark.parametrize("approver,match", [
     ({"source": "group"}, "group is required"),
-    ({"source": "nope"}, "must be 'group' or 'approver_group_tag'"),
+    ({"source": "nope"}, "must be 'group', 'approver_group_tag' or 'access_rule_type'"),
     ({"source": "approver_group_tag", "assets_from": {"$nope": [1]}}, "unknown operator"),
     ({"source": "approver_group_tag", "fallback_to_owner": "yes"}, "must be a boolean"),
+    ({"source": "access_rule_type", "rule_type_from": {"$nope": [1]}}, "unknown operator"),
     ("not-an-object", "must be an object"),
 ])
 def test_gate_approver_rejects_bad_config(approver, match):
     spec = _good_spec()
     spec["stages"][0]["approver"] = approver
+    with pytest.raises(SpecError, match=match):
+        validate_spec_dict(spec)
+
+
+# --- renamed stages ---------------------------------------------------------
+
+def test_renamed_from_compiles_to_an_alias_node_per_former_name():
+    spec = _good_spec()
+    spec["stages"][0]["renamed_from"] = ["approval"]
+    spec["stages"][1]["renamed_from"] = ["grant", "add_member"]
+    validate_spec_dict(spec)  # no raise
+    gate, step = spec_from_dict(spec).stages
+    assert (gate.renamed_from, step.renamed_from) == (["approval"], ["grant", "add_member"])
+    nodes = set(build_spec_graph(spec_from_dict(spec)).compile().get_graph().nodes)
+    assert {"manager_approval", "approval", "provision", "grant", "add_member"} <= nodes
+
+
+@pytest.mark.parametrize("mutate,match", [
+    (lambda s: s["stages"][1].__setitem__("renamed_from", "grant"), "must be a list of non-empty strings"),
+    (lambda s: s["stages"][1].__setitem__("renamed_from", [""]), "must be a list of non-empty strings"),
+    (lambda s: s["stages"][1].__setitem__("renamed_from", ["completed"]), "reserved"),
+    (lambda s: s["stages"][1].__setitem__("renamed_from", ["manager_approval"]), "still the name of a stage"),
+    (lambda s: (s["stages"][0].__setitem__("renamed_from", ["old"]),
+                s["stages"][1].__setitem__("renamed_from", ["old"])), "already a former name"),
+    (lambda s: (s["stages"][1].__setitem__("renamed_from", ["cleanup"]),
+                s.__setitem__("on_reject", [{"kind": "step", "name": "cleanup", "tool": "add_group_membership"}])),
+     "duplicate stage name"),
+])
+def test_renamed_from_rejects_bad_or_clashing_names(mutate, match):
+    spec = _good_spec()
+    mutate(spec)
     with pytest.raises(SpecError, match=match):
         validate_spec_dict(spec)
 

@@ -42,6 +42,10 @@ Share each request link and say it waits for its approver group. Don't promise a
 time. Don't resubmit the same change: the preview shows open requests that touch
 the same rows.
 
+Each request is **prepared** (the exact row changes and who approves), then
+**approved** by that type's group, then **recorded** in the access rules; the next
+export carries it to Terraform. Use those words for the steps, not "plan" or "apply".
+
 ## Execution
 Call `execute_workflow` with:
 ```json

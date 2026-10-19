@@ -1,4 +1,4 @@
-"""The Access Rules ledger: reads, direct edits, access-change plan / apply, history.
+"""The Access Rules ledger: reads, direct edits, preparing and recording access changes, history.
 
 Authorization is the caller's job (API / workflow tools, via ``approvers``);
 this module enforces data rules: policy (``policy.evaluate``), optimistic
@@ -12,7 +12,7 @@ one change set, one event per touched rule, and each update / delete as
 Access proposals: ``AccessProposal.outcomes[i].index`` and every finding's
 ``change_index`` index ``AccessProposal.items`` (the normalized items, with
 added prerequisites, then any item that couldn't be resolved). In
-``ApplyResult.skipped`` the index is into the approved proposal's ``items``.
+``RecordResult.skipped`` the index is into the approved proposal's ``items``.
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ from app.models.rbac import (
     AccessMatch,
     AccessPreview,
     AccessProposal,
-    ApplyResult,
+    RecordResult,
     ChangeSetDetail,
     ChangeSetIn,
     ChangeSetPreview,
@@ -338,6 +338,7 @@ def sheet_infos(db: Session, editable_planes: Set[str]) -> List[SheetInfo]:
             export_target=spec.export_target,
             export_path=spec.export_path,
             editable=spec.plane in editable,
+            options=policy.sheet_options(spec),
         )
         for spec in layout.managed_sheets()
     ]
@@ -867,7 +868,7 @@ def revert_change_set(db: Session, change_set_id: str, *, actor: str, reason: st
     return ChangeSetResult(change_set_id=change_set.id, diffs=diffs, findings=preview.findings)
 
 
-# --- Access changes: normalize, plan, apply -----------------------------------------
+# --- Access changes: normalize, prepare, record -------------------------------------
 
 
 def _deny(code: str, message: str, item: AccessItem, **kwargs: Any) -> Finding:
@@ -886,14 +887,24 @@ def _normalize_item(index: int, raw: AccessItem) -> _Norm:
             canonical = policy.canonical_privilege(securable_type, part)
             if canonical and canonical not in privileges:
                 privileges.append(canonical)
+    catalog = (raw.catalog or "").strip()
+    object_name = (raw.object_name or "").strip()
+    workspace_name = (raw.workspace_name or "").strip()
+    env = layout.environment(env_key)
+    if env is not None and plane == PLANE_UC:
+        catalog = layout.option_spelling(env.catalogs, catalog)
+    elif env is not None and plane == PLANE_WORKSPACE:
+        workspace_name = layout.option_spelling(env.workspaces, workspace_name)
+        if securable_type in layout.WORKSPACE_NAMED_TYPES:
+            object_name = layout.option_spelling(env.workspaces, object_name)
     item = AccessItem(
         action=raw.action,
         environment=env_key or ((raw.environment or "").strip() or None),
         securable_type=securable_type,
-        catalog=(raw.catalog or "").strip(),
+        catalog=catalog,
         schema_name=(raw.schema_name or "").strip(),
-        object_name=(raw.object_name or "").strip(),
-        workspace_name=(raw.workspace_name or "").strip(),
+        object_name=object_name,
+        workspace_name=workspace_name,
         principal_type=cells.principal_type_key(raw.principal_type) or "group",
         principal_name=(raw.principal_name or "").strip(),
         privileges=privileges or list(raw.privileges),
@@ -1078,14 +1089,14 @@ def _plan_plane(
     )
 
 
-def plan_access_change(db: Session, change: AccessChangeIn, *, requester: Optional[str]) -> AccessPreview:
+def prepare_access_change(db: Session, change: AccessChangeIn, *, requester: Optional[str]) -> AccessPreview:
     """One proposal per plane the items touch, each with diffs, outcomes and findings.
 
-    Resolves environments (aliases) and planes, adds prerequisites, plans row
+    Resolves environments (aliases) and planes, adds prerequisites, works out row
     edits with ``cells.plan_edits`` against the current ledger and evaluates
     policy (path ``request``) including the justification. Sets ``group_ref``
     when there is more than one proposal. ``report_markdown`` is left empty
-    (the workflow's plan step renders it).
+    (the chat preview and the workflow's prepare step render it).
 
     An item whose type can't be resolved joins the first proposal (or a ``uc``
     one when nothing resolves) as a blocked outcome with a deny finding.
@@ -1102,7 +1113,7 @@ def plan_access_change(db: Session, change: AccessChangeIn, *, requester: Option
     for k, plane in enumerate(planes):
         members = [n for n in norms if n.plane == plane or (n.plane is None and k == 0)]
         proposals.append(_plan_plane(db, plane, members, justification=change.justification, touched=touched))
-    logger.debug("Access Rules: planned %d item(s) for %s across %s", len(change.items), requester, planes)
+    logger.debug("Access Rules: prepared %d item(s) for %s across %s", len(change.items), requester, planes)
     return AccessPreview(group_ref=audit.new_id() if len(proposals) > 1 else None, proposals=proposals)
 
 
@@ -1139,7 +1150,7 @@ def _op_from_diff(diff: RowDiff, versions: Dict[str, int]) -> _Op:
     environment = diff.environment
     if diff.op != "create":
         if diff.rule_id not in versions:
-            raise LedgerError(f"Rule {diff.rule_id} is no longer active, so the plan can't be applied.")
+            raise LedgerError(f"Rule {diff.rule_id} is no longer active, so the approved change can't be recorded.")
         expected = versions[diff.rule_id]
         if before is not None:
             environment = before.environment
@@ -1151,14 +1162,14 @@ def _noop_reason(item: AccessItem) -> str:
     return "already in place" if item.action == "grant" else "already removed"
 
 
-def apply_access_change(db: Session, *, request_id: str, approved: AccessProposal, actor: str) -> ApplyResult:
-    """Re-plan ``approved.items`` against the current ledger and apply only the
-    intersection with ``approved.diffs`` (never wider). Idempotent on
+def record_access_change(db: Session, *, request_id: str, approved: AccessProposal, actor: str) -> RecordResult:
+    """Work ``approved.items`` out again against the current ledger and write only
+    the intersection with ``approved.diffs`` (never wider). Idempotent on
     ``request_id``: a change set with ``source_ref == request_id`` already
-    present returns ``already_applied``. Raises ChangeBlocked if policy now denies.
+    present returns ``already_recorded``. Raises ChangeBlocked if policy now denies.
 
     Prerequisites are not re-added: ``approved.items`` already carries them,
-    and any new one would fall outside the approved plan.
+    and any new one would fall outside the approved change.
     """
     existing = (
         db.query(RbacChangeSetModel)
@@ -1168,8 +1179,8 @@ def apply_access_change(db: Session, *, request_id: str, approved: AccessProposa
     )
     if existing is not None:
         detail = change_set_detail(db, existing.id)
-        return ApplyResult(change_set_id=existing.id, applied=detail.diffs if detail else [],
-                           already_applied=True)
+        return RecordResult(change_set_id=existing.id, recorded=detail.diffs if detail else [],
+                            already_recorded=True)
 
     try:
         plane = approved.plane
@@ -1199,7 +1210,7 @@ def apply_access_change(db: Session, *, request_id: str, approved: AccessProposa
                                            reason=outcomes_i[0].reason))
             elif not _atoms_of(diffs_i) <= approved_atoms:
                 skipped.append(ItemOutcome(index=norm.index, item=norm.item, status="noop",
-                                           reason="outside the approved plan"))
+                                           reason="outside the approved change"))
             else:
                 kept.append(norm)
 
@@ -1210,7 +1221,7 @@ def apply_access_change(db: Session, *, request_id: str, approved: AccessProposa
                 skipped.append(ItemOutcome(index=norm.index, item=norm.item, status="noop",
                                            reason=_noop_reason(norm.item)))
         if not _atoms_of(diffs) <= approved_atoms:
-            raise LedgerError("The approved plan no longer applies cleanly. Submit the request again.")
+            raise LedgerError("The approved change no longer fits the current rules cleanly. Submit the request again.")
 
         findings = policy.evaluate([_diff_rows(d) for d in diffs], path="request")
         if policy.is_blocked(findings):
@@ -1219,7 +1230,7 @@ def apply_access_change(db: Session, *, request_id: str, approved: AccessProposa
         skipped.sort(key=lambda o: o.index)
         if not diffs:
             db.rollback()
-            return ApplyResult(skipped=skipped)
+            return RecordResult(skipped=skipped)
         ops = [_op_from_diff(d, versions) for d in diffs]
         change_set, written = _write(db, ops, actor=actor, source=SOURCE_REQUEST, source_ref=request_id,
                                      reason=f"Approved access request {request_id}")
@@ -1227,10 +1238,10 @@ def apply_access_change(db: Session, *, request_id: str, approved: AccessProposa
     except Exception:
         db.rollback()
         raise
-    logger.info("Access Rules: applied request %s as change set %s (%d rows, %d skipped)",
+    logger.info("Access Rules: recorded request %s as change set %s (%d rows, %d skipped)",
                 request_id, change_set.id, len(written), len(skipped))
     _export_soon()
-    return ApplyResult(change_set_id=change_set.id, applied=written, skipped=skipped)
+    return RecordResult(change_set_id=change_set.id, recorded=written, skipped=skipped)
 
 
 # --- Find access ---------------------------------------------------------------------

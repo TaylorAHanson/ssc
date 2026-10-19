@@ -160,6 +160,8 @@ export interface Approval {
   selfApprovalBlocked?: boolean;
   /** A Platform Admin may Edit & Restart the request from this approval. */
   canEditParameters?: boolean;
+  /** Who approves, when the gate's group comes from a setting, e.g. "UC securables approvers: grp_x". */
+  approverLabel?: string | null;
   /** `manual_task` only: the work the assignee must complete, shown verbatim. */
   instructions?: string;
   /** `manual_task` only: SLA deadline, so an ignored task can show as overdue. */

@@ -211,7 +211,11 @@ async def list_workflow_building_blocks() -> Dict[str, Any]:
                      "approver": "optional approver source: {source:'group', group:'<name>'} for a "
                                  "hardcoded group/role, OR {source:'approver_group_tag', "
                                  "assets_from:<expr=assets>, fallback_to_owner:true} to read the UC "
-                                 "approver_group tag off the request's assets",
+                                 "approver_group tag off the request's assets, OR "
+                                 "{source:'access_rule_type', rule_type_from:<expr=plane>} for the "
+                                 "approver group set per type of access rule in Admin -> Settings -> "
+                                 "Access Rules (Platform Admins when that type's group is blank); use it "
+                                 "on a 'platform_admin' gate after rbac_prepare_access_change",
                      "instructions": "REQUIRED on type 'manual_task' (invalid elsewhere): what the "
                                      "assignee must do off-platform before marking it done",
                      "due_in_days": "optional on type 'manual_task': SLA in days, drives overdue "

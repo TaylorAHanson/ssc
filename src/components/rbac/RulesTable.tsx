@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   columnFilteringFeature,
@@ -14,11 +14,13 @@ import {
   type ColumnFiltersState,
   type SortingState,
 } from '@tanstack/react-table';
-import { ArrowDown, ArrowUp, ArrowUpDown, Clock, Copy, Lock, Plus, Search, Trash2, Undo2, X } from 'lucide-react';
-import type { RbacField, RbacSheetInfo } from '../../types/rbac';
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Clock, Copy, Lock, Plus, Search, Trash2, Undo2, X } from 'lucide-react';
+import type { RbacCells, RbacField, RbacSheetInfo } from '../../types/rbac';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { cn } from '../../lib/utils';
+import { CellEditor } from './CellEditor';
+import { editorFor, flagFor, type CellFlag } from './cellOptions';
 import type { GridRow } from './staging';
 import { Badge } from './ui';
 import { PACKED_FIELDS, cellValue, splitPacked } from './utils';
@@ -48,8 +50,8 @@ interface RulesTableProps {
   onEdit: (row: GridRow, field: RbacField, value: string) => void;
   onDelete: (row: GridRow) => void;
   onUndo: (row: GridRow) => void;
-  /** Stage a new row (a copy of `from` when given) and return its key. */
-  onAdd: (from?: GridRow) => string;
+  /** Stage a new row (a copy of `from` when given) and return its key and starting cells. */
+  onAdd: (from?: GridRow) => { key: string; cells: Partial<RbacCells> };
 }
 
 const cellId = (rowKey: string, col: number) => `rbac-cell-${rowKey}-${col}`;
@@ -123,13 +125,21 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
   };
 
   const add = (from?: GridRow) => {
-    const key = onAdd(from);
+    const { key, cells } = onAdd(from);
     clearFilters();
     setSorting([]);
     // New rows are appended, so with filters and sorting cleared it lands on the last page.
     setPage(Math.floor(rows.length / PAGE_SIZE));
-    if (firstEditable >= 0) setEditing({ rowKey: key, col: firstEditable });
+    const firstEmpty = from ? -1 : sheet.columns.findIndex((c) => c.field && !cells[c.field]);
+    const col = firstEmpty >= 0 ? firstEmpty : firstEditable;
+    if (col >= 0) setEditing({ rowKey: key, col });
   };
+
+  const editorSpec = useMemo(() => {
+    const field = editing ? sheet.columns[editing.col]?.field : null;
+    const row = editing ? rows.find((r) => r.key === editing.rowKey) : undefined;
+    return field && row ? editorFor(sheet, row, field, rows) : null;
+  }, [editing, rows, sheet]);
 
   const finishEdit = (row: GridRow, col: number, value: string | null, refocus: boolean) => {
     const field = sheet.columns[col]?.field;
@@ -280,6 +290,8 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
                     const was = modified && row.original ? cellValue(row.original, col, i) : null;
                     const isEditing = editing?.rowKey === row.key && editing.col === i;
                     const canEdit = editable && !!col.field && !deleted;
+                    const packed = PACKED_FIELDS.has(col.field ?? '');
+                    const flag = col.field ? flagFor(sheet, row, col.field) : null;
                     return (
                       <td
                         key={i}
@@ -291,11 +303,11 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
                         )}
                         title={was !== null ? `Was: ${was || '(empty)'}` : undefined}
                       >
-                        {isEditing ? (
+                        {isEditing && editorSpec ? (
                           <CellEditor
+                            spec={editorSpec}
                             initial={value}
                             label={`${col.header}, row ${row.number}`}
-                            packed={PACKED_FIELDS.has(col.field ?? '')}
                             onDone={(next, refocus) => finishEdit(row, i, next, refocus)}
                           />
                         ) : canEdit ? (
@@ -303,13 +315,13 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
                             id={cellId(row.key, i)}
                             type="button"
                             onClick={() => setEditing({ rowKey: row.key, col: i })}
-                            aria-label={`Edit ${col.header}, row ${row.number}: ${value || 'empty'}`}
+                            aria-label={`Edit ${col.header}, row ${row.number}: ${value || 'empty'}${flag ? `. ${flag.reason}: ${[...flag.values].join(', ')}` : ''}`}
                             className="-mx-1 block min-h-[1.5rem] w-full rounded px-1 text-left hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                           >
-                            <CellContent value={value} packed={PACKED_FIELDS.has(col.field ?? '')} />
+                            <CellContent value={value} packed={packed} flag={flag} />
                           </button>
                         ) : (
-                          <CellContent value={value} packed={PACKED_FIELDS.has(col.field ?? '')} />
+                          <CellContent value={value} packed={packed} flag={flag} />
                         )}
                       </td>
                     );
@@ -342,58 +354,39 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
   );
 }
 
-function CellContent({ value, packed }: { value: string; packed: boolean }) {
+function CellContent({ value, packed, flag }: { value: string; packed: boolean; flag?: CellFlag | null }) {
   if (!value) return <span className="text-gray-300">—</span>;
   if (!packed) {
     const identifier = value.length <= 40 && !/\s/.test(value);
+    if (flag?.values.has(value)) {
+      return (
+        <span title={flag.reason} className={cn('text-red-800', identifier ? 'whitespace-nowrap' : 'break-words')}>
+          <AlertTriangle aria-hidden="true" className="-mt-0.5 mr-1 inline h-3 w-3" />
+          {value}
+        </span>
+      );
+    }
     return <span className={identifier ? 'whitespace-nowrap' : 'break-words'}>{value}</span>;
   }
   return (
     <span className="flex flex-wrap gap-1">
-      {splitPacked(value).map((atom, i) => (
-        <span key={`${atom}-${i}`} className="rounded border border-gray-200 bg-gray-50 px-1 text-xs text-gray-700">
-          {atom}
-        </span>
-      ))}
+      {splitPacked(value).map((atom, i) =>
+        flag?.values.has(atom) ? (
+          <span
+            key={`${atom}-${i}`}
+            title={flag.reason}
+            className="inline-flex items-center gap-0.5 rounded border border-red-200 bg-red-50 px-1 text-xs text-red-800"
+          >
+            <AlertTriangle aria-hidden="true" className="h-3 w-3" />
+            {atom}
+          </span>
+        ) : (
+          <span key={`${atom}-${i}`} className="rounded border border-gray-200 bg-gray-50 px-1 text-xs text-gray-700">
+            {atom}
+          </span>
+        ),
+      )}
     </span>
-  );
-}
-
-/** Inline editor: Enter saves, Escape cancels, leaving the field saves. */
-function CellEditor({ initial, label, packed, onDone }: {
-  initial: string;
-  label: string;
-  packed: boolean;
-  onDone: (value: string | null, refocus: boolean) => void;
-}) {
-  const [draft, setDraft] = useState(initial);
-  const finished = useRef(false);
-  const finish = (value: string | null, refocus: boolean) => {
-    if (finished.current) return;
-    finished.current = true;
-    onDone(value, refocus);
-  };
-  return (
-    <div className={packed ? 'min-w-[18rem]' : 'min-w-[10rem]'}>
-      <input
-        autoFocus
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            finish(draft, true);
-          } else if (e.key === 'Escape') {
-            e.preventDefault();
-            finish(null, true);
-          }
-        }}
-        onBlur={() => finish(draft, false)}
-        aria-label={`Edit ${label}`}
-        className="h-7 w-full rounded border border-primary bg-white px-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-      />
-      {packed && <p className="mt-0.5 text-[11px] text-gray-500">Separate values with “;”. Enter saves, Esc cancels.</p>}
-    </div>
   );
 }
 

@@ -85,11 +85,9 @@ export function RulesTab({ permissions, sheetName, onSheetChange, staged, setSta
   const onUndo = (row: GridRow) => setStaged((prev) => stageUndo(prev, row.key));
   const onAdd = (from?: GridRow) => {
     const key = newRowKey();
-    if (sheet) {
-      const cells = from ? duplicateCells(sheet, from) : newRowCells(sheet, rules ?? []);
-      setStaged((prev) => stageCreate(prev, key, sheet.name, cells));
-    }
-    return key;
+    const cells = sheet ? (from ? duplicateCells(sheet, from) : newRowCells(sheet, rules ?? [])) : {};
+    if (sheet) setStaged((prev) => stageCreate(prev, key, sheet.name, cells));
+    return { key, cells };
   };
 
   const discard = () => {

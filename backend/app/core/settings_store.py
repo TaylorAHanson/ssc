@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.core.config import settings, _yaml_config
+from app.services.rbac.layout import SECURABLE_TYPES as RBAC_SECURABLE_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -568,7 +569,11 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "One row per environment in the access-rules workbook. The sheet suffix builds that environment's "
              "sheet names from the patterns below (e.g. Dev → UC_Securables_RBAC_Dev). Aliases are other "
              "spellings of the environment, comma-separated. The export path is the folder its CSVs are "
-             "written to (a UC Volume or Workspace path); blank = its sheets are not exported. Self-service "
+             "written to (a UC Volume or Workspace path); blank = its sheets are not exported. Workspaces "
+             "(comma-separated) are the names offered for WorkspaceName, and for SecurableName on workspace and "
+             "workspace entitlement rows, on its workspace sheet; Catalogs (comma-separated) are the names "
+             "offered for Catalog on its UC sheet. When set, a request or edit can add only those names "
+             "(requests are blocked, direct edits warned); blank = typed freely. Self-service "
              "off = requests can't change it. Write privileges off = requests can't add MODIFY or other write "
              "privileges. Service principals off = only groups can be granted. Two-person rule on = a direct "
              "edit becomes a request another approver must approve.",
@@ -578,6 +583,8 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
          {"key": "sheet_suffix", "label": "Sheet suffix", "type": "string", "required": True, "placeholder": "Dev"},
          {"key": "export_path", "label": "Export path", "type": "string",
           "placeholder": "/Volumes/catalog/schema/volume/rbac/dev"},
+         {"key": "workspaces", "label": "Workspaces", "type": "string", "placeholder": "ws-dev, ws-dev-analytics"},
+         {"key": "catalogs", "label": "Catalogs", "type": "string", "placeholder": "sales_dev, finance_dev"},
          {"key": "self_service", "label": "Self-service", "type": "bool"},
          {"key": "write_privileges", "label": "Write privileges", "type": "bool"},
          {"key": "service_principals", "label": "Service principals", "type": "bool"},
@@ -644,10 +651,19 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Access Rules", "section": "Policy", "key": "RBAC_MIN_JUSTIFICATION_LENGTH",
      "label": "Minimum justification length (requests)", "type": "int", "min": 0,
      "help": "Characters required in a request's business justification."},
-    {"group": "Access Rules", "section": "Policy", "key": "RBAC_HARD_DENIED_PRIVILEGES",
-     "label": "Never-granted privileges", "type": "string_list", "add_label": "Add privilege",
-     "help": "Privileges no request or direct edit can add. Existing rows that hold them still import (with a "
-             "finding), and removing them is always allowed."},
+    {"group": "Access Rules", "section": "Policy", "key": "RBAC_ALLOWED_PRIVILEGES",
+     "label": "Allowed privileges (allow only)", "type": "collection", "unique": "securable_type",
+     "add_label": "Add securable type",
+     "help": "The only privileges a request or direct edit can add, per securable type (comma-separated). A "
+             "type with no row can't be granted anything new, and a privilege Databricks adds later can't be "
+             "granted until a Platform Admin adds it here. The Access Rules grid offers these as its choices. "
+             "Removing privileges is always allowed, and existing rows are left as they are, even where they "
+             "hold a privilege that isn't listed.",
+     "columns": [
+         {"key": "securable_type", "label": "Securable type", "type": "select", "required": True,
+          "options": list(RBAC_SECURABLE_TYPES)},
+         {"key": "privileges", "label": "Privileges", "type": "string", "placeholder": "USE_SCHEMA, SELECT"},
+     ]},
     {"group": "Access Rules", "section": "Policy", "key": "RBAC_SYSTEM_GROUPS",
      "label": "System groups", "type": "string_list", "add_label": "Add group",
      "help": "Groups no request or direct edit may add to or remove from any rule (case-insensitive)."},
@@ -761,6 +777,10 @@ GROUP_REQUIRES: Dict[str, List[str]] = {
 READONLY_FIELDS: List[Dict[str, Any]] = [
     {"group": "Environment", "key": "ENVIRONMENT", "label": "Environment"},
     {"group": "Environment", "key": "DB_SCHEMA", "label": "Postgres schema"},
+    {"group": "Environment", "key": "LAKEBASE_CDF_TABLES", "label": "Lakebase CDF tables",
+     "help": "Tables given REPLICA IDENTITY FULL at startup so a Lakebase Change Data Feed "
+             "on the Postgres schema captures them. \"none\" = off; \"default\" = requests, "
+             "events, approvals, enforcement audit and the access-rule ledger."},
     {"group": "Databricks", "key": "DATABRICKS_WORKSPACE_URL", "label": "Workspace URL"},
     {"group": "Databricks", "key": "DATABRICKS_HOST", "label": "Databricks host"},
     {"group": "Databricks", "key": "DATABRICKS_WAREHOUSE_ID", "label": "SQL warehouse id"},
@@ -800,6 +820,8 @@ RETIRED_KEYS = frozenset({
     "yaml:web_search.algolia.index_name",
     "yaml:links.genie_full_experience_url",
     "yaml:tools.ask_your_data.default_genie_space_id",
+    # Replaced by the RBAC_ALLOWED_PRIVILEGES allow list.
+    "RBAC_HARD_DENIED_PRIVILEGES",
 })
 
 

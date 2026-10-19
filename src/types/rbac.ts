@@ -154,6 +154,21 @@ export interface RbacSheetColumn {
   field: RbacField | null;
 }
 
+/** The values the grid offers for a sheet's cells, in the workbook's spelling. */
+export interface RbacSheetOptions {
+  /** Environment keys usable on the sheet: its own on an environment sheet, every key on the metastore sheet. */
+  environments: string[];
+  securable_types: string[];
+  /** Environment key → allowed principal types. */
+  principal_types: Record<string, string[]>;
+  /** Securable type → privileges the allow list permits on it. */
+  privileges: Record<string, string[]>;
+  /** Workspace sheets: the environment's configured workspaces; empty means none are configured. */
+  workspaces: string[];
+  /** UC securables sheets: the environment's configured catalogs; empty means none are configured. */
+  catalogs: string[];
+}
+
 export interface RbacSheetInfo {
   name: string;
   plane: RbacPlane;
@@ -163,6 +178,7 @@ export interface RbacSheetInfo {
   export_target: string;
   export_path: string;
   editable: boolean;
+  options?: Partial<RbacSheetOptions>;
 }
 
 export interface RbacImportSheetSummary {
