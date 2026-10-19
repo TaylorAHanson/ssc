@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import cronstrue from 'cronstrue';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -48,7 +49,17 @@ export const Settings = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Record<string, FieldValue>>({});
-  const [activeGroup, setActiveGroup] = useState<string>('Appearance');
+  // `?group=<name>` opens that page, so other screens can link straight to their settings.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activeGroup, setActiveGroup] = useState<string>(searchParams.get('group') || 'Appearance');
+  const selectGroup = (g: string) => {
+    setActiveGroup(g);
+    if (searchParams.has('group')) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('group');
+      setSearchParams(next, { replace: true });
+    }
+  };
   const [focusCapability, setFocusCapability] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -69,6 +80,10 @@ export const Settings = () => {
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    if (state && !state.sections.some((s) => s.groups.includes(activeGroup))) setActiveGroup('Appearance');
+  }, [state, activeGroup]);
 
   const fieldsByKey = useMemo(() => {
     const map = new Map<string, SettingField>();
@@ -147,7 +162,7 @@ export const Settings = () => {
   };
 
   const goToCapability = (id: string) => {
-    setActiveGroup(FEATURES_GROUP);
+    selectGroup(FEATURES_GROUP);
     setFocusCapability(id);
   };
 
@@ -286,7 +301,7 @@ export const Settings = () => {
                       return (
                         <button
                           key={g}
-                          onClick={() => setActiveGroup(g)}
+                          onClick={() => selectGroup(g)}
                           className={cn(
                             'w-full text-left px-3 py-1.5 rounded-md text-sm transition-colors flex items-center gap-2',
                             isActive

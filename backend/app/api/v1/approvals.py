@@ -18,6 +18,7 @@ from app.services.approval_scope import (
     in_group,
 )
 from app.api.v1.requests import is_own_request, self_approval_blocked
+from app.services.rbac.inflight import LEGACY_PREPARED_CONTEXT_KEY, PREPARED_CONTEXT_KEY
 import logging
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,11 @@ class InboxApproval(Approval):
 
 # Keys excluded from the editable workflow parameters view.
 # These are internal/system fields that should not surface to approvers.
-_EXCLUDED_PARAM_KEYS = {"requested_by", "requested_by_email"}
+_EXCLUDED_PARAM_KEYS = {
+    "requested_by", "requested_by_email",
+    # An access change's prepared rows and report, which the card's step report already shows.
+    PREPARED_CONTEXT_KEY, LEGACY_PREPARED_CONTEXT_KEY,
+}
 
 
 def _get_workflow_params(state_context: dict | None) -> dict:

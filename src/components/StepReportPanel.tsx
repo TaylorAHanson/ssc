@@ -22,21 +22,26 @@ export function StepReportPanel({ reports }: { reports: StepReport[] }) {
         <FileText className="w-3.5 h-3.5" />
         Reports
       </p>
-      {reports.map((report) => (
-        <details
-          key={report.step}
-          className="group rounded-lg border border-gray-200 bg-white"
-        >
-          <summary className="cursor-pointer select-none px-3 py-2 text-sm flex items-center gap-2">
-            <span className="font-medium text-gray-900">{report.title}</span>
-            <span className="text-gray-500 truncate">{headline(report.markdown)}</span>
-          </summary>
-          <div
-            className="border-t border-gray-100 px-3 py-3 text-sm prose prose-sm agent-prose max-w-none overflow-x-auto"
-            dangerouslySetInnerHTML={{ __html: renderMarkdownSafe(report.markdown) }}
-          />
-        </details>
-      ))}
+      {reports.map((report) => {
+        const first = headline(report.markdown);
+        return (
+          <details
+            key={report.step}
+            className="group rounded-lg border border-gray-200 bg-white"
+          >
+            <summary className="cursor-pointer select-none px-3 py-2 text-sm flex items-center gap-2">
+              <span className="font-medium text-gray-900">{report.title}</span>
+              {first.toLowerCase() !== report.title.trim().toLowerCase() && (
+                <span className="text-gray-500 truncate">{first}</span>
+              )}
+            </summary>
+            <div
+              className="border-t border-gray-100 px-3 py-3 text-sm prose prose-sm agent-prose max-w-none overflow-x-auto"
+              dangerouslySetInnerHTML={{ __html: renderMarkdownSafe(report.markdown) }}
+            />
+          </details>
+        );
+      })}
     </div>
   );
 }

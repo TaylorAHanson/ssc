@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   columnFilteringFeature,
@@ -60,6 +60,16 @@ function focusCell(rowKey: string, col: number) {
   window.requestAnimationFrame(() => document.getElementById(cellId(rowKey, col))?.focus());
 }
 
+/** Bring a cell fully into view: centred vertically so the sticky staged-changes tray can't
+ *  cover it, and scrolled sideways into the table when the grid was scrolled away from it. */
+function revealCell(rowKey: string, col: number) {
+  window.requestAnimationFrame(() =>
+    document
+      .querySelector(`[data-cell="${cellId(rowKey, col)}"]`)
+      ?.scrollIntoView({ block: 'center', inline: 'nearest' }),
+  );
+}
+
 /** The sheet's rows under its own headers: search, column filters, sorting, paging and inline edits. */
 export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, onAdd }: RulesTableProps) {
   const [globalFilter, setGlobalFilter] = useState('');
@@ -68,6 +78,8 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
   const [view, setView] = useState<View>('all');
   const [page, setPage] = useState(0);
   const [editing, setEditing] = useState<{ rowKey: string; col: number } | null>(null);
+  // The cell Add row / Duplicate just opened, revealed once its page has rendered.
+  const reveal = useRef<{ rowKey: string; col: number } | null>(null);
 
   const data = useMemo(
     () =>
@@ -132,8 +144,19 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
     setPage(Math.floor(rows.length / PAGE_SIZE));
     const firstEmpty = from ? -1 : sheet.columns.findIndex((c) => c.field && !cells[c.field]);
     const col = firstEmpty >= 0 ? firstEmpty : firstEditable;
-    if (col >= 0) setEditing({ rowKey: key, col });
+    if (col >= 0) {
+      reveal.current = { rowKey: key, col };
+      setEditing({ rowKey: key, col });
+    }
   };
+
+  useEffect(() => {
+    const target = reveal.current;
+    if (!target || target.rowKey !== editing?.rowKey || target.col !== editing.col) return;
+    if (!pageRows.some((r) => r.original.key === target.rowKey)) return;
+    reveal.current = null;
+    revealCell(target.rowKey, target.col);
+  }, [editing, pageRows]);
 
   const editorSpec = useMemo(() => {
     const field = editing ? sheet.columns[editing.col]?.field : null;
@@ -295,6 +318,7 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
                     return (
                       <td
                         key={i}
+                        data-cell={cellId(row.key, i)}
                         className={cn(
                           'border-b border-gray-100 px-2 py-1.5',
                           modified && 'bg-amber-50 shadow-[inset_0_0_0_1px_rgb(252,211,77)]',

@@ -166,7 +166,7 @@ export function RequestStateList({ request }: { request: Request }) {
   useVisibleInterval(fetchRequests, 5000, isActive);
 
   // Collect all states to display
-  let steps: { id: string; name: string; status: string; type?: string; order: number; completedAt?: string; facts?: { type: string; timestamp: string; data: Record<string, string> }[] }[] = [];
+  let steps: { id: string; name: string; status: string; type?: string; typeLabel?: string | null; order: number; completedAt?: string; facts?: { type: string; timestamp: string; data: Record<string, string> }[] }[] = [];
 
 
   // Use the new linear states structure
@@ -205,6 +205,7 @@ export function RequestStateList({ request }: { request: Request }) {
           name: state.name,
           status,
           type: state.gateType,
+          typeLabel: state.gateLabel,
           order: index + 1,
           completedAt: state.completedAt,
           facts: state.facts
@@ -219,6 +220,7 @@ export function RequestStateList({ request }: { request: Request }) {
         name: 'Completed',
         status: request.status === 'completed' ? 'completed' : 'pending',
         type: undefined,
+        typeLabel: undefined,
         order: stateSteps.length + 1,
         completedAt: completionState?.completedAt,
         facts: completionState?.facts ?? []
@@ -241,6 +243,7 @@ export function RequestStateList({ request }: { request: Request }) {
             name: 'System Processing',
             status: 'failed',
             type: undefined,
+            typeLabel: undefined,
             order: stateSteps.length + 1,
             completedAt: request.updatedAt,
             facts: []
@@ -314,8 +317,8 @@ export function RequestStateList({ request }: { request: Request }) {
                     <div className="flex items-center gap-2 mb-1">
                       <p className="text-base font-semibold text-gray-900">{step.name}</p>
                       {step.type && (
-                        <span className="text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full capitalize">
-                          {step.type.replace(/_/g, ' ')}
+                        <span className={`text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full ${step.typeLabel ? '' : 'capitalize'}`}>
+                          {step.typeLabel || step.type.replace(/_/g, ' ')}
                         </span>
                       )}
                     </div>

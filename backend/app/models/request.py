@@ -82,6 +82,9 @@ class StateInfo(BaseModel):
     # "platform_admin", ...); None for non-gate states. Lets the UI identify
     # the approval step and show its assigned approver(s).
     gateType: Optional[str] = None
+    # What the UI calls the gate when its type alone would mislead, e.g. "Access rule
+    # approvers" for a platform_admin gate that routes to the access rule type's group.
+    gateLabel: Optional[str] = None
 
 
 class StateMachineState(BaseModel):

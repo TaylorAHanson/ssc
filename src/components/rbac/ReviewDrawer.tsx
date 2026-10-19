@@ -194,7 +194,7 @@ function ConflictPanel({ conflict, sheet, mine, label, onDrop, onReapply }: {
       <p className="font-medium text-red-800">Someone changed this row{label ? ` (${label})` : ''}</p>
       <p className="mt-1 text-red-700">
         {gone
-          ? 'It has been deleted since you loaded the sheet, so your change can’t be applied.'
+          ? 'It has been deleted since you loaded the sheet, so your change can’t be saved.'
           : 'It was saved by someone else after you loaded the sheet. Here is what it holds now; changed values are highlighted.'}
       </p>
       {now && !gone && (
@@ -222,7 +222,7 @@ function ConflictPanel({ conflict, sheet, mine, label, onDrop, onReapply }: {
         <Button size="sm" variant="outline" onClick={onDrop}>Drop my change</Button>
         {onReapply && (
           <Button size="sm" onClick={onReapply} title="Keep your edits on top of the row as it is now">
-            Re-apply my change on the new version
+            Keep my change on the new version
           </Button>
         )}
       </div>

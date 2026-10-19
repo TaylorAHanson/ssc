@@ -311,7 +311,9 @@ export function WorkflowEditor({
                 {s.kind === 'gate'
                   ? s.type === 'manual_task'
                     ? 'manual'
-                    : s.type
+                    : (s as WorkflowGateStage).approver?.source === 'access_rule_type'
+                      ? 'access rules'
+                      : s.type
                   : s.kind === 'subworkflow'
                     ? (s as WorkflowSubWorkflowStage).ref || 'workflow'
                     : (s as WorkflowStepStage).tool}

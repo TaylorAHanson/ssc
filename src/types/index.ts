@@ -82,6 +82,8 @@ export interface State {
   // Gate type for approval steps ("data_owner", "manager", ...); undefined for
   // non-gate steps. Used to render the approval step's assigned approver(s).
   gateType?: string;
+  /** What to call the gate when its type alone would mislead, e.g. "Access rule approvers". */
+  gateLabel?: string | null;
   facts?: {
     type: string;
     data: Record<string, any>;

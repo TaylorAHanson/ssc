@@ -10,7 +10,7 @@ import type {
   RbacSheetInfo,
 } from '../../types/rbac';
 
-export const SETTINGS_PATH = '/admin/settings';
+export const SETTINGS_PATH = '/admin/settings?group=Access%20Rules';
 
 export const PLANE_ORDER: RbacPlane[] = ['uc', 'workspace', 'uc_metastore'];
 

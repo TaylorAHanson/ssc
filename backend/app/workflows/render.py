@@ -27,6 +27,10 @@ _TERMINAL = {"completed", "rejected", "failed"}
 # its change), shown under the Completed step.
 _COMPLETION_FACTS = {"rbac_exported"}
 
+# A gate whose approvers come from a setting is named by that source rather than its
+# gate type, which only says who approves when nothing else is configured.
+_GATE_LABELS = {"access_rule_type": "Access rule approvers"}
+
 
 def _completion_facts(facts) -> List[Dict[str, Any]]:
     return [
@@ -133,6 +137,8 @@ def render_state(request, db, facts=None, spec_dict=None) -> StateMachineState:
     # Map each gate node to its gate type so the UI can identify approval
     # steps (and surface their approver) regardless of the stage's name/id.
     gate_types = {s["name"]: s.get("gate_type") for s in specs if s.get("kind") == "gate"}
+    gate_labels = {s["name"]: _GATE_LABELS[s["approver_source"]] for s in specs
+                   if s.get("kind") == "gate" and s.get("approver_source") in _GATE_LABELS}
     completed_facts = _completion_facts(facts) if status == "completed" else []
     states_view: List[StateInfo] = []
     for idx, node_id in enumerate(ids):
@@ -147,6 +153,7 @@ def render_state(request, db, facts=None, spec_dict=None) -> StateMachineState:
             startedAt=request.created_at if idx == 0 else None,
             facts=(completed_facts or None) if node_id == "completed" else None,
             gateType=gate_types.get(node_id),
+            gateLabel=gate_labels.get(node_id),
         ))
 
     return StateMachineState(currentState=current, states=states_view, currentProgress=None)

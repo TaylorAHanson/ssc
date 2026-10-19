@@ -608,8 +608,10 @@ def stage_specs_from_dict(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for stage in data.get("stages", []):
         if stage.get("kind") == "gate":
+            approver = stage.get("approver") if isinstance(stage.get("approver"), dict) else {}
             out.append({"name": stage["name"], "kind": "gate",
-                        "gate_type": stage.get("type"), "success_fact": None})
+                        "gate_type": stage.get("type"), "success_fact": None,
+                        "approver_source": approver.get("source")})
         elif stage.get("kind") == "subworkflow":
             out.append({"name": stage["name"], "kind": "subworkflow",
                         "gate_type": None, "success_fact": None,

@@ -133,9 +133,17 @@ def test_the_card_names_the_access_rule_approvers_for_the_requests_type(db_sessi
     assert get_approval("appr-req-uc", current_user=MEMBER, db=db_session).approverLabel == (
         f"UC securables approvers: {GROUP}")
 
-    # The requester's own view of the request names the same approvers.
-    [shown] = requests_api._format_request(db_session.get(RequestModel, "req-ws"), db_session).approvals
+    # The prepared change is the step report's source, not a parameter to show again as JSON.
+    card = get_approval("appr-req-uc", current_user=ADMIN, db=db_session)
+    assert "prepared_change" not in (card.workflowParameters or {})
+
+    # The requester's own view of the request names the same approvers, and its timeline
+    # calls the gate by where its approvers come from rather than "platform admin".
+    formatted = requests_api._format_request(db_session.get(RequestModel, "req-ws"), db_session)
+    [shown] = formatted.approvals
     assert shown.approverLabel == "Platform Admins (no Workspace securables group set)"
+    gates = {s.id: (s.gateType, s.gateLabel) for s in formatted.stateMachine.states if s.gateType}
+    assert gates == {"approve": ("platform_admin", "Access rule approvers")}
     summary = requests_api._format_request(db_session.get(RequestModel, "req-ws"), db_session, summary=True)
     assert summary.approvals[0].approverLabel is None
 

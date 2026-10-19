@@ -13,6 +13,25 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 1.11.0 — 2026-10-19
+
+### Added
+
+- **Filter Pending Approvals by workflow.** Approvers who handle several kinds of request had to scroll through one long mixed list to find the ones they wanted. A new **Workflow** list at the top of **Approvals** names each workflow with how many requests are waiting. Pick one and both the pending and completed lists show only that workflow, and **Select all** only picks the requests you can see. The choice is kept in the page's web address, so it survives a reload and you can share a link to the same view.
+- **Dropdowns when editing access rules.** Every cell on the Access Rules page used to be free text, so a typo or a privilege that isn't allowed only showed up at review. Environment, securable type and principal type are now picked from a list, and privileges are a checklist of what the allow list permits for the row's securable type. Other columns suggest names already used on the sheet and still accept new ones. Values already on a row that aren't in a list stay as they are, and a change that puts a value outside its list is marked in red.
+- **Lists of workspaces and catalogs for each environment.** Platform Admins can now fill in the **Workspaces** and **Catalogs** columns of **Environments** under **Admin → Settings → Access Rules**, so the Access Rules page offers those names as choices. Requests through the assistant can then only name a listed workspace or catalog, and a direct edit outside the list gets a warning at review. Leave a column empty to keep typing names freely, as before.
+- **Send the app's logs to Unity Catalog.** For operators: the app's logs used to be visible only in its own log view. Each environment's deployment settings now include a log destination, and once its catalog and schema are filled in, the app's logs and metrics are written to tables there. A separate deployment setting prepares chosen app tables for Lakebase Change Data Feed, so requests, approvals, the enforcement audit and access-rule history can be copied into Unity Catalog. Both are off until an operator turns them on, and the platform setup guide walks through each one.
+
+### Changed
+
+- **Access rules use an allow list of privileges.** The never-granted list only blocked the privileges named on it, so anything else could be requested, including privileges Databricks adds later. Now a request or a direct edit can add only the privileges a Platform Admin lists for each securable type under **Admin → Settings → Access Rules → Allowed privileges**. The starting list is every privilege that was allowed before, so nothing changes until you edit it, and a new privilege can't be granted until someone adds it. Existing rules stay as they are and removing access is always allowed; if you had customised the never-granted list, check the new allow list, because that customisation isn't carried over.
+- **The access-rule approval step names its approver group.** The approval card and the workflow editor used to say only "Platform Admin", which suggested no group was involved even when one was set. The card now says which group approves, for example "UC securables approvers: grp_data_stewards", or "Platform Admins (no UC securables group set)" when that type has no group, and the requester's own request page says the same. The step is labelled **Access rule approvers** in the request's timeline and in the workflow editor, which also lists the three groups with a link to their settings, and the card no longer repeats the prepared change as raw data, since its report already shows it. Who can approve hasn't changed.
+- **Access-rule requests now go through Prepare, Approve and Record.** The steps used to be called Plan and Apply, which was easy to confuse with Terraform, although nothing reaches Terraform at these steps. Prepare works out the exact rule changes and who approves them; Record writes the approved change into the access rules, and the next export carries it to Terraform. Requests already in progress finish normally.
+
+### Fixed
+
+- **Import findings give the row number you see in Excel.** Findings counted from the first data row and skipped blank rows, so every number was at least one short of the row in the workbook. They now count the header as row 1 and include blank rows, so you can go straight to the row they name.
+
 ## 1.10.0 — 2026-10-16
 
 ### Added
