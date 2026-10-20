@@ -23,6 +23,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.metadata import MetadataObjectModel, MetadataObservedModel
+from app.services.metadata import scope as managed
 from app.services.metadata.errors import ChangeBlocked, MetadataError
 from app.services.metadata.types import (
     RELATION_TYPES,
@@ -181,6 +182,7 @@ def expand_request(db: Session, request: ChangeRequest) -> Expansion:
     ops: List[ChangeOp] = []
     findings: List[Finding] = []
     matched: Dict[str, int] = {}
+    left_out: List[str] = []
     for op in request.ops:
         if not (op.match or "").strip():
             ops.append(op)
@@ -189,6 +191,16 @@ def expand_request(db: Session, request: ChangeRequest) -> Expansion:
             raise MetadataError("A pattern can't carry expected versions; name each object to use them.")
         label = _label(op)
         found = match_objects(db, op.match, column=op.column, types=op.match_types)
+        outside = managed.outside(managed.catalog_of(m.fqn_key) for m in found)
+        if outside:
+            kept = [m for m in found if managed.manages(managed.catalog_of(m.fqn_key))]
+            left_out.extend(outside)
+            findings.append(Finding(
+                code="pattern_outside_managed_catalogs", severity="info",
+                message=(f"'{label}' also matched {len(found) - len(kept):,} object(s) in catalogs this deployment "
+                         f"doesn't manage ({', '.join(outside[:5])}); they were left out."),
+            ))
+            found = kept
         matched[label] = matched.get(label, 0) + len(found)
         if found:
             findings.append(Finding(
@@ -203,6 +215,8 @@ def expand_request(db: Session, request: ChangeRequest) -> Expansion:
                 "name": m.name, "column": m.column, "match": None, "match_types": [],
                 "securable_type": m.securable_type,
             }))
+    if not ops and left_out:
+        raise MetadataError(managed.outside_message(sorted(set(left_out))))
     if not ops:
         raise MetadataError(
             "No known object matches " + ", ".join(f"'{k}'" for k in matched)

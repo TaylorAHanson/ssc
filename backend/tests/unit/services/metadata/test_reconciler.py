@@ -49,8 +49,21 @@ def catalog_row(name="sales", tags=None, present=True):
 ])
 def test_current_mode(monkeypatch, raw, mode):
     monkeypatch.setattr(settings, "METADATA_RECONCILE_MODE", raw)
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", ["sales_dev"])
 
     assert reconciler.current_mode() == mode
+
+
+def test_enforce_needs_a_catalog_list_and_says_so_once(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_MODE", "enforce")
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", [])
+    monkeypatch.setattr(reconciler, "_bad_mode", None)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.metadata.reconciler"):
+        assert reconciler.current_mode() == "plan"
+        assert reconciler.current_mode() == "plan"
+
+    assert sum("METADATA_RECONCILE_CATALOGS" in r.getMessage() for r in caplog.records) == 1
 
 
 def test_an_unknown_mode_falls_back_to_plan_and_is_logged_once(monkeypatch, caplog):

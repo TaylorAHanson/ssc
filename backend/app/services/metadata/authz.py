@@ -31,7 +31,7 @@ from app.core.config import settings
 from app.db.metadata import OBJECT_ACTIVE, MetadataObjectModel, MetadataObservedModel, MetadataTagModel
 from app.models.user import User
 from app.services.approval_scope import is_platform_admin, normalize_group, normalize_roles, parse_csv
-from app.services.metadata import environments, policy, principals
+from app.services.metadata import environments, policy, principals, scope
 from app.services.metadata import observed as observed_store
 from app.services.metadata.errors import NotFound
 from app.services.metadata.types import (
@@ -573,6 +573,8 @@ def is_editable(db: Session, actor: Actor, key: ObjectKey) -> Tuple[bool, List[s
     here, but an environment where every change needs approval makes it not
     directly editable (except for principals that may skip approval).
     """
+    if not scope.manages(key.catalog):
+        return False, [scope.outside_message([key.catalog.lower()])]
     env = environments.environment_of(key.catalog)
     if actor.actor_type == "system":
         reasons = ["The app itself can edit every object."]

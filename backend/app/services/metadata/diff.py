@@ -192,7 +192,7 @@ def plan(
     """Statements that bring UC to the desired state, typed from the observed table type.
 
     One item per statement: an unset (``removals`` = keys removed), a set and a comment
-    for most objects. A view column takes one statement per tag, and a changed value
+    (``removals=1`` when it clears a description) for most objects. A view column takes one statement per tag, and a changed value
     there is an unset (``removals=0``, it isn't a removal) followed by a set, since
     ``SET TAG`` can't overwrite. ``parent`` is the relation's observed row, used to
     type a column's statements. Sorted with ``plan_sort_key``.
@@ -232,8 +232,10 @@ def plan(
         if to_set:
             items.append(PlanItem(**base, operation="set", tags=to_set, sql=tag_sql("set", tags=to_set)[0]))
     if object_diff.comment_changed:
+        cleared = object_diff.comment_after is None and object_diff.comment_before is not None
         items.append(PlanItem(
             **base, operation="comment", comment=object_diff.comment_after,
             sql=build_comment_statement(stype, key.name, object_diff.comment_after, column=column),
+            removals=1 if cleared else 0,
         ))
     return sorted(items, key=plan_sort_key)

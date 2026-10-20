@@ -625,8 +625,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # Full sweep: refresh the snapshot from information_schema and reconcile
         # every managed object. Hourly at :30, off the data-asset sync's slot.
         "reconcile_cron": "30 * * * *",
-        # Catalogs this instance reconciles. Blank = every governed catalog
-        # (SCAN_CATALOGS, or all when that is blank too).
+        # Catalogs this instance manages: names or patterns (*_dev; * = all). The
+        # only catalogs it writes to, adopts in or accepts edits for. Blank = read
+        # and plan every governed catalog, write none (enforce needs a list).
         "reconcile_catalogs": [],
         # How often new or altered tables are looked for. 0 = only the sweep and
         # explicit reconcile calls pick them up.
@@ -637,7 +638,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # Keys the reconciler never sets or removes, and edits can't touch.
         # OmniGuard owns certification, so enforcement must leave it alone.
         "exempt_keys": ["system.certification_status"],
-        # More removals than this in one run pauses enforcement and alerts governance.
+        # More removals (tags or descriptions) than this in one run pauses
+        # enforcement and alerts governance. 0 = every removal waits for review.
         "max_removals_per_run": 200,
         # Statements run in parallel across relations (one relation's stay in order).
         "apply_concurrency": 8,

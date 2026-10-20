@@ -471,7 +471,8 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "What the reconciler does with the difference between the desired tags and descriptions and what "
              "Unity Catalog holds. Plan (default) works out every statement and shows it on the Drift and Runs "
              "tabs without changing anything. Enforce applies them, including removing tags that aren't in the "
-             "desired state. Off stops it entirely. Review the drift report in plan before switching to enforce."},
+             "desired state, but only once Catalogs to reconcile lists the catalogs this deployment manages. Off "
+             "stops it entirely. Review the drift report in plan before switching to enforce."},
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_RECONCILE_CRON",
      "label": "Full sweep schedule", "type": "cron", "requires": ["features.metadata_v2"],
      "help": "When the whole snapshot is re-read from information_schema and every managed object is "
@@ -480,9 +481,10 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_RECONCILE_CATALOGS",
      "label": "Catalogs to reconcile", "type": "string_list", "add_label": "Add catalog",
      "requires": ["features.metadata_v2"],
-     "help": "The only catalogs this deployment reads and applies. Blank = every governed catalog (Data Catalog "
-             "settings). On a dev or stage deployment, list sandbox catalogs here so it never touches catalogs "
-             "the production deployment manages."},
+     "help": "The catalogs this deployment manages: the only ones it changes, adopts new tables in, or accepts "
+             "edits to. Names or patterns, such as sales_dev or *_dev; * means every catalog. Blank = it reads "
+             "and plans every governed catalog but changes none, and enforce doesn't run. On a dev or stage "
+             "deployment that shares the metastore with production, list only that environment's catalogs."},
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_NEW_OBJECT_POLL_SECONDS",
      "label": "New-table check interval (seconds)", "type": "int", "min": 0,
      "requires": ["features.metadata_v2"],
@@ -494,17 +496,19 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "requires": ["features.metadata_v2"],
      "help": "Adopt (default) = a new table's create-time tags and description become its desired state, so tags "
              "a pipeline sets in CREATE ... TAGS are kept. Ignore = the table stays unmanaged until someone edits "
-             "it here."},
+             "it here. Only applies in the catalogs listed under Catalogs to reconcile."},
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_EXEMPT_KEYS",
      "label": "Exempt tag keys", "type": "string_list", "add_label": "Add key",
      "requires": ["features.metadata_v2"],
      "help": "Keys the reconciler never sets or removes and that edits can't change. Keep "
              "system.certification_status here: OmniGuard owns it."},
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_MAX_REMOVALS_PER_RUN",
-     "label": "Max tag removals per run", "type": "int", "min": 1,
+     "label": "Max removals per run", "type": "int", "min": 0,
      "requires": ["features.metadata_v2"],
-     "help": "A run that would remove more tags than this applies nothing, is marked paused on the Runs tab, and "
-             "alerts governance. Guards against an import or adopt gone wrong stripping tags in bulk."},
+     "help": "A run that would remove more tags, or clear more descriptions, than this applies nothing, is marked "
+             "paused on the Runs tab, and alerts governance. Guards against an import or adopt gone wrong "
+             "stripping tags in bulk. 0 = every removal waits for review, so the reconciler only adds unless you "
+             "resume the run."},
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_APPLY_CONCURRENCY",
      "label": "Statements in parallel", "type": "int", "min": 1, "max": 32,
      "requires": ["features.metadata_v2"],

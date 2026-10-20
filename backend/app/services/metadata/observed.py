@@ -20,6 +20,7 @@ Names that ``ObjectKey.parse`` refuses can't be managed and aren't stored.
 """
 from __future__ import annotations
 
+import fnmatch
 import logging
 import time
 from collections import deque
@@ -35,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_scan_catalogs, settings
 from app.db.metadata import MetadataObservedModel, MetadataSyncStateModel
+from app.services.metadata import scope
 from app.services.metadata.sql import quote_identifier, sql_string_literal
 from app.services.metadata.types import ObjectKey, ObservedState, normalize_value
 
@@ -214,18 +216,22 @@ def _rows(provider, sql: str) -> List[list]:
 def scope_catalogs(provider=None) -> List[str]:
     """METADATA_RECONCILE_CATALOGS, else SCAN_CATALOGS, else every catalog the provider can see.
 
-    Names are lowercased (as information_schema and ``fqn_key`` report them). The
-    fallback skips system, sample, internal and Delta Sharing catalogs.
+    Names are lowercased (as information_schema and ``fqn_key`` report them). Patterns
+    (``*_dev``, ``*``) are matched against the visible catalogs, which skip system,
+    sample, internal and Delta Sharing catalogs.
     """
-    configured = getattr(settings, "METADATA_RECONCILE_CATALOGS", None) or []
-    if isinstance(configured, str):
-        configured = configured.split(",")
-    names = [str(c).strip().lower() for c in configured if str(c).strip()]
+    names = scope.patterns() or list(dict.fromkeys(c.strip().lower() for c in get_scan_catalogs() if c.strip()))
+    globs = [n for n in names if scope.is_pattern(n)]
+    if names and not globs:
+        return names
+    visible = _visible_catalogs(provider)
     if not names:
-        names = [c.lower() for c in get_scan_catalogs()]
-    if names:
-        return list(dict.fromkeys(names))
+        return visible
+    matched = [c for c in visible if any(fnmatch.fnmatchcase(c, g) for g in globs)]
+    return list(dict.fromkeys([n for n in names if not scope.is_pattern(n)] + matched))
 
+
+def _visible_catalogs(provider=None) -> List[str]:
     provider = _provider(provider)
     visible: List[str] = []
     for info in provider.client.catalogs.list():

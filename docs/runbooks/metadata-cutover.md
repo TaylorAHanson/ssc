@@ -6,13 +6,15 @@ every tag and description, and the reconciler applies them to Unity Catalog. Pla
 the plan-mode review in step 5 to take at least a few days.
 
 Do it once, on the production deployment, which owns every environment. Dev and stage
-deployments stay in `plan` mode (step 8).
+deployments either stay in `plan` mode or enforce only their own catalogs (step 8).
 
 ## 1. Before you start
 
 - **Grant the governance service principal** (the identity behind
   `get_governance_uc_provider()`; see `docs/SERVICE_PRINCIPALS.md`) on every catalog it
-  will manage:
+  will manage, and only those. Give each deployment its own principal, so a dev
+  deployment's principal can't write to production catalogs even if the app is
+  misconfigured:
   - `USE CATALOG`, `USE SCHEMA` and `BROWSE`, so the sweep can read `information_schema`;
   - `APPLY TAG`, to set and remove tags on catalogs, schemas, tables, views and columns;
   - ownership or `MANAGE`, to set descriptions (`COMMENT ON`);
@@ -32,13 +34,13 @@ deployments stay in `plan` mode (step 8).
 | Setting | Set it to |
 | --- | --- |
 | **Reconcile mode** | `plan` (the default). Don't start in `enforce`. |
-| **Catalogs to reconcile** | Blank to manage every governed catalog, or the catalogs to manage first. |
+| **Catalogs to reconcile** | The catalogs this deployment manages: names or patterns such as `*_prd`, or `*` for every catalog. It changes, adopts in and accepts edits for these only. Blank means read and plan everything but change nothing, and enforce won't run. |
 | **Instance id** | A name unique to this deployment, such as `prod`. |
 | **Owner tag key** | The key whose value names the groups that own an object (default `data_owner`). |
 | **Governance approver group** | The Databricks group that approves sensitive changes and objects with no owner. Left blank, only Platform Admins can approve them. |
 | **Key policies** | One row per governed key: where it applies, allowed values or pattern, editor groups, and whether it's sensitive. These replace `tag_policy.yml` in the governance repository. |
 | **Environments** | One row per environment with a catalog pattern such as `{base}_dev`, and whether every change or only sensitive ones need approval. |
-| **Max tag removals per run** | Keep the default (200) until enforcement has run cleanly for a while. |
+| **Max removals per run** | Keep the default (200) until enforcement has run cleanly for a while. Removed tags and cleared descriptions both count. |
 
 `features.metadata_v2` must be on (it is by default).
 
@@ -95,8 +97,8 @@ Let the scheduled sweeps run for a few days.
 2. On **Reconciler runs**, choose **Run a full check now** and watch the run. It should
    apply only the statements you reviewed. Changes saved while the mode was `plan` were
    only planned, so this run is what applies them.
-3. If a run is **paused** by the circuit breaker, it wanted to remove more tags than
-   **Max tag removals per run**. Saved changes are applied in batches of up to 200
+3. If a run is **paused** by the circuit breaker, it wanted to remove more tags or
+   descriptions than **Max removals per run**. Saved changes are applied in batches of up to 200
    objects and the limit counts per batch, while a full check counts the whole run. Open
    the run, check the removals, then either fix the desired state or choose **Apply
    anyway and resume** (`"override_circuit_breaker": true`).
@@ -112,14 +114,23 @@ because other workflows use them.
 
 ## 8. Lower environments
 
-Dev and stage deployments share the metastore, so they must not enforce production's
-catalogs:
+Dev and stage deployments share the metastore with production, so they must never write
+to production's catalogs. **Catalogs to reconcile** is the boundary: a deployment never
+changes, claims or adopts tables in a catalog it doesn't list, and refuses edits to one.
 
-- keep **Reconcile mode** at `plan` there, which shows real diffs against the metastore
-  without writing;
-- to try enforcement end to end, list sandbox catalogs in **Catalogs to reconcile** and
-  give the deployment its own **Instance id**. Its claim tag on those catalogs keeps the
-  production deployment away from them, and vice versa.
+- **Report only:** leave **Catalogs to reconcile** blank and **Reconcile mode** at `plan`.
+  It shows real diffs against the metastore and writes nothing; enforce won't run
+  without a list.
+- **Enforce its own catalogs:** list only that environment's catalogs (for example
+  `*_dev`), give the deployment its own **Instance id**, and set **Reconcile mode** to
+  `enforce`. Its claim tag on those catalogs keeps the production deployment away from
+  them, so leave them out of production's list too.
+- **Add, don't remove, while you build trust:** set **Max removals per run** to `0`.
+  Every run that would remove a tag or clear a description pauses for review on the
+  **Reconciler runs** tab, so the deployment only adds unless you choose **Apply anyway
+  and resume**.
+- **Least privilege:** grant the dev deployment's service principal `APPLY TAG` and
+  `MANAGE` on its own catalogs only. That holds even if a setting is wrong.
 
 ## Rolling back
 

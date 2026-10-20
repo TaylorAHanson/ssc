@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.metadata import SOURCE_ADOPT, SOURCE_IMPORT, SOURCE_REVERT, SOURCES, MetadataObservedModel
-from app.services.metadata import abac, authz, environments, errors, observed, policy, report, requests, store
+from app.services.metadata import abac, authz, environments, errors, observed, policy, report, requests, scope, store
 from app.services.metadata.report import APPROVAL, DENIED, DIRECT
 from app.services.metadata.types import (
     Actor,
@@ -375,6 +375,9 @@ def _resolve_targets(
         items.extend(changed)
 
     if items:
+        outside = scope.outside(scope.catalog_of(i.fqn_key) for i in items)
+        if outside:
+            findings.append(_deny("outside_managed_catalogs", scope.outside_message(outside)))
         object_count = len({i.fqn_key for i in items})
         limit = _object_limit(actor)
         if limit > 0 and object_count > limit:
@@ -854,6 +857,9 @@ def adopt(db: Session, request: AdoptRequest, actor: Actor) -> ChangeResult:
     names = [n.strip() for n in request.names if (n or "").strip()]
     if not catalogs and not names:
         raise errors.MetadataError("Name at least one catalog or object to adopt.")
+    outside = scope.outside([*catalogs, *(_parse(n).catalog for n in names)])
+    if outside:
+        raise errors.MetadataError(scope.outside_message(outside))
     keys: List[str] = []
     for catalog in catalogs:
         keys.extend(_observed_under(db, _parse(catalog).fqn_key, include_columns=request.include_columns))

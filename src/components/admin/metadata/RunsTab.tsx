@@ -139,11 +139,11 @@ export function RunsTab() {
           <Notice kind="warn">
             {paused ? (
               <>
-                The paused run planned {plural(paused.removals_planned, 'tag removal')}.
+                The paused run planned {plural(paused.removals_planned, 'removal')}.
                 {paused.paused_reason && <span className="mt-1 block">{paused.paused_reason}</span>}
               </>
             ) : (
-              'The last run planned more tag removals than the safety limit allows.'
+              'The last run planned more removals than the safety limit allows.'
             )}
           </Notice>
           <p className="text-sm text-gray-700">

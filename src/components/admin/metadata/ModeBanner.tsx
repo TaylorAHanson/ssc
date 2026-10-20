@@ -9,19 +9,27 @@ export function ModeBanner() {
   const sweep = config.last_sweep_at ? (
     <span title={formatTime(config.last_sweep_at)}> Last full check {relativeTime(config.last_sweep_at)}.</span>
   ) : null;
+  const managed = config.managed_catalogs.length ? (
+    <span className="mt-1 block">
+      This deployment manages {config.managed_catalogs.includes('*') ? 'every catalog' : `catalogs matching ${config.managed_catalogs.join(', ')}`}.
+    </span>
+  ) : null;
   if (config.reconcile_mode === 'enforce') {
     return (
       <Notice kind="info" title="Enforce mode">
         The reconciler writes declared tags and descriptions to Unity Catalog and undoes changes made there directly, except for keys managed elsewhere.
         {sweep}
+        {managed}
       </Notice>
     );
   }
   if (config.reconcile_mode === 'plan') {
     return (
       <Notice kind="warn" title="Plan mode">
-        The reconciler only reports what it would change. Nothing is written to Unity Catalog, so drift stays until an admin switches to enforce mode.
+        {config.enforce_blocked_reason ??
+          'The reconciler only reports what it would change. Nothing is written to Unity Catalog, so drift stays until an admin switches to enforce mode.'}
         {sweep}
+        {managed}
       </Notice>
     );
   }
@@ -38,7 +46,7 @@ export function CircuitBreakerBanner({ action }: { action?: ReactNode }) {
   return (
     <Notice kind="error" title="The reconciler stopped itself">
       <p>
-        A run would have removed more tags than the safety limit allows, so it paused instead of writing anything. Declared changes are still saved, but nothing
+        A run would have removed more tags or descriptions than the safety limit allows, so it paused instead of writing anything. Declared changes are still saved, but nothing
         reaches Unity Catalog until an admin reviews the planned removals and resumes.
       </p>
       {action && <div className="mt-2">{action}</div>}

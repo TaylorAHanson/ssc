@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 import pytest
 from sqlalchemy import insert
 
+from app.core.config import settings
 from app.db.metadata import (
     MetadataObjectModel,
     MetadataObservedModel,
@@ -319,6 +320,18 @@ def test_editable_only_with_full_access_filters_nothing(world, fakes):
 
     assert [i.fqn_key for i in result.items] == DEFAULT_KEYS
     assert all(i.editable for i in result.items)
+
+
+def test_catalogs_this_deployment_doesnt_manage_are_never_editable(world, fakes, monkeypatch):
+    fakes.scope = EditableScope(all=True)
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", ["*_dev"])
+
+    result = search(world, SearchQuery(page_size=500), ALICE)
+    editable = {i.fqn_key: i.editable for i in result.items}
+    assert editable["sales_dev.bronze.orders"] is True
+    assert any(not k.startswith("sales_dev") for k in editable)
+    assert all(v is False for k, v in editable.items() if not k.startswith("sales_dev"))
+    assert all(k.startswith("sales_dev") for k in _keys(world, editable_only=True))
 
 
 def test_editable_only_follows_the_nearest_owner(world, fakes):

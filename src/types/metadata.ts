@@ -525,6 +525,10 @@ export interface MetadataConfig {
   new_object_policy: 'adopt' | 'ignore';
   last_sweep_at?: string | null;
   circuit_breaker_tripped: boolean;
+  /** Catalog names or patterns this deployment manages; empty = every catalog, but plan only. */
+  managed_catalogs: string[];
+  /** Set when enforce is configured but can't run because no catalogs are listed. */
+  enforce_blocked_reason?: string | null;
 }
 
 // --- Adopt and import ----------------------------------------------------------------

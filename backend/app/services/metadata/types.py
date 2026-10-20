@@ -534,7 +534,7 @@ class PlanItem(BaseModel):
     keys: List[str] = Field(default_factory=list)
     comment: Optional[str] = None
     sql: str
-    # Tag removals count toward the circuit breaker.
+    # Removed tags and cleared descriptions count toward the circuit breaker.
     removals: int = 0
 
 
@@ -749,6 +749,10 @@ class MetadataConfig(BaseModel):
     new_object_policy: Literal["adopt", "ignore"] = "adopt"
     last_sweep_at: Optional[datetime] = None
     circuit_breaker_tripped: bool = False
+    # Catalog names or patterns this deployment manages; empty = every catalog, but plan only.
+    managed_catalogs: List[str] = Field(default_factory=list)
+    # Set when enforce is configured but can't run (no catalog list), so the UI can say why.
+    enforce_blocked_reason: Optional[str] = None
 
 
 # --- Adopt and import ----------------------------------------------------------------

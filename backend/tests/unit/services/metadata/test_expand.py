@@ -5,6 +5,7 @@ from typing import Optional
 import pytest
 from pydantic import ValidationError
 
+from app.core.config import settings
 from app.db.metadata import MetadataObjectModel, MetadataObservedModel
 from app.services.metadata import changes, expand
 from app.services.metadata.errors import ChangeBlocked, MetadataError
@@ -137,6 +138,22 @@ def test_expand_request_keeps_named_ops_and_reports_counts(world):
     assert out.request.reason == "Meeting outcome"
     assert out.matched == {"sales_dev.bronze.*": 3, "nothing.*.*": 0}
     assert [(f.code, f.severity) for f in out.findings] == [("pattern_matched", "info"), ("pattern_no_match", "warn")]
+
+
+def test_matches_outside_the_managed_catalogs_are_left_out(world, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", ["sales_dev"])
+    ask = ChangeRequest(ops=[ChangeOp(op="set_tags", match="sales?dev.bronze.orders", tags={"k": "v"})])
+
+    out = expand.expand_request(world, ask)
+
+    assert [o.name for o in out.request.ops] == ["sales_dev.bronze.orders"]
+    assert out.matched == {"sales?dev.bronze.orders": 1}
+    left_out = [f for f in out.findings if f.code == "pattern_outside_managed_catalogs"]
+    assert len(left_out) == 1 and "salesxdev" in left_out[0].message
+
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", ["hr_*"])
+    with pytest.raises(MetadataError, match="manages only catalogs matching hr_"):
+        expand.expand_request(world, ask)
 
 
 def test_expand_request_without_patterns_is_untouched(world):

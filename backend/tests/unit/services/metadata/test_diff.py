@@ -174,6 +174,15 @@ def test_plan_orders_unset_then_set_then_comment_and_counts_removals():
     assert items[0].keys == ["y", "z"] and items[1].tags == {"a": "1", "b": "2"} and items[2].comment == "Orders"
 
 
+def test_clearing_a_description_counts_as_a_removal():
+    have = observed(comment="Orders placed online", table_type="MANAGED")
+    [cleared] = d.plan(d.diff(desired(), have, exempt_keys=EXEMPT), observed=have)
+    [changed] = d.plan(d.diff(desired(comment="Orders"), have, exempt_keys=EXEMPT), observed=have)
+
+    assert (cleared.operation, cleared.comment, cleared.removals) == ("comment", None, 1)
+    assert (changed.operation, changed.removals) == ("comment", 0)
+
+
 @pytest.mark.parametrize("table_type,securable_type,keyword", [
     ("VIEW", "view", "VIEW"),
     ("METRIC_VIEW", "metric_view", "VIEW"),

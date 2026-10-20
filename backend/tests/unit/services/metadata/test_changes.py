@@ -746,6 +746,29 @@ def test_adopting_a_schema_by_name_includes_everything_under_it(db, fakes):
     assert desired(db, "sales_dev.bronzer.t") is None and desired(db, "sales_dev.silver.t") is None
 
 
+def test_an_edit_outside_the_managed_catalogs_is_refused(db, fakes, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", ["*_dev"])
+
+    pv = preview(db, op("set_tags", tags={"a": "1"}), op("set_tags", name="Sales_Prd.Bronze.Orders", tags={"a": "1"}))
+
+    assert pv.blocked
+    assert [(f.code, f.severity) for f in pv.findings] == [("outside_managed_catalogs", "deny")]
+    assert "sales_prd" in pv.findings[0].message and "*_dev" in pv.findings[0].message
+    with pytest.raises(errors.ChangeBlocked):
+        submit(db, op("set_tags", name="Sales_Prd.Bronze.Orders", tags={"a": "1"}))
+    assert desired(db, PRD_KEY) is None
+    assert not preview(db, op("set_tags", tags={"a": "1"})).blocked
+
+
+def test_adopting_outside_the_managed_catalogs_is_refused(db, fakes, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", ["sales_dev"])
+    fakes.observe("Sales_Prd.Bronze.Orders", tags={"tier": "gold"})
+
+    with pytest.raises(errors.MetadataError, match="manages only catalogs matching sales_dev"):
+        changes.adopt(db, AdoptRequest(names=["sales_prd.bronze"]), ADMIN)
+    assert change_set_count(db) == 0
+
+
 def test_large_adopts_commit_in_batches(db, fakes, monkeypatch):
     monkeypatch.setattr(changes, "ADOPT_BATCH_SIZE", 2)
     for name in ("Sales_Dev.S.A", "Sales_Dev.S.B", "Sales_Dev.S.C"):

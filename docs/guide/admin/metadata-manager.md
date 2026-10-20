@@ -153,7 +153,14 @@ Metadata Manager**:
 
 - **Reconcile mode**: **Plan** (the default) reports what would change without
   changing anything; **Enforce** makes Unity Catalog match, including removing
-  undeclared tags; **Off** stops the reconciler.
+  undeclared tags; **Off** stops the reconciler. Enforce only runs once
+  **Catalogs to reconcile** is filled in.
+- **Catalogs to reconcile**: the catalogs this deployment manages, as names or
+  patterns such as `*_dev` (`*` is every catalog). It only changes, adopts new
+  tables in and accepts edits for these; an edit to any other catalog is
+  refused at preview, and a bulk edit leaves those matches out. Blank means it
+  reads and plans every catalog but changes none. On a dev or stage deployment,
+  list only that environment's catalogs.
 - **Browse roles**: who can open the page. Blank = everyone.
 - **Owner tag key**, **Editor roles** and **Governance approver group**: who
   can edit and who approves. With no governance approver group, only Platform
@@ -167,8 +174,9 @@ Metadata Manager**:
   masks and row filters on the changed objects. It needs READ METADATA for the
   governance service principal; for changes to more than 50 tables only the
   catalog and schema policies are read.
-- **Max tag removals per run**: a run that would remove more stops and alerts
-  governance instead. Saved changes are applied in batches of up to 200
-  objects, and the limit counts per batch.
+- **Max removals per run**: a run that would remove more tags, or clear more
+  descriptions, stops and alerts governance instead. Saved changes are applied
+  in batches of up to 200 objects, and the limit counts per batch. Set it to 0
+  and every removal waits for you to review and resume the run.
 - **Statements in parallel**: how many tables the reconciler updates at once.
 - **Max objects per change**: 5,000 by default.

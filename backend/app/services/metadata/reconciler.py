@@ -3,8 +3,10 @@
 ``run`` reconciles a scope: named objects (a queue batch) or whole catalogs (a sweep).
 It refreshes the snapshot for that scope, checks each catalog's claim, diffs every
 managed row against UC under full enforcement, then records the plan (``plan``) or
-applies it and records the outcome (``enforce``). A run that would remove more tags
-than METADATA_MAX_REMOVALS_PER_RUN trips the circuit breaker and applies nothing.
+applies it and records the outcome (``enforce``). Catalogs outside
+METADATA_RECONCILE_CATALOGS (``scope``) are never touched, and enforce needs that list
+to be set. A run that would remove more tags or descriptions than
+METADATA_MAX_REMOVALS_PER_RUN trips the circuit breaker and applies nothing.
 
 ``drain_queue`` runs the oldest due queue rows as one run, deletes the rows that
 converged and backs off the rest. ``reconcile_task`` is the poller's entry point
@@ -45,7 +47,7 @@ from app.db.metadata import (
 )
 from app.services.metadata import apply as apply_
 from app.services.metadata import diff as diff_
-from app.services.metadata import errors, policy
+from app.services.metadata import errors, policy, scope
 from app.services.metadata import observed as snapshot
 from app.services.metadata.sql import build_tag_statement
 from app.services.metadata.types import (
@@ -149,9 +151,15 @@ def enqueue(
 
 
 def current_mode() -> ReconcileMode:
-    """METADATA_RECONCILE_MODE; blank or unknown is ``plan`` (writes nothing)."""
+    """METADATA_RECONCILE_MODE; blank or unknown is ``plan`` (writes nothing), and so is enforce with no catalog list."""
     global _bad_mode
     raw = str(getattr(settings, "METADATA_RECONCILE_MODE", "") or "").strip().lower()
+    if raw == "enforce" and not scope.is_explicit():
+        if _bad_mode != "enforce":
+            logger.warning("METADATA_RECONCILE_MODE is enforce but METADATA_RECONCILE_CATALOGS is blank; "
+                           "reconciling in plan mode (no writes).")
+            _bad_mode = "enforce"
+        return "plan"
     if raw in MODES:
         return raw  # type: ignore[return-value]
     if raw and raw != _bad_mode:
@@ -192,6 +200,9 @@ def _int_setting(name: str, default: int) -> int:
 def _adopt_new_objects() -> bool:
     """METADATA_NEW_OBJECT_POLICY: ``adopt`` (the default) or ``ignore``."""
     return str(getattr(settings, "METADATA_NEW_OBJECT_POLICY", "") or "adopt").strip().lower() != "ignore"
+
+
+_OUTSIDE_SCOPE = "Not one of this deployment's catalogs (Catalogs to reconcile), so it's left alone."
 
 
 def _removal_limit() -> int:
@@ -260,7 +271,7 @@ def trip_circuit_breaker(
         "run_id": run_id,
         "removals": int(removals),
         "limit": int(limit),
-        "reason": reason or f"The run would remove {removals} tags; the limit is {limit}.",
+        "reason": reason or f"The run would remove {removals} tags or descriptions; the limit is {limit}.",
         "tripped_at": _utcnow().isoformat(),
     }
     _set_state(db, CIRCUIT_BREAKER_KEY, value)
@@ -280,7 +291,7 @@ def clear_circuit_breaker(db: Session, *, cleared_by: Optional[str] = None) -> b
 
 def _paused_reason(breaker: dict) -> str:
     return (
-        f"The circuit breaker is tripped: {breaker.get('reason') or 'too many tag removals.'} "
+        f"The circuit breaker is tripped: {breaker.get('reason') or 'too many removals.'} "
         "Nothing is applied until an admin reviews the paused run and runs again with the override."
     )
 
@@ -788,6 +799,8 @@ def _run(
 ) -> _RunReport:
     """``run``, plus what ``drain_queue`` needs; ``adopt`` limits adoption to those keys (None: all named)."""
     mode = mode or current_mode()
+    if mode == "enforce" and not scope.is_explicit():
+        mode = "plan"
     if mode == "off":
         return _RunReport(record_run(
             db, trigger=trigger, mode="off", status="skipped", actor=actor,
@@ -801,12 +814,12 @@ def _run(
                     db, trigger=trigger, mode=mode, status="paused", actor=actor, paused_reason=_paused_reason(breaker),
                 ))
         if fqn_keys is not None:
-            scope: dict = {"objects": len(fqn_keys)}
+            run_scope: dict = {"objects": len(fqn_keys)}
             if catalogs:
-                scope["catalogs"] = sorted({c.strip().lower() for c in catalogs if c and c.strip()})
+                run_scope["catalogs"] = sorted({c.strip().lower() for c in catalogs if c and c.strip()})
         else:
-            scope = {"catalogs": sorted({c.strip().lower() for c in catalogs or [] if c and c.strip()}) or "scope"}
-        run_id = start_run(db, trigger=trigger, mode=mode, actor=actor, summary={"scope": scope})
+            run_scope = {"catalogs": sorted({c.strip().lower() for c in catalogs or [] if c and c.strip()}) or "scope"}
+        run_id = start_run(db, trigger=trigger, mode=mode, actor=actor, summary={"scope": run_scope})
         ctx = _Context(
             run_id=run_id, trigger=trigger, mode=mode, actor=actor, provider=provider, override=override,
             now=_utcnow(), exempt=policy.exempt_keys(),
@@ -837,7 +850,7 @@ def _reconcile(
     if ctx.provider is None:
         ctx.provider = _governance_provider()
     if fqn_keys is not None:
-        works = _targeted(db, ctx, _scope_keys(fqn_keys, catalogs), adopt)
+        works = _targeted(db, ctx, _scope_keys(ctx, fqn_keys, catalogs), adopt)
     else:
         works = _sweep_scope(db, ctx, catalogs)
     # Snapshot and object-state writes land before any statement runs, so nothing stays locked meanwhile.
@@ -888,8 +901,8 @@ def _planned(item: PlanItem) -> PlanOutcome:
     return PlanOutcome(**item.model_dump(), status="planned")
 
 
-def _scope_keys(fqn_keys: Sequence[str], catalogs: Optional[Sequence[str]]) -> List[str]:
-    """Relation-level queue keys, deduplicated; invalid keys are logged and dropped."""
+def _scope_keys(ctx: _Context, fqn_keys: Sequence[str], catalogs: Optional[Sequence[str]]) -> List[str]:
+    """Relation-level queue keys, deduplicated; invalid keys and catalogs this deployment doesn't manage are dropped."""
     allowed = {c.strip().lower() for c in catalogs or [] if c and c.strip()}
     keys: Set[str] = set()
     for fqn_key in fqn_keys:
@@ -898,8 +911,15 @@ def _scope_keys(fqn_keys: Sequence[str], catalogs: Optional[Sequence[str]]) -> L
         except (ValueError, errors.MetadataError) as e:
             logger.warning("Metadata reconcile: ignoring invalid object key '%s': %s", fqn_key, e)
             continue
-        if not allowed or _catalog_of(key) in allowed:
+        catalog = _catalog_of(key)
+        if not scope.manages(catalog):
+            ctx.skipped[catalog] = _OUTSIDE_SCOPE
+            continue
+        if not allowed or catalog in allowed:
             keys.add(key)
+    if ctx.skipped:
+        logger.info("Metadata reconcile run %s: ignored objects in catalogs outside METADATA_RECONCILE_CATALOGS: %s",
+                    ctx.run_id, ", ".join(sorted(ctx.skipped)))
     return sorted(keys)
 
 
@@ -983,6 +1003,10 @@ def _sweep_scope(db: Session, ctx: _Context, catalogs: Optional[Sequence[str]]) 
     observing = _monotonic()
     wanted = list(dict.fromkeys(c.strip().lower() for c in catalogs or [] if c and c.strip()))
     targets = wanted or snapshot.scope_catalogs(ctx.provider)
+    for catalog in targets:
+        if not scope.manages(catalog):
+            ctx.skipped[catalog] = _OUTSIDE_SCOPE
+    targets = [c for c in targets if scope.manages(c)]
     if not targets:
         return []
     swept = snapshot.sweep(db, provider=ctx.provider, catalogs=targets)
@@ -1014,8 +1038,12 @@ def _evaluate_claims(ctx: _Context, catalogs: Sequence[str], seen: Dict[str, Obs
 
 
 def _adopt(db: Session, ctx: _Context, keys: Sequence[str], seen: Dict[str, ObservedState]) -> None:
-    """METADATA_NEW_OBJECT_POLICY=adopt: unmanaged objects that exist get desired state = observed."""
-    if not keys or not _adopt_new_objects():
+    """METADATA_NEW_OBJECT_POLICY=adopt: unmanaged objects that exist get desired state = observed.
+
+    Only with an explicit METADATA_RECONCILE_CATALOGS: a deployment that manages no
+    catalogs in particular doesn't take over new tables on a shared metastore.
+    """
+    if not keys or not _adopt_new_objects() or not scope.is_explicit():
         return
     candidates = [
         k for k in keys
@@ -1190,13 +1218,13 @@ def _log_run(result: ReconcileResult, ctx: _Context) -> None:
 
 def _report_breaker_trip(ctx: _Context, removals: int, limit: int) -> None:
     logger.warning(
-        "Metadata reconcile run %s tripped the circuit breaker: it would remove %d tags (limit %d). "
+        "Metadata reconcile run %s tripped the circuit breaker: it would remove %d tags or descriptions (limit %d). "
         "Nothing was applied; enforcement is paused until an override run.", ctx.run_id, removals, limit,
     )
     _alert_governance(
-        "[Action required] Metadata reconciler paused: too many tag removals",
+        "[Action required] Metadata reconciler paused: too many removals",
         [
-            f"A {ctx.trigger} run would remove {removals} tags from Unity Catalog; the limit is {limit} "
+            f"A {ctx.trigger} run would remove {removals} tags or descriptions from Unity Catalog; the limit is {limit} "
             "(METADATA_MAX_REMOVALS_PER_RUN).",
             "Nothing was applied. Runs that change Unity Catalog stay paused until an admin reviews the run "
             "on the Runs tab and runs again with the circuit-breaker override.",

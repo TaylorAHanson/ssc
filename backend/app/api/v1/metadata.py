@@ -30,6 +30,7 @@ from app.services.metadata import (
     policy,
     principals,
     reconciler,
+    scope,
     search,
     store,
 )
@@ -167,6 +168,8 @@ def _config(db: Session, user: User) -> MetadataConfig:
         new_object_policy="ignore" if settings.METADATA_NEW_OBJECT_POLICY == "ignore" else "adopt",
         last_sweep_at=observed.last_sweep_at(db),
         circuit_breaker_tripped=reconciler.circuit_breaker_tripped(db),
+        managed_catalogs=scope.patterns(),
+        enforce_blocked_reason=scope.enforce_blocked_reason(),
     )
 
 
@@ -403,6 +406,9 @@ def _notify(db: Session, user: User, body: ReconcileNotify) -> ReconcileAccepted
             key = ObjectKey.from_fqn_key(name.strip())
         except ValueError as exc:
             rejected.append({"name": name, "reason": str(exc)})
+            continue
+        if not scope.manages(key.catalog):
+            rejected.append({"name": name, "reason": scope.outside_message([key.catalog.lower()])})
             continue
         if actor.actor_type == "service_principal":
             ok, reasons = authz.is_editable(db, actor, key)

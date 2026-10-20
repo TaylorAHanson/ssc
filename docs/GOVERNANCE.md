@@ -134,7 +134,7 @@ Because the page searches the platform's own list, it answers instantly and neve
 
 **Environments.** One production deployment manages every environment. Catalogs are mapped to environments under **Admin → Settings → Metadata Manager → Environments**, for example `{base}_dev` and `{base}_prd`. To test a change, make it on the dev object first, then **promote** it to production, which copies the dev values to the matching production object as a new change. A change can also name extra environments to apply to at once.
 
-**Turning enforcement on.** **Reconcile mode** starts at **Plan**: the reconciler works out every statement and lists it on **Drift** and **Reconciler runs**, without changing anything. Review that for a while, then switch to **Enforce**. A run that would remove more tags than **Max tag removals per run** stops and alerts governance instead. The [cutover runbook](./runbooks/metadata-cutover.md) walks through the switch.
+**Turning enforcement on.** **Reconcile mode** starts at **Plan**: the reconciler works out every statement and lists it on **Drift** and **Reconciler runs**, without changing anything. Review that for a while, list the catalogs this deployment manages under **Catalogs to reconcile** (enforce doesn't run without that list), then switch to **Enforce**. A run that would remove more tags or descriptions than **Max removals per run** stops and alerts governance instead. The [cutover runbook](./runbooks/metadata-cutover.md) walks through the switch.
 
 **Permissions.** The reconciler writes as the governance service principal. It needs `APPLY TAG` on the catalogs it manages, ownership or `MANAGE` for descriptions, and `ASSIGN` on each governed tag it sets. See `SERVICE_PRINCIPALS.md`.
 

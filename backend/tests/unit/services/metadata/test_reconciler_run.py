@@ -53,6 +53,7 @@ def db():
 def _settings(monkeypatch):
     for name, value in {
         "METADATA_RECONCILE_MODE": "enforce",
+        "METADATA_RECONCILE_CATALOGS": ["*"],
         "METADATA_CLAIM_ENABLED": True,
         "METADATA_CLAIM_TAG_KEY": CLAIM_KEY,
         "METADATA_INSTANCE_ID": ME,
@@ -348,7 +349,7 @@ def test_too_many_removals_trip_the_breaker_before_anything_runs(db, uc, provide
     assert {i.status for i in tripped.items} == {"planned"} and tripped.removals_planned == 2
     assert reconciler.circuit_breaker_state(db)["run_id"] == tripped.run_id
     assert obj(db, "c.s.t").drift_detected_at is not None
-    assert len(alerts) == 1 and "too many tag removals" in alerts[0][0]
+    assert len(alerts) == 1 and "too many removals" in alerts[0][0]
 
     paused = reconciler.run(db, trigger="manual", fqn_keys=["c.s.t"], provider=provider)
     assert paused.status == "paused" and "circuit breaker" in paused.paused_reason
@@ -433,6 +434,74 @@ def test_adopt_policy_adopts_new_objects_from_the_poll_but_not_from_a_change(db,
     assert adopted == [(["c.s.fresh"], reconciler._ADOPT_REASON)]
     assert provider.statements.executed == [] and result.items == []
     assert queue(db) == {}
+
+
+def test_new_objects_arent_adopted_without_a_catalog_list(db, uc, provider, monkeypatch):
+    adopted = []
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", [])
+    monkeypatch.setattr(changes, "adopt_observed", lambda db_, keys, *, reason: adopted.append(keys))
+    uc.add("c.s.fresh", {"a": "1"})
+
+    reconciler.run(db, trigger="new_object", fqn_keys=["c.s.fresh"], provider=provider)
+
+    assert adopted == []
+
+
+# --- The catalog list is the write boundary ------------------------------------------------
+
+
+def test_enforce_without_a_catalog_list_only_plans(db, uc, provider, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", [])
+    uc.add("c.s.t", {"stray": "1"})
+    desired(db, "c.s.t", {"a": "1"})
+
+    result = reconciler.run(db, trigger="manual", fqn_keys=["c.s.t"], provider=provider)
+
+    assert result.mode == "plan" and provider.statements.executed == []
+    assert {i.status for i in result.items} == {"planned"}
+
+
+def test_a_queued_object_outside_the_catalog_list_is_dropped_untouched(db, uc, provider, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", ["c"])
+    uc.add("prod")
+    uc.add("prod.s.t", {"stray": "1"})
+    uc.add("c.s.t")
+    desired(db, "prod.s.t", {"a": "1"})
+    desired(db, "c.s.t", {"a": "1"})
+    reconciler.enqueue(db, ["prod.s.t", "c.s.t"])
+    db.commit()
+
+    result = reconciler.drain_queue(db, provider=provider)
+
+    executed = " ".join(provider.statements.executed)
+    assert "`prod`" not in executed and "`c`.`s`.`t`" in executed
+    assert "prod" in result.skipped_catalogs
+    assert all(not k.startswith("prod") for batch in uc.refreshed for k in batch)
+    assert queue(db) == {}
+
+
+def test_a_sweep_leaves_catalogs_outside_the_list_alone(db, uc, provider, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", ["c*"])
+    uc.add("prod")
+    uc.add("prod.s.t", {"stray": "1"})
+    desired(db, "prod.s.t", {"a": "1"})
+
+    result = reconciler.run(db, trigger="manual", catalogs=["c", "prod"], provider=provider)
+
+    assert "prod" in result.skipped_catalogs
+    assert all("prod" not in s for s in provider.statements.executed)
+    assert all("prod" not in batch for batch in uc.swept)
+
+
+def test_a_cleared_description_counts_toward_the_removal_limit(db, uc, provider, monkeypatch, alerts):
+    monkeypatch.setattr(settings, "METADATA_MAX_REMOVALS_PER_RUN", 0)
+    uc.add("c.s.t", comment="Orders placed online")
+    desired(db, "c.s.t")
+
+    result = reconciler.run(db, trigger="manual", fqn_keys=["c.s.t"], provider=provider)
+
+    assert result.status == "paused" and provider.statements.executed == []
+    assert result.removals_planned == 1
 
 
 def test_ignore_policy_leaves_new_objects_unmanaged(db, uc, provider, monkeypatch):

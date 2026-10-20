@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.db.metadata import OBJECT_ACTIVE, MetadataObjectModel, MetadataObservedModel, MetadataTagModel
 from app.services.metadata import authz, environments, observed, policy
+from app.services.metadata import scope as managed
 from app.services.metadata.types import (
     COLUMN_SEPARATOR,
     Actor,
@@ -168,16 +169,18 @@ def _editable_clause(fqn, name_parts: Sequence, scope):
     return or_(*terms) if terms else false()
 
 
-def editable_predicate(scope) -> Callable[[str], bool]:
+def editable_predicate(editable_scope) -> Callable[[str], bool]:
     """The same rule as the SQL filter, for one fqn_key."""
-    if scope.all:
-        return lambda _key: True
-    owned = _owned_terms(scope)
-    globs = [[_glob_regex(p) for p in parts] for parts in _scope_globs(scope)]
-    envs = set(_norm_keys(getattr(scope, "environments", None) or []))
+    if editable_scope.all:
+        return lambda key: managed.manages(managed.catalog_of(key))
+    owned = _owned_terms(editable_scope)
+    globs = [[_glob_regex(p) for p in parts] for parts in _scope_globs(editable_scope)]
+    envs = set(_norm_keys(getattr(editable_scope, "environments", None) or []))
 
     def editable(fqn_key: str) -> bool:
         key = fqn_key.lower()
+        if not managed.manages(managed.catalog_of(key)):
+            return False
         if envs and (environments.environment_of(key.split(".", 1)[0]) or "").lower() not in envs:
             return False
         for o, overridden in owned:
@@ -220,6 +223,10 @@ def _common_where(ctx: _Ctx, *, fqn, catalog_key, name_parts: Sequence, stype, c
         where.append(_editable_clause(fqn, name_parts, ctx.scope))
         if ctx.scope_catalogs is not None:
             where.append(catalog_key.in_(ctx.scope_catalogs))
+    if q.editable_only:
+        catalogs_managed = managed.patterns()
+        if catalogs_managed and "*" not in catalogs_managed:
+            where.append(or_(*[_glob_clause(name_parts[:1], [p]) for p in catalogs_managed]))
     return where
 
 
