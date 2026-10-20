@@ -283,7 +283,7 @@ def test_import_prune_deletes_seeded_rows_and_tombstones(db_session):
     # A full export keeps 'workspace_access'; everything else must be pruned.
     kept = WorkflowService.get_by_key(db_session, "workspace_access")
     assert kept is not None and kept.source == "seed"
-    other = WorkflowService.get_by_key(db_session, "tag_change")
+    other = WorkflowService.get_by_key(db_session, "metadata_change")
     assert other is not None  # a different seeded catalog workflow
 
     bundle = {
@@ -295,13 +295,13 @@ def test_import_prune_deletes_seeded_rows_and_tombstones(db_session):
     report = WorkflowService.import_bundle(
         db_session, bundle, as_status="published", overwrite=True, prune=True,
     )
-    assert "tag_change" in report["pruned"]
-    assert WorkflowService.get_by_key(db_session, "tag_change") is None
+    assert "metadata_change" in report["pruned"]
+    assert WorkflowService.get_by_key(db_session, "metadata_change") is None
     assert WorkflowService.get_by_key(db_session, "workspace_access") is not None
 
     # Re-running the seeders must NOT resurrect the pruned catalog workflow.
     WorkflowService.seed_specs_from_catalog(db_session)
-    assert WorkflowService.get_by_key(db_session, "tag_change") is None
+    assert WorkflowService.get_by_key(db_session, "metadata_change") is None
 
 
 def test_import_prune_guarded_by_nonempty_bundle(db_session):

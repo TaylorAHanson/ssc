@@ -37,3 +37,15 @@ from app.db.rbac import (
     RbacRuleModel,
     RbacSheetModel,
 )
+from app.db.metadata import (
+    MetadataChangeSetModel,
+    MetadataEventModel,
+    MetadataObjectModel,
+    MetadataObservedModel,
+    MetadataPrincipalModel,
+    MetadataReconcileItemModel,
+    MetadataReconcileQueueModel,
+    MetadataReconcileRunModel,
+    MetadataSyncStateModel,
+    MetadataTagModel,
+)

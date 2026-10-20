@@ -84,6 +84,33 @@ def _add_index(engine: Engine, index_name: str, table: str, columns: list[str]) 
     logger.info("Migration: created index %s on %s(%s)", index_name, table, cols)
 
 
+def _make_metadata_idempotency_unique(engine: Engine) -> None:
+    """Replace the plain (actor, idempotency_key) index on metadata_change_sets with a unique one.
+
+    Two identical submits racing each other could otherwise both file an approval
+    request. Existing duplicates keep the old index in place and log a warning.
+    """
+    table = "metadata_change_sets"
+    insp = inspect(engine)
+    if table not in set(insp.get_table_names()):
+        return
+    existing = {ix.get("name") for ix in insp.get_indexes(table)}
+    if "uq_metadata_change_sets_idempotency" not in existing:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS uq_metadata_change_sets_idempotency "
+                    f"ON {table} (actor, idempotency_key)"
+                ))
+        except Exception as e:  # noqa: BLE001 - duplicates already stored; keep the plain index
+            logger.warning("Migration: couldn't make metadata idempotency keys unique (duplicates?): %s", e)
+            return
+        logger.info("Migration: created unique index uq_metadata_change_sets_idempotency")
+    if "ix_metadata_change_sets_idempotency" in existing:
+        with engine.begin() as conn:
+            conn.execute(text("DROP INDEX IF EXISTS ix_metadata_change_sets_idempotency"))
+
+
 def _backfill_request_state_summary(engine: Engine) -> None:
     """Populate ``requests.state_summary`` for existing Sentinel rows (Postgres).
 
@@ -273,6 +300,13 @@ def run_startup_migrations(engine: Engine) -> None:
         _add_column(engine, "preview_features", "origin", "VARCHAR")
         _add_column(engine, "preview_features", "created_by", "VARCHAR")
         _add_column(engine, "preview_features", "replaced_by", "VARCHAR")
+        # Metadata Manager (ADR-0006): run items keep what each statement did.
+        _add_column(engine, "metadata_reconcile_items", "securable_type", "VARCHAR")
+        _add_column(engine, "metadata_reconcile_items", "removals", "INTEGER DEFAULT 0")
+        _add_column(engine, "metadata_reconcile_items", "payload", "JSON")
+        _add_index(engine, "ix_metadata_objects_securable_type", "metadata_objects", ["securable_type"])
+        _add_index(engine, "ix_metadata_observed_securable_type", "metadata_observed", ["securable_type"])
+        _make_metadata_idempotency_unique(engine)
         _prune_orphaned_workflow_children(engine)
     except Exception as e:  # noqa: BLE001 - never block startup on a migration
         logger.warning("Startup migration step failed (continuing): %s", e)
@@ -291,6 +325,10 @@ DEFAULT_CDF_TABLES: tuple[str, ...] = (
     "rbac_rules",
     "rbac_change_sets",
     "rbac_rule_events",
+    "metadata_objects",
+    "metadata_tags",
+    "metadata_change_sets",
+    "metadata_events",
 )
 
 _PG_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -398,3 +436,61 @@ def apply_replica_identity_full(
             schema, result["missing"],
         )
     return result
+
+
+# --- Metadata Manager search indexes (ADR-0006 D10) -------------------------
+
+# Trigram GIN indexes for substring search on names and descriptions. Postgres
+# only; SQLite search falls back to LIKE over the model's B-tree indexes.
+_METADATA_TRGM_INDEXES: tuple[tuple[str, str, str], ...] = (
+    ("ix_metadata_objects_fqn_trgm", "metadata_objects", "fqn_key"),
+    ("ix_metadata_objects_comment_trgm", "metadata_objects", "comment"),
+    # Search also matches Unity Catalog's comment and unmanaged objects from the snapshot.
+    ("ix_metadata_observed_fqn_trgm", "metadata_observed", "fqn_key"),
+    ("ix_metadata_observed_comment_trgm", "metadata_observed", "comment"),
+)
+
+
+def apply_metadata_search_indexes(engine: Engine, schema: str | None = None) -> bool:
+    """Create ``pg_trgm`` and the trigram indexes behind Metadata Manager search.
+
+    Returns True when every index exists. Never raises: without the extension
+    (it needs CREATE on the database) search still works through ILIKE, only
+    slower, and the next boot tries again.
+    """
+    if engine.dialect.name != "postgresql":
+        return False
+    from app.db.session import get_db_schema
+
+    schema = schema or get_db_schema()
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+    except Exception as e:  # noqa: BLE001 - never block startup
+        logger.warning("Metadata search: could not create the pg_trgm extension (search uses ILIKE): %s", e)
+    try:
+        with engine.connect() as conn:
+            ext_schema = conn.execute(text(
+                "SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace "
+                "WHERE e.extname = 'pg_trgm'"
+            )).scalar()
+    except Exception as e:  # noqa: BLE001 - never block startup
+        logger.warning("Metadata search: could not look up pg_trgm (search uses ILIKE): %s", e)
+        return False
+    if not ext_schema or not _PG_IDENT_RE.match(ext_schema):
+        logger.warning("Metadata search: pg_trgm is not installed; search uses ILIKE without trigram indexes.")
+        return False
+
+    ok = True
+    for name, table, column in _METADATA_TRGM_INDEXES:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                conn.execute(text(
+                    f'CREATE INDEX IF NOT EXISTS "{name}" ON "{schema}"."{table}" '
+                    f'USING gin ("{column}" "{ext_schema}".gin_trgm_ops)'
+                ))
+        except Exception as e:  # noqa: BLE001 - never block startup
+            ok = False
+            logger.warning("Metadata search: could not create index %s (continuing): %s", name, e)
+    return ok

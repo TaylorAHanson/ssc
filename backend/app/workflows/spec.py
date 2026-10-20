@@ -19,6 +19,7 @@ underlying fact/event to that shape.
 Provision steps run their tool through the shared ``ToolExecutor`` so they are
 OPA-gated, idempotent (per request + step), and audited.
 """
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TypedDict, Union
@@ -68,11 +69,16 @@ class Gate:
     #   "access_rule_type"   -> the approver group set in Admin -> Settings for
     #                           the request's type of access rule
     #                           (``approver_rule_type_from``); none when unset.
+    #   "metadata_owner"     -> for a metadata change: the owner groups of the
+    #                           objects in the change prepared on the request
+    #                           (``approver_role`` "owner"), or the governance
+    #                           approver group setting ("governance").
     # The gate node resolves this to a list of approver identifiers and surfaces
     # them in the interrupt payload (``approvers``/``data_owners``). Takes
     # precedence over ``approvers_from`` when set.
     approver_source: Optional[str] = None
     approver_group: Optional[str] = None
+    approver_role: str = "owner"
     approver_assets_from: Optional[Callable[[Dict[str, Any]], Any]] = None
     approver_fallback_to_owner: bool = True
     approver_rule_type_from: Optional[Callable[[Dict[str, Any]], Any]] = None
@@ -203,7 +209,7 @@ def _gate_node(gate: Gate):
         # Terramate gate can pass along terramate_request_id if already written into context
         if gate.type in ("terramate", "terramate_status") and "terramate_request_id" in ctx:
             payload["terramate_request_id"] = ctx["terramate_request_id"]
-        approvers = await _resolve_gate_approvers(gate, ctx)
+        approvers = await _resolve_gate_approvers(gate, ctx, request_id=state["request_id"])
         if approvers:
             # Surface under both keys: ``data_owners`` keeps parity with the old
             # dedicated data-access graph; ``approvers`` is the generic name.
@@ -227,18 +233,30 @@ def _gate_node(gate: Gate):
     return node
 
 
-async def _resolve_gate_approvers(gate: "Gate", ctx: Dict[str, Any]) -> List[str]:
+async def _resolve_gate_approvers(
+    gate: "Gate", ctx: Dict[str, Any], *, request_id: Optional[str] = None,
+) -> List[str]:
     """Resolve a gate's approver identifier(s) to a flat list of strings.
 
     Precedence: the declarative ``approver_source`` (``group`` literal,
-    ``approver_group_tag`` UC-tag lookup or ``access_rule_type`` setting) wins;
-    otherwise fall back to the ``approvers_from`` expression for backward
-    compatibility. Group/role names and owner emails are both returned as-is —
-    the approval layer decides how to route each (email -> assignee, otherwise
-    -> role/group).
+    ``approver_group_tag`` UC-tag lookup, ``access_rule_type`` setting or
+    ``metadata_owner``) wins; otherwise fall back to the ``approvers_from``
+    expression for backward compatibility. Group/role names and owner emails are
+    both returned as-is — the approval layer decides how to route each (email ->
+    assignee, otherwise -> role/group).
     """
     if gate.approver_source == "group":
         return [gate.approver_group] if gate.approver_group else []
+    if gate.approver_source == "metadata_owner":
+        if gate.approver_role == "governance":
+            from app.core.config import settings
+
+            group = (getattr(settings, "METADATA_GOVERNANCE_APPROVER_GROUP", "") or "").strip()
+            return [group] if group else []
+        # Read from the change prepared on the request row, never from context a requester supplied.
+        from app.services.metadata.requests import owner_approver_groups_for
+
+        return await asyncio.to_thread(owner_approver_groups_for, request_id) if request_id else []
     if gate.approver_source == "access_rule_type":
         from app.services.rbac.approvers import approver_group
 

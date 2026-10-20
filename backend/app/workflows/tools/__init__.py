@@ -62,15 +62,11 @@ from app.workflows.tools.github import (
     GithubCreateTeamInput,
     GithubGrantTeamRepoInput,
     GithubRepoInput,
-    OpenTagChangePrInput,
-    _parse_submitted_at,
-    _tag_change_pr_body,
     github_add_team_members,
     github_create_repo,
     github_create_team,
     github_grant_team_repo,
     github_set_permissions,
-    open_tag_change_pr,
 )
 from app.workflows.tools.infra import (
     CreateSpInput,
@@ -107,6 +103,10 @@ from app.workflows.tools.preview_features import (
     set_preview_setting,
     set_preview_target_status,
     verify_preview_setting,
+)
+from app.workflows.tools.metadata import (
+    prepare_metadata_change,
+    record_metadata_change,
 )
 from app.workflows.tools.rbac import (
     RENAMED_TOOLS as _RBAC_RENAMED_TOOLS,
@@ -157,15 +157,11 @@ __all__ = [
     "GithubCreateTeamInput",
     "GithubGrantTeamRepoInput",
     "GithubRepoInput",
-    "OpenTagChangePrInput",
-    "_parse_submitted_at",
-    "_tag_change_pr_body",
     "github_add_team_members",
     "github_create_repo",
     "github_create_team",
     "github_grant_team_repo",
     "github_set_permissions",
-    "open_tag_change_pr",
     # Membership & Notifications
     "GroupMembershipInput",
     "NotifyInput",
@@ -179,6 +175,9 @@ __all__ = [
     # Access Rules requests
     "rbac_prepare_access_change",
     "record_access_change",
+    # Metadata change requests
+    "prepare_metadata_change",
+    "record_metadata_change",
     # Former tool names (old -> current), resolved by the tool registry
     "RENAMED_TOOLS",
     # Sentinel

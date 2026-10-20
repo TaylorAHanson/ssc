@@ -2,7 +2,7 @@
 API v1 routes.
 """
 from fastapi import APIRouter
-from app.api.v1 import requests, agent, agent_polls, approvals, content, delegations, branding, callbacks, roles, reports, github, training, allowlist, data_assets, data_contracts, odps, system, tags, context_catalog, feedback, workflows, tool_registry, skills, settings, governance, legacy_dashboards, preview_features, rbac
+from app.api.v1 import requests, agent, agent_polls, approvals, content, delegations, branding, callbacks, roles, reports, github, training, allowlist, data_assets, data_contracts, odps, system, context_catalog, feedback, workflows, tool_registry, skills, settings, governance, legacy_dashboards, preview_features, rbac, metadata
 
 router = APIRouter()
 
@@ -27,7 +27,6 @@ router.include_router(data_assets.router, prefix="/data-assets", tags=["data-ass
 router.include_router(legacy_dashboards.router, prefix="/legacy-dashboards", tags=["legacy-dashboards"])
 router.include_router(data_contracts.router, prefix="/data-contracts", tags=["data-contracts"])
 router.include_router(odps.router, prefix="/odps", tags=["odps"])
-router.include_router(tags.router, prefix="/tags", tags=["tags"])
 router.include_router(context_catalog.router, prefix="/context", tags=["context-catalog"])
 router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 router.include_router(workflows.router, prefix="/workflows", tags=["workflows"])
@@ -37,6 +36,7 @@ router.include_router(settings.router, prefix="/settings", tags=["settings"])
 router.include_router(governance.router, prefix="/governance", tags=["governance"])
 router.include_router(preview_features.router, prefix="/preview-features", tags=["preview-features"])
 router.include_router(rbac.router, prefix="/rbac", tags=["rbac"])
+router.include_router(metadata.router, prefix="/metadata", tags=["metadata"])
 # Dev/Test routes
 from app.api.v1 import dev
 router.include_router(dev.router, prefix="/dev", tags=["dev"])

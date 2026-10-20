@@ -8,7 +8,7 @@ policy keys on silently changes who sees what, so the preview flags it.
 """
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -77,11 +77,12 @@ def _references(policy) -> List[TagReference]:
     return refs
 
 
-def fetch_abac_references(provider, tables: List[str]) -> AbacReferences:
+def fetch_abac_references(provider, tables: List[str], *, timeout: Optional[float] = None) -> AbacReferences:
     """Tag conditions of every ABAC policy that applies to each object (incl. inherited).
 
     ``tables`` may also name catalogs and schemas; for those it's the policies
     defined on them or above, whose table conditions see their (inherited) tags.
+    Objects not read within ``timeout`` seconds are reported as unchecked.
     """
     result = AbacReferences()
     unique = sorted({_normalize_fqn(t): t for t in tables}.items())
@@ -99,12 +100,19 @@ def fetch_abac_references(provider, tables: List[str]) -> AbacReferences:
         return norm, name, [r for p in policies for r in _references(p)]
 
     if checked:
-        with ThreadPoolExecutor(max_workers=min(_WORKERS, len(checked))) as pool:
-            for norm, name, refs in pool.map(load, checked):
-                if refs is None:
-                    result.unchecked.append(name)
-                elif refs:
-                    result.by_table[norm] = refs
+        pool = ThreadPoolExecutor(max_workers=min(_WORKERS, len(checked)))
+        futures = [pool.submit(load, item) for item in checked]
+        _, pending = wait(futures, timeout=timeout)
+        pool.shutdown(wait=False, cancel_futures=True)
+        for (_, name), future in zip(checked, futures):
+            if future in pending:
+                result.unchecked.append(name)
+                continue
+            norm, name, refs = future.result()
+            if refs is None:
+                result.unchecked.append(name)
+            elif refs:
+                result.by_table[norm] = refs
     return result
 
 

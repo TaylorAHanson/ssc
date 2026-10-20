@@ -465,27 +465,157 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "OmniGuard scans every target workspace for compute/apps/jobs, but data certification is Unity Catalog (metastore) scoped, so it runs ONCE against a single workspace. Enter the NAME of the target workspace that should run it, or leave blank to use the app's own home workspace. This workspace's service principal is ALSO the governance identity for other metastore-global reads — notably the data-asset cache sync that powers the data catalog — so it must have BROWSE on the scanned catalogs and CAN USE on the SQL warehouse. The DQ table + ADOC schema always come from the settings above."},
 
     # --- Metadata Manager -----------------------------------------------
-    {"group": "Metadata Manager", "key": "GOVERNANCE_TAGS_LOCAL_MODE", "label": "Local execution mode",
-     "type": "bool",
-     "help": "When enabled, tag and description changes are planned, validated, risk-assessed, and applied directly to "
-             "Unity Catalog from the app without opening a GitHub PR or requiring GitHub Actions. "
-             "Useful when GitHub Actions / network connectivity is blocked or unavailable."},
-    {"group": "Metadata Manager", "key": "GOVERNANCE_TAGS_REPO", "label": "Tag governance repo",
-     "type": "string",
-     "help": "Repository the app opens tag-change PRs against (GitOps mode) — 'owner/repo', or a bare name "
-             "resolved against the GitHub org. Blank in GitOps mode = tag changes are rejected at submit."},
-    {"group": "Metadata Manager", "key": "GOVERNANCE_TAGS_BASE_BRANCH", "label": "Base branch",
-     "type": "string",
-     "help": "Branch this deployment's PRs target in GitOps mode. The governance repo keeps one long-lived "
-             "branch per environment (e.g. dev / test / stage / prod) and merging is what applies the tags."},
-    {"group": "Metadata Manager", "key": "GOVERNANCE_TAGS_PATH", "label": "Migrations path",
-     "type": "string",
-     "help": "Directory in the repo where generated .sql migrations are committed. The repo's validation "
-             "workflow only looks at files under this path."},
-    {"group": "Metadata Manager", "key": "GOVERNANCE_TAGS_LEDGER_TABLE", "label": "Apply ledger table",
-     "type": "string",
-     "help": "Fully-qualified Delta table (catalog.schema.table) the apply job writes each migration's "
-             "outcome to. The app reads/updates it to track and verify tag changes. Blank = unverified."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_RECONCILE_MODE",
+     "label": "Reconcile mode", "type": "select", "options": ["off", "plan", "enforce"],
+     "requires": ["features.metadata_v2"],
+     "help": "What the reconciler does with the difference between the desired tags and descriptions and what "
+             "Unity Catalog holds. Plan (default) works out every statement and shows it on the Drift and Runs "
+             "tabs without changing anything. Enforce applies them, including removing tags that aren't in the "
+             "desired state. Off stops it entirely. Review the drift report in plan before switching to enforce."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_RECONCILE_CRON",
+     "label": "Full sweep schedule", "type": "cron", "requires": ["features.metadata_v2"],
+     "help": "When the whole snapshot is re-read from information_schema and every managed object is "
+             "reconciled (5-field cron, UTC). Saved changes don't wait for this: they are applied within a poll "
+             "cycle. Leave BLANK to run sweeps only with Run now."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_RECONCILE_CATALOGS",
+     "label": "Catalogs to reconcile", "type": "string_list", "add_label": "Add catalog",
+     "requires": ["features.metadata_v2"],
+     "help": "The only catalogs this deployment reads and applies. Blank = every governed catalog (Data Catalog "
+             "settings). On a dev or stage deployment, list sandbox catalogs here so it never touches catalogs "
+             "the production deployment manages."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_NEW_OBJECT_POLL_SECONDS",
+     "label": "New-table check interval (seconds)", "type": "int", "min": 0,
+     "requires": ["features.metadata_v2"],
+     "help": "How often newly created or altered tables and views are looked for, so tags declared before a "
+             "table existed are applied soon after it's created. 0 = only the sweep and explicit reconcile "
+             "calls pick them up."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_NEW_OBJECT_POLICY",
+     "label": "New objects with no desired state", "type": "select", "options": ["adopt", "ignore"],
+     "requires": ["features.metadata_v2"],
+     "help": "Adopt (default) = a new table's create-time tags and description become its desired state, so tags "
+             "a pipeline sets in CREATE ... TAGS are kept. Ignore = the table stays unmanaged until someone edits "
+             "it here."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_EXEMPT_KEYS",
+     "label": "Exempt tag keys", "type": "string_list", "add_label": "Add key",
+     "requires": ["features.metadata_v2"],
+     "help": "Keys the reconciler never sets or removes and that edits can't change. Keep "
+             "system.certification_status here: OmniGuard owns it."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_MAX_REMOVALS_PER_RUN",
+     "label": "Max tag removals per run", "type": "int", "min": 1,
+     "requires": ["features.metadata_v2"],
+     "help": "A run that would remove more tags than this applies nothing, is marked paused on the Runs tab, and "
+             "alerts governance. Guards against an import or adopt gone wrong stripping tags in bulk."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_APPLY_CONCURRENCY",
+     "label": "Statements in parallel", "type": "int", "min": 1, "max": 32,
+     "requires": ["features.metadata_v2"],
+     "help": "How many tag and description statements the reconciler runs at once, each on a different table. "
+             "Higher applies large changes faster but puts more load on the SQL warehouse."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_ORPHAN_RETENTION_DAYS",
+     "label": "Keep dropped objects (days)", "type": "int", "min": 1,
+     "requires": ["features.metadata_v2"],
+     "help": "Desired state for a dropped table is kept this long, and re-applied if the table is recreated. "
+             "After that it is removed (still visible in History)."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_CLAIM_ENABLED",
+     "label": "Claim catalogs", "type": "bool", "requires": ["features.metadata_v2"],
+     "help": "On (default) = this deployment marks each catalog it enforces with the claim tag below and skips "
+             "catalogs another deployment has claimed, so two deployments never undo each other's changes."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_CLAIM_TAG_KEY",
+     "label": "Claim tag key", "type": "string", "requires": ["features.metadata_v2"],
+     "help": "Catalog tag naming the deployment that enforces the catalog. Always exempt from enforcement."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_INSTANCE_ID",
+     "label": "Instance id", "type": "string", "requires": ["features.metadata_v2"],
+     "help": "The value this deployment writes in the claim tag. Blank = the Databricks app name. Give every "
+             "deployment a different value."},
+    {"group": "Metadata Manager", "section": "Permissions", "key": "METADATA_OWNER_TAG_KEY",
+     "label": "Owner tag key", "type": "string", "requires": ["features.metadata_v2"],
+     "help": "Members of the group named by this tag may edit the object's tags and description. When the object "
+             "has no such tag, its table's, schema's or catalog's applies. Several groups may be listed, "
+             "comma-separated. Changing the tag itself always needs approval."},
+    {"group": "Metadata Manager", "section": "Permissions", "key": "METADATA_UC_OWNER_IS_AUTHORITY",
+     "label": "Unity Catalog owner can edit", "type": "bool", "requires": ["features.metadata_v2"],
+     "help": "On = the object's owner in Unity Catalog (a user or group) may also edit it."},
+    {"group": "Metadata Manager", "section": "Permissions", "key": "METADATA_EDITOR_ROLES",
+     "label": "Editor roles", "type": "string_list", "add_label": "Add role",
+     "requires": ["features.metadata_v2"],
+     "help": "App roles, besides Platform Admin, that may edit every object. Their sensitive changes still need "
+             "approval."},
+    {"group": "Metadata Manager", "section": "Permissions", "key": "METADATA_BROWSE_ROLES",
+     "label": "Browse roles", "type": "string_list", "add_label": "Add role",
+     "requires": ["features.metadata_v2"],
+     "help": "App roles that may search and view tags and descriptions. Blank = every signed-in user, like the "
+             "data catalog."},
+    {"group": "Metadata Manager", "section": "Permissions", "key": "METADATA_GOVERNANCE_APPROVER_GROUP",
+     "label": "Governance approver group", "type": "string", "requires": ["features.metadata_v2"],
+     "help": "Exact display name of the Databricks group that approves sensitive changes and changes to objects "
+             "with no owner tag. Blank = Platform Admins only."},
+    {"group": "Metadata Manager", "section": "Tag policy", "key": "METADATA_KEY_MODE",
+     "label": "Allowed keys", "type": "select", "options": ["open", "known_only"],
+     "requires": ["features.metadata_v2"],
+     "help": "Open (default) = any key may be set. Known only = only keys listed below."},
+    {"group": "Metadata Manager", "section": "Tag policy", "key": "METADATA_KEY_POLICIES",
+     "label": "Key policies", "type": "collection", "unique": "key", "add_label": "Add key",
+     "requires": ["features.metadata_v2"],
+     "help": "Rules per tag key, checked on every preview and save. Applies to: comma-separated catalog, schema, "
+             "table, column (blank = all). Allowed values: comma-separated (blank = any). Pattern: a regular "
+             "expression the whole value must match. Editor groups: comma-separated; when set, only those groups "
+             "and admins may change the key. Sensitive: every change to the key needs approval. Required: "
+             "objects of the listed kinds are flagged when the key is missing.",
+     "columns": [
+         {"key": "key", "label": "Key", "type": "string", "required": True, "placeholder": "classification"},
+         {"key": "applies_to", "label": "Applies to", "type": "string", "placeholder": "table, column"},
+         {"key": "allowed_values", "label": "Allowed values", "type": "string", "placeholder": "public, internal"},
+         {"key": "pattern", "label": "Pattern", "type": "string", "placeholder": "^[a-z_]+$"},
+         {"key": "editor_groups", "label": "Editor groups", "type": "string", "placeholder": "data-stewards"},
+         {"key": "sensitive", "label": "Sensitive", "type": "bool"},
+         {"key": "required", "label": "Required", "type": "bool"},
+         {"key": "description", "label": "Description", "type": "string"},
+     ]},
+    {"group": "Metadata Manager", "section": "Tag policy", "key": "METADATA_CLASSIFICATION_KEY",
+     "label": "Classification key", "type": "string", "requires": ["features.metadata_v2"],
+     "help": "Lowering or removing this key's value needs approval. Blank = no downgrade check."},
+    {"group": "Metadata Manager", "section": "Tag policy", "key": "METADATA_CLASSIFICATION_LEVELS",
+     "label": "Classification levels", "type": "string_list", "add_label": "Add level",
+     "requires": ["features.metadata_v2"],
+     "help": "The classification values from least to most sensitive. Moving a value down this list is a "
+             "downgrade."},
+    {"group": "Metadata Manager", "section": "Tag policy", "key": "METADATA_PII_KEYS",
+     "label": "PII flag keys", "type": "string_list", "add_label": "Add key",
+     "requires": ["features.metadata_v2"],
+     "help": "Removing one of these tags, or setting it to false, no or 0, needs approval."},
+    {"group": "Metadata Manager", "section": "Environments", "key": "METADATA_ENVIRONMENTS",
+     "label": "Environments", "type": "collection", "unique": "key", "add_label": "Add environment",
+     "requires": ["features.metadata_v2"],
+     "help": "Which catalogs belong to which environment. A catalog belongs to the first row that lists it in "
+             "Catalogs (comma-separated) or whose pattern matches it. {base} in the pattern also finds the same "
+             "object in other environments, so a change can be copied or promoted (sales_dev under {base}_dev "
+             "becomes sales_prd under {base}_prd). Approval: sensitive = only sensitive changes need approval; "
+             "all = every change in this environment does.",
+     "columns": [
+         {"key": "key", "label": "Key", "type": "string", "required": True, "placeholder": "dev"},
+         {"key": "catalog_pattern", "label": "Catalog pattern", "type": "string", "placeholder": "{base}_dev"},
+         {"key": "catalogs", "label": "Catalogs", "type": "string", "placeholder": "sandbox, scratch"},
+         {"key": "approval", "label": "Approval", "type": "select", "required": True,
+          "options": ["sensitive", "all"]},
+     ]},
+    {"group": "Metadata Manager", "section": "Limits", "key": "METADATA_MAX_OBJECTS_PER_CHANGE",
+     "label": "Max objects per change", "type": "int", "min": 1, "max": 100000,
+     "requires": ["features.metadata_v2"],
+     "help": "The most objects (tables, columns, schemas, catalogs) one change can touch. A system principal's "
+             "own limit can be higher."},
+    {"group": "Metadata Manager", "section": "Tag policy", "key": "METADATA_ABAC_CHECK",
+     "label": "Check access policies in previews", "type": "bool",
+     "requires": ["features.metadata_v2"],
+     "help": "A preview reads the column masks and row filters on the changed objects and warns when a tag "
+             "they key on changes, since that changes who can see the data. Needs READ METADATA for the "
+             "governance service principal; turn off if previews are slow or it can't read them."},
+    {"group": "Metadata Manager", "section": "Limits", "key": "METADATA_MIN_REASON_LENGTH",
+     "label": "Minimum reason length (direct changes)", "type": "int", "min": 0,
+     "requires": ["features.metadata_v2"],
+     "help": "Characters required in the reason for a change saved directly. 0 = optional."},
+    {"group": "Metadata Manager", "section": "Limits", "key": "METADATA_MIN_JUSTIFICATION_LENGTH",
+     "label": "Minimum justification length (approvals)", "type": "int", "min": 0,
+     "requires": ["features.metadata_v2"],
+     "help": "Characters required in the justification of a change that needs approval."},
 
     # ===================================================================
     # Control Tower
@@ -780,7 +910,8 @@ READONLY_FIELDS: List[Dict[str, Any]] = [
     {"group": "Environment", "key": "LAKEBASE_CDF_TABLES", "label": "Lakebase CDF tables",
      "help": "Tables given REPLICA IDENTITY FULL at startup so a Lakebase Change Data Feed "
              "on the Postgres schema captures them. \"none\" = off; \"default\" = requests, "
-             "events, approvals, enforcement audit and the access-rule ledger."},
+             "events, approvals, enforcement audit, the access-rule ledger and the Metadata "
+             "Manager's desired tags, descriptions and change log."},
     {"group": "Databricks", "key": "DATABRICKS_WORKSPACE_URL", "label": "Workspace URL"},
     {"group": "Databricks", "key": "DATABRICKS_HOST", "label": "Databricks host"},
     {"group": "Databricks", "key": "DATABRICKS_WAREHOUSE_ID", "label": "SQL warehouse id"},
@@ -822,6 +953,12 @@ RETIRED_KEYS = frozenset({
     "yaml:tools.ask_your_data.default_genie_space_id",
     # Replaced by the RBAC_ALLOWED_PRIVILEGES allow list.
     "RBAC_HARD_DENIED_PRIVILEGES",
+    # GitOps tag changes, replaced by the Metadata Manager's desired-state tables (ADR-0006).
+    "GOVERNANCE_TAGS_LOCAL_MODE",
+    "GOVERNANCE_TAGS_REPO",
+    "GOVERNANCE_TAGS_BASE_BRANCH",
+    "GOVERNANCE_TAGS_PATH",
+    "GOVERNANCE_TAGS_LEDGER_TABLE",
 })
 
 
@@ -978,10 +1115,13 @@ CAPABILITIES: List[Dict[str, Any]] = [
          {"key": "certification", "label": "Show Data Certification (ODCS)"},
          {"key": "odps", "label": "Show Data Products (ODPS)"},
          {"key": "allowlist", "label": "Show Allowlist"},
-         {"key": "tag_management", "label": "Show Metadata Manager"},
      ]},
     {"id": "sentinel", "section": "Watch Tower", "label": "OmniGuard", "feature": "sentinel", "tabs": ["sentinel"]},
     {"id": "rbac", "section": "Watch Tower", "label": "Access Rules", "feature": "rbac", "tabs": ["access_rules"]},
+    {"id": "metadata_v2", "section": "Watch Tower", "label": "Metadata Manager", "feature": "metadata_v2",
+     "tabs": [{"key": "tag_management", "label": "Show Metadata Manager"}],
+     "description": "Desired tags and descriptions kept in the app's database, applied to Unity Catalog by the "
+                    "reconciler, with owner-based editing, the metadata API and its agent and MCP tools."},
 
     # --- Control Tower --------------------------------------------------
     {"id": "admin", "section": "Control Tower", "label": "Admin", "tabs": ["admin"],
@@ -1017,7 +1157,12 @@ CAPABILITY_SECTIONS: List[str] = [
 # description (safe for flags added later).
 FEATURE_DESCRIPTIONS: Dict[str, str] = {
     "core": "Base platform capabilities. Keep this on — turning it off disables the core app experience.",
-    "governance": "The data governance pages: data certification (ODCS), data products (ODPS), the allowlist, and the metadata manager (tags and descriptions).",
+    "governance": "The data governance pages: data certification (ODCS), data products (ODPS) and the allowlist.",
+    "metadata_v2": (
+        "Metadata Manager: desired tags and descriptions kept in the app's database and applied to Unity Catalog "
+        "by the reconciler, with owner-based editing, approvals for sensitive changes, the metadata API and its "
+        "agent and MCP tools. Off = no reconciler runs and the API refuses requests."
+    ),
     "data_discovery": "Browse and search the synced Unity Catalog data catalog. Also enables the background data-asset sync.",
     "calendar": "The event calendar page and its background calendar sync.",
     "sentinel": (
@@ -1376,6 +1521,7 @@ _CRON_SCHEDULE_TARGETS: Dict[str, tuple] = {
     "CONTRACT_SYNC_CRON": ("app.workers.tasks.sync_contracts", "_next_contract_sync_time"),
     "PREVIEW_FEATURE_SYNC_CRON": ("app.services.preview_features.sync", "_next_preview_sync_time"),
     "RBAC_EXPORT_CRON": ("app.services.rbac.csv_export", "_next_export_time"),
+    "METADATA_RECONCILE_CRON": ("app.services.metadata.reconciler", "_next_sweep_time"),
 }
 
 

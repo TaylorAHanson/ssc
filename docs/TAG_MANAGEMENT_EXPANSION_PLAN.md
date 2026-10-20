@@ -1,5 +1,10 @@
 # Tag Management Expansion — Status & Plan
 
+> **Superseded (2026-10-20)** by [ADR-0006](adr/0006-metadata-desired-state.md). The
+> Metadata Manager now keeps desired tags and descriptions in Lakebase, a reconciler
+> applies them to Unity Catalog, and GitOps mode and the live-read screens described
+> below are removed. This document is kept for history only.
+
 > **Status (2026-10-01):** Phases 0–2 and their follow-ups are done (admin
 > tagging of any table, view or column), except the GitOps-mode items, which
 > are deferred. Phase 3 (self-service requests through the agent) is not

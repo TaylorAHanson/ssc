@@ -118,6 +118,9 @@ def validate_spec_dict(data: Any) -> None:
     stages = data.get("stages", [])
     if not isinstance(stages, list):
         raise SpecError("spec.stages must be a list")
+    if "filed_by" in data and data["filed_by"] is not None and (
+            not isinstance(data["filed_by"], str) or not data["filed_by"].strip()):
+        raise SpecError("spec.filed_by must name the tool that files this workflow's requests")
 
     seen: set = set()
     renamed: Dict[str, str] = {}
@@ -293,8 +296,13 @@ def _validate_gate_approver(approver: Any, where: str) -> None:
     elif source == "access_rule_type":
         if "rule_type_from" in approver and approver["rule_type_from"] is not None:
             _validate_expr(approver["rule_type_from"], f"{where}.rule_type_from", allow_item=False)
+    elif source == "metadata_owner":
+        if approver.get("role", "owner") not in ("owner", "governance"):
+            raise SpecError(f"{where}.role must be 'owner' or 'governance' when source is 'metadata_owner'")
     else:
-        raise SpecError(f"{where}.source must be 'group', 'approver_group_tag' or 'access_rule_type'")
+        raise SpecError(
+            f"{where}.source must be 'group', 'approver_group_tag', 'access_rule_type' or 'metadata_owner'"
+        )
 
 
 def _validate_step(stage: Dict[str, Any], where: str) -> None:
@@ -448,6 +456,8 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
                 elif source == "access_rule_type":
                     rule_type_spec = approver.get("rule_type_from") or {"$var": "plane"}
                     gate.approver_rule_type_from = _value_fn(rule_type_spec)
+                elif source == "metadata_owner":
+                    gate.approver_role = approver.get("role", "owner")
             stages.append(gate)
             if stage["type"] not in preceding_gate_types:
                 preceding_gate_types.append(stage["type"])

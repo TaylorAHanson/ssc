@@ -36,6 +36,7 @@ _web_search = _yaml_config.get("web_search", {}) or {}
 _app_code_review = _yaml_config.get("app_code_review", {}) or {}
 _duplicate_check = _yaml_config.get("duplicate_check", {}) or {}
 _rbac = _yaml_config.get("rbac", {}) or {}
+_metadata = _yaml_config.get("metadata", {}) or {}
 
 
 def _slugify_brand(value: str) -> str:
@@ -826,26 +827,41 @@ class Settings(BaseSettings):
     RBAC_NAMING_RULES: List[dict] = copy.deepcopy(_rbac.get("naming_rules", []))
     RBAC_HEADER_ALIASES: List[dict] = copy.deepcopy(_rbac.get("header_aliases", []))
 
+    # Metadata Manager (Admin -> Settings -> Metadata Manager; ADR-0006). Defaults
+    # and their rationale live in default_config.py.
+    METADATA_RECONCILE_MODE: str = _metadata.get("reconcile_mode", "plan")
+    METADATA_RECONCILE_CRON: str = _metadata.get("reconcile_cron", "30 * * * *")
+    METADATA_RECONCILE_CATALOGS: List[str] = list(_metadata.get("reconcile_catalogs", []))
+    METADATA_NEW_OBJECT_POLL_SECONDS: int = _metadata.get("new_object_poll_seconds", 60)
+    METADATA_NEW_OBJECT_POLICY: str = _metadata.get("new_object_policy", "adopt")
+    METADATA_EXEMPT_KEYS: List[str] = list(_metadata.get("exempt_keys", ["system.certification_status"]))
+    METADATA_MAX_REMOVALS_PER_RUN: int = _metadata.get("max_removals_per_run", 200)
+    METADATA_APPLY_CONCURRENCY: int = _metadata.get("apply_concurrency", 8)
+    METADATA_ORPHAN_RETENTION_DAYS: int = _metadata.get("orphan_retention_days", 30)
+    METADATA_CLAIM_ENABLED: bool = _metadata.get("claim_enabled", True)
+    METADATA_CLAIM_TAG_KEY: str = _metadata.get("claim_tag_key", "metadata_manager_instance")
+    METADATA_INSTANCE_ID: str = _metadata.get("instance_id", "")
+    METADATA_OWNER_TAG_KEY: str = _metadata.get("owner_tag_key", "data_owner")
+    METADATA_UC_OWNER_IS_AUTHORITY: bool = _metadata.get("uc_owner_is_authority", False)
+    METADATA_EDITOR_ROLES: List[str] = list(_metadata.get("editor_roles", ["Governance Admin"]))
+    METADATA_BROWSE_ROLES: List[str] = list(_metadata.get("browse_roles", []))
+    METADATA_KEY_MODE: str = _metadata.get("key_mode", "open")
+    METADATA_KEY_POLICIES: List[dict] = copy.deepcopy(_metadata.get("key_policies", []))
+    METADATA_CLASSIFICATION_KEY: str = _metadata.get("classification_key", "classification")
+    METADATA_CLASSIFICATION_LEVELS: List[str] = list(
+        _metadata.get("classification_levels", ["public", "internal", "confidential", "restricted"])
+    )
+    METADATA_PII_KEYS: List[str] = list(_metadata.get("pii_keys", ["pii"]))
+    METADATA_ENVIRONMENTS: List[dict] = copy.deepcopy(_metadata.get("environments", []))
+    METADATA_MAX_OBJECTS_PER_CHANGE: int = _metadata.get("max_objects_per_change", 5000)
+    METADATA_ABAC_CHECK: bool = _metadata.get("abac_check", True)
+    METADATA_MIN_REASON_LENGTH: int = _metadata.get("min_reason_length", 0)
+    METADATA_MIN_JUSTIFICATION_LENGTH: int = _metadata.get("min_justification_length", 10)
+    METADATA_GOVERNANCE_APPROVER_GROUP: str = _metadata.get("governance_approver_group", "")
+
     # Requesters can't approve their own requests (any workflow). Platform-wide.
     APPROVALS_DENY_SELF_APPROVAL: bool = True
 
-    # Governance Tag Management (GitOps or Local Mode for UC tag changes)
-    # In GitOps mode, the app opens PRs against this repo and GitHub Actions applies
-    # the generated SQL on merge. In Local Mode, the app plans, validates, checks risk,
-    # and applies changes directly to Unity Catalog without requiring GitHub / Actions.
-    GOVERNANCE_TAGS_LOCAL_MODE: bool = False
-    GOVERNANCE_TAGS_REPO: str = ""  # "owner/repo" or bare repo name (resolved against GITHUB_ORG)
-    # Base branch PRs target. The governance repo uses one branch per environment
-    # (dev / test / stage / prod) and has no 'main', so there is no safe default —
-    # a wrong value 404s at branch creation, which is harder to diagnose than a
-    # missing one. Set it per deployment.
-    GOVERNANCE_TAGS_BASE_BRANCH: str = ""
-    GOVERNANCE_TAGS_PATH: str = "tags/migrations"  # path prefix for generated .sql files
-    # Delta table the governance repo's apply job writes each migration's outcome
-    # to. This is how the app learns whether a merged PR actually applied: merging
-    # only means the SQL was accepted for execution, not that it succeeded.
-    GOVERNANCE_TAGS_LEDGER_TABLE: str = ""
-    
     # Mock User Settings (for local dev when auth headers are missing)
     MOCK_USER_EMAIL: str = "dev@example.com"
     MOCK_USER_NAME: str = "dev_user"

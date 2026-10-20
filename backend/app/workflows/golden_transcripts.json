@@ -62,6 +62,42 @@
       "github_add_team_members"
     ]
   },
+  "metadata_change[approver_group_change]": {
+    "gates": 2,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "prepare_metadata_change",
+      "record_metadata_change"
+    ]
+  },
+  "metadata_change[column_pii]": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "prepare_metadata_change",
+      "record_metadata_change"
+    ]
+  },
+  "metadata_change[copy_to_prd]": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "prepare_metadata_change",
+      "record_metadata_change"
+    ]
+  },
+  "metadata_change[pre_declared_table]": {
+    "gates": 1,
+    "mutating": 1,
+    "status": "completed",
+    "tools": [
+      "prepare_metadata_change",
+      "record_metadata_change"
+    ]
+  },
   "preview_feature_request": {
     "gates": 1,
     "mutating": 4,
@@ -131,14 +167,6 @@
     "status": "completed",
     "tools": [
       "send_notification"
-    ]
-  },
-  "tag_change": {
-    "gates": 1,
-    "mutating": 1,
-    "status": "completed",
-    "tools": [
-      "open_tag_change_pr"
     ]
   },
   "tag_creation": {

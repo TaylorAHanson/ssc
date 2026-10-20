@@ -46,20 +46,12 @@ data.
 
 ## Metadata Manager
 
-**Metadata Manager** edits tags and descriptions on catalogs, schemas, tables,
-views and columns.
-
-- On **Edit Metadata**, find objects by name or by tag, add them to your list
-  and make your changes. **Rename a tag key everywhere** renames a key across
-  every object that uses it.
-- **Review & Run Checks** checks your changes against tag policies, flags
-  likely typos and access-policy impacts, and scores the risk before anything
-  is applied.
-- **Change History** shows past changes and who made them.
-
-Depending on how your environment is set up, changes are applied directly or
-submitted as pull requests for review. Some edits, such as column, catalog and
-schema tags, are only possible when changes are applied directly.
+**Metadata Manager** keeps the tags and descriptions on catalogs, schemas,
+tables, views and columns correct. {{brand_name}} holds the list of what each
+object should carry, and a reconciler makes Unity Catalog match it. Owners edit
+their own objects, sensitive changes go for approval, and pipelines can make
+changes through an API. See [Metadata Manager](metadata-manager.md) and
+[Metadata API and MCP](metadata-api.md).
 
 ## Access Rules
 

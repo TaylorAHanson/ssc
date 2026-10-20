@@ -40,7 +40,10 @@ logger = logging.getLogger(__name__)
 
 # Keys the runner/executor inject into tool kwargs; never forwarded to OPA input
 # or persisted in audit facts (they carry tokens / PII / non-model context).
-_INJECTED_KEYS = ("_obo_token", "_user_email", "_user_roles", "_user_entitlements", "_request_id")
+_INJECTED_KEYS = (
+    "_obo_token", "_user_email", "_user_roles", "_user_entitlements", "_request_id",
+    "_actor_type", "_principal_id", "_channel",
+)
 
 _DEFAULT_ALLOW_DECISION = {
     "allow": True,
@@ -294,6 +297,11 @@ class ToolExecutor:
             call_args["_user_email"] = ctx.user_identity.get("email")
             call_args["_user_roles"] = ctx.user_identity.get("roles")
             call_args["_user_entitlements"] = ctx.user_identity.get("entitlements")
+            # "service_principal" only for a registered machine caller resolved by api.deps.
+            call_args["_actor_type"] = ctx.user_identity.get("actor_type") or "user"
+            call_args["_principal_id"] = ctx.user_identity.get("application_id")
+            # "mcp" for the in-app MCP server; unset for the chat agent.
+            call_args["_channel"] = ctx.user_identity.get("channel")
         # Workflow steps carry the request id as the executor scope. Inject it so
         # tools that need to persist to / read from the originating request (e.g.
         # the enforcement sentinel writing violations back to state_context) can

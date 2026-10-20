@@ -328,12 +328,47 @@ def test_gate_access_rule_type_source_can_read_the_type_from_elsewhere(monkeypat
     assert asyncio.run(_resolve_gate_approvers(gate, ctx)) == ["ws-approvers"]
 
 
+def test_gate_metadata_owner_source_reads_the_prepared_change_not_context(monkeypatch):
+    import asyncio
+    from app.services.metadata import requests as metadata_requests
+    from app.workflows.spec import _resolve_gate_approvers
+
+    seen = []
+    monkeypatch.setattr(metadata_requests, "owner_approver_groups_for",
+                        lambda request_id: seen.append(request_id) or ["crm-owners"])
+    spec = _good_spec()
+    spec["stages"][0]["approver"] = {"source": "metadata_owner"}
+    validate_spec_dict(spec)  # no raise
+    gate = spec_from_dict(spec).stages[0]
+    assert (gate.approver_source, gate.approver_role) == ("metadata_owner", "owner")
+    # Requester-supplied context never names the approvers.
+    ctx = {"approver_groups": ["me"]}
+    assert asyncio.run(_resolve_gate_approvers(gate, ctx, request_id="req-1")) == ["crm-owners"]
+    assert seen == ["req-1"]
+    assert asyncio.run(_resolve_gate_approvers(gate, ctx)) == []
+
+
+@pytest.mark.parametrize("group, expected", [("data-governance", ["data-governance"]), ("", [])])
+def test_gate_metadata_owner_governance_role_uses_the_setting(monkeypatch, group, expected):
+    import asyncio
+    from app.core.config import settings
+    from app.workflows.spec import _resolve_gate_approvers
+
+    monkeypatch.setattr(settings, "METADATA_GOVERNANCE_APPROVER_GROUP", group)
+    spec = _good_spec()
+    spec["stages"][0]["approver"] = {"source": "metadata_owner", "role": "governance"}
+    gate = spec_from_dict(spec).stages[0]
+    # Blank: no approvers, so only Platform Admins can act on it.
+    assert asyncio.run(_resolve_gate_approvers(gate, {}, request_id="req-1")) == expected
+
+
 @pytest.mark.parametrize("approver,match", [
     ({"source": "group"}, "group is required"),
-    ({"source": "nope"}, "must be 'group', 'approver_group_tag' or 'access_rule_type'"),
+    ({"source": "nope"}, "must be 'group', 'approver_group_tag', 'access_rule_type' or 'metadata_owner'"),
     ({"source": "approver_group_tag", "assets_from": {"$nope": [1]}}, "unknown operator"),
     ({"source": "approver_group_tag", "fallback_to_owner": "yes"}, "must be a boolean"),
     ({"source": "access_rule_type", "rule_type_from": {"$nope": [1]}}, "unknown operator"),
+    ({"source": "metadata_owner", "role": "anyone"}, "role must be 'owner' or 'governance'"),
     ("not-an-object", "must be an object"),
 ])
 def test_gate_approver_rejects_bad_config(approver, match):

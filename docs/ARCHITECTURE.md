@@ -218,6 +218,29 @@ which writes the approved change to the ledger, and stays bounded by a **mandato
 gate plus capability scoping**. OBO+UC remains the bound for `read` tools. See
 [ADR-0005](adr/0005-rbac-access-rules.md).
 
+### Decision: tags and descriptions are desired state that the reconciler applies
+
+Tags and descriptions on catalogs, schemas, tables, views and columns are recorded as desired
+state in Lakebase (`metadata_objects` and `metadata_tags`, one row per tag with its author and
+version), and the **metadata reconciler** (`app/services/metadata/reconciler.py`) is the only
+writer to Unity Catalog. It diffs the desired state against a snapshot read from
+`information_schema` (`metadata_observed`) and, under `METADATA_RECONCILE_MODE=enforce`, applies
+the `ALTER … SET/UNSET TAGS` and `COMMENT ON` statements as the governance service principal.
+Saved changes are applied within a poll cycle, new tables are picked up by the new-object poll
+(so tags can be declared before a table exists), and the cron sweep re-reads everything and
+corrects drift. The Metadata Manager page, `/api/v1/metadata` and the MCP tools never query
+Unity Catalog live.
+
+A metadata change is an `app_write`: the desired-state write is bounded by **owner-tag
+authorization, key policies and a sensitivity gate** (`app/services/metadata/authz.py`,
+`policy.py`), not by UC grants. A sensitive change, or one on an object the caller doesn't own,
+files a `metadata_change` request whose approve path records the change; nothing is written
+before approval. Pipelines call the same API or MCP tools as registered system principals
+(`metadata_principals`) with an explicit name and key scope. A log (`metadata_change_sets` /
+`metadata_events`) is written in the same transaction as the state and backs history and
+revert; it is never replayed to compute state. See
+[ADR-0006](adr/0006-metadata-desired-state.md).
+
 ## 6. Architecture Layers
 
 Logical view of the same system (complements the physical diagram in [§3](#3-physical-architecture-deployed-components)):
@@ -603,8 +626,8 @@ tools/workflows granted in Unity Catalog.
   truth, e.g. "Terraform actually succeeded → advance") rather than relying on checkpoint state
   alone — decide how far to carry this.
 - **Off-the-shelf MCP servers** for standard Databricks/UC ops vs. thin in-house tools over
-  existing providers — where is the cut line? Org-specific systems (LMWS, GitOps tag management,
-  Terraform conventions) will not have off-the-shelf equivalents.
+  existing providers — where is the cut line? Org-specific systems (LMWS, Terraform
+  conventions) will not have off-the-shelf equivalents.
 - **Token-level streaming** and richer progress UI for long-running graph nodes.
 - **Workflow storage**: UC-Volume markdown (platform-governed, OBO-discovered, zero infra) vs.
   the Lakebase-backed Workflow object (structured action metadata: `allowed_tools`,

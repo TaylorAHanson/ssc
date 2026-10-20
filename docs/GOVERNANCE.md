@@ -112,33 +112,31 @@ The **Data Products** page is the catalog of those logical products and their co
 
 ### 4.3 Metadata Manager
 
-Tags are how data gets governed at scale — classification (PII and similar), ownership, domain, and the certification status itself all ride on tags. The **Metadata Manager** page (formerly Tag Management) is where you review and manage the governance tags applied across catalogs, schemas, tables, views and columns, and the descriptions of catalogs and schemas. Correct tags and descriptions are a *precondition* for certification, so this page and the Data Certification page work hand in hand.
+Tags are how data gets governed at scale — classification (PII and similar), ownership, domain, and the certification status itself all ride on tags. The **Metadata Manager** page is where you keep the tags on catalogs, schemas, tables, views and columns, and their descriptions, correct. Correct tags and descriptions are a *precondition* for certification, so this page and the Data Certification page work hand in hand.
 
-The page has two tabs: **Edit Metadata**, where changes are made, and **Change History**, which lists every change with who submitted it, its checks and risk, and what was applied.
+**The platform's list is the source of truth.** The Metadata Manager keeps its own list of the tags and descriptions every object *should* have. A background **reconciler** compares that list with what Unity Catalog actually holds and makes Unity Catalog match: it adds missing tags, corrects wrong values and, once enforcement is on, removes tags nobody declared. So a tag added by hand in Databricks, outside the platform, is undone on the next pass — add it here instead. Changes you save reach Unity Catalog within a minute or so; a full check of every object runs on a schedule (**Admin → Settings → Metadata Manager → Full sweep schedule**).
 
-**Finding what to edit.** One search box covers everything. Click it to browse every governed dataset, or type part of a name to find datasets and any catalog, schema, table or view in the governed catalogs (`SCAN_CATALOGS`). Catalogs and schemas are listed in their own group, above tables and views. Each result has a checkbox meaning "in my list": tick as many as you like and they're added straight away; untick to remove. Ticking a dataset adds all of its tables, so you can mix datasets and individual tables in one change. The box also understands:
+Because the page searches the platform's own list, it answers instantly and never waits on Unity Catalog. Tags can also be declared for a table that doesn't exist yet; they're applied as soon as it's created.
 
-- `main.sales.*` — every table and view in a schema (any `*` pattern over the full name).
-- `classification=restricted` — objects carrying that tag value (`*` wildcards allowed; `data_owner=*` means "has the tag").
-- `!data_owner` — objects *missing* a tag, the quickest way to find certification gaps.
+**Tabs.**
 
-Press **Enter** (or **Select all**) to add every match for a pattern or filter. Name search answers instantly from the Discover cache; tag filters read live values from Unity Catalog and take a second or two.
+- **Objects** — search and edit. Filter by name, catalog, `key=value`, `key` (has the tag) or `!key` (lacks it, the quickest way to find certification gaps), or **Editable by me**. Open an object to see the tags it should have next to the ones Unity Catalog has, who set each tag and when, its columns and its history. Edits are collected in a tray; **Review** shows what will change, what needs approval and the risk score, and **Submit** saves it.
+- **Changes** — every change, with who made it, from where (this page, the assistant, a pipeline or the reconciler), its reason and each tag it touched. A change can be **reverted**, which saves the opposite change.
+- **Drift** — objects whose Unity Catalog tags or description differ from the list, and why.
+- **Reconciler runs** — what each run did or, in plan mode, would do, with any failures.
+- **System principals** *(Platform Admin)* — the pipelines and systems allowed to change tags through the API or MCP, and their scope.
 
-**Editing.** Each object is one row showing its tags as chips (green = new, amber = new value, red = removed). Click a row to edit its tags, and open **Columns** to tag individual columns — for example to mark `email` as `classification=restricted`. To change many at once, narrow the list with the filter (by name, `key=value` or `!key`), then use **Set tag … on all N shown** to set or remove one tag on every row shown. Tables with many columns have the same filter and bar inside their **Columns** panel. **Changed only** shows just what you've edited.
+**Who can edit what.** An object's owner tag (`data_owner` by default) names the groups that own it, and members of those groups may edit it. An object without the tag inherits the owner of its table, schema or catalog. Platform Admins, and any roles listed under **Editor roles**, may edit everything. Anyone else can still propose a change; it goes to the owners for approval.
 
-**Catalogs and schemas.** A catalog or schema row has a **Description** box above its tags; clearing it removes the description. Tags on a catalog or schema are inherited by every schema and table inside it, so the AI review calls out how wide the change reaches. The default policy allows only `data_owner` and `classification` on catalogs and schemas; other keys can be allowed by adding `catalog` or `schema` to their `applies_to` in the tag policy file.
+**What needs approval.** Most edits by an owner are saved straight away. A change is *sensitive*, and needs approval from the owners or the governance approver group, when it changes the owner tag, an approver or access-control tag, lowers or removes a classification, or removes a PII flag. Adding a PII flag isn't sensitive. Which keys are sensitive, which values they allow and where they may be used are set per key under **Admin → Settings → Metadata Manager → Key policies**. An environment can also require approval for every change. The assistant follows the same rules: it previews a change, asks for your confirmation and then saves it or files the approval request.
 
-**Renaming a tag key.** **Rename a tag key everywhere** (under the search box) takes an old and a new key — say `domains` → `domain` — finds every catalog, schema, table, view and column carrying the old key, adds them to your list and renames the key on each, keeping its value. An object that already has the new key with a *different* value is left unchanged and reported, so nothing is silently overwritten. To rename on just part of the list, filter it and pick **Rename key** in the bulk bar instead. Either way the rename is an ordinary edit: nothing changes in Unity Catalog until you review and apply it. One change holds at most 500 objects, so a very common key may need renaming in batches.
+**Reserved keys.** `system.certification_status` belongs to OmniGuard, which sets it when a dataset certifies and removes it when certification lapses. It is on the **Exempt tag keys** list, so it can't be edited here and the reconciler leaves it alone.
 
-**Reviewing and applying.** **Review & Run Checks** runs the tag policy, the typo/hygiene scan, the risk score and the advisory AI review over everything you changed, and shows the exact SQL. Lowering or removing a classification (or a PII flag) is scored as higher risk, because masking and access rules are often keyed on those tags. `system.certification_status` is reserved: OmniGuard sets it when a dataset certifies and removes it when certification lapses, so it can't be edited here and is flagged as you type. Other `system.` tags are edited like any other tag. Keys the policy declares table-only (such as `dataset`, `data_owner`, `approver_group`) can't be set on columns. Values are also checked against Unity Catalog's own governed tags: if a tag policy limits a key to certain values, the editor suggests them and flags anything else as you type, and Review blocks the change rather than letting Unity Catalog reject it partway through. The key field also suggests governed tags as you type.
+**Environments.** One production deployment manages every environment. Catalogs are mapped to environments under **Admin → Settings → Metadata Manager → Environments**, for example `{base}_dev` and `{base}_prd`. To test a change, make it on the dev object first, then **promote** it to production, which copies the dev values to the matching production object as a new change. A change can also name extra environments to apply to at once.
 
-**Access policies (ABAC).** If a column mask or row filter selects data by a tag (for example `has_tag('pii')`), changing that tag changes who can see the data. Review lists any such policy and raises the risk score. To see the policies, the governance service principal needs `READ METADATA` on the tables; otherwise Review notes that the check was skipped. Setting a governed tag also needs the `ASSIGN` permission on it, which can't be checked in advance, so Review reminds you.
+**Turning enforcement on.** **Reconcile mode** starts at **Plan**: the reconciler works out every statement and lists it on **Drift** and **Reconciler runs**, without changing anything. Review that for a while, then switch to **Enforce**. A run that would remove more tags than **Max tag removals per run** stops and alerts governance instead. The [cutover runbook](./runbooks/metadata-cutover.md) walks through the switch.
 
-**Datasets.** A row whose edit adds, moves or removes its `dataset` tag is marked, because dataset membership decides which data product, contract and certification the table belongs to.
-
-**Column, catalog and schema changes need Local Execution Mode.** In GitOps mode, changes are written as migrations to the governance repository, whose format covers table and view tags only; column tags, and catalog and schema tags and descriptions, are shown read-only there, and a rename leaves them out.
-
-**Permissions.** In Local Execution Mode changes run as the governance service principal. Tagging needs `APPLY TAG` on the object; changing a catalog or schema description needs ownership of it (or `MANAGE`).
+**Permissions.** The reconciler writes as the governance service principal. It needs `APPLY TAG` on the catalogs it manages, ownership or `MANAGE` for descriptions, and `ASSIGN` on each governed tag it sets. See `SERVICE_PRINCIPALS.md`.
 
 ### 4.4 A note on "reliability window"
 
@@ -358,6 +356,9 @@ GRANT BROWSE ON CATALOG <catalog> TO `<service-principal>`;
 
 `BROWSE` is all that's required. It is a metadata-only privilege — it lets the scanner see tables, columns, and tags, but **not read any data** — and it does not require `USE CATALOG` or `USE SCHEMA`. If you are ever asked for `SELECT` here, that's a bug: the platform reads `information_schema`, never the tables themselves. Such a contract also fails the **Contract completeness** check rather than certifying, so it shows as uncertified until the grant is in place.
 
+**…keep a tag someone added directly in Databricks?**
+Under enforcement the reconciler removes tags that aren't in the Metadata Manager's list. Find the object on the **Drift** tab, which shows the tag as "in Unity Catalog only", and add it in the Metadata Manager. If another system legitimately owns that key, add it to **Admin → Settings → Metadata Manager → Exempt tag keys** instead, and the reconciler will leave it alone everywhere.
+
 **…stop the Sentinel from flagging something that's actually fine?**
 Add an **approved Allowlist** entry (**Watch Tower → Allowlist**) with the resource, its workspace, a justification, and ideally an expiry. Only approved entries suppress findings.
 
@@ -395,5 +396,8 @@ Edit the relevant workflow in **Control Tower → Workflow Studio** (follow the 
 - **Enforcement Sentinel** — the background watchdog that scans workspaces and reports policy violations. Never destroys anything without a human action.
 - **Allowlist** — the list of approved exceptions that tells the Sentinel to leave specific resources alone.
 - **Reliability window** — how far back to look when judging a dataset's data quality.
+- **Desired state** — the Metadata Manager's list of the tags and descriptions each object should have. It, not Unity Catalog, is the record of what's correct.
+- **Reconciler** — the background job that makes Unity Catalog's tags and descriptions match the desired state. In *plan* mode it only reports what it would change; in *enforce* mode it makes the changes.
+- **Drift** — a difference between the desired state and what Unity Catalog holds, usually from a change made directly in Databricks.
 - **Gate / step (in a workflow)** — a gate is an approval; a step is a governed action. Their order defines the rule.
 - **PAT (Personal Access Token)** — a personal credential for a human; restricted to non-prod and short lifetimes.

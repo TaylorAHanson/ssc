@@ -16,7 +16,14 @@ class User(BaseModel):
     
     # Calculated application roles
     roles: List[str] = []
-    
+
+    # "user", or "service_principal" for a registered machine caller (ADR-0006 D7),
+    # whose id and email both hold its application id.
+    actor_type: str = "user"
+    application_id: Optional[str] = None
+    # Identity headers the Apps proxy forwarded on this request (names only).
+    identity_headers: List[str] = []
+
     model_config = ConfigDict(from_attributes=True)
 
     def has_role(self, role_name: str) -> bool:

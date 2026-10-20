@@ -55,6 +55,49 @@ def _spawn_background(coro) -> asyncio.Task:
     task.add_done_callback(_background_tasks.discard)
     return task
 
+
+# The last metadata reconciler problem logged, so a repeating one is reported once.
+_metadata_reconcile_last_issue: Optional[str] = None
+
+
+def _note_metadata_reconcile_issue(issue: str, *, exc_info: bool = False) -> None:
+    global _metadata_reconcile_last_issue
+    if issue != _metadata_reconcile_last_issue:
+        logger.error(issue, exc_info=exc_info)
+        _metadata_reconcile_last_issue = issue
+
+
+def _metadata_reconcile_enabled() -> bool:
+    """features.metadata_v2 is on and METADATA_RECONCILE_MODE isn't ``off``."""
+    if not (_yaml_config.get("features", {}) or {}).get("metadata_v2", False):
+        return False
+    try:
+        from app.services.metadata.reconciler import current_mode
+
+        return current_mode() != "off"
+    except Exception as e:  # noqa: BLE001 - never let the reconciler break the poll cycle
+        _note_metadata_reconcile_issue(f"Couldn't read the metadata reconcile mode: {e}", exc_info=True)
+        return False
+
+
+async def _safe_metadata_reconcile(semaphore: asyncio.Semaphore) -> None:
+    """One reconciler pass (leader only); a slow pass isn't overlapped and nothing it raises escapes."""
+    global _metadata_reconcile_last_issue
+    if semaphore.locked():
+        return  # The previous pass is still running
+    async with semaphore:
+        try:
+            from app.services.metadata import reconciler
+
+            await reconciler.reconcile_task()
+            _metadata_reconcile_last_issue = None
+        except NotImplementedError:
+            if _metadata_reconcile_last_issue != "not_implemented":
+                logger.info("The metadata reconciler isn't available in this build yet; skipping it.")
+                _metadata_reconcile_last_issue = "not_implemented"
+        except Exception as e:  # noqa: BLE001
+            _note_metadata_reconcile_issue(f"Error in background metadata reconcile: {e}", exc_info=True)
+
 async def process_enforcement_sentinel_cron():
     """Check if it's time to run the enforcement sentinel and spawn it."""
     global _next_sentinel_time
@@ -199,6 +242,10 @@ async def start_poller():
         "runs on contract_cron above" if _contract_cron
         else "ODCS contracts refresh only when 'Sync Data Contracts' is clicked (set CONTRACT_SYNC_CRON to automate)",
     )
+    logger.info(
+        "Poller metadata reconciler: %s.",
+        "on" if _metadata_reconcile_enabled() else "off (features.metadata_v2 is off or METADATA_RECONCILE_MODE=off)",
+    )
     
     poll_count = 0
     consecutive_db_errors = 0
@@ -213,6 +260,8 @@ async def start_poller():
     preview_sync_semaphore = asyncio.Semaphore(1)
     # Access-rules CSV export writes every managed sheet; keep one at a time.
     rbac_export_semaphore = asyncio.Semaphore(1)
+    # A metadata reconcile pass can read and write many UC objects; keep one at a time.
+    metadata_reconcile_semaphore = asyncio.Semaphore(1)
 
     # Elect a single active poller cluster-wide (no-op on SQLite). Replicas that
     # aren't the leader idle here so we don't run N copies of the poll cycle.
@@ -298,6 +347,9 @@ async def start_poller():
                             logger.error(f"Error in background access-rules export: {e}", exc_info=True)
 
                 _spawn_background(safe_rbac_export())
+
+            if _metadata_reconcile_enabled():
+                _spawn_background(_safe_metadata_reconcile(metadata_reconcile_semaphore))
 
             # Pre-warm user profiles + prune retained user data. Self-throttled
             # (well below the poll interval) and detached, so a slow identity

@@ -46,6 +46,8 @@ class McpTool:
         success_predicate: Optional[Any] = None,
         hide_result: bool = False,
         is_lookup: bool = False,
+        requires_identity: bool = False,
+        allow_service_principals: bool = False,
     ):
         self._func = func
         self._args_schema = args_schema
@@ -73,6 +75,8 @@ class McpTool:
         self._success_predicate = success_predicate
         self._hide_result = hide_result
         self._is_lookup = is_lookup
+        self._requires_identity = requires_identity
+        self._allow_service_principals = allow_service_principals
         
     @property
     def name(self) -> str:
@@ -130,6 +134,20 @@ class McpTool:
         and skips duplicate argument sets.
         """
         return self._is_lookup
+
+    @property
+    def requires_identity(self) -> bool:
+        """Whether the tool's result depends on who is calling (permissions, "my" data).
+
+        Over MCP, such a tool (like any mutating one) is refused on deployed targets
+        when the request carries no forwarded identity.
+        """
+        return self._requires_identity
+
+    @property
+    def allow_service_principals(self) -> bool:
+        """Whether a registered service principal may call this tool over MCP (ADR-0006 D7)."""
+        return self._allow_service_principals
 
     @property
     def policy_ref(self) -> Optional[str]:
@@ -293,6 +311,8 @@ def tool(
     policy_ref: Optional[str] = None,
     hide_result: bool = False,
     is_lookup: bool = False,
+    requires_identity: bool = False,
+    allow_service_principals: bool = False,
 ):
     """
     Decorator to register a function as a tool.
@@ -325,6 +345,10 @@ def tool(
 
     Set ``is_lookup=True`` for knowledge-retrieval tools the runner should
     budget (duplicate-skip + per-turn cap via ``AGENT_MAX_LOOKUP_CALLS``).
+
+    Set ``requires_identity=True`` when the result depends on the caller, and
+    ``allow_service_principals=True`` to let registered service principals call
+    the tool over MCP (see ``mcp_server.py``).
     """
     def decorator(func: Callable) -> McpTool:
         # Determine schema
@@ -377,6 +401,8 @@ def tool(
             policy_ref,
             hide_result=hide_result,
             is_lookup=is_lookup,
+            requires_identity=requires_identity,
+            allow_service_principals=allow_service_principals,
         )
         
     return decorator

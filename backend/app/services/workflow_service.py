@@ -23,7 +23,11 @@ logger = logging.getLogger(__name__)
 _GOAL_RE = re.compile(r"\*\*Goal\*\*:\s*(.*?)(?:\n|$)")
 
 # Seeded workflows whose display name differs from the title-cased key.
-_SEED_NAMES = {"enforcement_sentinel": "OmniGuard", "rbac_access_change": "Access change"}
+_SEED_NAMES = {
+    "enforcement_sentinel": "OmniGuard",
+    "rbac_access_change": "Access change",
+    "metadata_change": "Metadata change",
+}
 
 # Portable bundle format tag (bumped if the export shape changes).
 BUNDLE_FORMAT = "selfservice.workflows/v1"
@@ -59,11 +63,15 @@ LEGACY_WORKFLOW_ALIASES = {
 # users. Securable access now goes only through the Access Rules ledger and its
 # Terraform export (ADR-0005, D4/D5). ``request_data_access`` is the legacy
 # instruction-only key that used to fold into ``data_access_request``.
+#
+# ``tag_change`` opened GitOps pull requests; tags and descriptions are now
+# desired state applied by the metadata reconciler (ADR-0006, D9).
 RETIRED_WORKFLOW_KEYS = frozenset({
     "data_access_request",
     "batch_data_access",
     "catalog_schema_table_access",
     "request_data_access",
+    "tag_change",
 })
 
 

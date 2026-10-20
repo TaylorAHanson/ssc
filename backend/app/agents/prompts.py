@@ -854,6 +854,9 @@ You have access to the following tools:
     # Access-rule guidance (only when the access-rule tools are present)
     access_rules_section = _get_access_rules_section(effective_tools)
 
+    # Metadata Manager guidance (only when the metadata tools are present)
+    metadata_section = _get_metadata_section(effective_tools)
+
     return f"""{SYSTEM_PROMPT}
 
 {CORE_INSTRUCTIONS}
@@ -863,6 +866,7 @@ You have access to the following tools:
 {authoring_section}
 {skills_section}
 {access_rules_section}
+{metadata_section}
 {capabilities_section}
 {context_domains_section}
 {web_search_section}
@@ -907,6 +911,42 @@ def _get_access_rules_section(tools: Optional[List[Any]]) -> str:
     if "find_access" not in names and "preview_access_change" not in names:
         return ""
     return ACCESS_RULES_INSTRUCTIONS
+
+
+METADATA_INSTRUCTIONS = """
+## Unity Catalog tags and descriptions (Metadata Manager)
+Tags and descriptions are held as desired state in the Metadata Manager; a reconciler
+applies them to Unity Catalog and reverts any edit made outside it. You never run
+ALTER statements or change Unity Catalog directly.
+
+- Find objects with `search_metadata` and read one with `get_metadata`. Both read the
+  app's own tables, not Unity Catalog live; say so if the user asks whether Unity
+  Catalog matches right now, and point at the drift shown.
+- An object doesn't have to exist yet. Tags declared for a table that hasn't been
+  created are applied the moment it appears.
+- To change tags or a description, call `preview_metadata_change`, show its
+  `report_markdown` and follow its `next_step`. Ask for the reason in the user's own
+  words; never write, suggest or embellish it.
+- For a set of objects ("every table in sales_dev.bronze"), give one change a `match`
+  pattern (`*` and `?` within one part) instead of `name`, and tell the user how many
+  objects the preview says it matched.
+- After an explicit yes, call `submit_metadata_change` with the same changes. It writes what
+  the user may change directly and files one approval request for the rest, routed to
+  the object's owner groups (and governance for sensitive tags). Never call
+  `execute_workflow` for a metadata change.
+- To copy metadata from a lower environment to a higher one, pass `environments` (for
+  example `["prd"]`) so the same changes apply to the counterpart objects.
+- If submit reports a conflict, someone changed the object since you read it: read it
+  again, show the current values and ask before re-applying.
+"""
+
+
+def _get_metadata_section(tools: Optional[List[Any]]) -> str:
+    """Metadata Manager guidance, included only when the metadata tools are available."""
+    names = {getattr(t, "name", "") for t in (tools or [])}
+    if "preview_metadata_change" not in names and "search_metadata" not in names:
+        return ""
+    return METADATA_INSTRUCTIONS
 
 
 def _get_authoring_section(tools: Optional[List[Any]]) -> str:

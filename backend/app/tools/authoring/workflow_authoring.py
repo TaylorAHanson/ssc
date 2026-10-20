@@ -215,7 +215,10 @@ async def list_workflow_building_blocks() -> Dict[str, Any]:
                                  "{source:'access_rule_type', rule_type_from:<expr=plane>} for the "
                                  "approver group set per type of access rule in Admin -> Settings -> "
                                  "Access Rules (Platform Admins when that type's group is blank); use it "
-                                 "on a 'platform_admin' gate after rbac_prepare_access_change",
+                                 "on a 'platform_admin' gate after rbac_prepare_access_change, OR "
+                                 "{source:'metadata_owner', role:'owner'|'governance'} after "
+                                 "prepare_metadata_change: the owner groups of the objects in the "
+                                 "prepared change, or the Metadata Manager governance approver group",
                      "instructions": "REQUIRED on type 'manual_task' (invalid elsewhere): what the "
                                      "assignee must do off-platform before marking it done",
                      "due_in_days": "optional on type 'manual_task': SLA in days, drives overdue "

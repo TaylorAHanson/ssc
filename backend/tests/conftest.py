@@ -35,6 +35,12 @@ def db_session(db_engine):
     transaction.rollback()
     connection.close()
 
+@pytest.fixture(autouse=True)
+def _no_live_access_policy_reads(monkeypatch):
+    """Metadata previews read ABAC policies from Unity Catalog; tests that want it pass a fake provider."""
+    monkeypatch.setattr(settings, "METADATA_ABAC_CHECK", False)
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--mode", action="store", default="mock", help="Test mode: mock or real"

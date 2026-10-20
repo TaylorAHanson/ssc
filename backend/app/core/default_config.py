@@ -154,6 +154,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # Access Rules: the group-to-securable ledger, its scheduled CSV export,
         # the rbac_access_change workflow and the Access Rules page.
         "rbac": True,
+        # Metadata Manager (ADR-0006): desired tags and descriptions in Lakebase,
+        # the reconciler, the /metadata API and its agent and MCP tools.
+        "metadata_v2": True,
         # Verbose landing header (brand title and greeting). False = clean,
         # minimal landing page.
         "enhanced_landing_page": False,
@@ -222,6 +225,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # before an rbac_access_change request.
         "find_access": True,
         "preview_access_change": True,
+        # Metadata Manager: search and read desired tags and descriptions, then
+        # preview and submit a change (also published over MCP).
+        "search_metadata": True,
+        "get_metadata": True,
+        "preview_metadata_change": True,
+        "submit_metadata_change": True,
         # SDK "ping" of target workspaces to prove cross-VPC reachability.
         "ping_workspaces": False,
         "ping_url": True,
@@ -602,6 +611,104 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "naming_rules": [],
         # Extra header spellings: [{"field": "<canonical field>", "header": "<header text>"}]
         "header_aliases": [],
+    },
+
+    # Metadata Manager (Admin -> Settings -> Metadata Manager; ADR-0006). Desired
+    # tags and descriptions live in Lakebase and the reconciler applies them to
+    # Unity Catalog through the governance service principal.
+    "metadata": {
+        # off = never touch UC; plan = compute and record diffs, write nothing;
+        # enforce = apply. Starts in plan so the drift report can be reviewed
+        # before anything is removed (ADR-0006 D11). Lower-environment
+        # deployments stay in plan unless they enforce a sandbox list below.
+        "reconcile_mode": "plan",
+        # Full sweep: refresh the snapshot from information_schema and reconcile
+        # every managed object. Hourly at :30, off the data-asset sync's slot.
+        "reconcile_cron": "30 * * * *",
+        # Catalogs this instance reconciles. Blank = every governed catalog
+        # (SCAN_CATALOGS, or all when that is blank too).
+        "reconcile_catalogs": [],
+        # How often new or altered tables are looked for. 0 = only the sweep and
+        # explicit reconcile calls pick them up.
+        "new_object_poll_seconds": 60,
+        # A new object with no desired row: adopt its create-time tags and comment
+        # (so CREATE ... TAGS isn't stripped), or ignore it (left unmanaged).
+        "new_object_policy": "adopt",
+        # Keys the reconciler never sets or removes, and edits can't touch.
+        # OmniGuard owns certification, so enforcement must leave it alone.
+        "exempt_keys": ["system.certification_status"],
+        # More removals than this in one run pauses enforcement and alerts governance.
+        "max_removals_per_run": 200,
+        # Statements run in parallel across relations (one relation's stay in order).
+        "apply_concurrency": 8,
+        # Rows whose object was dropped are purged after this many days.
+        "orphan_retention_days": 30,
+        # Catalog tag naming the instance that enforces the catalog, so two
+        # deployments never fight over one. Blank instance id = the app name.
+        "claim_enabled": True,
+        "claim_tag_key": "metadata_manager_instance",
+        "instance_id": "",
+        # Members of the group(s) named by this tag (on the object, else its
+        # table, schema or catalog) may edit the object.
+        "owner_tag_key": "data_owner",
+        # Also treat the object's Unity Catalog owner as an editor.
+        "uc_owner_is_authority": False,
+        # Roles (besides Platform Admin) that may edit every object.
+        "editor_roles": ["Governance Admin"],
+        # Roles that may browse. Blank = every signed-in user, like Discover.
+        "browse_roles": [],
+        # open = any key; known_only = only keys with a policy row below.
+        "key_mode": "open",
+        # Per-key rules. applies_to: comma-separated catalog, schema, table,
+        # column (blank = all). allowed_values: comma-separated (blank = any).
+        # editor_groups: comma-separated; when set, only those groups (and
+        # admins) may change the key. sensitive: changes need approval.
+        "key_policies": [
+            {"key": "dataset", "applies_to": "table", "allowed_values": "",
+             "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", "editor_groups": "", "sensitive": False,
+             "required": False, "description": "Logical dataset this object belongs to."},
+            {"key": "data_owner", "applies_to": "catalog, schema, table", "allowed_values": "",
+             "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._@,-]{0,255}$", "editor_groups": "", "sensitive": True,
+             "required": False, "description": "Group(s) accountable for the data; members may edit its tags."},
+            {"key": "approver_group", "applies_to": "table", "allowed_values": "",
+             "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$", "editor_groups": "", "sensitive": True,
+             "required": False, "description": "Group that approves access requests for this dataset."},
+            {"key": "access_group", "applies_to": "table", "allowed_values": "",
+             "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$", "editor_groups": "", "sensitive": True,
+             "required": False, "description": "Group granted access once a request is approved."},
+            {"key": "reliability_window", "applies_to": "table", "allowed_values": "",
+             "pattern": "^[0-9]+(m|h|d|w)$", "editor_groups": "", "sensitive": False,
+             "required": False, "description": "Freshness commitment, e.g. 24h or 7d."},
+            {"key": "classification", "applies_to": "", "allowed_values": "public, internal, confidential, restricted",
+             "pattern": "", "editor_groups": "", "sensitive": False,
+             "required": False, "description": "Sensitivity classification."},
+        ],
+        # Lowering this key along the ordered levels (least to most sensitive),
+        # or removing it, needs approval.
+        "classification_key": "classification",
+        "classification_levels": ["public", "internal", "confidential", "restricted"],
+        # Removing one of these flags (or setting it to false/no/0) needs approval.
+        "pii_keys": ["pii"],
+        # One row per environment. A catalog belongs to the first row that lists
+        # it or whose pattern matches it; {base} in the pattern also defines its
+        # counterpart in other environments (sales_dev -> sales_prd).
+        # approval: sensitive = only sensitive changes need approval; all = every change.
+        "environments": [
+            {"key": "dev", "catalog_pattern": "{base}_dev", "catalogs": "", "approval": "sensitive"},
+            {"key": "tst", "catalog_pattern": "{base}_tst", "catalogs": "", "approval": "sensitive"},
+            {"key": "stg", "catalog_pattern": "{base}_stg", "catalogs": "", "approval": "sensitive"},
+            {"key": "prd", "catalog_pattern": "{base}_prd", "catalogs": "", "approval": "sensitive"},
+        ],
+        "max_objects_per_change": 5000,
+        # Preview reads the column masks and row filters keyed on the changed tags.
+        "abac_check": True,
+        "min_reason_length": 0,
+        # Characters required in the justification of a change that needs approval.
+        "min_justification_length": 10,
+        # Approves changes to objects with no owner tag anywhere above them, and
+        # runs the governance gate on sensitive changes. Blank = Platform and
+        # Governance Admins.
+        "governance_approver_group": "",
     },
 
     # Web lookup config for the search_databricks_docs / fetch_doc_page tools.

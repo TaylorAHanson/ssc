@@ -10,7 +10,8 @@ Admin screens appear in two sidebar sections, depending on your role:
 
 | Section | Pages | Who sees it |
 | --- | --- | --- |
-| Watch Tower | **Data Certification (ODCS)**, **Data Products (ODPS)**, **Allowlist**, **OmniGuard**, **Metadata Manager** | Platform admins and governance admins |
+| Watch Tower | **Data Certification (ODCS)**, **Data Products (ODPS)**, **Allowlist**, **OmniGuard** | Platform admins and governance admins |
+| Watch Tower | **Metadata Manager** | Everyone, unless a Platform Admin limits it to the **Browse roles** setting. Data owners edit their own objects there. |
 | Watch Tower | **Access Rules** | Platform admins, viewer roles and members of the access rule approver groups |
 | Control Tower | **Admin** | Platform admins |
 | Control Tower | **Context Catalog**, **Workflow Studio**, **Tool Registry**, **Preview Features**, **Training Studio** | Platform admins and governance admins |
@@ -50,6 +51,10 @@ are:
   Tool Registry, Context Catalog, Training Studio and Preview Features.
 - [Governance tools](governance.md): OmniGuard, the Allowlist, Data
   Certification, Data Products and Metadata Manager.
+- [Metadata Manager](metadata-manager.md): tags and descriptions, who can edit
+  them, approvals and the reconciler that applies them to Unity Catalog.
+- [Metadata API and MCP](metadata-api.md): changing tags from pipelines and
+  other systems.
 - [Access rules](access-rules.md): which groups hold which privileges, the
   approver group for each type, and the CSV export the Terraform pipeline
   reads.

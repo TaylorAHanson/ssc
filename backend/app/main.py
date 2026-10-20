@@ -49,11 +49,16 @@ async def lifespan(app: FastAPI):
         engine = get_engine()
         # Apply in-place schema renames BEFORE create_all so renamed tables keep
         # their data instead of being recreated empty alongside the old ones.
-        from app.db.migrate import run_startup_migrations, apply_replica_identity_full
+        from app.db.migrate import (
+            apply_metadata_search_indexes,
+            apply_replica_identity_full,
+            run_startup_migrations,
+        )
         run_startup_migrations(engine)
         Base.metadata.create_all(bind=engine)
         # Opt-in via LAKEBASE_CDF_TABLES; after create_all so first boot is covered.
         apply_replica_identity_full(engine)
+        apply_metadata_search_indexes(engine)
         
         db = get_session_local()()
         try:

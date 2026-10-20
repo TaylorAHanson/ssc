@@ -64,6 +64,14 @@ def test_logs_what_it_retired(db_session, caplog):
     assert "finance_data_access (was published)" in caplog.text
 
 
+def test_retires_the_gitops_tag_change_workflow(db_session):
+    WorkflowService.create(db_session, key="tag_change", name="Tag change", source="seed",
+                           request_type="tag_change", status="published", graph_spec=_SPEC)
+    assert WorkflowService.retire_workflows(db_session) == 1
+    row = WorkflowService.get_by_key(db_session, "tag_change")
+    assert (row.status, row.disabled) == ("draft", True)
+
+
 def test_no_rows_is_a_no_op(db_session):
     assert WorkflowService.retire_workflows(db_session) == 0
 

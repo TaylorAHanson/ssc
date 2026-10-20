@@ -28,6 +28,7 @@ import time
 import uuid
 from typing import Awaitable, Callable, MutableMapping
 
+from app.api.identity import forwarded_identity
 from app.core.config import settings
 from app.core.local_identity import local_user_token
 from app.core.logging_formatter import (
@@ -167,6 +168,9 @@ class AuthMiddleware:
                     "email": email,
                     "username": username,
                     "id": user_id,
+                    # What the proxy actually sent, without the mock stand-ins above,
+                    # so deps can tell a service principal from a missing identity.
+                    "forwarded": forwarded_identity(headers),
                 }
                 state["token"] = obo_token
 

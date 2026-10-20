@@ -86,6 +86,16 @@ def execute_workflow(
                     f"governs this type yet — author and publish one first."
                 ),
             }
+        from app.workflows.graphs import published_graph_spec
+        from app.workflows.graphs.specs import SPECS
+        from app.workflows.instructions import filed_by
+
+        filer = filed_by(published_graph_spec(db, workflow_type) or SPECS.get(workflow_type))
+        if filer:
+            return {
+                "success": False,
+                "error": f"'{workflow_type}' requests are filed by `{filer}`, not execute_workflow. Call `{filer}`.",
+            }
 
         duplicates = _possible_duplicates(db, workflow_type, parameters, kwargs)
         if duplicates and not acknowledge_duplicates:

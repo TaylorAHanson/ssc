@@ -26,13 +26,13 @@ import { Allowlist } from './pages/admin/Allowlist';
 import { EnforcementSentinel } from './pages/admin/EnforcementSentinel';
 import { DataCertification } from './pages/admin/DataCertification';
 import { ODPS } from './pages/admin/ODPS';
-import { TagManagement } from './pages/admin/TagManagement';
 import { ContextCatalog } from './pages/admin/ContextCatalog';
 import { Workflows } from './pages/admin/Workflows';
 import { ToolRegistry } from './pages/admin/ToolRegistry';
 import { TrainingAdmin } from './pages/admin/TrainingAdmin';
 import { PreviewFeatures } from './pages/admin/PreviewFeatures';
 import { AccessRules } from './pages/admin/AccessRules';
+import { MetadataManager } from './pages/admin/metadata/MetadataManager';
 
 const Guide = lazy(() => import('./pages/Guide').then((m) => ({ default: m.Guide })));
 
@@ -150,18 +150,14 @@ function App() {
               }
             />
           )}
+          {/* Access is checked by the page against /metadata/whoami: data owners can browse and
+              edit without an admin persona, and admin-only tabs follow the caller's role. */}
           {uiTabs?.tag_management !== false && (
-            <Route
-              path="/governance/metadata"
-              element={
-                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
-                  <TagManagement />
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/governance/metadata" element={<MetadataManager />} />
           )}
-          {/* Legacy redirect: the Metadata Manager used to be Tag Management. */}
+          {/* Legacy redirects: the Metadata Manager used to be Tag Management, then previewed at /next. */}
           <Route path="/governance/tags" element={<Navigate to="/governance/metadata" replace />} />
+          <Route path="/governance/metadata/next" element={<Navigate to="/governance/metadata" replace />} />
           {uiTabs?.context_catalog !== false && (
             <Route
               path="/governance/context-catalog"

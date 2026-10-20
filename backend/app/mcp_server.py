@@ -13,12 +13,16 @@ sticky sessions, which matters when the app runs as multiple Databricks App
 replicas behind a load balancer. The server is mounted by ``app.main`` and its
 session manager lifespan is started there.
 """
+import asyncio
 import functools
 import logging
+from typing import Any, Dict, Optional, Tuple
 
+from fastapi import HTTPException
 from mcp.server.fastmcp import FastMCP
 
-from app.core.config import settings
+from app.api.identity import TOKEN_HEADER, forwarded_identity, identifiers
+from app.core.config import dev_features_allowed, settings
 from app.tools import get_external_tools
 from app.tools.tool_executor import ToolContext, executor
 
@@ -36,29 +40,73 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP(settings.PROJECT_NAME, stateless_http=True, streamable_http_path="/")
 
 
-def _extract_obo_identity():
-    """Pull the calling user's OBO token + email off the live MCP HTTP request.
-
-    The app's ``AuthMiddleware`` deliberately skips ``/mcp`` (it has its own auth
-    model), so ``request.state`` is *not* populated here — we read the Databricks
-    Apps forwarding headers (``X-Forwarded-Access-Token`` / ``X-Forwarded-Email``)
-    straight off the request instead. Returns ``(obo_token, user_identity)``;
-    both empty when there's no request context (e.g. stdio) or no forwarded token
-    (e.g. local dev), in which case the executor falls back to the SP.
-    """
+def _request_headers():
     try:
         request = mcp.get_context().request_context.request
     except Exception:
-        return None, {}
-    if request is None:
-        return None, {}
-    headers = request.headers
-    obo_token = headers.get("x-forwarded-access-token") or None
-    if not obo_token and settings.MOCK_USER_TOKEN:
+        return None
+    return None if request is None else request.headers
+
+
+def _resolve_identity(fwd: Dict[str, Any], obo_token: Optional[str]) -> Dict[str, Any]:
+    """The caller's full identity (email, groups, app roles), resolved exactly as the API does."""
+    from app.api.deps import resolve_user
+    from app.db.session import get_session_local
+
+    db = get_session_local()()
+    try:
+        user = resolve_user(
+            db, email=fwd.get("email"), username=fwd.get("username"), forwarded=fwd,
+            obo_token=obo_token, allow_service_principals=True,
+        )
+    finally:
+        db.close()
+    # Same shape as the chat agent's identity: roles and groups comma-joined.
+    return {
+        "email": user.email,
+        "name": user.full_name,
+        "roles": ", ".join(user.roles),
+        "entitlements": ", ".join(user.entitlements),
+        "actor_type": user.actor_type,
+        "application_id": user.application_id,
+        "channel": "mcp",
+    }
+
+
+async def _caller_identity() -> Tuple[Optional[str], Dict[str, Any], Optional[str]]:
+    """``(obo_token, user_identity, refusal)`` for the live MCP request.
+
+    The app's ``AuthMiddleware`` skips ``/mcp``, so the Databricks Apps forwarding
+    headers are read straight off the request. ``refusal`` explains why no identity
+    could be resolved; it is None when one was, or when there is no request context
+    (e.g. stdio). There is no service-principal fallback: a tool that needs to know
+    who is calling is refused when nobody was identified.
+    """
+    headers = _request_headers()
+    if headers is None:
+        return None, {}, None
+    fwd = forwarded_identity(headers)
+    obo_token = headers.get(TOKEN_HEADER) or None
+    if not obo_token and settings.MOCK_USER_TOKEN and dev_features_allowed():
         obo_token = settings.MOCK_USER_TOKEN
-    email = headers.get("x-forwarded-email") or None
-    identity = {"email": email} if email else {}
-    return obo_token, identity
+    if not identifiers(fwd) and not dev_features_allowed():
+        return obo_token, {}, "No caller identity was forwarded with this request."
+    try:
+        identity = await asyncio.to_thread(_resolve_identity, fwd, obo_token)
+    except HTTPException as e:
+        return obo_token, {}, str(e.detail)
+    except Exception as e:  # noqa: BLE001 - identity resolution must not crash the endpoint
+        logger.warning("MCP: could not resolve the caller's identity: %s", e)
+        return obo_token, {}, "The caller's identity could not be resolved."
+    return obo_token, identity, None
+
+
+def _refusal(tool, user_identity: Dict[str, Any], refusal: Optional[str]) -> Optional[str]:
+    if refusal and (tool.is_mutating or tool.requires_identity):
+        return f"Tool '{tool.name}' needs to know who is calling. {refusal}"
+    if user_identity.get("actor_type") == "service_principal" and not tool.allow_service_principals:
+        return f"Service principals can't call '{tool.name}'."
+    return None
 
 
 def _governed_shim(tool):
@@ -67,13 +115,19 @@ def _governed_shim(tool):
     ``functools.wraps`` copies the underlying function's signature/annotations so
     FastMCP still generates the correct input schema, while execution is routed
     through governance (validation, OPA pre-flight for mutating tools, audit).
-    The calling user's OBO token/identity is lifted off the request so tools
-    pinned to OBO enforce the *user's* Unity Catalog grants; when absent the
-    ToolExecutor falls back to the Service Principal.
+    The caller's OBO token and full identity (email, groups, app roles, and the
+    principal for a registered service principal) are resolved from the request,
+    so tools enforce the caller's own permissions. A mutating or identity-dependent
+    tool is refused when no identity could be resolved; it never runs as the app's
+    service principal on the caller's behalf.
     """
     @functools.wraps(tool._func)
     async def _shim(**kwargs):
-        obo_token, user_identity = _extract_obo_identity()
+        obo_token, user_identity, refusal = await _caller_identity()
+        reason = _refusal(tool, user_identity, refusal)
+        if reason:
+            logger.warning("MCP: refused %s: %s", tool.name, reason)
+            return {"error": reason, "status": "refused"}
         ctx = ToolContext(
             tool_call_id=f"mcp:{tool.name}",
             obo_token=obo_token,

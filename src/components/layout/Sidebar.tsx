@@ -41,6 +41,7 @@ import { useUserStore } from '../../stores/userStore';
 import { useRequestStore } from '../../stores/requestStore';
 import { genieHomeUrl, workspaceHomeUrl } from '../../lib/databricksLinks';
 import { api } from '../../services/api';
+import { getWhoAmI } from '../../services/metadataApi';
 import type { UserPersona } from '../../types';
 
 // Explicit render order for sidebar groups. Groups not listed here fall to
@@ -97,7 +98,7 @@ interface NavItem {
   allowedPersonas?: UserPersona[]; // If undefined, allowed for all
   // Shown by a backend permission check instead of persona (e.g. Access Rules,
   // which approver-group members see without holding an admin role).
-  gate?: 'access_rules';
+  gate?: 'access_rules' | 'metadata';
   // Exactly one of `path` (internal route) or `href` (external URL) should
   // be set. External items render as `<a target="_blank">` and pick up a
   // small external-link glyph next to the label when the rail is expanded.
@@ -162,7 +163,7 @@ const navItems: NavItem[] = [
     icon: <Tags className="w-5 h-5" />,
     path: '/governance/metadata',
     group: 'Watch Tower',
-    allowedPersonas: ['Platform Admin', 'Governance Admin']
+    gate: 'metadata',
   },
   {
     id: 'access_rules',
@@ -285,6 +286,28 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       cancelled = true;
     };
   }, [accessRulesTabOn, currentUser, activeRoleOverride]);
+
+  // Data owners edit metadata without an admin role, so the link follows the
+  // backend's browse check (METADATA_BROWSE_ROLES) rather than the persona.
+  const metadataTabOn = uiTabs?.tag_management !== false;
+  const metadataRole = activeRoleOverride ?? '';
+  const [metadataBrowse, setMetadataBrowse] = useState<{ role: string; ok: boolean } | null>(null);
+  useEffect(() => {
+    if (!metadataTabOn || !currentUser) return;
+    let cancelled = false;
+    getWhoAmI()
+      .then((w) => {
+        if (!cancelled) setMetadataBrowse({ role: metadataRole, ok: w.can_browse });
+      })
+      .catch(() => {
+        if (!cancelled) setMetadataBrowse({ role: metadataRole, ok: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [metadataTabOn, currentUser, metadataRole]);
+  const canBrowseMetadata =
+    metadataTabOn && !!currentUser && metadataBrowse?.role === metadataRole && metadataBrowse.ok;
 
   // Once branding confirms this is a non-dev environment, clear any stale
   // dev-mode override persisted in localStorage (e.g. carried over from a lower
@@ -455,6 +478,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     }
 
     if (item.gate === 'access_rules') return canViewAccessRules;
+    if (item.gate === 'metadata') return canBrowseMetadata;
     if (!item.allowedPersonas) return true;
     return item.allowedPersonas.includes(currentPersona);
   });

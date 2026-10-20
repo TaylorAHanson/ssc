@@ -96,7 +96,9 @@ Workspace + database:
 
 The **Preview Features** tracker also uses each target SP in its own workspace. The daily sync reads that workspace's preview list and values (`GET /api/2.1/settings-metadata` and `/api/2.1/settings/{name}`), which any workspace user can do. After a request is approved, it turns workspace previews on or off (`PATCH /api/2.1/settings/{name}`), which needs **workspace admin**. A workspace whose SP isn't admin falls back to a manual Implement task. Account-level previews are never changed by the app, because it has no account-admin credential.
 
-This SP is also the app's **governance identity**: every metastore-global governance read runs as it, pinned to the home host + `DATABRICKS_WAREHOUSE_ID` (see `get_governance_uc_provider`). That covers the data-asset cache sync behind Discover, data-contract (`dataset` tag) discovery, ODCS metadata drafting, and tag-manager discovery and search (tag filters read `system.information_schema.table_tags`). In Local Execution Mode the Metadata Manager page also *writes* catalog, schema, table, view and column tags as this SP, which is what its `APPLY TAG` grant below is for, and catalog and schema descriptions (`COMMENT ON`), which need the SP to own the catalog or schema or hold `MANAGE` on it. Grant it `BROWSE` on every governed catalog or those features quietly return nothing — Unity Catalog metadata is permission-filtered, so a missing grant looks like "no tagged tables" rather than an error.
+This SP is also the app's **governance identity**: every metastore-global governance read runs as it, pinned to the home host + `DATABRICKS_WAREHOUSE_ID` (see `get_governance_uc_provider`). That covers the data-asset cache sync behind Discover, data-contract (`dataset` tag) discovery, ODCS metadata drafting, and the Metadata Manager's reconciler (ADR-0006). The reconciler's sweep reads tags and descriptions from `information_schema` into the app's snapshot table, which is what the Metadata Manager page, API and MCP tools search; none of them query Unity Catalog live. Under `METADATA_RECONCILE_MODE=enforce` it also *writes*, as this SP, every catalog, schema, table, view and column tag (`ALTER … SET TAGS` / `UNSET TAGS`, which need `APPLY TAG`) and description (`COMMENT ON`, which needs ownership of the object or `MANAGE` on it). Setting a governed tag also needs `ASSIGN` on that tag. When the SP lacks a grant, the run records the object as failed with the Unity Catalog error, retries it with backoff and alerts governance after repeated failures. Grant it `BROWSE` on every governed catalog or those features quietly return nothing — Unity Catalog metadata is permission-filtered, so a missing grant looks like "no tagged tables" rather than an error.
+
+Pipelines and other systems that change tags through the Metadata API or MCP authenticate as **their own** service principals and need no Unity Catalog grants for it: the app checks their scope (Metadata Manager → System principals) and the reconciler applies the change as the governance SP above. They need only `CAN USE` on the app.
 
 ### Grants for each Sentinel SP (in ITS target workspace)
 
@@ -117,6 +119,10 @@ Additionally, the SP for the **data-certification workspace** (`SENTINEL_DATA_CE
 GRANT BROWSE, USE CATALOG, APPLY TAG ON CATALOG <catalog> TO `<cert-sp>`;
 GRANT USE SCHEMA ON CATALOG <catalog> TO `<cert-sp>`;       -- or per-schema
 GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<cert-sp>`;
+-- Metadata Manager enforcement (METADATA_RECONCILE_MODE=enforce) only:
+-- descriptions need ownership or MANAGE, and each governed tag it sets needs
+-- ASSIGN (granted on the tag under Catalog Explorer → Governed tags → Permissions).
+-- GRANT MANAGE ON CATALOG <catalog> TO `<cert-sp>`;
 -- Only if the RBAC / access-controls check is enabled. Reading a table/view's
 -- grants (SHOW GRANTS) requires MANAGE on the securable, ownership, or metastore
 -- admin — workspace admin is NOT sufficient for arbitrary UC objects. Grant MANAGE
@@ -135,7 +141,9 @@ GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<
 | `BROWSE` | catalog | ‡ | ✓† | Surfaces tables + tags in `information_schema` for discovery |
 | `USE CATALOG` | catalog | ‡ | ✓† | Required for tag writes (certification) |
 | `USE SCHEMA` | schema/catalog | ‡ | ✓† | Required for tag writes (certification) |
-| `APPLY TAG` | catalog/schema/table | ‡ | ✓† | Authorizes `ALTER TABLE/VIEW … SET TAGS` (certification) |
+| `APPLY TAG` | catalog/schema/table | ‡ | ✓† | Authorizes `ALTER … SET TAGS` / `UNSET TAGS` (certification, and Metadata Manager enforcement) |
+| `MANAGE` or ownership (Metadata Manager) | catalog / schema (inherits) | ‡ | ✓†‖ | `COMMENT ON` for descriptions the reconciler enforces |
+| `ASSIGN` | each governed tag | ‡ | ✓†‖ | Set a governed tag (one with a Unity Catalog tag policy) |
 | `SELECT` | `DATA_QUALITY_ADOC_SCHEMA` | ‡ | ✓† | Read ADOC data-quality history |
 | `MANAGE` (RBAC check only) | catalog / schema (inherits) | ‡* | ✓*† | Read grants (`SHOW GRANTS`) for the access-controls check. Requires `MANAGE`, object ownership, or metastore admin — **workspace admin is not sufficient** for UC objects |
 | `CAN USE` | SQL warehouse | ✓ | ✓ | Runs each SP's SQL. The cert SP needs `CAN USE` on the **home** warehouse too, since governance discovery runs there |
@@ -150,6 +158,7 @@ GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<
 `✓†` = only the Sentinel SP for the data-certification workspace (`SENTINEL_DATA_CERT_WORKSPACE`) needs the Unity Catalog grants; SPs that only scan workspace resources don't.
 `✓§` = only for the export paths you configure, and only when Access Rules (`features.rbac`) is on.
 `✓¶` = only for targets with app telemetry export enabled (`telemetry_export_destinations` in `databricks.yml`).
+`‖` = only on the deployment that enforces metadata (`METADATA_RECONCILE_MODE=enforce`), on the catalogs it reconciles. Deployments in `plan` mode only read.
 `‡` = the App SP needs these **only** when it is also the governance/certification identity — i.e. no dedicated certification-workspace SP is configured (`SENTINEL_DATA_CERT_WORKSPACE` blank), so discovery and certification fall back to the App SP. In the recommended setup they live on the cert SP instead.
 
 **Never needed:** `SELECT` (or ownership) on the governed data tables/views. Discovery is covered by `BROWSE`; certification is covered by `APPLY TAG`.

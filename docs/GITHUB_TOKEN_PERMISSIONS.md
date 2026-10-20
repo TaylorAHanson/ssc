@@ -5,14 +5,12 @@ API call the application makes, maps each one to the **least-privilege
 permission** it requires, and provides a ready-to-send request message you can
 forward to whoever owns your GitHub org.
 
-The application talks to GitHub for four features:
+The application talks to GitHub for three features:
 
 - **Reusable assets / templates** — listing template repositories and creating
   new repositories from them for self-service users.
 - **GitHub team access** — validating org membership, listing teams, creating
   teams, granting repo access, and adding members (GitHub access-request workflow).
-- **GitOps workflows** (e.g. the Tag Management flow) — creating a branch,
-  committing files, and opening a pull request in a governed config repo.
 - **App code review** (the `review_databricks_app_code` workflow step) — reading
   a Databricks App's repository at one commit so it can be security-reviewed.
   Read-only: it resolves the ref to a commit and downloads that commit's archive.
@@ -45,13 +43,7 @@ The app authenticates to GitHub with a **Personal Access Token (PAT)** only (Git
 | `POST /orgs/{org}/repos` | Create a repo under the org | `create_repo` |
 | `POST /repos/{template}/generate` | Create a repo from a template repo | `create_from_template` |
 | `PUT /repos/{owner}/{repo}/collaborators/{user}` | Grant a user access to a repo | `set_permissions` |
-| `GET /repos/{owner}/{repo}/git/ref/heads/{branch}` | Read a branch's head SHA | `create_branch` |
-| `POST /repos/{owner}/{repo}/git/refs` | Create a branch | `create_branch` |
-| `GET /repos/{owner}/{repo}/contents/{path}` | Read a file (to get its blob SHA before update) | `create_or_update_file` |
-| `PUT /repos/{owner}/{repo}/contents/{path}` | Create/update a file (commit) | `create_or_update_file` |
-| `POST /repos/{owner}/{repo}/pulls` | Open a pull request | `create_pull_request` |
-| `GET /repos/{owner}/{repo}/pulls` | Find an existing PR (idempotent retry) | `create_pull_request` |
-| `GET /repos/{owner}/{repo}/pulls/{number}` | Poll a PR's state / merge status; read a submitted PR's head commit (code review) | `get_pull_request` |
+| `GET /repos/{owner}/{repo}/pulls/{number}` | Read a submitted PR's head commit (code review) | `get_pull_request` |
 | `GET /repos/{owner}/{repo}` | Resolve a submitted repo and its default branch (code review) | `get_repo` |
 | `GET /repos/{owner}/{repo}/commits/{ref}` | Resolve a branch/tag/SHA to a commit (code review) | `resolve_commit_sha` |
 | `GET /repos/{owner}/{repo}/tarball/{sha}` | Download the commit archive to review (redirects to `codeload.github.com`) | `download_tarball` |
@@ -68,17 +60,17 @@ The app authenticates to GitHub with a **Personal Access Token (PAT)** only (Git
 ## Fine-grained PAT permissions
 
 Grant **only** these permissions, scoped to the specific org and the
-specific repositories the app touches (template repos + the GitOps config repo,
-plus, for app code review, every repo an app may be submitted from; code review
-needs only **Contents: Read** and **Pull requests: Read** on those):
+specific repositories the app touches (template repos, plus, for app code
+review, every repo an app may be submitted from; code review needs only
+**Contents: Read** and **Pull requests: Read** on those):
 
 ### Repository permissions
 
 | Permission | Access | Why (which calls) |
 | --- | --- | --- |
 | **Metadata** | Read | Mandatory baseline (auto-selected). Backs `GET /repos/{owner}/{repo}` and the repo-list calls. |
-| **Contents** | Read & write | Branch refs (`git/ref`, `git/refs`) and file commits (`contents/{path}`). Also the read half of "create from template". |
-| **Pull requests** | Read & write | Open/find/poll PRs (`/pulls`). |
+| **Contents** | Read | The read half of "create from template", and downloading a commit for code review. |
+| **Pull requests** | Read | Reading a submitted PR's head commit for code review (`/pulls/{number}`). |
 | **Administration** | Read & write | Repo creation (`/user/repos`, `/orgs/{org}/repos`), template generation (`/generate`), and adding collaborators (`/collaborators/{user}`). |
 | **Workflows** | Read & write | **Only if** any template or committed file lives under `.github/workflows/`. GitHub blocks committing workflow files without this. |
 
@@ -125,7 +117,7 @@ Use a classic PAT when the app must create repositories at the org level:
    the **Workflows** permission (fine-grained) or the `workflow` scope (classic),
    in addition to Contents write.
 5. **Scope the token to specific repos.** Limit the token to the template repos
-   and the GitOps config repo (`GOVERNANCE_TAGS_REPO`) rather than "all
+   (and, for code review, the repos apps are submitted from) rather than "all
    repositories" to keep blast radius minimal.
 6. **Team invites for non-members.** Adding a user who is not yet an org member
    sends a GitHub org invitation they must accept before team membership is active.
@@ -140,11 +132,11 @@ Use a classic PAT when the app must create repositories at the org level:
 >
 > Our internal self-service platform needs scoped GitHub access to (a) create
 > repositories from our template repos for self-service users, (b) manage GitHub
-> team membership for access requests, and (c) run a GitOps flow (create a branch,
-> commit config files, open a PR) against our governance config repo.
+> team membership for access requests, and (c) read the repositories apps are
+> submitted from, for code review.
 >
 > We'd like a **Personal Access Token owned by a dedicated machine/service
-> account**, scoped to the template repositories and the config repo.
+> account**, scoped to the template repositories and the repositories apps are submitted from.
 >
 > Because we create repositories at the org level, we need a **classic PAT** with
 > the `repo` scope (plus `read:org` / `admin:org` for team flows, and `workflow`

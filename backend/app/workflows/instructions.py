@@ -120,10 +120,19 @@ def execution_contract(
     can't drift from the graph.
     """
     spec = spec or {}
-    return {
+    contract = {
         "workflow_type": request_type or spec.get("name") or "workflow",
         "parameters": _user_inputs(spec),
     }
+    if filed_by(spec):
+        contract["filed_by"] = filed_by(spec)
+    return contract
+
+
+def filed_by(spec: Dict[str, Any] | None) -> str | None:
+    """The tool that files this workflow's requests itself, when it isn't ``execute_workflow``."""
+    value = (spec or {}).get("filed_by")
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def render_execution_block(
@@ -131,6 +140,12 @@ def render_execution_block(
 ) -> str:
     """Render the ``## Execution`` markdown block deterministically from the graph."""
     contract = execution_contract(spec, request_type=request_type)
+    if contract.get("filed_by"):
+        return "\n".join([
+            "## Execution",
+            f"Call `{contract['filed_by']}`; it files the `{contract['workflow_type']}` request itself. "
+            "Don't call `execute_workflow` for this workflow.",
+        ])
     user_inputs = contract["parameters"]
     lines: List[str] = ["## Execution", "Call `execute_workflow` with:", "```json", "{"]
     lines.append(f'  "workflow_type": "{contract["workflow_type"]}",')

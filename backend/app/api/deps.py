@@ -9,6 +9,7 @@ from app.core.config import settings, dev_features_allowed as _dev_features_allo
 import uuid
 import logging
 import time
+from app.api import identity
 from app.models.user import User
 from app.db.role_mapping import RoleMappingModel
 from app.providers.github.client import GitHubProvider
@@ -108,21 +109,128 @@ def _calculate_roles(db: Session, entitlements: List[str]) -> List[str]:
             
     return list(roles)
 
+def _principal_user(db: Session, fwd: Dict, obo_token: Optional[str]) -> Optional[User]:
+    """The registered service principal behind a caller with no email address, or None.
+
+    Its groups come only from its own forwarded token: the SDK's default client is
+    the app's own identity, whose groups must never be attributed to a caller.
+    """
+    from app.services.metadata.principals import find_principal, record_seen
+
+    principal = find_principal(db, identity.identifiers(fwd))
+    if principal is None:
+        return None
+    app_id = principal.application_id
+    record_seen(db, app_id, identity.header_shape(fwd))
+    entitlements = [app_id]
+    if obo_token:
+        entitlements += [e for e in _get_user_entitlements(app_id, obo_token)[1:] if e not in entitlements]
+    return User(
+        id=app_id,
+        email=app_id,
+        full_name=principal.display_name or app_id,
+        entitlements=entitlements,
+        roles=_calculate_roles(db, entitlements),
+        actor_type="service_principal",
+        application_id=app_id,
+        identity_headers=list(fwd.get("headers_seen") or []),
+    )
+
+
+def resolve_user(
+    db: Session,
+    *,
+    email: Optional[str],
+    username: Optional[str] = None,
+    forwarded: Optional[Dict] = None,
+    obo_token: Optional[str] = None,
+    dev_role_override: Optional[str] = None,
+    allow_service_principals: bool = False,
+) -> User:
+    """Resolve the caller's identity, groups and app roles (shared by the API and the MCP endpoint).
+
+    ``email`` / ``username`` are what the auth middleware put on the request (with
+    its mock stand-ins); ``forwarded`` is what the proxy actually sent. A caller with
+    no email address but some other forwarded identifier is matched against
+    registered service principals (ADR-0006 D7), and only routes that opt in with
+    ``allow_service_principals`` accept one. Raises HTTPException 401 / 403.
+    """
+    fwd = forwarded or {}
+    principal_user = _principal_user(db, fwd, obo_token) if identity.identifiers(fwd) else None
+    if principal_user is not None:
+        if not allow_service_principals:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Service principals can only call the metadata API.",
+            )
+        return principal_user
+    if identity.identifiers(fwd) and not identity.is_email_address(fwd.get("email")):
+        identity.log_unrecognized_shape(fwd)
+        if not _dev_features_allowed():
+            # The proxy authenticated it, so this is "not allowed", not "not signed in".
+            caller = identity.identifiers(fwd)[0]
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"'{caller}' has no email identity and isn't a registered service principal. A Platform "
+                    "Admin can register its application id under Metadata Manager -> System principals."
+                ),
+            )
+
+    return _resolve_human(db, email=email, username=username, obo_token=obo_token,
+                          dev_role_override=dev_role_override,
+                          identity_headers=list(fwd.get("headers_seen") or []))
+
+
+def _state_identity(request: Request) -> Tuple[Optional[str], Optional[str], Optional[Dict]]:
+    state_user = getattr(request.state, "user", None) or {}
+    email = state_user.get("email") or None
+    username = state_user.get("username", email) if email else None
+    return email, username, state_user.get("forwarded")
+
+
 def get_current_user(
     request: Request,
     db: Session = Depends(get_db),
     x_dev_role_override: Optional[str] = Header(None, alias="X-Dev-Role-Override")
 ) -> User:
     """
-    Get the current authenticated user and calculate roles.
+    Get the current authenticated user and calculate roles. Service principals are refused.
     """
-    user_email = None
-    user_name = None
-    
-    if hasattr(request.state, "user") and request.state.user.get("email"):
-        user_email = request.state.user["email"]
-        user_name = request.state.user.get("username", user_email)
-        
+    email, username, forwarded = _state_identity(request)
+    return resolve_user(
+        db, email=email, username=username, forwarded=forwarded,
+        obo_token=getattr(request.state, "token", None), dev_role_override=x_dev_role_override,
+    )
+
+
+def get_current_user_or_principal(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_dev_role_override: Optional[str] = Header(None, alias="X-Dev-Role-Override")
+) -> User:
+    """Like ``get_current_user``, but also accepts a registered service principal (metadata API only)."""
+    email, username, forwarded = _state_identity(request)
+    return resolve_user(
+        db, email=email, username=username, forwarded=forwarded,
+        obo_token=getattr(request.state, "token", None), dev_role_override=x_dev_role_override,
+        allow_service_principals=True,
+    )
+
+
+def _resolve_human(
+    db: Session,
+    *,
+    email: Optional[str],
+    username: Optional[str],
+    obo_token: Optional[str],
+    dev_role_override: Optional[str],
+    identity_headers: List[str],
+) -> User:
+    user_email = email
+    user_name = username or email
+    x_dev_role_override = dev_role_override
+
     # The auth middleware substitutes ``settings.MOCK_USER_EMAIL`` when the proxy
     # sent no ``x-forwarded-email``, so both branches here mean the same thing:
     # this request carries no real forwarded identity.
@@ -145,8 +253,6 @@ def get_current_user(
         user_email = MOCK_USER_EMAIL
         user_name = "System Admin"
 
-
-    obo_token = getattr(request.state, "token", None)
     entitlements = _get_user_entitlements(user_email, obo_token)
     calculated_roles = _calculate_roles(db, entitlements)
     
@@ -171,7 +277,8 @@ def get_current_user(
         email=user_email,
         full_name=user_name,
         entitlements=entitlements,
-        roles=calculated_roles
+        roles=calculated_roles,
+        identity_headers=identity_headers,
     )
     
     return user

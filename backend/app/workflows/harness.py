@@ -32,7 +32,7 @@ import logging
 import os
 import types
 import uuid
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -85,12 +85,6 @@ def _install_fakes():
         return {"content": "<p>hermetic report content</p>"}
     runner_mod.AgentRunner.run = _fake_run
 
-    # The tag-change graph refuses to guess a GitOps target, so give it one —
-    # a local checkout has no governance repo configured.
-    from app.core.config import settings
-    settings.GOVERNANCE_TAGS_REPO = settings.GOVERNANCE_TAGS_REPO or "tag-manager"
-    settings.GOVERNANCE_TAGS_BASE_BRANCH = settings.GOVERNANCE_TAGS_BASE_BRANCH or "dev"
-
     # Preview-feature steps read and write the tracker's tables; stand in for
     # them so the graph's shape (approve -> automatic change -> Implement skipped
     # -> verify) runs without a database.
@@ -115,11 +109,61 @@ def _install_fakes():
         "plane": "uc", "nothing_to_change": False, "report_markdown": "hermetic"}
     rbac_requests.record_step = lambda *a, **k: {"change_set_id": "cs-hermetic", "message": "hermetic"}
 
+    # Metadata-change steps read and write the desired-state tables; prepare is
+    # set per scenario (see METADATA_SCENARIOS).
+    import app.services.metadata.requests as metadata_requests
+    metadata_requests.record_step = lambda *a, **k: {"change_set_id": "cs-hermetic", "message": "hermetic"}
+    metadata_requests.owner_approver_groups_for = lambda *a, **k: ["sales-owners"]
+    _use_metadata_scenario(next(iter(METADATA_SCENARIOS)))
+
     fake = _FakeProvider()
     for getter in ("_get_databricks_provider", "_get_github_provider",
                    "_get_gitops_provider", "_get_notification_provider",
                    "_get_identity_provider", "_get_terramate_provider"):
         setattr(T, getter, lambda fake=fake: fake)
+
+
+def _metadata_item(name: str, key: str, after, *, column=None, action="set", before=None, environment="dev",
+                   object_exists=True, copied_from=None) -> dict:
+    return {"fqn_key": f"{name}::{column}" if column else name, "name": name, "column": column,
+            "securable_type": "column" if column else "table", "environment": environment, "field": "tag",
+            "key": key, "action": action, "before": before, "before_exists": before is not None,
+            "after": after, "object_exists": object_exists,
+            "object_state": "exists" if object_exists else "pending", "copied_from": copied_from}
+
+
+# The metadata_change graph's gates depend on what prepare finds, so it runs once per
+# scenario. Sensitivity comes from the real key policies and environment rules.
+METADATA_SCENARIOS: Dict[str, List[dict]] = {
+    "column_pii": [_metadata_item("sales_dev.crm.customers", "pii", None, column="email")],
+    "approver_group_change": [_metadata_item("sales_dev.crm.customers", "approver_group", "crm-approvers",
+                                             before="sales-approvers")],
+    "pre_declared_table": [_metadata_item("sales_dev.crm.leads_v2", "dataset", "crm", object_exists=False)],
+    "copy_to_prd": [
+        _metadata_item("sales_dev.crm.customers", "dataset", "crm"),
+        _metadata_item("sales_prd.crm.customers", "dataset", "crm", environment="prd", copied_from="dev"),
+    ],
+}
+
+
+def _use_metadata_scenario(name: str) -> None:
+    import app.services.metadata.requests as metadata_requests
+    from app.services.metadata import environments, policy
+    from app.services.metadata.types import ChangeItem
+
+    items = [ChangeItem.model_validate(raw) for raw in METADATA_SCENARIOS[name]]
+    sensitive = any(policy.sensitive_reasons(i) or environments.approval_rule(i.environment) == "all" for i in items)
+    metadata_requests.prepare_step = lambda *a, **k: {
+        "nothing_to_change": not items, "sensitive": sensitive, "approver_groups": ["sales-owners"],
+        "change_count": len(items), "report_markdown": "hermetic"}
+
+
+def _scenarios(rtype_value: str) -> List[Tuple[str, Callable[[], None]]]:
+    """``(transcript key, setup)`` per run of a graph; one plain run unless it has scenarios."""
+    if rtype_value == "metadata_change":
+        return [(f"{rtype_value}[{name}]", lambda name=name: _use_metadata_scenario(name))
+                for name in METADATA_SCENARIOS]
+    return [(rtype_value, lambda: None)]
 
 
 def _make_request(rtype_value: str):
@@ -243,17 +287,20 @@ async def main(*, capture: bool = False, sandbox: bool = False) -> int:
     ex = DurableWorkflowExecutor()
     results: List[Tuple[str, bool, str, int]] = []
     for rt in registered_types():
-        current_rt["v"] = rt
-        transcripts.setdefault(rt, {"tools": [], "mutating": 0})
-        try:
-            res = await _run_one(ex, rt)
-            results.append(res)
-            transcripts[rt]["status"] = res[2]
-            transcripts[rt]["gates"] = res[3]
-        except Exception as e:
-            results.append((rt, False, f"ERROR: {e}", 0))
-            transcripts[rt]["status"] = f"ERROR: {e}"
-            transcripts[rt]["gates"] = 0
+        for key, setup in _scenarios(rt):
+            current_rt["v"] = key
+            transcripts.setdefault(key, {"tools": [], "mutating": 0})
+            try:
+                if not sandbox:
+                    setup()
+                _, ok, status, gates = await _run_one(ex, rt)
+                results.append((key, ok, status, gates))
+                transcripts[key]["status"] = status
+                transcripts[key]["gates"] = gates
+            except Exception as e:
+                results.append((key, False, f"ERROR: {e}", 0))
+                transcripts[key]["status"] = f"ERROR: {e}"
+                transcripts[key]["gates"] = 0
 
     te.executor.run = orig_run
     logging.disable(logging.NOTSET)

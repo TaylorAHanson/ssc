@@ -124,8 +124,33 @@ def test_auth_middleware_propagates_user_state():
 
     asyncio.run(middleware(scope, receive, send))
 
-    assert captured["state"].get("user") == {
+    user = captured["state"].get("user")
+    assert {k: user[k] for k in ("email", "username", "id")} == {
         "email": "taylor@example.com",
         "username": "taylor",
         "id": "u-123",
     }
+    assert user["forwarded"]["email"] == "taylor@example.com"
+    assert user["forwarded"]["user_id"] == "u-123"
+
+
+def test_auth_middleware_records_only_what_was_forwarded():
+    """Without headers the mock stand-ins fill ``user``, but ``forwarded`` stays empty."""
+    captured: dict = {}
+
+    async def app(scope, receive, send):
+        captured["state"] = dict(scope.get("state", {}))
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_message):
+        pass
+
+    asyncio.run(AuthMiddleware(app)(_make_scope(), receive, send))
+
+    forwarded = captured["state"]["user"]["forwarded"]
+    assert forwarded["email"] is None and forwarded["user_id"] is None
+    assert forwarded["headers_seen"] == []

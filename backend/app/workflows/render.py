@@ -29,7 +29,7 @@ _COMPLETION_FACTS = {"rbac_exported"}
 
 # A gate whose approvers come from a setting is named by that source rather than its
 # gate type, which only says who approves when nothing else is configured.
-_GATE_LABELS = {"access_rule_type": "Access rule approvers"}
+_GATE_LABELS = {"access_rule_type": "Access rule approvers", "metadata_owner": "Metadata approvers"}
 
 
 def _completion_facts(facts) -> List[Dict[str, Any]]:

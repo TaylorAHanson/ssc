@@ -1,0 +1,43 @@
+{
+  "key": "metadata_change",
+  "name": "metadata_change",
+  "complete_fact": "metadata_change_recorded",
+  "filed_by": "submit_metadata_change",
+  "stages": [
+    {
+      "kind": "step",
+      "name": "prepare",
+      "tool": "prepare_metadata_change",
+      "writes_context": ["nothing_to_change", "sensitive", "approver_groups"],
+      "args": {}
+    },
+    {
+      "kind": "gate",
+      "name": "owner_approval",
+      "type": "data_owner",
+      "waiting_status": "data_owner_approval",
+      "editable": false,
+      "auto_approve": {"$var": {"path": "nothing_to_change", "default": false}},
+      "approver": {"source": "metadata_owner", "role": "owner"}
+    },
+    {
+      "kind": "gate",
+      "name": "governance_approval",
+      "type": "platform_admin",
+      "waiting_status": "manager_approval",
+      "editable": false,
+      "auto_approve": {"$or": [
+        {"$var": {"path": "nothing_to_change", "default": false}},
+        {"$not": {"$var": {"path": "sensitive", "default": true}}}
+      ]},
+      "approver": {"source": "metadata_owner", "role": "governance"}
+    },
+    {
+      "kind": "step",
+      "name": "record",
+      "tool": "record_metadata_change",
+      "success_fact": "metadata_change_recorded",
+      "args": {}
+    }
+  ]
+}
