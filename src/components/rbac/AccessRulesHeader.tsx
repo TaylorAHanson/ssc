@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle, BookOpen, Eye, KeyRound, Lock, Pencil } from 'lucide-react';
 import type { RbacPlanePermission } from '../../types/rbac';
 import { GUIDE_ACCESS_RULES, useGuideEnabled } from '../../lib/guide';
-import { Badge } from './ui';
+import { Badge, type Tone } from './ui';
 import { SETTINGS_PATH } from './utils';
 
 export function AccessRulesHeader() {
@@ -28,10 +28,16 @@ export function AccessRulesHeader() {
   );
 }
 
-const GROUP_STATUS: Record<RbacPlanePermission['group_status'], { label: string; tone: 'green' | 'red' | 'gray' }> = {
+const GROUP_STATUS: Record<RbacPlanePermission['group_status'], { label: string; tone: Tone; title?: string }> = {
   found: { label: 'Found in Databricks', tone: 'green' },
+  account_only: {
+    label: 'Found in the account',
+    tone: 'green',
+    title: 'An account group that isn’t assigned to this workspace.',
+  },
   not_found: { label: 'Not found in Databricks', tone: 'red' },
-  unknown: { label: 'Couldn’t check', tone: 'gray' },
+  unverified: { label: 'Couldn’t confirm', tone: 'amber' },
+  unknown: { label: 'Couldn’t check', tone: 'gray', title: 'The group lookup failed; try again later.' },
   unset: { label: 'Not set', tone: 'gray' },
 };
 
@@ -61,10 +67,7 @@ export function ApproverStrip({ planes }: { planes: RbacPlanePermission[] }) {
                 </span>
               )}
               {p.approver_group && (
-                <Badge
-                  tone={status.tone}
-                  title={p.group_status === 'unknown' ? 'The group lookup failed; try again later.' : undefined}
-                >
+                <Badge tone={status.tone} title={status.title}>
                   {status.label}
                 </Badge>
               )}
@@ -72,8 +75,19 @@ export function ApproverStrip({ planes }: { planes: RbacPlanePermission[] }) {
             {p.group_status === 'not_found' && (
               <p className="mt-2 flex items-start gap-1.5 text-xs text-red-700">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                No Databricks group has this exact name, so approvals will only reach Platform Admins until it’s fixed
-                in Admin → Settings → Access Rules.
+                No Databricks group in this workspace or the account has this exact name, so approvals will only reach
+                Platform Admins until it’s fixed in Admin → Settings → Access Rules.
+              </p>
+            )}
+            {p.group_status === 'account_only' && (
+              <p className="mt-2 text-xs text-gray-500">
+                Not assigned to this workspace, which is fine: members are recognised from their account groups.
+              </p>
+            )}
+            {p.group_status === 'unverified' && (
+              <p className="mt-2 text-xs text-gray-500">
+                This workspace has no group with this name, and the account’s groups couldn’t be checked. If it’s an
+                account group, check the name matches exactly.
               </p>
             )}
           </div>

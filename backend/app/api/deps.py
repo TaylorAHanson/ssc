@@ -2,12 +2,13 @@
 API dependencies.
 """
 from fastapi import Depends, HTTPException, status, Header, Request
-from typing import Generator, Optional, List, Dict
+from typing import Generator, Optional, List, Dict, Tuple
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.core.config import settings, dev_features_allowed as _dev_features_allowed
 import uuid
 import logging
+import time
 from app.models.user import User
 from app.db.role_mapping import RoleMappingModel
 from app.providers.github.client import GitHubProvider
@@ -17,6 +18,32 @@ from databricks.sdk.core import DatabricksError
 logger = logging.getLogger(__name__)
 
 MOCK_USER_EMAIL = "admin@example.com"
+
+ACCOUNT_GROUPS_ME_PATH = "/api/2.0/account/scim/v2/Me"
+ACCOUNT_GROUP_CACHE_SECONDS = 300.0
+# User email -> (fetched at, account group names). A failed read caches an empty list
+# so a refused call doesn't slow every request.
+_account_group_cache: Dict[str, Tuple[float, List[str]]] = {}
+
+
+def _account_groups(w: WorkspaceClient, user_email: str) -> List[str]:
+    """The user's account-level groups, read with their own token.
+
+    The workspace's ``me()`` leaves out account groups that aren't assigned to the
+    workspace, but Unity Catalog grants and approver groups can still name them.
+    """
+    now = time.monotonic()
+    cached = _account_group_cache.get(user_email)
+    if cached and now - cached[0] < ACCOUNT_GROUP_CACHE_SECONDS:
+        return cached[1]
+    try:
+        me = w.api_client.do("GET", ACCOUNT_GROUPS_ME_PATH, query={"attributes": "groups"}) or {}
+        groups = [g["display"] for g in me.get("groups") or [] if g.get("display")]
+    except Exception as e:  # noqa: BLE001 - any refusal or failure falls back to workspace groups
+        logger.warning("Couldn't read account groups for %s; using workspace groups only: %s", user_email, e)
+        groups = []
+    _account_group_cache[user_email] = (time.monotonic(), groups)
+    return groups
 
 
 def _get_user_entitlements(user_email: str, obo_token: Optional[str] = None) -> List[str]:
@@ -53,6 +80,10 @@ def _get_user_entitlements(user_email: str, obo_token: Optional[str] = None) -> 
             for role in me.roles:
                 if getattr(role, "value", None):
                     entitlements.append(role.value)
+
+        # Only with the user's own token: the fallback client is the app's identity.
+        if obo_token:
+            entitlements.extend(g for g in _account_groups(w, user_email) if g not in entitlements)
                     
     except DatabricksError as e:
         logger.warning(f"Failed to fetch Databricks entitlements for {user_email}: {e}")

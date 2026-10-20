@@ -94,10 +94,10 @@ def _settings(monkeypatch):
     monkeypatch.setattr(settings, "RBAC_EXPORT_ARCHIVE_DAYS", 90)
     monkeypatch.setattr(csv_export, "_change_pending_since", None)
 
-    async def group_exists(name):
-        return True
+    async def group_status(name):
+        return "found"
 
-    monkeypatch.setattr(approvers, "group_exists", group_exists)
+    monkeypatch.setattr(approvers, "group_status", group_status)
 
 
 @pytest.fixture

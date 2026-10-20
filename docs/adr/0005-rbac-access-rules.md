@@ -514,7 +514,14 @@ Live verification is part of the drift view (D15).
 The page is gated by the `features.rbac` capability. It is open to Platform Admins,
 to viewer roles, and to members of any of the three approver groups; editing is per
 type (D8). A header strip shows each type's approver group and warns when one is
-unset or can't be found. The page has four tabs:
+unset or absent. The workspace's group list and its `me()` leave out account
+groups that aren't assigned to the workspace, which Unity Catalog grants often
+use. So the existence check falls back to the account's groups (served by the
+workspace at `/api/2.0/account/scim/v2/Groups`) and reports `account_only`.
+Sign-in adds the user's account groups (`/api/2.0/account/scim/v2/Me`, read with
+their own token) to their entitlements, so members of such a group are routed
+and can edit. If that read is refused, the user keeps their workspace groups. The
+page has four tabs:
 
 - **Rules:** a Type selector, then an Environment selector, to pick the sheet; column
   filters, search, inline editing for editors,

@@ -24,8 +24,25 @@ own approver group.
 The approver group is a Databricks group, named exactly as it appears in
 Databricks. Its members approve requests of that type and can edit that type's
 rules directly. The strip at the top of the page shows each type's group and
-warns when one isn't set or can't be found in Databricks. A type with no group
-falls back to Platform Admins, and Platform Admins can approve every type.
+warns when one isn't set or isn't in Databricks. A type with no group falls back
+to Platform Admins, and Platform Admins can approve every type.
+
+The group can be a workspace group or an account group, including one that
+isn't assigned to this workspace, as Unity Catalog grants often use. Each card
+shows what Databricks says about the name:
+
+- **Found in Databricks:** the group is in this workspace, or you're in it.
+- **Found in the account:** an account group that isn't assigned to this
+  workspace. Members are recognised from their account groups, so they still
+  get the approvals.
+- **Couldn't confirm:** the group isn't in this workspace, and the account's
+  groups couldn't be checked. Check that the name matches the group exactly.
+- **Not found in Databricks:** no group in the workspace or the account has this
+  exact name, so only Platform Admins get these approvals until it's fixed.
+
+If a member of an account group sees that type as **View only**, {{brand_name}}
+couldn't read their account groups; the warning in the app's logs says why.
+Assigning the group to the workspace also fixes it.
 
 The access request workflow reads these settings when each request reaches its
 approval step, so you change approvers here, not in the workflow. In the

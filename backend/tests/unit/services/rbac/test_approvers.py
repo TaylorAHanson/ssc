@@ -52,12 +52,28 @@ class _FakeGroups:
 
 @pytest.fixture
 def fake_sdk(monkeypatch):
-    """Replace ``databricks.sdk.WorkspaceClient`` with one whose groups API is ``_FakeGroups``."""
-    state = {"groups": _FakeGroups(existing=[])}
+    """Replace ``databricks.sdk.WorkspaceClient`` with one whose workspace groups API is
+    ``_FakeGroups`` and whose account group lookup finds ``state["account"]``.
+
+    ``state["account_error"]`` makes the account lookup raise instead.
+    """
+    state = {"groups": _FakeGroups(existing=[]), "account": set(), "account_error": None,
+             "account_calls": []}
+
+    class _ApiClient:
+        def do(self, method, path, query=None, **kw):
+            assert (method, path) == ("GET", approvers.ACCOUNT_GROUPS_PATH)
+            state["account_calls"].append(query["filter"])
+            if state["account_error"]:
+                raise state["account_error"]
+            hits = [n for n in state["account"] | state["groups"].existing
+                    if query["filter"] == f'displayName eq "{n}"']
+            return {"Resources": [{"id": "1", "displayName": n} for n in hits]}
 
     class _Client:
         def __init__(self, *a, **kw):
             self.groups = state["groups"]
+            self.api_client = _ApiClient()
 
     monkeypatch.setattr("databricks.sdk.WorkspaceClient", _Client)
     return state
@@ -167,42 +183,59 @@ def test_require_view_and_edit_raise_plain_messages():
     assert "Workspace securables" in str(exc_info.value)
 
 
-# --- group_exists --------------------------------------------------------------
+# --- group_status --------------------------------------------------------------
 
 
-def test_group_exists_true_false_and_cached(fake_sdk):
+def test_group_status_found_not_found_and_cached(fake_sdk):
     fake_sdk["groups"] = _FakeGroups(existing=[UC_GROUP])
 
-    assert asyncio.run(approvers.group_exists(UC_GROUP)) is True
-    assert asyncio.run(approvers.group_exists("Missing")) is False
+    assert asyncio.run(approvers.group_status(UC_GROUP)) == "found"
+    assert asyncio.run(approvers.group_status("Missing")) == "not_found"
     calls = len(fake_sdk["groups"].calls)
-    assert asyncio.run(approvers.group_exists(UC_GROUP)) is True
-    assert asyncio.run(approvers.group_exists("Missing")) is False
+    assert asyncio.run(approvers.group_status(UC_GROUP)) == "found"
+    assert asyncio.run(approvers.group_status("Missing")) == "not_found"
     assert len(fake_sdk["groups"].calls) == calls
     assert fake_sdk["groups"].calls[0] == (f'displayName eq "{UC_GROUP}"', "id,displayName")
 
 
-def test_group_exists_cache_expires(fake_sdk, monkeypatch):
+def test_an_account_group_not_assigned_to_the_workspace_is_account_only(fake_sdk):
+    """The workspace's group list leaves these out, but grants and approvals can name them."""
+    fake_sdk["groups"] = _FakeGroups(existing=[UC_GROUP])
+    fake_sdk["account"] = {"edh_dbx_metastore_admin"}
+
+    assert asyncio.run(approvers.group_status("edh_dbx_metastore_admin")) == "account_only"
+    assert asyncio.run(approvers.group_status(UC_GROUP)) == "found"
+    assert fake_sdk["account_calls"] == ['displayName eq "edh_dbx_metastore_admin"']
+
+
+def test_a_workspace_miss_is_unverified_when_the_account_cannot_be_checked(fake_sdk):
+    fake_sdk["account_error"] = RuntimeError("account SCIM not available")
+    assert asyncio.run(approvers.group_status("Maybe an account group")) == "unverified"
+    asyncio.run(approvers.group_status("Maybe an account group"))
+    assert len(fake_sdk["account_calls"]) == 1
+
+
+def test_group_status_cache_expires(fake_sdk, monkeypatch):
     fake_sdk["groups"] = _FakeGroups(existing=[UC_GROUP])
     clock = {"now": 1000.0}
     monkeypatch.setattr(approvers.time, "monotonic", lambda: clock["now"])
 
-    asyncio.run(approvers.group_exists(UC_GROUP))
+    asyncio.run(approvers.group_status(UC_GROUP))
     clock["now"] += approvers.GROUP_CACHE_SECONDS + 1
-    asyncio.run(approvers.group_exists(UC_GROUP))
+    asyncio.run(approvers.group_status(UC_GROUP))
     assert len(fake_sdk["groups"].calls) == 2
 
 
-def test_group_exists_escapes_double_quotes(fake_sdk):
+def test_group_status_escapes_double_quotes(fake_sdk):
     name = 'odd "quoted" group'
-    asyncio.run(approvers.group_exists(name))
+    asyncio.run(approvers.group_status(name))
     assert fake_sdk["groups"].calls[0][0] == 'displayName eq "odd \\"quoted\\" group"'
 
 
-def test_group_exists_is_none_on_error_and_not_cached(fake_sdk):
+def test_group_status_is_unknown_on_error_and_not_cached(fake_sdk):
     fake_sdk["groups"] = _FakeGroups(existing=[], fail=[UC_GROUP])
-    assert asyncio.run(approvers.group_exists(UC_GROUP)) is None
-    assert asyncio.run(approvers.group_exists(UC_GROUP)) is None
+    assert asyncio.run(approvers.group_status(UC_GROUP)) == "unknown"
+    assert asyncio.run(approvers.group_status(UC_GROUP)) == "unknown"
     assert len(fake_sdk["groups"].calls) == 2
 
 
@@ -227,6 +260,28 @@ def test_permissions_report_each_plane_and_group_status(fake_sdk, monkeypatch):
     assert perms.can_export is True
     assert perms.can_import is False
     assert perms.can_reset is False
+
+
+def test_the_viewers_own_membership_confirms_a_group_the_app_cannot_see(fake_sdk, monkeypatch):
+    monkeypatch.setattr(settings, "RBAC_WS_APPROVER_GROUP", "Hidden WS Group")
+    fake_sdk["account_error"] = RuntimeError("account SCIM not available")
+    fake_sdk["account"] = {MS_GROUP}
+
+    statuses = {p.plane: p.group_status
+                for p in asyncio.run(approvers.permissions(_user(groups=["hidden ws group"]))).planes}
+    assert statuses == {"uc": "unverified", "uc_metastore": "unverified", "workspace": "found"}
+
+
+def test_an_account_only_group_member_can_edit_its_type(fake_sdk, monkeypatch):
+    monkeypatch.setattr(settings, "RBAC_METASTORE_APPROVER_GROUP", "edh_dbx_metastore_admin")
+    fake_sdk["account"] = {"edh_dbx_metastore_admin"}
+
+    member = {p.plane: (p.group_status, p.can_edit)
+              for p in asyncio.run(approvers.permissions(_user(groups=["edh_dbx_metastore_admin"]))).planes}
+    other = {p.plane: (p.group_status, p.can_edit)
+             for p in asyncio.run(approvers.permissions(_user())).planes}
+    assert member["uc_metastore"] == ("account_only", True)
+    assert other["uc_metastore"] == ("account_only", False)
 
 
 def test_permissions_unknown_when_lookup_fails(fake_sdk):

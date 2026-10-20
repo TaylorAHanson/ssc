@@ -31,6 +31,7 @@ Format rules (the app parses this file, so keep to them):
 ### Fixed
 
 - **Import findings give the row number you see in Excel.** Findings counted from the first data row and skipped blank rows, so every number was at least one short of the row in the workbook. They now count the header as row 1 and include blank rows, so you can go straight to the row they name.
+- **Account groups work as approver groups.** An approver group that exists in your Databricks account but isn't assigned to this workspace, as Unity Catalog groups often aren't, showed as "Not found in Databricks". Its members also weren't recognised, so they couldn't approve or edit that type, and the warning that approvals only reached Platform Admins was right. Now such a group shows **Found in the account**, and the app reads each person's account groups when they sign in, so members get the approvals and edit rights. A group mapped to an app role under role mappings now applies to its members in the same way, even when it isn't assigned to the workspace. "Not found" now means no group in the workspace or the account has that name.
 
 ## 1.10.0 — 2026-10-16
 

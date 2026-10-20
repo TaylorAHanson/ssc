@@ -30,8 +30,12 @@ _GROUP_SETTINGS: Dict[str, str] = {
 }
 
 GROUP_CACHE_SECONDS = 300.0
-# Exact group name -> (looked up at, exists). Failed lookups aren't cached.
-_group_cache: Dict[str, Tuple[float, bool]] = {}
+# Exact group name -> (looked up at, status). Failed lookups aren't cached.
+_group_cache: Dict[str, Tuple[float, str]] = {}
+
+# The account's groups, served by the workspace. Unlike the workspace's own group
+# list it includes account groups that aren't assigned to the workspace.
+ACCOUNT_GROUPS_PATH = "/api/2.0/account/scim/v2/Groups"
 
 
 class RbacForbidden(Exception):
@@ -103,45 +107,61 @@ def _scim_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _lookup_group(name: str) -> bool:
+def _lookup_group(name: str) -> str:
     from databricks.sdk import WorkspaceClient
 
-    groups = WorkspaceClient().groups.list(
-        filter=f'displayName eq "{_scim_string(name)}"', attributes="id,displayName",
-    )
-    return next(iter(groups), None) is not None
+    client = WorkspaceClient()
+    scim_filter = f'displayName eq "{_scim_string(name)}"'
+    if next(iter(client.groups.list(filter=scim_filter, attributes="id,displayName")), None) is not None:
+        return "found"
+    try:
+        res = client.api_client.do(
+            "GET", ACCOUNT_GROUPS_PATH,
+            query={"filter": scim_filter, "attributes": "id,displayName", "count": 1},
+        ) or {}
+    except Exception as exc:  # noqa: BLE001 - e.g. a workspace without identity federation
+        logger.info("Couldn't check account groups for %r; only this workspace's were checked: %s", name, exc)
+        return "unverified"
+    return "account_only" if res.get("Resources") else "not_found"
 
 
-async def group_exists(name: str) -> Optional[bool]:
-    """True / False when Databricks says, None when the lookup failed. Cached briefly."""
+async def group_status(name: str) -> str:
+    """What Databricks says about a group name, as the app's identity sees it. Cached briefly.
+
+    ``found`` (assigned to this workspace); ``account_only`` (an account group not
+    assigned to this workspace); ``not_found`` (no account group has this name);
+    ``unverified`` (not in this workspace, and the account couldn't be checked);
+    ``unknown`` (the lookup failed, and isn't cached).
+    """
     if not name or not name.strip():
-        return False
+        return "not_found"
     now = time.monotonic()
     cached = _group_cache.get(name)
     if cached and now - cached[0] < GROUP_CACHE_SECONDS:
         return cached[1]
     try:
-        found = await asyncio.to_thread(_lookup_group, name)
+        status = await asyncio.to_thread(_lookup_group, name)
     except Exception as exc:  # noqa: BLE001 - any SDK/auth/network failure means "unknown"
         logger.warning("Couldn't check whether Databricks group %r exists: %s", name, exc)
-        return None
-    _group_cache[name] = (time.monotonic(), found)
-    return found
+        return "unknown"
+    _group_cache[name] = (time.monotonic(), status)
+    return status
 
 
-async def _group_status(group: Optional[str]) -> str:
+async def _plane_group_status(group: Optional[str], user: User) -> str:
     if not group:
         return "unset"
-    exists = await group_exists(group)
-    if exists is None:
-        return "unknown"
-    return "found" if exists else "not_found"
+    status = await group_status(group)
+    # The viewer's own groups come from Databricks too, so membership confirms the name.
+    if status in ("not_found", "unverified", "unknown") and is_member(user, group):
+        return "found"
+    return status
 
 
 async def permissions(user: User) -> RbacPermissions:
-    """The current user's rights plus each plane's group and whether it exists."""
+    """The current user's rights plus each plane's group and whether Databricks confirms it."""
     groups = [approver_group(plane) for plane in PLANES]
-    statuses = await asyncio.gather(*(_group_status(g) for g in groups))
+    statuses = await asyncio.gather(*(_plane_group_status(g, user) for g in groups))
     planes = [
         PlanePermission(
             plane=plane,

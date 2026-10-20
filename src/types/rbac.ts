@@ -135,7 +135,7 @@ export interface RbacPlanePermission {
   plane: RbacPlane;
   label: string;
   approver_group: string | null;
-  group_status: 'unset' | 'found' | 'not_found' | 'unknown';
+  group_status: 'unset' | 'found' | 'account_only' | 'not_found' | 'unverified' | 'unknown';
   can_edit: boolean;
 }
 

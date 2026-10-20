@@ -267,8 +267,10 @@ class PlanePermission(BaseModel):
     plane: Plane
     label: str
     approver_group: Optional[str] = None
-    # unset | found | not_found | unknown (lookup failed)
-    group_status: Literal["unset", "found", "not_found", "unknown"] = "unset"
+    # unset | found (in this workspace) | account_only (an account group not assigned to
+    # this workspace) | not_found (no such account group) | unverified (not in this
+    # workspace; the account couldn't be checked) | unknown (lookup failed)
+    group_status: Literal["unset", "found", "account_only", "not_found", "unverified", "unknown"] = "unset"
     can_edit: bool = False
 
 
