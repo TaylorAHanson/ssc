@@ -160,7 +160,9 @@ Metadata Manager**:
   tables in and accepts edits for these; an edit to any other catalog is
   refused at preview, and a bulk edit leaves those matches out. Blank means it
   reads and plans every catalog but changes none. On a dev or stage deployment,
-  list only that environment's catalogs.
+  list only that environment's catalogs. The governance service principal needs
+  BROWSE on each catalog to see all of it; Unity Catalog hides the tables it
+  has no privilege on, so they're missing from the Objects tab.
 - **Browse roles**: who can open the page. Blank = everyone.
 - **Owner tag key**, **Editor roles** and **Governance approver group**: who
   can edit and who approves. With no governance approver group, only Platform

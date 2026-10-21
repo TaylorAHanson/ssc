@@ -15,7 +15,10 @@ deployments either stay in `plan` mode or enforce only their own catalogs (step 
   will manage, and only those. Give each deployment its own principal, so a dev
   deployment's principal can't write to production catalogs even if the app is
   misconfigured:
-  - `USE CATALOG`, `USE SCHEMA` and `BROWSE`, so the sweep can read `information_schema`;
+  - `BROWSE`, so the sweep can read the catalog from `system.information_schema`
+    (enough on its own for plan mode);
+  - `USE CATALOG` and `USE SCHEMA`, which Unity Catalog requires alongside the write
+    privileges below;
   - `APPLY TAG`, to set and remove tags on catalogs, schemas, tables, views and columns;
   - ownership or `MANAGE`, to set descriptions (`COMMENT ON`);
   - `ASSIGN` on every governed tag it will apply;

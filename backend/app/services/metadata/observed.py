@@ -4,15 +4,17 @@ Bulk reads of ``information_schema`` (catalogs, schemata, tables, columns and th
 four ``*_tags`` views) through ``get_governance_uc_provider()``. ``""`` tag values
 are stored as None. Only the reconciler calls into UC; the UI reads the snapshot.
 
-* ``sweep`` reads each catalog's own ``<catalog>.information_schema`` (four
-  statements per catalog, a few catalogs in parallel) and commits per catalog.
-  A catalog whose query fails, or whose own ``catalogs`` row is missing (the
-  identity lost ``BROWSE``), is reported and its rows are left untouched:
-  information_schema filters silently, so an empty read is never taken to mean
-  "everything was dropped".
-* ``refresh`` and ``poll_new_objects`` read ``system.information_schema``
-  filtered by catalog, so an object in a catalog that doesn't exist yet comes
-  back as not found rather than as an error. Neither commits.
+Every read goes through ``system.information_schema`` filtered by catalog, which
+lists what the identity can only ``BROWSE`` (``<catalog>.information_schema``
+would need ``USE CATALOG``), and an object in a catalog that doesn't exist yet
+comes back as not found rather than as an error.
+
+* ``sweep`` reads whole catalogs (four statements per catalog, a few catalogs in
+  parallel) and commits per catalog. A catalog whose query fails, or whose own
+  ``catalogs`` row is missing (the identity lost ``BROWSE``), is reported and its
+  rows are left untouched: information_schema filters silently, so an empty read
+  is never taken to mean "everything was dropped".
+* ``refresh`` and ``poll_new_objects`` read specific objects. Neither commits.
 
 Skipped everywhere: the ``information_schema`` schema itself, and relations whose
 name starts with ``__`` (Databricks-managed materializations), with their columns.
@@ -37,7 +39,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_scan_catalogs, settings
 from app.db.metadata import MetadataObservedModel, MetadataSyncStateModel
 from app.services.metadata import scope
-from app.services.metadata.sql import quote_identifier, sql_string_literal
+from app.services.metadata.sql import sql_string_literal
 from app.services.metadata.types import ObjectKey, ObservedState, normalize_value
 
 logger = logging.getLogger(__name__)
@@ -234,7 +236,7 @@ def scope_catalogs(provider=None) -> List[str]:
 def _visible_catalogs(provider=None) -> List[str]:
     provider = _provider(provider)
     visible: List[str] = []
-    for info in provider.client.catalogs.list():
+    for info in provider.client.catalogs.list(include_browse=True):
         name = str(getattr(info, "name", "") or "").strip().lower()
         kind = getattr(info, "catalog_type", None)
         kind = str(getattr(kind, "value", kind) or "").upper()
@@ -512,8 +514,7 @@ class _CatalogRead:
 
 def _read_catalog(provider, catalog: str) -> _CatalogRead:
     observed_at = _utcnow()
-    info = f"{quote_identifier(catalog)}.information_schema"
-    rows = _read(provider, info, catalog, _Targets(), observed_at)
+    rows = _read(provider, "system.information_schema", catalog, _Targets(), observed_at)
     if catalog not in rows:
         raise RuntimeError(
             f"information_schema returned no row for catalog '{catalog}'; it doesn't exist or the "

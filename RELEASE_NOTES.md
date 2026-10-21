@@ -13,6 +13,12 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.0.1 — 2026-10-20
+
+### Fixed
+
+- **The Metadata Manager now sees every table in a catalog its service principal can browse.** The full check read each catalog in a way that needs the USE CATALOG permission, so with only BROWSE (all that data certification needs) the check failed for that catalog every time. The Objects tab then showed just the few tables created or changed since the app started. The full check now reads the same metadata views as data certification, so BROWSE is enough. After upgrading, run **Run a full check now** once (or wait for the next hourly check), and the whole catalog appears.
+
 ## 2.0.0 — 2026-10-20
 
 ### Metadata Manager

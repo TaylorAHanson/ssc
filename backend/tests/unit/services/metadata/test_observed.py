@@ -93,7 +93,7 @@ class FakeUC:
     def get_config(self, key, default=None):
         return {"warehouse_id": "wh-1"}.get(key, default)
 
-    def _list_catalogs(self):
+    def _list_catalogs(self, include_browse=None):
         return [SimpleNamespace(name=n, catalog_type=c.catalog_type) for n, c in self.catalogs.items()]
 
     def _list_tag_policies(self, page_size=None):
@@ -126,6 +126,9 @@ class FakeUC:
                 raise RuntimeError(f"[CATALOG_NOT_FOUND] {name}")
         conditions = [(c, op, set(_literals(vals))) for c, op, vals in _IN.findall(where)]
         conditions += [(c, "=", {v}) for c, v in _EQ.findall(where) if c not in ("kind",)]
+        for column, op, values in conditions:
+            if column in ("catalog_name", "table_catalog") and op != "NOT IN" and values & self.failing:
+                raise RuntimeError(f"[CATALOG_NOT_FOUND] {sorted(values & self.failing)}")
         since = [datetime.fromisoformat(s.replace("Z", "+00:00")) for s in _SINCE.findall(where)]
 
         def keep(row: dict) -> bool:
@@ -298,13 +301,14 @@ def test_sweep_snapshots_every_level_with_tags_and_comments(db_session):
     assert observed.governed_tags(db_session) == {"classification": ["public", "restricted"], "pii": []}
 
 
-def test_sweep_reads_each_catalog_through_its_own_information_schema(db_session):
+def test_sweep_reads_the_system_information_schema_filtered_to_the_catalog(db_session):
+    """<catalog>.information_schema needs USE CATALOG; the system views also list what's only BROWSEd."""
     uc = _metastore()
 
     observed.sweep(db_session, provider=uc, catalogs=["Sales"])
 
     assert len(uc.sql) == 4
-    assert all("`sales`.information_schema." in s for s in uc.sql)
+    assert all("system.information_schema." in s and "`sales`" not in s for s in uc.sql)
     assert all("'sales'" in s for s in uc.sql)
     assert {r.catalog for r in _rows(db_session).values()} == {"sales"}
 

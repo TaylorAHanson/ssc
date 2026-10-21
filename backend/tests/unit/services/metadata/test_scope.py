@@ -48,7 +48,7 @@ def test_outside_message_lists_a_few_names(monkeypatch):
 
 def _visible(names):
     return SimpleNamespace(client=SimpleNamespace(catalogs=SimpleNamespace(
-        list=lambda: [SimpleNamespace(name=n, catalog_type=None) for n in names])))
+        list=lambda include_browse=None: [SimpleNamespace(name=n, catalog_type=None) for n in names])))
 
 
 def test_scope_catalogs_expands_patterns_against_visible_catalogs(monkeypatch):
