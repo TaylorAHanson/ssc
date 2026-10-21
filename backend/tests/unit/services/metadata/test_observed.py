@@ -75,6 +75,8 @@ class FakeUC:
         self.sql: List[str] = []
         self.governed: Dict[str, List[str]] = {}
         self.governed_error: Optional[Exception] = None
+        # Results with more rows fail the way a warehouse's inline byte limit does.
+        self.max_rows: Optional[int] = None
         self._lock = threading.Lock()
 
     # -- provider surface --
@@ -110,6 +112,18 @@ class FakeUC:
         rows: List[list] = []
         for part in statement.split(" UNION ALL "):
             rows.extend(self._answer(part))
+        if self.max_rows is not None and len(rows) > self.max_rows:
+            error = (
+                "ServiceError(error_code=<ServiceErrorCode.BAD_REQUEST: 'BAD_REQUEST'>, message='Inline byte limit "
+                "exceeded. Statements executed with disposition=INLINE can have a result size of at most 26214400 "
+                "bytes. Please execute the statement with disposition=EXTERNAL_LINKS if you want to download the "
+                "full result.')"
+            )
+            return SimpleNamespace(
+                statement_id=f"stmt-{len(self.sql)}",
+                status=SimpleNamespace(state=SimpleNamespace(value="FAILED"), error=error),
+                result=None,
+            )
         return SimpleNamespace(
             statement_id=f"stmt-{len(self.sql)}",
             status=SimpleNamespace(state=SimpleNamespace(value="SUCCEEDED"), error=None),
@@ -307,10 +321,61 @@ def test_sweep_reads_the_system_information_schema_filtered_to_the_catalog(db_se
 
     observed.sweep(db_session, provider=uc, catalogs=["Sales"])
 
-    assert len(uc.sql) == 4
+    assert len(uc.sql) == 5
     assert all("system.information_schema." in s and "`sales`" not in s for s in uc.sql)
     assert all("'sales'" in s for s in uc.sql)
     assert {r.catalog for r in _rows(db_session).values()} == {"sales"}
+
+
+def _wide_catalog() -> FakeUC:
+    """One catalog, four schemas of three two-column tables, each table and column tagged."""
+    uc = FakeUC()
+    uc.catalogs["big"] = FakeCatalog(schemas={
+        f"s{i}": FakeSchema(tables={
+            f"t{j}": FakeTable(
+                name=f"t{j}", tags={"layer": "gold"},
+                columns=[("a", "string", None, {"pii": ""}), ("b", "int", None, {"pii": ""})],
+            )
+            for j in range(3)
+        })
+        for i in range(4)
+    })
+    return uc
+
+
+def test_a_result_over_the_inline_limit_is_read_in_parts(db_session):
+    """A big catalog's tables/columns/tags overflow one inline result; halving by schema, then table, reads it all."""
+    uc = _wide_catalog()
+    observed.sweep(db_session, provider=uc)
+    expected = {k: (r.present, dict(r.tags or {})) for k, r in _rows(db_session).items()}
+    assert len(expected) == 1 + 4 + 12 + 24
+
+    db_session.query(MetadataObservedModel).delete()
+    db_session.commit()
+    uc.sql.clear()
+    uc.max_rows = 5  # fits the catalog and schema rows, not one schema's 6 columns or 9 tags: those split by table
+
+    result = observed.sweep(db_session, provider=uc)
+
+    assert result.failed_catalogs == {}
+    assert {k: (r.present, dict(r.tags or {})) for k, r in _rows(db_session).items()} == expected
+    assert any(" AND table_schema IN ('s0') AND table_name IN (" in s for s in uc.sql if ".columns " in s)
+    assert sum(1 for s in uc.sql if ".tables " in s) == 1 + 2 + 4  # whole, two halves, four schemas
+
+
+def test_a_single_table_over_the_inline_limit_fails_the_catalog(db_session):
+    uc = _wide_catalog()
+    uc.max_rows = 1
+
+    result = observed.sweep(db_session, provider=uc)
+
+    assert "Inline byte limit exceeded" in result.failed_catalogs["big"]
+    assert _rows(db_session) == {}
+
+
+def test_overlong_column_types_fall_back_to_the_bare_type_name():
+    sql = observed._statements("system.information_schema", "big", observed._Targets())["columns"]
+    assert f"CASE WHEN length(full_data_type) > {observed._DATA_TYPE_MAX} THEN data_type ELSE full_data_type END" in sql
 
 
 def test_sweep_marks_dropped_objects_missing_and_leaves_failed_catalogs_untouched(db_session):

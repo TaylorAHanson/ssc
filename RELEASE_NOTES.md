@@ -26,6 +26,7 @@ Format rules (the app parses this file, so keep to them):
 ### Fixed
 
 - **The Metadata Manager now sees every table in a catalog its service principal can browse.** The full check read each catalog in a way that needs the USE CATALOG permission, so with only BROWSE (all that data certification needs) the check failed for that catalog every time. The list then showed just the few tables created or changed since the app started. The full check now reads the same metadata views as data certification, so BROWSE is enough. After upgrading, choose **Check and sync now** under **Admin → Sync history** once (or wait for the next hourly check), and the whole catalog appears.
+- **Very large catalogs no longer fail the Metadata Manager's full check.** The check asked for a whole catalog's tables, columns and tags in one answer, and a SQL warehouse caps an answer at 25 MB, so a catalog with tens of thousands of columns failed every time with "Inline byte limit exceeded", and its tables never showed up or stayed out of date. When an answer is too big, the check now asks again for half the schemas at a time, and then for half of a schema's tables at a time, until each part fits. Very long nested column types are also stored as their short type name, such as STRUCT, to keep each answer smaller. Large catalogs take a few more queries to check, and nothing needs to change in settings.
 
 ## 2.0.0 — 2026-10-20
 

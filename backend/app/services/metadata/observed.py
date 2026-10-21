@@ -9,8 +9,10 @@ lists what the identity can only ``BROWSE`` (``<catalog>.information_schema``
 would need ``USE CATALOG``), and an object in a catalog that doesn't exist yet
 comes back as not found rather than as an error.
 
-* ``sweep`` reads whole catalogs (four statements per catalog, a few catalogs in
-  parallel) and commits per catalog. A catalog whose query fails, or whose own
+* ``sweep`` reads whole catalogs (five statements per catalog, a few catalogs in
+  parallel) and commits per catalog. A table, column or tag read whose result is
+  over the warehouse's inline limit (25 MiB) is read again in halves, by schema and
+  then by table, until each part fits. A catalog whose query fails, or whose own
   ``catalogs`` row is missing (the identity lost ``BROWSE``), is reported and its
   rows are left untouched: information_schema filters silently, so an empty read
   is never taken to mean "everything was dropped".
@@ -25,11 +27,11 @@ from __future__ import annotations
 import fnmatch
 import logging
 import time
-from collections import deque
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 from dateutil import parser as date_parser
 from pydantic import BaseModel, Field
@@ -63,6 +65,8 @@ _REFRESH_CHUNK = 200
 _POLL_CATALOG_CHUNK = 100
 # fqn_keys per IN (...) list against Lakebase.
 _KEY_CHUNK = 500
+# Longest full_data_type kept; a longer one (a wide nested struct) is stored as its bare type name.
+_DATA_TYPE_MAX = 500
 
 _TABLE_TYPES = {
     "VIEW": "view",
@@ -215,6 +219,67 @@ def _rows(provider, sql: str) -> List[list]:
     return [list(r) for r in _run_statement(provider.client, sql, _warehouse_id(provider)) or []]
 
 
+def _over_inline_limit(error: Exception) -> bool:
+    """The statement failed because its result is over the warehouse's inline size limit (25 MiB)."""
+    text = str(error).lower()
+    return "inline byte limit" in text or "disposition=external_links" in text
+
+
+@dataclass(frozen=True)
+class _Part:
+    """Part of a catalog's relation-level read: these schemas, and optionally these tables of one schema."""
+
+    schemas: Tuple[str, ...]
+    tables: Optional[Tuple[str, ...]] = None
+
+
+def _halves(part: _Part, tables: Optional[Dict[str, List[str]]]) -> List[_Part]:
+    """``part`` split in two: by schema, then by the tables of a single schema; [] when it can't split."""
+    if len(part.schemas) > 1:
+        mid = len(part.schemas) // 2
+        return [_Part(part.schemas[:mid]), _Part(part.schemas[mid:])]
+    names = part.tables if part.tables is not None else tuple((tables or {}).get(part.schemas[0], ()))
+    if len(names) < 2:
+        return []
+    mid = len(names) // 2
+    return [_Part(part.schemas, names[:mid]), _Part(part.schemas, names[mid:])]
+
+
+def _rows_in_parts(
+    provider, label: str, build: Callable[[Optional[_Part]], str], schemas: Sequence[str],
+    tables: Optional[Dict[str, List[str]]] = None,
+) -> List[list]:
+    """Rows of ``build(None)``; a result over the inline limit is read again in halves until each fits.
+
+    Halving goes by schema, then (when ``tables`` lists a schema's tables) by table. Any
+    other failure, or a single table still over the limit, raises.
+    """
+    try:
+        return _rows(provider, build(None))
+    except Exception as e:  # noqa: BLE001 - re-raised unless it's the size limit
+        if not _over_inline_limit(e):
+            raise
+        first = e
+    logger.info("Observed read: %s is over the warehouse's inline result limit; reading it in parts.", label)
+    rows: List[list] = []
+    statements = 0
+    pending = _halves(_Part(tuple(schemas)), tables) if schemas else []
+    if not pending:
+        raise first
+    while pending:
+        part = pending.pop()
+        statements += 1
+        try:
+            rows.extend(_rows(provider, build(part)))
+        except Exception as e:  # noqa: BLE001 - re-raised unless it's the size limit
+            halves = _halves(part, tables) if _over_inline_limit(e) else []
+            if not halves:
+                raise
+            pending.extend(halves)
+    logger.info("Observed read: %s read in %d statement(s).", label, statements)
+    return rows
+
+
 def scope_catalogs(provider=None) -> List[str]:
     """METADATA_RECONCILE_CATALOGS, else SCAN_CATALOGS, else every catalog the provider can see.
 
@@ -273,8 +338,21 @@ def _relation_filter(pairs: Optional[Set[Tuple[str, str]]], schema_col: str, tab
     )
 
 
-def _statements(info: str, catalog: str, targets: _Targets) -> Dict[str, str]:
-    """containers / relations / columns / tags statements for one catalog."""
+def _part_filter(part: Optional[_Part], schema_col: str, table_col: str) -> str:
+    if part is None:
+        return ""
+    out = f" AND {schema_col} IN ({_in_list(part.schemas)})"
+    if part.tables is not None:
+        out += f" AND {table_col} IN ({_in_list(part.tables)})"
+    return out
+
+
+def _statements(info: str, catalog: str, targets: _Targets, part: Optional[_Part] = None) -> Dict[str, str]:
+    """containers / tags (catalog and schema) and relations / columns / relation_tags statements for one catalog.
+
+    ``part`` narrows the relation-level statements to some schemas or tables, for a
+    catalog whose result is too big to read at once.
+    """
     lit = sql_string_literal(catalog)
     null = "CAST(NULL AS STRING)"
     out: Dict[str, str] = {}
@@ -303,21 +381,22 @@ def _statements(info: str, catalog: str, targets: _Targets) -> Dict[str, str]:
             f"tag_name, tag_value FROM {info}.schema_tags WHERE {where}"
         )
     if targets.relations is None or targets.relations:
-        rel = _relation_filter(targets.relations, "table_schema", "table_name")
-        tag_rel = _relation_filter(targets.relations, "schema_name", "table_name")
+        rel = _relation_filter(targets.relations, "table_schema", "table_name") + _part_filter(part, "table_schema", "table_name")
+        tag_rel = _relation_filter(targets.relations, "schema_name", "table_name") + _part_filter(part, "schema_name", "table_name")
         out["relations"] = (
             f"SELECT table_schema, table_name, table_type, table_owner, comment, created, last_altered "
             f"FROM {info}.tables WHERE table_catalog = {lit} AND {_not_skipped('table_schema')}{rel}"
         )
         out["columns"] = (
-            f"SELECT table_schema, table_name, column_name, full_data_type, ordinal_position, comment "
+            f"SELECT table_schema, table_name, column_name, "
+            f"CASE WHEN length(full_data_type) > {_DATA_TYPE_MAX} THEN data_type ELSE full_data_type END, "
+            f"ordinal_position, comment "
             f"FROM {info}.columns WHERE table_catalog = {lit} AND {_not_skipped('table_schema')}{rel}"
         )
-        tags.append(
+        out["relation_tags"] = (
             f"SELECT 'table' AS kind, schema_name, table_name, {null} AS column_name, tag_name, tag_value "
             f"FROM {info}.table_tags WHERE catalog_name = {lit} AND {_not_skipped('schema_name')}{tag_rel}"
-        )
-        tags.append(
+            f" UNION ALL "
             f"SELECT 'column' AS kind, schema_name, table_name, column_name, tag_name, tag_value "
             f"FROM {info}.column_tags WHERE catalog_name = {lit} AND {_not_skipped('schema_name')}{tag_rel}"
         )
@@ -349,8 +428,21 @@ def _read(provider, info: str, catalog: str, targets: _Targets, observed_at: dat
             owner=owner or None, comment=normalize_value(comment), created=_ts(created), last_altered=_ts(altered),
         )
 
+    # A relation-level read too big for one result is split by these schemas, then by table.
+    schemas = sorted(
+        {s for s, _ in targets.relations} if targets.relations is not None
+        else {str(row["schema_name"]).lower() for row in rows.values() if row["securable_type"] == "schema"}
+    )
+
+    def read(name: str, tables: Optional[Dict[str, List[str]]] = None) -> List[list]:
+        return _rows_in_parts(
+            provider, f"{catalog} {name}", lambda part: _statements(info, catalog, targets, part)[name], schemas, tables,
+        )
+
+    # schema -> its relations' names, once read, for splitting the column and tag reads by table.
+    tables: Dict[str, List[str]] = defaultdict(list)
     if "relations" in sql:
-        for r in _rows(provider, sql["relations"]):
+        for r in read("relations"):
             if len(r) < 7:
                 continue
             schema, table, table_type, owner, comment, created, altered = r[:7]
@@ -368,7 +460,9 @@ def _read(provider, info: str, catalog: str, targets: _Targets, observed_at: dat
                 created=_ts(created), last_altered=_ts(altered),
             )
             rows[key.fqn_key] = relations[pair] = row
-        for r in _rows(provider, sql["columns"]):
+        for schema, table in sorted(relations):
+            tables[schema].append(table)
+        for r in read("columns", tables):
             if len(r) < 6:
                 continue
             schema, table, column, data_type, ordinal, comment = r[:6]
@@ -382,7 +476,10 @@ def _read(provider, info: str, catalog: str, targets: _Targets, observed_at: dat
                 ordinal_position=_int(ordinal), comment=normalize_value(comment),
             )
 
-    for r in _rows(provider, sql["tags"]) if "tags" in sql else []:
+    tag_rows = _rows(provider, sql["tags"]) if "tags" in sql else []
+    if "relation_tags" in sql:
+        tag_rows += read("relation_tags", tables)
+    for r in tag_rows:
         if len(r) < 6:
             continue
         kind, schema, table, column, tag_name, tag_value = r[:6]
