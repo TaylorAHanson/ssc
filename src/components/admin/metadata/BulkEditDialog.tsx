@@ -4,9 +4,9 @@ import { RELATION_TYPES, type ApprovalRouting, type ChangeRequest, type Securabl
 import { Input } from '../../ui/input';
 import { Textarea } from '../../ui/textarea';
 import { Notice } from '../../rbac/ui';
-import { parseSheet, parseTagList, patternOp, patternProblem } from './bulk';
+import { isPattern, parseSheet, parseTagList, patternOp, patternProblem } from './bulk';
 import { useMetadata } from './context';
-import { TYPE_LABELS, plural, tagProblem } from './format';
+import { TYPE_LABELS, envForCatalog, plural, tagProblem } from './format';
 import { ReviewDialog } from './ReviewDialog';
 import { useReviewFlow } from './useReviewFlow';
 
@@ -44,6 +44,7 @@ export function BulkEditDialog({ onClose, initialPattern = '' }: { onClose: () =
   const [sheet, setSheet] = useState('');
   const [reason, setReason] = useState('');
   const [routing, setRouting] = useState<ApprovalRouting>('request');
+  const [envs, setEnvs] = useState<string[]>([]);
   const flow = useReviewFlow<ChangeRequest>({
     preview: previewChange,
     submit: (r, idempotencyKey) => submitChange(r, { idempotencyKey }),
@@ -66,9 +67,20 @@ export function BulkEditDialog({ onClose, initialPattern = '' }: { onClose: () =
     return [patternOp({ pattern, column, types: relationLevel && type ? [type] : [], action, tags: tagList.tags, comment: comment.trim() })];
   })();
 
-  const request = (r = reason, route = routing): ChangeRequest => ({ ops, reason: r, on_approval_needed: route });
-  const opsKey = (r: ChangeRequest | null) => (r ? JSON.stringify(r.ops) : '');
+  // {sales}.bronze.* already names every environment, so there's nothing to copy to.
+  const everyEnvironment = mode === 'pattern' && pattern.trim().startsWith('{');
+  const sentEnvs = everyEnvironment ? [] : envs;
+  const request = (r = reason, route = routing, environments = sentEnvs): ChangeRequest => ({
+    ops,
+    reason: r,
+    environments,
+    on_approval_needed: route,
+  });
+  const opsKey = (r: ChangeRequest | null) => (r ? JSON.stringify([r.ops, r.environments ?? []]) : '');
   const stale = flow.state.step === 'preview' && opsKey(flow.state.request) !== opsKey(request());
+  const catalogPart = pattern.trim().split('.')[0] ?? '';
+  const sourceEnv = mode === 'pattern' && catalogPart && !isPattern(catalogPart) ? envForCatalog(config, catalogPart) : null;
+  const envPatterns = config.environments.some((e) => e.catalog_pattern);
 
   const close = () => {
     if (flow.state.step === 'result' && flow.state.result.status !== 'rejected') bumpRefresh();
@@ -103,6 +115,18 @@ export function BulkEditDialog({ onClose, initialPattern = '' }: { onClose: () =
       }}
       previewDisabled={!ops.length}
       stale={stale}
+      environments={
+        everyEnvironment
+          ? undefined
+          : {
+              value: envs,
+              exclude: sourceEnv ? [sourceEnv] : [],
+              onChange: (next) => {
+                setEnvs(next);
+                if (flow.state.step === 'preview' && ops.length) flow.start(request(reason, routing, next));
+              },
+            }
+      }
       reasonPlaceholder="e.g. Ownership and domain tags agreed in the data council"
     >
       <div className="space-y-3">
@@ -128,8 +152,18 @@ export function BulkEditDialog({ onClose, initialPattern = '' }: { onClose: () =
                 aria-describedby={`${id}-pattern-help`}
               />
               <p id={`${id}-pattern-help`} className={patternIssue ? 'mt-1 text-xs text-red-700' : 'mt-1 text-xs text-gray-500'}>
-                {patternIssue ??
-                  '* matches any characters and ? one character, within one part. One part matches catalogs, two schemas, three tables and views. Objects prepared before they exist count too.'}
+                {patternIssue ?? (
+                  <>
+                    * matches any characters and ? one character, within one part. One part matches catalogs, two schemas, three tables and views. Objects
+                    prepared before they exist count too.
+                    {envPatterns && (
+                      <>
+                        {' '}
+                        Put the catalog in braces, as in <code>{'{sales}'}.bronze.*</code>, to match it in every environment.
+                      </>
+                    )}
+                  </>
+                )}
               </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -232,7 +266,8 @@ export function BulkEditDialog({ onClose, initialPattern = '' }: { onClose: () =
               <summary className="cursor-pointer">Sheet format</summary>
               <p className="mt-1">
                 Copy the cells from Google Sheets or Excel, header row included, and paste them here (CSV works too). The <code>name</code> (or{' '}
-                <code>table</code>) column holds <code>catalog.schema.table</code>, or a pattern such as <code>sales_dev.silver.*</code>. Every other column is a tag
+                <code>table</code>) column holds <code>catalog.schema.table</code>, or a pattern such as <code>sales_dev.silver.*</code> (
+                <code>{'{sales}'}.silver.*</code> for every environment). Every other column is a tag
                 key and each non-empty cell sets that tag; empty cells are skipped. Optional columns: <code>column</code> for a column’s tags,{' '}
                 <code>description</code>, and <code>tags</code> for extra tags written as <code>key=value; key</code>.
               </p>

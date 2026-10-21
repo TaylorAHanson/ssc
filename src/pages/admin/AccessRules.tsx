@@ -83,11 +83,7 @@ export function AccessRules() {
   } else if (!data) {
     body = (
       <div className="space-y-4">
-        <div className="grid gap-3 md:grid-cols-3">
-          <Skeleton rows={2} />
-          <Skeleton rows={2} />
-          <Skeleton rows={2} />
-        </div>
+        <Skeleton rows={1} />
         <Skeleton rows={6} />
       </div>
     );

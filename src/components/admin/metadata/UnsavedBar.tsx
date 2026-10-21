@@ -19,6 +19,7 @@ export function UnsavedBar() {
   const store = useStagingStore();
   const edited = stagedList(store).filter(hasEdits);
   const edits = edited.reduce((n, t) => n + editCount(t), 0);
+  const sourceEnvs = [...new Set(edited.flatMap((t) => (t.environment ? [t.environment] : [])))];
   const [open, setOpen] = useState(false);
 
   const flow = useReviewFlow<ChangeRequest>({
@@ -67,7 +68,6 @@ export function UnsavedBar() {
               <ChangeRow key={t.key} target={t} />
             ))}
           </ul>
-          <EnvironmentChoice targets={edited} />
         </div>
       )}
 
@@ -86,6 +86,18 @@ export function UnsavedBar() {
             useStagingStore.getState().rebase(conflicts);
             flow.start(buildChangeRequest(useStagingStore.getState()));
           }}
+          environments={
+            sourceEnvs.length
+              ? {
+                  value: store.environments,
+                  exclude: sourceEnvs.length === 1 ? sourceEnvs : [],
+                  onChange: (envs) => {
+                    store.setEnvironments(envs);
+                    flow.start(buildChangeRequest(useStagingStore.getState()));
+                  },
+                }
+              : undefined
+          }
         />
       )}
     </section>
@@ -122,34 +134,5 @@ function ChangeRow({ target }: { target: StagedTarget }) {
         <X className="h-3.5 w-3.5" />
       </button>
     </li>
-  );
-}
-
-function EnvironmentChoice({ targets }: { targets: StagedTarget[] }) {
-  const { config } = useMetadata();
-  const environments = useStagingStore((s) => s.environments);
-  const setEnvironments = useStagingStore((s) => s.setEnvironments);
-  if (config.environments.length < 2 || !targets.some((t) => t.environment)) return null;
-  return (
-    <fieldset className="space-y-1">
-      <legend className="text-sm font-medium text-gray-900">Also make these changes in</legend>
-      <p className="text-xs text-gray-500">
-        Copies them to the same table in each environment you tick, for example from <code>sales_dev</code> to <code>sales_prd</code>.
-      </p>
-      <div className="flex flex-wrap gap-4">
-        {config.environments.map((env) => (
-          <label key={env.key} className="inline-flex cursor-pointer items-center gap-1.5 text-sm">
-            <input
-              type="checkbox"
-              checked={environments.includes(env.key)}
-              onChange={(e) => setEnvironments(e.target.checked ? [...environments, env.key] : environments.filter((k) => k !== env.key))}
-              className="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
-            />
-            <EnvBadge env={env.key} />
-            {env.approval === 'all' && <span className="text-xs text-gray-500">(every change needs approval)</span>}
-          </label>
-        ))}
-      </div>
-    </fieldset>
   );
 }

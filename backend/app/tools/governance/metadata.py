@@ -240,7 +240,8 @@ def _next_step(preview) -> str:
         "against the desired state, checks the key policies and who may change what, and returns per-item "
         "decisions (direct, needs approval, denied), approver groups, findings, report_markdown and next_step. "
         "For many objects at once, give an op 'match' (a name pattern such as sales_dev.bronze.* or "
-        "sales_*.*.*, * and ? within one part) instead of 'name'; with 'column' it matches that column name "
+        "sales_*.*.*, * and ? within one part; {sales}.bronze.* means the sales catalog in every environment) "
+        "instead of 'name'; with 'column' it matches that column name "
         "(a pattern too) on every matching table. Findings say how many objects each pattern matched. "
         "Always preview, show the report and get an explicit yes before submit_metadata_change."
     ),

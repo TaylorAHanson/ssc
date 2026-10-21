@@ -255,9 +255,21 @@ class AccessMatch(BaseModel):
     via: Literal["direct", "parent"] = "direct"
 
 
+class SecurableSuggestion(BaseModel):
+    """A securable with rules whose name matches one asked about, cut to the level that matched."""
+    securable_type: str
+    catalog: str = ""
+    schema_name: str = ""
+    object_name: str = ""
+    workspace_name: str = ""
+    environments: List[str] = Field(default_factory=list)
+
+
 class FindAccessResult(BaseModel):
     matches: List[AccessMatch]
     truncated: bool = False
+    # Only when nothing matched: securables whose name matches any name asked about, at any level.
+    suggestions: List[SecurableSuggestion] = Field(default_factory=list)
 
 
 # --- Permissions and sheets ---------------------------------------------------

@@ -188,6 +188,7 @@ def _request_targets(request: ChangeRequest) -> Tuple[List[_Target], List[Findin
     findings: List[Finding] = []
     envs = _environment_keys(request.environments, findings)
     targets: List[_Target] = []
+    uncopied: Dict[Tuple[str, str], Dict[str, ObjectKey]] = {}
     for op in request.ops:
         key = _parse(op.name, op.column)
         targets.append(_Target(op=op, key=key))
@@ -199,13 +200,18 @@ def _request_targets(request: ChangeRequest) -> Tuple[List[_Target], List[Findin
                 continue
             counterpart = environments.counterpart(key, env)
             if counterpart is None:
-                findings.append(_deny(
-                    "no_counterpart",
-                    f"{key.display} has no counterpart in {env}: its catalog isn't named by an environment pattern.",
-                    fqn_key=key.fqn_key,
-                ))
+                uncopied.setdefault((key.catalog.lower(), env), {})[key.fqn_key] = key
                 continue
             targets.append(_Target(op=op, key=counterpart, copied_from=own, source_fqn=key.fqn_key))
+    for (catalog, env), keys in uncopied.items():
+        only = next(iter(keys.values())) if len(keys) == 1 else None
+        what = only.display if only else f"{len(keys)} objects in {catalog}"
+        findings.append(Finding(
+            code="no_counterpart", severity="warn", fqn_key=only.fqn_key if only else None,
+            message=(f"{what} {'has' if only else 'have'} no counterpart in {env}, because the {catalog} catalog "
+                     f"isn't named by an environment pattern, so {env} is skipped for "
+                     f"{'it' if only else 'them'}."),
+        ))
     return targets, findings
 
 

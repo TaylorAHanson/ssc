@@ -102,6 +102,12 @@ def environment_of(catalog: str) -> Optional[str]:
     return found[0].key if found else None
 
 
+def base_of(catalog: str) -> Optional[str]:
+    """``sales`` for ``sales_dev`` under ``{base}_dev``; None when no environment pattern names the catalog."""
+    found = _match(catalog)
+    return found[1] if found else None
+
+
 def counterpart(key: ObjectKey, target_env: str) -> Optional[ObjectKey]:
     """The same object in ``target_env``, or None when the catalog has no pattern-based counterpart.
 

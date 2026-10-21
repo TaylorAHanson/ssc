@@ -23,13 +23,15 @@ own approver group.
 
 The approver group is a Databricks group, named exactly as it appears in
 Databricks. Its members approve requests of that type and can edit that type's
-rules directly. The strip at the top of the page shows each type's group and
-warns when one isn't set or isn't in Databricks. A type with no group falls back
-to Platform Admins, and Platform Admins can approve every type.
+rules directly. The **Approvers** line at the top of the page shows each type's
+group, with a pencil where you can edit that type and an eye where you can only
+view it. A type with no group shows **Not set** and falls back to Platform
+Admins, and Platform Admins can approve every type.
 
 The group can be a workspace group or an account group, including one that
-isn't assigned to this workspace, as Unity Catalog grants often use. Each card
-shows what Databricks says about the name:
+isn't assigned to this workspace, as Unity Catalog grants often use. The dot
+after each group shows what Databricks says about the name (green, amber or
+red); hover over it for the detail:
 
 - **Found in Databricks:** the group is in this workspace, or you're in it.
 - **Found in the account:** an account group that isn't assigned to this
@@ -38,7 +40,8 @@ shows what Databricks says about the name:
 - **Couldn't confirm:** the group isn't in this workspace, and the account's
   groups couldn't be checked. Check that the name matches the group exactly.
 - **Not found in Databricks:** no group in the workspace or the account has this
-  exact name, so only Platform Admins get these approvals until it's fixed.
+  exact name, so only Platform Admins get these approvals until it's fixed. A
+  red warning under the line says so.
 
 If a member of an account group sees that type as **View only**, {{brand_name}}
 couldn't read their account groups; the warning in the app's logs says why.
@@ -63,7 +66,9 @@ Nobody else sees the page in the sidebar.
 
 People ask the assistant for access, for example "give `grp_finance_analysts`
 SELECT on the `sales` schema in prod". The assistant first checks the rules: if
-the group already has that access, it says so instead of filing a request.
+the group already has that access, it says so instead of filing a request. A
+bare name doesn't have to say what it is: if `sales` isn't a catalog, the
+assistant finds the schema or table with that name, and says which one it used.
 Otherwise it shows the proposed change, including any prerequisite it adds
 (such as `USE_SCHEMA` alongside `SELECT`), and asks for confirmation and a
 justification in the requester's own words.

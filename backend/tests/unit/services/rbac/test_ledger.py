@@ -794,3 +794,27 @@ def test_find_access_for_a_principal(db):
         ledger.find_access(db)
     with pytest.raises(ledger.LedgerError):
         ledger.find_access(db, principal_name="g_new", environment="moon")
+
+
+def test_find_access_suggests_a_schema_asked_for_as_a_catalog(db):
+    seed(db, UC_PRD, position=1, catalog="enterprise_prd", schema="platinum_insights")
+    seed(db, UC_PRD, position=2, kind="table", catalog="enterprise_prd", schema="platinum_insights", obj="sales")
+    seed(db, position=1, catalog="enterprise_dev", schema="Platinum_Insights")
+
+    result = ledger.find_access(db, catalog="platinum_insights", environment="prd")
+    assert result.matches == []
+    assert [(s.securable_type, s.catalog, s.schema_name, s.environments) for s in result.suggestions] == [
+        ("schema", "enterprise_prd", "platinum_insights", ["prd"]),
+        ("schema", "enterprise_dev", "Platinum_Insights", ["dev"]),
+    ]
+
+    dotted = ledger.find_access(db, catalog="enterprise_prd.platinum_insights.sales", environment="prd")
+    assert ("table", "enterprise_prd", "platinum_insights", "sales") in [
+        (s.securable_type, s.catalog, s.schema_name, s.object_name) for s in dotted.suggestions]
+
+    partial = ledger.find_access(db, catalog="platinum")
+    assert {s.schema_name for s in partial.suggestions} == {"platinum_insights", "Platinum_Insights"}
+
+    assert ledger.find_access(db, catalog="nowhere").suggestions == []
+    found = ledger.find_access(db, catalog="enterprise_prd", schema_name="platinum_insights")
+    assert found.matches and found.suggestions == []

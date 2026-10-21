@@ -245,7 +245,7 @@ export const useStagingStore = create<StagingState>((set) => ({
       delete targets[key];
       return { targets, order: state.order.filter((k) => k !== key) };
     }),
-  clear: () => set({ targets: {}, order: [], reason: '' }),
+  clear: () => set({ targets: {}, order: [], reason: '', environments: [] }),
   rebase: (conflicts) =>
     set((state) => {
       const targets = { ...state.targets };

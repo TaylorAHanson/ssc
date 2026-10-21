@@ -13,6 +13,23 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.2.0 — 2026-10-21
+
+### Added
+
+- **Copy changes to other environments from Review and save, and from Edit many tables by name.** The **Also make these changes in** checkboxes used to be hidden inside the collapsed list of unsaved changes, where most people never saw them. Edit many tables by name had no way to pick environments at all, so a bulk change only touched the environment its pattern named. Both now show the choice next to the preview. Tick prd while saving dev changes and the preview updates to list the production copies, each under that environment's approval rules. The choice is cleared after each save, so a later change isn't copied by surprise.
+- **Name a catalog in every environment with braces.** In Edit many tables by name, in a pasted sheet, through the API or when asking the assistant, `{sales}.bronze.*` matches `sales_dev.bronze.*`, `sales_prd.bronze.*` and every other environment's copy at once. Before, you needed one pattern per environment, or a wildcard such as `sales_*` that could also catch unrelated catalogs. It follows the catalog patterns under **Environments** in Admin → Settings, so catalogs listed there by name aren't included.
+
+### Changed
+
+- **An object with no counterpart in another environment no longer blocks the whole change.** When you asked for changes to be copied to prd and one object's catalog wasn't named by an environment pattern, the entire change was refused, even if every other object had a match. Now that object is changed only where it is, and the preview warns that prd was skipped for it, naming the object, or giving a count per catalog when there are several.
+- **The approver groups on Access Rules now take one line instead of three cards.** The three cards at the top of the page showed each type's approver group, but they pushed the rules themselves far down the screen. They're now a single **Approvers** line: each type's group, a pencil where you can edit that type or an eye where you can only view it, and a coloured dot for whether Databricks knows the group. Hover over the dot for the detail. A group that isn't in Databricks still gets a red warning under the line, because its approvals only reach Platform Admins until it's fixed.
+
+### Fixed
+
+- **The assistant no longer gives up when a name isn't the kind of securable it guessed.** Asking who can reach `platinum_insights` led the assistant to look for a catalog of that name, find none, and report that nobody had access, when it was a schema in `enterprise_prd`. When a lookup finds nothing, the assistant now searches for that name as a catalog, schema, table or workspace, in every environment, and looks up the match itself, telling you which one it used. If several fit, it asks which you meant, and if the name only exists in another environment it says so.
+- **The assistant talks about access in plainer words.** Answers about who has access ended with a note that they were the "desired-state ledger, not a live check of current grants", which meant little to most people. The assistant now calls them the access rules and leaves out the caveat. If you ask whether access is live right now, it explains that approved changes reach Databricks at the next scheduled update.
+
 ## 2.1.0 — 2026-10-20
 
 ### Added

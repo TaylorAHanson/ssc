@@ -6,8 +6,11 @@
 Call `find_access` for the securable (or the group) the user names before asking
 anything else. If the group already holds the privilege, directly or through a
 parent catalog or schema row (`via: "parent"`), say so and stop: there's nothing
-to request. The results are the Access Rules (what the CSV export publishes), not
-live grants; say that if the user asks what Databricks shows today.
+to request. If nothing matches, follow the result's `next_step`: the name may be
+a schema or table rather than a catalog, and `suggestions` says where it is.
+Call the results "the access rules", never "desired state" or "ledger". Only if
+the user asks what Databricks shows today, say approved changes reach it at the
+next scheduled update.
 
 ## Rules for what can be requested
 - **Groups or service principals**, in any environment. Never an individual

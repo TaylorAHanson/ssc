@@ -62,6 +62,7 @@ from app.models.rbac import (
     Rule,
     RuleRow,
     RulesPage,
+    SecurableSuggestion,
     SheetColumn,
     SheetInfo,
 )
@@ -1261,7 +1262,9 @@ def find_access(
 ) -> FindAccessResult:
     """Who holds what on a securable (including parent catalog / schema rows), or what a principal holds.
 
-    Metastore rows with no environment match any ``environment`` filter.
+    Metastore rows with no environment match any ``environment`` filter. When nothing
+    matches, ``suggestions`` lists securables named like any name asked about, at any
+    level, so a schema asked for as a catalog is still found.
     """
     stype = layout.normalize_securable_type(securable_type) if (securable_type or "").strip() else None
     fields = {
@@ -1276,6 +1279,7 @@ def find_access(
         raise LedgerError("Say which securable or which group to look up.")
 
     base = db.query(RbacRuleModel).filter(RbacRuleModel.status == RULE_ACTIVE)
+    env_key: Optional[str] = None
     if (environment or "").strip():
         env_key = layout.resolve_environment(environment)
         if env_key is None:
@@ -1341,4 +1345,63 @@ def find_access(
                     via=via,
                 ))
     cap = max(int(limit or 0), 1)
-    return FindAccessResult(matches=matches[:cap], truncated=len(matches) > cap)
+    suggestions: List[SecurableSuggestion] = []
+    if not matches and fields:
+        names = [part.strip(" `") for value in fields.values() for part in value.split(".")]
+        suggestions = _suggest_securables(db, names, prefer_env=env_key)
+    return FindAccessResult(matches=matches[:cap], truncated=len(matches) > cap, suggestions=suggestions)
+
+
+_NAME_COLUMNS = ("catalog", "schema_name", "object_name", "workspace_name")
+_SUGGESTION_CAP = 10
+
+
+def _suggest_securables(db: Session, names: Sequence[str], *, prefer_env: Optional[str]) -> List[SecurableSuggestion]:
+    """Securables with active rules whose catalog, schema, object or workspace name matches one of ``names``.
+
+    Exact (case-insensitive) matches win; partial ones count only when there are none.
+    Each suggestion stops at the level that matched, so a schema name suggests the
+    schema rather than every table in it. Every environment is searched, with
+    ``prefer_env`` first, so a securable that only exists elsewhere still shows up.
+    """
+    wanted = sorted({n.lower() for n in names if n})
+    if not wanted:
+        return []
+    active = db.query(RbacRuleModel).filter(RbacRuleModel.status == RULE_ACTIVE)
+    order = (RbacRuleModel.sheet, RbacRuleModel.position, RbacRuleModel.id)
+    columns = [getattr(RbacRuleModel, c) for c in _NAME_COLUMNS]
+    exact = True
+    rows = active.filter(or_(*[func.lower(col).in_(wanted) for col in columns])).order_by(*order).all()
+    if not rows:
+        exact = False
+        rows = active.filter(or_(*[
+            col.ilike(f"%{_escape_like(n)}%", escape="\\") for col in columns for n in wanted
+        ])).order_by(*order).all()
+
+    def hit(value: str) -> bool:
+        low = value.lower()
+        return low in wanted if exact else any(n in low for n in wanted)
+
+    found: Dict[Tuple[str, ...], SecurableSuggestion] = {}
+    for m in rows:
+        cat, sch, obj, ws = ((getattr(m, c) or "").strip() for c in _NAME_COLUMNS)
+        levels: List[Tuple[str, str, str, str, str]] = []
+        if cat and hit(cat):
+            levels.append(("catalog", cat, "", "", ""))
+        if sch and hit(sch):
+            levels.append(("schema", cat, sch, "", ""))
+        if ws and hit(ws):
+            levels.append(("workspace", "", "", "", ws))
+        if obj and hit(obj) and obj.lower() != ws.lower():
+            levels.append(((m.securable_type or "").strip(), cat, sch, obj, ws))
+        for stype, c, s, o, w in levels:
+            key = tuple(v.lower() for v in (stype, c, s, o, w))
+            suggestion = found.get(key)
+            if suggestion is None:
+                suggestion = found[key] = SecurableSuggestion(
+                    securable_type=stype, catalog=c, schema_name=s, object_name=o, workspace_name=w)
+            if m.environment and m.environment not in suggestion.environments:
+                suggestion.environments.append(m.environment)
+
+    ranked = sorted(found.values(), key=lambda s: prefer_env is not None and prefer_env not in s.environments)
+    return ranked[:_SUGGESTION_CAP]

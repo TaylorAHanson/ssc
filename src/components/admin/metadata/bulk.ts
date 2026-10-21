@@ -1,10 +1,14 @@
 import type { ChangeOp, SecurableType, Tags } from '../../../types/metadata';
 import { nameProblem } from './format';
 
-/** A name with `*` or `?` is a pattern; the server expands it into one op per known object. */
-export const isPattern = (name: string): boolean => /[*?]/.test(name);
+/**
+ * A name with `*`, `?` or a braced catalog (`{sales}.bronze.orders`, every environment) is a pattern;
+ * the server expands it into one op per known object.
+ */
+export const isPattern = (name: string): boolean => /[*?{}]/.test(name);
 
 const UNSAFE = /[`'";\s]/;
+const EVERY_ENVIRONMENT = /^\{[^{}]+\}$/;
 
 /** Mirrors the backend's pattern checks (expand.py); returns a message or null. */
 export function patternProblem(pattern: string, column?: string | null): string | null {
@@ -13,6 +17,10 @@ export function patternProblem(pattern: string, column?: string | null): string 
     return 'Use catalog, catalog.schema or catalog.schema.table, with * or ? in any part.';
   }
   if (parts.some((p) => UNSAFE.test(p.trim()))) return 'Patterns can’t contain quotes, semicolons or spaces.';
+  const [catalog, ...rest] = parts.map((p) => p.trim());
+  if (rest.some((p) => /[{}]/.test(p)) || (/[{}]/.test(catalog) && !EVERY_ENVIRONMENT.test(catalog))) {
+    return 'Braces go around the whole catalog part only, as in {sales}.bronze.*, meaning that catalog in every environment.';
+  }
   if (column?.trim() && parts.length !== 3) return 'A column needs a catalog.schema.table pattern.';
   if (column && column.includes('`')) return 'Column names can’t contain backticks.';
   return null;

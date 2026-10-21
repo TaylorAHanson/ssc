@@ -66,8 +66,7 @@ Unity Catalog*.
    top of their page. Nothing is saved yet: changed tags turn green or amber,
    and a bar at the bottom counts your unsaved changes.
 2. Keep going on other tables if you like; the bar collects everything. Click
-   the count to see the list, discard one object's changes, or copy them to
-   another environment.
+   the count to see the list or discard one object's changes.
 3. Choose **Review and save**. It shows every change, which ones need
    approval and who approves them, any policy problems, and the risk score.
    It also warns when a changed tag is one a column mask or row filter keys
@@ -75,7 +74,9 @@ Unity Catalog*.
    table here it's marked *Starts being managed*, and the tags and description
    it already has are listed as *Already in Unity Catalog*: they're kept, not
    counted as edits, and need no approval. If one breaks a tag rule, the
-   review shows a warning instead of stopping the save.
+   review shows a warning instead of stopping the save. When more than one
+   environment is set up, **Also make these changes in** lets you tick other
+   environments to make the same changes there (see [Environments](#environments)).
 4. Add a reason (if your admin requires one) and save. Changes you're allowed to make are saved straight
    away; the rest become one approval request, which you can follow under
    **My Requests**.
@@ -105,7 +106,9 @@ change made to it here).
   such as `sales_dev.bronze.*` (`*` matches any characters within one part and
   `?` matches one character), and optionally a column name or pattern such as
   `*_email`. Then choose tags to add or remove, or set a description. Tags are
-  typed as `data_owner=sales_eng; domain=sales; pii`.
+  typed as `data_owner=sales_eng; domain=sales; pii`. To cover every
+  environment, put the catalog in braces: `{sales}.bronze.*` matches
+  `sales_dev.bronze.*`, `sales_prd.bronze.*` and the rest.
 - **Paste from a spreadsheet**, in the same dialog. Copy the cells from Google
   Sheets or Excel, header row included, and paste them in. Name one column
   `name` (or `table`) for `catalog.schema.table`; every other column is a tag
@@ -195,8 +198,16 @@ One production deployment manages every environment's catalogs, for example
 `sales_dev` and `sales_prd`. To try a change safely, make it on the dev object
 first, then open it and choose **Details → Copy to another environment**:
 {{brand_name}} copies the dev values to the matching production object as a
-new change, with the same approval rules. You can also tick extra
-environments in the unsaved-changes bar to make the same change there at once.
+new change, with the same approval rules.
+
+To make a change in several environments at once, tick them under **Also make
+these changes in** on the **Review and save** step, or in **Edit many tables
+by name**. The preview updates to show the copies, and each environment's own
+approval rules apply. An object whose catalog isn't named by an environment
+pattern (a catalog listed by name, say) has no counterpart: it's changed where
+it is, and the preview warns that the other environments were skipped for it.
+A name pattern with the catalog in braces, such as `{sales}.bronze.*`, already
+covers every environment, so the choice isn't offered with one.
 
 ## Asking the assistant
 

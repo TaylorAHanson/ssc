@@ -100,6 +100,13 @@ def test_counterpart_keeps_the_base_spelling_and_works_for_catalogs_and_schemas(
     assert schema.name == "sales_prd.bronze" and schema.level == "schema"
 
 
+@pytest.mark.parametrize("catalog,base", [
+    ("sales_dev", "sales"), ("Sales_PRD", "Sales"), ("sandbox", None), ("shared_ref", None), ("sales", None),
+])
+def test_base_of(catalog, base):
+    assert environments.base_of(catalog) == base
+
+
 def test_target_environment_is_matched_case_insensitively():
     assert environments.counterpart(ObjectKey.parse("sales_dev.s.t"), "PRD").catalog == "sales_prd"
 

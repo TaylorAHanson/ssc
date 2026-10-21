@@ -4,6 +4,7 @@ import { Textarea } from '../../ui/textarea';
 import type { ApprovalRouting, ChangePreview, VersionConflictItem } from '../../../types/metadata';
 import { ErrorBanner, Modal, Notice, Spinner } from '../../rbac/ui';
 import { useMetadata } from './context';
+import { EnvironmentChoice, type EnvironmentChoiceProps } from './EnvironmentChoice';
 import { PreviewView } from './PreviewView';
 import { ConflictPanel, ResultView } from './ResultView';
 import { RoutingChoice } from './RoutingChoice';
@@ -32,6 +33,8 @@ interface ReviewDialogProps<R> {
   previewLabel?: string;
   /** The options changed after the preview; submitting is held until it's re-run. */
   stale?: boolean;
+  /** Offers "Also make these changes in"; `onChange` should re-run the preview when one is showing. */
+  environments?: EnvironmentChoiceProps;
 }
 
 function submitLabel(p: ChangePreview, routing: ApprovalRouting | undefined): string {
@@ -60,6 +63,7 @@ export function ReviewDialog<R>({
   previewDisabled,
   previewLabel = 'Preview',
   stale,
+  environments,
 }: ReviewDialogProps<R>) {
   const { config } = useMetadata();
   const reasonId = useId();
@@ -175,9 +179,13 @@ export function ReviewDialog<R>({
       break;
   }
 
+  const showEnvironments = environments && (state.step === 'idle' || state.step === 'previewing' || state.step === 'preview');
+  const busy = state.step === 'previewing' || (state.step === 'preview' && state.submitting);
+
   return (
     <Modal title={title} subtitle={subtitle} onClose={onClose} footer={footer} wide>
       {state.step !== 'result' && children}
+      {showEnvironments && <EnvironmentChoice {...environments} disabled={environments.disabled || busy} />}
       {body}
     </Modal>
   );

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import app.db.session as db_session_module
-from app.models.rbac import AccessMatch, FindAccessResult
+from app.models.rbac import AccessMatch, FindAccessResult, SecurableSuggestion
 from app.services.rbac import ledger
 from app.services.rbac import requests as rbac_requests
 from app.tools.self_service.find_access import find_access
@@ -28,7 +28,7 @@ def test_both_tools_are_read_only_and_behind_the_rbac_flag():
 
 
 @pytest.mark.asyncio
-async def test_find_access_wraps_the_ledger_and_says_it_is_desired_state(monkeypatch, session):
+async def test_find_access_wraps_the_ledger(monkeypatch, session):
     seen = {}
 
     def fake_find(db, **kwargs):
@@ -42,10 +42,26 @@ async def test_find_access_wraps_the_ledger_and_says_it_is_desired_state(monkeyp
     out = await find_access.execute(catalog="sales_dev", schema_name="orders", environment="dev")
 
     assert out["count"] == 1 and out["matches"][0]["via"] == "parent"
-    assert "not live grants" in out["note"]
+    assert "next_step" not in out
     assert (seen["catalog"], seen["schema_name"], seen["environment"], seen["limit"]) == (
         "sales_dev", "orders", "dev", 25)
     session.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_find_access_steers_an_empty_lookup_to_the_suggestions(monkeypatch, session):
+    suggested = FindAccessResult(matches=[], suggestions=[SecurableSuggestion(
+        securable_type="schema", catalog="enterprise_prd", schema_name="platinum_insights", environments=["prd"])])
+    monkeypatch.setattr(ledger, "find_access", lambda db, **kw: suggested)
+    out = await find_access.execute(catalog="platinum_insights", environment="prd")
+    assert out["suggestions"][0]["catalog"] == "enterprise_prd"
+    assert "look it up now" in out["next_step"]
+
+    monkeypatch.setattr(ledger, "find_access", lambda db, **kw: FindAccessResult(matches=[]))
+    out = await find_access.execute(catalog="nowhere")
+    assert "No access rule mentions this name" in out["next_step"]
+    out = await find_access.execute(principal_name="g_nobody")
+    assert "next_step" not in out
 
 
 @pytest.mark.asyncio

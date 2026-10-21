@@ -25,8 +25,13 @@ Unity Catalog matches.
   (a pattern: `*` and `?` within one part, e.g. `sales_dev.bronze.*`) instead of
   `name`, plus `column` for a column name or pattern. Tell the user how many
   objects the preview says each pattern matched before asking for a yes.
+- **Every environment:** when the user means a catalog in all its environments
+  ("the sales bronze tables everywhere"), put the catalog part in braces:
+  `{sales}.bronze.*` matches `sales_dev`, `sales_prd` and the rest.
 - To copy to another environment (for example after testing in dev), pass
   `environments: ["prd"]` and the same changes apply to the matching objects there.
+  Objects without a counterpart there are changed only where they are; mention the
+  preview's `no_counterpart` warning if there is one.
 
 ## Preview, confirm, then submit
 1. Call `preview_metadata_change` with the `changes` (and the reason once the user has

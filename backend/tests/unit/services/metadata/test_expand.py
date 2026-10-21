@@ -112,6 +112,41 @@ def test_too_many_matches(world):
         expand.match_objects(world, "sales_dev.*.*", limit=2)
 
 
+@pytest.fixture
+def two_envs(world, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_ENVIRONMENTS", [
+        {"key": "dev", "catalog_pattern": "{base}_dev"},
+        {"key": "prd", "catalog_pattern": "{base}_prd"},
+    ])
+    for name in ("sales_prd", "sales_prd.bronze", "sales_prd.bronze.orders", "hr_prd", "hr_prd.bronze.staff"):
+        _snap(world, name)
+    _desired(world, "sales_prd.bronze.planned")
+    world.flush()
+    return world
+
+
+def test_braced_catalog_matches_that_catalog_in_every_environment(two_envs):
+    assert _names(expand.match_objects(two_envs, "{sales}.bronze.*")) == [
+        "sales_dev.bronze.future_table", "sales_dev.bronze.orders", "sales_dev.bronze.v_orders",
+        "sales_prd.bronze.orders", "sales_prd.bronze.planned",
+    ]
+    assert _names(expand.match_objects(two_envs, "{SALES}")) == ["sales_dev", "sales_prd"]
+    assert _names(expand.match_objects(two_envs, "{*}.bronze.orders")) == [
+        "sales_dev.bronze.orders", "sales_prd.bronze.orders",
+    ]
+    # salesxdev isn't named by an environment pattern, so no braced pattern reaches it.
+    assert _names(expand.match_objects(two_envs, "{sales*}.bronze.orders")) == [
+        "sales_dev.bronze.orders", "sales_prd.bronze.orders",
+    ]
+    assert expand.match_objects(two_envs, "{finance}.*") == []
+
+
+@pytest.mark.parametrize("pattern", ["{sales}_dev.bronze.*", "sales_dev.{bronze}.*", "{}.bronze", "{sales.bronze}"])
+def test_braces_only_wrap_the_whole_catalog_part(two_envs, pattern):
+    with pytest.raises(MetadataError, match="braces go around the whole catalog part"):
+        expand.match_objects(two_envs, pattern)
+
+
 def test_op_needs_exactly_one_of_name_and_match():
     with pytest.raises(ValidationError):
         ChangeOp(op="set_tags", tags={"a": "b"})

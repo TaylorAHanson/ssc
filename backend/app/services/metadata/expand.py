@@ -3,9 +3,11 @@
 A ``ChangeOp`` may carry ``match`` (a glob over ``catalog``, ``catalog.schema`` or
 ``catalog.schema.table``; ``*`` and ``?`` match within one part) instead of
 ``name``, so one op can tag every table in a schema, or every ``email`` column
-across a catalog. The matches are the objects the platform knows about: present
-rows in the snapshot plus active desired rows, so a table declared before it was
-created matches and a dropped one doesn't. Nothing here reads Unity Catalog.
+across a catalog. A catalog part in braces, ``{sales}`` (a glob too), means every
+catalog whose environment-pattern base matches: ``sales_dev``, ``sales_prd`` and
+so on. The matches are the objects the platform knows about: present rows in the
+snapshot plus active desired rows, so a table declared before it was created
+matches and a dropped one doesn't. Nothing here reads Unity Catalog.
 
 The API and the tools call ``expand_request`` before ``changes.preview`` or
 ``changes.submit``; everything after that sees ordinary named ops, so limits,
@@ -23,6 +25,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.metadata import MetadataObjectModel, MetadataObservedModel
+from app.services.metadata import environments
 from app.services.metadata import scope as managed
 from app.services.metadata.errors import ChangeBlocked, MetadataError
 from app.services.metadata.types import (
@@ -43,6 +46,8 @@ logger = logging.getLogger(__name__)
 MAX_MATCHES = 100_000
 
 _UNSAFE = re.compile(r"[`'\";\s\x00-\x1f\x7f]")
+# {sales} as the catalog part: the catalog with that environment-pattern base in every environment.
+_EVERY_ENVIRONMENT = re.compile(r"\{([^{}]+)\}")
 _UNSAFE_COLUMN = re.compile(r"[`'\";\x00-\x1f\x7f]")
 _LEVEL_TYPES: Dict[int, Tuple[str, ...]] = {1: ("catalog",), 2: ("schema",), 3: RELATION_TYPES}
 _ESCAPE = "\\"
@@ -79,7 +84,24 @@ def _parts(pattern: str) -> List[str]:
         )
     if any(_UNSAFE.search(p) for p in parts):
         raise MetadataError(f"'{pattern}' contains a character names can't have (quotes, spaces or ;).")
+    if any(c in p for p in parts[1:] for c in "{}") or (
+        any(c in parts[0] for c in "{}") and not _EVERY_ENVIRONMENT.fullmatch(parts[0])
+    ):
+        raise MetadataError(
+            f"'{pattern}': braces go around the whole catalog part only, as in {{sales}}.bronze.*, "
+            "meaning the sales catalog in every environment."
+        )
     return [p.lower() for p in parts]
+
+
+def _environment_catalogs(db: Session, base_glob: str) -> List[str]:
+    """Known catalogs, in any environment, whose environment-pattern base matches ``base_glob``."""
+    known = set(db.execute(select(func.lower(_B.c.catalog)).distinct()).scalars())
+    known |= set(db.execute(select(func.lower(_O.c.catalog)).distinct()).scalars())
+    return sorted(
+        c for c in known
+        if c and (base := environments.base_of(c)) is not None and fnmatch.fnmatchcase(base.lower(), base_glob)
+    )
 
 
 def _like(glob: str) -> str:
@@ -136,12 +158,26 @@ def match_objects(
             wanted = tuple(t for t in wanted if t in set(types))
 
     globs = parts + ([column_glob] if column_glob else [])
+    every = _EVERY_ENVIRONMENT.fullmatch(parts[0])
+    catalogs = set(_environment_catalogs(db, every.group(1))) if every else None
+    if catalogs is not None and not catalogs:
+        return []
     found: Dict[str, Match] = {}
+
+    def part_ok(i: int, value: Optional[str], glob: str) -> bool:
+        if value is None:
+            return False
+        if i == 0 and catalogs is not None:
+            return value.lower() in catalogs
+        return fnmatch.fnmatchcase(value.lower(), glob)
 
     def collect(table, extra) -> None:
         names = [table.c.catalog, table.c.schema_name, table.c.object_name, table.c.column_name][: len(globs)]
-        where = [table.c.securable_type.in_(wanted), *extra,
-                 *[_part_clause(col, g) for col, g in zip(names, globs)]]
+        clauses = [
+            func.lower(col).in_(sorted(catalogs)) if i == 0 and catalogs is not None else _part_clause(col, g)
+            for i, (col, g) in enumerate(zip(names, globs))
+        ]
+        where = [table.c.securable_type.in_(wanted), *extra, *clauses]
         rows = db.execute(
             select(table.c.fqn_key, table.c.securable_type, table.c.catalog, table.c.schema_name,
                    table.c.object_name, table.c.column_name)
@@ -149,7 +185,7 @@ def match_objects(
         ).all()
         for fqn_key, stype, catalog, schema, obj, col in rows:
             values = [catalog, schema, obj, col][: len(globs)]
-            if not all(v is not None and fnmatch.fnmatchcase(v.lower(), g) for v, g in zip(values, globs)):
+            if not all(part_ok(i, v, g) for i, (v, g) in enumerate(zip(values, globs))):
                 continue
             if fqn_key in found:
                 continue

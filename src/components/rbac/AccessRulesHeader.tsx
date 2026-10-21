@@ -2,7 +2,6 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle, BookOpen, Eye, KeyRound, Lock, Pencil } from 'lucide-react';
 import type { RbacPlanePermission } from '../../types/rbac';
 import { GUIDE_ACCESS_RULES, useGuideEnabled } from '../../lib/guide';
-import { Badge, type Tone } from './ui';
 import { SETTINGS_PATH } from './utils';
 
 export function AccessRulesHeader() {
@@ -28,72 +27,79 @@ export function AccessRulesHeader() {
   );
 }
 
-const GROUP_STATUS: Record<RbacPlanePermission['group_status'], { label: string; tone: Tone; title?: string }> = {
-  found: { label: 'Found in Databricks', tone: 'green' },
+const GROUP_STATUS: Record<RbacPlanePermission['group_status'], { label: string; dot: string; detail?: string }> = {
+  found: { label: 'Found in Databricks', dot: 'bg-green-500' },
   account_only: {
     label: 'Found in the account',
-    tone: 'green',
-    title: 'An account group that isn’t assigned to this workspace.',
+    dot: 'bg-green-500',
+    detail: 'Not assigned to this workspace, which is fine: members are recognised from their account groups.',
   },
-  not_found: { label: 'Not found in Databricks', tone: 'red' },
-  unverified: { label: 'Couldn’t confirm', tone: 'amber' },
-  unknown: { label: 'Couldn’t check', tone: 'gray', title: 'The group lookup failed; try again later.' },
-  unset: { label: 'Not set', tone: 'gray' },
+  not_found: {
+    label: 'Not found in Databricks',
+    dot: 'bg-red-500',
+    detail: 'No group in this workspace or the account has this exact name, so only Platform Admins get these approvals.',
+  },
+  unverified: {
+    label: 'Couldn’t confirm',
+    dot: 'bg-amber-500',
+    detail: 'This workspace has no group with this name, and the account’s groups couldn’t be checked. If it’s an account group, check the name matches exactly.',
+  },
+  unknown: { label: 'Couldn’t check', dot: 'bg-gray-400', detail: 'The group lookup failed; try again later.' },
+  unset: { label: 'Not set', dot: 'bg-gray-400' },
 };
 
-/** One card per type: who approves its requests and edits its rows, and whether you can edit. */
+/** One line: each type's approver group, whether Databricks knows it, and whether you can edit that type. */
 export function ApproverStrip({ planes }: { planes: RbacPlanePermission[] }) {
+  const missing = planes.filter((p) => p.group_status === 'not_found');
   return (
-    <div className="grid gap-3 md:grid-cols-3">
-      {planes.map((p) => {
-        const status = GROUP_STATUS[p.group_status] ?? GROUP_STATUS.unknown;
-        return (
-          <div key={p.plane} className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-semibold text-gray-900">{p.label}</span>
-              {p.can_edit ? (
-                <Badge tone="green"><Pencil className="h-3 w-3" /> You can edit</Badge>
-              ) : (
-                <Badge><Eye className="h-3 w-3" /> View only</Badge>
-              )}
-            </div>
-            <div className="mt-2 text-xs text-gray-500">Approver group</div>
-            <div className="flex flex-wrap items-center gap-2">
-              {p.approver_group ? (
-                <code className="break-all text-sm text-gray-800">{p.approver_group}</code>
-              ) : (
-                <span className="inline-flex items-center gap-1 text-sm text-amber-700">
-                  <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" /> Not set — Platform Admins approve
-                </span>
-              )}
-              {p.approver_group && (
-                <Badge tone={status.tone} title={status.title}>
-                  {status.label}
-                </Badge>
-              )}
-            </div>
-            {p.group_status === 'not_found' && (
-              <p className="mt-2 flex items-start gap-1.5 text-xs text-red-700">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                No Databricks group in this workspace or the account has this exact name, so approvals will only reach
-                Platform Admins until it’s fixed in Admin → Settings → Access Rules.
-              </p>
-            )}
-            {p.group_status === 'account_only' && (
-              <p className="mt-2 text-xs text-gray-500">
-                Not assigned to this workspace, which is fine: members are recognised from their account groups.
-              </p>
-            )}
-            {p.group_status === 'unverified' && (
-              <p className="mt-2 text-xs text-gray-500">
-                This workspace has no group with this name, and the account’s groups couldn’t be checked. If it’s an
-                account group, check the name matches exactly.
-              </p>
-            )}
-          </div>
-        );
-      })}
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs shadow-sm">
+        <span className="font-medium text-gray-500">Approvers</span>
+        {planes.map((p) => (
+          <ApproverItem key={p.plane} plane={p} />
+        ))}
+      </div>
+      {missing.length > 0 && (
+        <p className="flex items-start gap-1.5 text-xs text-red-700">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span>
+            {missing.map((p) => p.label).join(', ')}: the approver group isn’t in Databricks, so only Platform Admins
+            get these approvals until it’s fixed in{' '}
+            <Link to={SETTINGS_PATH} className="underline">Admin → Settings → Access Rules</Link>.
+          </span>
+        </p>
+      )}
     </div>
+  );
+}
+
+function ApproverItem({ plane: p }: { plane: RbacPlanePermission }) {
+  const status = GROUP_STATUS[p.group_status] ?? GROUP_STATUS.unknown;
+  const access = p.can_edit ? 'You can edit' : 'View only';
+  const AccessIcon = p.can_edit ? Pencil : Eye;
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5">
+      <span title={access} className="inline-flex shrink-0">
+        <AccessIcon className={`h-3.5 w-3.5 ${p.can_edit ? 'text-green-600' : 'text-gray-400'}`} aria-hidden="true" />
+        <span className="sr-only">{access}:</span>
+      </span>
+      <span className="text-gray-700">{p.label}</span>
+      {p.approver_group ? (
+        <>
+          <code className="break-all text-gray-900">{p.approver_group}</code>
+          <span
+            className={`h-2 w-2 shrink-0 rounded-full ${status.dot}`}
+            title={status.detail ? `${status.label}. ${status.detail}` : status.label}
+            role="img"
+            aria-label={status.label}
+          />
+        </>
+      ) : (
+        <span className="inline-flex items-center gap-1 text-amber-700" title="No approver group is set, so Platform Admins approve.">
+          <AlertTriangle className="h-3 w-3" aria-hidden="true" /> Not set
+        </span>
+      )}
+    </span>
   );
 }
 

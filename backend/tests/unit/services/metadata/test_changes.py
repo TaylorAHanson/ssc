@@ -326,13 +326,26 @@ def test_the_objects_own_environment_is_skipped(db, fakes):
     assert [d.item.fqn_key for d in pv.items] == [DEV_KEY]
 
 
-def test_unknown_environments_and_missing_counterparts_are_denied(db, fakes):
+def test_unknown_environments_are_denied(db, fakes):
     pv = preview(db, op("set_tags", tags={"a": "1"}), environments=["qa"])
     assert pv.blocked and [f.code for f in pv.findings] == ["unknown_environment"]
     assert "dev, prd" in pv.findings[0].message
 
-    pv = preview(db, op("set_tags", name="main.s.t", tags={"a": "1"}), environments=["prd"])
-    assert pv.blocked and [(f.code, f.fqn_key) for f in pv.findings] == [("no_counterpart", "main.s.t")]
+
+def test_a_missing_counterpart_skips_that_object_with_a_warning(db, fakes):
+    pv = preview(db, op("set_tags", name="main.s.t", tags={"a": "1"}), op("set_tags", tags={"a": "1"}),
+                 environments=["prd"])
+    assert not pv.blocked
+    assert sorted(d.item.fqn_key for d in pv.items) == sorted(["main.s.t", DEV_KEY, PRD_KEY])
+    assert [(f.code, f.severity, f.fqn_key) for f in pv.findings] == [("no_counterpart", "warn", "main.s.t")]
+    assert "prd is skipped for it" in pv.findings[0].message
+
+
+def test_missing_counterparts_in_one_catalog_collapse_into_one_warning(db, fakes):
+    pv = preview(db, op("set_tags", name="main.s.t", tags={"a": "1"}), op("set_comment", name="main.s.t", comment="x"),
+                 op("set_tags", name="main.s.u", tags={"a": "1"}), environments=["prd"])
+    assert [(f.code, f.fqn_key) for f in pv.findings] == [("no_counterpart", None)]
+    assert pv.findings[0].message.startswith("2 objects in main have no counterpart in prd")
 
 
 # --- Types, states and warnings ----------------------------------------------------

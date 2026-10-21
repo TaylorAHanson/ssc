@@ -95,14 +95,20 @@ Idempotency-Key: nightly-load-2026-10-20
   `{"op": "set_tags", "match": "sales_dev.bronze.*", "tags": {"domain": "sales"}}`.
   One part matches catalogs, two schemas and three tables and views. Add `column`
   (a name or a pattern) to match columns, or `match_types` such as `["view"]` to
-  match only some kinds of table. A pattern covers every object {{brand_name}}
-  knows about: what Unity Catalog had at the last sweep plus objects declared ahead
-  of time. The preview's findings say how many objects each pattern matched, and the
+  match only some kinds of table. Put the catalog part in braces to mean that catalog
+  in every environment: `{sales}.bronze.*` matches `sales_dev.bronze.*`,
+  `sales_prd.bronze.*` and so on, using the catalog patterns under **Environments**
+  (catalogs listed by name, rather than by pattern, aren't included). A pattern
+  covers every object {{brand_name}} knows about: what Unity Catalog had at the last
+  sweep plus objects declared ahead of time. The preview's findings say how many objects each pattern matched, and the
   change fails if one matches nothing. Patterns can't be combined with
   `expected_versions`. One change covers at most 5,000 objects by default (**Max
   objects per change** in Settings).
 - **`environments`** applies each operation to the same object in those environments
-  too, for example the `prd` counterpart of a `dev` table.
+  too, for example the `prd` counterpart of a `dev` table. An object whose catalog
+  isn't named by an environment pattern has no counterpart: it's changed where it is,
+  that environment is skipped for it, and the preview says so in a `no_counterpart`
+  warning.
 - **Concurrent edits:** to make sure nobody changed a tag since you read it, pass
   `expected_versions` (`{"classification": 3}`; `0` means the tag must not exist yet),
   or `expected_comment_version` for the description. A mismatch fails the whole change
