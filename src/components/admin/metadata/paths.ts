@@ -16,5 +16,8 @@ export function objectPath(name: string, column?: string | null): string {
   return column ? `${page}?column=${enc(column)}` : page;
 }
 
+export const datasetsPath = `${METADATA_BASE}/datasets`;
+export const datasetPath = (name: string): string => `${datasetsPath}/${enc(name)}`;
+
 export const historyPath = `${METADATA_BASE}/history`;
 export const adminPath = `${METADATA_BASE}/admin`;

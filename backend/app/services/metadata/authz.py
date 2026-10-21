@@ -400,6 +400,8 @@ class _Batch:
 
     def decide(self, item: ChangeItem, key: ObjectKey) -> ItemDecision:
         findings = policy.check_item(item, governed=self.governed)
+        if item.unchanged_in_uc:
+            return _kept(item, findings)
         return ItemDecision(item=item, decision=self._decision(item, key, findings), findings=findings)
 
     def _decision(self, item: ChangeItem, key: ObjectKey, findings: List[Finding]) -> AuthzDecision:
@@ -489,6 +491,22 @@ class _Batch:
         return decision
 
 
+_KEPT_NOTE = " Unity Catalog already has this value, so it's kept as is."
+
+
+def _kept(item: ChangeItem, findings: List[Finding]) -> ItemDecision:
+    """A value UC already has, carried into an object's first desired row: it changes nothing
+    there, so it needs no approval and a policy problem with it is only a warning."""
+    return ItemDecision(
+        item=item,
+        decision=AuthzDecision(allowed=True, reasons=["Unity Catalog already has this."]),
+        findings=[
+            f.model_copy(update={"severity": "warn", "message": f.message + _KEPT_NOTE}) if f.severity == "deny" else f
+            for f in findings
+        ],
+    )
+
+
 def decide(
     db: Session,
     actor: Actor,
@@ -497,6 +515,8 @@ def decide(
     observed: Optional[Dict[str, ObservedState]] = None,
 ) -> List[ItemDecision]:
     """One decision per item, in order, with its policy findings (``policy.check_item``).
+
+    An ``unchanged_in_uc`` item is allowed directly and its deny findings become warnings.
 
     ``observed`` (fqn_key -> snapshot row) supplies UC owners when
     METADATA_UC_OWNER_IS_AUTHORITY is on; keys it lacks are read from the snapshot table.

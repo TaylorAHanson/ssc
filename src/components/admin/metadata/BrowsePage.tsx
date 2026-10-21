@@ -7,6 +7,7 @@ import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { EmptyState, ErrorBanner, Notice, Pager, Skeleton } from '../../rbac/ui';
 import { activeFilterCount, useBrowseFilters, type SearchWhat } from './browseFilters';
+import { BrowseSwitch } from './BrowseSwitch';
 import { BulkEditDialog } from './BulkEditDialog';
 import { useMetadata } from './context';
 import { DeclareObjectDialog } from './DeclareObjectDialog';
@@ -130,7 +131,7 @@ export function BrowsePage() {
 
   return (
     <div className="space-y-4">
-      <Breadcrumb catalog={catalog} schema={schema} />
+      {catalog ? <Breadcrumb catalog={catalog} schema={schema} /> : <BrowseSwitch />}
       {scopeName && header.data && <ObjectHeader detail={header.data} title={schema ?? catalog ?? ''} />}
       {scopeName && !header.data && header.loading && <Skeleton rows={2} />}
 

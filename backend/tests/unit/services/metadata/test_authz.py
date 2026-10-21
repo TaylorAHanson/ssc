@@ -7,7 +7,7 @@ from sqlalchemy import event
 from app.core.config import settings
 from app.db.metadata import MetadataObjectModel, MetadataObservedModel, MetadataTagModel
 from app.models.user import User
-from app.services.metadata import authz, environments, observed, principals
+from app.services.metadata import authz, environments, observed, principals, report
 from app.services.metadata.types import (
     SYSTEM_ACTOR,
     Actor,
@@ -379,6 +379,19 @@ def test_policy_denials_block_the_item_outright(tree):
 
     assert (d.allowed, d.needs_approval, d.can_request) == (False, False, False)
     assert "must match" in d.reasons[0]
+
+
+def test_a_value_uc_already_has_is_kept_without_approval_and_its_policy_problem_only_warns(tree):
+    sensitive = tag("hr_dev.gold.staff", key="approver_group", after="users")
+    invalid = tag("hr_dev.gold.staff", key="dataset", after="Not Valid!")
+    for item in (sensitive, invalid):
+        item.unchanged_in_uc = True
+
+    kept = authz.decide(tree, user("nobody"), [sensitive, invalid])
+
+    assert [report.bucket(d) for d in kept] == ["direct", "direct"]
+    assert [f.severity for f in kept[1].findings] == ["warn"]
+    assert kept[1].findings[0].message.endswith("so it's kept as is.")
 
 
 def test_findings_are_attached_to_each_decision(tree):

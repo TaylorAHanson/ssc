@@ -5,15 +5,20 @@ import type { ObjectDetail } from '../../../types/metadata';
 import { AttentionBadge, EnvBadge } from './badges';
 import { TYPE_LABELS } from './format';
 import { DescriptionField, TagsField } from './InlineEdit';
-import { browsePath } from './paths';
+import { browsePath, datasetsPath } from './paths';
 import { hasEdits, seedFromDetail, useStagingStore } from './staging';
 
-/** All catalogs › catalog › schema › table, each a link except the last. */
-export function Breadcrumb({ catalog, schema, table }: { catalog?: string; schema?: string; table?: string }) {
-  const parts: { label: string; to?: string }[] = [{ label: 'All catalogs', to: catalog ? browsePath() : undefined }];
-  if (catalog) parts.push({ label: catalog, to: schema ? browsePath(catalog) : undefined });
-  if (schema) parts.push({ label: schema, to: table ? browsePath(catalog, schema) : undefined });
-  if (table) parts.push({ label: table });
+/** All catalogs › catalog › schema › table, or All datasets › dataset; each a link except the last. */
+export function Breadcrumb({ catalog, schema, table, dataset }: { catalog?: string; schema?: string; table?: string; dataset?: string }) {
+  const parts: { label: string; to?: string }[] = [];
+  if (dataset !== undefined) {
+    parts.push({ label: 'All datasets', to: datasetsPath }, { label: dataset });
+  } else {
+    parts.push({ label: 'All catalogs', to: catalog ? browsePath() : undefined });
+    if (catalog) parts.push({ label: catalog, to: schema ? browsePath(catalog) : undefined });
+    if (schema) parts.push({ label: schema, to: table ? browsePath(catalog, schema) : undefined });
+    if (table) parts.push({ label: table });
+  }
   return (
     <nav aria-label="Where you are" className="flex flex-wrap items-center gap-1 text-sm text-gray-500">
       {parts.map((p, i) => (

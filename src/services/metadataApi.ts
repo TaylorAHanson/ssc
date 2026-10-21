@@ -8,6 +8,7 @@ import type {
   ChangeSet,
   ChangeSetPage,
   ChangeSource,
+  DatasetSummary,
   ImportRequest,
   KeyInfo,
   MetadataConfig,
@@ -155,6 +156,11 @@ export async function getObject(name: string, column?: string | null): Promise<O
 /** GET /keys */
 export async function listKeys(params: { q?: string; limit?: number } = {}): Promise<KeyInfo[]> {
   return call(`/keys${buildQuery(params)}`);
+}
+
+/** GET /datasets */
+export async function listDatasets(): Promise<DatasetSummary[]> {
+  return call('/datasets');
 }
 
 // --- Changes ----------------------------------------------------------------------------

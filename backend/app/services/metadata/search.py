@@ -34,7 +34,9 @@ from app.services.metadata import authz, environments, observed, policy
 from app.services.metadata import scope as managed
 from app.services.metadata.types import (
     COLUMN_SEPARATOR,
+    RELATION_TYPES,
     Actor,
+    DatasetSummary,
     Facet,
     KeyInfo,
     ObjectSummary,
@@ -52,6 +54,7 @@ _T = MetadataTagModel.__table__
 _B = MetadataObservedModel.__table__
 
 NON_COLUMN_TYPES = tuple(t for t in get_args(SecurableType) if t != "column")
+DATASET_KEYS = ("dataset", "data_set")
 TAG_KEY_FACET_LIMIT = 50
 FACET_LIMIT = 500
 KEY_VALUE_LIMIT = 10
@@ -234,6 +237,12 @@ def _tag_filters(query: SearchQuery) -> List[TagFilter]:
     return [f for f in query.tags if (f.key or "").strip()]
 
 
+def _dataset_filters(query: SearchQuery) -> List[TagFilter]:
+    """Either spelling of the dataset key with the query's dataset; none without one."""
+    name = (query.dataset or "").strip()
+    return [TagFilter(key=k, value=name) for k in DATASET_KEYS] if name else []
+
+
 def _desired_tag_clause(f: TagFilter):
     conditions = [_T.c.object_id == _O.c.id, _T.c.key == f.key.strip()]
     if f.op == "eq":
@@ -288,6 +297,8 @@ def _managed_where(ctx: _Ctx) -> List:
     if q.object_states:
         where.append(_O.c.object_state.in_(list(q.object_states)))
     where += [_desired_tag_clause(f) for f in _tag_filters(q)]
+    if _dataset_filters(q):
+        where.append(or_(*[_desired_tag_clause(f) for f in _dataset_filters(q)]))
     if q.drift is True:
         where.append(_O.c.drift_detected_at.isnot(None))
     elif q.drift is False:
@@ -311,6 +322,8 @@ def _unmanaged_where(ctx: _Ctx) -> List:
         catalogs = sorted(c for c, env in ctx.env_by_catalog.items() if env in wanted)
         where.append(_B.c.catalog.in_(catalogs) if catalogs else false())
     where += [_observed_tag_clause(f, ctx.dialect) for f in _tag_filters(q)]
+    if _dataset_filters(q):
+        where.append(or_(*[_observed_tag_clause(f, ctx.dialect) for f in _dataset_filters(q)]))
     return where
 
 
@@ -511,6 +524,7 @@ def search(db: Session, query: SearchQuery, actor: Actor) -> SearchResult:
     * ``catalogs``: catalog names; ``schemas``: ``catalog.schema`` or a bare schema name.
     * ``securable_types``: listing ``column`` includes columns even without ``include_columns``.
     * ``tags``: exact key and value; ``key=`` (value None) matches key-only tags.
+    * ``dataset``: tagged ``dataset`` or ``data_set`` with exactly this value.
     * ``editable_only``: ``authz.editable_scope`` — the nearest owner-tagged object at or
       above is owned, or a principal glob covers the name (or an ancestor's) part by
       part: ``*`` and ``?`` within one part; a column goes by its relation.
@@ -626,3 +640,52 @@ def list_keys(db: Session, *, q: str = "", limit: int = 50) -> List[KeyInfo]:
     ]
     infos.sort(key=lambda info: (-info.count, info.key.lower()))
     return infos[:limit]
+
+
+# --- Datasets -----------------------------------------------------------------------
+
+
+def list_datasets(db: Session) -> List[DatasetSummary]:
+    """Every value of a table's or view's ``dataset`` / ``data_set`` tag, sorted by name.
+
+    Tags are read as search reads them: desired for managed objects, the snapshot's
+    otherwise. A relation tagged with both spellings is counted once per value.
+    """
+    dialect = db.get_bind().dialect.name
+    tables: Dict[str, set] = {}
+    catalogs: Dict[str, set] = {}
+    drifted: Dict[str, set] = {}
+
+    def add(value, fqn_key: str, catalog: str, drift: bool) -> None:
+        name = normalize_value(value)
+        if not name:
+            return
+        tables.setdefault(name, set()).add(fqn_key)
+        catalogs.setdefault(name, set()).add(catalog.lower())
+        if drift:
+            drifted.setdefault(name, set()).add(fqn_key)
+
+    for fqn_key, catalog, drift_at, value in db.execute(
+        select(_O.c.fqn_key, _O.c.catalog, _O.c.drift_detected_at, _T.c.value)
+        .select_from(_T.join(_O, _O.c.id == _T.c.object_id))
+        .where(_O.c.status == OBJECT_ACTIVE, _O.c.securable_type.in_(RELATION_TYPES), _T.c.key.in_(DATASET_KEYS))
+    ):
+        add(value, fqn_key, catalog, drift_at is not None)
+
+    desired = select(_O.c.id).where(_O.c.fqn_key == _B.c.fqn_key, _O.c.status == OBJECT_ACTIVE).correlate(_B).exists()
+    tagged = or_(*[_observed_tag_clause(TagFilter(key=k, op="exists"), dialect) for k in DATASET_KEYS])
+    for fqn_key, catalog, raw in db.execute(
+        select(_B.c.fqn_key, _B.c.catalog, _B.c.tags)
+        .where(_B.c.present.is_(True), ~desired, _B.c.securable_type.in_(RELATION_TYPES), tagged)
+    ):
+        tags = _json_tags(raw) or {}
+        for key in DATASET_KEYS:
+            add(tags.get(key), fqn_key, catalog, False)
+
+    return [
+        DatasetSummary(
+            name=name, table_count=len(keys), catalogs=sorted(catalogs[name]),
+            out_of_sync_count=len(drifted.get(name, ())),
+        )
+        for name, keys in sorted(tables.items(), key=lambda item: item[0].lower())
+    ]

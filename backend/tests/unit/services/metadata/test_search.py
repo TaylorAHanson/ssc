@@ -303,6 +303,46 @@ def test_tag_keys_that_a_json_path_cannot_quote(world):
     assert len(_keys(world, tags=_tags('!we"ird'))) == len(DEFAULT_KEYS) - 1
 
 
+def _datasets(db_session):
+    db = db_session
+    _obj(db, "sales_dev.crm.customers", tags={"dataset": "crm", "classification": "internal"}, drift=datetime(2026, 3, 3))
+    _obj(db, "sales_dev.crm.leads", tags={"dataset": "crm"})
+    _obj(db, "sales_dev.crm.retired", status="deleted", tags={"dataset": "crm"})
+    _obj(db, "sales_dev.crm", tags={"dataset": "crm"})
+    # Desired state wins: UC still says "old", but the managed row has moved to crm.
+    _snap(db, "sales_dev.crm.leads", tags={"dataset": "old"})
+    _snap(db, "sales_prd.crm.orders", tags={"data_set": "crm"})
+    _snap(db, "sales_prd.crm.both", tags={"dataset": "crm", "data_set": "crm"})
+    _snap(db, "sales_prd.hr.staff", tags={"dataset": "hr", "data_set": "people"})
+    _snap(db, "sales_prd.hr.flag", tags={"dataset": None})
+    _snap(db, "sales_prd.hr.gone", tags={"dataset": "hr"}, present=False)
+    _snap(db, "sales_prd.hr.staff", "ssn", tags={"dataset": "hr"})
+    return db
+
+
+def test_datasets_group_tables_and_views_by_either_spelling_of_the_dataset_tag(db_session, fakes):
+    db = _datasets(db_session)
+
+    datasets = {d.name: d for d in search_mod.list_datasets(db)}
+
+    assert list(datasets) == ["crm", "hr", "people"]
+    crm = datasets["crm"]
+    assert (crm.table_count, crm.catalogs, crm.out_of_sync_count) == (4, ["sales_dev", "sales_prd"], 1)
+    assert (datasets["hr"].table_count, datasets["people"].table_count) == (1, 1)
+
+
+def test_the_dataset_filter_matches_either_spelling_with_the_exact_value(db_session, fakes):
+    db = _datasets(db_session)
+
+    assert _keys(db, dataset="crm", securable_types=["table"]) == [
+        "sales_dev.crm.customers", "sales_dev.crm.leads", "sales_prd.crm.both", "sales_prd.crm.orders",
+    ]
+    assert _keys(db, dataset="people") == ["sales_prd.hr.staff"]
+    assert _keys(db, dataset="CRM") == []
+    assert _keys(db, dataset="old") == []
+    assert len(_keys(db, dataset=" ")) == len(_keys(db))
+
+
 def test_drift_filter(world):
     assert _keys(world, drift=True) == ["sales_dev.bronze.orders"]
     not_drifted = _keys(world, drift=False)

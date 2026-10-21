@@ -9,12 +9,14 @@ import { cn } from '../../../lib/utils';
 import { AdminPage } from '../../../components/admin/metadata/AdminPage';
 import { BrowsePage } from '../../../components/admin/metadata/BrowsePage';
 import { ChangeSetDrawer } from '../../../components/admin/metadata/ChangeSetDrawer';
+import { DatasetPage } from '../../../components/admin/metadata/DatasetPage';
+import { DatasetsPage } from '../../../components/admin/metadata/DatasetsPage';
 import { MetadataContext, type MetadataContextValue } from '../../../components/admin/metadata/context';
 import { errorMessage } from '../../../components/admin/metadata/format';
 import { HistoryPage } from '../../../components/admin/metadata/HistoryPage';
 import { CircuitBreakerBanner } from '../../../components/admin/metadata/ModeBanner';
 import { ObjectPage } from '../../../components/admin/metadata/ObjectPage';
-import { METADATA_BASE, adminPath, historyPath, objectPath } from '../../../components/admin/metadata/paths';
+import { METADATA_BASE, adminPath, datasetsPath, historyPath, objectPath } from '../../../components/admin/metadata/paths';
 import { RevertDialog } from '../../../components/admin/metadata/RevertDialog';
 import { RunDrawer } from '../../../components/admin/metadata/RunDrawer';
 import { UnsavedBar } from '../../../components/admin/metadata/UnsavedBar';
@@ -99,6 +101,8 @@ export function MetadataManager() {
           <Route path="browse/:catalog" element={<BrowsePage key={location.pathname} />} />
           <Route path="browse/:catalog/:schema" element={<BrowsePage key={location.pathname} />} />
           <Route path="browse/:catalog/:schema/:table" element={<ObjectPage />} />
+          <Route path="datasets" element={<DatasetsPage />} />
+          <Route path="datasets/:dataset" element={<DatasetPage key={location.pathname} />} />
           <Route path="history" element={<HistoryPage />} />
           <Route path="admin" element={ctx.isAdmin ? <AdminPage /> : <Navigate to={METADATA_BASE} replace />} />
           <Route path="*" element={<Navigate to={METADATA_BASE} replace />} />
@@ -147,7 +151,8 @@ export function MetadataManager() {
 
 function NavItem({ to, children, end = true, matchBrowse }: { to: string; children: ReactNode; end?: boolean; matchBrowse?: boolean }) {
   const location = useLocation();
-  const browseActive = matchBrowse && (location.pathname === METADATA_BASE || location.pathname.startsWith(`${METADATA_BASE}/browse`));
+  const browseActive =
+    matchBrowse && (location.pathname === METADATA_BASE || location.pathname.startsWith(`${METADATA_BASE}/browse`) || location.pathname.startsWith(datasetsPath));
   return (
     <NavLink
       to={to}
@@ -187,7 +192,7 @@ function Welcome() {
       </button>
       <p className="font-medium text-gray-900">How this works</p>
       <ol className="mt-1 list-decimal space-y-0.5 pl-5">
-        <li>Click into a catalog and schema, or search, to find a table.</li>
+        <li>Open a catalog or a dataset, or search, to find a table.</li>
         <li>Change its description or tags right on the page. Nothing is saved yet.</li>
         <li>
           Click <span className="font-medium">Review and save</span> at the bottom. Some changes go to the owners for approval first.

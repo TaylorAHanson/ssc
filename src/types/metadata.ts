@@ -407,6 +407,8 @@ export interface SearchQuery {
   environments?: string[];
   object_states?: ObjectState[];
   tags?: string[];
+  /** Only objects tagged `dataset` or `data_set` with this value. */
+  dataset?: string;
   drift?: boolean | null;
   include_columns?: boolean;
   editable_only?: boolean;
@@ -450,6 +452,14 @@ export interface ObjectSummary {
 export interface Facet {
   value: string;
   count: number;
+}
+
+/** The tables and views tagged `dataset` (or `data_set`) with one value. */
+export interface DatasetSummary {
+  name: string;
+  table_count: number;
+  catalogs: string[];
+  out_of_sync_count: number;
 }
 
 export interface SearchResult {

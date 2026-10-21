@@ -215,6 +215,20 @@ def test_an_invalid_search_is_400(api):
     assert response.status_code == 400
 
 
+def test_datasets_are_listed_and_one_datasets_tables_are_searchable(api, db):
+    from app.db.metadata import MetadataObservedModel
+
+    _observe(db, "sales_dev.crm.customers", "sales_dev.crm.orders")
+    db.query(MetadataObservedModel).filter_by(fqn_key="sales_dev.crm.customers").update({"tags": {"dataset": "crm"}})
+    db.commit()
+
+    datasets = api(OWNER).get(f"{BASE}/datasets").json()
+    tables = api(OWNER).get(f"{BASE}/objects", params={"dataset": "crm"}).json()
+
+    assert [(d["name"], d["table_count"], d["catalogs"]) for d in datasets] == [("crm", 1, ["sales_dev"])]
+    assert [i["name"] for i in tables["items"]] == ["sales_dev.crm.customers"]
+
+
 # --- Source and idempotency ----------------------------------------------------------------
 
 

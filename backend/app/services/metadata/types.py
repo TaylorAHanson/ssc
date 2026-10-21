@@ -627,6 +627,8 @@ class SearchQuery(BaseModel):
     environments: List[str] = Field(default_factory=list)
     object_states: List[ObjectState] = Field(default_factory=list)
     tags: List[TagFilter] = Field(default_factory=list)
+    # Only objects tagged ``dataset`` or ``data_set`` with this value.
+    dataset: Optional[str] = None
     # None = either; True = only objects whose desired and observed state differ.
     drift: Optional[bool] = None
     include_columns: bool = False
@@ -673,6 +675,15 @@ class ObjectSummary(BaseModel):
 class Facet(BaseModel):
     value: str
     count: int
+
+
+class DatasetSummary(BaseModel):
+    """The tables and views tagged ``dataset`` (or ``data_set``) with one value."""
+    name: str
+    table_count: int
+    catalogs: List[str] = Field(default_factory=list)
+    # Of table_count: managed objects whose Unity Catalog state differs from the desired one.
+    out_of_sync_count: int = 0
 
 
 class SearchResult(BaseModel):

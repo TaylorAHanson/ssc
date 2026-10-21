@@ -44,6 +44,7 @@ from app.services.metadata.types import (
     ChangeSet,
     ChangeSetPage,
     ChangeSource,
+    DatasetSummary,
     ImportRequest,
     KeyInfo,
     MetadataConfig,
@@ -202,6 +203,7 @@ async def search_objects(
     object_states: List[str] = Query([]),
     object_state: List[str] = Query([]),
     tag: List[str] = Query([], description="key=value, key (has the key) or !key (lacks the key); repeatable"),
+    dataset: Optional[str] = Query(None, max_length=255, description="Tagged dataset or data_set with this value"),
     drift: Optional[bool] = None,
     include_columns: bool = False,
     editable_only: bool = False,
@@ -219,7 +221,8 @@ async def search_objects(
                 q=q, catalogs=_merged(catalogs, catalog), schemas=_merged(schemas, schema),
                 securable_types=_merged(securable_types, securable_type),
                 environments=_merged(environments_, environment), object_states=_merged(object_states, object_state),
-                tags=[TagFilter.parse(t) for t in tag if t.strip()], drift=drift, include_columns=include_columns,
+                tags=[TagFilter.parse(t) for t in tag if t.strip()], dataset=dataset, drift=drift,
+                include_columns=include_columns,
                 editable_only=editable_only, include_unmanaged=include_unmanaged, sort=sort, order=order,
                 page=page, page_size=page_size,
             )
@@ -254,6 +257,19 @@ async def list_keys(
         def run() -> List[KeyInfo]:
             _browse(db, user)
             return search.list_keys(db, q=q, limit=limit)
+
+        return await asyncio.to_thread(run)
+
+
+@router.get("/datasets", response_model=List[DatasetSummary])
+async def list_datasets(
+    db: Session = Depends(get_db), user: User = Depends(deps.get_current_user_or_principal),
+) -> List[DatasetSummary]:
+    """Every dataset tag value with its tables; ``GET /objects?dataset=`` lists one dataset's tables."""
+    with _http_errors():
+        def run() -> List[DatasetSummary]:
+            _browse(db, user)
+            return search.list_datasets(db)
 
         return await asyncio.to_thread(run)
 

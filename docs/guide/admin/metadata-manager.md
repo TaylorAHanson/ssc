@@ -27,7 +27,9 @@ or so, and a full check of every object runs on a schedule.
 ## Finding a table
 
 The page opens on a list of every catalog, with how many tables and views each
-holds. Click a catalog to see its schemas, and a schema to see its tables. The
+holds; the **Catalogs | Datasets** switch above it lists datasets instead (see
+[Tagging many objects at once](#tagging-many-objects-at-once)). Click a catalog
+to see its schemas, and a schema to see its tables. The
 path at the top (*All catalogs › sales_dev › bronze*) takes you back up. Every
 level has its own address, so you can share a link to a catalog, a schema or a
 table.
@@ -72,7 +74,8 @@ Unity Catalog*.
    on, because that changes who can see the data. The first time you change a
    table here it's marked *Starts being managed*, and the tags and description
    it already has are listed as *Already in Unity Catalog*: they're kept, not
-   counted as edits.
+   counted as edits, and need no approval. If one breaks a tag rule, the
+   review shows a warning instead of stopping the save.
 4. Add a reason (if your admin requires one) and save. Changes you're allowed to make are saved straight
    away; the rest become one approval request, which you can follow under
    **My Requests**.
@@ -87,6 +90,14 @@ change made to it here).
 
 ## Tagging many objects at once
 
+- **A whole dataset.** Switch **Browse** from **Catalogs** to **Datasets**. A
+  dataset is every table and view tagged with the same `dataset` (or
+  `data_set`) value, such as `dataset=crm`, whatever catalog it's in. Open one
+  to see each of its tags and how many of its tables carry it. **Add to the
+  other N** puts a tag on the tables missing it, **Remove from all** takes it
+  off every table, and **Add or change a tag on every table** sets one value
+  everywhere. You can also tick some of its tables and choose **Edit these**.
+  The changes join your unsaved changes like any other edit.
 - **Pick them from a list.** Tick the tables in a schema, or in search results,
   and choose **Edit all**. Whatever you add, remove or describe applies
   to every ticked object and joins your unsaved changes.

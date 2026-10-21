@@ -498,6 +498,21 @@ def test_split_routing_writes_direct_items_and_files_the_rest(db, fakes):
     assert len(fakes.filed) == 1
 
 
+def test_split_files_an_objects_kept_values_with_its_edits_that_need_approval(db, fakes):
+    fakes.sensitive = {"pii"}
+    fakes.observe(DEV, tags={"legacy": "x"})
+    fakes.observe("sales_dev.bronze.events", tags={"legacy": "y"})
+
+    result = submit(db, op("set_tags", tags={"legacy": "x", "pii": None}),
+                    op("set_tags", name="sales_dev.bronze.events", tags={"legacy": "y", "tier": "gold"}),
+                    on_approval_needed="split")
+
+    assert result.status == "partial"
+    assert desired(db) is None
+    assert desired(db, "sales_dev.bronze.events").tags == {"legacy": "y", "tier": "gold"}
+    assert sorted(i.key for i in fakes.filed[0]["items"]) == ["legacy", "pii"]
+
+
 def test_split_with_nothing_direct_is_just_a_request(db, fakes):
     fakes.sensitive = {"pii"}
     result = submit(db, op("set_tags", tags={"pii": None}), on_approval_needed="split")

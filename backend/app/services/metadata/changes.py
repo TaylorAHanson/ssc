@@ -566,6 +566,10 @@ def _route(
     if groups[DENIED]:
         raise errors.Forbidden(_forbidden_message(groups[DENIED]))
     direct, approval = groups[DIRECT], groups[APPROVAL]
+    # A kept value waits with its object's edits that need approval, so the object starts being managed only once they're approved.
+    waiting = {d.item.fqn_key for d in approval}
+    approval += [d for d in direct if d.item.unchanged_in_uc and d.item.fqn_key in waiting]
+    direct = [d for d in direct if not (d.item.unchanged_in_uc and d.item.fqn_key in waiting)]
     types = {d.item.fqn_key: d.item.securable_type for d in pv.items}
 
     def write(decisions: List[ItemDecision], result: ChangeResult) -> ChangeSet:
