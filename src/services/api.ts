@@ -1555,6 +1555,8 @@ export interface DomainHierarchy {
   domain: string;
   description: string;
   subdomain_count: number;
+  // False when every asset is in the catch-all subdomain.
+  has_subdomains?: boolean;
   metric_view_count: number;
   table_count: number;
   dashboard_count: number;
@@ -2207,6 +2209,54 @@ export async function getTableDetails(tableName: string): Promise<TableDetailsRe
   return response.json();
 }
 
+export type TablePreviewErrorKind =
+  | 'not_found'
+  | 'permission_denied'
+  | 'broken_dependency'
+  | 'no_warehouse'
+  | 'no_obo'
+  | 'error'
+  | null;
+
+export interface TablePreviewColumn {
+  name: string;
+  /** SQL type from the result set, e.g. `BIGINT`, `DECIMAL(10,2)`; null if unknown. */
+  type: string | null;
+}
+
+/** A cell as the SQL warehouse returns it: values arrive as strings (or null). */
+export type TablePreviewCell = string | number | boolean | null | Record<string, unknown> | unknown[];
+
+export interface TablePreviewResponse {
+  table_name: string;
+  columns: TablePreviewColumn[];
+  /** One array per row, aligned with `columns`. */
+  rows: TablePreviewCell[][];
+  row_count: number;
+  /** Rows requested; `truncated` is true when the table may have more. */
+  limit: number;
+  truncated: boolean;
+  error: string | null;
+  error_kind: TablePreviewErrorKind;
+}
+
+/**
+ * Sample rows of a UC table or view, read as the signed-in user on the SQL
+ * warehouse (capped by the admin's preview row limit). Failures come back as
+ * HTTP 200 with `error` / `error_kind`.
+ */
+export async function getTablePreview(tableName: string, limit?: number): Promise<TablePreviewResponse> {
+  const params = new URLSearchParams({ table_name: tableName });
+  if (limit !== undefined) params.set('limit', String(limit));
+  const response = await fetch(`${API_BASE_URL}/data-assets/databricks/table/preview?${params}`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load data preview: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 // ---------------------------------------------------------------------------
 // Context Catalog
 // ---------------------------------------------------------------------------
@@ -2632,6 +2682,70 @@ export async function deleteChatSessions(surface?: string): Promise<number> {
   if (!response.ok) throw new Error(`Failed to clear chat sessions: ${response.statusText}`);
   const body = await response.json().catch(() => ({ deleted: 0 }));
   return body.deleted ?? 0;
+}
+
+// --- Pinned Discover assets (per user, server-side) ---
+
+export interface PinnedAssetInput {
+  /** Discover asset id: data_assets.id, a legacy mapping id, or a dashboard/app id. */
+  asset_id: string;
+  /** Lowercased asset type, e.g. `metric_view`, `view`, `managed`, `dashboard`, `app`, `legacy_dashboard`. */
+  asset_type: string;
+  title: string;
+  /** e.g. `catalog.schema` or `Domain › Subdomain`. */
+  subtitle?: string | null;
+  /** External http(s) link for assets that open outside Discover (dashboards, apps). */
+  url?: string | null;
+}
+
+export interface PinnedAsset extends PinnedAssetInput {
+  subtitle: string | null;
+  url: string | null;
+  created_at: string | null;
+  /** False when the asset has left the catalog; null when unknown (dashboards, apps). */
+  available: boolean | null;
+}
+
+export interface PinnedAssetList {
+  pins: PinnedAsset[];
+  count: number;
+  max: number;
+}
+
+/** FastAPI error detail as one readable line. */
+async function pinError(response: Response, action: string): Promise<Error> {
+  const body = await response.json().catch(() => null);
+  const detail = body?.detail;
+  if (typeof detail === 'string') return new Error(detail);
+  if (Array.isArray(detail)) return new Error(detail.map((d: { msg?: string }) => d.msg).join('; '));
+  return new Error(`Failed to ${action}: ${response.statusText}`);
+}
+
+/** The current user's pins, newest first. */
+export async function listPins(): Promise<PinnedAssetList> {
+  const response = await fetch(`${API_BASE_URL}/pins`, { headers: getHeaders() });
+  if (!response.ok) throw await pinError(response, 'load pins');
+  return response.json();
+}
+
+/** Pin an asset. Idempotent: re-pinning refreshes its title/subtitle. */
+export async function pinAsset(input: PinnedAssetInput): Promise<PinnedAsset> {
+  const response = await fetch(`${API_BASE_URL}/pins`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw await pinError(response, 'pin asset');
+  return response.json();
+}
+
+/** Unpin an asset. Idempotent: unpinning something not pinned succeeds. */
+export async function unpinAsset(assetId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/pins/${encodeURIComponent(assetId)}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  });
+  if (!response.ok) throw await pinError(response, 'unpin asset');
 }
 
 // ---------------------------------------------------------------------------
@@ -3922,6 +4036,7 @@ export const api = {
   getDatabricksGenieSpaces,
   getTableLineage,
   getTableDetails,
+  getTablePreview,
   listContextDomains,
   getContextDomain,
   createContextDomain,
@@ -3942,6 +4057,9 @@ export const api = {
   putChatSession,
   deleteChatSession,
   deleteChatSessions,
+  listPins,
+  pinAsset,
+  unpinAsset,
   submitFeedback,
   listFeedback,
   getFeedback,

@@ -1,7 +1,5 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react';
 import {
-  TrendingUp,
-  Database,
   LayoutDashboard,
   Box,
   Check,
@@ -13,7 +11,6 @@ import {
   ExternalLink,
   Layers,
   X,
-  ArrowLeftRight,
 } from 'lucide-react';
 import type { DomainHierarchy, DataAsset, LegacyMapping, SubdomainMeta } from '../../services/api';
 import { MetricViewCard } from './MetricViewCard';
@@ -25,8 +22,9 @@ import { usePagination } from './usePagination';
 import { SidePanel } from './SidePanel';
 import { LegacyMappingTable } from './LegacyMappingTable';
 import { CopyLinkButton } from './CopyLinkButton';
-
-type ContentKind = 'metrics' | 'tables' | 'dashboards' | 'apps' | 'legacy';
+import { CONTENT_KINDS, type ContentKind } from './contentKinds';
+import { DISCOVER_CONTENT_KINDS } from '../../lib/discoverLinks';
+import { PinButton } from './PinButton';
 
 const KINDS_STORAGE_KEY = 'discover_content_kinds';
 // Cards per page: 4 rows of the 3-column grid.
@@ -35,8 +33,7 @@ const PAGE_SIZE = 12;
 function loadPickedKinds(): ContentKind[] | null {
   try {
     const raw = JSON.parse(localStorage.getItem(KINDS_STORAGE_KEY) || 'null');
-    const valid: ContentKind[] = ['metrics', 'tables', 'dashboards', 'apps', 'legacy'];
-    return Array.isArray(raw) && raw.length && raw.every((k) => valid.includes(k)) ? raw : null;
+    return Array.isArray(raw) && raw.length && raw.every((k) => DISCOVER_CONTENT_KINDS.includes(k)) ? raw : null;
   } catch {
     return null;
   }
@@ -45,22 +42,6 @@ function loadPickedKinds(): ContentKind[] | null {
 function plural(n: number, one: string, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`;
 }
-
-const CONTENT_KINDS: Array<{
-  key: ContentKind;
-  label: string;
-  Icon: typeof TrendingUp;
-  /** Classes when selected / accent when not. */
-  on: string;
-  off: string;
-}> = [
-  { key: 'metrics', label: 'Metric Views', Icon: TrendingUp, on: 'bg-primary/10 border-primary text-primary', off: 'text-primary' },
-  { key: 'tables', label: 'Tables & Views', Icon: Database, on: 'bg-indigo-50 border-indigo-600 text-indigo-800', off: 'text-indigo-700' },
-  { key: 'dashboards', label: 'Dashboards', Icon: LayoutDashboard, on: 'bg-amber-50 border-amber-500 text-amber-800', off: 'text-amber-700' },
-  { key: 'apps', label: 'Apps', Icon: Box, on: 'bg-purple-50 border-purple-600 text-purple-800', off: 'text-purple-700' },
-  // Only offered where admins have mapped legacy (e.g. Tableau) dashboards.
-  { key: 'legacy', label: 'Legacy Dashboards', Icon: ArrowLeftRight, on: 'bg-slate-100 border-slate-700 text-slate-800', off: 'text-slate-600' },
-];
 
 function SectionHeading({ kind, count }: { kind: ContentKind; count: number }) {
   const { label, Icon, off } = CONTENT_KINDS.find((k) => k.key === kind)!;
@@ -103,18 +84,20 @@ function LinkCard({
   badge,
   openLabel,
   tone,
+  pinType,
 }: {
   item: LinkItem;
   Icon: typeof Box;
   badge: string;
   openLabel: string;
   tone: keyof typeof LINK_TONES;
+  pinType: 'dashboard' | 'app';
 }) {
   const t = LINK_TONES[tone];
   const [thumbFailed, setThumbFailed] = useState(false);
   const when = formatWhen(item.updated_at);
   return (
-    <div className={`bg-white rounded-2xl border border-slate-200 p-5 shadow-xs hover:shadow-md ${t.hover} transition-all flex flex-col justify-between`}>
+    <div className={`group bg-white rounded-2xl border border-slate-200 p-5 shadow-xs hover:shadow-md ${t.hover} transition-all flex flex-col justify-between`}>
       <div>
         {item.thumbnail_url && !thumbFailed && (
           <img
@@ -129,7 +112,10 @@ function LinkCard({
           <span className={`text-[11px] font-semibold uppercase px-2 py-0.5 rounded-md border inline-flex items-center gap-1 ${t.badge}`}>
             <Icon className="w-3 h-3" /> {badge}
           </span>
-          {when && <span className="text-[11px] text-slate-400">Updated {when}</span>}
+          <span className="flex items-center gap-1">
+            {when && <span className="text-[11px] text-slate-400">Updated {when}</span>}
+            <PinButton asset={{ asset_id: item.id, asset_type: pinType, title: item.name, url: item.url }} />
+          </span>
         </div>
         <h4 className="text-base font-bold text-slate-900 mb-1 break-words">{item.name}</h4>
         {item.description ? (
@@ -220,6 +206,10 @@ interface DomainFullViewProps {
   viewLink?: string;
   /** Shareable URL of an asset opened from this view. */
   assetLink?: (asset: DataAsset) => string;
+  /** Kinds a link asked to show; they win over the remembered choice without replacing it. */
+  linkedKinds?: ContentKind[] | null;
+  /** Called when the user picks kinds themselves, so the link's choice can be dropped. */
+  onClearLinkedKinds?: () => void;
 }
 
 export function DomainFullView({
@@ -253,9 +243,12 @@ export function DomainFullView({
   replacesFor,
   viewLink,
   assetLink,
+  linkedKinds = null,
+  onClearLinkedKinds,
 }: DomainFullViewProps) {
   const currentDomainData = domainsHierarchy.find((d) => d.domain === domain) || domainsHierarchy[0];
   const currentSubdomainMeta = currentDomainData?.subdomains.find((sd) => sd.name === subdomain);
+  const showSubdomainPicker = currentDomainData?.has_subdomains !== false || !!subdomain;
 
   // Derive split dashboards and apps lists
   const dashboardsList = dashboards ?? consumingSolutions.filter((s) => s.type !== 'app');
@@ -271,7 +264,14 @@ export function DomainFullView({
     apps: appsList.length,
     legacy: legacyMappings.length,
   };
-  const [pickedKinds, setPickedKindsState] = useState<ContentKind[] | null>(loadPickedKinds);
+  const [pickedKinds, setPickedKindsState] = useState<ContentKind[] | null>(() => linkedKinds ?? loadPickedKinds());
+  // A link's kinds apply for this visit only, so they're adopted without being stored.
+  const linkedKey = linkedKinds?.join(',') ?? '';
+  const [appliedLinkedKey, setAppliedLinkedKey] = useState(linkedKey);
+  if (linkedKey !== appliedLinkedKey) {
+    setAppliedLinkedKey(linkedKey);
+    if (linkedKinds) setPickedKindsState(linkedKinds);
+  }
   const setPickedKinds = (update: ContentKind[] | null | ((prev: ContentKind[] | null) => ContentKind[] | null)) =>
     setPickedKindsState((prev) => {
       const next = typeof update === 'function' ? update(prev) : update;
@@ -298,7 +298,9 @@ export function DomainFullView({
   const toggleKind = (kind: ContentKind) => {
     const next = isShown(kind) ? shownKinds.filter((k) => k !== kind) : [...shownKinds, kind];
     // Keep at least one kind selected so the page is never blank.
-    if (next.length) setPickedKinds(CONTENT_KINDS.map((k) => k.key).filter((k) => next.includes(k)));
+    if (!next.length) return;
+    setPickedKinds(CONTENT_KINDS.map((k) => k.key).filter((k) => next.includes(k)));
+    if (linkedKinds) onClearLinkedKinds?.();
   };
 
   // Views with readable KPIs first; the rest keep their order.
@@ -409,79 +411,84 @@ export function DomainFullView({
               )}
             </div>
 
-            <ChevronRight className="w-3.5 h-3.5 text-slate-400 hidden sm:block" />
+            {/* Hidden when every asset is in the catch-all subdomain. */}
+            {showSubdomainPicker && (
+              <>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-400 hidden sm:block" />
 
-            {/* Subdomain Dropdown Switcher */}
-            <div className="relative" ref={subdomainRef}>
-              <button
-                type="button"
-                onClick={() => {
-                  setSubdomainDropdownOpen(!subdomainDropdownOpen);
-                  setDomainDropdownOpen(false);
-                }}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                  subdomain
-                    ? 'bg-primary/10 text-primary border-primary/30'
-                    : 'bg-slate-50 text-slate-700 border-slate-200/90 hover:bg-slate-100'
-                }`}
-              >
-                <span>{subdomain || 'All Subdomains'}</span>
-                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${subdomainDropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
+              {/* Subdomain Dropdown Switcher */}
+              <div className="relative" ref={subdomainRef}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSubdomainDropdownOpen(!subdomainDropdownOpen);
+                    setDomainDropdownOpen(false);
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                    subdomain
+                      ? 'bg-primary/10 text-primary border-primary/30'
+                      : 'bg-slate-50 text-slate-700 border-slate-200/90 hover:bg-slate-100'
+                  }`}
+                >
+                  <span>{subdomain || 'All Subdomains'}</span>
+                  <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${subdomainDropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
 
-              {subdomainDropdownOpen && (
-                <div className="absolute left-0 top-full mt-1.5 w-64 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in slide-in-from-top-1 text-left">
-                  <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                    Filter by Subdomain
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onSelectSubdomain(null);
-                      onSelectMetricView(null);
-                      setSubdomainDropdownOpen(false);
-                    }}
-                    className={`w-full text-left px-3 py-2 text-xs font-medium flex items-center justify-between hover:bg-slate-50 transition-colors ${
-                      !subdomain ? 'bg-primary/10 text-primary font-bold' : 'text-slate-700'
-                    }`}
-                  >
-                    <span>All Subdomains</span>
-                    <span className="text-[10px] text-slate-400">{plural(currentDomainData?.metric_view_count ?? 0, 'metric view')}</span>
-                  </button>
-                  <div className="h-px bg-slate-100 my-1" />
-                  {currentDomainData?.subdomains.map((sd: SubdomainMeta) => (
+                {subdomainDropdownOpen && (
+                  <div className="absolute left-0 top-full mt-1.5 w-64 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in slide-in-from-top-1 text-left">
+                    <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Filter by Subdomain
+                    </div>
                     <button
-                      key={sd.name}
                       type="button"
                       onClick={() => {
-                        onSelectSubdomain(sd.name);
+                        onSelectSubdomain(null);
                         onSelectMetricView(null);
                         setSubdomainDropdownOpen(false);
                       }}
                       className={`w-full text-left px-3 py-2 text-xs font-medium flex items-center justify-between hover:bg-slate-50 transition-colors ${
-                        sd.name === subdomain ? 'bg-primary/10 text-primary font-bold' : 'text-slate-700'
+                        !subdomain ? 'bg-primary/10 text-primary font-bold' : 'text-slate-700'
                       }`}
                     >
-                      <span>{sd.name}</span>
-                      <span className="text-[10px] text-slate-400 font-semibold whitespace-nowrap">{sd.metric_views_count} MV · {plural(sd.tables_count, 'table')}</span>
+                      <span>All Subdomains</span>
+                      <span className="text-[10px] text-slate-400">{plural(currentDomainData?.metric_view_count ?? 0, 'metric view')}</span>
                     </button>
-                  ))}
-                </div>
-              )}
-            </div>
+                    <div className="h-px bg-slate-100 my-1" />
+                    {currentDomainData?.subdomains.map((sd: SubdomainMeta) => (
+                      <button
+                        key={sd.name}
+                        type="button"
+                        onClick={() => {
+                          onSelectSubdomain(sd.name);
+                          onSelectMetricView(null);
+                          setSubdomainDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 text-xs font-medium flex items-center justify-between hover:bg-slate-50 transition-colors ${
+                          sd.name === subdomain ? 'bg-primary/10 text-primary font-bold' : 'text-slate-700'
+                        }`}
+                      >
+                        <span>{sd.name}</span>
+                        <span className="text-[10px] text-slate-400 font-semibold whitespace-nowrap">{sd.metric_views_count} MV · {plural(sd.tables_count, 'table')}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
 
-            {subdomain && (
-              <button
-                type="button"
-                onClick={() => {
-                  onSelectSubdomain(null);
-                  onSelectMetricView(null);
-                }}
-                className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-                title="Show all subdomains"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
+              {subdomain && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectSubdomain(null);
+                    onSelectMetricView(null);
+                  }}
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                  title="Show all subdomains"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+              </>
             )}
 
             {/* Search, scoped to whatever is selected */}
@@ -661,6 +668,7 @@ export function DomainFullView({
                       badge="Dashboard"
                       openLabel="Open Dashboard"
                       tone="amber"
+                      pinType="dashboard"
                     />
                   ))}
                 </div>
@@ -697,7 +705,7 @@ export function DomainFullView({
               <>
                 <div className={GRID}>
                   {appPages.pageItems.map((app) => (
-                    <LinkCard key={app.id} item={app} Icon={Box} badge="App" openLabel="Launch App" tone="purple" />
+                    <LinkCard key={app.id} item={app} Icon={Box} badge="App" openLabel="Launch App" tone="purple" pinType="app" />
                   ))}
                 </div>
                 <Pagination {...appPages} onPageChange={appPages.setPage} />

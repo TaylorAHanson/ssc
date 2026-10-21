@@ -233,6 +233,20 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "How many days of system.access.table_lineage the data-asset sync searches for "
              "dashboards that read each metric view. A dashboard nobody opened in this window isn't "
              "listed. Lineage keeps up to 365 days. Applies on the next sync."},
+    {"group": "Data Catalog", "key": "DISCOVER_PREVIEW_ROW_LIMIT",
+     "label": "Data preview rows", "type": "int", "min": 1, "max": 5000,
+     "requires": ["features.data_discovery"],
+     "help": "Most rows a user sees when they load the Data preview of a table or view on the catalog "
+             "page. The preview runs SELECT ... LIMIT on the SQL warehouse as the signed-in user, so "
+             "it only shows rows they're allowed to read; search, sort and filter then work on just "
+             "these rows in the browser. Higher values make previews slower and use more warehouse "
+             "time. Applies immediately."},
+    {"group": "Data Catalog", "key": "DISCOVER_MAX_PINS",
+     "label": "Pinned assets per user", "type": "int", "min": 1, "max": 500,
+     "requires": ["features.data_discovery"],
+     "help": "Most tables, views, metric views and dashboards one person can pin to the top of the "
+             "catalog page. Existing pins over a lowered limit are kept; the user just can't add "
+             "more until they unpin some. Applies immediately."},
     {"group": "Data Catalog", "key": "DATA_ASSET_SYNC_CRON", "label": "Data asset sync cron",
      "type": "cron", "requires": ["features.data_discovery"],
      "help": "How often the local data-asset cache (and the cached workspace list, if on) is refreshed "

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict
 from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
-from app.workers.tasks.sync_data_assets import is_metric_view
+from app.workers.tasks.sync_data_assets import DEFAULT_SUBDOMAIN, is_metric_view
 from app.api.deps import get_current_user
 from app.services.data_asset_owner import resolve_data_asset_owner
 from datetime import datetime
@@ -154,12 +154,12 @@ def get_domains_hierarchy(db: Session = Depends(get_db)):
         "Sales Execution": "Deal intelligence, sales order conversion, rep attainment, and pipeline velocity",
         "Governance & Audit": "Access controls, certification violations, data contract compliance, and audit logs",
         "Site & Asset Performance": "Data center MW delivered, energy efficiency, equipment telemetry, and uptime SLAs",
-        "General Analytics": "General enterprise analytics, staging tables, and operational views",
+        DEFAULT_SUBDOMAIN: "General enterprise analytics, staging tables, and operational views",
     }
 
     for a in assets:
         d = a.domain or "Enterprise Data"
-        sd = a.subdomain or "General Analytics"
+        sd = a.subdomain or DEFAULT_SUBDOMAIN
         is_metric = is_metric_view(a.type)
 
         if d not in domain_map:
@@ -201,7 +201,7 @@ def get_domains_hierarchy(db: Session = Depends(get_db)):
             sub_entry["metric_views"].append(a.table_name)
 
     results = []
-    priority_order = ["Supply Chain", "Finance", "Sales & Commercial", "Operations & Facilities", "Risk & Compliance", "Enterprise Data"]
+    priority_order = ["Enterprise Data", "Supply Chain", "Finance", "Sales & Commercial", "Operations & Facilities", "Risk & Compliance"]
     sorted_domains = sorted(domain_map.keys(), key=lambda x: priority_order.index(x) if x in priority_order else 99)
 
     for d in sorted_domains:
@@ -220,10 +220,14 @@ def get_domains_hierarchy(db: Session = Depends(get_db)):
 
         subdomains_list.sort(key=lambda x: (x["metric_views_count"], x["tables_count"]), reverse=True)
 
+        real_subdomains = [sd for sd in subdomains_list if sd["name"] != DEFAULT_SUBDOMAIN]
         results.append({
             "domain": data["domain"],
             "description": data["description"],
             "subdomain_count": len(subdomains_list),
+            # False when every asset sits in the catch-all bucket, so the UI can
+            # open the domain's assets directly instead of a one-item subdomain list.
+            "has_subdomains": bool(real_subdomains),
             "metric_view_count": data["metric_view_count"],
             "table_count": data["table_count"],
             "dashboard_count": data["dashboard_count"],
@@ -828,6 +832,87 @@ def get_databricks_table_details(table_name: str, req: Request):
     except Exception as e:
         logger.error(f"Unexpected error fetching table {table_name}: {e}")
         return {**base_response, "error": str(e), "error_kind": _classify_uc_error(str(e))}
+
+
+_PREVIEW_ROW_LIMIT_MAX = 5000
+
+
+def _preview_row_limit(requested: Optional[int]) -> int:
+    """Rows to read: the admin's ``DISCOVER_PREVIEW_ROW_LIMIT`` (1..5000), or fewer if asked."""
+    from app.core.config import settings
+
+    try:
+        cap = int(getattr(settings, "DISCOVER_PREVIEW_ROW_LIMIT", 500))
+    except (TypeError, ValueError):
+        cap = 500
+    cap = min(max(cap, 1), _PREVIEW_ROW_LIMIT_MAX)
+    return cap if requested is None else min(max(requested, 1), cap)
+
+
+def _preview_error_kind(message: str) -> str:
+    # SELECT on a table the user can't see at all reports TABLE_OR_VIEW_NOT_FOUND.
+    if "table_or_view_not_found" in (message or "").lower():
+        return "not_found"
+    return _classify_uc_error(message)
+
+
+@router.get("/databricks/table/preview")
+async def get_databricks_table_preview(table_name: str, req: Request, limit: Optional[int] = None):
+    """Sample rows of a table or view, read On-Behalf-Of the user on the SQL warehouse.
+
+    Runs ``SELECT * FROM <fqn> LIMIT n`` as the user, so row filters, column
+    masks and missing SELECT grants all apply. ``n`` is the admin-set
+    ``DISCOVER_PREVIEW_ROW_LIMIT``; ``limit`` may lower it, never raise it.
+    Like the sibling table endpoints, failures return HTTP 200 with ``error`` /
+    ``error_kind`` (``permission_denied``, ``not_found``, ``broken_dependency``,
+    ``no_warehouse``, ``no_obo`` or ``error``); a malformed name is a 400.
+    """
+    from fastapi import HTTPException
+    from app.core.config import settings
+    from app.core.workspaces import get_uc_provider
+    from app.providers.databricks_mcp import sp_fallback_allowed
+
+    parts = (table_name or "").split(".")
+    if len(parts) != 3 or not all(p.strip() for p in parts):
+        raise HTTPException(
+            status_code=400,
+            detail="table_name must be a fully qualified name (catalog.schema.table)",
+        )
+
+    n = _preview_row_limit(limit)
+    response = {"table_name": table_name, "columns": [], "rows": [], "row_count": 0,
+                "limit": n, "truncated": False, "error": None, "error_kind": None}
+
+    if not settings.DATABRICKS_WAREHOUSE_ID:
+        return {**response, "error": "No SQL warehouse is configured for previews.",
+                "error_kind": "no_warehouse"}
+    obo_token = getattr(req.state, "token", None)
+    # Never read rows as the app SP on a deployed target; only local dev may fall back.
+    if not obo_token and not sp_fallback_allowed():
+        return {**response, "error": "Your sign-in token wasn't forwarded, so rows can't be read as you.",
+                "error_kind": "no_obo"}
+
+    fqn = ".".join(_quote_ident(p) for p in parts)
+    try:
+        result = await get_uc_provider().execute_sql(
+            f"SELECT * FROM {fqn} LIMIT {n}", **_run_as_user(obo_token)
+        )
+    except Exception as e:
+        msg = str(e)
+        logger.info("Data preview of %s unavailable to the user: %s", table_name, msg)
+        return {**response, "error": msg, "error_kind": _preview_error_kind(msg)}
+
+    rows = result.get("rows") or []
+    names = list(result.get("schema") or (rows[0].keys() if rows else []))
+    types = list(result.get("column_types") or [])
+    types += [None] * (len(names) - len(types))
+    return {
+        **response,
+        "columns": [{"name": name, "type": t} for name, t in zip(names, types)],
+        "rows": [[r.get(name) for name in names] if isinstance(r, dict) else list(r) for r in rows],
+        "row_count": len(rows),
+        "truncated": len(rows) >= n,
+    }
 
 
 @router.get("/databricks/lineage")

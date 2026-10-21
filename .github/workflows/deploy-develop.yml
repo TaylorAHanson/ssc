@@ -26,7 +26,8 @@ jobs:
 
       - name: Install Databricks CLI
         run: |
-          curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/v0.295.0/install.sh | sh
+          # >= 1.9.0 for `databricks postgres create-cdf-config` (scripts/ensure_cdf.sh).
+          curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/v1.20.0/install.sh | sh
 
       - name: Configure Databricks CLI (OAuth)
         env:
@@ -57,3 +58,14 @@ jobs:
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
         run: |
           databricks bundle run ${{ env.APP_NAME }} -t ${{ env.TARGET }}
+
+      # After the app has started, so its tables exist. A bundle can't declare the
+      # Lakebase Change Data Feed; this creates it if missing and skips while the
+      # target's cdf_catalog / cdf_schema are placeholders.
+      - name: Ensure Lakebase Change Data Feed
+        env:
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+        run: |
+          scripts/ensure_cdf.sh ${{ env.TARGET }}

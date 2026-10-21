@@ -15,6 +15,9 @@ from app.core.exceptions import AuthenticationError
 
 logger = logging.getLogger(__name__)
 
+# Catch-all subdomain for assets nothing more specific was inferred for.
+DEFAULT_SUBDOMAIN = "General Analytics"
+
 def infer_domain_and_subdomain(catalog: str, schema: str, table_name: str, tags: list[str]) -> tuple[str, str]:
     """Extract or infer domain and subdomain for a data asset."""
     domain = None
@@ -82,7 +85,7 @@ def infer_domain_and_subdomain(catalog: str, schema: str, table_name: str, tags:
         inferred_subdomain = "Site & Asset Performance"
     else:
         inferred_domain = "Enterprise Data"
-        inferred_subdomain = "General Analytics"
+        inferred_subdomain = DEFAULT_SUBDOMAIN
 
     return domain or inferred_domain, subdomain or inferred_subdomain
 

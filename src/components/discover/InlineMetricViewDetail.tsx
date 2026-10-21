@@ -21,6 +21,8 @@ import { LineageGraph, type LineageSeedTable } from './LineageGraph';
 import { useLegacyMappings } from '../../lib/catalogCache';
 import { LegacyStatusBadge } from './LegacyMappingTable';
 import { CopyLinkButton } from './CopyLinkButton';
+import { PinButton } from './PinButton';
+import { pinInputFromAsset } from '../../lib/usePinnedAssets';
 import { scrollContainerOf } from '../../hooks/useViewScroll';
 
 interface DashboardOrApp {
@@ -291,6 +293,12 @@ export function InlineMetricViewDetail({
 
         {/* Action Controls */}
         <div className="flex items-center gap-2 self-start shrink-0">
+          <PinButton
+            asset={pinInputFromAsset(asset)}
+            variant="labeled"
+            className="gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 font-semibold hover:bg-slate-50 shadow-2xs"
+          />
+
           {catalogUrl && (
             <a
               href={catalogUrl}

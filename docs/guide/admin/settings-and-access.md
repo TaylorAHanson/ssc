@@ -84,8 +84,10 @@ visit most often:
   request is rejected.
 - **Agent**: the assistant's model, limits and guardrails, and where it may
   look things up on the web.
-- **Data Catalog**: which Unity Catalog catalogs are governed, and how often
-  the catalog in Discover is refreshed.
+- **Data Catalog**: which Unity Catalog catalogs are governed, how often the
+  catalog in Discover is refreshed, the most rows a **Data preview** shows
+  (**Data preview rows**), and how many assets each person can pin
+  (**Pinned assets per user**).
 - **Legacy Dashboards** (under **Discover & Analyze**): map dashboards people
   used before, for example in Tableau, to the metric views that replace them.
   People then find them in Discover under **Legacy Dashboards** and when they

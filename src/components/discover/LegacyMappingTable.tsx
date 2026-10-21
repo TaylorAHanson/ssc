@@ -2,6 +2,8 @@ import { useState, useMemo } from 'react';
 import { ArrowLeftRight, CheckCircle2, ExternalLink, Loader, TrendingUp, XCircle } from 'lucide-react';
 import type { LegacyMapping, LegacyStatus } from '../../services/api';
 import { LEGACY_STATUSES, legacyMatches, prettyMetricViewName } from './legacyMappings';
+import { LEGACY_DASHBOARD_PIN_TYPE } from '../../lib/usePinnedAssets';
+import { PinButton } from './PinButton';
 
 const STATUS_STYLES: Record<LegacyStatus, { Icon: typeof CheckCircle2; className: string }> = {
   Active: { Icon: CheckCircle2, className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
@@ -82,10 +84,19 @@ export function LegacyMappingTable({ mappings, searchTerm = '', showSubdomain = 
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rows.map((m) => (
-              <tr key={m.id} className="hover:bg-slate-50/70 transition-colors align-top">
+              <tr key={m.id} className="group hover:bg-slate-50/70 transition-colors align-top">
                 <td className="py-3 px-4 min-w-[14rem]">
                   <div className="font-semibold text-slate-900 text-sm flex items-center gap-1.5">
                     <span>{m.dashboard}</span>
+                    <PinButton
+                      asset={{
+                        asset_id: m.id,
+                        asset_type: LEGACY_DASHBOARD_PIN_TYPE,
+                        title: m.dashboard,
+                        subtitle: `Replaced by ${prettyMetricViewName(m.metric_view)}`,
+                        url: m.url && /^https?:\/\//i.test(m.url) ? m.url : null,
+                      }}
+                    />
                     {m.url && (
                       <a
                         href={m.url}

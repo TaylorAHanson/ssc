@@ -72,7 +72,7 @@ Open `databricks.yml` in the root of your repository and update the `variables` 
 - `ai_gateway_endpoint` (default empty) — if set, the agent's LLM calls route through this AI Gateway endpoint (model routing/A-B, rate + cost limits, and input guardrails are configured **on the gateway**, not in app code). Leave empty to call `model_serving_endpoint` directly.
 - `mlflow_tracing_enabled` (default `false`) / `mlflow_experiment` — enable one MLflow trace per agent turn into the given experiment.
 - `identity_provider` (default `noop`) — pluggable identity-group backend: `noop`, `rest` (SCIM/Entra/Okta), or `lmws`.
-- `telemetry_catalog` / `telemetry_schema` (per target, `REPLACE_WITH_...` placeholders) and `lakebase_cdf_tables` (default `none`) — optional exports of the app's logs and of its Lakebase change history to Unity Catalog. See [Section 7](#7-optional-export-app-logs-and-lakebase-history-to-unity-catalog).
+- `telemetry_catalog` / `telemetry_schema` (per target, `REPLACE_WITH_...` placeholders) and `lakebase_cdf_tables` (default `none`; `default` in the `dev`, `stage` and `prod` targets) with `cdf_catalog` / `cdf_schema` — optional exports of the app's logs and of its Lakebase change history to Unity Catalog. See [Section 7](#7-optional-export-app-logs-and-lakebase-history-to-unity-catalog).
 
 ---
 
@@ -182,7 +182,7 @@ Two independent, opt-in exports. Both write Unity Catalog managed Delta tables, 
 | | App telemetry export | Lakebase Change Data Feed |
 |---|---|---|
 | Captures | The app's OpenTelemetry logs (spans and metrics only with custom instrumentation) | Every insert, update and delete on the app tables you list |
-| Configured in | `databricks.yml`, per target | One `databricks.yml` variable, plus **Start** in the Lakebase UI |
+| Configured in | `databricks.yml`, per target | `databricks.yml` variables, plus `scripts/ensure_cdf.sh` after deploy |
 | Lands in | `otel_logs`, `otel_metrics`, `otel_spans` | `lb_<table>_history`, one per source table |
 
 ### Step 7.1: App telemetry export (OpenTelemetry → Unity Catalog)
@@ -213,7 +213,7 @@ Two independent, opt-in exports. Both write Unity Catalog managed Delta tables, 
 
 ### Step 7.2: Lakebase Change Data Feed (app tables → `lb_<table>_history`)
 
-[Lakebase Change Data Feed](https://docs.databricks.com/aws/en/oltp/projects/lakehouse-sync) (Public Preview; called *Lakehouse Sync* during its Beta) streams changes from Lakebase Postgres into append-only Delta tables named `lb_<table>_history`. Each row is a source row plus `_pg_change_type` (`insert`, `update_preimage`, `update_postimage` or `delete`), `_pg_lsn`, `_pg_xid`, `_timestamp` and `_sort_by`. A feed covers one Postgres schema and can't be declared in a bundle: you start it in the Lakebase UI, or through the CDF operations of the Postgres REST API. The app's part is making its tables eligible.
+[Lakebase Change Data Feed](https://docs.databricks.com/aws/en/oltp/projects/lakehouse-sync) (Public Preview; called *Lakehouse Sync* during its Beta) streams changes from Lakebase Postgres into append-only Delta tables named `lb_<table>_history`. Each row is a source row plus `_pg_change_type` (`insert`, `update_preimage`, `update_postimage` or `delete`), `_pg_lsn`, `_pg_xid`, `_timestamp` and `_sort_by`. A feed covers one Postgres schema and can't be declared as a bundle resource. The bundle opts the tables in (`lakebase_cdf_tables`) and names the destination (`cdf_catalog`, `cdf_schema`), and `scripts/ensure_cdf.sh <target>` creates the feed after deploy, skipping when one already exists. You can instead start it by hand in the Lakebase UI. The app's part is making its tables eligible.
 
 **Where the app's data lives.** Database: the one attached as the app's `postgres` resource (`lakebase_database_id` in `databricks.yml`; normally `databricks_postgres`). Schema: **`selfservice`** (the `DB_SCHEMA` setting), not `public`. The same schema holds the LangGraph checkpoint tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`), which are large and rewritten on every workflow step. The feed skips any table without `REPLICA IDENTITY FULL`, which is how they stay out. **Don't** run the Databricks docs' "all tables in a schema" loop or install their auto-apply event trigger on `selfservice`: either would pull the checkpoints in.
 
@@ -233,13 +233,15 @@ Two independent, opt-in exports. Both write Unity Catalog managed Delta tables, 
    `default` means `requests`, `events`, `approvals`, `enforcement_audit`, `rbac_rules`, `rbac_change_sets` and `rbac_rule_events`. You can list table names instead, or combine them (`"default,failures"`); `none`, the shipped value, turns this off. On startup the app runs `ALTER TABLE ... REPLICA IDENTITY FULL` on each listed table that isn't already full. Only the table owner can do that, and the app's service principal owns them. The backend log reports `Lakebase CDF: REPLICA IDENTITY FULL in schema selfservice: set now [...]`, plus a warning for any table it couldn't find or alter (it retries on the next start). The current value is shown read-only under **Admin → Settings → Infrastructure**.
    - **Trade-off on `requests`:** full replica identity makes Postgres write the whole old row to the write-ahead log on every update and delete, and the feed stores before and after images. Enforcement Sentinel request rows carry a very large `state_context` (it can reach hundreds of MB), so their updates get expensive and their history rows are huge. If that matters, list tables explicitly and leave out `requests`. `events`, which is insert-only, still records each request's lifecycle.
    - Taking a table off the list doesn't switch it back. It stays `FULL` (and in the feed) until its owner runs `ALTER TABLE ... REPLICA IDENTITY DEFAULT`.
-2. **Choose and grant the destination** catalog and schema. They're picked in the Start dialog, which is why they aren't bundle variables:
+2. **Choose and grant the destination** catalog and schema, and set them as `cdf_catalog` and `cdf_schema` for the target (they ship as `REPLACE_WITH_<ENV>_CDF_CATALOG` / `REPLACE_WITH_<ENV>_CDF_SCHEMA`). The identity that runs `scripts/ensure_cdf.sh` (the CI/CD SP, or you) needs the grants:
    ```sql
    GRANT USE CATALOG ON CATALOG <cdf_catalog> TO `<you>`;
    GRANT USE SCHEMA, CREATE TABLE ON SCHEMA <cdf_catalog>.<cdf_schema> TO `<you>`;
    ```
    The history tables hold full row contents, including request conversations and approval comments. Grant `SELECT` on them as carefully as you would grant access to the app database.
-3. **Start the feed.** Open **Lakebase Postgres** from the app switcher, then the app's project (its name is `database_instances.edh_ssc_db.name` in `databricks.yml`) and the `production` branch. Click the branch name to open **Branch overview**, open the **Lakebase CDF** tab and click **Start**. Choose the app's database, schema `selfservice`, and your destination catalog and schema, then click **Start**. A schema has only one feed: tables you opt in later join it automatically, so never click **Start** again for them.
+3. **Start the feed.** Scripted: after the app has started once (so its tables exist), run `scripts/ensure_cdf.sh <target>` (add `--dry-run` to preview). The `deploy-develop` workflow runs it after `bundle run`; wire the same step into your stage and prod pipelines. It creates a feed named after the schema (`selfservice`) with the destination you set, does nothing if the schema already has a feed, and warns, without changing anything, if the existing feed writes somewhere else (a feed's destination is immutable; remove it with `databricks postgres delete-cdf-config` to move it). It needs the CLI's `databricks postgres create-cdf-config` (Beta).
+
+   By hand instead: open **Lakebase Postgres** from the app switcher, then the app's project (its name is `database_instances.edh_ssc_db.name` in `databricks.yml`) and the `production` branch. Click the branch name to open **Branch overview**, open the **Lakebase CDF** tab and click **Start**. Choose the app's database, schema `selfservice`, and your destination catalog and schema, then click **Start**. A schema has only one feed: tables you opt in later join it automatically, so never click **Start** again for them.
 4. **Verify.** In the Lakebase SQL editor:
    ```sql
    -- 'f' = full replica identity (in the feed); 'd' = default (skipped)

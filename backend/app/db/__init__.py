@@ -29,6 +29,7 @@ from app.db.workflow_test import WorkflowTestModel, WorkflowTestRunModel
 from app.db.tool_registry import McpSourceModel, ToolRegistryModel
 from app.db.user_profile import UserProfileModel
 from app.db.chat_session import ChatSessionModel
+from app.db.user_pin import UserPinModel
 from app.db.preview_feature import PreviewFeatureModel, PreviewFeatureTargetModel
 from app.db.rbac import (
     RbacChangeSetModel,

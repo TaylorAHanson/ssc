@@ -17,11 +17,17 @@ the catalog. You can ask follow-up questions there.
 ## Browse by business area
 
 Data is organized into business domains, such as finance or sales, and each
-domain into subdomains.
+domain into subdomains. **Enterprise Data** always comes first and is
+highlighted. It holds shared data that isn't owned by a single business area.
 
 1. Under **What domain are you interested in?**, pick a domain card.
-2. In **Step 2**, pick a subdomain and select **Launch**, or select
-   **Explore All** to see the whole domain.
+2. In **Step 2**, the left column lists the domain's subdomains. Click one to
+   open it. The right column, **All of** the domain, jumps straight to one
+   type across the whole domain, such as **Legacy Dashboards** or **Tables &
+   Views**. **Explore all** opens everything.
+
+If a domain has no subdomains, clicking its card skips Step 2 and opens the
+domain's assets directly.
 
 The domain view lists everything in that area by type: **Metric Views**,
 **Tables & Views**, **Dashboards** and **Apps**. Some organizations also list
@@ -47,11 +53,29 @@ these tabs:
 - **Columns** (or **Schema** for a dataset): the fields it contains.
 - **Lineage**: where the data comes from and what uses it. Click **Sources**
   on a table to see what feeds it, or **Consumers** to see what depends on it.
+- **Data preview** (tables and views): a sample of the rows, read with your
+  own permissions, so you only see data you're allowed to query. Search
+  across all columns, click a column header to sort, or type in a column's
+  filter box. Filters accept text, `null`, or comparisons such as `>20` on
+  number columns. The preview only loads when you open the tab, and it shows
+  at most a set number of rows, which your administrator chooses.
 - **Quality**: service levels and data quality checks, where they're defined.
 - **Team & Support**: the people responsible for a dataset and how to get
   help.
 
 **Open in Catalog Explorer** opens the asset in Databricks.
+
+To make the details panel wider or narrower, drag its left edge. Double-click
+the edge to reset it. The width you choose is remembered.
+
+## Pin assets you use often
+
+Select the pin icon on an asset card, or **Pin** in its details panel, to add
+it to the **Pinned** row at the top of the Discover page. Click a pinned item
+to open it, or its **×** to unpin it. Pins stay on one line: if they don't
+all fit, the rest appear under **+N**. Your pins follow you between browsers
+and devices. If a pinned asset is removed from the catalog, it's shown
+crossed out until you unpin it.
 
 ## Request access
 

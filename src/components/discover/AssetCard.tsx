@@ -2,6 +2,8 @@ import { ShieldCheck, ExternalLink, ChevronRight, User } from 'lucide-react';
 import type { DataAsset } from '../../services/api';
 import { assetWorkspaceUrl } from '../../lib/databricksLinks';
 import { AssetTypeBadge } from '../../lib/assetTypes';
+import { pinInputFromAsset } from '../../lib/usePinnedAssets';
+import { PinButton } from './PinButton';
 
 interface AssetCardProps {
   asset: DataAsset;
@@ -26,18 +28,21 @@ export function AssetCard({ asset, workspaceUrl, isSelected = false, onSelect, c
       }`}
     >
       <div>
-        {href && (
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1 rounded hover:bg-slate-100 transition-colors"
-            title="Open in Catalog Explorer"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
-        )}
+        <div className="absolute top-4 right-4 flex items-center gap-0.5">
+          <PinButton asset={pinInputFromAsset(asset)} />
+          {href && (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="text-slate-400 hover:text-slate-600 p-1 rounded hover:bg-slate-100 transition-colors"
+              title="Open in Catalog Explorer"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
+        </div>
 
         {asset.certified && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 mb-2 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
@@ -46,8 +51,8 @@ export function AssetCard({ asset, workspaceUrl, isSelected = false, onSelect, c
           </span>
         )}
 
-        {context && <div className="text-[11px] font-semibold text-slate-500 mb-1 pr-6 truncate">{context}</div>}
-        <h4 className="text-base font-bold text-slate-900 group-hover:text-indigo-700 transition-colors mb-1 pr-6 break-all">
+        {context && <div className="text-[11px] font-semibold text-slate-500 mb-1 pr-12 truncate">{context}</div>}
+        <h4 className="text-base font-bold text-slate-900 group-hover:text-indigo-700 transition-colors mb-1 pr-12 break-all">
           {asset.table_name}
         </h4>
         <div className="text-[11px] font-mono text-slate-400 mb-2 truncate">

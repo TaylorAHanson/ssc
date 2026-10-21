@@ -6,7 +6,7 @@ import {
   BookOpen, Calendar, GitBranch, AlertCircle, ChevronDown, ChevronUp,
   Link as LinkIcon, ArrowDownToLine, ArrowUpFromLine, Lock, Columns3,
   Key, ExternalLink, Network, Activity, Sparkles,
-  Users, Server
+  Users, Server, Eye
 } from 'lucide-react';
 import { api } from '../services/api';
 import type { DataAsset, LegacyMapping, TableDetailsResponse } from '../services/api';
@@ -38,10 +38,14 @@ import {
   type DiscoverLinkTarget,
 } from '../lib/discoverLinks';
 import { CopyLinkButton } from '../components/discover/CopyLinkButton';
+import { PinButton } from '../components/discover/PinButton';
+import { pinInputFromAsset } from '../lib/usePinnedAssets';
 import { DomainStartView } from '../components/discover/DomainStartView';
 import { DomainFullView } from '../components/discover/DomainFullView';
+import { countDomainContent } from '../components/discover/contentKinds';
 import { DiscoverSearchResults } from '../components/discover/DiscoverSearchResults';
 import { SidePanel } from '../components/discover/SidePanel';
+import { DataPreview } from '../components/discover/DataPreview';
 import { DiscoverSearch } from '../components/discover/DiscoverSearch';
 
 import yaml from 'js-yaml';
@@ -56,7 +60,7 @@ export function DataDiscovery() {
   // Resources from cache
   const { data: domainsHierarchy, loading: hierarchyLoading } = useDomainHierarchy();
   const { data: metricViewsData, loading: metricViewsLoading } = useMetricViews();
-  const { data: legacyMappings } = useLegacyMappings();
+  const { data: legacyMappings, loading: legacyLoading } = useLegacyMappings();
   // The catalog is served from a shared stale-while-revalidate cache so this
   // page renders instantly on revisit and after a prefetch from the landing.
   const { data: datasets, loading: catalogLoading } = useDiscoveryCatalog();
@@ -192,6 +196,7 @@ export function DataDiscovery() {
     const next: DiscoverLinkTarget = {
       domain: selectedDomain,
       subdomain: selectedSubdomain,
+      show: urlTarget.show,
       asset: selectedAsset ? urlTarget.asset : null,
     };
     if (selectedMetricView && !domainData) {
@@ -358,6 +363,17 @@ export function DataDiscovery() {
       return (legacyByMv.get(mvId) ?? []).filter((m) => m.dashboard.toLowerCase().includes(term)).map((m) => m.dashboard);
     },
     [legacyByMv, effectiveSearchTerm],
+  );
+  const pickerKindCounts = useMemo(
+    () =>
+      pickerDomain
+        ? countDomainContent(pickerDomain, {
+            metricViews: metricViewsLoading ? null : (metricViewsData as DataAsset[]),
+            assets: catalogLoading ? null : datasets,
+            legacyMappings: legacyLoading ? null : legacyMappings,
+          })
+        : undefined,
+    [pickerDomain, metricViewsLoading, metricViewsData, catalogLoading, datasets, legacyLoading, legacyMappings],
   );
   const scopedLegacyMappings = useMemo(
     () =>
@@ -705,7 +721,9 @@ export function DataDiscovery() {
             onSelectDomain={setPickerDomain}
             selectedSubdomain={null}
             onSelectSubdomain={() => {}}
-            onLaunchFullMode={(dom, subdom) => navigateTo({ domain: dom, subdomain: subdom ?? null, asset: null })}
+            onLaunchFullMode={(dom, subdom, show) => navigateTo({ domain: dom, subdomain: subdom ?? null, show: show ?? null, asset: null })}
+            kindCounts={pickerKindCounts}
+            onOpenAsset={openAsset}
           />
         ) : (
           <DomainFullView
@@ -737,6 +755,8 @@ export function DataDiscovery() {
             onSearchChange={setSearchTerm}
             onSubmitAgentQuery={submitAgentQuery}
             legacyMappings={scopedLegacyMappings}
+            linkedKinds={urlTarget.show}
+            onClearLinkedKinds={() => navigateTo({ show: null }, { replace: true })}
             replacesFor={legacyNamesMatching}
             onOpenMetricViewById={(id) => {
               if ((metricViewsData as DataAsset[]).some((v) => v.id === id)) openAsset(id);
@@ -887,8 +907,16 @@ function DetailsModal({
   const hasQuality = (slaProperties.length > 0 || asset.sla)
     || (asset.data_quality && Object.keys(asset.data_quality).length > 0);
   const hasTeam = isDataset && (team.length > 0 || support.length > 0 || authoritativeDefinitions.length > 0);
+  // Data preview tab: sample rows of a UC table/view, queried as the user only once the tab is opened.
+  const previewFqn = isTableLike && asset.catalog && asset.schema_name && asset.table_name
+    ? `${asset.catalog}.${asset.schema_name}.${asset.table_name}`
+    : null;
+  const previewTypes = useMemo(
+    () => Object.fromEntries((tableDetails?.columns ?? []).map((c) => [c.name, c.type])),
+    [tableDetails],
+  );
 
-  type TabId = 'overview' | 'schema' | 'lineage' | 'quality' | 'team';
+  type TabId = 'overview' | 'schema' | 'preview' | 'lineage' | 'quality' | 'team';
   const tabs: { id: TabId; label: string; icon: ReactNode; count?: number }[] = [
     { id: 'overview', label: 'Overview', icon: <BookOpen className="w-4 h-4" /> },
     ...(hasSchema
@@ -898,6 +926,9 @@ function DetailsModal({
           icon: <TableIcon className="w-4 h-4" />,
           ...(schemaTabCount > 0 ? { count: schemaTabCount } : {}),
         }]
+      : []),
+    ...(previewFqn
+      ? [{ id: 'preview' as TabId, label: 'Data preview', icon: <Eye className="w-4 h-4" /> }]
       : []),
     ...(hasLineage
       ? [{ id: 'lineage' as TabId, label: 'Lineage', icon: <Network className="w-4 h-4" /> }]
@@ -966,6 +997,7 @@ function DetailsModal({
                 title="Copy a link to this asset"
                 className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline cursor-pointer"
               />
+              <PinButton asset={pinInputFromAsset(asset)} variant="labeled" />
             </div>
           </div>
           <button
@@ -1259,6 +1291,21 @@ function DetailsModal({
                 </section>
               )}
             </>
+          )}
+
+          {/* ============== Data preview tab ============== */}
+          {/* Stays mounted (hidden) once opened so search, sort and filters survive tab switches. */}
+          {previewFqn && (
+            <section hidden={activeTab !== 'preview'}>
+              <SectionHeading icon={<Eye className="w-4 h-4" />} title="Data preview" />
+              <DataPreview
+                key={previewFqn}
+                fqn={previewFqn}
+                active={activeTab === 'preview'}
+                fallbackTypes={previewTypes}
+                onRequestAccess={canRequestAccess ? onRequestAccess : undefined}
+              />
+            </section>
           )}
 
           {/* ============== Lineage tab ============== */}

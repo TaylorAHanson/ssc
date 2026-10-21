@@ -503,6 +503,12 @@ class Settings(BaseSettings):
     # that read each metric view (lineage keeps a rolling year). A dashboard
     # nobody opened in this window isn't listed. Editable in Admin -> Settings.
     DATA_ASSET_LINEAGE_LOOKBACK_DAYS: int = int(os.getenv("DATA_ASSET_LINEAGE_LOOKBACK_DAYS", "90"))
+    # Most rows the Discover "Data preview" reads (as the user, via the SQL
+    # warehouse) for a table or view; clamped to 1..5000 at read time.
+    # Editable in Admin -> Settings.
+    DISCOVER_PREVIEW_ROW_LIMIT: int = int(os.getenv("DISCOVER_PREVIEW_ROW_LIMIT", "500"))
+    # Most assets one user can pin in Discover. Editable in Admin -> Settings.
+    DISCOVER_MAX_PINS: int = int(os.getenv("DISCOVER_MAX_PINS", "50"))
     # The data-asset sync also caches the account's workspace list
     # (system.access.workspaces_latest), read as the same governance SP, so
     # list_workspaces answers without a warehouse round trip. Older than the max

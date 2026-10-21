@@ -27,6 +27,17 @@ _NON_RETRYABLE_SQL_ERROR_CODES = {"BAD_REQUEST", "NOT_FOUND", "ALREADY_EXISTS", 
 _SQL_INLINE_WAIT = "5s"
 
 
+def _column_type(col: Any) -> Optional[str]:
+    """A result column's SQL type, e.g. ``DECIMAL(10,2)`` or ``INT``."""
+    text = getattr(col, "type_text", None)
+    if text:
+        return str(text)
+    name = getattr(col, "type_name", None)
+    if name is None:
+        return None
+    return str(getattr(name, "value", name))
+
+
 def _build_workspace_client(**auth: Any) -> WorkspaceClient:
     """Build a WorkspaceClient with bounded HTTP + retry timeouts baked into its Config.
 
@@ -233,10 +244,13 @@ class DatabricksProvider(BaseProvider):
             # Simplified result parsing
             # Extract columns first
             columns = []
+            schema_cols = []
             if final_response.manifest and final_response.manifest.schema and final_response.manifest.schema.columns:
-                columns = [col.name for col in final_response.manifest.schema.columns]
+                schema_cols = final_response.manifest.schema.columns
             elif final_response.result and hasattr(final_response.result, 'schema') and final_response.result.schema:
-                columns = [col.name for col in final_response.result.schema.columns]
+                schema_cols = final_response.result.schema.columns
+            columns = [col.name for col in schema_cols]
+            column_types = [_column_type(col) for col in schema_cols]
 
             # Map rows to columns
             rows = []
@@ -261,7 +275,8 @@ class DatabricksProvider(BaseProvider):
             
             result = {
                 "rows": rows,
-                "schema": columns
+                "schema": columns,
+                "column_types": column_types,
             }
             return result
 

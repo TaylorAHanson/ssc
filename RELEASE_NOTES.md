@@ -13,6 +13,23 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.4.0 — 2026-10-21
+
+### Added
+
+- **You can now preview a table's rows in Discover.** Before, the details panel only listed a table's columns, so checking what the data actually looked like meant opening it somewhere else. Tables and views now have a **Data preview** tab with a sample of rows, read with your own permissions so you only see data you're allowed to query. Search across every column, click a header to sort, or filter a column by text, `null` or a comparison like `>20`. The preview loads only when you open the tab. Admins set the row limit under **Data Catalog → Data preview rows** (500 by default).
+- **You can pin the tables, views, metric views and dashboards you use most.** Finding the same few assets meant browsing back through domains each time. Select the pin icon on an asset card, or **Pin** in its details panel, and it appears in a **Pinned** row at the top of Discover; click it to open it, or its × to unpin. The row stays on one line and puts any extra pins under **+N**, so it doesn't push the domains down. Pins are saved to your account, so they follow you between browsers and devices. Admins can change the limit (50 by default) under **Data Catalog → Pinned assets per user**.
+- **The Discover details panel can be resized.** Wide tables and long descriptions were cramped in the fixed-width panel. Drag its left edge to make it wider or narrower, or double-click the edge to reset it; the width is remembered for next time.
+
+### Changed
+
+- **Enterprise Data is now the first domain in Discover, and it's highlighted.** It holds the shared data every business area builds on, but it was listed sixth and looked like any other domain. Its card now comes first, with its own icon and colour and a **Shared foundation** label.
+- **Step 2 in Discover is laid out in two columns.** The subdomain list used to share space with a single "view all" link. Subdomains are now on the left, and on the right one shortcut per type jumps straight to that type across the whole domain. **Legacy Dashboards** is first, since finding the replacement for an old dashboard is the most common reason to look. **Explore all** still opens everything.
+- **Domains without subdomains now open directly.** A domain whose assets weren't split into subdomains used to ask you to pick from a single "General Analytics" entry. Clicking its card now goes straight to its assets, and the subdomain picker is hidden there.
+
+
+- **The Lakebase change history export is now set up by the deployment instead of by hand.** Copying the app's requests, approvals and access-rule history into Unity Catalog needed someone to open the Lakebase UI and click Start in every environment, and the app's tables weren't prepared for it unless an operator had also changed a setting, so in practice nothing was being exported. The `dev`, `stage` and `prod` deployment settings now prepare the app tables, and each has a destination catalog and schema to fill in (`cdf_catalog` and `cdf_schema`). After a deploy, `scripts/ensure_cdf.sh <target>` creates the feed if there isn't one and does nothing if there is; the develop pipeline runs it for you. Until you replace the placeholder destination, nothing is created. Once it is on, the history tables are written to the destination you chose, and the platform setup guide explains the permissions it needs. The develop pipeline also installs a newer Databricks CLI, because the older one can't create the feed.
+
 ## 2.3.0 — 2026-10-21
 
 ### Added
