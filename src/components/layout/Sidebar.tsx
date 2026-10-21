@@ -52,7 +52,6 @@ import type { UserPersona } from '../../types';
 const GROUP_ORDER = [
   'Discover & Analyze',
   'Build & Customize',
-  'Requests & Approvals',
   'Learn & Share',
   'Watch Tower',
   'Control Tower',
@@ -111,10 +110,8 @@ const navItems: NavItem[] = [
   // is overridden at render time with a brand-derived label (see allNavItems).
   { id: 'home', title: 'Agent', icon: <WandSparkles className="w-5 h-5" />, path: '/request', group: 'Discover & Analyze' },
   { id: 'data_discovery', title: 'View & Search Catalog', icon: <Search className="w-5 h-5" />, path: '/discovery', group: 'Discover & Analyze' },
-
-  // Self Service
   // One page with tabs; opens on "Needs my approval" while anything is waiting.
-  { id: 'requests', title: 'Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Requests & Approvals', gate: 'requests' },
+  { id: 'requests', title: 'Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Discover & Analyze', gate: 'requests' },
   { id: 'reports', title: 'Reports', icon: <BarChart className="w-5 h-5" />, path: '/reports', group: 'Discover & Analyze' },
 
   // Community - Available to everyone

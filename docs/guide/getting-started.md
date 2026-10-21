@@ -11,8 +11,7 @@ organization uses and your role allows, so yours may be shorter than this list.
 
 | Section | Pages | What they're for |
 | --- | --- | --- |
-| Discover & Analyze | **Ask Anything**, **View & Search Catalog**, **Reports** | Chat with the assistant, browse and search the data catalog, and manage reports the assistant generates on a schedule. |
-| Requests & Approvals | **Requests** | Follow the requests you've made, and act on the ones waiting for you. |
+| Discover & Analyze | **Ask Anything**, **View & Search Catalog**, **Requests**, **Reports** | Chat with the assistant, browse and search the data catalog, follow the requests you've made and act on the ones waiting for you, and manage reports the assistant generates on a schedule. |
 | Learn & Share | **Training**, **Event Calendar**, **Templates & Assets**, **Community Links**, **Guide** | Learning tracks, upcoming sessions, reusable patterns, recommended links, and this guide. |
 | Watch Tower | Governance tools | For governance and platform admins. See [Governance tools](admin/governance.md). |
 | Control Tower | Admin, workflow and catalog tools | For admins. See the [admin overview](admin/index.md). |
