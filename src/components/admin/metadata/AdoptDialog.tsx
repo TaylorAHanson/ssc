@@ -6,7 +6,7 @@ import { Switch } from '../../ui/switch';
 import { Textarea } from '../../ui/textarea';
 import { ErrorBanner, Modal, Notice, Spinner } from '../../rbac/ui';
 import { useMetadata } from './context';
-import { errorMessage, plural } from './format';
+import { errorMessage, plural, reasonHint } from './format';
 import { ResultView } from './ResultView';
 import { useAsync } from './useAsync';
 
@@ -142,7 +142,7 @@ export function AdoptDialog({ onClose }: { onClose: () => void }) {
       )}
       <div>
         <label htmlFor={`${id}-reason`} className="mb-1 block text-sm font-medium text-gray-900">
-          Reason <span className="font-normal text-gray-500">(at least {config.min_reason_length} characters)</span>
+          Reason <span className="font-normal text-gray-500">({reasonHint(config.min_reason_length)})</span>
         </label>
         <Textarea id={`${id}-reason`} rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Bringing the finance catalogs under management" className="text-sm" />
       </div>

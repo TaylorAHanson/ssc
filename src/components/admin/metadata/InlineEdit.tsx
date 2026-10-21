@@ -27,7 +27,7 @@ export function TagsField({ seed, readOnly, compact }: { seed: TargetSeed; readO
   );
 
   return (
-    <ul className="flex flex-wrap items-center gap-1.5" aria-label="Tags">
+    <ul className="list-plain flex flex-wrap items-center gap-1.5" aria-label="Tags">
       {keys.length === 0 && readOnly && <li className="text-xs text-gray-400">No tags</li>}
       {keys.map((k) => {
         const exempt = config.exempt_keys.includes(k);

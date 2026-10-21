@@ -1,6 +1,18 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { cn } from '../../../lib/utils';
 
+const GAP = 4;
+const MARGIN = 12;
+const MIN_BELOW = 320;
+
+/** Below the button, scrolling within the space left; above it when there's little room below and more above. */
+function placement(anchor: DOMRect): { top?: number; bottom?: number; maxHeight: number } {
+  const below = window.innerHeight - anchor.bottom - GAP - MARGIN;
+  const above = anchor.top - GAP - MARGIN;
+  if (below < MIN_BELOW && above > below) return { bottom: window.innerHeight - anchor.top + GAP, maxHeight: above };
+  return { top: anchor.bottom + GAP, maxHeight: below };
+}
+
 /** A button that opens a small panel below it; closes on outside click or Escape. */
 export function Popover({ label, children, align = 'left', className, buttonClassName, ariaLabel }: {
   label: ReactNode;
@@ -61,11 +73,8 @@ export function Popover({ label, children, align = 'left', className, buttonClas
       {anchor && (
         <div
           id={id}
-          style={{
-            top: anchor.bottom + 4,
-            ...(align === 'right' ? { right: window.innerWidth - anchor.right } : { left: anchor.left }),
-          }}
-          className={cn('fixed z-[60] max-h-[70vh] min-w-56 overflow-y-auto rounded-lg border border-gray-200 bg-white p-1 shadow-lg', className)}
+          style={{ ...placement(anchor), ...(align === 'right' ? { right: window.innerWidth - anchor.right } : { left: anchor.left }) }}
+          className={cn('fixed z-[60] min-w-56 overflow-y-auto rounded-lg border border-gray-200 bg-white p-1 shadow-lg', className)}
         >
           {typeof children === 'function' ? children(close) : children}
         </div>

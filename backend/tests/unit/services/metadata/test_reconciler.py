@@ -206,6 +206,44 @@ def test_start_and_finish_run_record_counters_and_items(db_session):
     assert db_session.get(MetadataReconcileRunModel, run_id).summary == {"scope": "manual"}
 
 
+def test_a_run_whose_process_is_gone_or_that_is_very_old_is_closed_when_the_next_starts(db_session, monkeypatch):
+    """A restart mid-run leaves it ``running``; the next run closes it, but not one another process still owns."""
+    monkeypatch.setattr(reconciler.socket, "gethostname", lambda: "host-a")
+    monkeypatch.setattr(reconciler.os, "getpid", lambda: 200)
+    alive = {200, 300}
+
+    def kill(pid, sig):
+        if pid not in alive:
+            raise ProcessLookupError(pid)
+
+    monkeypatch.setattr(reconciler.os, "kill", kill)
+    now = reconciler._utcnow()
+
+    def running(worker, age=timedelta(minutes=5)):
+        run = MetadataReconcileRunModel(id=worker, trigger="sweep", mode="plan", status="running", skipped_catalogs=[],
+                                        summary={"scope": "all", "worker": worker}, started_at=now - age)
+        db_session.add(run)
+        return run.id
+
+    dead_here = running("host-a:100")
+    live_here = running("host-a:300")
+    other_host = running("host-b:100")
+    ancient = running("host-b:101", age=timedelta(hours=7))
+    db_session.commit()
+
+    new_id = reconciler.start_run(db_session, trigger="queue", mode="plan")
+
+    runs = {r.id: r for r in db_session.query(MetadataReconcileRunModel)}
+    for run_id in (dead_here, ancient):
+        assert runs[run_id].status == "failed" and runs[run_id].finished_at is not None
+        assert "restarted" in runs[run_id].error and runs[run_id].summary == {"scope": "all"}
+    assert runs[live_here].status == runs[other_host].status == "running"
+    assert runs[new_id].summary == {"worker": "host-a:200"}
+
+    reconciler.finish_run(db_session, new_id, status="completed")
+    assert db_session.get(MetadataReconcileRunModel, new_id).summary == {}
+
+
 def test_record_run_writes_a_finished_run_in_one_go(db_session):
     result = reconciler.record_run(
         db_session, trigger="sweep", mode="enforce", status="paused", paused_reason="Too many removals.",

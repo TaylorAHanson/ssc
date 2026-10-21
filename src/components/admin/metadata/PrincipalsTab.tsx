@@ -55,7 +55,7 @@ export function PrincipalsTab() {
       ) : data && data.length === 0 ? (
         <EmptyState title="No service principals yet">Add one to let automation change metadata within the limits you set.</EmptyState>
       ) : data ? (
-        <ul className="space-y-3">
+        <ul className="list-plain space-y-3">
           {data.map((p) => (
             <PrincipalCard key={p.application_id} principal={p} onEdit={() => setEditing(p)} onDelete={() => setDeleting(p)} />
           ))}

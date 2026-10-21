@@ -234,6 +234,9 @@ export const eventsByObject = (events: ChangeEvent[]): [string, ChangeEvent[]][]
 
 export function describeItem(item: ChangeItem): string {
   const v = (s: string | null | undefined) => (s === null || s === undefined || s === '' ? '(key only)' : s);
+  if (item.unchanged_in_uc) {
+    return item.field === 'comment' ? `Keep the description “${item.after ?? ''}”` : `Keep ${item.key}${item.after ? `=${item.after}` : ' (key only)'}`;
+  }
   if (item.field === 'comment') {
     if (item.action === 'comment_clear') return 'Clear the description';
     return item.before_exists && item.before ? `Change the description to “${item.after ?? ''}”` : `Set the description to “${item.after ?? ''}”`;
@@ -242,6 +245,11 @@ export function describeItem(item: ChangeItem): string {
   if (item.before_exists) return `${item.key}: ${v(item.before)} → ${v(item.after)}`;
   return `Add ${item.key}${item.after ? `=${item.after}` : ' (key only)'}`;
 }
+
+/** Directly saved edits, leaving out values Unity Catalog already has. */
+export const realEditCount = (p: { direct_count: number; kept_count?: number }): number => p.direct_count - (p.kept_count ?? 0);
+
+export const reasonHint = (min: number): string => (min > 0 ? `at least ${min} characters` : 'optional');
 
 export type Outcome = 'direct' | 'approval' | 'denied';
 

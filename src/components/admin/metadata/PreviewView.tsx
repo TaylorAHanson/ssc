@@ -3,14 +3,14 @@ import { renderMarkdownSafe } from '../../../lib/markdown';
 import type { ChangePreview, Finding, ItemDecision } from '../../../types/metadata';
 import { Badge, Notice } from '../../rbac/ui';
 import { EnvBadge, OutcomeBadge } from './badges';
-import { VIA_LABELS, describeItem, objectLabel, outcomeOf, plural } from './format';
+import { VIA_LABELS, describeItem, objectLabel, outcomeOf, plural, realEditCount } from './format';
 
 const MAX_ITEMS = 200;
 
 function FindingList({ findings }: { findings: Finding[] }) {
   if (!findings.length) return null;
   return (
-    <ul className="space-y-1">
+    <ul className="list-plain space-y-1">
       {findings.map((f, i) => (
         <li key={`${f.code}-${f.fqn_key ?? ''}-${f.key ?? ''}-${i}`} className="flex items-start gap-2 text-sm">
           <Badge tone={f.severity === 'deny' ? 'red' : f.severity === 'warn' ? 'amber' : 'blue'}>
@@ -31,20 +31,23 @@ export function PreviewView({ preview, reasonOk }: { preview: ChangePreview; rea
   const grouped = useMemo(() => {
     const map = new Map<string, ItemDecision[]>();
     preview.items.slice(0, MAX_ITEMS).forEach((d) => map.set(d.item.fqn_key, [...(map.get(d.item.fqn_key) ?? []), d]));
-    return [...map.values()];
+    // Within an object, values kept as they are go after the edits.
+    return [...map.values()].map((ds) => [...ds].sort((a, b) => Number(!!a.item.unchanged_in_uc) - Number(!!b.item.unchanged_in_uc)));
   }, [preview.items]);
   const reportHtml = useMemo(() => (preview.report_markdown ? renderMarkdownSafe(preview.report_markdown) : ''), [preview.report_markdown]);
+  const edits = realEditCount(preview);
+  const alreadyThere = preview.noop_count + (preview.kept_count ?? 0);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-1.5 text-sm">
         <span className="font-medium text-gray-900">{plural(preview.object_count, 'object')}:</span>
-        {preview.direct_count > 0 && <Badge tone="green">{plural(preview.direct_count, 'edit')} saved directly</Badge>}
+        {edits > 0 && <Badge tone="green">{plural(edits, 'edit')} saved directly</Badge>}
         {preview.approval_count > 0 && <Badge tone="amber">{plural(preview.approval_count, 'edit')} need approval</Badge>}
         {preview.denied_count > 0 && <Badge tone="red">{plural(preview.denied_count, 'edit')} not allowed</Badge>}
-        {preview.noop_count > 0 && (
-          <Badge tone="gray" title="These already have the value you chose, so they’re skipped.">
-            {plural(preview.noop_count, 'edit')} already in place
+        {alreadyThere > 0 && (
+          <Badge tone="gray" title="Unity Catalog already has these values, so nothing changes there.">
+            {plural(alreadyThere, 'value')} already in place
           </Badge>
         )}
         {preview.environments.length > 0 && (
@@ -71,7 +74,7 @@ export function PreviewView({ preview, reasonOk }: { preview: ChangePreview; rea
       {preview.items.length === 0 ? (
         <p className="text-sm text-gray-500">Nothing would change: everything already matches.</p>
       ) : (
-        <ul className="divide-y divide-gray-100 rounded-md border border-gray-200">
+        <ul className="list-plain divide-y divide-gray-100 rounded-md border border-gray-200">
           {grouped.map((decisions) => {
             const first = decisions[0].item;
             return (
@@ -79,10 +82,15 @@ export function PreviewView({ preview, reasonOk }: { preview: ChangePreview; rea
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="font-mono text-xs font-medium text-gray-900">{objectLabel(first.name, first.column)}</span>
                   <EnvBadge env={first.environment} />
-                  {!first.object_exists && <Badge tone="blue">Not created yet</Badge>}
+                  {first.object_state === 'pending' && <Badge tone="blue">Not created yet</Badge>}
+                  {!first.object_exists && first.object_state !== 'pending' && (
+                    <Badge tone="gray" title="This is its first change here, so the tags and description it already has are kept too.">
+                      Starts being managed
+                    </Badge>
+                  )}
                   {first.copied_from && <span className="text-xs text-gray-500">copied from {first.copied_from}</span>}
                 </div>
-                <ul className="space-y-1.5">
+                <ul className="list-plain space-y-1.5">
                   {decisions.map((d, i) => (
                     <DecisionRow key={`${d.item.field}-${d.item.key ?? ''}-${i}`} decision={d} />
                   ))}
@@ -114,12 +122,13 @@ export function PreviewView({ preview, reasonOk }: { preview: ChangePreview; rea
 function DecisionRow({ decision }: { decision: ItemDecision }) {
   const outcome = outcomeOf(decision);
   const { decision: d } = decision;
-  const why = outcome === 'direct' ? [VIA_LABELS[d.via] ? `You can make this ${VIA_LABELS[d.via]}.` : ''] : [...d.sensitive_reasons, ...d.reasons];
+  const kept = outcome === 'direct' && !!decision.item.unchanged_in_uc;
+  const why = kept ? [] : outcome === 'direct' ? [VIA_LABELS[d.via] ? `You can make this ${VIA_LABELS[d.via]}.` : ''] : [...d.sensitive_reasons, ...d.reasons];
   return (
     <li className="text-sm">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <span className="min-w-0 break-words font-mono text-xs text-gray-800">{describeItem(decision.item)}</span>
-        <OutcomeBadge outcome={outcome} />
+        <span className={`min-w-0 break-words font-mono text-xs ${kept ? 'text-gray-500' : 'text-gray-800'}`}>{describeItem(decision.item)}</span>
+        {kept ? <Badge tone="gray">Already in Unity Catalog</Badge> : <OutcomeBadge outcome={outcome} />}
       </div>
       {why.filter(Boolean).length > 0 && (
         <ul className="mt-0.5 list-disc pl-5 text-xs text-gray-600">

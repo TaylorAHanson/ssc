@@ -62,7 +62,7 @@ export function UnsavedBar() {
 
       {open && edited.length > 0 && (
         <div className="max-h-[50vh] space-y-4 overflow-y-auto border-t border-gray-200 px-4 py-3">
-          <ul className="divide-y divide-gray-100 rounded-md border border-gray-200">
+          <ul className="list-plain divide-y divide-gray-100 rounded-md border border-gray-200">
             {edited.map((t) => (
               <ChangeRow key={t.key} target={t} />
             ))}

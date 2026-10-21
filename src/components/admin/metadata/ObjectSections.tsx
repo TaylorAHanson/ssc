@@ -130,7 +130,7 @@ export function CounterpartsSection({ counterparts }: { counterparts: Record<str
   return (
     <section>
       <SectionTitle>Same table in other environments</SectionTitle>
-      <ul className="flex flex-wrap gap-2">
+      <ul className="list-plain flex flex-wrap gap-2">
         {entries.map(([env, name]) => {
           const [base, column] = name.split('::');
           return (
@@ -191,7 +191,7 @@ export function ApplySection({ detail }: { detail: ObjectDetail }) {
 
 export function PlanList({ items, showObject }: { items: PlanOutcome[]; showObject?: boolean }) {
   return (
-    <ul className="space-y-2">
+    <ul className="list-plain space-y-2">
       {items.map((p, i) => (
         <li key={`${p.fqn_key}-${p.operation}-${i}`} className="rounded-md border border-gray-200 p-2">
           <div className="flex flex-wrap items-center gap-2 text-xs">

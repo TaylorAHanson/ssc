@@ -379,6 +379,9 @@ class ChangeItem(BaseModel):
     # Whether the object already has a desired row; False = this change creates it.
     object_exists: bool = True
     object_state: ObjectState = "exists"
+    # The change creates the row of an object Unity Catalog already has, and UC already holds this value:
+    # it's recorded so the first desired state is complete, and nothing in UC changes.
+    unchanged_in_uc: bool = False
     # The environment this item was copied from, for a cross-environment copy or promote.
     copied_from: Optional[str] = None
 
@@ -424,6 +427,8 @@ class ChangePreview(BaseModel):
     denied_count: int = 0
     # Ops that resolved to no change (already true).
     noop_count: int = 0
+    # Of direct_count: items that are ``unchanged_in_uc``.
+    kept_count: int = 0
     needs_approval: bool = False
     approver_groups: List[str] = Field(default_factory=list)
     environments: List[str] = Field(default_factory=list)

@@ -74,7 +74,7 @@ export function EventList({ events, showObject, showActor, showChangeSet, empty 
 }) {
   if (!events.length) return <p className="text-sm text-gray-500">{empty}</p>;
   return (
-    <ul className="divide-y divide-gray-100">
+    <ul className="list-plain divide-y divide-gray-100">
       {events.map((e) => (
         <EventRow key={e.id} event={e} showObject={showObject} showActor={showActor} showChangeSet={showChangeSet} />
       ))}

@@ -112,7 +112,7 @@ export function HistoryPage() {
         </EmptyState>
       ) : data ? (
         <div className={loading ? 'opacity-60' : undefined}>
-          <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white">
+          <ul className="list-plain divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white">
             {data.items.map((cs) => (
               <li key={cs.id}>
                 <button

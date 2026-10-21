@@ -100,7 +100,8 @@ def _require_admin(actor: Actor, what: str) -> None:
 
 def items_digest(items: Sequence[ChangeItem]) -> str:
     """sha256 over the resolved items, so a record step can refuse a change that moved since preview."""
-    payload = [i.model_dump(mode="json") for i in items]
+    # unchanged_in_uc follows the snapshot, which may refresh between preview and submit.
+    payload = [i.model_dump(mode="json", exclude={"unchanged_in_uc"}) for i in items]
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -312,6 +313,17 @@ def _unmanaged_finding(work: _Work, display: str, fqn_key: str) -> Optional[Find
     )
 
 
+def _mark_unchanged_in_uc(items: Sequence[ChangeItem], obs: ObservedState) -> None:
+    """Flag the items of an object's first desired row that only restate what UC already has."""
+    tags = obs.tags or {}
+    for item in items:
+        if item.field == "tag":
+            item.unchanged_in_uc = (item.action == "set" and item.key in tags
+                                    and normalize_value(tags[item.key]) == normalize_value(item.after))
+        else:
+            item.unchanged_in_uc = item.action == "comment_set" and normalize_value(obs.comment) == normalize_value(item.after)
+
+
 def _resolve_targets(
     db: Session,
     targets: Sequence[_Target],
@@ -372,6 +384,7 @@ def _resolve_targets(
             warning = _unmanaged_finding(w, key.display, fqn)
             if warning is not None:
                 findings.append(warning)
+            _mark_unchanged_in_uc(changed, w.obs)
         items.extend(changed)
 
     if items:
@@ -469,6 +482,7 @@ def _preview(db: Session, actor: Actor, resolved: _Resolved, *, reason: str, tit
         approval_count=buckets.count(APPROVAL),
         denied_count=buckets.count(DENIED),
         noop_count=resolved.noop_count,
+        kept_count=sum(1 for d, b in zip(decisions, buckets) if b == DIRECT and d.item.unchanged_in_uc),
         needs_approval=APPROVAL in buckets,
         approver_groups=_dedupe(groups),
         environments=sorted({i.environment for i in items if i.environment}),

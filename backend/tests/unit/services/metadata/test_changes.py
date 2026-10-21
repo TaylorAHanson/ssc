@@ -370,6 +370,24 @@ def test_editing_an_unmanaged_object_warns_about_uc_tags_it_drops(db, fakes):
     assert not [f for f in keeps_everything.findings if f.code == "unmanaged_object"]
 
 
+def test_values_an_unmanaged_object_already_has_are_flagged_unchanged_in_uc(db, fakes):
+    """The first desired row restates the object's UC tags and description; only real edits count as edits."""
+    fakes.observe(DEV, tags={"legacy": "x"}, comment="From UC")
+    pv = preview(db, op("set_tags", tags={"legacy": "x", "tier": "gold"}), op("set_comment", comment="From UC"))
+
+    kept = {(d.item.field, d.item.key): d.item.unchanged_in_uc for d in pv.items}
+    assert kept == {("tag", "legacy"): True, ("tag", "tier"): False, ("comment", None): True}
+    assert pv.direct_count == 3 and pv.kept_count == 2
+
+    changed = preview(db, op("set_tags", tags={"legacy": "y"}), op("set_comment", comment="New"))
+    assert not any(d.item.unchanged_in_uc for d in changed.items) and changed.kept_count == 0
+
+    a = changes.items_digest([d.item for d in pv.items])
+    for d in pv.items:
+        d.item.unchanged_in_uc = not d.item.unchanged_in_uc
+    assert changes.items_digest([d.item for d in pv.items]) == a
+
+
 # --- Limits and reasons ------------------------------------------------------------
 
 

@@ -128,8 +128,8 @@ def build_report(preview: ChangePreview, *, reason: str = "", title: str = "Meta
         f"- {_count(preview.object_count, 'object')}: {preview.direct_count} direct, "
         f"{preview.approval_count} need approval, {preview.denied_count} denied"
     )
-    if preview.noop_count:
-        summary += f", {preview.noop_count} already true"
+    if preview.noop_count or preview.kept_count:
+        summary += f", {preview.noop_count + preview.kept_count} already true"
     lines = [f"**{safe_text(title, 120) or 'Metadata change'}**", "", summary + "."]
     if preview.environments:
         lines.append("- Environments: " + ", ".join(safe_code(e, 60) for e in preview.environments))

@@ -222,7 +222,7 @@ def _change_request(kwargs: Dict[str, Any], *, submit: bool):
 def _next_step(preview) -> str:
     if preview.blocked:
         return "A policy blocks this change. Show the report and the deny findings; don't submit it."
-    if preview.direct_count + preview.approval_count == 0:
+    if preview.direct_count - preview.kept_count + preview.approval_count == 0:
         return "Nothing would change. Tell the user their objects already have this metadata."
     if preview.needs_approval:
         groups = ", ".join(preview.approver_groups) or "the governance approvers"

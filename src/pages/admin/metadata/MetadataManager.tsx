@@ -131,7 +131,7 @@ export function MetadataManager() {
           </nav>
         )}
       </div>
-      {ctx?.whoami.can_browse && <Welcome />}
+      {ctx?.whoami.can_browse && !onAdmin && !location.pathname.startsWith(historyPath) && <Welcome />}
       {ctx ? (
         <MetadataContext.Provider value={ctx}>
           {body}

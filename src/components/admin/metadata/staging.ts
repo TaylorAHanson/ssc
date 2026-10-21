@@ -122,7 +122,7 @@ export function opsFor(t: StagedTarget): ChangeOp[] {
     const tags = effectiveTags(t);
     const comment = effectiveComment(t);
     const zeros = Object.fromEntries(Object.keys(tags).map((k) => [k, 0]));
-    ops.push({ ...base, op: 'set_tags', tags, expected_versions: zeros });
+    if (Object.keys(tags).length) ops.push({ ...base, op: 'set_tags', tags, expected_versions: zeros });
     if (comment !== null) ops.push({ ...base, op: 'set_comment', comment, expected_comment_version: 0 });
     return ops;
   }

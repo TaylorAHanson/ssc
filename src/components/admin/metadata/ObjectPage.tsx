@@ -106,7 +106,7 @@ function ObjectBody({ detail, table, focusColumn, reload }: { detail: ObjectDeta
 
       <ColumnsGrid columns={detail.columns} focusColumn={focusColumn} />
 
-      <Rollup title="Details" hint="Owners, other environments and sync status">
+      <Rollup title="Details" hint={detailsHint(detail)}>
         <section>
           <SectionTitle>Owners</SectionTitle>
           {detail.owner_groups.length ? (
@@ -149,6 +149,14 @@ function ObjectBody({ detail, table, focusColumn, reload }: { detail: ObjectDeta
   );
 }
 
+/** What the Details rollup holds for this table, matching the sections it shows. */
+function detailsHint(detail: ObjectDetail): string {
+  const parts = ['Owners'];
+  if (Object.keys(detail.counterparts).length) parts.push('other environments');
+  if (detail.desired?.status === 'active' || detail.recent_plan.length) parts.push('sync status');
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0];
+}
+
 function ColumnsGrid({ columns, focusColumn }: { columns: ObjectSummary[]; focusColumn: string | null }) {
   const [filter, setFilter] = useState('');
   const term = filter.trim().toLowerCase();
@@ -171,11 +179,11 @@ function ColumnsGrid({ columns, focusColumn }: { columns: ObjectSummary[]; focus
         )}
       </div>
       <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="w-full text-left text-sm">
+        <table className="w-full min-w-[40rem] table-fixed text-left text-sm">
           <thead className="bg-gray-50 text-xs text-gray-600">
             <tr>
               <th scope="col" className="w-56 px-3 py-2 font-medium">Column</th>
-              <th scope="col" className="px-3 py-2 font-medium">Description</th>
+              <th scope="col" className="w-[45%] px-3 py-2 font-medium">Description</th>
               <th scope="col" className="px-3 py-2 font-medium">Tags</th>
             </tr>
           </thead>

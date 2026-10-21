@@ -63,8 +63,11 @@ Unity Catalog*.
 3. Choose **Review and save**. It shows every change, which ones need
    approval and who approves them, any policy problems, and the risk score.
    It also warns when a changed tag is one a column mask or row filter keys
-   on, because that changes who can see the data.
-4. Add a reason and save. Changes you're allowed to make are saved straight
+   on, because that changes who can see the data. The first time you change a
+   table here it's marked *Starts being managed*, and the tags and description
+   it already has are listed as *Already in Unity Catalog*: they're kept, not
+   counted as edits.
+4. Add a reason (if your admin requires one) and save. Changes you're allowed to make are saved straight
    away; the rest become one approval request, which you can follow under
    **My Requests**.
 
@@ -79,7 +82,7 @@ change made to it here).
 ## Tagging many objects at once
 
 - **Pick them from a list.** Tick the tables in a schema, or in search results,
-  and choose **Edit tags on all**. Whatever you add, remove or describe applies
+  and choose **Edit all**. Whatever you add, remove or describe applies
   to every ticked object and joins your unsaved changes.
 - **By name.** Choose **More → Edit many tables by name**. Type a name pattern
   such as `sales_dev.bronze.*` (`*` matches any characters within one part and

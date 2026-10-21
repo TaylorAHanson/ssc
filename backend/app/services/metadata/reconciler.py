@@ -21,6 +21,8 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import os
+import socket
 import time
 import uuid
 from collections import defaultdict
@@ -370,14 +372,60 @@ def run_status(outcomes: Sequence[PlanOutcome], *, mode: ReconcileMode) -> RunSt
     return "partial" if any(o.status in ("applied", "noop") for o in outcomes) else "failed"
 
 
+# summary key naming the process running a run (host:pid), dropped when the run finishes.
+_WORKER_KEY = "worker"
+# A run still running this long after it started stopped without finishing, wherever it ran.
+_ABANDONED_RUN_AGE = timedelta(hours=6)
+_ABANDONED_RUN_ERROR = (
+    "This run stopped before it finished, most likely because the app restarted while it was working. "
+    "Later runs aren't affected."
+)
+
+
+def _worker() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+
+def _worker_gone(worker: object) -> bool:
+    """True when ``worker`` (host:pid) is a process on this host that no longer exists."""
+    host, _, pid = str(worker or "").rpartition(":")
+    if host != socket.gethostname() or not pid.isdigit() or int(pid) == os.getpid():
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _close_abandoned_runs(db: Session) -> None:
+    cutoff = _utcnow() - _ABANDONED_RUN_AGE
+    running = db.query(MetadataReconcileRunModel).filter(MetadataReconcileRunModel.status == "running").all()
+    for run in running:
+        if run.started_at >= cutoff and not _worker_gone((run.summary or {}).get(_WORKER_KEY)):
+            continue
+        logger.warning("Metadata: reconcile run %s (started %s) stopped without finishing; closing it as failed.",
+                       run.id, run.started_at)
+        run.status = "failed"
+        run.error = _ABANDONED_RUN_ERROR
+        run.finished_at = _utcnow()
+        run.summary = {k: v for k, v in (run.summary or {}).items() if k != _WORKER_KEY}
+
+
 def start_run(
     db: Session, *, trigger: RunTrigger, mode: ReconcileMode, actor: Optional[str] = None,
     summary: Optional[dict] = None,
 ) -> str:
-    """Insert a ``running`` run so the Runs tab shows it while it works. Commits; returns the run id."""
+    """Insert a ``running`` run so the Runs tab shows it while it works. Commits; returns the run id.
+
+    Runs left ``running`` by a process that stopped mid-run are closed as failed first.
+    """
+    _close_abandoned_runs(db)
     run = MetadataReconcileRunModel(
         id=str(uuid.uuid4()), trigger=trigger, mode=mode, status="running", actor=actor,
-        skipped_catalogs=[], summary=dict(summary or {}), started_at=_utcnow(),
+        skipped_catalogs=[], summary={**(summary or {}), _WORKER_KEY: _worker()}, started_at=_utcnow(),
     )
     db.add(run)
     db.commit()
@@ -430,8 +478,7 @@ def finish_run(
     run.skipped_catalogs = sorted(set(skipped_catalogs))
     run.paused_reason = paused_reason
     run.error = error
-    if summary:
-        run.summary = {**(run.summary or {}), **summary}
+    run.summary = {k: v for k, v in {**(run.summary or {}), **(summary or {})}.items() if k != _WORKER_KEY}
     run.finished_at = now
     db.commit()
     return _result(run, list(outcomes))

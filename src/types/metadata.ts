@@ -216,6 +216,8 @@ export interface ChangeItem {
   after?: string | null;
   object_exists: boolean;
   object_state: ObjectState;
+  /** The change starts managing an existing object, and Unity Catalog already has this value. */
+  unchanged_in_uc?: boolean;
   copied_from?: string | null;
 }
 
@@ -252,6 +254,8 @@ export interface ChangePreview {
   approval_count: number;
   denied_count: number;
   noop_count: number;
+  /** Of direct_count: items that are `unchanged_in_uc`. */
+  kept_count?: number;
   needs_approval: boolean;
   approver_groups: string[];
   environments: string[];

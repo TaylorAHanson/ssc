@@ -52,7 +52,7 @@ export function DriftTab() {
       ) : data && data.items.length === 0 ? (
         <EmptyState title="Everything matches">Unity Catalog matches everything saved here{catalog ? ` in ${catalog}` : ''}.</EmptyState>
       ) : data ? (
-        <ul className={loading ? 'space-y-2 opacity-60' : 'space-y-2'}>
+        <ul className={loading ? 'list-plain space-y-2 opacity-60' : 'list-plain space-y-2'}>
           {data.items.map((s) => (
             <DriftRow key={s.fqn_key} summary={s} entries={summaryDrift(s, config.exempt_keys)} />
           ))}

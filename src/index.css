@@ -308,6 +308,17 @@ body {
   padding-left: 0.5rem;
 }
 
+/* A list laid out by its own classes (chips, rows): the two rules above leave it alone. */
+.text-sm ul.list-plain {
+  list-style-type: none;
+  margin: 0;
+}
+
+.text-sm ul.list-plain > li {
+  margin: 0;
+  padding-left: 0;
+}
+
 /* Hide SurveyJS Creator non-commercial text */
 .svc-creator__non-commercial-text {
   display: none !important;

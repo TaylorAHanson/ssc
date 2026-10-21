@@ -7,7 +7,7 @@ import { useMetadata } from './context';
 import { PreviewView } from './PreviewView';
 import { ConflictPanel, ResultView } from './ResultView';
 import { RoutingChoice } from './RoutingChoice';
-import { plural } from './format';
+import { plural, realEditCount, reasonHint } from './format';
 import type { ReviewFlow } from './useReviewFlow';
 
 interface ReviewDialogProps<R> {
@@ -35,9 +35,10 @@ interface ReviewDialogProps<R> {
 }
 
 function submitLabel(p: ChangePreview, routing: ApprovalRouting | undefined): string {
-  if (!p.approval_count) return p.direct_count ? `Save ${plural(p.direct_count, 'edit')}` : 'Submit';
+  const edits = realEditCount(p);
+  if (!p.approval_count) return edits ? `Save ${plural(edits, 'edit')}` : p.direct_count ? 'Save' : 'Submit';
   if (routing === 'reject') return 'Submit (nothing saved if approval is needed)';
-  if (routing === 'split' && p.direct_count) return `Save ${p.direct_count}, send ${p.approval_count} for approval`;
+  if (routing === 'split' && edits) return `Save ${edits}, send ${p.approval_count} for approval`;
   return 'Send for approval';
 }
 
@@ -69,7 +70,7 @@ export function ReviewDialog<R>({
   const reasonField = (
     <div>
       <label htmlFor={reasonId} className="mb-1 block text-sm font-medium text-gray-800">
-        Reason <span className="font-normal text-gray-500">(required, at least {config.min_reason_length} characters)</span>
+        Reason <span className="font-normal text-gray-500">({reasonHint(config.min_reason_length)})</span>
       </label>
       <Textarea
         id={reasonId}
