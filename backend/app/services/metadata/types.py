@@ -752,6 +752,8 @@ class MetadataConfig(BaseModel):
     min_justification_length: int = 10
     new_object_policy: Literal["adopt", "ignore"] = "adopt"
     last_sweep_at: Optional[datetime] = None
+    # Catalogs the latest full check couldn't read; their lists may be incomplete.
+    unread_catalogs: List[str] = Field(default_factory=list)
     circuit_breaker_tripped: bool = False
     # Catalog names or patterns this deployment manages; empty = every catalog, but plan only.
     managed_catalogs: List[str] = Field(default_factory=list)

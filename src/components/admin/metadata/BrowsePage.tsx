@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { MoreHorizontal, Search, SlidersHorizontal, X } from 'lucide-react';
 import { getObject, searchObjects } from '../../../services/metadataApi';
 import { RELATION_TYPES, type ObjectSummary, type SearchQuery, type SecurableType } from '../../../types/metadata';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
-import { EmptyState, ErrorBanner, Pager, Skeleton } from '../../rbac/ui';
+import { EmptyState, ErrorBanner, Notice, Pager, Skeleton } from '../../rbac/ui';
 import { activeFilterCount, useBrowseFilters, type SearchWhat } from './browseFilters';
 import { BulkEditDialog } from './BulkEditDialog';
 import { useMetadata } from './context';
@@ -14,6 +14,7 @@ import { EditManyDialog } from './EditManyDialog';
 import { errorMessage, plural, splitSearch } from './format';
 import { Breadcrumb, ObjectHeader } from './ObjectHeader';
 import { ObjectList } from './ObjectList';
+import { adminPath } from './paths';
 import { MenuItem, Popover } from './Popover';
 import { seedFromSummary } from './staging';
 import { useAsync, useDebounced } from './useAsync';
@@ -29,10 +30,25 @@ const WHAT_TYPES: Record<SearchWhat, { types: SecurableType[]; columns: boolean 
 
 type Dialog = 'pattern' | 'declare' | 'many' | null;
 
+/** A schema (or catalog) known only from the tables counted in it: its own row hasn't been read yet. */
+function impliedRow(catalog: string | undefined, value: string): ObjectSummary {
+  const name = catalog ? `${catalog}.${value}` : value;
+  return {
+    fqn_key: name.toLowerCase(),
+    name,
+    securable_type: catalog ? 'schema' : 'catalog',
+    catalog: catalog ?? value,
+    schema_name: catalog ? value : null,
+    managed: false,
+    tags: {},
+    drift: false,
+  };
+}
+
 /** All catalogs, one catalog's schemas, or one schema's tables, with search and filters scoped to where you are. */
 export function BrowsePage() {
   const { catalog, schema } = useParams<{ catalog?: string; schema?: string }>();
-  const { refreshToken } = useMetadata();
+  const { refreshToken, config, isAdmin } = useMetadata();
   const filters = useBrowseFilters();
   const [text, setText] = useState('');
   const q = useDebounced(text, 300);
@@ -78,6 +94,15 @@ export function BrowsePage() {
     const facet = countsData?.facets[catalog ? 'schema' : 'catalog'];
     return facet ? Object.fromEntries(facet.map((f) => [f.value, f.count])) : undefined;
   }, [countsData, catalog]);
+
+  const items = useMemo(() => {
+    if (!data || searching || schema || !counts) return data?.items ?? [];
+    const listed = new Set(data.items.map((s) => (catalog ? s.schema_name ?? '' : s.catalog).toLowerCase()));
+    const implied = Object.keys(counts).filter((v) => !listed.has(v.toLowerCase())).map((v) => impliedRow(catalog, v));
+    return implied.length ? [...data.items, ...implied].sort((a, b) => a.name.localeCompare(b.name)) : data.items;
+  }, [data, searching, schema, counts, catalog]);
+  const unread = config.unread_catalogs ?? [];
+  const unreadHere = catalog ? unread.filter((c) => c === catalog.toLowerCase()) : unread;
 
   const headerLoad = useMemo(() => (scopeName ? () => getObject(scopeName) : null), [scopeName]);
   const header = useAsync(headerLoad, { token: refreshToken });
@@ -164,18 +189,36 @@ export function BrowsePage() {
         </div>
       )}
 
+      {unreadHere.length > 0 && (
+        <Notice kind="warn" title={catalog ? 'This catalog hasn’t been fully read' : 'Some catalogs haven’t been fully read'}>
+          The last full check couldn’t read {catalog ? 'it' : unreadHere.join(', ')} from Unity Catalog, so some schemas and tables may be
+          missing here. Tables created or changed since then still show up.{' '}
+          {isAdmin ? (
+            <Link to={adminPath} className="font-medium underline">
+              See why under Admin → Sync history
+            </Link>
+          ) : (
+            'An admin can see why under Admin → Sync history.'
+          )}
+        </Notice>
+      )}
+
       {error ? <ErrorBanner message={errorMessage(error, 'Couldn’t load this list')} onRetry={reload} /> : null}
       {!data && loading ? (
         <Skeleton rows={8} />
-      ) : data && data.items.length === 0 ? (
+      ) : data && items.length === 0 ? (
         <EmptyState title={searching ? 'Nothing matches' : `No ${level}s here`}>
-          {searching ? 'Try fewer words, or clear the filters.' : level === 'catalog' ? 'No catalogs have been read from Unity Catalog yet. An admin can run a check from the Admin page.' : 'Unity Catalog doesn’t report anything here yet.'}
+          {searching
+            ? 'Try fewer words, or clear the filters.'
+            : level === 'catalog'
+              ? 'No catalogs have been read from Unity Catalog yet. An admin can run a check from the Admin page.'
+              : `Unity Catalog hasn’t reported any ${level}s here yet.`}
         </EmptyState>
       ) : data ? (
         <div className={loading ? 'space-y-2 opacity-60' : 'space-y-2'}>
           {searching && <p className="text-sm text-gray-500">{plural(data.total, 'result')}{scopeName ? ` in ${scopeName}` : ''}</p>}
           <ObjectList
-            items={data.items}
+            items={items}
             showPath={searching}
             counts={searching || schema ? undefined : counts}
             countLabel="Tables and views"
@@ -224,7 +267,7 @@ function FiltersButton({ onChange }: { onChange: () => void }) {
       className="w-80 space-y-4 p-4"
     >
       <fieldset className="space-y-1.5">
-        <legend className="mb-1 text-xs font-medium text-gray-500">Search for</legend>
+        <legend className="mb-1 text-xs font-medium text-gray-500">When you search, look for</legend>
         {(
           [
             ['tables', 'Tables and views'],

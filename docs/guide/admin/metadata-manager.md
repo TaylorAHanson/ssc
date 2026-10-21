@@ -32,11 +32,17 @@ path at the top (*All catalogs › sales_dev › bronze*) takes you back up. Eve
 level has its own address, so you can share a link to a catalog, a schema or a
 table.
 
+If the last full check couldn't read a catalog, its page says so: new and
+changed tables still appear, but older ones may be missing until a check reads
+the catalog again. Admins can see why under **Admin → Sync history**.
+
 The search box searches wherever you are: everything from the catalog list, or
 just one catalog or schema once you've clicked into it. **Filters** narrows the
 results:
 
-- **Search for** tables and views (the default), columns, or everything;
+- **When you search, look for** tables and views (the default), columns, or
+  everything. This only affects searches; browsing always lists every catalog,
+  schema and table;
 - **Out of sync with Unity Catalog**, for objects whose tags there differ from
   the ones saved here;
 - **Things I can change without approval**;

@@ -166,6 +166,7 @@ def _config(db: Session, user: User) -> MetadataConfig:
         min_justification_length=settings.METADATA_MIN_JUSTIFICATION_LENGTH,
         new_object_policy="ignore" if settings.METADATA_NEW_OBJECT_POLICY == "ignore" else "adopt",
         last_sweep_at=observed.last_sweep_at(db),
+        unread_catalogs=observed.unread_catalogs(db),
         circuit_breaker_tripped=reconciler.circuit_breaker_tripped(db),
         managed_catalogs=scope.patterns(),
         enforce_blocked_reason=scope.enforce_blocked_reason(),

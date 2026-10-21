@@ -689,12 +689,15 @@ def sweep(db: Session, *, provider=None, catalogs: Optional[List[str]] = None) -
     result.read_ms = int(read_s * 1000)
     result.write_ms = int(write_s * 1000)
     previous = _get_state(db, LAST_SWEEP_KEY) or {}
+    # Every catalog whose latest sweep failed, including ones this sweep didn't try.
+    unread = [c for c in previous.get("unread_catalogs") or [] if c not in targets] + sorted(result.failed_catalogs)
     state = {
         # Only a sweep that refreshed something moves the "last sweep" time.
         "at": sweep_started_at.isoformat() if result.catalogs or not targets else previous.get("at"),
         "attempted_at": sweep_started_at.isoformat(),
         "catalogs": result.catalogs,
         "failed_catalogs": result.failed_catalogs,
+        "unread_catalogs": unread,
         "objects_seen": result.objects_seen,
         "objects_missing": result.objects_missing,
         "took_ms": result.took_ms,
@@ -835,7 +838,13 @@ def poll_new_objects(db: Session, *, provider=None) -> List[str]:
                     newest = stamp
 
     if found:
-        refresh(db, list(found.values()), provider=provider)
+        # Their schema and catalog rows too, so a table in a catalog the sweep couldn't read is still listed under them.
+        parents: Dict[str, ObjectKey] = {}
+        for key in found.values():
+            for parent in (_object_key(key.catalog), _object_key(key.catalog, key.schema_name)):
+                if parent is not None:
+                    parents.setdefault(parent.fqn_key, parent)
+        refresh(db, [*found.values(), *parents.values()], provider=provider)
     newest = min(newest, now)
     if newest > watermark:
         _set_state(db, NEW_OBJECT_WATERMARK_KEY, {"at": newest.isoformat()})
@@ -900,3 +909,8 @@ def governed_tags(db: Session) -> Dict[str, List[str]]:
 def last_sweep_at(db: Session) -> Optional[datetime]:
     """When the last sweep that refreshed at least one catalog started (naive UTC)."""
     return _parse_iso((_get_state(db, LAST_SWEEP_KEY) or {}).get("at"))
+
+
+def unread_catalogs(db: Session) -> List[str]:
+    """Managed catalogs whose latest sweep couldn't read them, so their snapshot may be incomplete."""
+    return [c for c in (_get_state(db, LAST_SWEEP_KEY) or {}).get("unread_catalogs") or [] if scope.manages(c)]

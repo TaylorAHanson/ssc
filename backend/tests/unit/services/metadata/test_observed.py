@@ -378,6 +378,20 @@ def test_overlong_column_types_fall_back_to_the_bare_type_name():
     assert f"CASE WHEN length(full_data_type) > {observed._DATA_TYPE_MAX} THEN data_type ELSE full_data_type END" in sql
 
 
+def test_unread_catalogs_lists_each_catalogs_latest_failure_until_a_sweep_reads_it(db_session):
+    uc = _metastore()
+    uc.failing.add("hr")
+    observed.sweep(db_session, provider=uc)
+    assert observed.unread_catalogs(db_session) == ["hr"]
+
+    observed.sweep(db_session, provider=uc, catalogs=["sales"])
+    assert observed.unread_catalogs(db_session) == ["hr"]  # not tried again, so still unread
+
+    uc.failing.clear()
+    observed.sweep(db_session, provider=uc, catalogs=["hr"])
+    assert observed.unread_catalogs(db_session) == []
+
+
 def test_sweep_marks_dropped_objects_missing_and_leaves_failed_catalogs_untouched(db_session):
     uc = _metastore()
     observed.sweep(db_session, provider=uc)
@@ -609,6 +623,9 @@ def test_poll_returns_relations_past_the_watermark_and_advances_it(db_session):
     rows = _rows(db_session)
     assert rows["sales.bronze.fresh"].tags == {"source": "pipeline"}
     assert rows["sales.bronze.orders::email"].present is True
+    # The schema and catalog come along, so the tables have somewhere to be listed before a sweep reads them.
+    assert rows["sales.bronze"].tags == {"layer": "bronze"} and rows["sales"].comment == "Sales data"
+    assert "hr.people" not in rows
 
     uc.sql.clear()
     assert observed.poll_new_objects(db_session, provider=uc) == []

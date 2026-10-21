@@ -527,6 +527,8 @@ export interface MetadataConfig {
   min_justification_length: number;
   new_object_policy: 'adopt' | 'ignore';
   last_sweep_at?: string | null;
+  /** Catalogs the latest full check couldn't read; their lists may be incomplete. */
+  unread_catalogs?: string[];
   circuit_breaker_tripped: boolean;
   /** Catalog names or patterns this deployment manages; empty = every catalog, but plan only. */
   managed_catalogs: string[];
