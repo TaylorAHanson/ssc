@@ -13,6 +13,20 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.3.0 — 2026-10-21
+
+### Added
+
+- **Training courses can now be linked to the Databricks Academy catalog, which keeps them current.** Course codes, links and durations used to be typed in by hand and went stale whenever Academy released a new version of a course, which happens often. The old "Sync from Catalog" button scraped a web page that no longer lists courses, so it found nothing. The Academy course catalog is now copied in every night. In Training Studio, **Pick from Academy** fills in a course from a search, and a linked course's code, link, type and duration update on every sync. When Academy replaces a course with a new version, linked courses move to it automatically. Courses that aren't linked yet are listed under the sync bar with suggested matches to accept, and nothing is linked without your say-so except courses whose code already matches exactly. The schedule and course languages are under Admin → Settings → Training.
+- **Workflow steps that require a course now accept any version of it.** A step written against one course code used to pass only for that exact code, so people who took the newer version of the same course, or the instructor-led instead of the self-paced one, stayed blocked until an admin stepped in. The step, and the progress shown on the Training page, now accept a completion of any version or delivery of the required course. Codes that aren't Academy codes still have to match exactly.
+
+### Changed
+
+- **Your requests and your approvals are now one compact, searchable page.** My Requests and Pending Approvals were separate pages of large cards, which were hard to scan once a list grew, and Pending Approvals opened with a large box explaining your approval permissions. Both are now tabs of a single table, opened from **Requests** in the sidebar: **Needs my approval** (only if something can be assigned to you), **My requests**, and **All requests** for Platform Admins. A search box filters by request ID, title, workflow, requester, status or the names in a request, and status buttons show how many requests match each. Approvers get Approve and Reject on each row, and reports from earlier steps are still shown before you confirm. The permissions box is gone, because if you can approve something its Approve button is already there.
+- **Notifications moved into the account menu.** The separate bell at the bottom of the sidebar took a full row for one link. When approvals are waiting, a red count now shows on your initials and on **Requests** in the sidebar, and **Notifications** at the top of the account menu takes you to them. **Requests** opens straight on **Needs my approval** while anything is waiting for you.
+- **Access Rules columns can be resized, and the page is a little more compact.** The rules grid shows a lot of information and was hard to work with on smaller screens. Drag the border between two column headings to resize. Long values now stop at two lines, with groups and privileges side by side instead of one per line, so rows stay short; hover over a cell to see its full value. Your widths are remembered in your browser for each type of sheet. Double-click a border to reset that column, or use **Reset columns** to restore them all. Text and rows are also slightly smaller, so more rules fit on screen. The History, Exports and Import tables resize the same way.
+- **The Admin page now has just three tabs: Dashboard, Settings and Feedback.** Legacy dashboard mappings and training-completion uploads are occasional setup tasks, so they now sit in Admin → Settings next to the settings they relate to: **Legacy Dashboards** under Discover & Analyze, and **Training** under Learn & Share, which also holds the new Academy catalog settings. The Test Runner tab, which was only useful to developers, is gone. Old links and bookmarks to these tabs take you to their new pages.
+
 ## 2.2.0 — 2026-10-21
 
 ### Added

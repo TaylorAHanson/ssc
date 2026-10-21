@@ -334,6 +334,17 @@ async def start_poller():
 
                 _spawn_background(safe_sync_preview_features())
 
+            if _yaml_config.get("features", {}).get("training_admin", False):
+                async def safe_sync_academy_catalog():
+                    try:
+                        from app.services.training_catalog import academy_sync_task
+
+                        await academy_sync_task()
+                    except Exception as e:
+                        logger.error(f"Error in background Academy catalog sync: {e}", exc_info=True)
+
+                _spawn_background(safe_sync_academy_catalog())
+
             if _yaml_config.get("features", {}).get("rbac", False):
                 async def safe_rbac_export():
                     if rbac_export_semaphore.locked():
@@ -1046,18 +1057,21 @@ def _training_course_completed(db, request: RequestModel, course_code: str) -> b
     """True if the requester has an LMS completion for ``course_code``.
 
     Looks the requester's completions up via the training provider (the same
-    data the Training page + admin CSV upload populate). Best-effort: any lookup
-    failure returns False so the gate simply stays parked (manual completion
-    remains a fallback) rather than erroring the poll tick.
+    data the Training page + admin CSV upload populate). An Academy code also
+    matches other versions and deliveries of the same course, so a gate written
+    against ``-v2`` still passes for someone who took ``-v3``. Best-effort: any
+    lookup failure returns False so the gate simply stays parked (manual
+    completion remains a fallback) rather than erroring the poll tick.
     """
     try:
+        from app.providers.training.academy import codes_match
         from app.providers.training.client import TrainingProvider
 
         email = getattr(request, "requester_email", None)
         if not email:
             return False
         completed = TrainingProvider(db).get_user_training_status(email)
-        return course_code in (completed or [])
+        return codes_match(course_code, completed or [])
     except Exception as e:  # noqa: BLE001 - never fail a poll tick on LMS lookup
         logger.warning("[%s] training course lookup failed: %s", request.id, e)
         return False

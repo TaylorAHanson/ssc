@@ -79,7 +79,7 @@ Unity Catalog*.
    environments to make the same changes there (see [Environments](#environments)).
 4. Add a reason (if your admin requires one) and save. Changes you're allowed to make are saved straight
    away; the rest become one approval request, which you can follow under
-   **My Requests**.
+   **Requests** → **My requests**.
 
 **Discard** on the bar drops every unsaved change. A key with no value, such as
 `pii`, is a key-only tag and is applied as a tag with no value.
@@ -132,7 +132,7 @@ description for a name before the table is created.
 assistant, a pipeline or the sync. **Filters** narrows by table and by where
 the change came from. Open a change to see each tag it touched; **Undo this
 change** saves the opposite change. Changes still waiting for approval are under
-**My Requests**.
+**Requests** → **My requests**.
 
 ## Admin
 

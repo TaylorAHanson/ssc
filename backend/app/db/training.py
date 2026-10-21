@@ -96,6 +96,9 @@ class TrainingCourseModel(Base):
     # Deeplink to the public catalog course-detail page, when known. The UI
     # links the course title to this when present.
     external_url = Column(String, nullable=True)
+    # The Academy catalog course this follows (TrainingCatalogCourseModel.id).
+    # While set, each catalog sync refreshes the code, link, type and duration.
+    academy_course_id = Column(Integer, nullable=True, index=True)
     # Grouping/level within the track (e.g. "fundamentals", "associate"). Keeps
     # the sectioned layout the old UI had without hardcoding the buckets.
     section = Column(String, nullable=True)
@@ -108,6 +111,53 @@ class TrainingCourseModel(Base):
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class TrainingCatalogCourseModel(Base):
+    """A course in the Databricks Academy catalog, as of the last sync.
+
+    Keyed by Docebo's ``id_course``. A course missing from a successful sync
+    is kept with ``active=False`` so courses linked to it can say it was retired.
+    """
+
+    __tablename__ = "training_catalog_courses"
+
+    id = Column(Integer, primary_key=True, autoincrement=False, comment="Docebo id_course")
+    code = Column(String, nullable=True, index=True)
+    # The code's course acronym (see providers.training.academy.course_stem).
+    stem = Column(String, nullable=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    course_type = Column(String, nullable=True, comment="elearning | classroom")
+    duration_seconds = Column(Integer, nullable=True)
+    language = Column(String, nullable=True, index=True)
+    is_free = Column(Boolean, nullable=False, default=False)
+    category = Column(String, nullable=True)
+    slug = Column(String, nullable=True)
+    url = Column(String, nullable=True)
+    image_url = Column(String, nullable=True)
+    academy_updated_at = Column(String, nullable=True, comment="date_last_updated as Academy reports it")
+    active = Column(Boolean, nullable=False, default=True, index=True)
+    first_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TrainingCatalogSyncModel(Base):
+    """One Academy catalog sync attempt, kept for the status shown to admins."""
+
+    __tablename__ = "training_catalog_syncs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    ok = Column(Boolean, nullable=False, default=False)
+    trigger = Column(String, nullable=False, default="schedule", comment="schedule | manual | boot")
+    error = Column(Text, nullable=True)
+    courses = Column(Integer, nullable=False, default=0)
+    added = Column(Integer, nullable=False, default=0)
+    retired = Column(Integer, nullable=False, default=0)
+    linked_updated = Column(Integer, nullable=False, default=0)
+    relinked = Column(Integer, nullable=False, default=0)
 
 
 class TrainingMediaModel(Base):

@@ -143,11 +143,11 @@ export function RulesTab({ permissions, sheetName, onSheetChange, staged, setSta
   const plane = permissions.planes.find((p) => p.plane === sheet?.plane);
 
   return (
-    <div className={cn('space-y-4', staged.length > 0 && 'pb-24')}>
+    <div className={cn('space-y-3', staged.length > 0 && 'pb-24')}>
       <SheetPicker sheets={sheets} selected={selectedName} onSelect={selectSheet} />
       {sheet && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
-          <span className="font-mono text-sm font-medium text-gray-900">{sheet.name}</span>
+          <span className="font-mono text-[13px] font-medium text-gray-900">{sheet.name}</span>
           <span>
             {sheet.export_path ? (
               <>Exported to <code className="text-gray-700">{sheet.export_path}</code></>

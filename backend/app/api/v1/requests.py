@@ -190,10 +190,14 @@ def _format_requests_bulk(
 def get_requests(
     skip: int = 0,
     limit: int = 100,
+    mine: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all requests.
+
+    ``mine=true`` limits a Platform Admin to their own requests too, so the
+    "My requests" list isn't crowded out by everyone else's (e.g. automated runs).
 
     Defined as a *sync* handler so Starlette runs it in the worker threadpool:
     formatting + JSON encoding a large page (e.g. a Sentinel run with tens of
@@ -206,7 +210,7 @@ def get_requests(
     query = db.query(RequestModel).options(selectinload(RequestModel.approvals))
     
     # Non-admins can only see their own requests
-    if not current_user.has_role("platform_admin"):
+    if mine or not current_user.has_role("platform_admin"):
         query = query.filter(RequestModel.requester_email == current_user.email)
     
     requests = query.order_by(RequestModel.created_at.desc()).offset(skip).limit(limit).all()

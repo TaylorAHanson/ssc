@@ -12,6 +12,11 @@ import type {
 
 export const SETTINGS_PATH = '/admin/settings?group=Access%20Rules';
 
+/** Body cells of the resizable tables: a narrowed column clips rather than spilling over. */
+export const CELL = 'overflow-hidden px-2 py-1.5';
+/** A single-line cell that ends in an ellipsis when narrowed; give it a `title`. */
+export const TEXT_CELL = 'overflow-hidden text-ellipsis whitespace-nowrap px-2 py-1.5';
+
 export const PLANE_ORDER: RbacPlane[] = ['uc', 'workspace', 'uc_metastore'];
 
 export const PLANE_GROUP_LABELS: Record<RbacPlane, string> = {

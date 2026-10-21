@@ -22,7 +22,7 @@ export function SheetPicker({ sheets, selected, onSelect }: {
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
       <Segmented label="Type">
         {planes.map((plane) => (
           <Segment key={plane} active={plane === current?.plane} onClick={() => selectPlane(plane)}>
@@ -40,7 +40,7 @@ export function SheetPicker({ sheets, selected, onSelect }: {
               title={`${s.name}: ${s.row_count.toLocaleString()} rows${s.editable ? '' : ' (view only for you)'}`}
             >
               {s.environment ?? s.name}
-              <span className="text-xs text-gray-400">{s.row_count.toLocaleString()}</span>
+              <span className="text-[11px] text-gray-400">{s.row_count.toLocaleString()}</span>
               {!s.editable && <Lock className="h-3 w-3 text-gray-400" aria-label="View only" />}
             </Segment>
           ))}
@@ -76,7 +76,7 @@ function Segment({ active, onClick, title, children }: {
       onClick={onClick}
       title={title}
       className={cn(
-        'flex items-center gap-1.5 rounded px-2.5 py-1 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+        'flex items-center gap-1.5 rounded px-2 py-0.5 text-[13px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
         active
           ? 'bg-white font-medium text-primary shadow-sm ring-1 ring-gray-300'
           : 'text-gray-600 hover:text-gray-900',

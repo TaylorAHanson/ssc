@@ -69,14 +69,7 @@ Add `?profile=true` to any API URL to get an interactive HTML performance report
 
 ## 3. Testing
 
-### UI Test Runner (Admin Panel - Simple Method)
-For testing workflows interactively without leaving the app:
-1.  Navigate to **Admin > Test Runner**.
-2.  Select a test scenario (e.g., "Campaign Workflow").
-3.  Click **Run Test**.
-4.  View real-time logs and state transitions in the UI.
-
-### Unit Tests (Pytest - More Complex Method)
+### Unit Tests (Pytest)
 Run the backend test suite using `pytest`.
 ```bash
 cd backend

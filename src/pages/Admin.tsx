@@ -1,16 +1,19 @@
 import { useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Navigate, useParams, useNavigate } from 'react-router-dom';
 import { useRequestStore } from '../stores/requestStore';
-import {
-  Activity, MessageSquarePlus, GraduationCap, SlidersHorizontal, ArrowLeftRight
-} from 'lucide-react';
-import { TestRunner } from '../components/admin/TestRunner';
+import { MessageSquarePlus, SlidersHorizontal } from 'lucide-react';
 import { AdminDashboard } from './admin/AdminDashboard';
 import { FeedbackAdmin } from './admin/FeedbackAdmin';
-import { TrainingUpload } from '../components/admin/TrainingUpload';
 import { Settings } from './admin/Settings';
-import { LegacyDashboards } from './admin/LegacyDashboards';
+import { LEGACY_DASHBOARDS_GROUP, TRAINING_GROUP, settingsGroupPath } from './admin/settingsGroups';
 import { useBrandingStore } from '../stores/brandingStore';
+
+// Tabs that moved, so old links and bookmarks still land somewhere useful.
+const MOVED_TABS: Record<string, string> = {
+  'test-runner': '/admin/dashboard',
+  'legacy-dashboards': settingsGroupPath(LEGACY_DASHBOARDS_GROUP),
+  training: settingsGroupPath(TRAINING_GROUP),
+};
 
 export function Admin() {
   const fetchRequests = useRequestStore((state) => state.fetchRequests);
@@ -26,12 +29,14 @@ export function Admin() {
   const uiTabs = useBrandingStore((s) => s.uiTabs);
   const feedbackEnabled = uiTabs?.feedback !== false;
 
-  const validTabs = ['dashboard', 'settings', 'test-runner', 'training', 'legacy-dashboards', ...(feedbackEnabled ? ['feedback'] : [])];
-  const activeTab = tab && validTabs.includes(tab) ? tab as 'dashboard' | 'settings' | 'test-runner' | 'training' | 'legacy-dashboards' | 'feedback' : 'dashboard';
+  const validTabs = ['dashboard', 'settings', ...(feedbackEnabled ? ['feedback'] : [])];
+  const activeTab = tab && validTabs.includes(tab) ? tab as 'dashboard' | 'settings' | 'feedback' : 'dashboard';
 
   const handleTabChange = (newTab: string) => {
     navigate(`/admin/${newTab}`);
   };
+
+  if (tab && MOVED_TABS[tab]) return <Navigate to={MOVED_TABS[tab]} replace />;
 
   return (
     <div className="space-y-6">
@@ -61,36 +66,6 @@ export function Admin() {
           <SlidersHorizontal className="w-4 h-4 inline mr-2" />
           Settings
         </button>
-        <button
-          onClick={() => handleTabChange('test-runner')}
-          className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'test-runner'
-            ? 'border-b-2 border-primary text-primary'
-            : 'text-gray-600 hover:text-gray-900'
-            }`}
-        >
-          <Activity className="w-4 h-4 inline mr-2" />
-          Test Runner
-        </button>
-        <button
-          onClick={() => handleTabChange('training')}
-          className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'training'
-            ? 'border-b-2 border-primary text-primary'
-            : 'text-gray-600 hover:text-gray-900'
-            }`}
-        >
-          <GraduationCap className="w-4 h-4 inline mr-2" />
-          Training Upload
-        </button>
-        <button
-          onClick={() => handleTabChange('legacy-dashboards')}
-          className={`px-4 py-2 font-medium text-sm transition-colors ${activeTab === 'legacy-dashboards'
-            ? 'border-b-2 border-primary text-primary'
-            : 'text-gray-600 hover:text-gray-900'
-            }`}
-        >
-          <ArrowLeftRight className="w-4 h-4 inline mr-2" />
-          Legacy Dashboards
-        </button>
         {feedbackEnabled && (
           <button
             onClick={() => handleTabChange('feedback')}
@@ -105,11 +80,8 @@ export function Admin() {
         )}
       </div>
 
-      {activeTab === 'test-runner' && <TestRunner />}
       {activeTab === 'dashboard' && <AdminDashboard />}
       {activeTab === 'settings' && <Settings />}
-      {activeTab === 'training' && <TrainingUpload />}
-      {activeTab === 'legacy-dashboards' && <LegacyDashboards />}
       {activeTab === 'feedback' && <FeedbackAdmin />}
     </div>
   );

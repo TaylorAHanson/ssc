@@ -1,37 +1,63 @@
 import { X, MessageSquare, Info, Workflow } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Request } from '../types';
 import { renderMarkdownSafe } from '../lib/markdown';
 import { RequestGraphView } from './RequestGraphView';
+import { RequestStateList } from './RequestStateList';
+import { formatDate } from '../lib/requestDates';
 
 interface RequestDetailsModalProps {
     request: Request;
     onClose: () => void;
-    // We reuse the components from Requests.tsx logic, but since they aren't exported,
-    // we'll pass them in or redefine them if they are small.
-    // Actually, let's just implement a standalone version for the modal.
-    RequestStateList: React.ComponentType<{ request: Request }>;
 }
 
-export function RequestDetailsModal({ request, onClose, RequestStateList }: RequestDetailsModalProps) {
+export function RequestDetailsModal({ request, onClose }: RequestDetailsModalProps) {
     const [activeTab, setActiveTab] = useState<'status' | 'workflow' | 'conversation'>('status');
 
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') onClose();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [onClose]);
+
     return (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-100 p-4 animate-in fade-in duration-200">
-            <Card className="w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col bg-white shadow-2xl ring-1 ring-black/5 animate-in zoom-in-95 duration-200">
+        <div
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-100 p-4 animate-in fade-in duration-200"
+            onClick={onClose}
+        >
+            <Card
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="request-details-title"
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col bg-white shadow-2xl ring-1 ring-black/5 animate-in zoom-in-95 duration-200"
+            >
                 <CardHeader className="shrink-0 border-b border-gray-100 flex flex-row items-center justify-between py-4">
-                    <div className="flex flex-col">
-                        <CardTitle className="text-xl font-bold text-gray-900">{request.title}</CardTitle>
-                        <p className="text-xs text-gray-500 font-medium uppercase tracking-wider mt-1">
-                            ID: {request.id} • Type: {request.type.replace(/_/g, ' ')}
+                    <div className="flex flex-col min-w-0">
+                        <CardTitle id="request-details-title" className="text-xl font-bold text-gray-900">{request.title}</CardTitle>
+                        <p className="text-xs text-gray-500 mt-1">
+                            <button
+                                type="button"
+                                onClick={() => navigator.clipboard?.writeText(request.id)}
+                                title="Click to copy the request ID"
+                                className="font-mono hover:text-primary"
+                            >
+                                {request.id}
+                            </button>
+                            {' • '}
+                            <span className="capitalize">{request.type.replace(/_/g, ' ')}</span>
+                            {request.createdAt && <> • Created {formatDate(request.createdAt)}</>}
                         </p>
                     </div>
                     <Button
                         variant="ghost"
                         onClick={onClose}
-                        className="rounded-full hover:bg-gray-100 transition-colors h-10 w-10 p-0"
+                        aria-label="Close"
+                        className="rounded-full hover:bg-gray-100 transition-colors h-10 w-10 p-0 shrink-0"
                     >
                         <X className="w-5 h-5" />
                     </Button>
@@ -103,7 +129,7 @@ export function RequestDetailsModal({ request, onClose, RequestStateList }: Requ
                                                     <p className="text-sm leading-relaxed">{message.content}</p>
                                                 )}
                                                 <p className={`text-[10px] mt-2 opacity-70 font-medium`}>
-                                                    {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                    {formatDate(typeof message.timestamp === 'string' ? message.timestamp : message.timestamp?.toISOString())}
                                                 </p>
                                             </div>
                                         </div>

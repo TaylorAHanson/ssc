@@ -371,6 +371,20 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "type": "cron",
      "help": "How often calendar/events are synced (5-field cron, UTC). Leave BLANK to disable."},
 
+    # --- Training (Academy catalog) ---------------------------------------
+    {"group": "Training", "section": "Academy catalog", "key": "TRAINING_ACADEMY_URL", "label": "Academy URL",
+     "type": "string",
+     "help": "The Databricks Academy site whose public course catalog is synced. Must be on databricks.com. "
+             "Training Studio's course picker and linked courses use this catalog."},
+    {"group": "Training", "section": "Academy catalog", "key": "TRAINING_ACADEMY_SYNC_CRON",
+     "label": "Catalog sync cron", "type": "cron",
+     "help": "How often the Academy catalog is re-read and linked courses refreshed (5-field cron, UTC). "
+             "Leave BLANK to sync only when Sync Academy catalog is clicked in Training Studio."},
+    {"group": "Training", "section": "Academy catalog", "key": "TRAINING_ACADEMY_LANGUAGES",
+     "label": "Languages", "type": "string_list", "add_label": "Add language",
+     "help": "Which course languages to keep, as Academy names them (english, japanese, korean, spanish, "
+             "french, pt-br, simplified_chinese). Empty keeps every language."},
+
     # ===================================================================
     # Watch Tower
     # ===================================================================
@@ -890,6 +904,8 @@ GROUP_REQUIRES: Dict[str, List[str]] = {
     "Workflow Studio": ["features.workflow_authoring"],
     "Preview Features": ["features.preview_features"],
     "Access Rules": ["features.rbac"],
+    # Mappings are only shown in Discover and the agent's data-asset search.
+    "Legacy Dashboards": ["features.data_discovery"],
 }
 
 
@@ -963,17 +979,21 @@ RETIRED_KEYS = frozenset({
 # Page layout
 # ---------------------------------------------------------------------------
 # The Settings sub-nav mirrors the app sidebar: each section holds pages
-# (groups). "Features & Navigation" and "Roles & Access" are rendered by the
-# client (the capability switches below and the role manager); "Infrastructure"
-# also shows READONLY_FIELDS under its editable fields.
+# (groups). CLIENT_GROUPS are rendered by the client rather than from fields
+# (the capability switches below, the role manager, the legacy dashboard
+# mappings and the training-completion upload); "Infrastructure" also shows
+# READONLY_FIELDS under its editable fields.
 FEATURES_GROUP = "Features & Navigation"
 ROLES_GROUP = "Roles & Access"
+LEGACY_DASHBOARDS_GROUP = "Legacy Dashboards"
+TRAINING_GROUP = "Training"
+CLIENT_GROUPS = frozenset({FEATURES_GROUP, ROLES_GROUP, LEGACY_DASHBOARDS_GROUP, TRAINING_GROUP})
 
 SECTIONS: List[Dict[str, Any]] = [
     {"title": "General", "groups": ["Appearance", FEATURES_GROUP, ROLES_GROUP, "Notifications"]},
-    {"title": "Discover & Analyze", "groups": ["Agent", "Data Catalog"]},
+    {"title": "Discover & Analyze", "groups": ["Agent", "Data Catalog", LEGACY_DASHBOARDS_GROUP]},
     {"title": "Requests & Approvals", "groups": ["Approvals", "Group Management (LMWS)", "App Code Review"]},
-    {"title": "Learn & Share", "groups": ["Links & Embedded Apps", "Calendar"]},
+    {"title": "Learn & Share", "groups": ["Links & Embedded Apps", "Calendar", TRAINING_GROUP]},
     {"title": "Watch Tower", "groups": ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager",
                                         "Access Rules"]},
     {"title": "Control Tower", "groups": ["Workflow Studio", "Preview Features"]},
@@ -994,6 +1014,11 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
     "Notifications": "How email is delivered, the base URL used in email links, and what a requester is told when a request is denied.",
     "Agent": "The AI agent's model, limits and guardrails, what it knows about the user up front, where it may look things up on the web, and how it checks for duplicate requests.",
     "Data Catalog": "Which Unity Catalog catalogs are governed and how often the searchable data catalog is refreshed from them.",
+    LEGACY_DASHBOARDS_GROUP: (
+        "Map dashboards people used before (e.g. in Tableau) to the metric views that replace them. People see "
+        "these in Discover under Legacy Dashboards, on each metric view, and when they search by the old "
+        "dashboard name. A temporary aid for the migration."
+    ),
     "Group Management (LMWS)": (
         "How the app runs LMWS/FWS-API group & user management — natively in-app, or as a Databricks job "
         "against a vendored notebook on serverless or classic compute. Applies to the next run."
@@ -1007,6 +1032,12 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
     ),
     "Links & Embedded Apps": "The Community Links resource page and the external apps embedded (iframed) in the sidebar. Edits apply immediately.",
     "Calendar": "Where the event calendar's events come from, and how often they are synced.",
+    TRAINING_GROUP: (
+        "Where course details come from and how people's completions get in. Courses linked to the Databricks "
+        "Academy catalog keep their codes, links and durations current on every sync. Completions exported from "
+        "your learning system as a CSV update progress on the Training page and satisfy any workflow step that "
+        "requires a course."
+    ),
     "OmniGuard": (
         "The policy scanner for your target workspaces: who is alerted, when scans run, how hard they work, "
         "and what may be remediated automatically."
@@ -1519,6 +1550,7 @@ _CRON_SCHEDULE_TARGETS: Dict[str, tuple] = {
     "PREVIEW_FEATURE_SYNC_CRON": ("app.services.preview_features.sync", "_next_preview_sync_time"),
     "RBAC_EXPORT_CRON": ("app.services.rbac.csv_export", "_next_export_time"),
     "METADATA_RECONCILE_CRON": ("app.services.metadata.reconciler", "_next_sweep_time"),
+    "TRAINING_ACADEMY_SYNC_CRON": ("app.services.training_catalog", "_next_sync_time"),
 }
 
 
@@ -1805,6 +1837,7 @@ def get_state() -> Dict[str, Any]:
         "readonly": readonly,
         "sections": SECTIONS,
         "group_descriptions": GROUP_DESCRIPTIONS,
+        "group_requires": GROUP_REQUIRES,
         "capabilities": capability_state(),
         "capability_sections": CAPABILITY_SECTIONS,
     }

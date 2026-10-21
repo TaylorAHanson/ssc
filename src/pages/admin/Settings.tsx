@@ -31,12 +31,26 @@ import { useBrandingStore } from '../../stores/brandingStore';
 import { useRequestStore } from '../../stores/requestStore';
 import { cn } from '../../lib/utils';
 import { Users } from './Users';
+import { LegacyDashboards } from './LegacyDashboards';
+import { TrainingUpload } from '../../components/admin/TrainingUpload';
 import { StringListField, CommunityLinksEditor, EmbeddedAppsEditor } from './catalogEditors';
+import { LEGACY_DASHBOARDS_GROUP, TRAINING_GROUP } from './settingsGroups';
 
 // Pages rendered by the client rather than from the generic field list. The
 // backend's `sections` names them; these must match settings_store.py.
 const FEATURES_GROUP = 'Features & Navigation';
 const ROLES_GROUP = 'Roles & Access';
+// Client pages shown inside the standard page card (title, description, Off note).
+const CARD_PAGES: Record<string, () => ReactNode> = {
+  [LEGACY_DASHBOARDS_GROUP]: () => <LegacyDashboards />,
+  [TRAINING_GROUP]: () => <TrainingUpload />,
+};
+
+// Heading over a card page's body when it sits below the page's settings.
+const CARD_BODY_TITLES: Record<string, string> = {
+  [TRAINING_GROUP]: 'Completion uploads',
+};
+
 // Also shows the read-only, deploy-time settings under its editable fields.
 const INFRA_GROUP = 'Infrastructure';
 
@@ -146,11 +160,15 @@ export const Settings = () => {
   const fieldsForGroup = (group: string): SettingField[] =>
     (state?.fields || []).filter((f) => f.group === group);
 
-  // A page is "off" when every one of its settings is waiting on a capability.
+  // A page is "off" when every one of its settings is waiting on a capability,
+  // or, for a page with no settings, when its group requirement is unmet.
   const pageOffCapabilities = (group: string): Capability[] | null => {
     if (group === FEATURES_GROUP || group === ROLES_GROUP) return null;
     const fields = fieldsForGroup(group);
-    if (fields.length === 0) return null;
+    if (fields.length === 0) {
+      const unmet = (state?.group_requires?.[group] || []).filter((k) => !requirementMet(k));
+      return unmet.length ? offCapabilities(unmet) : null;
+    }
     const unmet = fields.map(unmetRequirements);
     if (unmet.some((u) => u.length === 0)) return null;
     return offCapabilities(unmet.flat());
@@ -245,7 +263,44 @@ export const Settings = () => {
     return <FieldRow key={f.key} field={f} value={valueOf(f)} onChange={set} />;
   };
 
-  const renderGroupPage = (group: string) => {
+  const renderPageHeader = (group: string) => (
+    <CardHeader className="flex flex-row items-start justify-between gap-4">
+      <div>
+        <CardTitle>{group}</CardTitle>
+        {state.group_descriptions?.[group] && (
+          <p className="text-sm text-gray-500 mt-1.5 max-w-2xl leading-relaxed">
+            {state.group_descriptions[group]}
+          </p>
+        )}
+      </div>
+      {saveActions}
+    </CardHeader>
+  );
+
+  // While its capability is off, a client page is shown read-only under the note.
+  const renderCardPage = (group: string, body: ReactNode) => {
+    const pageOff = pageOffCapabilities(group);
+    return (
+      <Card>
+        {renderPageHeader(group)}
+        <CardContent className="space-y-5">
+          {pageOff ? (
+            <>
+              <InactiveNote capabilities={pageOff} onGoTo={goToCapability} whole />
+              <fieldset disabled aria-disabled className="opacity-60 select-none">
+                {body}
+              </fieldset>
+            </>
+          ) : (
+            body
+          )}
+        </CardContent>
+      </Card>
+    );
+  };
+
+  // A card page with settings (Training) shows them above its body.
+  const renderGroupPage = (group: string, body?: ReactNode) => {
     const fields = fieldsForGroup(group);
     const active = fields.filter((f) => unmetRequirements(f).length === 0);
     const inactive = fields.filter((f) => unmetRequirements(f).length > 0);
@@ -254,17 +309,7 @@ export const Settings = () => {
 
     return (
       <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-4">
-          <div>
-            <CardTitle>{group}</CardTitle>
-            {state.group_descriptions?.[group] && (
-              <p className="text-sm text-gray-500 mt-1.5 max-w-2xl leading-relaxed">
-                {state.group_descriptions[group]}
-              </p>
-            )}
-          </div>
-          {saveActions}
-        </CardHeader>
+        {renderPageHeader(group)}
         <CardContent className="space-y-5">
           {pageOff && <InactiveNote capabilities={pageOff} onGoTo={goToCapability} whole />}
           <SectionedFields fields={active} renderField={renderField} />
@@ -276,7 +321,17 @@ export const Settings = () => {
               <SectionedFields fields={inactive} renderField={renderField} />
             </InactiveSettings>
           )}
-          {fields.length === 0 && <p className="text-sm text-gray-500">No settings in this group.</p>}
+          {fields.length === 0 && !body && <p className="text-sm text-gray-500">No settings in this group.</p>}
+          {body && fields.length > 0 && (
+            <div className="space-y-5">
+              {CARD_BODY_TITLES[group] && (
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 pt-2 border-b border-gray-200 pb-1.5">
+                  {CARD_BODY_TITLES[group]}
+                </h4>
+              )}
+              {body}
+            </div>
+          )}
         </CardContent>
       </Card>
     );
@@ -349,19 +404,13 @@ export const Settings = () => {
 
         {activeGroup === ROLES_GROUP ? (
           <Users />
+        ) : CARD_PAGES[activeGroup] ? (
+          fieldsForGroup(activeGroup).length > 0
+            ? renderGroupPage(activeGroup, CARD_PAGES[activeGroup]())
+            : renderCardPage(activeGroup, CARD_PAGES[activeGroup]())
         ) : activeGroup === FEATURES_GROUP ? (
           <Card>
-            <CardHeader className="flex flex-row items-start justify-between gap-4">
-              <div>
-                <CardTitle>{FEATURES_GROUP}</CardTitle>
-                {state.group_descriptions?.[FEATURES_GROUP] && (
-                  <p className="text-sm text-gray-500 mt-1.5 max-w-2xl leading-relaxed">
-                    {state.group_descriptions[FEATURES_GROUP]}
-                  </p>
-                )}
-              </div>
-              {saveActions}
-            </CardHeader>
+            {renderPageHeader(FEATURES_GROUP)}
             <CardContent>
               <CapabilitiesPanel
                 capabilities={state.capabilities}

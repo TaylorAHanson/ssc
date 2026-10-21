@@ -22,7 +22,7 @@ interface EditorProps {
   onDone: Done;
 }
 
-const FIELD = 'w-full rounded border border-primary bg-white px-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30';
+const FIELD = 'w-full rounded border border-primary bg-white px-1.5 text-[13px] focus:outline-none focus:ring-2 focus:ring-primary/30';
 
 /** Inline editor: Enter saves, Escape cancels, leaving the field saves. */
 export function CellEditor({ spec, ...props }: EditorProps & { spec: EditorSpec }) {
@@ -126,7 +126,7 @@ function SelectEditor({ initial, label, options, match, onDone }: EditorProps & 
         aria-activedescendant={active >= 0 ? optionDomId(listId, active) : undefined}
         onKeyDown={onKeyDown}
         onBlur={() => commit(active, false)}
-        className={cn(FIELD, 'flex h-7 cursor-default items-center justify-between gap-1')}
+        className={cn(FIELD, 'flex h-6 cursor-default items-center justify-between gap-1')}
       >
         <span className={cn('truncate', !current && 'text-gray-400', currentOutside && 'text-red-800')}>{current || 'Choose…'}</span>
         <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-gray-400" />
@@ -218,7 +218,7 @@ function MultiSelectEditor({ initial, label, spec, onDone }: EditorProps & { spe
         aria-activedescendant={active >= 0 ? optionDomId(listId, active) : undefined}
         onKeyDown={onKeyDown}
         onBlur={() => finish(value, false)}
-        className={cn(FIELD, 'flex min-h-7 cursor-default flex-wrap items-center gap-1 py-0.5')}
+        className={cn(FIELD, 'flex min-h-6 cursor-default flex-wrap items-center gap-1 py-0.5')}
       >
         {atoms.length ? (
           atoms.map((atom, i) => (
@@ -313,7 +313,7 @@ function TextEditor({ initial, label, packed, suggestions, onDone }: EditorProps
         aria-expanded={combobox ? listed : undefined}
         aria-controls={listed ? listId : undefined}
         aria-activedescendant={listed && active >= 0 ? optionDomId(listId, active) : undefined}
-        className={cn(FIELD, 'h-7')}
+        className={cn(FIELD, 'h-6')}
       />
       {listed && (
         <PickerList

@@ -6,12 +6,18 @@ import type { RbacFinding, RbacImportPreview, RbacImportResult, RbacPermissions 
 import { Button } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
 import { Input } from '../ui/input';
+import { cn } from '../../lib/utils';
+import { ColGroup, ResetColumnsButton, ResizableTh } from './ColumnResizer';
 import { FindingList } from './FindingList';
 import { Badge, ErrorBanner, Notice, SectionTitle, Skeleton, type Tone, type ToastMessage } from './ui';
 import { useLoad } from './useLoad';
-import { PLANE_GROUP_LABELS, SETTINGS_PATH, errorMessage, formatTime, plural } from './utils';
+import { useResizableColumns } from './useResizableColumns';
+import { CELL, PLANE_GROUP_LABELS, SETTINGS_PATH, TEXT_CELL, errorMessage, formatTime, plural } from './utils';
 
 const loadImports = () => api.getRbacImports();
+
+const IMPORT_COLUMNS = ['started', 'file', 'mode', 'status', 'by', 'completed'];
+const PREVIEW_COLUMNS = ['sheet', 'type', 'environment', 'rows', 'headers', 'unknown', 'duplicates', 'warnings'];
 
 const IMPORT_STATUS: Record<string, Tone> = {
   completed: 'green',
@@ -34,6 +40,7 @@ export function ImportTab({ permissions, notify, onOpenHistory }: {
   const [result, setResult] = useState<RbacImportResult | null>(null);
 
   const chosen = useRef<File | null>(null);
+  const { attachTable, ...widths } = useResizableColumns('imports', IMPORT_COLUMNS);
 
   const choose = async (next: File | null) => {
     chosen.current = next;
@@ -54,7 +61,7 @@ export function ImportTab({ permissions, notify, onOpenHistory }: {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <Card>
         <CardContent className="space-y-4 pt-5">
           <div>
@@ -105,40 +112,44 @@ export function ImportTab({ permissions, notify, onOpenHistory }: {
       )}
 
       <section>
-        <SectionTitle>Recent imports</SectionTitle>
+        <SectionTitle actions={<ResetColumnsButton columns={widths} />}>Recent imports</SectionTitle>
         {imports.error ? (
           <ErrorBanner message={errorMessage(imports.error, 'Could not load past imports')} onRetry={imports.reload} />
         ) : !imports.data ? (
           <Skeleton rows={3} />
         ) : imports.data.length === 0 ? (
-          <p className="text-sm text-gray-500">No imports yet.</p>
+          <p className="text-[13px] text-gray-500">No imports yet.</p>
         ) : (
           <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-            <table className="w-full text-sm">
+            <table ref={attachTable} style={widths.tableStyle} className={cn('text-[13px]', !widths.active && 'w-full')}>
+              <ColGroup columns={widths} />
               <thead className="border-b bg-gray-50 text-left text-xs text-gray-500">
                 <tr>
-                  <th scope="col" className="px-3 py-2 font-medium">Started</th>
-                  <th scope="col" className="px-3 py-2 font-medium">File</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Mode</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Status</th>
-                  <th scope="col" className="px-3 py-2 font-medium">By</th>
-                  <th scope="col" className="px-3 py-2 font-medium">Completed</th>
+                  <ResizableTh columns={widths} id="started" label="Started" />
+                  <ResizableTh columns={widths} id="file" label="File" />
+                  <ResizableTh columns={widths} id="mode" label="Mode" />
+                  <ResizableTh columns={widths} id="status" label="Status" />
+                  <ResizableTh columns={widths} id="by" label="By" />
+                  <ResizableTh columns={widths} id="completed" label="Completed" />
                 </tr>
               </thead>
               <tbody>
-                {imports.data.map((imp) => (
-                  <tr key={imp.id} className="border-b align-top last:border-b-0">
-                    <td className="whitespace-nowrap px-3 py-2">{formatTime(imp.created_at)}</td>
-                    <td className="px-3 py-2 text-gray-700">{imp.filename || '—'}</td>
-                    <td className="px-3 py-2 text-gray-700">{imp.mode === 'reset' ? 'Reset and re-import' : imp.mode === 'initial' ? 'Initial' : imp.mode || '—'}</td>
-                    <td className="px-3 py-2">
-                      <Badge tone={IMPORT_STATUS[imp.status] ?? 'gray'}>{imp.status}</Badge>
-                      {imp.error && <div className="mt-1 text-xs text-red-700">{imp.error}</div>}
-                    </td>
-                    <td className="px-3 py-2 text-gray-700">{imp.actor || '—'}</td>
-                    <td className="whitespace-nowrap px-3 py-2">{formatTime(imp.completed_at)}</td>
-                  </tr>
-                ))}
+                {imports.data.map((imp) => {
+                  const mode = imp.mode === 'reset' ? 'Reset and re-import' : imp.mode === 'initial' ? 'Initial' : imp.mode || '—';
+                  return (
+                    <tr key={imp.id} className="border-b align-top last:border-b-0">
+                      <td className={TEXT_CELL} title={formatTime(imp.created_at)}>{formatTime(imp.created_at)}</td>
+                      <td className={cn(TEXT_CELL, 'text-gray-700')} title={imp.filename || undefined}>{imp.filename || '—'}</td>
+                      <td className={cn(TEXT_CELL, 'text-gray-700')} title={mode}>{mode}</td>
+                      <td className={CELL}>
+                        <Badge tone={IMPORT_STATUS[imp.status] ?? 'gray'}>{imp.status}</Badge>
+                        {imp.error && <div className="mt-1 line-clamp-2 break-words text-xs text-red-700" title={imp.error}>{imp.error}</div>}
+                      </td>
+                      <td className={cn(TEXT_CELL, 'text-gray-700')} title={imp.actor || undefined}>{imp.actor || '—'}</td>
+                      <td className={TEXT_CELL} title={formatTime(imp.completed_at)}>{formatTime(imp.completed_at)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -157,6 +168,7 @@ function ImportPreviewView({ preview, file, canReset, onImported }: {
   const [confirmation, setConfirmation] = useState('');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { attachTable, ...widths } = useResizableColumns('import-preview', PREVIEW_COLUMNS);
   const totalRows = preview.sheets.reduce((n, s) => n + s.rows, 0);
   const reset = preview.mode === 'reset';
   const phrase = preview.confirmation_phrase ?? '';
@@ -190,49 +202,58 @@ function ImportPreviewView({ preview, file, canReset, onImported }: {
           {reset && <span>{plural(preview.existing_rules, 'rule')} in the app today</span>}
         </div>
 
-        <div className="overflow-x-auto rounded-lg border border-gray-200">
-          <table className="w-full text-sm">
-            <thead className="border-b bg-gray-50 text-left text-xs text-gray-500">
-              <tr>
-                <th scope="col" className="px-3 py-2 font-medium">Sheet</th>
-                <th scope="col" className="px-3 py-2 font-medium">Type</th>
-                <th scope="col" className="px-3 py-2 font-medium">Environment</th>
-                <th scope="col" className="px-3 py-2 font-medium">Rows</th>
-                <th scope="col" className="px-3 py-2 font-medium">Headers as captured</th>
-                <th scope="col" className="px-3 py-2 font-medium">Unknown headers</th>
-                <th scope="col" className="px-3 py-2 font-medium">Duplicates</th>
-                <th scope="col" className="px-3 py-2 font-medium">Warnings</th>
-              </tr>
-            </thead>
-            <tbody>
-              {preview.sheets.map((s) => (
-                <tr key={s.sheet} className="border-b align-top last:border-b-0">
-                  <td className="px-3 py-2 font-mono text-xs text-gray-900">{s.sheet}</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-gray-700">{PLANE_GROUP_LABELS[s.plane] ?? s.plane}</td>
-                  <td className="px-3 py-2 text-gray-700">{s.environment || '—'}</td>
-                  <td className="px-3 py-2 tabular-nums">{s.rows.toLocaleString()}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex flex-wrap gap-1">
-                      {s.columns.map((c, i) => (
-                        <code
-                          key={i}
-                          title={c.field ? `Read as ${c.field}` : 'Not a modelled column: kept as is'}
-                          className={`rounded px-1 text-xs ${c.field ? 'bg-gray-100 text-gray-700' : 'bg-amber-50 text-amber-800'}`}
-                        >
-                          {c.header}
-                        </code>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-xs">
-                    {s.unknown_headers.length ? <span className="text-amber-800">{s.unknown_headers.join(', ')}</span> : <span className="text-gray-400">—</span>}
-                  </td>
-                  <td className="px-3 py-2">{s.duplicates ? <Badge tone="amber">{s.duplicates}</Badge> : <span className="text-gray-400">0</span>}</td>
-                  <td className="px-3 py-2">{s.warnings ? <Badge tone="amber">{s.warnings}</Badge> : <span className="text-gray-400">0</span>}</td>
+        <div className="space-y-1">
+          <div className="flex justify-end">
+            <ResetColumnsButton columns={widths} />
+          </div>
+          <div className="overflow-x-auto rounded-lg border border-gray-200">
+            <table ref={attachTable} style={widths.tableStyle} className={cn('text-[13px]', !widths.active && 'w-full')}>
+              <ColGroup columns={widths} />
+              <thead className="border-b bg-gray-50 text-left text-xs text-gray-500">
+                <tr>
+                  <ResizableTh columns={widths} id="sheet" label="Sheet" />
+                  <ResizableTh columns={widths} id="type" label="Type" />
+                  <ResizableTh columns={widths} id="environment" label="Environment" />
+                  <ResizableTh columns={widths} id="rows" label="Rows" />
+                  <ResizableTh columns={widths} id="headers" label="Headers as captured" />
+                  <ResizableTh columns={widths} id="unknown" label="Unknown headers" />
+                  <ResizableTh columns={widths} id="duplicates" label="Duplicates" />
+                  <ResizableTh columns={widths} id="warnings" label="Warnings" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {preview.sheets.map((s) => {
+                  const plane = PLANE_GROUP_LABELS[s.plane] ?? s.plane;
+                  return (
+                    <tr key={s.sheet} className="border-b align-top last:border-b-0">
+                      <td className={cn(TEXT_CELL, 'font-mono text-xs text-gray-900')} title={s.sheet}>{s.sheet}</td>
+                      <td className={cn(TEXT_CELL, 'text-gray-700')} title={plane}>{plane}</td>
+                      <td className={cn(TEXT_CELL, 'text-gray-700')} title={s.environment || undefined}>{s.environment || '—'}</td>
+                      <td className={cn(TEXT_CELL, 'tabular-nums')}>{s.rows.toLocaleString()}</td>
+                      <td className={CELL}>
+                        <div className="flex flex-wrap gap-1">
+                          {s.columns.map((c, i) => (
+                            <code
+                              key={i}
+                              title={`${c.header}: ${c.field ? `read as ${c.field}` : 'not a modelled column, kept as is'}`}
+                              className={cn('rounded px-1 text-xs', widths.active && 'max-w-full truncate', c.field ? 'bg-gray-100 text-gray-700' : 'bg-amber-50 text-amber-800')}
+                            >
+                              {c.header}
+                            </code>
+                          ))}
+                        </div>
+                      </td>
+                      <td className={cn(CELL, 'break-words text-xs')}>
+                        {s.unknown_headers.length ? <span className="line-clamp-2 text-amber-800" title={s.unknown_headers.join(', ')}>{s.unknown_headers.join(', ')}</span> : <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className={CELL}>{s.duplicates ? <Badge tone="amber">{s.duplicates}</Badge> : <span className="text-gray-400">0</span>}</td>
+                      <td className={CELL}>{s.warnings ? <Badge tone="amber">{s.warnings}</Badge> : <span className="text-gray-400">0</span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {(preview.skipped_sheets.length > 0 || preview.missing_sheets.length > 0) && (

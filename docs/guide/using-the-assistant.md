@@ -67,7 +67,7 @@ them.
 
 The assistant then shows you its plan. Nothing changes until you confirm.
 
-Once you confirm, the request is created and tracked under **My Requests**.
+Once you confirm, the request is created and tracked under **Requests** → **My requests**.
 Requests that need sign-off go to the right approvers first. See
 [Requests and approvals](requests-and-approvals.md).
 

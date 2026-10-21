@@ -143,6 +143,7 @@ async def safe_fetch(
     max_chars: Optional[int] = None,
     allowed_domains: Optional[List[str]] = None,
     extract: bool = True,
+    accept: str = "text/html,application/xhtml+xml,application/xml",
 ) -> Dict[str, object]:
     """SSRF-safe HTTPS GET with per-hop redirect validation.
 
@@ -160,7 +161,7 @@ async def safe_fetch(
         async with httpx.AsyncClient(
             follow_redirects=False,
             timeout=timeout,
-            headers={"User-Agent": _USER_AGENT, "Accept": "text/html,application/xhtml+xml,application/xml"},
+            headers={"User-Agent": _USER_AGENT, "Accept": accept},
         ) as client:
             for _ in range(_MAX_REDIRECTS + 1):
                 err = _validate(current, allowed)

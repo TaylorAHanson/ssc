@@ -306,6 +306,9 @@ def run_startup_migrations(engine: Engine) -> None:
         _add_column(engine, "metadata_reconcile_items", "payload", "JSON")
         _add_index(engine, "ix_metadata_objects_securable_type", "metadata_objects", ["securable_type"])
         _add_index(engine, "ix_metadata_observed_securable_type", "metadata_observed", ["securable_type"])
+        # Training courses that follow a Databricks Academy catalog course.
+        _add_column(engine, "training_courses", "academy_course_id", "INTEGER")
+        _add_index(engine, "ix_training_courses_academy_course_id", "training_courses", ["academy_course_id"])
         _make_metadata_idempotency_unique(engine)
         _prune_orphaned_workflow_children(engine)
     except Exception as e:  # noqa: BLE001 - never block startup on a migration

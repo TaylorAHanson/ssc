@@ -1,569 +1,389 @@
-import { useState, useEffect } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { AlertCircle, Calendar, CheckCircle2, ListChecks, Loader2, RefreshCw, Search, X } from 'lucide-react';
 import { useRequestStore } from '../stores/requestStore';
-import { GUIDE_REQUESTS, useGuideEnabled } from '../lib/guide';
+import { useUserStore } from '../stores/userStore';
+import { useBrandingStore } from '../stores/brandingStore';
+import { GUIDE_APPROVALS, GUIDE_REQUESTS, useGuideEnabled } from '../lib/guide';
 import { useVisibleInterval } from '../hooks/useVisibleInterval';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { cn } from '../lib/utils';
+import { api, getRequest } from '../services/api';
 import { Button } from '../components/ui/button';
-import { formatInTimeZone } from 'date-fns-tz';
-import { Eye, X, Trash2, CheckCircle2, Circle, Loader2, AlertCircle, Clock, WandSparkles, ArrowRight } from 'lucide-react';
-import type { Request } from '../types';
-import { renderMarkdownSafe } from '../lib/markdown';
-import { getRequest } from '../services/api';
+import { RequestDetailsModal } from '../components/RequestDetailsModal';
+import { parseUtcDate } from '../lib/requestDates';
+import { NewRequestBanner } from '../components/requests/NewRequestBanner';
+import { DelegationForm, DelegationStrips } from '../components/requests/DelegationPanel';
+import { ApprovalActionDialog, BulkApproveDialog, type ApprovalDialogAction } from '../components/requests/ApprovalDialogs';
+import { ApprovalRow, RequestRow } from '../components/requests/RequestRows';
+import {
+  AGING_DAYS, BULK_APPROVE_MAX, SELF_APPROVAL_MESSAGE, approvalHaystack, approvalStatusMatches, isBulkCandidate,
+  isOverdue, isRequestActive, requestHaystack, requestStatusMatches, typeLabel, waitingDays, workflowLabel,
+  type ApprovalStatusFilter, type InboxApproval, type RequestStatusFilter, type View,
+} from '../components/requests/rows';
+import type { Delegation, Request } from '../types';
 
-import { formatDistanceToNow, differenceInHours } from 'date-fns';
+// Mirrors the backend list endpoint's default page; past it, older requests
+// are reachable by deep link but not listed.
+const REQUEST_LIST_CAP = 100;
+// Rows rendered per "Show more", so a large inbox stays light to scroll and search.
+const PAGE_SIZE = 100;
 
-const NEW_REQUEST_BANNER_DISMISSED_KEY = 'requests.newRequestBanner.dismissed';
+// Roles that approve something. Group-based approvers (no role) still get the
+// tab as soon as anything is assigned to them.
+const APPROVER_ROLES = new Set([
+  'platform_admin', 'data_owner', 'manager', 'governance_admin', 'security_admin', 'finance_admin', 'security',
+]);
+
+const APPROVAL_STATUS_OPTIONS: { value: ApprovalStatusFilter; label: string }[] = [
+  { value: 'pending', label: 'Waiting' },
+  { value: 'done', label: 'Handled' },
+  { value: 'all', label: 'All' },
+];
+const REQUEST_STATUS_OPTIONS: { value: RequestStatusFilter; label: string }[] = [
+  { value: 'active', label: 'In progress' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'failed', label: 'Failed / rejected' },
+  { value: 'all', label: 'All' },
+];
+
+type ApprovalItem = { key: string; approval: InboxApproval; workflowKey: string; workflow: string; haystack: string };
+type RequestItem = { key: string; request: Request; workflowKey: string; workflow: string; haystack: string };
+
+const ts = (iso: string) => parseUtcDate(iso).getTime();
 
 /**
- * Prominent call-to-action steering users to the unified chat agent to start a
- * new request. New requests are conversational (there's no standalone form), so
- * this banner is the primary entry point from the My Requests page. Dismissible:
- * the choice is persisted to localStorage so it doesn't reappear every visit.
+ * Requests and approvals on one page. The URL picks the tab, so existing links
+ * keep working: `/approvals` is the approver's queue, `/requests` the caller's
+ * own requests, `/requests?view=all` every request (Platform Admins), and
+ * `/requests/:id` opens one request over the list.
  */
-function NewRequestBanner() {
-  const navigate = useNavigate();
-  const agentLabel = 'Ask Anything';
-
-  const [dismissed, setDismissed] = useState(
-    () => localStorage.getItem(NEW_REQUEST_BANNER_DISMISSED_KEY) === '1'
-  );
-
-  if (dismissed) return null;
-
-  const handleDismiss = () => {
-    localStorage.setItem(NEW_REQUEST_BANNER_DISMISSED_KEY, '1');
-    setDismissed(true);
-  };
-
-  return (
-    <div className="relative overflow-hidden rounded-xl bg-nav-bg text-nav-text shadow-md">
-      {/* Decorative oversized icon — purely visual, hidden from a11y tree */}
-      <WandSparkles
-        aria-hidden="true"
-        className="pointer-events-none absolute -right-5 -bottom-7 w-32 h-32 text-white/5"
-      />
-      <button
-        type="button"
-        onClick={handleDismiss}
-        aria-label="Dismiss"
-        className="absolute right-2 top-2 rounded-md p-1 text-nav-text-muted transition-colors hover:bg-white/10 hover:text-white"
-      >
-        <X className="h-4 w-4" />
-      </button>
-      <div className="relative flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3 pr-6">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/10">
-            <WandSparkles className="h-5 w-5" />
-          </div>
-          <div>
-            <h2 className="text-sm font-semibold">Need to request something?</h2>
-            <p className="text-xs text-white/80">
-              New requests start as a conversation — tell the {agentLabel} what you need (data
-              access, a workspace, a tag change) and it will submit it for you.
-            </p>
-          </div>
-        </div>
-        <Button
-          onClick={() => navigate('/')}
-          size="sm"
-          className="shrink-0 self-start bg-white font-semibold text-nav-bg hover:bg-white/90 sm:self-auto"
-        >
-          New request
-          <ArrowRight className="ml-2 h-4 w-4" />
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-const parseUtcDate = (dateString: string) => {
-  if (!dateString) return new Date();
-  // If string doesn't end with Z and doesn't have timezone offset, assume UTC and append Z
-  if (!dateString.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(dateString)) {
-    return new Date(dateString + 'Z');
-  }
-  return new Date(dateString);
-};
-
-const formatDate = (dateString: string) => {
-  if (!dateString) return '';
-  return formatInTimeZone(parseUtcDate(dateString), 'America/Los_Angeles', 'MMM d, yyyy h:mm a zzz');
-};
-
-const formatDuration = (startDate: string) => {
-  if (!startDate) return '';
-  const start = parseUtcDate(startDate);
-  const now = new Date();
-  const hours = differenceInHours(now, start);
-
-  if (hours < 1) {
-    return formatDistanceToNow(start, { addSuffix: true });
-  }
-  return `${hours} hours ago`;
-};
-
-function TrainingAction({ requestId }: { requestId: string }) {
-  const completeTraining = useRequestStore((state) => state.completeTraining);
-  const fetchRequests = useRequestStore((state) => state.fetchRequests);
-  const [isLoading, setIsLoading] = useState(false);
-
-  const handleCompleteTraining = async () => {
-    setIsLoading(true);
-    try {
-      await completeTraining(requestId);
-      await fetchRequests();
-    } catch (error) {
-      console.error('Failed to complete training:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <Button
-      size="sm"
-      onClick={handleCompleteTraining}
-      disabled={isLoading}
-      className="bg-yellow-600 hover:bg-yellow-700 text-white h-8 text-xs"
-    >
-      {isLoading ? 'Updating...' : 'Mark Complete (Debug)'}
-    </Button>
-  );
-}
-
-function ProvisioningProgress({ progress }: { progress: NonNullable<Request['stateMachine']['currentProgress']> }) {
-  return (
-    <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-sm font-medium text-blue-900">{progress.message}</span>
-        <span className="text-sm font-bold text-blue-900">{progress.percent}%</span>
-      </div>
-      <div className="w-full bg-blue-200 rounded-full h-2.5">
-        <div
-          className="bg-blue-600 h-2.5 rounded-full transition-all duration-500 ease-out"
-          style={{ width: `${progress.percent}%` }}
-        ></div>
-      </div>
-      <p className="text-[10px] text-blue-700 mt-2 text-right italic">
-        Last updated: {formatDate(progress.timestamp)}
-      </p>
-    </div>
-  );
-}
-
-export function RequestStateList({ request }: { request: Request }) {
-  const fetchApprovals = useRequestStore((state) => state.fetchApprovals);
-  const fetchRequests = useRequestStore((state) => state.fetchRequests);
-
-  useEffect(() => {
-    fetchApprovals();
-  }, [fetchApprovals, request.status]);
-
-  // Poll for request updates every 5 seconds while viewing an active request,
-  // so state transitions show up live. Paused while the tab is hidden.
-  const isActive = !['completed', 'failed', 'rejected'].includes(request.status);
-  useVisibleInterval(fetchRequests, 5000, isActive);
-
-  // Collect all states to display
-  let steps: { id: string; name: string; status: string; type?: string; typeLabel?: string | null; order: number; completedAt?: string; facts?: { type: string; timestamp: string; data: Record<string, string> }[] }[] = [];
-
-
-  // Use the new linear states structure
-  if (request.stateMachine.states && request.stateMachine.states.length > 0) {
-    const stateSteps = request.stateMachine.states
-      .filter(state => {
-        // Skip terminal failure/rejection states if they aren't the current state
-        // This ensures the "happy path" is the default view
-        if (state.id === 'failed' && request.status !== 'failed') return false;
-        if (state.id === 'rejected' && request.status !== 'rejected') return false;
-
-        // Skip terminal success state if we want a cleaner list
-        if (state.id === 'completed') return false;
-        return true;
-      })
-      .map((state, index) => {
-        let status: 'pending' | 'active' | 'completed' | 'rejected' | 'failed' = 'pending';
-        if (state.isCompleted) {
-          if (state.id === 'rejected' || state.name.toLowerCase().includes('rejected')) {
-            status = 'rejected';
-          } else {
-            status = 'completed';
-          }
-        } else if (state.isActive) {
-          if (request.status === 'completed') {
-            status = 'completed';
-          } else if (request.status === 'failed') {
-            status = 'failed';
-          } else {
-            status = 'active';
-          }
-        }
-
-        return {
-          id: state.id,
-          name: state.name,
-          status,
-          type: state.gateType,
-          typeLabel: state.gateLabel,
-          order: index + 1,
-          completedAt: state.completedAt,
-          facts: state.facts
-        };
-      });
-
-    // Handle terminal "Completed" state - always show it as the final goal if not failed/rejected
-    if (request.status !== 'failed' && request.status !== 'rejected') {
-      const completionState = request.stateMachine.states.find(s => s.id === 'completed');
-      stateSteps.push({
-        id: 'completed_goal',
-        name: 'Completed',
-        status: request.status === 'completed' ? 'completed' : 'pending',
-        type: undefined,
-        typeLabel: undefined,
-        order: stateSteps.length + 1,
-        completedAt: completionState?.completedAt,
-        facts: completionState?.facts ?? []
-      });
-    }
-
-    // Fallback: If request is failed but we have no states (e.g. failed to load state machine),
-    // add a synthetic failed step so the error is visible.
-    if (request.status === 'failed') {
-      const hasFailedStep = stateSteps.some(s => s.status === 'failed');
-      if (!hasFailedStep) {
-        // Replace the last active/pending step with failed, or append if needed
-        const activeIdx = stateSteps.findIndex(s => s.status === 'active' || s.status === 'pending');
-        if (activeIdx !== -1) {
-          stateSteps[activeIdx].status = 'failed';
-          stateSteps[activeIdx].name = `${stateSteps[activeIdx].name} (Failed)`;
-        } else {
-          stateSteps.push({
-            id: 'system_failure',
-            name: 'System Processing',
-            status: 'failed',
-            type: undefined,
-            typeLabel: undefined,
-            order: stateSteps.length + 1,
-            completedAt: request.updatedAt,
-            facts: []
-          });
-        }
-      }
-    }
-
-    steps = [...steps, ...stateSteps];
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="bg-white rounded-lg border border-gray-200 shadow-sm divide-y divide-gray-200">
-        {steps.map((step, idx) => {
-          const isCompleted = step.status === 'completed';
-          const isRejected = step.status === 'rejected';
-          const isFailed = step.status === 'failed';
-          const isActive = step.status === 'active';
-          const isTraining = step.id === 'training_pending';
-
-          // Human approval gates (data_owner / manager / admin roles). The step
-          // id is the stage name (e.g. "await_approval"), so we identify the
-          // gate by its `type` rather than a hardcoded id.
-          const HUMAN_GATE_TYPES = ['data_owner', 'manager', 'platform_admin', 'security', 'security_admin', 'governance_admin', 'finance_admin'];
-          // A manual task pauses for a person but grants nothing, so it gets its
-          // own "assigned to" block rather than the approver list.
-          const isManualTask = step.type === 'manual_task';
-          const isApprovalStep = !isManualTask && ((!!step.type && HUMAN_GATE_TYPES.includes(step.type)) || step.id === 'data_owner_approval' || /approval/i.test(step.id));
-          const manualTaskApprovals = isManualTask
-            ? (request.approvals || []).filter((a) => a.approvalType === 'manual_task')
-            : [];
-          const stepApprovals = isApprovalStep
-            ? (request.approvals || []).filter((a) =>
-                step.type ? a.approvalType === step.type : HUMAN_GATE_TYPES.includes(a.approvalType)
-              )
-            : [];
-
-          const getStepBg = () => {
-            if (isFailed || isRejected) return 'color-mix(in srgb, var(--brand-alert), transparent 95%)';
-            if (isActive) return 'color-mix(in srgb, var(--brand-info), transparent 95%)';
-            if (isCompleted) return 'color-mix(in srgb, var(--brand-success), transparent 95%)';
-            return 'white';
-          };
-
-          return (
-            <div
-              key={`${step.id}-${idx}`}
-              style={{ backgroundColor: getStepBg() }}
-              className={`p-4 flex flex-col transition-colors border-l-4 ${isFailed || isRejected ? 'border-l-alert' :
-                isActive ? 'border-l-info' :
-                  isCompleted ? 'border-l-success' :
-                    'border-l-gray-200'
-                } first:rounded-t-lg last:rounded-b-lg hover:bg-opacity-80`}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4 flex-1">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${isFailed ? 'bg-alert text-white' :
-                    isRejected ? 'bg-alert text-white' :
-                      isCompleted ? 'bg-success text-white' :
-                        isActive ? 'bg-info text-white' :
-                          'bg-gray-300 text-gray-600'
-                    }`}>
-                    {isFailed ? <AlertCircle className="w-6 h-6" /> :
-                      isCompleted ? <CheckCircle2 className="w-6 h-6" /> :
-                        isRejected ? <X className="w-6 h-6" /> :
-                          isActive ? <Loader2 className="w-6 h-6 animate-spin" /> :
-                            <Circle className="w-6 h-6" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <p className="text-base font-semibold text-gray-900">{step.name}</p>
-                      {step.type && (
-                        <span className={`text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full ${step.typeLabel ? '' : 'capitalize'}`}>
-                          {step.typeLabel || step.type.replace(/_/g, ' ')}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 text-sm text-gray-600">
-                      <span className={`font-medium ${isFailed ? 'text-alert font-bold' :
-                        isRejected ? 'text-alert' :
-                          isCompleted ? 'text-success' :
-                            isActive ? 'text-info' :
-                              'text-gray-500'
-                        }`}>
-                        {isFailed ? 'Failed' :
-                          isCompleted ? 'Completed' :
-                            isRejected ? 'Rejected' :
-                              isActive ? 'In Progress' :
-                                'Pending'}
-                      </span>
-                      {(step.completedAt || step.id === request.stateMachine.states[0]?.id) && (
-                        <>
-                          <span className="text-gray-400">•</span>
-                          <span className="text-gray-500">
-                            {formatDate(step.completedAt || request.createdAt)} ({formatDuration(step.completedAt || request.createdAt)})
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {isTraining && isActive && !isCompleted && !isRejected && (
-                  <div className="flex items-center gap-3 ml-4">
-                    <div className="text-sm text-yellow-800 bg-yellow-100 px-3 py-2 rounded-lg border border-yellow-300 flex items-center gap-2">
-                      <AlertCircle className="w-4 h-4" />
-                      Action Required
-                    </div>
-                    <TrainingAction requestId={request.id} />
-                  </div>
-                )}
-              </div>
-
-              {/* Progress Bar for Provisioning */}
-              {isActive && step.id === 'provisioning' && request.stateMachine.currentProgress && (
-                <div className="ml-14 mt-3">
-                  <ProvisioningProgress progress={request.stateMachine.currentProgress} />
-                </div>
-              )}
-
-              {/* Approver(s) for this human gate (data_owner / manager / admin).
-                  Surfaced so the requester can see who must approve — and who
-                  approved/rejected. Falls back to a clear message when no
-                  specific owner was resolved (then any Platform Admin can act). */}
-              {isApprovalStep && (
-                <div className="ml-14 mt-3 space-y-2">
-                  <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-1">
-                    {stepApprovals.length > 1 ? 'Approvers' : 'Approver'}
-                  </p>
-                  {stepApprovals.length > 0 ? (
-                    <div className="grid gap-2">
-                      {stepApprovals.map((approval, aIdx) => (
-                        <div key={aIdx} className="flex items-center justify-between bg-white border border-gray-200 rounded p-2 text-sm">
-                          <div className="flex items-center gap-2">
-                            {approval.status === 'approved' ? (
-                              <CheckCircle2 className="w-4 h-4 text-success" />
-                            ) : approval.status === 'rejected' ? (
-                              <X className="w-4 h-4 text-alert" />
-                            ) : (
-                              <Circle className="w-4 h-4 text-gray-300" />
-                            )}
-                            <span className="font-medium text-gray-700">
-                              {approval.assignedToEmail || approval.approverLabel || approval.assignedToRole || 'Any Platform Admin'}
-                            </span>
-                          </div>
-                          <span className={`text-xs font-medium ${
-                            approval.status === 'approved' ? 'text-success' :
-                            approval.status === 'rejected' ? 'text-alert' :
-                            'text-gray-500'
-                          }`}>
-                            {approval.status === 'approved' ? `Approved by ${approval.approvedBy || approval.assignedToEmail || approval.assignedToRole || 'Platform Admin'}` :
-                             approval.status === 'rejected' ? `Rejected by ${approval.rejectedBy || approval.assignedToEmail || approval.assignedToRole || 'Platform Admin'}` :
-                             'Pending'}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="bg-white border border-gray-200 rounded p-2 text-sm italic text-gray-500">
-                      {step.type === 'manager'
-                        ? 'No manager was resolved for this request — pending review by a Platform Admin.'
-                        : step.type === 'data_owner'
-                        ? 'No data owner was resolved for the requested asset — pending review by a Platform Admin.'
-                        : 'No approver was resolved — pending review by a Platform Admin.'}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Manual task: who is doing the off-platform work, and what they
-                  were asked to do. Nothing here is an approval. */}
-              {isManualTask && (
-                <div className="ml-14 mt-3 space-y-2">
-                  <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-1">
-                    Manual work assigned to
-                  </p>
-                  {manualTaskApprovals.length > 0 ? (
-                    <div className="grid gap-2">
-                      {manualTaskApprovals.map((task, tIdx) => (
-                        <div key={tIdx} className="bg-white border border-gray-200 rounded p-2 text-sm space-y-1">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              {task.status === 'approved' ? (
-                                <CheckCircle2 className="w-4 h-4 text-success" />
-                              ) : task.status === 'rejected' ? (
-                                <X className="w-4 h-4 text-alert" />
-                              ) : (
-                                <Circle className="w-4 h-4 text-gray-300" />
-                              )}
-                              <span className="font-medium text-gray-700">
-                                {task.assignedToEmail || task.assignedToRole || 'Any Platform Admin'}
-                              </span>
-                            </div>
-                            <span className={`text-xs font-medium ${
-                              task.status === 'approved' ? 'text-success' :
-                              task.status === 'rejected' ? 'text-alert' :
-                              'text-gray-500'
-                            }`}>
-                              {task.status === 'approved' ? `Marked done by ${task.approvedBy || task.assignedToEmail || task.assignedToRole || 'Platform Admin'}` :
-                               task.status === 'rejected' ? `Couldn't be completed by ${task.rejectedBy || task.assignedToEmail || task.assignedToRole || 'Platform Admin'}` :
-                               task.dueAt ? `Waiting — due ${formatDate(task.dueAt)}` : 'Waiting'}
-                            </span>
-                          </div>
-                          {task.instructions?.trim() && (
-                            <p className="text-xs text-gray-600 whitespace-pre-wrap">{task.instructions}</p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="bg-white border border-gray-200 rounded p-2 text-sm italic text-gray-500">
-                      Waiting for this task to be assigned.
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Step Logs / Facts */}
-              {((step.facts && step.facts.length > 0) || (isFailed && request.lastError)) && (
-                <div className="ml-14 mt-3 space-y-2">
-                  {isFailed && request.lastError && (
-                    <div className="bg-red-50 border border-red-200 rounded p-3 text-red-800 text-xs flex items-start gap-2">
-                      <AlertCircle className="w-4 h-4 shrink-0" />
-                      <div>
-                        <p className="font-bold mb-1">Error Details</p>
-                        <p>{request.lastError.error || 'An unexpected error occurred during this step.'}</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {step.facts && step.facts.length > 0 && (
-                    <div className="bg-gray-50 rounded border border-gray-100 p-3">
-                      <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-2">Step Logs</p>
-                      <div className="space-y-1.5">
-                        {step.facts.map((fact, fIdx) => (
-                          <div key={fIdx} className="flex items-start gap-2 text-xs">
-                            <span className="text-gray-400 font-mono shrink-0">
-                              [{formatInTimeZone(parseUtcDate(fact.timestamp), 'America/Los_Angeles', 'HH:mm:ss')}]
-                            </span>
-                            <div className="text-gray-700">
-                              <span className="font-semibold text-gray-900">
-                                {fact.type === 'rbac_exported' ? 'Exported for Terraform' : fact.type.replace(/_/g, ' ')}
-                              </span>
-                              {fact.type === 'rbac_exported' ? (
-                                <>: <span>{(fact.data.files as unknown as string[] | undefined)?.join(', ')}</span></>
-                              ) : fact.type === 'repo_created' ? (
-                                <>: <a href={fact.data.repo_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                                  {fact.data.repo_name}
-                                </a></>
-                              ) : fact.type === 'workspace_created' ? (
-                                <>: <span className="font-mono bg-gray-100 px-1 rounded">{fact.data.workspace_url}</span></>
-                              ) : fact.type === 'approval_received' ? (
-                                <>: <span>Approved by <span className="font-medium">{fact.data.approved_by || fact.data.actor}</span></span></>
-                              ) : fact.type === 'provisioning_failed' ? (
-                                <>: <span className="text-red-600 font-medium">Failed: {fact.data.error}</span></>
-                              ) : fact.type === 'request_rejected' ? (
-                                <>
-                                  : <span className="text-red-600 font-medium">Rejected by {fact.data.rejected_by}</span>
-                                  {fact.data.rejection_note && (
-                                    <div className="mt-1 p-2 bg-red-50 border border-red-100 rounded text-red-800 italic">
-                                      "{fact.data.rejection_note}"
-                                    </div>
-                                  )}
-                                </>
-                              ) : null}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 export function Requests() {
   const guideEnabled = useGuideEnabled();
-  const requests = useRequestStore((state) => state.requests);
-  const fetchRequests = useRequestStore((state) => state.fetchRequests);
-  const deleteRequest = useRequestStore((state) => state.deleteRequest);
-  const { requestId } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
-  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(requestId || null);
-  const [isDeleting, setIsDeleting] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'status' | 'conversation'>('status');
-  const [filterStatus, setFilterStatus] = useState<'pending' | 'completed' | 'failed'>('pending');
-  const [isLoading, setIsLoading] = useState(true);
+  const { requestId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  // Derived state: sort and filter
-  const filteredRequests = requests
-    .filter((r) => {
-      if (filterStatus === 'pending') return !['completed', 'rejected', 'failed'].includes(r.status);
-      if (filterStatus === 'completed') return r.status === 'completed';
-      if (filterStatus === 'failed') return ['rejected', 'failed'].includes(r.status);
-      return true;
-    })
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const requests = useRequestStore((state) => state.requests);
+  const approvals = useRequestStore((state) => state.approvals) as InboxApproval[];
+  const delegations = useRequestStore((state) => state.delegations);
+  const fetchRequests = useRequestStore((state) => state.fetchRequests);
+  const fetchApprovals = useRequestStore((state) => state.fetchApprovals);
+  const fetchDelegations = useRequestStore((state) => state.fetchDelegations);
+  const deleteRequest = useRequestStore((state) => state.deleteRequest);
+  const currentUser = useUserStore((state) => state.currentUser);
+  const uiTabs = useBrandingStore((state) => state.uiTabs);
+
+  const userRoles = useMemo(
+    () => currentUser?.roles.map((r) => r.toLowerCase().replace(/\s+/g, '_')) ?? [],
+    [currentUser],
+  );
+  const isPlatformAdmin = userRoles.includes('platform_admin');
+
+  const view: View = location.pathname.startsWith('/approvals')
+    ? 'approvals'
+    : isPlatformAdmin && searchParams.get('view') === 'all' ? 'all' : 'mine';
+
+  // --- Data ------------------------------------------------------------------
+  const [requestsLoaded, setRequestsLoaded] = useState(false);
+  const [approvalsLoaded, setApprovalsLoaded] = useState(false);
+  const [delegationsToMe, setDelegationsToMe] = useState<Delegation[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    if (requestId) {
-      setSelectedRequestId(requestId);
-    } else {
-      setSelectedRequestId(null);
+    let mounted = true;
+    fetchRequests().finally(() => mounted && setRequestsLoaded(true));
+    fetchApprovals().finally(() => mounted && setApprovalsLoaded(true));
+    return () => {
+      mounted = false;
+    };
+  }, [fetchRequests, fetchApprovals]);
+
+  // A Platform Admin's main list is everyone's (and capped), so their own
+  // requests are fetched on their own; for anyone else the main list is theirs.
+  const [ownRequests, setOwnRequests] = useState<Request[] | null>(null);
+  const fetchOwnRequests = useCallback(async () => {
+    if (!isPlatformAdmin) return;
+    try {
+      setOwnRequests(await api.getRequests({ mine: true }));
+    } catch {
+      setOwnRequests((prev) => prev ?? []);
     }
-  }, [requestId]);
+  }, [isPlatformAdmin]);
+  useEffect(() => {
+    void fetchOwnRequests();
+  }, [fetchOwnRequests]);
 
-  // Derived state: get the full object from the store's list
-  const listedRequest = requests.find(r => r.id === selectedRequestId) || null;
+  const loadDelegations = useCallback(async () => {
+    if (!currentUser?.email) return;
+    await Promise.all([
+      fetchDelegations(currentUser.email),
+      api.getDelegations(undefined, currentUser.email).then(setDelegationsToMe).catch(() => setDelegationsToMe([])),
+    ]);
+  }, [currentUser?.email, fetchDelegations]);
+  useEffect(() => {
+    void loadDelegations();
+  }, [loadDelegations]);
 
-  // The list endpoint is capped, so a deep link to an older request may not be
-  // in it; fetch that one directly.
+  // Poll the list on screen to catch state transitions (paused while the tab is hidden).
+  useVisibleInterval(view === 'mine' && isPlatformAdmin ? fetchOwnRequests : fetchRequests, 10000, view !== 'approvals');
+  useVisibleInterval(fetchApprovals, 30000, view === 'approvals');
+
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([fetchRequests(), fetchOwnRequests(), fetchApprovals(), loadDelegations()]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // --- Tabs ------------------------------------------------------------------
+  // No roles explainer: if you can act on something, it's in this tab with its
+  // buttons. A tab an admin switched off stays reachable by its link (the
+  // notifications bell always points at the approvals one).
+  const isApprover =
+    approvals.length > 0 || delegationsToMe.length > 0 || delegations.length > 0 ||
+    userRoles.some((r) => APPROVER_ROLES.has(r));
+  const pendingTotal = approvals.filter((a) => a.status === 'pending').length;
+  const myRequests = useMemo(
+    () => (isPlatformAdmin ? ownRequests ?? [] : requests),
+    [requests, isPlatformAdmin, ownRequests],
+  );
+  const myActive = myRequests.filter(isRequestActive).length;
+  const tabs = [
+    {
+      id: 'approvals' as const,
+      label: 'Needs my approval',
+      count: pendingTotal,
+      show: (uiTabs?.pending_approvals !== false && isApprover) || view === 'approvals',
+    },
+    { id: 'mine' as const, label: 'My requests', count: myActive, show: uiTabs?.my_requests !== false || view === 'mine' },
+    {
+      id: 'all' as const,
+      label: 'All requests',
+      count: null,
+      show: isPlatformAdmin && (uiTabs?.my_requests !== false || view === 'all'),
+    },
+  ].filter((t) => t.show);
+
+  const goTo = (next: View) => {
+    const params = new URLSearchParams();
+    if (next === 'all') params.set('view', 'all');
+    const wf = searchParams.get('workflow');
+    if (wf) params.set('workflow', wf);
+    const search = params.toString();
+    navigate({ pathname: next === 'approvals' ? '/approvals' : '/requests', search: search ? `?${search}` : '' });
+  };
+  const listPath = view === 'all' ? '/requests?view=all' : '/requests';
+
+  // --- Rows ------------------------------------------------------------------
+  const workflowNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const a of approvals) if (a.workflowName?.trim()) names.set(a.requestType, a.workflowName.trim());
+    return names;
+  }, [approvals]);
+
+  const approvalItems = useMemo<ApprovalItem[]>(
+    () => approvals.map((a) => ({
+      key: a.id, approval: a, workflowKey: a.requestType, workflow: workflowLabel(a), haystack: approvalHaystack(a),
+    })),
+    [approvals],
+  );
+  const requestItems = useMemo<RequestItem[]>(() => {
+    const source = view === 'all' ? requests : myRequests;
+    return source.map((r) => {
+      const workflow = workflowNames.get(r.type) ?? typeLabel(r.type);
+      return { key: r.id, request: r, workflowKey: r.type, workflow, haystack: requestHaystack(r, workflow) };
+    });
+  }, [view, requests, myRequests, workflowNames]);
+
+  // --- Filters ---------------------------------------------------------------
+  const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
+  const tokens = useMemo(() => deferredQuery.trim().toLowerCase().split(/\s+/).filter(Boolean), [deferredQuery]);
+  const [approvalStatus, setApprovalStatus] = useState<ApprovalStatusFilter>('pending');
+  // Until the user picks one: "In progress" when something is, else everything,
+  // so the list doesn't open empty for someone with nothing in flight.
+  const [pickedRequestStatus, setRequestStatus] = useState<RequestStatusFilter | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const workflowSelectRef = useRef<HTMLSelectElement>(null);
+
+  // "/" jumps to search, like most list views.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Workflow filter: ?workflow=<request type>, so a filtered list survives a
+  // reload and can be shared. A value with no rows behind it shows everything.
+  const baseItems: (ApprovalItem | RequestItem)[] = view === 'approvals' ? approvalItems : requestItems;
+  const requestStatus: RequestStatusFilter =
+    pickedRequestStatus ?? (requestItems.some((i) => isRequestActive(i.request)) ? 'active' : 'all');
+  const workflowOptions = useMemo(() => {
+    const byType = new Map<string, { value: string; label: string; count: number }>();
+    for (const item of baseItems) {
+      const option = byType.get(item.workflowKey) ?? { value: item.workflowKey, label: item.workflow, count: 0 };
+      const counts = 'approval' in item ? item.approval.status === 'pending' : true;
+      if (counts) option.count += 1;
+      byType.set(item.workflowKey, option);
+    }
+    return [...byType.values()].sort((x, y) => x.label.localeCompare(y.label));
+  }, [baseItems]);
+  const workflowFilter = workflowOptions.find((o) => o.value === searchParams.get('workflow')) ?? null;
+  const setWorkflowFilter = (value: string | null) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set('workflow', value);
+      else next.delete('workflow');
+      return next;
+    }, { replace: true });
+  };
+
+  const matched = useMemo(
+    () => baseItems.filter((item) =>
+      (!workflowFilter || item.workflowKey === workflowFilter.value) &&
+      tokens.every((t) => item.haystack.includes(t))),
+    [baseItems, workflowFilter, tokens],
+  );
+
+  const statusOptions = (view === 'approvals' ? APPROVAL_STATUS_OPTIONS : REQUEST_STATUS_OPTIONS).map((o) => ({
+    ...o,
+    count: matched.filter((item) =>
+      'approval' in item
+        ? approvalStatusMatches(item.approval, o.value as ApprovalStatusFilter)
+        : requestStatusMatches(item.request, o.value as RequestStatusFilter)).length,
+  }));
+  const statusFilter = view === 'approvals' ? approvalStatus : requestStatus;
+  const setStatusFilter = (value: string) =>
+    view === 'approvals' ? setApprovalStatus(value as ApprovalStatusFilter) : setRequestStatus(value as RequestStatusFilter);
+
+  const visible = useMemo(() => {
+    if (view === 'approvals') {
+      // Oldest pending first: the thing that has been blocking a requester the
+      // longest is the thing to look at. Handled ones follow, newest first.
+      const items = (matched as ApprovalItem[]).filter((i) => approvalStatusMatches(i.approval, approvalStatus));
+      return items.sort((x, y) => {
+        const xp = x.approval.status === 'pending';
+        const yp = y.approval.status === 'pending';
+        if (xp !== yp) return xp ? -1 : 1;
+        return xp
+          ? ts(x.approval.createdAt) - ts(y.approval.createdAt)
+          : ts(y.approval.updatedAt) - ts(x.approval.updatedAt);
+      });
+    }
+    return (matched as RequestItem[])
+      .filter((i) => requestStatusMatches(i.request, requestStatus))
+      .sort((x, y) => ts(y.request.createdAt) - ts(x.request.createdAt));
+  }, [view, matched, approvalStatus, requestStatus]);
+
+  const filterKey = `${view}|${statusFilter}|${tokens.join(' ')}|${workflowFilter?.value ?? ''}`;
+  const [page, setPage] = useState({ key: '', limit: PAGE_SIZE });
+  const limit = page.key === filterKey ? page.limit : PAGE_SIZE;
+  const shown = visible.slice(0, limit);
+
+  // One line above the queue so aging registers before you start clicking.
+  const agingSummary = (() => {
+    if (view !== 'approvals' || approvalStatus === 'done') return null;
+    const pending = (matched as ApprovalItem[]).map((i) => i.approval).filter((a) => a.status === 'pending');
+    const aging = pending.filter((a) => waitingDays(a.createdAt) >= AGING_DAYS);
+    if (aging.length === 0) return null;
+    const overdue = pending.filter((a) => a.dueAt && isOverdue(a.dueAt)).length;
+    const manual = aging.filter((a) => a.approvalType === 'manual_task').length;
+    const oldest = Math.max(...aging.map((a) => waitingDays(a.createdAt)));
+    const parts = [
+      `${aging.length} ${aging.length === 1 ? 'has' : 'have'} been waiting ${AGING_DAYS}+ days (oldest: ${oldest} days)`,
+    ];
+    if (manual > 0) {
+      parts.push(`${manual} ${manual === 1 ? 'is a manual task' : 'are manual tasks'} — those requests stay paused until someone marks the work done`);
+    }
+    if (overdue > 0) parts.push(`${overdue} past ${overdue === 1 ? 'its' : 'their'} due date`);
+    return `${parts.join('; ')}.`;
+  })();
+
+  // --- Expansion, selection, actions ----------------------------------------
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const toggleExpanded = (key: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  // Bulk approve covers only rows on screen: derived from what's shown, so rows
+  // that stopped being pending, or that a filter hides, drop out.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const bulkSelectable = view === 'approvals'
+    ? (shown as ApprovalItem[]).map((i) => i.approval).filter((a) => isBulkCandidate(a) && !a.selfApprovalBlocked)
+    : [];
+  const hasBulkCandidates = view === 'approvals' && (shown as ApprovalItem[]).some((i) => isBulkCandidate(i.approval));
+  const selectedApprovals = bulkSelectable.filter((a) => selectedIds.has(a.id));
+  const allSelected = bulkSelectable.length > 0 && selectedApprovals.length === bulkSelectable.length;
+  const someSelected = selectedApprovals.length > 0 && !allSelected;
+  const tooManySelected = selectedApprovals.length > BULK_APPROVE_MAX;
+  const toggleSelected = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleSelectAll = () => setSelectedIds(allSelected ? new Set() : new Set(bulkSelectable.map((a) => a.id)));
+
+  const [dialog, setDialog] = useState<{ approval: InboxApproval; action: ApprovalDialogAction } | null>(null);
+  const [showDelegationForm, setShowDelegationForm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this request? This action cannot be undone.')) return;
+    setIsDeleting(id);
+    try {
+      await deleteRequest(id);
+      if (isPlatformAdmin) setOwnRequests((prev) => prev?.filter((r) => r.id !== id) ?? prev);
+    } finally {
+      setIsDeleting(null);
+    }
+  };
+
+  // Details from an approval row. An approver who isn't the requester (or a
+  // Platform Admin) can't open the request itself, so say so instead of
+  // silently doing nothing.
+  // The store's list is polled by the details view, so prefer it for live updates.
+  const findKnown = (id: string) => requests.find((r) => r.id === id) ?? ownRequests?.find((r) => r.id === id);
+  const [inspect, setInspect] = useState<{ id: string; fetched?: Request } | null>(null);
+  const [detailsError, setDetailsError] = useState<{ key: string; message: string } | null>(null);
+  const openApprovalDetails = async (a: InboxApproval) => {
+    setDetailsError(null);
+    if (findKnown(a.requestId)) {
+      setInspect({ id: a.requestId });
+      return;
+    }
+    try {
+      setInspect({ id: a.requestId, fetched: await getRequest(a.requestId) });
+    } catch {
+      setExpanded((prev) => new Set(prev).add(a.id));
+      setDetailsError({
+        key: a.id,
+        message: "Only the requester and platform admins can open this request's full history; its parameters and reports are shown here.",
+      });
+    }
+  };
+  const inspected = inspect ? findKnown(inspect.id) ?? inspect.fetched ?? null : null;
+
+  // Deep link /requests/:id. The list endpoint is capped, so a link to an older
+  // request may not be in it; fetch that one directly.
+  const listedLinked = requestId ? findKnown(requestId) : undefined;
   const [linkedRequest, setLinkedRequest] = useState<{ id: string; request: Request | null } | null>(null);
-  const needsLookup = !!requestId && !isLoading && !requests.some(r => r.id === requestId);
+  const needsLookup = !!requestId && requestsLoaded && (!isPlatformAdmin || ownRequests !== null) && !listedLinked;
   useEffect(() => {
     if (!needsLookup || !requestId) return;
     let mounted = true;
@@ -575,337 +395,372 @@ export function Requests() {
     };
   }, [needsLookup, requestId]);
   const lookupPending = needsLookup && linkedRequest?.id !== requestId;
-  const selectedRequest = listedRequest
-    ?? (linkedRequest?.id === selectedRequestId ? linkedRequest.request : null);
+  const linked = listedLinked ?? (linkedRequest && linkedRequest.id === requestId ? linkedRequest.request : null);
+  const linkNotFound = !!requestId && requestsLoaded && !lookupPending && !linked;
+  const closeLinked = useCallback(() => navigate(listPath), [navigate, listPath]);
+  const closeInspect = useCallback(() => setInspect(null), []);
 
-  useEffect(() => {
-    let mounted = true;
-    fetchRequests().finally(() => {
-      if (mounted) setIsLoading(false);
-    });
-    return () => {
-      mounted = false;
-    };
-  }, [fetchRequests]);
+  // --- Render ----------------------------------------------------------------
+  const loaded = view === 'approvals' ? approvalsLoaded
+    : view === 'mine' && isPlatformAdmin ? ownRequests !== null
+      : requestsLoaded;
+  const noun = view === 'approvals' ? 'approvals' : 'requests';
+  const colSpan = view === 'approvals' ? 7 : view === 'all' ? 7 : 6;
+  const showApprovalsTab = tabs.some((t) => t.id === 'approvals');
+  const subtitle =
+    view === 'approvals' ? 'Requests waiting on your decision, and the ones you have handled.'
+      : view === 'all' ? 'Every request, from every requester.'
+        : "Track the status of every request you've submitted.";
+  const statusLabel = statusOptions.find((o) => o.value === statusFilter)?.label.toLowerCase() ?? '';
+  const totalForView = baseItems.length;
 
-  // Poll for updates every 10 seconds to catch state transitions (paused while
-  // the tab is hidden).
-  useVisibleInterval(fetchRequests, 10000);
-
-
-  const handleDelete = async (requestId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (window.confirm('Are you sure you want to delete this request? This action cannot be undone.')) {
-      setIsDeleting(requestId);
-      try {
-        await deleteRequest(requestId);
-      } finally {
-        setIsDeleting(null);
-      }
+  const emptyState = (() => {
+    if (!loaded) return null;
+    if (totalForView === 0) {
+      return view === 'approvals'
+        ? { title: 'Nothing needs your approval', body: "You're all caught up!" }
+        : view === 'all'
+          ? { title: 'No requests yet', body: 'Requests appear here once anyone submits one.' }
+          : { title: 'No requests yet', body: 'Once you submit a request through the agent, it will show up here.' };
     }
-  };
-
-  // We only show empty state if there are NO requests at all, not just if filter hides them
-  if ((requests.length === 0 && !selectedRequest) || (requestId && !selectedRequest && !isLoading)) {
-    if (isLoading || lookupPending) {
-      return (
-        <div className="flex items-center justify-center min-h-[400px]">
-          <div className="flex items-center gap-2 text-gray-500">
-            <Loader2 className="w-5 h-5 animate-spin" />
-            <p>Loading requests...</p>
-          </div>
-        </div>
-      );
-    }
-
-    if (requestId) {
-      return (
-        <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
-          <AlertCircle className="w-12 h-12 text-yellow-500 opacity-50" />
-          <div className="text-center">
-            <p className="text-lg font-semibold text-gray-900">Request Not Found</p>
-            <p className="text-sm text-gray-500 max-w-xs">
-              The request <strong>{requestId}</strong> could not be found in the current database.
-              It may have been deleted or the database was reset.
-            </p>
-            <Button variant="outline" className="mt-6" onClick={() => navigate('/requests')}>
-              View All Requests
-            </Button>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-6 pb-20">
-        <NewRequestBanner />
-        <div className="flex items-center justify-center min-h-[300px]">
-          <div className="text-center">
-            <p className="text-lg text-gray-600 mb-1">No requests yet</p>
-            <p className="text-sm text-gray-500">
-              Once you submit a request through the agent, it will show up here.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
+    if (visible.length > 0) return null;
+    const others = statusOptions.find((o) => o.value === 'all')?.count ?? 0;
+    const title = tokens.length > 0
+      ? `No ${statusFilter === 'all' ? '' : `${statusLabel} `}${noun} match "${deferredQuery.trim()}"`
+      : `No ${statusLabel} ${noun}${workflowFilter ? ` for ${workflowFilter.label}` : ''}`;
+    const body = view === 'approvals' && approvalStatus === 'pending' && others === 0 && !tokens.length
+      ? "You're all caught up!"
+      : others > 0 && statusFilter !== 'all'
+        ? `${others} ${others === 1 ? 'is' : 'are'} in other statuses.`
+        : '';
+    return { title, body };
+  })();
 
   return (
-    <div className="space-y-6 pb-20">
-      <NewRequestBanner />
+    <div className="space-y-4 pb-20">
+      {view !== 'approvals' && <NewRequestBanner />}
 
-      {/* Page header — matches the Approvals page pattern (h1 + subtitle
-          on the left, primary controls on the right). Stacks on narrow
-          screens so the filter pills don't get squeezed. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">My Requests</h1>
-          <p className="text-gray-600">
-            Track the status of every request you've submitted.
+          <h1 className="text-2xl font-bold text-gray-900">{showApprovalsTab ? 'Requests & Approvals' : 'My Requests'}</h1>
+          <p className="text-sm text-gray-600">
+            {subtitle}
             {guideEnabled && (
               <>
-                {' '}
-                <Link to={GUIDE_REQUESTS} className="text-accent hover:underline">
-                  How requests work
+                {' · '}
+                <Link to={view === 'approvals' ? GUIDE_APPROVALS : GUIDE_REQUESTS} className="text-accent hover:underline">
+                  {view === 'approvals' ? 'How approvals work' : 'How requests work'}
                 </Link>
               </>
             )}
           </p>
         </div>
-        <div className="flex bg-gray-100 p-1 rounded-full border border-gray-200 shadow-inner shrink-0 self-start sm:self-auto">
-          <button
-            onClick={() => setFilterStatus('pending')}
-            className={`px-6 py-2 rounded-full text-sm font-bold transition-all duration-200 ${filterStatus === 'pending'
-              ? 'bg-white text-primary shadow-md transform scale-105'
-              : 'text-gray-500 hover:text-gray-700'
-              }`}
-          >
-            Pending
-          </button>
-          <button
-            onClick={() => setFilterStatus('completed')}
-            className={`px-6 py-2 rounded-full text-sm font-bold transition-all duration-200 ${filterStatus === 'completed'
-              ? 'bg-white text-green-600 shadow-md transform scale-105'
-              : 'text-gray-500 hover:text-gray-700'
-              }`}
-          >
-            Completed
-          </button>
-          <button
-            onClick={() => setFilterStatus('failed')}
-            className={`px-6 py-2 rounded-full text-sm font-bold transition-all duration-200 ${filterStatus === 'failed'
-              ? 'bg-white text-red-600 shadow-md transform scale-105'
-              : 'text-gray-500 hover:text-gray-700'
-              }`}
-          >
-            Failed
-          </button>
+        <div className="flex items-center gap-2">
+          {view === 'approvals' && (
+            <Button
+              size="sm"
+              variant={showDelegationForm ? 'outline' : 'ghost'}
+              onClick={() => setShowDelegationForm((v) => !v)}
+              className="text-gray-700"
+            >
+              <Calendar className="w-4 h-4 mr-1.5" />
+              Out of office
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={refresh} disabled={refreshing} title="Refresh" aria-label="Refresh" className="text-gray-600">
+            <RefreshCw className={cn('w-4 h-4', refreshing && 'animate-spin')} />
+          </Button>
         </div>
       </div>
 
-      {/* Table View */}
-      <Card>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Title</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Request ID</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Type</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Status</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Created</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Updated</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRequests.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="py-20 text-center">
-                      <div className="flex flex-col items-center justify-center space-y-3">
-                        <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center">
-                          <Clock className="w-6 h-6 text-gray-400" />
-                        </div>
-                        <div>
-                          <p className="text-lg font-semibold text-gray-900">No requests found</p>
-                          <p className="text-sm text-gray-500">There are no requests matching the "{filterStatus}" filter.</p>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  filteredRequests.map((request) => (
-                    <tr key={request.id} className="border-b border-gray-100 hover:bg-gray-50">
-                      <td className="py-3 px-4 text-sm text-gray-900">{request.title}</td>
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(request.id); }}
-                          title={`${request.id} (click to copy)`}
-                          className="font-mono text-xs text-gray-500 hover:text-primary cursor-pointer"
-                        >
-                          {request.id}
-                        </button>
-                      </td>
-                      <td className="py-3 px-4 text-sm text-gray-600">
-                        {request.type.replace(/_/g, ' ')}
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${request.status === 'completed' ? 'bg-green-100 text-green-800' :
-                          request.status === 'provisioning' ? 'bg-blue-100 text-blue-800' :
-                            request.status === 'manager_approval' ? 'bg-yellow-100 text-yellow-800' :
-                              request.status === 'training_pending' ? 'bg-orange-100 text-orange-800' :
-                              request.status === 'manual_task_pending' ? 'bg-amber-100 text-amber-800' :
-                                ['failed', 'rejected'].includes(request.status) ? 'bg-red-100 text-red-800' :
-                                  'bg-gray-100 text-gray-800'
-                          }`}>
-                          {request.status.replace(/_/g, ' ')}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-sm text-gray-600">
-                        {formatDate(request.createdAt)}
-                      </td>
-                      <td className="py-3 px-4 text-sm text-gray-600">
-                        {formatDate(request.updatedAt)}
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
-                          <Button
-                            onClick={() => navigate(`/requests/${request.id}`)}
-                            variant="outline"
-                            size="sm"
-                            className="flex items-center gap-2"
-                          >
-                            <Eye className="w-4 h-4" />
-                            View
-                          </Button>
-                          <Button
-                            onClick={(e) => handleDelete(request.id, e)}
-                            variant="outline"
-                            size="sm"
-                            className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
-                            disabled={isDeleting === request.id}
-                            title="Delete Request"
-                          >
-                            {isDeleting === request.id ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <Trash2 className="w-4 h-4" />
-                            )}
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Flow Detail Modal */}
-      {selectedRequest && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => navigate('/requests')}>
-          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-6xl max-h-[90vh] flex flex-col">
-            <Card className="w-full h-full overflow-hidden flex flex-col bg-white">
-              <CardHeader className="shrink-0 border-b border-gray-200">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle>{selectedRequest.title}</CardTitle>
-                    <p className="text-sm text-gray-500 mt-1">
-                      Created {formatDate(selectedRequest.createdAt)}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => navigator.clipboard?.writeText(selectedRequest.id)}
-                      title="Click to copy Request ID"
-                      className="mt-1 font-mono text-xs text-gray-400 hover:text-primary cursor-pointer"
-                    >
-                      ID: {selectedRequest.id}
-                    </button>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => navigate('/requests')}
-                    className="flex items-center gap-2"
-                  >
-                    <X className="w-4 h-4" />
-                    Close
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent className="flex-1 overflow-y-auto space-y-6 p-6">
-                {/* Tabs */}
-                <div className="flex items-center gap-4 border-b border-gray-200 mb-6">
-                  <button
-                    onClick={() => setActiveTab('status')}
-                    className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${activeTab === 'status'
-                      ? 'border-primary text-primary'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                      }`}
-                  >
-                    Request Status
-                  </button>
-                  {selectedRequest.conversation && selectedRequest.conversation.length > 0 && (
-                    <button
-                      onClick={() => setActiveTab('conversation')}
-                      className={`pb-3 px-1 text-sm font-medium border-b-2 transition-colors ${activeTab === 'conversation'
-                        ? 'border-primary text-primary'
-                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                        }`}
-                    >
-                      Conversation History
-                    </button>
+      {tabs.length > 1 && (
+        <div role="tablist" aria-label="Requests and approvals" className="flex gap-5 border-b border-gray-200">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={view === t.id}
+              onClick={() => view !== t.id && goTo(t.id)}
+              className={cn(
+                '-mb-px flex items-center gap-1.5 border-b-2 pb-2 text-sm font-medium transition-colors',
+                view === t.id ? 'border-primary text-primary' : 'border-transparent text-gray-500 hover:text-gray-800',
+              )}
+            >
+              {t.label}
+              {t.count !== null && t.count > 0 && (
+                <span
+                  className={cn(
+                    'min-w-[1.25rem] rounded-full px-1.5 text-[11px] font-semibold leading-5 tabular-nums',
+                    t.id === 'approvals' ? 'bg-red-500 text-white' : 'bg-gray-100 text-gray-600',
                   )}
-                </div>
+                  title={t.id === 'approvals' ? `${t.count} waiting on you` : `${t.count} in progress`}
+                >
+                  {t.count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
 
-                {activeTab === 'status' ? (
-                  <div>
-                    <RequestStateList request={selectedRequest} />
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {selectedRequest.conversation?.map((message, idx) => {
-                      const isUser = message.type === 'user' || (message as {role?: string}).role === 'user';
-                      const isAgent = message.type === 'agent' || (message as {role?: string}).role === 'assistant' || (message as {role?: string}).role === 'agent';
+      {view === 'approvals' && (
+        <>
+          {showDelegationForm && <DelegationForm onClose={() => setShowDelegationForm(false)} />}
+          <DelegationStrips incoming={delegationsToMe} />
+        </>
+      )}
 
-                      return (
-                        <div
-                          key={idx}
-                          className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
-                        >
-                          <div
-                            className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${isUser
-                              ? 'bg-primary text-white'
-                              : 'bg-gray-50 text-gray-900 border border-gray-200/50'
-                              }`}
-                          >
-                            {isAgent ? (
-                              <div
-                                className="text-sm leading-relaxed prose prose-sm agent-prose max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700 [&_a:visited]:text-purple-600"
-                                dangerouslySetInnerHTML={{ __html: renderMarkdownSafe(message.content) }}
-                              />
-                            ) : (
-                              <p className="text-sm leading-relaxed">{message.content}</p>
-                            )}
-                            <p className={`text-[10px] mt-1 ${isUser ? 'text-blue-100' : 'text-gray-400'}`}>
-                              {formatDate(typeof message.timestamp === 'string' ? message.timestamp : message.timestamp?.toISOString())}
-                            </p>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+      {linkNotFound && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2 text-sm text-yellow-900">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>
+            Request <strong className="font-mono">{requestId}</strong> could not be found. It may have been deleted,
+            the database was reset, or it isn't yours to view.
+          </span>
+          <Button size="sm" variant="ghost" className="ml-auto h-7" onClick={closeLinked}>Dismiss</Button>
+        </div>
+      )}
+
+      {/* Toolbar: search, status, workflow. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[14rem] max-w-md">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input
+            ref={searchRef}
+            type="text"
+            role="searchbox"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={view === 'approvals' ? 'Search title, ID, requester, workflow, resource…' : 'Search title, ID, workflow, status, resource…'}
+            aria-label={`Search ${noun}`}
+            className="h-9 w-full rounded-md border border-gray-300 bg-white pl-8 pr-8 text-sm placeholder:text-gray-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => { setQuery(''); searchRef.current?.focus(); }}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-gray-400 hover:text-gray-700"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+        <div role="group" aria-label="Status" className="inline-flex rounded-md border border-gray-200 bg-gray-50 p-0.5">
+          {statusOptions.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              aria-pressed={statusFilter === o.value}
+              onClick={() => setStatusFilter(o.value)}
+              className={cn(
+                'rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap',
+                statusFilter === o.value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-800',
+              )}
+            >
+              {o.label}
+              <span className="ml-1 tabular-nums text-gray-400">{o.count}</span>
+            </button>
+          ))}
+        </div>
+        {workflowOptions.length > 1 && (
+          <select
+            ref={workflowSelectRef}
+            aria-label="Workflow"
+            value={workflowFilter?.value ?? ''}
+            onChange={(e) => setWorkflowFilter(e.target.value || null)}
+            className="h-9 max-w-[16rem] rounded-md border border-gray-300 bg-white px-2 text-sm text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          >
+            <option value="">All workflows</option>
+            {workflowOptions.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label} ({o.count}{view === 'approvals' ? ' waiting' : ''})
+              </option>
+            ))}
+          </select>
+        )}
+        {workflowFilter && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => { setWorkflowFilter(null); workflowSelectRef.current?.focus(); }}
+            className="h-8 px-2 text-gray-600"
+          >
+            <X className="w-4 h-4 mr-1" />
+            Clear filter
+          </Button>
+        )}
+        <span className="ml-auto text-xs text-gray-500 tabular-nums" role="status">
+          {loaded && totalForView > 0 && `${visible.length} of ${totalForView}`}
+        </span>
+      </div>
+
+      {agingSummary && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-sm text-amber-800">
+          <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>{agingSummary}</span>
+        </div>
+      )}
+
+      {selectedApprovals.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-green-200 bg-green-50 px-3 py-1.5 text-sm">
+          <span className="font-medium text-green-900">{selectedApprovals.length} selected</span>
+          {tooManySelected && (
+            <span className="text-xs text-red-600" role="status">Select at most {BULK_APPROVE_MAX} at a time.</span>
+          )}
+          <div className="ml-auto flex gap-2">
+            <Button size="sm" variant="ghost" className="h-7" onClick={() => setSelectedIds(new Set())}>Clear</Button>
+            <Button
+              size="sm"
+              onClick={() => setBulkOpen(true)}
+              disabled={tooManySelected}
+              className="h-7 bg-green-600 hover:bg-green-700 text-white"
+            >
+              <ListChecks className="w-4 h-4 mr-1.5" />
+              Approve selected ({selectedApprovals.length})
+            </Button>
           </div>
         </div>
       )}
+
+      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
+        {/* Fixed layout: the title column takes what's left and truncates, so
+            the action buttons never get pushed off the edge. */}
+        <table
+          className={cn(
+            'w-full table-fixed text-left',
+            // Room for the title as columns appear; narrower than this, the box scrolls.
+            view === 'approvals' ? 'min-w-[40rem] lg:min-w-[52rem] xl:min-w-[62rem]'
+              : view === 'all' ? 'min-w-[32rem] sm:min-w-[36rem] lg:min-w-[52rem] xl:min-w-[62rem]'
+                : 'min-w-[32rem] sm:min-w-[36rem] lg:min-w-[52rem]',
+          )}
+        >
+          <thead>
+            <tr className="border-b border-gray-200 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
+              {view === 'approvals' && (
+                <th className="w-9 py-2 pl-3 pr-0">
+                  {hasBulkCandidates && (
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 align-middle"
+                      aria-label="Select all you can approve"
+                      title={bulkSelectable.length === 0 ? SELF_APPROVAL_MESSAGE : `Select all you can approve (${bulkSelectable.length})`}
+                      checked={allSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someSelected;
+                      }}
+                      onChange={toggleSelectAll}
+                      disabled={bulkSelectable.length === 0}
+                    />
+                  )}
+                </th>
+              )}
+              <th className="py-2 px-3">Request</th>
+              <th className="hidden lg:table-cell w-44 py-2 px-3">Workflow</th>
+              {view !== 'mine' && <th className="hidden xl:table-cell w-40 py-2 px-3">Requester</th>}
+              <th className={cn('py-2 px-3', view === 'approvals' ? 'w-32' : 'w-44')}>Status</th>
+              {view === 'approvals' ? (
+                <th className="hidden sm:table-cell w-20 py-2 px-3" title="How long it has waited, or when it was last updated">Age</th>
+              ) : (
+                <>
+                  <th className="hidden lg:table-cell w-24 py-2 px-3">Submitted</th>
+                  <th className="hidden sm:table-cell w-24 py-2 px-3">Updated</th>
+                </>
+              )}
+              <th className={cn('py-2 px-3 text-right', view === 'approvals' ? 'w-48' : 'w-20')}>
+                <span className="sr-only">Actions</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {!loaded ? (
+              <tr>
+                <td colSpan={colSpan} className="py-12 text-center text-sm text-gray-500">
+                  <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
+                  Loading {noun}…
+                </td>
+              </tr>
+            ) : emptyState ? (
+              <tr>
+                <td colSpan={colSpan} className="py-12 text-center">
+                  <CheckCircle2 className="mx-auto mb-2 h-8 w-8 text-gray-300" />
+                  <p className="font-medium text-gray-800">{emptyState.title}</p>
+                  {emptyState.body && <p className="mt-0.5 text-sm text-gray-500">{emptyState.body}</p>}
+                  <div className="mt-3 flex justify-center gap-2">
+                    {query && <Button size="sm" variant="outline" onClick={() => setQuery('')}>Clear search</Button>}
+                    {totalForView > 0 && statusFilter !== 'all' && (
+                      <Button size="sm" variant="outline" onClick={() => setStatusFilter('all')}>Show all statuses</Button>
+                    )}
+                    {workflowFilter && (
+                      <Button size="sm" variant="outline" onClick={() => setWorkflowFilter(null)}>Show all workflows</Button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ) : view === 'approvals' ? (
+              (shown as ApprovalItem[]).map(({ key, approval }) => (
+                <ApprovalRow
+                  key={key}
+                  approval={approval}
+                  colSpan={colSpan}
+                  expanded={expanded.has(key)}
+                  selectable
+                  selected={selectedIds.has(approval.id)}
+                  onToggleExpand={() => toggleExpanded(key)}
+                  onToggleSelect={() => toggleSelected(approval.id)}
+                  onAction={(action) => setDialog({ approval, action })}
+                  onViewDetails={() => void openApprovalDetails(approval)}
+                  canEdit={isPlatformAdmin && !!approval.canEditParameters}
+                  detailsError={detailsError?.key === key ? detailsError.message : null}
+                />
+              ))
+            ) : (
+              (shown as RequestItem[]).map(({ key, request, workflow }) => (
+                <RequestRow
+                  key={key}
+                  request={request}
+                  workflow={workflow}
+                  showRequester={view === 'all'}
+                  onOpen={() => navigate(`/requests/${request.id}${view === 'all' ? '?view=all' : ''}`)}
+                  onDelete={() => void handleDelete(request.id)}
+                  deleting={isDeleting === request.id}
+                />
+              ))
+            )}
+          </tbody>
+        </table>
+        {visible.length > shown.length && (
+          <div className="border-t border-gray-100 px-3 py-2 text-center">
+            <Button size="sm" variant="ghost" onClick={() => setPage({ key: filterKey, limit: limit + PAGE_SIZE })}>
+              Show {Math.min(PAGE_SIZE, visible.length - shown.length)} more of {visible.length - shown.length}
+            </Button>
+          </div>
+        )}
+      </div>
+      {view !== 'approvals' && (view === 'mine' ? myRequests : requests).length >= REQUEST_LIST_CAP && (
+        <p className="text-xs text-gray-500">
+          Showing the {REQUEST_LIST_CAP} most recent requests. Older ones still open from their links.
+        </p>
+      )}
+
+      {dialog && (
+        <ApprovalActionDialog approval={dialog.approval} action={dialog.action} onClose={() => setDialog(null)} />
+      )}
+      {bulkOpen && (
+        <BulkApproveDialog
+          selected={selectedApprovals}
+          onClose={(sent) => {
+            setBulkOpen(false);
+            if (sent) setSelectedIds(new Set());
+          }}
+          onDone={async () => {
+            await Promise.all([fetchApprovals(), fetchRequests()]);
+          }}
+        />
+      )}
+      {inspected && <RequestDetailsModal request={inspected} onClose={closeInspect} />}
+      {!inspected && linked && <RequestDetailsModal request={linked} onClose={closeLinked} />}
     </div>
   );
 }

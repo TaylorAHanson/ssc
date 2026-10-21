@@ -86,10 +86,21 @@ visit most often:
   look things up on the web.
 - **Data Catalog**: which Unity Catalog catalogs are governed, and how often
   the catalog in Discover is refreshed.
+- **Legacy Dashboards** (under **Discover & Analyze**): map dashboards people
+  used before, for example in Tableau, to the metric views that replace them.
+  People then find them in Discover under **Legacy Dashboards** and when they
+  search for the old name. Select **Add mapping**, or **Import** to paste a
+  list from a spreadsheet. The page is marked **Off** while the data catalog
+  is switched off, because nobody would see the mappings.
 - **Links & Embedded Apps**: the links on the **Community Links** page, and
   other apps shown inside {{brand_name}} from the sidebar.
 - **Calendar**: where events on the **Event Calendar** come from, and how
   often they're synced.
+- **Training** (under **Learn & Share**): the Databricks Academy catalog that
+  Training Studio links courses to (its address, how often it syncs, and which
+  course languages to keep), and the upload for a CSV of training completions
+  from your learning system. Uploaded completions update people's progress on
+  the **Training** page and satisfy any workflow step that requires a course.
 - **Target Workspaces**: the Databricks workspaces that OmniGuard scans and
   Data Certification checks.
 

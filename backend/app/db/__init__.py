@@ -12,6 +12,8 @@ from app.db.training import (
     TrainingCourseModel,
     TrainingMediaModel,
     TrainingConsumptionModel,
+    TrainingCatalogCourseModel,
+    TrainingCatalogSyncModel,
 )
 from app.db.allowlist import AllowlistModel
 from app.db.enforcement_audit import EnforcementAuditModel

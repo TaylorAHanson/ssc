@@ -90,7 +90,7 @@ export function PickerList({ anchor, id, label, items, active, variant, onPick, 
     <div
       style={style}
       onMouseDown={(e) => e.preventDefault()}
-      className="z-40 flex flex-col overflow-hidden rounded-md border border-gray-200 bg-white text-sm shadow-lg"
+      className="z-40 flex flex-col overflow-hidden rounded-md border border-gray-200 bg-white text-[13px] shadow-lg"
     >
       <ul
         ref={list}

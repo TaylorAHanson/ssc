@@ -2,28 +2,34 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import {
-  GraduationCap, Plus, Trash2, Loader2, Save, Upload, RefreshCw, Pencil, X,
-  Film, FileText, ChevronRight, ChevronDown, BarChart3, Link2, FileUp,
+  GraduationCap, Plus, Trash2, Loader2, Save, Upload, Pencil, X,
+  Film, FileText, ChevronRight, ChevronDown, BarChart3, Link2, FileUp, Unlink,
 } from 'lucide-react';
 import {
   adminListTrainingTracks, adminCreateTrainingTrack, adminUpdateTrainingTrack, adminDeleteTrainingTrack,
   adminCreateTrainingCourse, adminUpdateTrainingCourse, adminDeleteTrainingCourse,
-  adminUploadTrainingMedia, adminDeleteTrainingMedia, adminSyncTrainingCatalog,
+  adminUploadTrainingMedia, adminDeleteTrainingMedia,
   adminTrainingConsumptionAnalytics, uploadTrainingData,
-  type TrainingTrackFull, type TrainingCourseFull, type CourseConsumptionRow, type CatalogSyncResult,
+  type AcademyCourse, type TrainingTrackFull, type TrainingCourseFull, type CourseConsumptionRow,
 } from '../../services/api';
+import {
+  AcademyBadge, AcademyCatalogPanel, AcademyCoursePicker,
+} from '../../components/admin/training/AcademyCatalog';
+import { academyMeta } from '../../components/admin/training/academy';
 
-const inputClass = 'w-full border border-gray-300 rounded-md h-9 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary';
+const inputClass = 'w-full border border-gray-300 rounded-md h-9 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:bg-gray-100 disabled:text-gray-500';
 const labelClass = 'text-[11px] font-bold text-gray-500 uppercase tracking-wider';
 
 interface CourseForm {
   title: string; description: string; course_code: string; external_url: string;
   section: string; course_type: string; duration: string; unlocks: string; status: string;
+  academy_course_id: number | null;
 }
 
 const emptyCourseForm: CourseForm = {
   title: '', description: '', course_code: '', external_url: '',
   section: 'fundamentals', course_type: '', duration: '', unlocks: '', status: 'published',
+  academy_course_id: null,
 };
 
 export function TrainingAdmin() {
@@ -39,6 +45,8 @@ export function TrainingAdmin() {
 
   const [courseForm, setCourseForm] = useState<CourseForm | null>(null);
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
+  // The Academy course picked in (or already linked to) the open course form.
+  const [formAcademy, setFormAcademy] = useState<AcademyCourse | null>(null);
 
   const [expandedCourse, setExpandedCourse] = useState<Set<string>>(new Set());
   const [analytics, setAnalytics] = useState<CourseConsumptionRow[]>([]);
@@ -102,9 +110,32 @@ export function TrainingAdmin() {
       } else {
         await adminCreateTrainingCourse(activeTrack.id, courseForm);
       }
-      setCourseForm(null); setEditingCourseId(null);
+      closeCourseForm();
       await load();
     } catch (e) { fail(e); } finally { setBusy(false); }
+  };
+
+  const closeCourseForm = () => { setCourseForm(null); setEditingCourseId(null); setFormAcademy(null); };
+
+  const pickAcademy = (a: AcademyCourse) => {
+    if (!courseForm) return;
+    setFormAcademy(a);
+    setCourseForm({
+      ...courseForm,
+      title: !courseForm.title.trim() || courseForm.title === formAcademy?.name ? a.name : courseForm.title,
+      description: courseForm.description || a.description || '',
+      course_code: a.code || courseForm.course_code,
+      external_url: a.url || courseForm.external_url,
+      course_type: a.type_label || courseForm.course_type,
+      duration: a.duration || courseForm.duration,
+      academy_course_id: a.id,
+    });
+  };
+
+  const unlinkAcademy = () => {
+    if (!courseForm) return;
+    setFormAcademy(null);
+    setCourseForm({ ...courseForm, academy_course_id: null });
   };
 
   const removeCourse = async (id: string) => {
@@ -119,8 +150,9 @@ export function TrainingAdmin() {
       title: c.title, description: c.description || '', course_code: c.course_code || '',
       external_url: c.external_url || '', section: c.section || 'fundamentals',
       course_type: c.course_type || '', duration: c.duration || '', unlocks: c.unlocks || '',
-      status: c.status || 'published',
+      status: c.status || 'published', academy_course_id: c.academy_course_id ?? null,
     });
+    setFormAcademy(c.academy || null);
   };
 
   // --- Media ---
@@ -139,16 +171,7 @@ export function TrainingAdmin() {
     try { await adminDeleteTrainingMedia(id); await load(); } catch (e) { fail(e); } finally { setBusy(false); }
   };
 
-  // --- Catalog + analytics + CSV ---
-  const syncCatalog = async () => {
-    setBusy(true); setError(null);
-    try {
-      const res: CatalogSyncResult = await adminSyncTrainingCatalog();
-      flash(`${res.note || 'Sync complete'} (added ${res.stats.added}, updated ${res.stats.updated})`);
-      await load();
-    } catch (e) { fail(e); } finally { setBusy(false); }
-  };
-
+  // --- Analytics + CSV ---
   const loadAnalytics = async () => {
     setShowAnalytics((v) => !v);
     if (!showAnalytics) {
@@ -182,9 +205,6 @@ export function TrainingAdmin() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={syncCatalog} disabled={busy}>
-            <RefreshCw className={`w-4 h-4 mr-2 ${busy ? 'animate-spin' : ''}`} /> Sync from Catalog
-          </Button>
           <Button variant="outline" size="sm" onClick={loadAnalytics}>
             <BarChart3 className="w-4 h-4 mr-2" /> {showAnalytics ? 'Hide' : 'Consumption'}
           </Button>
@@ -203,6 +223,8 @@ export function TrainingAdmin() {
       {notice && (
         <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-2 rounded-md text-sm">{notice}</div>
       )}
+
+      <AcademyCatalogPanel onChanged={() => void load()} onError={(msg) => setError(msg)} />
 
       {showAnalytics && (
         <Card>
@@ -288,7 +310,7 @@ export function TrainingAdmin() {
                     <h3 className="font-bold text-gray-900">{activeTrack.name}</h3>
                     <p className="text-xs text-gray-500">{activeTrack.description || 'No description'}</p>
                   </div>
-                  <Button size="sm" variant="outline" onClick={() => { setEditingCourseId(null); setCourseForm({ ...emptyCourseForm }); }}>
+                  <Button size="sm" variant="outline" onClick={() => { setEditingCourseId(null); setFormAcademy(null); setCourseForm({ ...emptyCourseForm }); }}>
                     <Plus className="w-4 h-4 mr-2" />Course
                   </Button>
                 </div>
@@ -297,15 +319,34 @@ export function TrainingAdmin() {
                   <div className="p-4 bg-gray-50 border-b space-y-3">
                     <div className="flex items-center justify-between">
                       <h4 className="font-semibold text-gray-800 text-sm">{editingCourseId ? 'Edit Course' : 'New Course'}</h4>
-                      <button onClick={() => { setCourseForm(null); setEditingCourseId(null); }}><X className="w-4 h-4 text-gray-400" /></button>
+                      <button onClick={closeCourseForm} aria-label="Close" title="Close"><X className="w-4 h-4 text-gray-400" /></button>
                     </div>
+                    {courseForm.academy_course_id !== null ? (
+                      <div className="flex items-center gap-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm">
+                        <Link2 className="w-4 h-4 text-emerald-700 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <div className="truncate text-emerald-900">
+                            Linked to <span className="font-medium">{formAcademy?.name || 'an Academy course'}</span>
+                            {formAcademy && !formAcademy.active && <span className="ml-2 text-[10px] font-bold uppercase text-amber-700">Retired</span>}
+                          </div>
+                          <div className="text-xs text-emerald-800/80">
+                            {formAcademy && <><span className="font-mono">{formAcademy.code}</span> · {academyMeta(formAcademy)} · </>}
+                            Code, link, type and duration follow Academy on every sync.
+                          </div>
+                        </div>
+                        <button onClick={unlinkAcademy} className="flex items-center gap-1 text-xs text-emerald-800 hover:text-red-600">
+                          <Unlink className="w-3.5 h-3.5" /> Unlink
+                        </button>
+                      </div>
+                    ) : null}
+                    <AcademyCoursePicker onPick={pickAcademy} />
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div><label className={labelClass}>Title</label><input className={inputClass} value={courseForm.title} onChange={(e) => setCourseForm({ ...courseForm, title: e.target.value })} /></div>
-                      <div><label className={labelClass}>Course Code (for gates)</label><input className={inputClass} value={courseForm.course_code} onChange={(e) => setCourseForm({ ...courseForm, course_code: e.target.value })} /></div>
+                      <div><label className={labelClass}>Course Code (for gates)</label><input className={inputClass} disabled={courseForm.academy_course_id !== null} value={courseForm.course_code} onChange={(e) => setCourseForm({ ...courseForm, course_code: e.target.value })} /></div>
                       <div><label className={labelClass}>Section</label><input className={inputClass} value={courseForm.section} onChange={(e) => setCourseForm({ ...courseForm, section: e.target.value })} /></div>
-                      <div><label className={labelClass}>Type</label><input className={inputClass} placeholder="eLearning / SelfPaced / Certification" value={courseForm.course_type} onChange={(e) => setCourseForm({ ...courseForm, course_type: e.target.value })} /></div>
-                      <div><label className={labelClass}>Duration</label><input className={inputClass} placeholder="3 hrs" value={courseForm.duration} onChange={(e) => setCourseForm({ ...courseForm, duration: e.target.value })} /></div>
-                      <div><label className={labelClass}>Catalog Deeplink URL</label><input className={inputClass} value={courseForm.external_url} onChange={(e) => setCourseForm({ ...courseForm, external_url: e.target.value })} /></div>
+                      <div><label className={labelClass}>Type</label><input className={inputClass} disabled={courseForm.academy_course_id !== null} placeholder="Self-paced / Instructor-led / Certification" value={courseForm.course_type} onChange={(e) => setCourseForm({ ...courseForm, course_type: e.target.value })} /></div>
+                      <div><label className={labelClass}>Duration</label><input className={inputClass} disabled={courseForm.academy_course_id !== null} placeholder="3 hrs" value={courseForm.duration} onChange={(e) => setCourseForm({ ...courseForm, duration: e.target.value })} /></div>
+                      <div><label className={labelClass}>Course Link</label><input className={inputClass} disabled={courseForm.academy_course_id !== null} value={courseForm.external_url} onChange={(e) => setCourseForm({ ...courseForm, external_url: e.target.value })} /></div>
                     </div>
                     <div><label className={labelClass}>Description</label><input className={inputClass} value={courseForm.description} onChange={(e) => setCourseForm({ ...courseForm, description: e.target.value })} /></div>
                     <div><label className={labelClass}>Unlocks (display)</label><input className={inputClass} value={courseForm.unlocks} onChange={(e) => setCourseForm({ ...courseForm, unlocks: e.target.value })} /></div>
@@ -325,8 +366,7 @@ export function TrainingAdmin() {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="text-sm font-medium text-gray-900 truncate">{c.title}</span>
-                              {c.external_url && <Link2 className="w-3.5 h-3.5 text-primary" />}
-                              {c.source === 'catalog' && <span className="text-[9px] uppercase font-bold text-gray-400 border border-gray-200 rounded px-1">catalog</span>}
+                              {c.academy ? <AcademyBadge academy={c.academy} /> : c.external_url && <Link2 className="w-3.5 h-3.5 text-primary" />}
                             </div>
                             <div className="text-[11px] text-gray-400">
                               {c.course_code || 'no code'}{c.media?.length ? ` · ${c.media.length} media` : ''}{c.status !== 'published' ? ` · ${c.status}` : ''}

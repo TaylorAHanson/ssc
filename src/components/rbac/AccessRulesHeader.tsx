@@ -8,10 +8,10 @@ export function AccessRulesHeader() {
   const guideEnabled = useGuideEnabled();
   return (
     <div>
-      <h2 className="flex items-center gap-2 text-xl font-bold text-gray-900">
+      <h2 className="flex items-center gap-2 text-lg font-bold text-gray-900">
         <KeyRound className="h-5 w-5" /> Access Rules
       </h2>
-      <p className="mt-1 text-sm text-gray-500">
+      <p className="mt-0.5 text-[13px] text-gray-500">
         Which groups hold which privileges on which securables, one row per workbook row, exported as CSV files for
         Terraform.
         {guideEnabled && (
@@ -53,7 +53,7 @@ export function ApproverStrip({ planes }: { planes: RbacPlanePermission[] }) {
   const missing = planes.filter((p) => p.group_status === 'not_found');
   return (
     <div className="space-y-1">
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs shadow-sm">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs shadow-sm">
         <span className="font-medium text-gray-500">Approvers</span>
         {planes.map((p) => (
           <ApproverItem key={p.plane} plane={p} />

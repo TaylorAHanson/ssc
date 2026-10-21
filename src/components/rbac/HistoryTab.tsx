@@ -4,13 +4,17 @@ import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
 import { api } from '../../services/api';
 import type { RbacChangeSetResult, RbacChangeSetSummary, RbacPermissions, RbacSheetInfo } from '../../types/rbac';
 import { Button } from '../ui/button';
+import { cn } from '../../lib/utils';
+import { ColGroup, ResetColumnsButton, ResizableTh } from './ColumnResizer';
 import { DiffView } from './DiffView';
 import { Badge, EmptyState, ErrorBanner, Pager, Skeleton, Spinner, type Tone, type ToastMessage } from './ui';
 import { useLoad } from './useLoad';
-import { errorMessage, formatTime, loadSheets, relativeTime, sourceLabel } from './utils';
+import { useResizableColumns } from './useResizableColumns';
+import { CELL, TEXT_CELL, errorMessage, formatTime, loadSheets, relativeTime, sourceLabel } from './utils';
 import { RevertDialog } from './RevertDialog';
 
 const LIMIT = 50;
+const COLUMNS = ['expand', 'when', 'source', 'by', 'reason', 'rows', 'sheets', 'actions'];
 
 const SOURCE_TONES: Record<string, Tone> = {
   import: 'blue',
@@ -48,6 +52,7 @@ export function HistoryTab({ permissions, notify }: {
   const sheets = sheetsState.data ?? [];
   const [expanded, setExpanded] = useState<string | null>(null);
   const [reverting, setReverting] = useState<RbacChangeSetSummary | null>(null);
+  const { attachTable, ...widths } = useResizableColumns('history', COLUMNS);
 
   const onReverted = (result: RbacChangeSetResult) => {
     setReverting(null);
@@ -76,25 +81,29 @@ export function HistoryTab({ permissions, notify }: {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-gray-500">
+        <p className="text-[13px] text-gray-500">
           Every change to the rules, newest first. Expand one to see its diff; revert records the opposite change.
         </p>
-        {history.loading && <Spinner label="Refreshing…" className="text-xs" />}
+        <span className="flex shrink-0 items-center gap-3">
+          {history.loading && <Spinner label="Refreshing…" className="text-xs" />}
+          <ResetColumnsButton columns={widths} />
+        </span>
       </div>
       <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <table className="w-full text-sm">
+        <table ref={attachTable} style={widths.tableStyle} className={cn('text-[13px]', !widths.active && 'w-full')}>
+          <ColGroup columns={widths} />
           <thead className="border-b bg-gray-50 text-left text-xs text-gray-500">
             <tr>
-              <th scope="col" className="w-8 px-2 py-2"><span className="sr-only">Expand</span></th>
-              <th scope="col" className="px-3 py-2 font-medium">When</th>
-              <th scope="col" className="px-3 py-2 font-medium">Source</th>
-              <th scope="col" className="px-3 py-2 font-medium">By</th>
-              <th scope="col" className="px-3 py-2 font-medium">Reason</th>
-              <th scope="col" className="px-3 py-2 font-medium">Rows</th>
-              <th scope="col" className="px-3 py-2 font-medium">Sheets</th>
-              <th scope="col" className="px-3 py-2 text-right font-medium"><span className="sr-only">Actions</span></th>
+              <th scope="col" data-col="expand" className="w-8 px-2 py-1.5"><span className="sr-only">Expand</span></th>
+              <ResizableTh columns={widths} id="when" label="When" />
+              <ResizableTh columns={widths} id="source" label="Source" />
+              <ResizableTh columns={widths} id="by" label="By" />
+              <ResizableTh columns={widths} id="reason" label="Reason" />
+              <ResizableTh columns={widths} id="rows" label="Rows" />
+              <ResizableTh columns={widths} id="sheets" label="Sheets" />
+              <th scope="col" data-col="actions" className="px-2 py-1.5 text-right font-medium"><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
@@ -105,7 +114,7 @@ export function HistoryTab({ permissions, notify }: {
               return (
                 <Fragment key={cs.id}>
                   <tr className="border-b align-top hover:bg-gray-50/50">
-                    <td className="px-2 py-2">
+                    <td className="px-2 py-1.5">
                       <button
                         type="button"
                         onClick={() => setExpanded(open ? null : cs.id)}
@@ -116,8 +125,8 @@ export function HistoryTab({ permissions, notify }: {
                         {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                       </button>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2" title={relativeTime(cs.created_at)}>{formatTime(cs.created_at)}</td>
-                    <td className="px-3 py-2">
+                    <td className={TEXT_CELL} title={`${formatTime(cs.created_at)} (${relativeTime(cs.created_at)})`}>{formatTime(cs.created_at)}</td>
+                    <td className={CELL}>
                       <div className="flex flex-col items-start gap-1">
                         <Badge tone={SOURCE_TONES[cs.source] ?? 'gray'}>{sourceLabel(cs.source)}</Badge>
                         {cs.source === 'request' && cs.source_ref && (
@@ -128,20 +137,20 @@ export function HistoryTab({ permissions, notify }: {
                         )}
                       </div>
                     </td>
-                    <td className="px-3 py-2 text-gray-700">{cs.actor || '—'}</td>
-                    <td className="max-w-xs px-3 py-2 text-gray-700">
-                      <span className="line-clamp-2" title={cs.reason || undefined}>{cs.reason || '—'}</span>
+                    <td className={cn(TEXT_CELL, 'text-gray-700')} title={cs.actor || undefined}>{cs.actor || '—'}</td>
+                    <td className={cn(CELL, 'text-gray-700', !widths.active && 'max-w-xs')}>
+                      <span className="line-clamp-2 break-words" title={cs.reason || undefined}>{cs.reason || '—'}</span>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-xs"><Counts cs={cs} /></td>
-                    <td className="max-w-[16rem] px-3 py-2 text-xs text-gray-600">
-                      <span className="line-clamp-2 font-mono" title={sheetNames.join(', ')}>{sheetNames.join(', ') || '—'}</span>
+                    <td className={cn(CELL, 'whitespace-nowrap text-xs')}><Counts cs={cs} /></td>
+                    <td className={cn(CELL, 'text-xs text-gray-600', !widths.active && 'max-w-[16rem]')}>
+                      <span className="line-clamp-2 break-words font-mono" title={sheetNames.join(', ')}>{sheetNames.join(', ') || '—'}</span>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right">
+                    <td className="whitespace-nowrap px-2 py-1 text-right">
                       {!cs.reverted_by && (
                         <Button
                           size="sm"
                           variant="outline"
-                          className="gap-1.5"
+                          className="h-7 gap-1.5 px-2.5 text-xs"
                           disabled={!allowed}
                           title={allowed ? undefined : 'You can only revert changes to types you can edit'}
                           onClick={() => setReverting(cs)}
@@ -153,7 +162,7 @@ export function HistoryTab({ permissions, notify }: {
                   </tr>
                   {open && (
                     <tr className="border-b bg-gray-50/60">
-                      <td colSpan={8} className="px-4 py-3">
+                      <td colSpan={8} className="px-3 py-2">
                         <ChangeSetDiffs id={cs.id} sheets={sheets} />
                       </td>
                     </tr>
@@ -186,7 +195,7 @@ function ChangeSetDiffs({ id, sheets }: { id: string; sheets: RbacSheetInfo[] })
   return (
     <div className="space-y-2">
       {detail.data.reason && (
-        <p className="text-sm text-gray-700"><span className="font-medium">Reason:</span> {detail.data.reason}</p>
+        <p className="text-[13px] text-gray-700"><span className="font-medium">Reason:</span> {detail.data.reason}</p>
       )}
       <p className="text-xs text-gray-500">Change set <code>{detail.data.id}</code></p>
       <DiffView diffs={detail.data.diffs} sheets={sheets} />

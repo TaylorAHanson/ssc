@@ -99,8 +99,34 @@ approver.
 
 **Training Studio** is where you author the learning tracks and courses people
 see on the **Training** page, upload their media, and see how much each one is
-used. Completions from another learning system can be uploaded under **Admin →
-Training Upload**.
+used. Completions from another learning system can be uploaded with
+**Academy CSV** here, or under **Admin → Settings → Training**, which also
+shows how many rows were skipped or failed.
+
+### Linking courses to Databricks Academy
+
+{{brand_name}} keeps a copy of the public Databricks Academy course catalog,
+refreshed nightly. The bar at the top of Training Studio shows when it last
+synced; select **Sync Academy catalog** to refresh it now.
+
+- When adding or editing a course, search **Pick from Academy** and choose a
+  course. Its title, code, link, type and duration are filled in, and the
+  course is *linked*: from then on, every sync keeps the code, link, type and
+  duration current. The title also follows Academy unless you change it.
+- When Academy replaces a course with a new version, linked courses move to
+  the new version automatically. A linked course Academy no longer lists, with
+  no newer version, is marked **Retired** and keeps its last details.
+- Courses that aren't linked are listed under the sync bar with a suggested
+  match where one is found (same code, a newer version of the same course, or
+  a closely matching title). Open the list, check each match, and select
+  **Link**, or **Link all suggested**. Courses with no match can be linked by
+  hand with **Pick from Academy**, or left as custom courses.
+- Workflow steps that require a course accept a completion of any version or
+  delivery of that course. A step written against an older course code still
+  passes for someone who completed the current version.
+
+The catalog address, sync schedule and course languages are under
+**Admin → Settings → Training**.
 
 ## Preview Features
 

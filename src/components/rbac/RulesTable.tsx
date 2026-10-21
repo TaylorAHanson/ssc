@@ -21,13 +21,16 @@ import { Input } from '../ui/input';
 import { cn } from '../../lib/utils';
 import { CellEditor } from './CellEditor';
 import { editorFor, flagFor, type CellFlag } from './cellOptions';
+import { ColGroup, ColumnResizer, ResetColumnsButton, ResizableTh } from './ColumnResizer';
 import type { GridRow } from './staging';
 import { Badge } from './ui';
+import { useResizableColumns } from './useResizableColumns';
 import { PACKED_FIELDS, cellValue, splitPacked } from './utils';
 
 const STICKY_END = 'sticky right-0 border-b border-l border-gray-200 px-2';
 
 const PAGE_SIZE = 100;
+const PAGER_BUTTON = 'h-7 px-2.5 text-xs';
 
 const features = tableFeatures({
   columnFilteringFeature,
@@ -55,6 +58,9 @@ interface RulesTableProps {
 }
 
 const cellId = (rowKey: string, col: number) => `rbac-cell-${rowKey}-${col}`;
+
+/** Keyed by position and header, so sheets of one type share widths but a reshaped sheet doesn't. */
+const widthKey = (header: string, col: number) => `${col}:${header}`;
 
 function focusCell(rowKey: string, col: number) {
   window.requestAnimationFrame(() => document.getElementById(cellId(rowKey, col))?.focus());
@@ -171,6 +177,12 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
     if (refocus) focusCell(row.key, col);
   };
 
+  const columnIds = useMemo(
+    () => ['num', 'status', ...sheet.columns.map((c, i) => widthKey(c.header, i)), ...(editable ? ['actions'] : [])],
+    [sheet.columns, editable],
+  );
+  const { attachTable, ...widths } = useResizableColumns(`rules:${sheet.plane}`, columnIds);
+
   const counts = useMemo(
     () => ({
       staged: rows.filter((r) => r.state !== 'clean').length,
@@ -180,10 +192,10 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
   );
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-3">
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[240px] flex-1">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-400" />
+          <Search className="absolute left-2.5 top-2 h-4 w-4 text-gray-400" />
           <Input
             value={globalFilter}
             onChange={(e) => {
@@ -192,7 +204,7 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
             }}
             placeholder="Search every column"
             aria-label="Search every column"
-            className="h-9 pl-8"
+            className="h-8 pl-8 text-[13px]"
           />
         </div>
         <select
@@ -202,7 +214,7 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
             setPage(0);
           }}
           aria-label="Show rows"
-          className="h-9 rounded-md border border-gray-300 bg-white px-2 text-sm"
+          className="h-8 rounded-md border border-gray-300 bg-white px-2 text-[13px]"
         >
           <option value="all">All rows</option>
           <option value="staged">Staged changes ({counts.staged})</option>
@@ -216,64 +228,83 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
             Clear filters
           </button>
         )}
+        <ResetColumnsButton columns={widths} className="ml-auto" />
         {editable && (
-          <Button size="sm" onClick={() => add()} className="ml-auto gap-1.5">
+          <Button size="sm" onClick={() => add()} className={cn('h-8 gap-1.5 text-[13px]', !widths.customized && 'ml-auto')}>
             <Plus className="h-4 w-4" /> Add row
           </Button>
         )}
       </div>
 
       <div className="max-h-[65vh] overflow-auto rounded-lg border border-gray-200 bg-white">
-        <table className="w-full border-separate border-spacing-0 text-sm">
+        <table
+          ref={attachTable}
+          style={widths.tableStyle}
+          className={cn('border-separate border-spacing-0 text-[13px]', !widths.active && 'w-full')}
+        >
+          <ColGroup columns={widths} />
           <thead className="sticky top-0 z-10 bg-gray-50 text-left text-xs text-gray-600">
             <tr>
-              <th scope="col" className="border-b border-gray-200 px-2 py-2 font-medium">#</th>
-              <th scope="col" className="border-b border-gray-200 px-2 py-2 font-medium">Status</th>
+              <th scope="col" data-col="num" className="border-b border-gray-200 px-2 py-1.5 font-medium">#</th>
+              <ResizableTh columns={widths} id="status" label="Status" className="border-b border-gray-200" />
               {table.getHeaderGroups()[0]?.headers.map((header) => {
                 const index = Number(header.column.id.slice(1));
                 const col = sheet.columns[index];
                 const sorted = header.column.getIsSorted();
+                const id = widthKey(col?.header ?? '', index);
                 return (
                   <th
                     key={header.id}
                     scope="col"
+                    data-col={id}
                     aria-sort={sorted === 'asc' ? 'ascending' : sorted === 'desc' ? 'descending' : 'none'}
-                    className="whitespace-nowrap border-b border-gray-200 px-2 py-2 font-medium"
+                    className="relative whitespace-nowrap border-b border-gray-200 py-1.5 pl-2 pr-3 font-medium"
                   >
-                    <button
-                      type="button"
-                      onClick={header.column.getToggleSortingHandler()}
-                      className="inline-flex items-center gap-1 hover:text-gray-900"
-                      title="Sort"
-                    >
-                      {col?.header}
-                      {sorted === 'asc' ? <ArrowUp className="h-3 w-3" /> : sorted === 'desc' ? <ArrowDown className="h-3 w-3" /> : <ArrowUpDown className="h-3 w-3 text-gray-300" />}
-                    </button>
-                    {col && !col.field && (
-                      <span title="Not a modelled column: shown and exported exactly as imported, not editable here.">
-                        <Lock className="ml-1 inline h-3 w-3 text-gray-400" aria-label="Read-only column" />
-                      </span>
-                    )}
+                    <span className="flex items-center">
+                      <button
+                        type="button"
+                        onClick={header.column.getToggleSortingHandler()}
+                        className={cn('inline-flex items-center gap-1 hover:text-gray-900', widths.active && 'min-w-0')}
+                        title={`Sort by ${col?.header ?? 'this column'}`}
+                      >
+                        <span className={cn(widths.active && 'truncate')}>{col?.header}</span>
+                        {sorted === 'asc' ? (
+                          <ArrowUp className="h-3 w-3 shrink-0" />
+                        ) : sorted === 'desc' ? (
+                          <ArrowDown className="h-3 w-3 shrink-0" />
+                        ) : (
+                          <ArrowUpDown className="h-3 w-3 shrink-0 text-gray-300" />
+                        )}
+                      </button>
+                      {col && !col.field && (
+                        <span className="shrink-0" title="Not a modelled column: shown and exported exactly as imported, not editable here.">
+                          <Lock className="ml-1 h-3 w-3 text-gray-400" aria-label="Read-only column" />
+                        </span>
+                      )}
+                    </span>
+                    <ColumnResizer columns={widths} id={id} label={col?.header ?? ''} />
                   </th>
                 );
               })}
-              {editable && <th scope="col" className={cn(STICKY_END, 'bg-gray-50 py-2 text-right font-medium')}>Actions</th>}
+              {editable && (
+                <th scope="col" data-col="actions" className={cn(STICKY_END, 'bg-gray-50 py-1.5 text-right font-medium')}>Actions</th>
+              )}
             </tr>
             <tr>
-              <th className="border-b border-gray-200 px-2 pb-2" />
-              <th className="border-b border-gray-200 px-2 pb-2" />
+              <th className="border-b border-gray-200 px-2 pb-1.5" />
+              <th className="border-b border-gray-200 px-2 pb-1.5" />
               {table.getHeaderGroups()[0]?.headers.map((header) => (
-                <th key={header.id} className="border-b border-gray-200 px-2 pb-2 font-normal">
+                <th key={header.id} className="border-b border-gray-200 px-2 pb-1.5 font-normal">
                   <Input
                     value={(header.column.getFilterValue() as string | undefined) ?? ''}
                     onChange={(e) => header.column.setFilterValue(e.target.value || undefined)}
                     placeholder="Filter"
                     aria-label={`Filter ${sheet.columns[Number(header.column.id.slice(1))]?.header ?? ''}`}
-                    className="h-7 min-w-[6rem] px-2 text-xs"
+                    className={cn('h-6 px-1.5 text-xs', widths.active ? 'min-w-0' : 'min-w-[5rem]')}
                   />
                 </th>
               ))}
-              {editable && <th className={cn(STICKY_END, 'bg-gray-50 pb-2')} />}
+              {editable && <th className={cn(STICKY_END, 'bg-gray-50 pb-1.5')} />}
             </tr>
           </thead>
           <tbody>
@@ -303,8 +334,8 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
                     deleted && 'bg-red-50/40 text-gray-400',
                   )}
                 >
-                  <td className="border-b border-gray-100 px-2 py-1.5 text-xs tabular-nums text-gray-400">{row.number}</td>
-                  <td className="border-b border-gray-100 px-2 py-1.5">
+                  <td className="border-b border-gray-100 px-2 py-1 text-[11px] tabular-nums text-gray-400">{row.number}</td>
+                  <td className="overflow-hidden border-b border-gray-100 px-2 py-1">
                     <RowStatus row={row} />
                   </td>
                   {sheet.columns.map((col, i) => {
@@ -320,12 +351,18 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
                         key={i}
                         data-cell={cellId(row.key, i)}
                         className={cn(
-                          'border-b border-gray-100 px-2 py-1.5',
+                          'border-b border-gray-100 px-2 py-1',
+                          // A narrowed column clips; the editor may spill over its neighbours instead.
+                          isEditing ? 'relative z-[2]' : 'overflow-hidden',
                           modified && 'bg-amber-50 shadow-[inset_0_0_0_1px_rgb(252,211,77)]',
                           !col.field && 'text-gray-500',
                           deleted && 'line-through',
                         )}
-                        title={was !== null ? `Was: ${was || '(empty)'}` : undefined}
+                        title={
+                          isEditing
+                            ? undefined
+                            : [value, was !== null ? `Was: ${was || '(empty)'}` : ''].filter(Boolean).join('\n') || undefined
+                        }
                       >
                         {isEditing && editorSpec ? (
                           <CellEditor
@@ -340,18 +377,18 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
                             type="button"
                             onClick={() => setEditing({ rowKey: row.key, col: i })}
                             aria-label={`Edit ${col.header}, row ${row.number}: ${value || 'empty'}${flag ? `. ${flag.reason}: ${[...flag.values].join(', ')}` : ''}`}
-                            className="-mx-1 block min-h-[1.5rem] w-full rounded px-1 text-left hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                            className="-mx-1 block min-h-[1.25rem] w-full rounded px-1 text-left hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                           >
-                            <CellContent value={value} packed={packed} flag={flag} />
+                            <CellContent value={value} packed={packed} flag={flag} fixed={widths.active} />
                           </button>
                         ) : (
-                          <CellContent value={value} packed={packed} flag={flag} />
+                          <CellContent value={value} packed={packed} flag={flag} fixed={widths.active} />
                         )}
                       </td>
                     );
                   })}
                   {editable && (
-                    <td className={cn(STICKY_END, 'whitespace-nowrap border-b-gray-100 bg-white py-1 text-right')}>
+                    <td className={cn(STICKY_END, 'whitespace-nowrap border-b-gray-100 bg-white py-0.5 text-right')}>
                       <RowActions row={row} onDelete={onDelete} onUndo={onUndo} onDuplicate={() => add(row)} />
                     </td>
                   )}
@@ -368,44 +405,59 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
             Rows {(pageIndex * PAGE_SIZE + 1).toLocaleString()}–{Math.min((pageIndex + 1) * PAGE_SIZE, visible.length).toLocaleString()} of{' '}
             {visible.length.toLocaleString()} · Page {pageIndex + 1} of {pageCount}
           </span>
-          <Button size="sm" variant="outline" disabled={pageIndex === 0} onClick={() => setPage(0)}>First</Button>
-          <Button size="sm" variant="outline" disabled={pageIndex === 0} onClick={() => setPage(pageIndex - 1)}>Previous</Button>
-          <Button size="sm" variant="outline" disabled={pageIndex >= pageCount - 1} onClick={() => setPage(pageIndex + 1)}>Next</Button>
-          <Button size="sm" variant="outline" disabled={pageIndex >= pageCount - 1} onClick={() => setPage(pageCount - 1)}>Last</Button>
+          <Button size="sm" variant="outline" className={PAGER_BUTTON} disabled={pageIndex === 0} onClick={() => setPage(0)}>First</Button>
+          <Button size="sm" variant="outline" className={PAGER_BUTTON} disabled={pageIndex === 0} onClick={() => setPage(pageIndex - 1)}>Previous</Button>
+          <Button size="sm" variant="outline" className={PAGER_BUTTON} disabled={pageIndex >= pageCount - 1} onClick={() => setPage(pageIndex + 1)}>Next</Button>
+          <Button size="sm" variant="outline" className={PAGER_BUTTON} disabled={pageIndex >= pageCount - 1} onClick={() => setPage(pageCount - 1)}>Last</Button>
         </div>
       )}
     </div>
   );
 }
 
-function CellContent({ value, packed, flag }: { value: string; packed: boolean; flag?: CellFlag | null }) {
+/**
+ * At most two lines, so rows stay short; the cell's title holds the whole value. `fixed`: the
+ * columns have set widths, so text that can't wrap ends in an ellipsis instead.
+ */
+function CellContent({ value, packed, flag, fixed }: { value: string; packed: boolean; flag?: CellFlag | null; fixed: boolean }) {
   if (!value) return <span className="text-gray-300">—</span>;
   if (!packed) {
     const identifier = value.length <= 40 && !/\s/.test(value);
+    const wrap = identifier ? (fixed ? 'block truncate' : 'whitespace-nowrap') : 'line-clamp-2 break-words';
     if (flag?.values.has(value)) {
       return (
-        <span title={flag.reason} className={cn('text-red-800', identifier ? 'whitespace-nowrap' : 'break-words')}>
+        <span title={`${value}: ${flag.reason}`} className={cn('text-red-800', wrap)}>
           <AlertTriangle aria-hidden="true" className="-mt-0.5 mr-1 inline h-3 w-3" />
           {value}
         </span>
       );
     }
-    return <span className={identifier ? 'whitespace-nowrap' : 'break-words'}>{value}</span>;
+    return <span className={wrap}>{value}</span>;
   }
+  // Chips flow inline so the two-line clamp applies; the minimum width fits a few per line.
   return (
-    <span className="flex flex-wrap gap-1">
+    <span className={cn('line-clamp-2 break-words leading-[18px]', !fixed && 'min-w-[11rem]')}>
       {splitPacked(value).map((atom, i) =>
         flag?.values.has(atom) ? (
           <span
             key={`${atom}-${i}`}
-            title={flag.reason}
-            className="inline-flex items-center gap-0.5 rounded border border-red-200 bg-red-50 px-1 text-xs text-red-800"
+            title={`${atom}: ${flag.reason}`}
+            className={cn(
+              'mr-1 inline-flex items-center gap-0.5 rounded border border-red-200 bg-red-50 px-1 align-top text-[11px] leading-4 text-red-800',
+              fixed && 'min-w-0 max-w-full',
+            )}
           >
-            <AlertTriangle aria-hidden="true" className="h-3 w-3" />
-            {atom}
+            <AlertTriangle aria-hidden="true" className="h-3 w-3 shrink-0" />
+            <span className={cn(fixed && 'truncate')}>{atom}</span>
           </span>
         ) : (
-          <span key={`${atom}-${i}`} className="rounded border border-gray-200 bg-gray-50 px-1 text-xs text-gray-700">
+          <span
+            key={`${atom}-${i}`}
+            className={cn(
+              'mr-1 inline-block rounded border border-gray-200 bg-gray-50 px-1 align-top text-[11px] leading-4 text-gray-700',
+              fixed && 'max-w-full truncate',
+            )}
+          >
             {atom}
           </span>
         ),
@@ -446,7 +498,7 @@ function RowActions({ row, onDelete, onUndo, onDuplicate }: {
   onUndo: (row: GridRow) => void;
   onDuplicate: () => void;
 }) {
-  const btn = 'inline-flex h-7 w-7 items-center justify-center rounded text-gray-500 hover:bg-gray-100 hover:text-gray-900';
+  const btn = 'inline-flex h-6 w-6 items-center justify-center rounded text-gray-500 hover:bg-gray-100 hover:text-gray-900';
   return (
     <span className="inline-flex gap-0.5">
       {row.state !== 'deleted' && (

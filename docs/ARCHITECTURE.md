@@ -833,17 +833,25 @@ tools/workflows granted in Unity Catalog.
     heartbeat recording, and the consumption→completion rule — watching every video in a course
     past `TRAINING_COMPLETION_THRESHOLD` writes a `TrainingCompletionModel` (`source="in_app"`) so
     **in-app consumption satisfies the same workflow training gates** as an Academy completion.
-    Also per-course consumption analytics and the catalog import.
-  - **Catalog scrape** (`app/providers/training/catalog_scraper.py`): no customer-facing
-    Academy API exists, so the admin "Sync from Catalog" action scrapes the public
-    `databricks.com/training/catalog` (via the SSRF-safe `safe_fetch`) for course titles +
-    stable course-detail deeplinks and upserts them as `source="catalog"` courses; course titles
-    link to the deeplink in the UI.
+    Also per-course consumption analytics.
+  - **Academy catalog** (`app/providers/training/academy.py`, `app/services/training_catalog.py`):
+    Databricks Academy runs on Docebo, whose public `GET <academy>/learn/v1/courses` returns the
+    whole catalog as JSON with no login. A sync (poller, `TRAINING_ACADEMY_SYNC_CRON`, plus once at
+    boot while the table is empty; or "Sync Academy catalog") pages through it via `safe_fetch`
+    (databricks.com only) into `training_catalog_courses`, retiring rows a successful sync no
+    longer lists. A course with `academy_course_id` follows its catalog row: each sync refreshes
+    its code, link, type and duration (and title, unless an admin edited it), and moves it to the
+    newest active version of the same course when Academy retires the old one. Course codes are
+    compared by **stem** (the acronym left after dropping audience, delivery, language and
+    version tokens: `ACAD-CUST-SLP-DINLC-EN-v3` → `DINLC`), so training gates and the Training
+    page accept a completion of any version or delivery of the required course. Unlinked courses
+    get link suggestions (same code, same stem, or a close title) that an admin accepts.
   - **API/UI**: `/api/v1/training` gains admin CRUD + media upload + Range stream + `/consumption`
-    + `/catalog/sync` + `/analytics/consumption` (writes gated to Platform/Governance Admin). The
+    + `/catalog/{sync,status,academy,suggestions}` + `/courses/{id}/academy-link` +
+    `/analytics/consumption` (writes gated to Platform/Governance Admin). The
     learner `Training.tsx` plays videos with a native HTML5 player that posts progress heartbeats;
     the admin **Training Studio** (`src/pages/admin/TrainingAdmin.tsx`, `/build/training`, gated by
-    the `training_admin` feature flag/ui tab) manages tracks/courses/media, catalog sync, the
+    the `training_admin` feature flag/ui tab) manages tracks/courses/media, Academy linking and sync, the
     consumption dashboard, and the legacy Academy CSV upload. A one-time idempotent seeder
     (`app/services/training_seed.py`) migrates the legacy `training.json` into DB rows on first
     boot.

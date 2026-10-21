@@ -125,10 +125,14 @@ class Settings(BaseSettings):
     TRAINING_MAX_UPLOAD_MB: int = int(os.getenv("TRAINING_MAX_UPLOAD_MB", "512"))
     # Fraction of a video that must be watched for it to count as "completed".
     TRAINING_COMPLETION_THRESHOLD: float = float(os.getenv("TRAINING_COMPLETION_THRESHOLD", "0.9"))
-    # Public Databricks training catalog scraped by the "Sync from Catalog"
-    # admin action. No customer-facing Academy API exists; this scrapes the
-    # public catalog for course titles + stable course-detail deeplinks.
-    TRAINING_CATALOG_URL: str = os.getenv("TRAINING_CATALOG_URL", "https://www.databricks.com/training/catalog")
+    # Databricks Academy catalog (Docebo's public /learn/v1/courses JSON), synced
+    # into training_catalog_courses so admins pick real courses and linked
+    # courses keep current codes, links and durations. Blank cron = manual sync.
+    TRAINING_ACADEMY_URL: str = os.getenv("TRAINING_ACADEMY_URL", "https://customer-academy.databricks.com")
+    TRAINING_ACADEMY_SYNC_CRON: str = os.getenv("TRAINING_ACADEMY_SYNC_CRON", "0 5 * * *")
+    TRAINING_ACADEMY_LANGUAGES: List[str] = [
+        s.strip() for s in os.getenv("TRAINING_ACADEMY_LANGUAGES", "english").split(",") if s.strip()
+    ]
 
     # Agent Skills (author-once, governed, OBO-discovered)
     # A "skill" is a folder containing a SKILL.md (YAML frontmatter + markdown

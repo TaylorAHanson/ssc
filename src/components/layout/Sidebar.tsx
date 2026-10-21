@@ -98,7 +98,7 @@ interface NavItem {
   allowedPersonas?: UserPersona[]; // If undefined, allowed for all
   // Shown by a backend permission check instead of persona (e.g. Access Rules,
   // which approver-group members see without holding an admin role).
-  gate?: 'access_rules' | 'metadata';
+  gate?: 'access_rules' | 'metadata' | 'requests';
   // Exactly one of `path` (internal route) or `href` (external URL) should
   // be set. External items render as `<a target="_blank">` and pick up a
   // small external-link glyph next to the label when the rail is expanded.
@@ -113,8 +113,8 @@ const navItems: NavItem[] = [
   { id: 'data_discovery', title: 'View & Search Catalog', icon: <Search className="w-5 h-5" />, path: '/discovery', group: 'Discover & Analyze' },
 
   // Self Service
-  { id: 'my_requests', title: 'My Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Requests & Approvals' },
-  { id: 'pending_approvals', title: 'Pending Approvals', icon: <CheckCircle2 className="w-5 h-5" />, path: '/approvals', group: 'Requests & Approvals' },
+  // One page with tabs; opens on "Needs my approval" while anything is waiting.
+  { id: 'requests', title: 'Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Requests & Approvals', gate: 'requests' },
   { id: 'reports', title: 'Reports', icon: <BarChart className="w-5 h-5" />, path: '/reports', group: 'Discover & Analyze' },
 
   // Community - Available to everyone
@@ -479,6 +479,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
     if (item.gate === 'access_rules') return canViewAccessRules;
     if (item.gate === 'metadata') return canBrowseMetadata;
+    if (item.gate === 'requests') {
+      return uiTabs?.my_requests !== false || uiTabs?.pending_approvals !== false;
+    }
     if (!item.allowedPersonas) return true;
     return item.allowedPersonas.includes(currentPersona);
   });
@@ -633,7 +636,13 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                     : item.id === 'home'
                       // The agent landing renders at both '/' and '/request'.
                       ? location.pathname === '/' || location.pathname === '/request'
+                    : item.gate === 'requests'
+                      ? location.pathname.startsWith('/requests') || location.pathname === '/approvals'
                       : location.pathname === item.path;
+                const itemPath = item.gate === 'requests' && (pendingCount > 0 || uiTabs?.my_requests === false)
+                  ? '/approvals'
+                  : item.path;
+                const badgeCount = item.gate === 'requests' ? pendingCount : 0;
                 // Icons in `navItems` are pre-built with `w-5 h-5`. In the
                 // collapsed rail they look puny, so re-clone them at a
                 // larger size so they read clearly.
@@ -663,16 +672,31 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                       )
                 );
                 const title = collapsed
-                  ? `${item.title}${isExternal ? ' (opens in new tab)' : ''}`
+                  ? `${item.title}${isExternal ? ' (opens in new tab)' : ''}${badgeCount > 0 ? ` (${badgeCount} pending)` : ''}`
                   : undefined;
                 const body = (
                   <>
-                    {renderedIcon}
+                    {collapsed && badgeCount > 0 ? (
+                      <span className="relative inline-flex">
+                        {renderedIcon}
+                        <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none">
+                          {badgeCount > 9 ? '9+' : badgeCount}
+                        </span>
+                      </span>
+                    ) : renderedIcon}
                     {!collapsed && (
                       <span className="flex-1 flex items-center gap-1.5">
                         <span>{item.title}</span>
                         {isExternal && (
                           <ExternalLink className="w-3 h-3 text-nav-text-muted shrink-0" />
+                        )}
+                        {badgeCount > 0 && (
+                          <span
+                            className="ml-auto min-w-[20px] h-5 px-1.5 bg-red-500 text-white text-[11px] font-bold rounded-full flex items-center justify-center leading-none"
+                            aria-label={`${badgeCount} pending`}
+                          >
+                            {badgeCount > 99 ? '99+' : badgeCount}
+                          </span>
                         )}
                       </span>
                     )}
@@ -696,7 +720,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 return (
                   <Link
                     key={itemKey}
-                    to={item.path!}
+                    to={itemPath!}
                     className={className}
                     title={title}
                   >
@@ -710,55 +734,31 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         })}
       </nav>
 
-      {/* ─── Bottom-aligned footer: notifications + user ───────── */}
+      {/* ─── Bottom-aligned footer: user menu (holds notifications) ── */}
       <div
         className={cn(
           "shrink-0 border-t border-nav-border",
           collapsed ? "p-2 space-y-1" : "p-3 space-y-1"
         )}
       >
-        <Link
-          to="/approvals"
-          aria-label={
-            pendingCount > 0
-              ? `Notifications (${pendingCount} pending)`
-              : "Notifications"
-          }
-          title={
-            collapsed && pendingCount > 0
-              ? `Notifications (${pendingCount} pending)`
-              : collapsed
-                ? "Notifications"
-                : undefined
-          }
-          className={cn(
-            "flex items-center text-sm transition-colors text-gray-300 hover:bg-nav-hover hover:text-white",
-            collapsed
-              ? "relative justify-center w-10 h-10 mx-auto rounded-lg bg-white/5"
-              : "gap-3 px-3 py-2 rounded-md"
-          )}
-        >
-          <span className="relative inline-flex">
-            <Bell className={cn(collapsed ? "w-6 h-6" : "w-5 h-5")} />
-            {pendingCount > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none">
-                {pendingCount > 9 ? '9+' : pendingCount}
-              </span>
-            )}
-          </span>
-          {!collapsed && (
-            <span className="flex-1 truncate">Notifications</span>
-          )}
-        </Link>
-
         <div ref={userMenuRef} className="relative">
           <button
             type="button"
             onClick={() => setUserMenuOpen((prev) => !prev)}
             aria-haspopup="menu"
             aria-expanded={userMenuOpen}
-            aria-label={`Account menu for ${userDisplayName}`}
-            title={collapsed ? userDisplayName : undefined}
+            aria-label={
+              pendingCount > 0
+                ? `Account menu for ${userDisplayName} (${pendingCount} pending)`
+                : `Account menu for ${userDisplayName}`
+            }
+            title={
+              collapsed
+                ? pendingCount > 0
+                  ? `${userDisplayName} (${pendingCount} pending)`
+                  : userDisplayName
+                : undefined
+            }
             className={cn(
               "w-full flex items-center text-sm transition-colors text-gray-200 hover:bg-nav-hover hover:text-white",
               collapsed
@@ -766,8 +766,16 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 : "gap-3 px-2 py-2 rounded-md"
             )}
           >
-            <span className="w-8 h-8 shrink-0 rounded-full bg-accent text-white flex items-center justify-center text-xs font-semibold shadow-sm">
+            <span className="relative w-8 h-8 shrink-0 rounded-full bg-accent text-white flex items-center justify-center text-xs font-semibold shadow-sm">
               {userInitials}
+              {pendingCount > 0 && (
+                <span
+                  aria-hidden="true"
+                  className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none ring-2 ring-nav-bg"
+                >
+                  {pendingCount > 9 ? '9+' : pendingCount}
+                </span>
+              )}
             </span>
             {!collapsed && (
               <>
@@ -882,6 +890,19 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               )}
 
               <div className="px-2 pt-2">
+                <Link
+                  to="/approvals"
+                  onClick={() => setUserMenuOpen(false)}
+                  className="w-full flex items-center gap-2 text-left px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-md transition-colors font-medium"
+                >
+                  <Bell className="w-4 h-4" />
+                  <span className="flex-1">Notifications</span>
+                  {pendingCount > 0 && (
+                    <span className="min-w-[20px] h-5 px-1.5 bg-red-500 text-white text-[11px] font-bold rounded-full flex items-center justify-center leading-none">
+                      {pendingCount > 99 ? '99+' : pendingCount}
+                    </span>
+                  )}
+                </Link>
                 {uiTabs?.guide !== false && (
                   <Link
                     to="/guide"

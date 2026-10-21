@@ -2,7 +2,7 @@
 
 Users coming from the old BI estate (e.g. Tableau) look up a dashboard they know
 and find the governed metric view that replaces it. Admins curate the list in
-Admin → Legacy Dashboards; everyone can read it. Domain and subdomain are taken
+Admin → Settings → Legacy Dashboards; everyone can read it. Domain and subdomain are taken
 from the mapped metric view so a mapping follows the view if it's recategorized.
 """
 import logging

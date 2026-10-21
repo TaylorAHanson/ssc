@@ -7,12 +7,19 @@ import type { RbacExportFile, RbacExportRun, RbacExportTarget, RbacPathCheckResu
 import { useVisibleInterval } from '../../hooks/useVisibleInterval';
 import { Button } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
+import { cn } from '../../lib/utils';
+import { ColGroup, ResetColumnsButton, ResizableTh } from './ColumnResizer';
 import { CompareCard } from './CompareCard';
 import { Badge, CopyButton, EmptyState, ErrorBanner, SectionTitle, Skeleton, Spinner, type Tone, type ToastMessage } from './ui';
 import { useLoad } from './useLoad';
-import { SETTINGS_PATH, errorMessage, formatBytes, formatTime, plural, relativeTime } from './utils';
+import { useResizableColumns } from './useResizableColumns';
+import { CELL, SETTINGS_PATH, TEXT_CELL, errorMessage, formatBytes, formatTime, plural, relativeTime } from './utils';
 
 const loadExports = () => api.getRbacExports();
+
+const DESTINATION_COLUMNS = ['target', 'path', 'sheets'];
+const DESTINATION_COLUMNS_TEST = [...DESTINATION_COLUMNS, 'test'];
+const RUN_COLUMNS = ['expand', 'status', 'trigger', 'by', 'started', 'finished', 'files', 'warnings'];
 
 const RUN_STATUS: Record<RbacExportRun['status'], { label: string; tone: Tone }> = {
   running: { label: 'Running', tone: 'blue' },
@@ -59,7 +66,7 @@ export function ExportsTab({ permissions, notify }: {
   const sheetNames = data.targets.flatMap((t) => t.sheets);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <Card>
         <CardContent className="space-y-3 pt-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
@@ -102,15 +109,8 @@ export function ExportsTab({ permissions, notify }: {
         </CardContent>
       </Card>
 
-      <section>
-        <SectionTitle>Destinations</SectionTitle>
-        <Destinations targets={data.targets} canTest={permissions.can_export} />
-      </section>
-
-      <section>
-        <SectionTitle>Runs</SectionTitle>
-        <RunHistory runs={data.runs} />
-      </section>
+      <Destinations targets={data.targets} canTest={permissions.can_export} />
+      <RunHistory runs={data.runs} />
 
       <CompareCard sheetNames={sheetNames} />
     </div>
@@ -161,6 +161,7 @@ function ExportNow({ onDone }: { onDone: (run: RbacExportRun) => void }) {
 
 function Destinations({ targets, canTest }: { targets: RbacExportTarget[]; canTest: boolean }) {
   const [checks, setChecks] = useState<Record<string, RbacPathCheckResult | { error: string } | 'busy'>>({});
+  const { attachTable, ...widths } = useResizableColumns('export-destinations', canTest ? DESTINATION_COLUMNS_TEST : DESTINATION_COLUMNS);
 
   const test = async (key: string) => {
     setChecks((c) => ({ ...c, [key]: 'busy' }));
@@ -172,18 +173,18 @@ function Destinations({ targets, canTest }: { targets: RbacExportTarget[]; canTe
     }
   };
 
-  if (targets.length === 0) {
-    return <EmptyState title="No destinations">Export paths are set per environment in Admin → Settings → Access Rules.</EmptyState>;
-  }
-  return (
+  const body = targets.length === 0 ? (
+    <EmptyState title="No destinations">Export paths are set per environment in Admin → Settings → Access Rules.</EmptyState>
+  ) : (
     <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-      <table className="w-full text-sm">
+      <table ref={attachTable} style={widths.tableStyle} className={cn('text-[13px]', !widths.active && 'w-full')}>
+        <ColGroup columns={widths} />
         <thead className="border-b bg-gray-50 text-left text-xs text-gray-500">
           <tr>
-            <th scope="col" className="px-3 py-2 font-medium">Target</th>
-            <th scope="col" className="px-3 py-2 font-medium">Path</th>
-            <th scope="col" className="px-3 py-2 font-medium">Sheets</th>
-            {canTest && <th scope="col" className="px-3 py-2 font-medium"><span className="sr-only">Test</span></th>}
+            <ResizableTh columns={widths} id="target" label="Target" />
+            <ResizableTh columns={widths} id="path" label="Path" />
+            <ResizableTh columns={widths} id="sheets" label="Sheets" />
+            {canTest && <th scope="col" data-col="test" className="px-2 py-1.5 font-medium"><span className="sr-only">Test</span></th>}
           </tr>
         </thead>
         <tbody>
@@ -191,10 +192,10 @@ function Destinations({ targets, canTest }: { targets: RbacExportTarget[]; canTe
             const check = checks[t.key];
             return (
               <tr key={t.key} className="border-b align-top last:border-b-0">
-                <td className="whitespace-nowrap px-3 py-2 font-medium text-gray-900">{t.label}</td>
-                <td className="px-3 py-2">
+                <td className={cn(TEXT_CELL, 'font-medium text-gray-900')} title={t.label}>{t.label}</td>
+                <td className={CELL}>
                   {t.configured && t.path ? (
-                    <code className="break-all text-xs text-gray-800">{t.path}</code>
+                    <code className="line-clamp-2 break-all text-xs text-gray-800" title={t.path}>{t.path}</code>
                   ) : (
                     <span className="flex items-start gap-1.5 text-xs text-amber-800">
                       <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -205,15 +206,17 @@ function Destinations({ targets, canTest }: { targets: RbacExportTarget[]; canTe
                     </span>
                   )}
                 </td>
-                <td className="px-3 py-2">
+                <td className={CELL}>
                   <div className="flex flex-wrap gap-1">
-                    {t.sheets.map((s) => <code key={s} className="rounded bg-gray-100 px-1 text-xs text-gray-700">{s}</code>)}
+                    {t.sheets.map((s) => (
+                      <code key={s} title={s} className={cn('rounded bg-gray-100 px-1 text-xs text-gray-700', widths.active && 'max-w-full truncate')}>{s}</code>
+                    ))}
                   </div>
                 </td>
                 {canTest && (
-                  <td className="px-3 py-2">
+                  <td className={CELL}>
                     <div className="flex flex-col items-start gap-1">
-                      <Button size="sm" variant="outline" disabled={!t.configured || check === 'busy'} onClick={() => test(t.key)}>
+                      <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs" disabled={!t.configured || check === 'busy'} onClick={() => test(t.key)}>
                         {check === 'busy' && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
                         Test path
                       </Button>
@@ -237,34 +240,45 @@ function Destinations({ targets, canTest }: { targets: RbacExportTarget[]; canTe
       </table>
     </div>
   );
+  return (
+    <section>
+      <SectionTitle actions={<ResetColumnsButton columns={widths} />}>Destinations</SectionTitle>
+      {body}
+    </section>
+  );
 }
 
 function RunHistory({ runs }: { runs: RbacExportRun[] }) {
   const [expanded, setExpanded] = useState<string | null>(null);
-  if (runs.length === 0) return <EmptyState title="No exports yet">Runs appear here with their files and checksums.</EmptyState>;
-  return (
+  const { attachTable, ...widths } = useResizableColumns('export-runs', RUN_COLUMNS);
+  const body = runs.length === 0 ? (
+    <EmptyState title="No exports yet">Runs appear here with their files and checksums.</EmptyState>
+  ) : (
     <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-      <table className="w-full text-sm">
+      <table ref={attachTable} style={widths.tableStyle} className={cn('text-[13px]', !widths.active && 'w-full')}>
+        <ColGroup columns={widths} />
         <thead className="border-b bg-gray-50 text-left text-xs text-gray-500">
           <tr>
-            <th scope="col" className="w-8 px-2 py-2"><span className="sr-only">Expand</span></th>
-            <th scope="col" className="px-3 py-2 font-medium">Status</th>
-            <th scope="col" className="px-3 py-2 font-medium">Trigger</th>
-            <th scope="col" className="px-3 py-2 font-medium">By</th>
-            <th scope="col" className="px-3 py-2 font-medium">Started</th>
-            <th scope="col" className="px-3 py-2 font-medium">Finished</th>
-            <th scope="col" className="px-3 py-2 font-medium">Files</th>
-            <th scope="col" className="px-3 py-2 font-medium">Warnings</th>
+            <th scope="col" data-col="expand" className="w-8 px-2 py-1.5"><span className="sr-only">Expand</span></th>
+            <ResizableTh columns={widths} id="status" label="Status" />
+            <ResizableTh columns={widths} id="trigger" label="Trigger" />
+            <ResizableTh columns={widths} id="by" label="By" />
+            <ResizableTh columns={widths} id="started" label="Started" />
+            <ResizableTh columns={widths} id="finished" label="Finished" />
+            <ResizableTh columns={widths} id="files" label="Files" />
+            <ResizableTh columns={widths} id="warnings" label="Warnings" />
           </tr>
         </thead>
         <tbody>
           {runs.map((run) => {
             const open = expanded === run.id;
             const st = RUN_STATUS[run.status] ?? { label: run.status, tone: 'gray' as Tone };
+            const trigger = TRIGGERS[run.trigger] ?? run.trigger;
+            const actor = run.actor || (run.trigger === 'schedule' ? 'Schedule' : '—');
             return (
               <Fragment key={run.id}>
                 <tr className="border-b align-top hover:bg-gray-50/50">
-                  <td className="px-2 py-2">
+                  <td className="px-2 py-1.5">
                     <button
                       type="button"
                       onClick={() => setExpanded(open ? null : run.id)}
@@ -275,20 +289,20 @@ function RunHistory({ runs }: { runs: RbacExportRun[] }) {
                       {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                     </button>
                   </td>
-                  <td className="px-3 py-2"><Badge tone={st.tone}>{st.label}</Badge></td>
-                  <td className="px-3 py-2 text-gray-700">{TRIGGERS[run.trigger] ?? run.trigger}</td>
-                  <td className="px-3 py-2 text-gray-700">{run.actor || (run.trigger === 'schedule' ? 'Schedule' : '—')}</td>
-                  <td className="whitespace-nowrap px-3 py-2" title={relativeTime(run.started_at)}>{formatTime(run.started_at)}</td>
-                  <td className="whitespace-nowrap px-3 py-2">{formatTime(run.finished_at)}</td>
-                  <td className="px-3 py-2 text-gray-700">{run.files.length}</td>
-                  <td className="px-3 py-2">
+                  <td className={CELL}><Badge tone={st.tone}>{st.label}</Badge></td>
+                  <td className={cn(TEXT_CELL, 'text-gray-700')} title={trigger}>{trigger}</td>
+                  <td className={cn(TEXT_CELL, 'text-gray-700')} title={actor}>{actor}</td>
+                  <td className={TEXT_CELL} title={`${formatTime(run.started_at)} (${relativeTime(run.started_at)})`}>{formatTime(run.started_at)}</td>
+                  <td className={TEXT_CELL} title={formatTime(run.finished_at)}>{formatTime(run.finished_at)}</td>
+                  <td className={cn(TEXT_CELL, 'text-gray-700')}>{run.files.length}</td>
+                  <td className={CELL}>
                     {run.warnings.length > 0 ? <Badge tone="amber">{run.warnings.length}</Badge> : <span className="text-gray-400">—</span>}
-                    {run.error && <div className="mt-1 text-xs text-red-700">{run.error}</div>}
+                    {run.error && <div className="mt-1 line-clamp-2 break-words text-xs text-red-700" title={run.error}>{run.error}</div>}
                   </td>
                 </tr>
                 {open && (
                   <tr className="border-b bg-gray-50/60">
-                    <td colSpan={8} className="space-y-3 px-4 py-3">
+                    <td colSpan={8} className="space-y-2 px-3 py-2">
                       {run.warnings.length > 0 && (
                         <ul className="list-disc space-y-0.5 pl-5 text-xs text-amber-800">
                           {run.warnings.map((w, i) => <li key={i}>{w}</li>)}
@@ -304,6 +318,12 @@ function RunHistory({ runs }: { runs: RbacExportRun[] }) {
         </tbody>
       </table>
     </div>
+  );
+  return (
+    <section>
+      <SectionTitle actions={<ResetColumnsButton columns={widths} />}>Runs</SectionTitle>
+      {body}
+    </section>
   );
 }
 

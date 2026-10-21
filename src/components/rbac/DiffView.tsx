@@ -76,7 +76,7 @@ function DiffCard({ diff, sheet, context }: { diff: RbacRowDiff; sheet?: RbacShe
   const what = securableSummary(diff.after ?? diff.before);
   return (
     <div className="rounded-md border border-gray-200 bg-white">
-      <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 px-2 py-1.5 text-xs">
         <Badge tone={op.tone}>{op.label}</Badge>
         <span className="font-medium text-gray-800">{diff.sheet}</span>
         {diff.environment && <span className="text-gray-500">{diff.environment}</span>}
@@ -84,14 +84,14 @@ function DiffCard({ diff, sheet, context }: { diff: RbacRowDiff; sheet?: RbacShe
         {context && <span className="ml-auto text-gray-500">{context}</span>}
       </div>
       {changes.length === 0 ? (
-        <p className="px-3 py-2 text-xs text-gray-500">No field values changed.</p>
+        <p className="px-2 py-1.5 text-xs text-gray-500">No field values changed.</p>
       ) : (
         <table className="w-full text-xs">
           <tbody>
             {changes.map((c) => (
               <tr key={c.key} className="border-t border-gray-50 align-top first:border-t-0">
-                <th scope="row" className="w-40 px-3 py-1.5 text-left font-medium text-gray-500">{c.label}</th>
-                <td className="px-3 py-1.5">
+                <th scope="row" className="w-36 px-2 py-1 text-left font-medium text-gray-500">{c.label}</th>
+                <td className="px-2 py-1">
                   {c.packed ? <AtomDiff op={diff.op} before={c.before} after={c.after} /> : <ValueDiff op={diff.op} before={c.before} after={c.after} />}
                 </td>
               </tr>

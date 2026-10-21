@@ -30,16 +30,9 @@ are:
   the oldest requests waiting for approval. Click any number or chart to filter
   the request list below it, and click a request to open its details.
   Scheduled runs, such as policy scans, are hidden unless you switch them on.
-- **Settings**: everything you can configure without a redeploy. See
+- **Settings**: everything you can configure without a redeploy, including
+  the legacy dashboard mappings and training-completion uploads. See
   [Settings, features and access](settings-and-access.md).
-- **Test Runner**: tools for managing the development database. You only need
-  these in a development environment.
-- **Training Upload**: upload a CSV of training completions from your learning
-  system. These completions update people's progress on the **Training** page
-  and satisfy any workflow step that requires a course.
-- **Legacy Dashboards**: map dashboards people used before, for example in
-  Tableau, to the metric views that replace them. People then find them in
-  Discover under **Legacy Dashboards** and when they search for the old name.
 - **Feedback**: everything people have sent with **Send feedback** in the
   account menu.
 

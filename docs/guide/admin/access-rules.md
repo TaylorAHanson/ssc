@@ -103,6 +103,13 @@ cells such as `USE_SCHEMA;SELECT` or a list of groups. Search across every
 column, or filter by column. A marker on a row means an open request will
 change it.
 
+To fit more on a small screen, drag the border between two column headings to
+make a column narrower or wider. Text that no longer fits ends in "…"; hover
+over it to read the whole value. {{brand_name}} remembers your widths in this
+browser, for each type of sheet. Double-click a border to put that column back,
+or select **Reset columns** above the grid to restore them all. The tables on
+the History, Exports and Import tabs resize the same way.
+
 If you can edit the sheet:
 
 1. Edit cells inline, add rows, duplicate a row or delete one. Your edits stay

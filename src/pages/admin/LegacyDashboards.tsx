@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { format, parseISO } from 'date-fns';
-import { AlertTriangle, ArrowLeftRight, Edit, ExternalLink, Loader2, Plus, Search, Trash2, Upload } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
+import { AlertTriangle, Edit, ExternalLink, Loader2, Plus, Search, Trash2, Upload } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
@@ -230,36 +229,24 @@ export function LegacyDashboards() {
   const set = (patch: Partial<LegacyMappingInput>) => setForm((f) => (f ? { ...f, ...patch } : f));
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-            <ArrowLeftRight className="w-5 h-5" /> Legacy Dashboards
-          </h2>
-          <p className="text-gray-500 text-sm mt-1 max-w-2xl">
-            Map dashboards people used before (e.g. in Tableau) to the metric views that replace them. Users see these
-            in Discover under <strong>Legacy Dashboards</strong>, on each metric view, and when they search by the old
-            dashboard name. This is a temporary aid for the migration.
-          </p>
+    <div className="space-y-5">
+      {!form && importText === null && (
+        <div className="flex items-center justify-end gap-2">
+          <Button
+            variant="outline"
+            onClick={() => {
+              setImportResult(null);
+              setImportText('');
+            }}
+            className="flex items-center gap-2"
+          >
+            <Upload className="w-4 h-4" /> Import
+          </Button>
+          <Button onClick={() => openForm()} className="flex items-center gap-2">
+            <Plus className="w-4 h-4" /> Add mapping
+          </Button>
         </div>
-        {!form && importText === null && (
-          <div className="flex items-center gap-2 shrink-0">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setImportResult(null);
-                setImportText('');
-              }}
-              className="flex items-center gap-2"
-            >
-              <Upload className="w-4 h-4" /> Import
-            </Button>
-            <Button onClick={() => openForm()} className="flex items-center gap-2">
-              <Plus className="w-4 h-4" /> Add mapping
-            </Button>
-          </div>
-        )}
-      </div>
+      )}
 
       {message && (
         <div
@@ -274,11 +261,11 @@ export function LegacyDashboards() {
       )}
 
       {form && (
-        <Card className="border-primary/20 shadow-md">
-          <CardHeader className="bg-gray-50/50 border-b">
-            <CardTitle className="text-lg">{editingId ? 'Edit mapping' : 'Add mapping'}</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-6">
+        <div className="rounded-md border border-primary/20 shadow-sm">
+          <h3 className="px-4 py-3 bg-gray-50/50 border-b text-base font-semibold text-gray-900">
+            {editingId ? 'Edit mapping' : 'Add mapping'}
+          </h3>
+          <div className="p-4">
             <form onSubmit={submit} className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -394,16 +381,14 @@ export function LegacyDashboards() {
                 </Button>
               </div>
             </form>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       )}
 
       {importText !== null && (
-        <Card className="border-primary/20 shadow-md">
-          <CardHeader className="bg-gray-50/50 border-b">
-            <CardTitle className="text-lg">Import mappings</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-6 space-y-3">
+        <div className="rounded-md border border-primary/20 shadow-sm">
+          <h3 className="px-4 py-3 bg-gray-50/50 border-b text-base font-semibold text-gray-900">Import mappings</h3>
+          <div className="p-4 space-y-3">
             <p className="text-sm text-gray-600">
               Paste rows from a spreadsheet or CSV. The first row is the header; <code>dashboard</code> and{' '}
               <code>metric_view</code> are required, the rest are optional. Rows already mapped are skipped.
@@ -476,8 +461,8 @@ export function LegacyDashboards() {
                 Import
               </Button>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       )}
 
       {importResult && importText === null && (
@@ -487,126 +472,124 @@ export function LegacyDashboards() {
         </div>
       )}
 
-      <Card>
-        <CardContent className="p-0">
-          {mappings.length > 0 && (
-            <div className="flex items-center justify-between gap-3 p-3 border-b border-gray-100">
-              <div className="relative w-full max-w-xs">
-                <Search className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  placeholder="Filter by dashboard, owner, metric view…"
-                  className="w-full pl-9 pr-3 py-1.5 text-sm bg-gray-50 border border-gray-200 rounded-md focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-              <span className="text-xs text-gray-500 whitespace-nowrap">
-                {shown.length === mappings.length ? mappings.length : `${shown.length} of ${mappings.length}`} mappings
-              </span>
+      <div className="rounded-md border border-gray-200">
+        {mappings.length > 0 && (
+          <div className="flex items-center justify-between gap-3 p-3 border-b border-gray-100">
+            <div className="relative w-full max-w-xs">
+              <Search className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Filter by dashboard, owner, metric view…"
+                className="w-full pl-9 pr-3 py-1.5 text-sm bg-gray-50 border border-gray-200 rounded-md focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+              />
             </div>
-          )}
+            <span className="text-xs text-gray-500 whitespace-nowrap">
+              {shown.length === mappings.length ? mappings.length : `${shown.length} of ${mappings.length}`} mappings
+            </span>
+          </div>
+        )}
 
-          {isLoading ? (
-            <div className="py-12 flex justify-center">
-              <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
-            </div>
-          ) : loadError ? (
-            <div className="py-12 text-center text-red-700 text-sm">{loadError}</div>
-          ) : mappings.length === 0 ? (
-            <div className="py-12 text-center text-gray-500 text-sm">
-              No legacy dashboards mapped yet. Add one, or import a list from a spreadsheet.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-gray-50 text-gray-900 font-medium">
-                  <tr>
-                    <th className="p-3">Legacy dashboard</th>
-                    <th className="p-3">Status</th>
-                    <th className="p-3">Owner</th>
-                    <th className="p-3">Metric view</th>
-                    <th className="p-3">Updated</th>
-                    <th className="p-3 text-right">Actions</th>
+        {isLoading ? (
+          <div className="py-12 flex justify-center">
+            <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+          </div>
+        ) : loadError ? (
+          <div className="py-12 text-center text-red-700 text-sm">{loadError}</div>
+        ) : mappings.length === 0 ? (
+          <div className="py-12 text-center text-gray-500 text-sm">
+            No legacy dashboards mapped yet. Add one, or import a list from a spreadsheet.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-gray-50 text-gray-900 font-medium">
+                <tr>
+                  <th className="p-3">Legacy dashboard</th>
+                  <th className="p-3">Status</th>
+                  <th className="p-3">Owner</th>
+                  <th className="p-3">Metric view</th>
+                  <th className="p-3">Updated</th>
+                  <th className="p-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {shown.map((m) => (
+                  <tr key={m.id} className={`hover:bg-gray-50 align-top ${editingId === m.id ? 'bg-primary/5' : ''}`}>
+                    <td className="p-3">
+                      <div className="font-medium text-gray-900 flex items-center gap-1.5">
+                        {m.dashboard}
+                        {m.url && (
+                          <a href={m.url} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-gray-600" title={m.url}>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                      </div>
+                      {m.description && <div className="text-xs text-gray-500 line-clamp-1 max-w-sm">{m.description}</div>}
+                    </td>
+                    <td className="p-3">
+                      <LegacyStatusBadge status={m.status} />
+                    </td>
+                    <td className="p-3 text-gray-600">{m.owner || <span className="text-gray-300">—</span>}</td>
+                    <td className="p-3">
+                      <div className="font-mono text-xs text-gray-800" title={m.metric_view_id}>
+                        {prettyMetricViewName(m.metric_view)}
+                      </div>
+                      {m.in_catalog ? (
+                        <div className="text-xs text-gray-500">{[m.domain, m.subdomain].filter(Boolean).join(' › ')}</div>
+                      ) : (
+                        <div className="text-xs text-amber-700 inline-flex items-center gap-1" title={m.metric_view_id}>
+                          <AlertTriangle className="w-3 h-3" /> No longer in the catalog — hidden in Discover
+                        </div>
+                      )}
+                    </td>
+                    <td className="p-3 text-xs text-gray-500 whitespace-nowrap">
+                      {format(parseISO(m.updated_at), 'MMM d, yyyy')}
+                      {m.updated_by && <div className="text-gray-400 truncate max-w-[10rem]" title={m.updated_by}>{m.updated_by}</div>}
+                    </td>
+                    <td className="p-3 text-right whitespace-nowrap">
+                      {confirmDeleteId === m.id ? (
+                        <div className="inline-flex items-center gap-2 text-xs">
+                          <span className="text-gray-600">Delete?</span>
+                          <button type="button" onClick={() => remove(m)} className="font-semibold text-red-700 hover:text-red-800">
+                            Delete
+                          </button>
+                          <button type="button" onClick={() => setConfirmDeleteId(null)} className="text-gray-500 hover:text-gray-700">
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => openForm(m)}
+                            className="p-1 text-gray-400 hover:text-blue-600 transition-colors"
+                            title="Edit"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(m.id)}
+                            className="p-1 text-gray-400 hover:text-red-600 transition-colors"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {shown.map((m) => (
-                    <tr key={m.id} className={`hover:bg-gray-50 align-top ${editingId === m.id ? 'bg-primary/5' : ''}`}>
-                      <td className="p-3">
-                        <div className="font-medium text-gray-900 flex items-center gap-1.5">
-                          {m.dashboard}
-                          {m.url && (
-                            <a href={m.url} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-gray-600" title={m.url}>
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
-                          )}
-                        </div>
-                        {m.description && <div className="text-xs text-gray-500 line-clamp-1 max-w-sm">{m.description}</div>}
-                      </td>
-                      <td className="p-3">
-                        <LegacyStatusBadge status={m.status} />
-                      </td>
-                      <td className="p-3 text-gray-600">{m.owner || <span className="text-gray-300">—</span>}</td>
-                      <td className="p-3">
-                        <div className="font-mono text-xs text-gray-800" title={m.metric_view_id}>
-                          {prettyMetricViewName(m.metric_view)}
-                        </div>
-                        {m.in_catalog ? (
-                          <div className="text-xs text-gray-500">{[m.domain, m.subdomain].filter(Boolean).join(' › ')}</div>
-                        ) : (
-                          <div className="text-xs text-amber-700 inline-flex items-center gap-1" title={m.metric_view_id}>
-                            <AlertTriangle className="w-3 h-3" /> No longer in the catalog — hidden in Discover
-                          </div>
-                        )}
-                      </td>
-                      <td className="p-3 text-xs text-gray-500 whitespace-nowrap">
-                        {format(parseISO(m.updated_at), 'MMM d, yyyy')}
-                        {m.updated_by && <div className="text-gray-400 truncate max-w-[10rem]" title={m.updated_by}>{m.updated_by}</div>}
-                      </td>
-                      <td className="p-3 text-right whitespace-nowrap">
-                        {confirmDeleteId === m.id ? (
-                          <div className="inline-flex items-center gap-2 text-xs">
-                            <span className="text-gray-600">Delete?</span>
-                            <button type="button" onClick={() => remove(m)} className="font-semibold text-red-700 hover:text-red-800">
-                              Delete
-                            </button>
-                            <button type="button" onClick={() => setConfirmDeleteId(null)} className="text-gray-500 hover:text-gray-700">
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex items-center justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openForm(m)}
-                              className="p-1 text-gray-400 hover:text-blue-600 transition-colors"
-                              title="Edit"
-                            >
-                              <Edit className="w-4 h-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteId(m.id)}
-                              className="p-1 text-gray-400 hover:text-red-600 transition-colors"
-                              title="Delete"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {shown.length === 0 && (
-                <div className="py-8 text-center text-gray-500 text-sm">No mappings match “{filter}”.</div>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                ))}
+              </tbody>
+            </table>
+            {shown.length === 0 && (
+              <div className="py-8 text-center text-gray-500 text-sm">No mappings match “{filter}”.</div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -6,7 +6,8 @@ Three surfaces:
   consumption/status), ``GET /media/{id}/stream`` (Range-enabled media
   streaming), ``POST /consumption`` (playback progress heartbeats).
 * **Admin** — CRUD for tracks/courses/media (media bytes go to a UC Volume),
-  ``POST /catalog/sync`` (scrape the public catalog), ``GET
+  the Databricks Academy catalog (``/catalog/*``: sync, search, status, link
+  suggestions; ``POST /courses/{id}/academy-link``), ``GET
   /analytics/consumption``, and the legacy ``POST /upload`` (Academy CSV).
 * **Workflow editor** — ``GET /courses`` (flat course list for the training-gate
   course picker).
@@ -26,9 +27,10 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.core.config import settings
 from app.models.user import User
-from app.providers.training.catalog_scraper import scrape_catalog
+from app.providers.training.academy import codes_match
 from app.providers.training.client import TrainingProvider
 from app.providers.training.storage import TrainingMediaStorage
+from app.services import training_catalog
 from app.services.training_service import TrainingService
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,7 @@ class CourseCreate(BaseModel):
     unlocks: Optional[str] = None
     status: str = "published"
     sort_order: Optional[int] = None
+    academy_course_id: Optional[int] = None
 
 
 class CourseUpdate(BaseModel):
@@ -86,6 +89,13 @@ class CourseUpdate(BaseModel):
     status: Optional[str] = None
     sort_order: Optional[int] = None
     track_id: Optional[str] = None
+    # Explicit null unlinks the course from the Academy catalog.
+    academy_course_id: Optional[int] = None
+
+
+class AcademyLink(BaseModel):
+    academy_course_id: Optional[int] = None
+    adopt_title: bool = True
 
 
 class MediaUpdate(BaseModel):
@@ -123,6 +133,9 @@ def get_my_training(
         track_payloads.append((track, courses))
 
     media_by_course = TrainingService.media_by_course(db, course_ids)
+    academy_rows = training_catalog.catalog_rows_by_id(
+        db, (c.academy_course_id for _, cs in track_payloads for c in cs)
+    )
     consumption = TrainingService.consumption_for_user(db, current_user.email, course_ids)
 
     result_tracks: List[Dict[str, Any]] = []
@@ -148,13 +161,13 @@ def get_my_training(
                         videos_completed += 1
 
             in_app_complete = bool(videos) and videos_completed == len(videos)
-            code_complete = bool(course.course_code) and course.course_code in completed_codes
+            code_complete = codes_match(course.course_code, completed_codes)
             completed = in_app_complete or code_complete
             if completed:
                 completed_count += 1
             progress = (sum(pct_values) / len(pct_values)) if pct_values else (1.0 if completed else 0.0)
 
-            cd = TrainingService.course_to_dict(db, course)
+            cd = TrainingService.course_to_dict(db, course, academy_rows=academy_rows)
             cd["media"] = media_payload
             cd["status"] = "completed" if completed else ("in_progress" if progress > 0 else "not_started")
             cd["progress"] = round(progress, 3)
@@ -338,10 +351,14 @@ def admin_create_course(
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     db: Session = Depends(deps.get_db),
 ):
+    fields = body.model_dump()
+    academy_course_id = fields.pop("academy_course_id", None)
     try:
         course = TrainingService.create_course(
-            db, track_id=track_id, created_by=current_user.email, **body.model_dump()
+            db, track_id=track_id, created_by=current_user.email, **fields
         )
+        if academy_course_id is not None:
+            course = training_catalog.link_course(db, course, academy_course_id, adopt_title=False)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return TrainingService.course_to_dict(db, course, include_media=True)
@@ -354,8 +371,13 @@ def admin_update_course(
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     db: Session = Depends(deps.get_db),
 ):
+    fields = body.model_dump(exclude_unset=True)
+    relink = "academy_course_id" in fields
+    academy_course_id = fields.pop("academy_course_id", None)
     try:
-        course = TrainingService.update_course(db, course_id, **body.model_dump(exclude_unset=True))
+        course = TrainingService.update_course(db, course_id, **fields)
+        if relink and academy_course_id != course.academy_course_id:
+            course = training_catalog.link_course(db, course, academy_course_id, adopt_title=False)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return TrainingService.course_to_dict(db, course, include_media=True)
@@ -465,18 +487,55 @@ def admin_delete_media(
 @router.post("/catalog/sync", response_model=Dict[str, Any])
 async def admin_sync_catalog(
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+):
+    """Sync the Databricks Academy catalog now and refresh linked courses."""
+    return await training_catalog.run_sync("manual")
+
+
+@router.get("/catalog/status", response_model=Dict[str, Any])
+def admin_catalog_status(
+    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     db: Session = Depends(deps.get_db),
 ):
-    """Scrape the public Databricks training catalog and import its courses."""
-    result = await scrape_catalog(settings.TRAINING_CATALOG_URL)
-    courses = result.get("courses", []) if result.get("ok") else []
-    stats = TrainingService.sync_catalog_courses(db, courses, created_by=current_user.email)
-    return {
-        "ok": bool(result.get("ok")),
-        "note": result.get("note"),
-        "found": len(courses),
-        "stats": stats,
-    }
+    return training_catalog.status(db)
+
+
+@router.get("/catalog/academy", response_model=List[Dict[str, Any]])
+def admin_search_catalog(
+    q: str = "",
+    limit: int = 25,
+    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    db: Session = Depends(deps.get_db),
+):
+    """Search the synced Academy catalog by name or course code."""
+    return training_catalog.search(db, q, limit)
+
+
+@router.get("/catalog/suggestions", response_model=Dict[str, Any])
+def admin_catalog_suggestions(
+    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    db: Session = Depends(deps.get_db),
+):
+    """Unlinked or retired courses with the Academy course each most likely is."""
+    return training_catalog.suggestions(db)
+
+
+@router.post("/courses/{course_id}/academy-link", response_model=Dict[str, Any])
+def admin_link_course(
+    course_id: str,
+    body: AcademyLink,
+    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    db: Session = Depends(deps.get_db),
+):
+    """Link a course to an Academy catalog course (or unlink it with null)."""
+    course = TrainingService.get_course(db, course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    try:
+        course = training_catalog.link_course(db, course, body.academy_course_id, adopt_title=body.adopt_title)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return TrainingService.course_to_dict(db, course, include_media=True)
 
 
 @router.get("/analytics/consumption", response_model=List[Dict[str, Any]])

@@ -93,7 +93,7 @@ export function AccessRules() {
     body = (
       <>
         <ApproverStrip planes={data.planes} />
-        <div role="tablist" aria-label="Access Rules sections" className="flex gap-2 border-b border-gray-200">
+        <div role="tablist" aria-label="Access Rules sections" className="flex gap-1 border-b border-gray-200">
           {tabs.map((t) => (
             <button
               key={t}
@@ -103,11 +103,11 @@ export function AccessRules() {
               aria-selected={active === t}
               aria-controls="rbac-tabpanel"
               onClick={() => switchTab(t)}
-              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors ${active === t ? 'border-b-2 border-primary text-primary' : 'text-gray-600 hover:text-gray-900'}`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-[13px] font-medium transition-colors ${active === t ? 'border-b-2 border-primary text-primary' : 'text-gray-600 hover:text-gray-900'}`}
             >
               {TAB_LABELS[t]}
               {t === 'rules' && dirty && (
-                <span className="rounded-full bg-amber-100 px-2 text-xs text-amber-800">{staged.length} staged</span>
+                <span className="rounded-full bg-amber-100 px-1.5 text-[11px] text-amber-800">{staged.length} staged</span>
               )}
             </button>
           ))}
@@ -134,7 +134,7 @@ export function AccessRules() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <AccessRulesHeader />
       {body}
       {toast && <Toast toast={toast} onDismiss={dismissToast} />}

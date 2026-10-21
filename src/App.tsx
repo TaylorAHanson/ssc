@@ -5,7 +5,6 @@ import { Home } from './pages/Home';
 import { DataDiscovery } from './pages/DataDiscovery';
 import { Requests } from './pages/Requests';
 import { Admin } from './pages/Admin';
-import { Approvals } from './pages/Approvals';
 import { Training } from './pages/Training';
 import { Events } from './pages/Events';
 import { ReusableAssets } from './pages/ReusableAssets';
@@ -91,7 +90,8 @@ function App() {
           <Route path="/discovery" element={<DataDiscovery />} />
           <Route path="/requests" element={<Requests />} />
           <Route path="/requests/:requestId" element={<Requests />} />
-          <Route path="/approvals" element={<Approvals />} />
+          {/* Same page as /requests, opened on the approver's tab. */}
+          <Route path="/approvals" element={<Requests />} />
           <Route path="/reports" element={<AdminReports />} />
           <Route
             path="/admin"

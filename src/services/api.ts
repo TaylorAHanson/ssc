@@ -255,8 +255,9 @@ export async function createRequest(
   return getRequest(result.request_id);
 }
 
-export async function getRequests(): Promise<Request[]> {
-  const response = await fetch(`${API_BASE_URL}/requests`, {
+/** `mine` limits a Platform Admin to their own requests (everyone else only ever gets theirs). */
+export async function getRequests(options: { mine?: boolean } = {}): Promise<Request[]> {
+  const response = await fetch(`${API_BASE_URL}/requests${options.mine ? '?mine=true' : ''}`, {
     headers: getHeaders()
   });
   if (!response.ok) {
@@ -667,6 +668,8 @@ export interface SettingsState {
   readonly: ReadonlySettingField[];
   sections: SettingsSection[];
   group_descriptions?: Record<string, string>;
+  /** Feature/tab keys a whole page needs; how client-rendered pages learn they're off. */
+  group_requires?: Record<string, string[]>;
   capabilities: Capability[];
   capability_sections: string[];
 }
@@ -796,55 +799,6 @@ export async function getTargetWorkspaces(): Promise<{
   return response.json();
 }
 
-// ... existing imports/exports
-
-export interface TestRunRequest {
-  path?: string;
-  args?: string[];
-}
-
-export interface TestRunResponse {
-  exit_code: number;
-  stdout: string;
-  stderr: string;
-  command: string[];
-}
-
-export async function runTests(path?: string, args?: string[]): Promise<TestRunResponse> {
-  const response = await fetch(`${API_BASE_URL}/dev/tests`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({ path, args }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail || `Failed to run tests: ${response.statusText}`);
-  }
-  return response.json();
-}
-
-export async function listTests(): Promise<string[]> {
-  const response = await fetch(`${API_BASE_URL}/dev/tests/list`, {
-    headers: getHeaders()
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to list tests: ${response.statusText}`);
-  }
-  const data = await response.json();
-  return data.tests;
-}
-
-export async function resetDb(): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/dev/db/reset`, {
-    method: 'POST',
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to reset database: ${response.statusText}`);
-  }
-}
-
-
 /**
  * Reports API
  */
@@ -906,15 +860,6 @@ export async function listExecutions(subscriptionId?: string): Promise<Execution
     throw new Error(`Failed to list executions: ${response.statusText}`);
   }
   return response.json();
-}
-
-export async function seedDb(): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/dev/db/seed`, {
-    method: 'POST',
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to seed database: ${response.statusText}`);
-  }
 }
 
 // Training API
@@ -1004,6 +949,9 @@ export interface TrainingCourseFull {
   source: string;
   sort_order: number;
   status: string;
+  // The Academy catalog course this follows; null to unlink.
+  academy_course_id?: number | null;
+  academy?: AcademyCourse | null;
   media?: TrainingMedia[];
   // Present on the learner /me payload:
   progress?: number;
@@ -1026,11 +974,67 @@ export interface TrainingTrackFull {
   total_count?: number;
 }
 
-export interface CatalogSyncResult {
+export interface AcademyCourse {
+  id: number;
+  code: string | null;
+  name: string;
+  description?: string | null;
+  course_type: string | null;
+  type_label: string | null;
+  duration_seconds: number | null;
+  duration: string | null;
+  language: string | null;
+  is_free: boolean;
+  url: string | null;
+  active: boolean;
+  last_seen_at: string | null;
+}
+
+export interface AcademySync {
+  id: number;
+  started_at: string | null;
+  finished_at: string | null;
   ok: boolean;
-  note?: string;
-  found: number;
-  stats: { added: number; updated: number; skipped: number };
+  trigger: string;
+  error: string | null;
+  courses: number;
+  added: number;
+  retired: number;
+  linked_updated: number;
+  relinked: number;
+}
+
+export interface AcademyCatalogStatus {
+  academy_url: string;
+  sync_cron: string;
+  catalog_courses: number;
+  last_sync: AcademySync | null;
+  last_successful_sync: AcademySync | null;
+  syncing: boolean;
+  courses_total: number;
+  courses_linked: number;
+  courses_retired: number;
+  courses_unlinked: number;
+}
+
+export interface AcademyLinkCandidate {
+  course_id: string;
+  course_title: string;
+  course_code: string | null;
+  track_id: string;
+  track_name: string | null;
+  retired: boolean;
+}
+
+export interface AcademySuggestion extends AcademyLinkCandidate {
+  reason: 'same_code' | 'newer_version' | 'similar_title';
+  score?: number | null;
+  match: AcademyCourse;
+}
+
+export interface AcademySuggestions {
+  suggestions: AcademySuggestion[];
+  unmatched: AcademyLinkCandidate[];
 }
 
 export interface CourseConsumptionRow {
@@ -1151,12 +1155,45 @@ export async function adminDeleteTrainingMedia(mediaId: string): Promise<void> {
   if (!response.ok) throw new Error(`Failed to delete media: ${response.statusText}`);
 }
 
-// Admin: catalog sync + analytics
-export async function adminSyncTrainingCatalog(): Promise<CatalogSyncResult> {
+// Admin: Academy catalog + analytics
+export async function adminSyncTrainingCatalog(): Promise<AcademySync> {
   const response = await fetch(`${API_BASE_URL}/training/catalog/sync`, {
     method: 'POST', headers: getHeaders(),
   });
   if (!response.ok) throw new Error(`Failed to sync catalog: ${response.statusText}`);
+  return response.json();
+}
+
+export async function adminAcademyCatalogStatus(): Promise<AcademyCatalogStatus> {
+  const response = await fetch(`${API_BASE_URL}/training/catalog/status`, { headers: getHeaders() });
+  if (!response.ok) throw new Error(`Failed to load catalog status: ${response.statusText}`);
+  return response.json();
+}
+
+export async function adminSearchAcademyCatalog(q: string, limit = 25): Promise<AcademyCourse[]> {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  const response = await fetch(`${API_BASE_URL}/training/catalog/academy?${params}`, { headers: getHeaders() });
+  if (!response.ok) throw new Error(`Failed to search the catalog: ${response.statusText}`);
+  return response.json();
+}
+
+export async function adminAcademySuggestions(): Promise<AcademySuggestions> {
+  const response = await fetch(`${API_BASE_URL}/training/catalog/suggestions`, { headers: getHeaders() });
+  if (!response.ok) throw new Error(`Failed to load link suggestions: ${response.statusText}`);
+  return response.json();
+}
+
+export async function adminLinkAcademyCourse(
+  courseId: string, academyCourseId: number | null, adoptTitle = true,
+): Promise<TrainingCourseFull> {
+  const response = await fetch(`${API_BASE_URL}/training/courses/${courseId}/academy-link`, {
+    method: 'POST', headers: getHeaders(),
+    body: JSON.stringify({ academy_course_id: academyCourseId, adopt_title: adoptTitle }),
+  });
+  if (!response.ok) {
+    const e = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(e.detail || `Failed to link course: ${response.statusText}`);
+  }
   return response.json();
 }
 
@@ -3843,10 +3880,6 @@ export const api = {
   createDelegation,
   deleteDelegation,
   editRequestParameters,
-  runTests,
-  listTests,
-  resetDb,
-  seedDb,
   getTrainingStatus,
   uploadTrainingData,
   getAllowlist,
@@ -3952,6 +3985,10 @@ export const api = {
   adminUploadTrainingMedia,
   adminDeleteTrainingMedia,
   adminSyncTrainingCatalog,
+  adminAcademyCatalogStatus,
+  adminSearchAcademyCatalog,
+  adminAcademySuggestions,
+  adminLinkAcademyCourse,
   adminTrainingConsumptionAnalytics,
   getPreviewFeatures,
   getPreviewSyncStatus,

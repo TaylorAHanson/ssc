@@ -12,7 +12,7 @@ organization uses and your role allows, so yours may be shorter than this list.
 | Section | Pages | What they're for |
 | --- | --- | --- |
 | Discover & Analyze | **Ask Anything**, **View & Search Catalog**, **Reports** | Chat with the assistant, browse and search the data catalog, and manage reports the assistant generates on a schedule. |
-| Requests & Approvals | **My Requests**, **Pending Approvals** | Follow the requests you've made, and act on the ones waiting for you. |
+| Requests & Approvals | **Requests** | Follow the requests you've made, and act on the ones waiting for you. |
 | Learn & Share | **Training**, **Event Calendar**, **Templates & Assets**, **Community Links**, **Guide** | Learning tracks, upcoming sessions, reusable patterns, recommended links, and this guide. |
 | Watch Tower | Governance tools | For governance and platform admins. See [Governance tools](admin/governance.md). |
 | Control Tower | Admin, workflow and catalog tools | For admins. See the [admin overview](admin/index.md). |
@@ -27,6 +27,8 @@ more room. Each section can be folded away by clicking its heading.
 
 Click your name at the bottom of the sidebar to open the account menu:
 
+- **Notifications** opens the approvals waiting for you, with a count when
+  there are any. See [Notifications](#notifications).
 - **Guide** opens this guide.
 - **Release notes** shows what changed in each version, newest first. The
   current version number is shown next to it.
@@ -38,8 +40,9 @@ Click your name at the bottom of the sidebar to open the account menu:
 
 ## Notifications
 
-The bell at the bottom of the sidebar shows how many approvals are waiting for
-you. Click it to go to **Pending Approvals**. See
+When approvals are waiting for you, a red count appears on **Requests** in the
+sidebar and on your initials at the bottom of it. Click either one (for your
+initials, then **Notifications**) to go to **Needs my approval**. See
 [Approve or reject a request](requests-and-approvals.md#approve-or-reject-a-request).
 
 ## What you can see depends on your role

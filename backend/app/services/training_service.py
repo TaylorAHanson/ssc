@@ -1,9 +1,9 @@
 """Training / lightweight-LMS service.
 
 Business logic for admin-authored learning tracks + courses, the media that
-backs each course (bytes on a UC Volume), per-learner consumption tracking, and
-the catalog-scrape import. Kept separate from the API layer so the same logic
-is reusable by tools/jobs.
+backs each course (bytes on a UC Volume) and per-learner consumption tracking.
+Academy catalog sync and linking live in ``training_catalog``. Kept separate
+from the API layer so the same logic is reusable by tools/jobs.
 
 Consumption → completion: when a learner watches every video in a course past
 ``TRAINING_COMPLETION_THRESHOLD`` the course is considered consumed; if the
@@ -21,12 +21,14 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.training import (
+    TrainingCatalogCourseModel,
     TrainingCompletionModel,
     TrainingConsumptionModel,
     TrainingCourseModel,
     TrainingMediaModel,
     TrainingTrackModel,
 )
+from app.services.training_catalog import catalog_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -524,73 +526,6 @@ class TrainingService:
         out.sort(key=lambda x: x["learners"], reverse=True)
         return out
 
-    # ------------------------------------------------------------ catalog sync
-
-    CATALOG_TRACK_NAME = "Databricks Training Catalog"
-
-    @staticmethod
-    def sync_catalog_courses(db: Session, scraped: List[Dict[str, str]],
-                             created_by: Optional[str] = None) -> Dict[str, int]:
-        """Upsert scraped ``{title, url}`` courses into the catalog track.
-
-        Matches existing catalog courses by ``external_url`` so a re-sync
-        updates titles rather than duplicating. Returns counts.
-        """
-        stats = {"added": 0, "updated": 0, "skipped": 0}
-        if not scraped:
-            return stats
-
-        track = (
-            db.query(TrainingTrackModel)
-            .filter(TrainingTrackModel.name == TrainingService.CATALOG_TRACK_NAME)
-            .first()
-        )
-        if not track:
-            track = TrainingService.create_track(
-                db,
-                name=TrainingService.CATALOG_TRACK_NAME,
-                description="Courses imported from the public Databricks training catalog.",
-                persona="Catalog",
-                source="catalog",
-                status="published",
-                created_by=created_by,
-            )
-
-        existing = {
-            c.external_url: c
-            for c in db.query(TrainingCourseModel)
-            .filter(TrainingCourseModel.track_id == track.id)
-            .all()
-            if c.external_url
-        }
-        for item in scraped:
-            url = (item.get("url") or "").strip()
-            title = (item.get("title") or "").strip()
-            if not url or not title:
-                stats["skipped"] += 1
-                continue
-            current = existing.get(url)
-            if current:
-                if current.title != title:
-                    current.title = title
-                    db.add(current)
-                    stats["updated"] += 1
-                else:
-                    stats["skipped"] += 1
-            else:
-                TrainingService.create_course(
-                    db,
-                    track_id=track.id,
-                    title=title,
-                    external_url=url,
-                    source="catalog",
-                    status="published",
-                    created_by=created_by,
-                )
-                stats["added"] += 1
-        db.commit()
-        return stats
-
     # ------------------------------------------------------------ serialization
 
     @staticmethod
@@ -627,7 +562,15 @@ class TrainingService:
 
     @staticmethod
     def course_to_dict(db: Session, course: TrainingCourseModel,
-                       include_media: bool = False) -> Dict[str, Any]:
+                       include_media: bool = False,
+                       academy_rows: Optional[Dict[int, TrainingCatalogCourseModel]] = None) -> Dict[str, Any]:
+        """``academy_rows`` (catalog rows by id) saves a lookup per course when serializing many."""
+        academy_row = None
+        if course.academy_course_id is not None:
+            academy_row = (
+                academy_rows.get(course.academy_course_id) if academy_rows is not None
+                else db.get(TrainingCatalogCourseModel, course.academy_course_id)
+            )
         data = {
             "id": course.id,
             "track_id": course.track_id,
@@ -635,6 +578,8 @@ class TrainingService:
             "description": course.description,
             "course_code": course.course_code,
             "external_url": course.external_url,
+            "academy_course_id": course.academy_course_id,
+            "academy": catalog_to_dict(academy_row),
             "section": course.section,
             "course_type": course.course_type,
             "duration": course.duration,

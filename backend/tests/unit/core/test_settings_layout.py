@@ -40,10 +40,25 @@ def test_every_group_is_in_exactly_one_section():
 
 
 def test_every_section_group_has_content():
-    special = {ss.FEATURES_GROUP, ss.ROLES_GROUP}
     field_groups = {f["group"] for f in ss.EDITABLE_FIELDS}
     for group in _section_groups():
-        assert group in special or group in field_groups, f"{group!r} has no fields"
+        assert group in ss.CLIENT_GROUPS or group in field_groups, f"{group!r} has no fields"
+
+
+def test_client_groups_are_placed():
+    for group in ss.CLIENT_GROUPS:
+        assert group in set(_section_groups()), group
+
+
+def test_only_card_pages_mix_fields_with_a_client_page():
+    # The Settings page renders fields above a card page's body, but the
+    # Features and Roles pages are entirely client-drawn and show no fields.
+    field_groups = {f["group"] for f in ss.EDITABLE_FIELDS}
+    assert ss.FEATURES_GROUP not in field_groups
+    assert ss.ROLES_GROUP not in field_groups
+    assert {f["key"] for f in ss.EDITABLE_FIELDS if f["group"] == ss.TRAINING_GROUP} == {
+        "TRAINING_ACADEMY_URL", "TRAINING_ACADEMY_SYNC_CRON", "TRAINING_ACADEMY_LANGUAGES",
+    }
 
 
 def test_group_descriptions_name_real_groups():
@@ -61,9 +76,9 @@ def test_group_requires_name_real_groups():
 def test_section_layout():
     assert [(s["title"], s["groups"]) for s in ss.SECTIONS] == [
         ("General", ["Appearance", ss.FEATURES_GROUP, ss.ROLES_GROUP, "Notifications"]),
-        ("Discover & Analyze", ["Agent", "Data Catalog"]),
+        ("Discover & Analyze", ["Agent", "Data Catalog", ss.LEGACY_DASHBOARDS_GROUP]),
         ("Requests & Approvals", ["Approvals", "Group Management (LMWS)", "App Code Review"]),
-        ("Learn & Share", ["Links & Embedded Apps", "Calendar"]),
+        ("Learn & Share", ["Links & Embedded Apps", "Calendar", ss.TRAINING_GROUP]),
         ("Watch Tower", ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager",
                          "Access Rules"]),
         ("Control Tower", ["Workflow Studio", "Preview Features"]),
@@ -99,6 +114,12 @@ def test_get_state_resolves_group_and_field_requires():
     assert by_key["EVENT_SYNC_CRON"]["requires"] == ["features.calendar"]
     assert by_key["CONTRACT_SYNC_CRON"]["requires"] == ["features.governance", "features.data_discovery"]
     assert by_key["SCAN_CATALOGS"]["requires"] == []
+
+
+def test_get_state_exposes_group_requires_for_client_pages():
+    group_requires = ss.get_state()["group_requires"]
+    assert group_requires[ss.LEGACY_DASHBOARDS_GROUP] == ["features.data_discovery"]
+    assert ss.TRAINING_GROUP not in group_requires
 
 
 # --- capabilities ---------------------------------------------------------
