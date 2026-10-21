@@ -154,10 +154,6 @@ def _outcome(item: PlanItem, status: str, detail: Optional[str] = None, **change
     return PlanOutcome(**data)
 
 
-def _catalog_of(fqn_key: str) -> str:
-    return fqn_key.partition(COLUMN_SEPARATOR)[0].split(".", 1)[0]
-
-
 class _FailureLog:
     """Warns about the first few failed statements and counts the rest (thread-safe)."""
 
@@ -218,34 +214,24 @@ def execute(provider, items: Sequence[PlanItem], *, workers: int = 1) -> List[Pl
     """Run the items' statements and return one outcome per item, in the order given.
 
     ``applied`` / ``noop`` (UNSET of a tag already gone) / ``failed`` (UC's error in
-    ``detail``) / ``skipped`` (an earlier statement for the same ``fqn_key`` failed, or
-    the catalog's claim failed: an unclaimed catalog isn't enforced). Never raises for
-    a statement failure.
+    ``detail``) / ``skipped`` (an earlier statement for the same ``fqn_key`` failed).
+    Never raises for a statement failure.
 
-    Claims run first, one at a time. Then each relation's statements (its own and its
-    columns', in the order given) run one after another, with up to ``workers``
-    relations in parallel.
+    Each relation's statements (its own and its columns', in the order given) run one
+    after another, with up to ``workers`` relations in parallel.
     """
     items = list(items)
     outcomes: List[Optional[PlanOutcome]] = [None] * len(items)
     failures = _FailureLog()
-    failed_claims: Set[str] = set()
     groups: Dict[str, List[int]] = {}
     for index, item in enumerate(items):
-        if item.operation != "claim":
-            groups.setdefault(item.fqn_key.partition(COLUMN_SEPARATOR)[0], []).append(index)
-            continue
-        outcomes[index] = _run_item(provider, item, failures)
-        if outcomes[index].status == "failed":
-            failed_claims.add(_catalog_of(item.fqn_key))
+        groups.setdefault(item.fqn_key.partition(COLUMN_SEPARATOR)[0], []).append(index)
 
     def run_group(indices: List[int]) -> None:
         failed_keys: Set[str] = set()
         for index in indices:
             item = items[index]
-            if _catalog_of(item.fqn_key) in failed_claims:
-                outcome = _outcome(item, "skipped", "Skipped: this deployment couldn't claim the catalog.")
-            elif item.fqn_key in failed_keys:
+            if item.fqn_key in failed_keys:
                 outcome = _outcome(item, "skipped", "Skipped: an earlier statement for this object failed.")
             else:
                 outcome = _run_item(provider, item, failures)

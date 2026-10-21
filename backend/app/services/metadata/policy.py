@@ -97,16 +97,8 @@ def policy_for(key: str) -> Optional[KeyPolicy]:
 
 
 def exempt_keys() -> List[str]:
-    """METADATA_EXEMPT_KEYS plus the claim tag key, lowercased.
-
-    The claim key stays exempt with claims off: catalogs keep the markers other deployments wrote,
-    and enforcement must not strip them.
-    """
-    keys = _as_list(settings.METADATA_EXEMPT_KEYS)
-    claim = str(settings.METADATA_CLAIM_TAG_KEY or "").strip()
-    if claim:
-        keys.append(claim)
-    return list(dict.fromkeys(k.lower() for k in keys))
+    """METADATA_EXEMPT_KEYS, lowercased."""
+    return list(dict.fromkeys(k.lower() for k in _as_list(settings.METADATA_EXEMPT_KEYS)))
 
 
 def is_exempt(key: str) -> bool:

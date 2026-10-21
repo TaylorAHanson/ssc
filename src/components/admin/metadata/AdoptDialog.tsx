@@ -10,7 +10,7 @@ import { errorMessage, plural } from './format';
 import { ResultView } from './ResultView';
 import { useAsync } from './useAsync';
 
-/** Start managing what's already in Unity Catalog by declaring its current tags and descriptions. */
+/** Start managing what's already in Unity Catalog by saving its current tags and descriptions here. */
 export function AdoptDialog({ onClose }: { onClose: () => void }) {
   const { config, bumpRefresh } = useMetadata();
   const [catalogs, setCatalogs] = useState<string[]>([]);
@@ -54,7 +54,7 @@ export function AdoptDialog({ onClose }: { onClose: () => void }) {
       setResult(res);
       bumpRefresh();
     } catch (e) {
-      setError(errorMessage(e, 'Couldn’t adopt'));
+      setError(errorMessage(e, 'Couldn’t start managing these'));
     } finally {
       setBusy(false);
     }
@@ -62,7 +62,7 @@ export function AdoptDialog({ onClose }: { onClose: () => void }) {
 
   if (result) {
     return (
-      <Modal title="Adopt current state" onClose={onClose} footer={<Button onClick={onClose}>Done</Button>}>
+      <Modal title="Start managing catalogs" onClose={onClose} footer={<Button onClick={onClose}>Done</Button>}>
         <ResultView result={result} onLeave={onClose} />
       </Modal>
     );
@@ -70,8 +70,8 @@ export function AdoptDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal
-      title="Adopt current state"
-      subtitle="Declare what Unity Catalog has now, so it’s managed here from this point on. Nothing in Unity Catalog changes."
+      title="Start managing catalogs"
+      subtitle="Saves what Unity Catalog has now as the starting point here, so syncing keeps it that way. Nothing in Unity Catalog changes."
       onClose={onClose}
       wide
       footer={
@@ -80,7 +80,7 @@ export function AdoptDialog({ onClose }: { onClose: () => void }) {
             Cancel
           </Button>
           <Button onClick={submit} disabled={!canSubmit}>
-            {busy ? 'Adopting…' : 'Adopt'}
+            {busy ? 'Saving…' : 'Start managing'}
           </Button>
         </>
       }
@@ -123,7 +123,7 @@ export function AdoptDialog({ onClose }: { onClose: () => void }) {
           <Switch id={`${id}-over`} checked={overwrite} onCheckedChange={setOverwrite} className="mt-0.5" />
           <label htmlFor={`${id}-over`} className="text-sm text-gray-800">
             Also reset objects that are already managed
-            <span className="block text-xs text-gray-500">Their declared tags and descriptions are replaced with what Unity Catalog has, ending any drift.</span>
+            <span className="block text-xs text-gray-500">The tags and descriptions saved here are replaced with what Unity Catalog has, so nothing is out of sync.</span>
           </label>
         </div>
       </div>
@@ -133,7 +133,7 @@ export function AdoptDialog({ onClose }: { onClose: () => void }) {
             'Counting objects…'
           ) : (
             <>
-              About {plural(estimate.data.total - estimate.data.managed, 'object')} in these catalogs aren’t managed yet and will be adopted.
+              About {plural(estimate.data.total - estimate.data.managed, 'object')} in these catalogs aren’t managed yet and will be.
               {overwrite && estimate.data.managed > 0 && ` ${plural(estimate.data.managed, 'managed object')} will be reset to Unity Catalog’s values.`}
               {!overwrite && estimate.data.managed > 0 && ` ${plural(estimate.data.managed, 'object')} already managed stay as they are.`}
             </>

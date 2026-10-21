@@ -1,6 +1,6 @@
 import { Bot, Cog, User } from 'lucide-react';
 import { Badge, type Tone } from '../../rbac/ui';
-import type { ActorType, ApplyStatus, ObjectState, PlanStatus, RunStatus } from '../../../types/metadata';
+import type { ActorType, ApplyStatus, ObjectState, ObjectSummary, PlanStatus, RunStatus } from '../../../types/metadata';
 import { useMetadata } from './context';
 import { ACTOR_TYPE_LABELS, sourceLabel, type Outcome } from './format';
 
@@ -37,31 +37,14 @@ export function EnvBadge({ env }: { env: string | null | undefined }) {
 
 const STATE: Record<ObjectState, { tone: Tone; label: string; title: string }> = {
   exists: { tone: 'green', label: 'Exists', title: 'The object exists in Unity Catalog.' },
-  pending: { tone: 'blue', label: 'Not created yet', title: 'Declared ahead of time; its metadata is applied when the object is created.' },
+  pending: { tone: 'blue', label: 'Not created yet', title: 'Tags were prepared before this existed; they’re applied when it’s created in Unity Catalog.' },
   orphaned: { tone: 'amber', label: 'Missing', title: 'The object was dropped from Unity Catalog; its metadata is kept in case it comes back.' },
 };
 
-export function StateBadge({ state, managed }: { state: ObjectState | null | undefined; managed: boolean }) {
-  if (!managed) {
-    return (
-      <Badge tone="gray" title="Unity Catalog has this object but nobody manages its metadata here yet.">
-        Not managed
-      </Badge>
-    );
-  }
-  if (!state || state === 'exists') return null;
-  const s = STATE[state];
-  return (
-    <Badge tone={s.tone} title={s.title}>
-      {s.label}
-    </Badge>
-  );
-}
-
 const APPLY: Record<ApplyStatus, { tone: Tone; label: string }> = {
-  pending: { tone: 'blue', label: 'Waiting to apply' },
-  applied: { tone: 'green', label: 'Applied' },
-  failed: { tone: 'red', label: 'Apply failed' },
+  pending: { tone: 'blue', label: 'Waiting to sync' },
+  applied: { tone: 'green', label: 'In Unity Catalog' },
+  failed: { tone: 'red', label: 'Couldn’t update Unity Catalog' },
   skipped: { tone: 'gray', label: 'Skipped' },
 };
 
@@ -72,10 +55,27 @@ export function ApplyBadge({ status }: { status: ApplyStatus | null | undefined 
 
 export function DriftBadge({ title }: { title?: string }) {
   return (
-    <Badge tone="amber" title={title ?? 'Unity Catalog doesn’t match what’s declared here.'}>
-      Drift
+    <Badge tone="amber" title={title ?? 'Unity Catalog has different tags or a different description than the ones saved here.'}>
+      Out of sync
     </Badge>
   );
+}
+
+/** At most one plain-language status, shown only when something needs attention. */
+export function AttentionBadge({ summary: s, unsaved }: {
+  summary: Pick<ObjectSummary, 'managed' | 'object_state' | 'drift' | 'last_apply_status'>;
+  unsaved?: boolean;
+}) {
+  if (unsaved) return <Badge tone="indigo" title="You changed this here but haven’t saved it yet.">Unsaved changes</Badge>;
+  if (!s.managed) return null;
+  if (s.last_apply_status === 'failed') {
+    return <Badge tone="red" title="The last attempt to write this to Unity Catalog failed. Open it to see why.">Couldn’t update Unity Catalog</Badge>;
+  }
+  if (s.object_state === 'pending') return <Badge tone="blue" title={STATE.pending.title}>Not created yet</Badge>;
+  if (s.object_state === 'orphaned') return <Badge tone="amber" title={STATE.orphaned.title}>Missing from Unity Catalog</Badge>;
+  if (s.last_apply_status === 'pending') return <Badge tone="blue" title="Saved here; Unity Catalog is updated in the background.">Waiting to sync</Badge>;
+  if (s.drift) return <DriftBadge />;
+  return null;
 }
 
 const RUN: Record<RunStatus, { tone: Tone; label: string }> = {

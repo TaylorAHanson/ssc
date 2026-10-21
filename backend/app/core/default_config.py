@@ -645,11 +645,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "apply_concurrency": 8,
         # Rows whose object was dropped are purged after this many days.
         "orphan_retention_days": 30,
-        # Catalog tag naming the instance that enforces the catalog, so two
-        # deployments never fight over one. Blank instance id = the app name.
-        "claim_enabled": True,
-        "claim_tag_key": "metadata_manager_instance",
-        "instance_id": "",
         # Members of the group(s) named by this tag (on the object, else its
         # table, schema or catalog) may edit the object.
         "owner_tag_key": "data_owner",

@@ -1,14 +1,11 @@
 """Desired vs observed for one object, under full enforcement (ADR-0006 D3). Workstream C.
 
-Tag keys are compared exactly as stored; only exemption is case-insensitive. The
-catalog claim key (``METADATA_CLAIM_TAG_KEY``) is always exempt, whatever the caller
-passes, so enforcement never strips the marker it uses to claim catalogs.
+Tag keys are compared exactly as stored; only exemption is case-insensitive.
 """
 from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-from app.core.config import settings
 from app.services.metadata.sql import VIEW_TYPES, build_comment_statement, build_tag_statement
 from app.services.metadata.types import (
     COLUMN_SEPARATOR,
@@ -34,16 +31,12 @@ _TABLE_TYPES = {
 # Execution order within one object. Unsets run before sets, so a key whose case
 # changed is removed before its replacement is written, and a view column's changed
 # value can be unset before SET TAG (which can't overwrite) writes it again.
-_OPERATION_ORDER = {"claim": 0, "unset": 1, "set": 2, "comment": 3}
+_OPERATION_ORDER = {"unset": 0, "set": 1, "comment": 2}
 
 
 def exempt_set(exempt_keys: Iterable[str]) -> Set[str]:
-    """Lowercased exempt keys plus the claim key."""
-    keys = {str(k).strip().lower() for k in (exempt_keys or ()) if str(k).strip()}
-    claim = (getattr(settings, "METADATA_CLAIM_TAG_KEY", "") or "").strip().lower()
-    if claim:
-        keys.add(claim)
-    return keys
+    """Lowercased exempt keys."""
+    return {str(k).strip().lower() for k in (exempt_keys or ()) if str(k).strip()}
 
 
 def _without(tags: Dict[str, Optional[str]], exempt: Set[str]) -> Dict[str, Optional[str]]:
@@ -172,7 +165,7 @@ def _object_key(object_diff: ObjectDiff, observed: Optional[ObservedState]) -> O
 
 
 def plan_sort_key(item: PlanItem) -> Tuple:
-    """Relation, then column, then claim / unset / set / comment, then keys: stable across runs.
+    """Relation, then column, then unset / set / comment, then keys: stable across runs.
 
     Grouping by relation keeps a table's statements next to its columns'; within one
     object it fixes the order statements must run in (see ``_OPERATION_ORDER``).

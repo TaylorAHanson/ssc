@@ -17,6 +17,6 @@ Modules:
 * ``diff``         desired vs observed for one object
 * ``sql``          statement builders
 * ``apply``        executing statements against UC
-* ``reconciler``   the queue, runs, modes, circuit breaker and catalog claim
+* ``reconciler``   the queue, runs, modes and circuit breaker
 * ``requests``     filing approval requests and the workflow's prepare and record steps
 """

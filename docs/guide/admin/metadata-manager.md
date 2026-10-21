@@ -12,85 +12,139 @@ setting.
 ## How it works
 
 {{brand_name}} keeps its own list of the tags and descriptions each object
-should have. A background reconciler compares that list with Unity Catalog and
+should have. A background sync compares that list with Unity Catalog and
 makes Unity Catalog match. Changes you save reach Unity Catalog within a minute
 or so, and a full check of every object runs on a schedule.
 
 - **The list is the source of truth.** A tag added directly in Databricks
-  shows up as drift and, once enforcement is on, is removed on the next pass.
-  Make the change here instead.
-- **Search is instant.** The page searches {{brand_name}}'s own list, never
-  Unity Catalog, so filters don't wait on a warehouse.
-- **Tables that don't exist yet.** Type a full name to declare tags for a table
-  before it's created. They're applied as soon as it exists.
+  shows up as *Out of sync* and, once syncing is on, is removed on the next
+  pass. Make the change here instead.
+- **Search is instant.** The page searches {{brand_name}}'s own copy of Unity
+  Catalog, so it never waits on a warehouse.
+- **Tables that don't exist yet.** You can prepare tags for a table before it's
+  created. They're applied as soon as it exists.
 
-## Finding objects
+## Finding a table
 
-The **Objects** tab lists every object {{brand_name}} knows about. Type part of
-a name, or filter by:
+The page opens on a list of every catalog, with how many tables and views each
+holds. Click a catalog to see its schemas, and a schema to see its tables. The
+path at the top (*All catalogs › sales_dev › bronze*) takes you back up. Every
+level has its own address, so you can share a link to a catalog, a schema or a
+table.
 
-- **Catalog** and **type**, from the side panel, which also shows how many
-  objects match each value;
-- a tag: `classification=restricted` (has that value), `data_owner` (has the
-  tag) or `!data_owner` (lacks it, the quickest way to find certification gaps);
-- **Editable by me**, to see only what you can change directly.
+The search box searches wherever you are: everything from the catalog list, or
+just one catalog or schema once you've clicked into it. **Filters** narrows the
+results:
 
-Open an object to see the tags it should have next to the ones Unity Catalog
-holds, who set each tag, when and from where, its columns, and its history.
+- **Search for** tables and views (the default), columns, or everything;
+- **Out of sync with Unity Catalog**, for objects whose tags there differ from
+  the ones saved here;
+- **Things I can change without approval**;
+- **Has this tag**, and the environment when more than one is set up.
+
+You can also type a tag into the search box: `classification=restricted` (has
+that value), `pii=*` (has the tag at all) or `!data_owner` (lacks it, the
+quickest way to find certification gaps).
+
+A list row shows a status only when something needs your attention, for
+example *Unsaved changes*, *Waiting to sync*, *Out of sync* or *Couldn't update
+Unity Catalog*.
 
 ## Making a change
 
-1. Edit tags and the description on one or more objects. Each edit goes into
-   the tray at the bottom of the page.
-2. Choose **Review staged edits**. It shows every change, which ones need
+1. Open a table. Click the pencil next to the description to edit it, the
+   cross on a tag to remove it, or **Add tag** to add one. Each column has the
+   same controls in the **Columns** list. Catalogs and schemas have them at the
+   top of their page. Nothing is saved yet: changed tags turn green or amber,
+   and a bar at the bottom counts your unsaved changes.
+2. Keep going on other tables if you like; the bar collects everything. Click
+   the count to see the list, discard one object's changes, or copy them to
+   another environment.
+3. Choose **Review and save**. It shows every change, which ones need
    approval and who approves them, any policy problems, and the risk score.
    It also warns when a changed tag is one a column mask or row filter keys
    on, because that changes who can see the data.
-3. Add a reason and choose **Submit**. Changes you're allowed to make are saved
-   straight away; the rest become one approval request.
+4. Add a reason and save. Changes you're allowed to make are saved straight
+   away; the rest become one approval request, which you can follow under
+   **My Requests**.
 
-A key with no value, such as `pii`, is a key-only tag. The reconciler applies
-it as a tag with no value.
+**Discard** on the bar drops every unsaved change. A key with no value, such as
+`pii`, is a key-only tag and is applied as a tag with no value.
 
-## Starting out: adopt, then plan, then enforce
-
-The first time an object is edited here, the change becomes its complete
-desired state. Under **Enforce**, any tag it carries in Unity Catalog that
-isn't in that state is removed. So bring existing objects under management
-before editing or enforcing them:
-
-1. **Adopt current state** (Platform Admins, on the **Objects** tab) declares
-   what Unity Catalog holds now for a catalog or schema, so those tags are
-   kept. **Import CSV or JSON** loads desired state from a file instead.
-2. Leave **Reconcile mode** on **Plan** and choose **Run a plan** on the
-   **Reconciler runs** tab. It lists what enforcing would set and remove,
-   without changing anything. Check the removals.
-3. Switch the mode to **Enforce**. The next full check, or **Run a full check
-   now**, applies everything saved in the meantime.
-
-**Declare a new object** adds tags for a table that doesn't exist yet; they're
-applied once it's created.
+Each table page also has two sections that start folded away: **Details**
+(owners, the same table in other environments, sync status, **Check Unity
+Catalog now** and **Copy to another environment**) and **Activity** (every
+change made to it here).
 
 ## Tagging many objects at once
 
-Choose **Bulk edit** on the **Objects** tab. It has two ways to pick objects:
-
-- **Match a pattern.** Type a name pattern such as `sales_dev.bronze.*` (`*`
-  matches any characters within one part and `?` matches one character), and
-  optionally a column name or pattern such as `*_email`. Then choose tags to add
-  or remove, or set a description. Tags are typed as
-  `data_owner=sales_eng; domain=sales; pii`.
-- **Paste from a spreadsheet.** Copy the cells from Google Sheets or Excel,
-  header row included, and paste them in. Name one column `name` (or `table`) for
-  `catalog.schema.table`; every other column is a tag key, and each non-empty
-  cell sets that tag. Optional `column` and `description` columns cover columns
-  and descriptions. A row's name can be a pattern too.
+- **Pick them from a list.** Tick the tables in a schema, or in search results,
+  and choose **Edit tags on all**. Whatever you add, remove or describe applies
+  to every ticked object and joins your unsaved changes.
+- **By name.** Choose **More → Edit many tables by name**. Type a name pattern
+  such as `sales_dev.bronze.*` (`*` matches any characters within one part and
+  `?` matches one character), and optionally a column name or pattern such as
+  `*_email`. Then choose tags to add or remove, or set a description. Tags are
+  typed as `data_owner=sales_eng; domain=sales; pii`.
+- **Paste from a spreadsheet**, in the same dialog. Copy the cells from Google
+  Sheets or Excel, header row included, and paste them in. Name one column
+  `name` (or `table`) for `catalog.schema.table`; every other column is a tag
+  key, and each non-empty cell sets that tag. Optional `column` and
+  `description` columns cover columns and descriptions. A row's name can be a
+  pattern too.
 
 **Preview** shows how many objects each pattern matched and exactly what
 changes. The usual approval rules apply to every object. One change covers up
 to 5,000 objects by default. If the preview warns that objects aren't managed
-yet, adopt their catalog or schema first, or the tags they carry now are
-removed under Enforce.
+yet, start managing their catalog first (see below), or the tags they carry now
+are removed once syncing is on.
+
+**More → Prepare tags for a table that doesn't exist yet** sets tags and a
+description for a name before the table is created.
+
+## History
+
+**History** lists the changes you've saved, newest first; switch to
+**Everyone's** to see all changes and who made them, from this page, the
+assistant, a pipeline or the sync. **Filters** narrows by table and by where
+the change came from. Open a change to see each tag it touched; **Undo this
+change** saves the opposite change. Changes still waiting for approval are under
+**My Requests**.
+
+## Admin
+
+Platform Admins get an **Admin** link with:
+
+- a summary of whether syncing is on, which catalogs it covers and when Unity
+  Catalog was last checked;
+- **Out of sync with Unity Catalog**: objects whose tags or description there
+  differ from the ones saved here, key by key. **Keep Unity Catalog's values**
+  adds what Unity Catalog has to your unsaved changes, so syncing stops undoing
+  it;
+- **Sync history**: what each check did or, when syncing is set to report
+  only, would do, and any failures. **Preview a sync** and **Check and sync
+  now** start one;
+- **Automation access**: the pipelines and systems that may change tags through
+  the API or MCP, and their scope. See [Metadata API and MCP](metadata-api.md);
+- **Bring in many tables at once**: **Start managing catalogs** and **Import
+  from a file**.
+
+### Starting out: start managing, preview, then sync
+
+The first time an object is edited here, the change becomes its complete
+desired state, including the tags it already carries. Once syncing is on, any
+tag it carries in Unity Catalog that isn't saved here is removed. So bring
+existing catalogs under management before turning syncing on:
+
+1. **Start managing catalogs** saves what Unity Catalog holds now for a catalog
+   or schema, so those tags are kept. **Import from a file** loads tags from a
+   CSV or JSON file instead.
+2. Leave **Reconcile mode** on **Plan** (shown on the page as *Report only*)
+   and choose **Preview a sync** under **Sync history**. It lists what syncing
+   would set and remove, without changing anything. Check the removals.
+3. Switch the mode to **Enforce** (shown as *Keeping Unity Catalog in sync*).
+   The next full check, or **Check and sync now**, applies everything saved in
+   the meantime.
 
 ## Who can edit
 
@@ -119,25 +173,10 @@ change on the approval card.
 
 One production deployment manages every environment's catalogs, for example
 `sales_dev` and `sales_prd`. To try a change safely, make it on the dev object
-first, then open the object and choose **Copy to another environment**:
+first, then open it and choose **Details → Copy to another environment**:
 {{brand_name}} copies the dev values to the matching production object as a
-new change, with the same approval rules. A change can also name extra
-environments to apply to at once.
-
-## Other tabs
-
-- **Changes**: every change, who made it and from where (this page, the
-  assistant, a pipeline or the reconciler), with its reason and each tag it
-  touched. Filter by object to see a catalog's or schema's changes, including
-  the objects under it. **Undo this change** saves the opposite change.
-- **Drift**: objects whose Unity Catalog tags or description differ from the
-  list. **Check Unity Catalog now**, on an object, asks the reconciler to look
-  at it straight away.
-- **Reconciler runs**: what each run did or, in plan mode, would do, and any
-  failures.
-- **System principals** (Platform Admins): the pipelines and systems that may
-  change tags through the API or MCP, and their scope. See
-  [Metadata API and MCP](metadata-api.md).
+new change, with the same approval rules. You can also tick extra
+environments in the unsaved-changes bar to make the same change there at once.
 
 ## Asking the assistant
 
@@ -151,9 +190,10 @@ confirm.
 Platform Admins configure the Metadata Manager under **Admin → Settings →
 Metadata Manager**:
 
-- **Reconcile mode**: **Plan** (the default) reports what would change without
-  changing anything; **Enforce** makes Unity Catalog match, including removing
-  undeclared tags; **Off** stops the reconciler. Enforce only runs once
+- **Reconcile mode**: **Plan** (the default, shown on the page as *Report
+  only*) reports what would change without changing anything; **Enforce**
+  (*Keeping Unity Catalog in sync*) makes Unity Catalog match, including
+  removing tags not saved here; **Off** stops syncing. Enforce only runs once
   **Catalogs to reconcile** is filled in.
 - **Catalogs to reconcile**: the catalogs this deployment manages, as names or
   patterns such as `*_dev` (`*` is every catalog). It only changes, adopts new
@@ -162,7 +202,7 @@ Metadata Manager**:
   reads and plans every catalog but changes none. On a dev or stage deployment,
   list only that environment's catalogs. The governance service principal needs
   BROWSE on each catalog to see all of it; Unity Catalog hides the tables it
-  has no privilege on, so they're missing from the Objects tab.
+  has no privilege on, so they're missing from the list.
 - **Browse roles**: who can open the page. Blank = everyone.
 - **Owner tag key**, **Editor roles** and **Governance approver group**: who
   can edit and who approves. With no governance approver group, only Platform

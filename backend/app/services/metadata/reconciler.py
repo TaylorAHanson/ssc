@@ -1,9 +1,9 @@
-"""The reconciler: queue, runs, modes, circuit breaker and catalog claim (ADR-0006 D3). Workstream C.
+"""The reconciler: queue, runs, modes and circuit breaker (ADR-0006 D3). Workstream C.
 
 ``run`` reconciles a scope: named objects (a queue batch) or whole catalogs (a sweep).
-It refreshes the snapshot for that scope, checks each catalog's claim, diffs every
-managed row against UC under full enforcement, then records the plan (``plan``) or
-applies it and records the outcome (``enforce``). Catalogs outside
+It refreshes the snapshot for that scope, diffs every managed row against UC under
+full enforcement, then records the plan (``plan``) or applies it and records the
+outcome (``enforce``). Catalogs outside
 METADATA_RECONCILE_CATALOGS (``scope``) are never touched, and enforce needs that list
 to be set. A run that would remove more tags or descriptions than
 METADATA_MAX_REMOVALS_PER_RUN trips the circuit breaker and applies nothing.
@@ -21,17 +21,15 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
-import os
 import time
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Iterable, Iterator, List, Literal, Optional, Sequence, Set, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 from croniter import CroniterBadCronError, croniter
-from pydantic import BaseModel
 from sqlalchemy import and_, bindparam, delete, func, insert, select, text, update
 from sqlalchemy.orm import Session
 
@@ -49,7 +47,6 @@ from app.services.metadata import apply as apply_
 from app.services.metadata import diff as diff_
 from app.services.metadata import errors, policy, scope
 from app.services.metadata import observed as snapshot
-from app.services.metadata.sql import build_tag_statement
 from app.services.metadata.types import (
     COLUMN_SEPARATOR,
     RELATION_TYPES,
@@ -166,27 +163,6 @@ def current_mode() -> ReconcileMode:
         logger.warning("Unknown METADATA_RECONCILE_MODE '%s'; reconciling in plan mode (no writes).", raw)
         _bad_mode = raw
     return "plan"
-
-
-def instance_id() -> str:
-    """METADATA_INSTANCE_ID, else the Databricks app name, else the environment."""
-    for candidate in (
-        getattr(settings, "METADATA_INSTANCE_ID", ""),
-        os.environ.get("DATABRICKS_APP_NAME"),
-        getattr(settings, "ENVIRONMENT", ""),
-    ):
-        value = str(candidate or "").strip()
-        if value:
-            return value
-    return "default"
-
-
-def claim_tag_key() -> str:
-    return str(getattr(settings, "METADATA_CLAIM_TAG_KEY", "") or "").strip()
-
-
-def _claims_enabled() -> bool:
-    return bool(getattr(settings, "METADATA_CLAIM_ENABLED", True)) and bool(claim_tag_key())
 
 
 def _int_setting(name: str, default: int) -> int:
@@ -332,7 +308,10 @@ def _securable_types(db: Session, fqn_keys: Iterable[str]) -> Dict[str, str]:
 
 
 def _outcome_from_row(row: MetadataReconcileItemModel, types: Dict[str, str]) -> PlanOutcome:
-    """A stored item as an outcome. Items written before the payload column carry only the statement."""
+    """A stored item as an outcome. Items written before the payload column carry only the statement.
+
+    Older runs stored a catalog-claim statement (a SET TAGS) as operation ``claim``; it reads as ``set``.
+    """
     relation, column = _split_fqn_key(row.fqn_key)
     level = _level_type(row.fqn_key)
     payload = row.payload if isinstance(row.payload, dict) else {}
@@ -343,7 +322,7 @@ def _outcome_from_row(row: MetadataReconcileItemModel, types: Dict[str, str]) ->
         name=relation,
         column=column,
         securable_type=stype,
-        operation=row.operation,
+        operation="set" if row.operation == "claim" else row.operation,
         sql=row.sql or "",
         tags=dict(payload.get("tags") or {}),
         keys=list(payload.get("keys") or []),
@@ -529,65 +508,6 @@ def recent_outcomes(db: Session, fqn_key: str, *, limit: int = 20) -> List[PlanO
     return _outcomes_from_rows(db, rows)
 
 
-# --- Catalog claim ----------------------------------------------------------------------
-
-ClaimStatus = Literal["ours", "claimable", "other", "unknown", "disabled"]
-
-
-class CatalogClaim(BaseModel):
-    """Whether this instance may enforce a catalog, from the claim tag on its observed row.
-
-    * ``ours``: the claim tag names this instance;
-    * ``claimable``: no claim tag (or one with no value); ``claim_item`` sets it;
-    * ``other``: another instance (``owner``) claimed it, so skip the catalog;
-    * ``unknown``: the catalog isn't in the snapshot, so ownership can't be checked; skip;
-    * ``disabled``: claiming is off (METADATA_CLAIM_ENABLED or a blank claim key); enforce.
-    """
-
-    catalog: str
-    status: ClaimStatus
-    owner: Optional[str] = None
-    claim_item: Optional[PlanItem] = None
-
-    @property
-    def may_enforce(self) -> bool:
-        return self.status in ("ours", "claimable", "disabled")
-
-
-def claim_plan_item(catalog: str, *, object_id: Optional[str] = None) -> PlanItem:
-    """The statement that marks a catalog as this instance's."""
-    key = ObjectKey.parse(catalog)
-    tags = {claim_tag_key(): instance_id()}
-    return PlanItem(
-        fqn_key=key.fqn_key, object_id=object_id, name=key.catalog, securable_type="catalog",
-        operation="claim", tags=tags, sql=build_tag_statement("catalog", key.catalog, "set", tags=tags)[0],
-    )
-
-
-def _claim_owner(tags: Dict[str, Optional[str]], claim_key: str) -> Optional[str]:
-    wanted = claim_key.lower()
-    for key, value in (tags or {}).items():
-        if str(key).strip().lower() == wanted:
-            owner = normalize_value(value)
-            return owner.strip() if owner and owner.strip() else None
-    return None
-
-
-def evaluate_claim(catalog: str, observed: Optional[ObservedState], *, object_id: Optional[str] = None) -> CatalogClaim:
-    """Read the catalog's claim tag (key compared case-insensitively, owner too)."""
-    name = observed.key.catalog if observed is not None else catalog
-    if not _claims_enabled():
-        return CatalogClaim(catalog=name, status="disabled")
-    if observed is None or not observed.present:
-        return CatalogClaim(catalog=name, status="unknown")
-    owner = _claim_owner(observed.tags, claim_tag_key())
-    if owner is None:
-        return CatalogClaim(catalog=name, status="claimable", claim_item=claim_plan_item(name, object_id=object_id))
-    if owner.lower() == instance_id().lower():
-        return CatalogClaim(catalog=name, status="ours", owner=owner)
-    return CatalogClaim(catalog=name, status="other", owner=owner)
-
-
 # --- Single flight and schedule ---------------------------------------------------------
 
 
@@ -727,7 +647,6 @@ class _Work:
     drift_at: Optional[datetime]
     apply_status: Optional[str]
     apply_error: Optional[str]
-    skipped: Optional[str] = None
     items: List[PlanItem] = field(default_factory=list)
 
 
@@ -741,7 +660,6 @@ class _Context:
     override: bool
     now: datetime
     exempt: List[str]
-    claims: Dict[str, CatalogClaim] = field(default_factory=dict)
     # Catalog -> why it was skipped (shown on the run). ``blocked`` ones had nothing planned at all.
     skipped: Dict[str, str] = field(default_factory=dict)
     blocked: Set[str] = field(default_factory=set)
@@ -856,7 +774,7 @@ def _reconcile(
     # Snapshot and object-state writes land before any statement runs, so nothing stays locked meanwhile.
     db.commit()
 
-    items = _with_claims(ctx, works)
+    items = _planned_items(works)
     removals = sum(i.removals for i in items)
     limit = _removal_limit()
     paused_reason: Optional[str] = None
@@ -883,7 +801,7 @@ def _reconcile(
         db, ctx.run_id,
         status="paused" if paused_reason else run_status(outcomes, mode=ctx.mode),
         outcomes=outcomes,
-        objects_checked=sum(1 for w in works if w.present and not w.skipped),
+        objects_checked=sum(1 for w in works if w.present),
         objects_drifted=sum(1 for w in works if w.items),
         skipped_catalogs=list(ctx.skipped),
         paused_reason=paused_reason,
@@ -931,10 +849,6 @@ def _targeted(db: Session, ctx: _Context, keys: List[str], adopt: Optional[Set[s
         return []
     observing = _monotonic()
     requested = [ObjectKey.from_fqn_key(k) for k in keys]
-    catalogs = sorted({k.catalog.lower() for k in requested})
-    if _claims_enabled():
-        named = set(keys)
-        requested += [ObjectKey(catalog=c) for c in catalogs if c not in named]
     seen = snapshot.refresh(db, requested, provider=ctx.provider)
     db.commit()
     ctx.timings["observe_ms"] = _ms(observing)
@@ -946,7 +860,6 @@ def _targeted(db: Session, ctx: _Context, keys: List[str], adopt: Optional[Set[s
     for key in keys:
         if _catalog_of(key) in ctx.blocked:
             ctx.retry[key] = ctx.skipped[_catalog_of(key)]
-    _evaluate_claims(ctx, [c for c in catalogs if c not in ctx.blocked], seen)
 
     relations = [k for k in keys if _level_type(k) == "table"]
     desired = store.get_objects(db, keys + _desired_column_keys(db, relations))
@@ -1015,7 +928,6 @@ def _sweep_scope(db: Session, ctx: _Context, catalogs: Optional[Sequence[str]]) 
         ctx.skipped[catalog] = _clip(f"Couldn't read it from Unity Catalog: {error}", 500)
         ctx.blocked.add(catalog)
     readable = [c for c in targets if c not in ctx.blocked]
-    _evaluate_claims(ctx, readable, snapshot.get_observed(db, readable))
 
     works: List[_Work] = []
     for chunk in _relation_chunks(_desired_keys_in(db, [c for c in readable if c not in ctx.blocked]), _SWEEP_CHUNK):
@@ -1024,17 +936,6 @@ def _sweep_scope(db: Session, ctx: _Context, catalogs: Optional[Sequence[str]]) 
         works.extend(_plan_objects(db, ctx, desired, snapshot.get_observed(db, set(chunk) | parents)))
         db.commit()
     return works
-
-
-def _evaluate_claims(ctx: _Context, catalogs: Sequence[str], seen: Dict[str, ObservedState]) -> None:
-    for catalog in catalogs:
-        claim = evaluate_claim(catalog, seen.get(catalog))
-        ctx.claims[catalog] = claim
-        if claim.status == "other":
-            ctx.skipped[catalog] = f"Claimed by another deployment ({claim.owner})."
-        elif claim.status == "unknown":
-            ctx.skipped[catalog] = "Not found in Unity Catalog, so its claim couldn't be checked."
-            ctx.blocked.add(catalog)
 
 
 def _adopt(db: Session, ctx: _Context, keys: Sequence[str], seen: Dict[str, ObservedState]) -> None:
@@ -1096,10 +997,7 @@ def _plan_objects(
             observed_at=obs.observed_at if present else None, drift_at=row.drift_detected_at,
             apply_status=row.last_apply_status, apply_error=row.last_apply_error,
         )
-        claim = ctx.claims.get(catalog)
-        if claim is not None and claim.status == "other":
-            work.skipped = ctx.skipped[catalog]
-        elif present:
+        if present:
             object_diff = diff_.diff(row, obs, exempt_keys=ctx.exempt)
             if not object_diff.in_sync:
                 parent = seen.get(_relation_of(fqn_key)) if COLUMN_SEPARATOR in fqn_key else None
@@ -1108,14 +1006,8 @@ def _plan_objects(
     return works
 
 
-def _with_claims(ctx: _Context, works: Sequence[_Work]) -> List[PlanItem]:
-    """Every planned statement, plus the claim of each claimable catalog that has any (claim on first write)."""
-    items = [i for w in works for i in w.items]
-    for catalog in sorted({_catalog_of(i.fqn_key) for i in items}):
-        claim = ctx.claims.get(catalog)
-        if claim is not None and claim.claim_item is not None:
-            items.append(claim.claim_item)
-    return sorted(items, key=diff_.plan_sort_key)
+def _planned_items(works: Sequence[_Work]) -> List[PlanItem]:
+    return sorted((i for w in works for i in w.items), key=diff_.plan_sort_key)
 
 
 def _patch_snapshot(db: Session, outcomes: Sequence[PlanOutcome]) -> None:
@@ -1131,7 +1023,7 @@ def _patch_snapshot(db: Session, outcomes: Sequence[PlanOutcome]) -> None:
             tags = dict(row.tags or {})
             comment = row.comment
             for outcome in by_key[row.fqn_key]:
-                if outcome.operation in ("set", "claim"):
+                if outcome.operation == "set":
                     tags.update({k: normalize_value(v) for k, v in outcome.tags.items()})
                 elif outcome.operation == "unset":
                     for key in outcome.keys:
@@ -1159,13 +1051,9 @@ def _record_objects(
     failed: List[dict] = []
     drifted: List[dict] = []
     cleared: List[dict] = []
-    skipped: List[dict] = []
     for work in works:
         guard = {"b_id": work.object_id, "b_hash": work.desired_hash}
-        if work.skipped:
-            if work.apply_status != "skipped" or work.apply_error != work.skipped:
-                skipped.append({**guard, "b_error": work.skipped})
-        elif not work.present:
+        if not work.present:
             if work.drift_at is not None:
                 cleared.append(guard)
         elif work.fqn_key in failures:
@@ -1194,9 +1082,6 @@ def _record_objects(
         )),
         (drifted, update(_OBJECTS).where(same_row).values(drift_detected_at=now)),
         (cleared, update(_OBJECTS).where(same_row).values(drift_detected_at=None)),
-        (skipped, update(_OBJECTS).where(same_row).values(
-            last_apply_status="skipped", last_apply_error=bindparam("b_error"),
-        )),
     )
     for params, statement in statements:
         for start in range(0, len(params), _WRITE_CHUNK):

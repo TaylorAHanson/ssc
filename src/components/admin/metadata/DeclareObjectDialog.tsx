@@ -1,17 +1,22 @@
 import { useId, useState, type FormEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getObject, MetadataApiError } from '../../../services/metadataApi';
 import { RELATION_TYPES, type SecurableType } from '../../../types/metadata';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { ErrorBanner, Modal } from '../../rbac/ui';
 import { useMetadata } from './context';
-import { TYPE_LABELS, envForCatalog, errorMessage, inferType, nameProblem } from './format';
-import { seedForNew, seedFromDetail, useStagingStore } from './staging';
+import { TYPE_LABELS, envForCatalog, errorMessage, inferType, nameProblem, objectLabel } from './format';
+import { DescriptionField, TagsField } from './InlineEdit';
+import { objectPath } from './paths';
+import { hasEdits, seedForNew, seedFromDetail, useStagingStore, type TargetSeed } from './staging';
 
-/** Declare tags for an object that doesn't exist yet; they're applied when it's created. */
+/** Prepare tags for an object that doesn't exist yet; they're applied when it's created. */
 export function DeclareObjectDialog({ onClose }: { onClose: () => void }) {
   const { config, notify } = useMetadata();
-  const stage = useStagingStore((s) => s.stage);
+  const navigate = useNavigate();
+  const [seed, setSeed] = useState<TargetSeed | null>(null);
+  const edited = useStagingStore((s) => (seed && s.targets[seed.key] ? hasEdits(s.targets[seed.key]) : false));
   const [name, setName] = useState('');
   const [column, setColumn] = useState('');
   const [type, setType] = useState<SecurableType | ''>('');
@@ -35,8 +40,9 @@ export function DeclareObjectDialog({ onClose }: { onClose: () => void }) {
     try {
       const detail = await getObject(name.trim(), column.trim() || null);
       if (detail.desired?.status === 'active' || detail.observed?.present) {
-        stage([seedFromDetail(detail)]);
-        notify('That object already exists, so it was staged for editing instead.');
+        const existing = seedFromDetail(detail);
+        navigate(objectPath(existing.name, existing.column));
+        notify('That already exists, so it’s opened here for you to edit.');
         onClose();
         return;
       }
@@ -48,14 +54,37 @@ export function DeclareObjectDialog({ onClose }: { onClose: () => void }) {
       }
     }
     const securable = relation && type ? type : inferred;
-    stage([seedForNew(name, column.trim() || null, securable, envForCatalog(config, name.split('.')[0]))]);
-    onClose();
+    setSeed(seedForNew(name, column.trim() || null, securable, envForCatalog(config, name.split('.')[0])));
+    setBusy(false);
   };
+
+  const title = 'Prepare tags for something that doesn’t exist yet';
+  if (seed) {
+    const finish = () => {
+      if (edited) notify('Added to your unsaved changes. Use Review and save at the bottom of the page when you’re ready.');
+      onClose();
+    };
+    return (
+      <Modal title={title} subtitle={<span className="font-mono">{objectLabel(seed.name, seed.column)}</span>} onClose={finish} footer={<Button onClick={finish}>Done</Button>}>
+        <div className="space-y-4">
+          <div>
+            <div className="mb-1 text-xs font-medium text-gray-500">Tags</div>
+            <TagsField seed={seed} />
+          </div>
+          <div>
+            <div className="mb-1 text-xs font-medium text-gray-500">Description</div>
+            <DescriptionField seed={seed} />
+          </div>
+          <p className="text-xs text-gray-500">These are applied as soon as it’s created in Unity Catalog.</p>
+        </div>
+      </Modal>
+    );
+  }
 
   return (
     <Modal
-      title="Declare a new object"
-      subtitle="Set tags and a description before the object exists. They’re applied as soon as it’s created in Unity Catalog."
+      title={title}
+      subtitle="Set tags and a description now. They’re applied as soon as the table is created in Unity Catalog."
       onClose={onClose}
       footer={
         <>
@@ -63,7 +92,7 @@ export function DeclareObjectDialog({ onClose }: { onClose: () => void }) {
             Cancel
           </Button>
           <Button type="submit" form={`${id}-form`} disabled={busy || !name.trim() || !!problem}>
-            {busy ? 'Checking…' : 'Stage it'}
+            {busy ? 'Checking…' : 'Next'}
           </Button>
         </>
       }
@@ -115,7 +144,7 @@ export function DeclareObjectDialog({ onClose }: { onClose: () => void }) {
         )}
         {name.trim() && !problem && (
           <p className="text-xs text-gray-500">
-            Will be declared as a {TYPE_LABELS[relation && type ? type : inferred].toLowerCase()}
+            Will be set up as a {TYPE_LABELS[relation && type ? type : inferred].toLowerCase()}
             {envForCatalog(config, name.split('.')[0]) && ` in the ${envForCatalog(config, name.split('.')[0])} environment`}.
           </p>
         )}

@@ -1,41 +1,55 @@
 import type { ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { Notice } from '../../rbac/ui';
 import { useMetadata } from './context';
 import { formatTime, relativeTime } from './format';
 
-/** What the reconciler does with drift right now, in plain language. */
-export function ModeBanner() {
+/** Whether saved changes reach Unity Catalog right now, in plain language. */
+export function SyncStatus() {
   const { config } = useMetadata();
   const sweep = config.last_sweep_at ? (
-    <span title={formatTime(config.last_sweep_at)}> Last full check {relativeTime(config.last_sweep_at)}.</span>
-  ) : null;
+    <span title={formatTime(config.last_sweep_at)}> Unity Catalog was last checked {relativeTime(config.last_sweep_at)}.</span>
+  ) : (
+    <span> Unity Catalog hasn’t been checked yet.</span>
+  );
   const managed = config.managed_catalogs.length ? (
     <span className="mt-1 block">
-      This deployment manages {config.managed_catalogs.includes('*') ? 'every catalog' : `catalogs matching ${config.managed_catalogs.join(', ')}`}.
+      Catalogs kept in sync: {config.managed_catalogs.includes('*') ? 'all of them' : config.managed_catalogs.join(', ')}.
     </span>
   ) : null;
+  const settings = (
+    <span className="mt-1 block">
+      Change this under{' '}
+      <Link to="/admin/settings" className="font-medium underline">
+        Admin → Settings
+      </Link>{' '}
+      (Metadata Manager).
+    </span>
+  );
   if (config.reconcile_mode === 'enforce') {
     return (
-      <Notice kind="info" title="Enforce mode">
-        The reconciler writes declared tags and descriptions to Unity Catalog and undoes changes made there directly, except for keys managed elsewhere.
+      <Notice kind="success" title="Keeping Unity Catalog in sync">
+        Changes saved here are written to Unity Catalog within about a minute, and changes made there directly are put back, except for tags another tool manages.
         {sweep}
         {managed}
+        {settings}
       </Notice>
     );
   }
   if (config.reconcile_mode === 'plan') {
     return (
-      <Notice kind="warn" title="Plan mode">
-        {config.enforce_blocked_reason ??
-          'The reconciler only reports what it would change. Nothing is written to Unity Catalog, so drift stays until an admin switches to enforce mode.'}
+      <Notice kind="warn" title="Report only">
+        {config.enforce_blocked_reason ?? 'Changes are saved here, and differences from Unity Catalog are reported, but nothing is written to Unity Catalog yet.'}
         {sweep}
         {managed}
+        {settings}
       </Notice>
     );
   }
   return (
-    <Notice kind="warn" title="Reconciler off">
-      Declared metadata is saved here but never applied to Unity Catalog, and drift isn’t checked.
+    <Notice kind="warn" title="Syncing is off">
+      Changes are saved here but never written to Unity Catalog, and Unity Catalog isn’t checked.
+      {settings}
     </Notice>
   );
 }
@@ -44,10 +58,10 @@ export function CircuitBreakerBanner({ action }: { action?: ReactNode }) {
   const { config } = useMetadata();
   if (!config.circuit_breaker_tripped) return null;
   return (
-    <Notice kind="error" title="The reconciler stopped itself">
+    <Notice kind="error" title="Syncing paused itself">
       <p>
-        A run would have removed more tags or descriptions than the safety limit allows, so it paused instead of writing anything. Declared changes are still saved, but nothing
-        reaches Unity Catalog until an admin reviews the planned removals and resumes.
+        A sync would have removed more tags or descriptions than the safety limit allows, so it stopped before writing anything. Changes are still saved here, but nothing
+        reaches Unity Catalog until an admin reviews the removals and resumes.
       </p>
       {action && <div className="mt-2">{action}</div>}
     </Notice>

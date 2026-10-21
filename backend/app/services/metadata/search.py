@@ -328,6 +328,7 @@ def _union(ctx: _Ctx, *, full: bool):
         _O.c.id.label("id"),
         _O.c.fqn_key.label("fqn_key"),
         func.lower(_O.c.catalog).label("catalog_key"),
+        func.lower(_O.c.schema_name).label("schema_key"),
         _O.c.securable_type.label("securable_type"),
         _O.c.environment.label("environment"),
         _O.c.object_state.label("object_state"),
@@ -360,6 +361,7 @@ def _union(ctx: _Ctx, *, full: bool):
             null().label("id"),
             _B.c.fqn_key.label("fqn_key"),
             _B.c.catalog.label("catalog_key"),
+            func.lower(_B.c.schema_name).label("schema_key"),
             _B.c.securable_type.label("securable_type"),
             _unmanaged_environment(ctx).label("environment"),
             null().label("object_state"),
@@ -513,7 +515,8 @@ def search(db: Session, query: SearchQuery, actor: Actor) -> SearchResult:
       above is owned, or a principal glob covers the name (or an ancestor's) part by
       part: ``*`` and ``?`` within one part; a column goes by its relation.
     * Facets: catalog (lowercased), securable_type, environment, object_state and the
-      top 50 tag keys of the managed rows; NULLs aren't counted.
+      top 50 tag keys of the managed rows; NULLs aren't counted. With exactly one catalog
+      in ``catalogs``, also schema (lowercased bare name).
     """
     started = time.perf_counter()
     dialect = db.get_bind().dialect.name
@@ -551,6 +554,8 @@ def search(db: Session, query: SearchQuery, actor: Actor) -> SearchResult:
             "object_state": _facet(db, lean.c.object_state),
             "tag_key": _tag_key_facet(db, ctx),
         }
+        if len(query.catalogs or []) == 1:
+            facets["schema"] = _facet(db, lean.c.schema_key)
 
     took_ms = int((time.perf_counter() - started) * 1000)
     logger.debug("Metadata search: %d of %d object(s) in %d ms.", len(items), total, took_ms)

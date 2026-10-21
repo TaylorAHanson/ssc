@@ -486,6 +486,8 @@ def test_facets_cover_the_whole_filtered_set(world):
     filtered = search(world, SearchQuery(catalogs=["sales_prd"]), ALICE)
     assert _facet(filtered, "catalog") == [("sales_prd", 1)]
     assert _facet(filtered, "tag_key") == [("classification", 1)]
+    assert "schema" not in result.facets
+    assert _facet(filtered, "schema") == [("gold", 1)]
 
     with_columns = search(world, SearchQuery(include_columns=True, q="orders"), ALICE)
     assert ("pii", 2) in _facet(with_columns, "tag_key")

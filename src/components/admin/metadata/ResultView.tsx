@@ -30,8 +30,8 @@ export function ResultView({ result, onLeave }: { result: ChangeResult; onLeave?
     config.reconcile_mode === 'enforce'
       ? 'Unity Catalog is updated in the background, usually within a minute.'
       : config.reconcile_mode === 'plan'
-        ? 'The reconciler is in plan mode, so Unity Catalog won’t change until an admin switches it to enforce.'
-        : 'The reconciler is off, so Unity Catalog won’t change until an admin turns it on.';
+        ? 'Syncing is set to report only, so Unity Catalog won’t change until an admin turns syncing on.'
+        : 'Syncing is off, so Unity Catalog won’t change until an admin turns it on.';
 
   return (
     <div className="space-y-3">

@@ -89,7 +89,7 @@ export function BulkEditDialog({ onClose, initialPattern = '' }: { onClose: () =
 
   return (
     <ReviewDialog
-      title="Bulk edit"
+      title="Edit many by name"
       subtitle="Tag many objects in one change. You’ll see how many objects it covers, and exactly what changes, before anything is saved."
       flow={flow}
       reason={reason}
@@ -129,7 +129,7 @@ export function BulkEditDialog({ onClose, initialPattern = '' }: { onClose: () =
               />
               <p id={`${id}-pattern-help`} className={patternIssue ? 'mt-1 text-xs text-red-700' : 'mt-1 text-xs text-gray-500'}>
                 {patternIssue ??
-                  '* matches any characters and ? one character, within one part. One part matches catalogs, two schemas, three tables and views. Objects declared before they exist count too.'}
+                  '* matches any characters and ? one character, within one part. One part matches catalogs, two schemas, three tables and views. Objects prepared before they exist count too.'}
               </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">

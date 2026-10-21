@@ -519,17 +519,6 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "requires": ["features.metadata_v2"],
      "help": "Desired state for a dropped table is kept this long, and re-applied if the table is recreated. "
              "After that it is removed (still visible in History)."},
-    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_CLAIM_ENABLED",
-     "label": "Claim catalogs", "type": "bool", "requires": ["features.metadata_v2"],
-     "help": "On (default) = this deployment marks each catalog it enforces with the claim tag below and skips "
-             "catalogs another deployment has claimed, so two deployments never undo each other's changes."},
-    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_CLAIM_TAG_KEY",
-     "label": "Claim tag key", "type": "string", "requires": ["features.metadata_v2"],
-     "help": "Catalog tag naming the deployment that enforces the catalog. Always exempt from enforcement."},
-    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_INSTANCE_ID",
-     "label": "Instance id", "type": "string", "requires": ["features.metadata_v2"],
-     "help": "The value this deployment writes in the claim tag. Blank = the Databricks app name. Give every "
-             "deployment a different value."},
     {"group": "Metadata Manager", "section": "Permissions", "key": "METADATA_OWNER_TAG_KEY",
      "label": "Owner tag key", "type": "string", "requires": ["features.metadata_v2"],
      "help": "Members of the group named by this tag may edit the object's tags and description. When the object "
@@ -963,6 +952,10 @@ RETIRED_KEYS = frozenset({
     "GOVERNANCE_TAGS_BASE_BRANCH",
     "GOVERNANCE_TAGS_PATH",
     "GOVERNANCE_TAGS_LEDGER_TABLE",
+    # Catalog claim markers; Catalogs to reconcile bounds each deployment instead.
+    "METADATA_CLAIM_ENABLED",
+    "METADATA_CLAIM_TAG_KEY",
+    "METADATA_INSTANCE_ID",
 })
 
 

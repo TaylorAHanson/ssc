@@ -211,23 +211,6 @@ def test_a_failure_skips_the_rest_of_that_object_but_not_other_objects(caplog):
     assert any("c.s.a" in r.getMessage() for r in caplog.records)
 
 
-def test_a_failed_claim_skips_the_whole_catalog():
-    statements = FakeStatements({"ALTER CATALOG `c1`": "[PERMISSION_DENIED] no APPLY TAG on c1"})
-    items = [
-        item("c1", "claim", "ALTER CATALOG `c1` SET TAGS ('claim' = 'me');", securable_type="catalog",
-             tags={"claim": "me"}),
-        item("c1.s", "set", "ALTER SCHEMA `c1`.`s` SET TAGS ('a' = '1');", securable_type="schema", tags={"a": "1"}),
-        item("c1.s.t::x", "set", "ALTER TABLE `c1`.`s`.`t` ALTER COLUMN `x` SET TAGS ('a' = '1');",
-             securable_type="column", name="c1.s.t", column="x", tags={"a": "1"}),
-        item("c10.s.t", "set", "ALTER TABLE `c10`.`s`.`t` SET TAGS ('a' = '1');", tags={"a": "1"}),
-    ]
-
-    outcomes = apply.execute(FakeProvider(statements), items)
-
-    assert [o.status for o in outcomes] == ["failed", "skipped", "skipped", "applied"]
-    assert outcomes[1].detail == "Skipped: this deployment couldn't claim the catalog."
-
-
 def test_an_empty_statement_is_a_noop():
     statements = FakeStatements()
 
@@ -265,9 +248,9 @@ def test_a_broken_provider_fails_items_without_raising():
     assert [o.status for o in outcomes] == ["failed", "failed"]
 
 
-def test_parallel_workers_run_claims_first_and_keep_each_relation_in_order():
+def test_parallel_workers_keep_each_relation_in_order():
     statements = FakeStatements({"ALTER TABLE `c`.`s`.`t3`": "[PERMISSION_DENIED] no"})
-    items = [item("c", "claim", "ALTER CATALOG `c` SET TAGS ('claim' = 'me');", securable_type="catalog")]
+    items = []
     for n in range(8):
         name = f"c.s.t{n}"
         items += [
@@ -278,12 +261,11 @@ def test_parallel_workers_run_claims_first_and_keep_each_relation_in_order():
     outcomes = apply.execute(FakeProvider(statements), items, workers=4)
 
     assert [o.sql for o in outcomes] == [i.sql for i in items]
-    assert statements.executed[0] == items[0].sql
     for n in range(8):
         if n != 3:
-            assert statements.executed.index(items[1 + 2 * n].sql) < statements.executed.index(items[2 + 2 * n].sql)
+            assert statements.executed.index(items[2 * n].sql) < statements.executed.index(items[2 * n + 1].sql)
     assert [o.status for o in outcomes if o.fqn_key == "c.s.t3"] == ["failed", "skipped"]
-    assert sum(o.status == "applied" for o in outcomes) == 15
+    assert sum(o.status == "applied" for o in outcomes) == 14
 
 
 def test_only_the_first_failures_are_logged_one_by_one(caplog):

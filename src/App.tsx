@@ -151,9 +151,9 @@ function App() {
             />
           )}
           {/* Access is checked by the page against /metadata/whoami: data owners can browse and
-              edit without an admin persona, and admin-only tabs follow the caller's role. */}
+              edit without an admin persona, and the admin page follows the caller's role. */}
           {uiTabs?.tag_management !== false && (
-            <Route path="/governance/metadata" element={<MetadataManager />} />
+            <Route path="/governance/metadata/*" element={<MetadataManager />} />
           )}
           {/* Legacy redirects: the Metadata Manager used to be Tag Management, then previewed at /next. */}
           <Route path="/governance/tags" element={<Navigate to="/governance/metadata" replace />} />

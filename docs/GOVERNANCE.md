@@ -357,7 +357,7 @@ GRANT BROWSE ON CATALOG <catalog> TO `<service-principal>`;
 `BROWSE` is all that's required. It is a metadata-only privilege — it lets the scanner see tables, columns, and tags, but **not read any data** — and it does not require `USE CATALOG` or `USE SCHEMA`. If you are ever asked for `SELECT` here, that's a bug: the platform reads `information_schema`, never the tables themselves. Such a contract also fails the **Contract completeness** check rather than certifying, so it shows as uncertified until the grant is in place.
 
 **…keep a tag someone added directly in Databricks?**
-Under enforcement the reconciler removes tags that aren't in the Metadata Manager's list. Find the object on the **Drift** tab, which shows the tag as "in Unity Catalog only", and add it in the Metadata Manager. If another system legitimately owns that key, add it to **Admin → Settings → Metadata Manager → Exempt tag keys** instead, and the reconciler will leave it alone everywhere.
+Under enforcement the reconciler removes tags that aren't in the Metadata Manager's list. Find the object under **Admin → Out of sync with Unity Catalog**, which shows the tag as "Only in Unity Catalog", and choose **Keep Unity Catalog's values** or add it on the table's page. If another system legitimately owns that key, add it to **Admin → Settings → Metadata Manager → Exempt tag keys** instead, and the reconciler will leave it alone everywhere.
 
 **…stop the Sentinel from flagging something that's actually fine?**
 Add an **approved Allowlist** entry (**Watch Tower → Allowlist**) with the resource, its workspace, a justification, and ideally an expiry. Only approved entries suppress findings.

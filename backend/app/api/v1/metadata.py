@@ -158,7 +158,6 @@ def _config(db: Session, user: User) -> MetadataConfig:
         reconcile_mode=reconciler.current_mode(),
         owner_tag_key=settings.METADATA_OWNER_TAG_KEY,
         exempt_keys=policy.exempt_keys(),
-        claim_tag_key=settings.METADATA_CLAIM_TAG_KEY if settings.METADATA_CLAIM_ENABLED else None,
         key_mode=settings.METADATA_KEY_MODE if settings.METADATA_KEY_MODE in ("open", "known_only") else "open",
         key_policies=policy.key_policies(),
         environments=environments.environments(),

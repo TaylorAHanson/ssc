@@ -1,4 +1,4 @@
-"""Reconciler phase 1: modes, instance id, circuit breaker, runs, catalog claim, single flight and the sweep cron."""
+"""Reconciler phase 1: modes, circuit breaker, runs, single flight and the sweep cron."""
 import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -14,16 +14,10 @@ from app.db.metadata import (
     MetadataReconcileRunModel,
 )
 from app.services.metadata import errors, reconciler
-from app.services.metadata.types import ObjectKey, ObservedState, PlanOutcome
-
-CLAIM_KEY = "metadata_manager_instance"
-
+from app.services.metadata.types import PlanOutcome
 
 @pytest.fixture(autouse=True)
 def _settings(monkeypatch):
-    monkeypatch.setattr(settings, "METADATA_CLAIM_ENABLED", True)
-    monkeypatch.setattr(settings, "METADATA_CLAIM_TAG_KEY", CLAIM_KEY)
-    monkeypatch.setattr(settings, "METADATA_INSTANCE_ID", "prod-app")
     monkeypatch.setattr(reconciler, "_next_sweep_time", None)
     monkeypatch.setattr(reconciler, "_bad_cron", None)
     monkeypatch.setattr(reconciler, "_bad_mode", None)
@@ -36,12 +30,7 @@ def outcome(fqn_key, operation, status, *, name=None, column=None, securable_typ
     )
 
 
-def catalog_row(name="sales", tags=None, present=True):
-    key = ObjectKey.parse(name)
-    return ObservedState(fqn_key=key.fqn_key, key=key, securable_type="catalog", tags=tags or {}, present=present)
-
-
-# --- Mode and identity ----------------------------------------------------------------------
+# --- Mode ----------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("raw,mode", [
@@ -74,18 +63,6 @@ def test_an_unknown_mode_falls_back_to_plan_and_is_logged_once(monkeypatch, capl
         assert reconciler.current_mode() == "plan"
 
     assert sum("METADATA_RECONCILE_MODE" in r.getMessage() for r in caplog.records) == 1
-
-
-def test_instance_id_prefers_the_setting_then_the_app_name_then_the_environment(monkeypatch):
-    monkeypatch.setenv("DATABRICKS_APP_NAME", "lighthouse-prd")
-    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
-    assert reconciler.instance_id() == "prod-app"
-
-    monkeypatch.setattr(settings, "METADATA_INSTANCE_ID", "  ")
-    assert reconciler.instance_id() == "lighthouse-prd"
-
-    monkeypatch.delenv("DATABRICKS_APP_NAME")
-    assert reconciler.instance_id() == "production"
 
 
 def test_re_enqueue_makes_a_backing_off_row_due_with_a_fresh_attempt_count(db_session):
@@ -161,6 +138,7 @@ def test_list_runs_clamps_paging(db_session):
 
 
 def test_get_run_returns_its_statements_typed_from_the_snapshot(db_session):
+    """An older run's catalog-claim statement reads as a set."""
     _seed_run(db_session, "r1", minutes_ago=0)
     db_session.add(MetadataObjectModel(
         id="o1", fqn_key="c.s.v", securable_type="table", catalog="c", display_name="c.s.v",
@@ -181,7 +159,7 @@ def test_get_run_returns_its_statements_typed_from_the_snapshot(db_session):
     result = reconciler.get_run(db_session, "r1")
 
     assert [(i.fqn_key, i.securable_type, i.name, i.column, i.operation, i.status) for i in result.items] == [
-        ("c", "catalog", "c", None, "claim", "applied"),
+        ("c", "catalog", "c", None, "set", "applied"),
         ("c.s", "schema", "c.s", None, "set", "applied"),
         ("c.s.v", "view", "c.s.v", None, "unset", "failed"),
         ("c.s.v::Col", "column", "c.s.v", "Col", "set", "skipped"),
@@ -264,50 +242,6 @@ def test_recent_outcomes_cover_the_object_and_its_columns_only(db_session):
 
     assert [o.fqn_key for o in found] == ["s_x.b.t::b", "s_x.b.t::a", "s_x.b.t"]
     assert [o.fqn_key for o in reconciler.recent_outcomes(db_session, "s_x.b.t", limit=1)] == ["s_x.b.t::b"]
-
-
-# --- Catalog claim ------------------------------------------------------------------------
-
-
-def test_a_catalog_claimed_by_this_instance_is_ours():
-    claim = reconciler.evaluate_claim("sales", catalog_row(tags={"Metadata_Manager_Instance": " PROD-APP "}))
-
-    assert (claim.status, claim.owner, claim.claim_item, claim.may_enforce) == ("ours", "PROD-APP", None, True)
-
-
-@pytest.mark.parametrize("tags", [{}, {CLAIM_KEY: None}, {CLAIM_KEY: ""}, {"other": "x"}])
-def test_an_unclaimed_catalog_is_claimable_with_a_claim_statement(tags):
-    claim = reconciler.evaluate_claim("sales", catalog_row(tags=tags), object_id="obj-1")
-
-    assert claim.status == "claimable" and claim.may_enforce
-    item = claim.claim_item
-    assert (item.fqn_key, item.name, item.securable_type, item.operation, item.object_id) == (
-        "sales", "sales", "catalog", "claim", "obj-1")
-    assert item.tags == {CLAIM_KEY: "prod-app"} and item.removals == 0
-    assert item.sql == f"ALTER CATALOG `sales` SET TAGS ('{CLAIM_KEY}' = 'prod-app');"
-
-
-def test_a_catalog_claimed_by_another_instance_is_skipped():
-    claim = reconciler.evaluate_claim("sales", catalog_row(tags={CLAIM_KEY: "dev-app"}))
-
-    assert (claim.status, claim.owner, claim.claim_item, claim.may_enforce) == ("other", "dev-app", None, False)
-
-
-@pytest.mark.parametrize("row", [None, catalog_row(present=False)])
-def test_an_unobserved_catalog_is_unknown_and_skipped(row):
-    claim = reconciler.evaluate_claim("sales", row)
-
-    assert claim.status == "unknown" and not claim.may_enforce and claim.claim_item is None
-
-
-@pytest.mark.parametrize("enabled,key", [(False, CLAIM_KEY), (True, "  ")])
-def test_claiming_can_be_turned_off(monkeypatch, enabled, key):
-    monkeypatch.setattr(settings, "METADATA_CLAIM_ENABLED", enabled)
-    monkeypatch.setattr(settings, "METADATA_CLAIM_TAG_KEY", key)
-
-    claim = reconciler.evaluate_claim("sales", catalog_row(tags={CLAIM_KEY: "dev-app"}))
-
-    assert claim.status == "disabled" and claim.may_enforce and claim.claim_item is None
 
 
 # --- Single flight --------------------------------------------------------------------------

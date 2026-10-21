@@ -1,16 +1,10 @@
 """Desired vs observed under full enforcement, the drawer's drift entries and the typed plan (ADR-0006 D3)."""
 import pytest
 
-from app.core.config import settings
 from app.services.metadata import diff as d
 from app.services.metadata.types import CommentState, DesiredState, ObjectKey, ObservedState
 
 EXEMPT = ["system.certification_status"]
-
-
-@pytest.fixture(autouse=True)
-def _claim_key(monkeypatch):
-    monkeypatch.setattr(settings, "METADATA_CLAIM_TAG_KEY", "metadata_manager_instance")
 
 
 def desired(name="c.s.t", column=None, *, securable_type=None, tags=None, comment=None):
@@ -63,14 +57,6 @@ def test_tag_keys_are_otherwise_compared_exactly():
 
     assert result.to_set == {"PII": "true"}
     assert result.to_unset == ["pii"]
-
-
-def test_the_claim_key_is_always_exempt():
-    result = d.diff(
-        desired("c"), observed("c", tags={"Metadata_Manager_Instance": "prod"}), exempt_keys=[],
-    )
-
-    assert result.in_sync
 
 
 @pytest.mark.parametrize("want,have,changed", [

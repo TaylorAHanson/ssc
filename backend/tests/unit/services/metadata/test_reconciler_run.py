@@ -1,4 +1,4 @@
-"""Reconciler phase 2: runs (plan/enforce, breaker, claims, lifecycle, adopt), queue drains and the poller pass."""
+"""Reconciler phase 2: runs (plan/enforce, breaker, lifecycle, adopt), queue drains and the poller pass."""
 import asyncio
 import logging
 from datetime import datetime, timedelta
@@ -24,8 +24,6 @@ from app.services.metadata import changes, observed, reconciler, store
 from app.services.metadata.observed import SweepResult
 from app.services.metadata.types import ObjectKey, ObservedState
 
-CLAIM_KEY = "metadata_manager_instance"
-ME = "prod-app"
 TABLES = [
     MetadataObjectModel.__table__,
     MetadataTagModel.__table__,
@@ -54,9 +52,6 @@ def _settings(monkeypatch):
     for name, value in {
         "METADATA_RECONCILE_MODE": "enforce",
         "METADATA_RECONCILE_CATALOGS": ["*"],
-        "METADATA_CLAIM_ENABLED": True,
-        "METADATA_CLAIM_TAG_KEY": CLAIM_KEY,
-        "METADATA_INSTANCE_ID": ME,
         "METADATA_EXEMPT_KEYS": ["system.certified"],
         "METADATA_MAX_REMOVALS_PER_RUN": 200,
         "METADATA_NEW_OBJECT_POLICY": "adopt",
@@ -250,12 +245,12 @@ def test_plan_mode_records_the_plan_and_never_runs_a_statement(db, uc, provider,
 
     assert provider.statements.executed == []
     assert result.status == "completed" and result.mode == "plan"
-    assert ops(result) == [("c", "claim", "planned"), ("c.s.t", "unset", "planned"), ("c.s.t", "set", "planned")]
+    assert ops(result) == [("c.s.t", "unset", "planned"), ("c.s.t", "set", "planned")]
     assert (result.objects_checked, result.objects_drifted, result.removals_planned) == (1, 1, 1)
     row = obj(db, "c.s.t")
     assert row.drift_detected_at is not None and row.last_apply_status is None
     stored = reconciler.get_run(db, result.run_id)
-    assert [(i.operation, i.keys, i.tags) for i in stored.items[1:]] == [("unset", ["stray"], {}), ("set", [], {"a": "1"})]
+    assert [(i.operation, i.keys, i.tags) for i in stored.items] == [("unset", ["stray"], {}), ("set", [], {"a": "1"})]
 
 
 def test_plan_mode_never_runs_a_statement_even_past_the_removal_limit(db, uc, provider, monkeypatch, alerts):
@@ -271,7 +266,7 @@ def test_plan_mode_never_runs_a_statement_even_past_the_removal_limit(db, uc, pr
     assert reconciler.circuit_breaker_tripped(db) is False
 
 
-def test_enforce_claims_the_catalog_first_then_applies_and_records_convergence(db, uc, provider):
+def test_enforce_applies_and_records_convergence(db, uc, provider):
     uc.add("c.s.t", {"a": "old", "stray": "1", "system.certified": "yes"}, comment="old")
     uc.add("c.s.t::email")
     desired(db, "c.s.t", {"a": "1"}, comment="Orders", drift=datetime(2026, 1, 1))
@@ -279,21 +274,18 @@ def test_enforce_claims_the_catalog_first_then_applies_and_records_convergence(d
 
     result = reconciler.run(db, trigger="manual", fqn_keys=["c.s.t"], provider=provider)
 
-    executed = provider.statements.executed
-    assert executed[0] == f"ALTER CATALOG `c` SET TAGS ('{CLAIM_KEY}' = '{ME}');"
-    assert len(executed) == 5 and result.status == "completed"
-    assert result.statements_applied == 5 and result.objects_drifted == 2
+    assert len(provider.statements.executed) == 4 and result.status == "completed"
+    assert result.statements_applied == 4 and result.objects_drifted == 2
     for key in ("c.s.t", "c.s.t::email"):
         row = obj(db, key)
         assert (row.last_apply_status, row.drift_detected_at, row.last_apply_error) == ("applied", None, None)
         assert row.last_applied_at is not None and row.last_observed_at is not None
-    snapshot = {k: v for k, v in observed.get_observed(db, ["c", "c.s.t", "c.s.t::email"]).items()}
+    snapshot = observed.get_observed(db, ["c.s.t", "c.s.t::email"])
     assert snapshot["c.s.t"].tags == {"a": "1", "system.certified": "yes"} and snapshot["c.s.t"].comment == "Orders"
     assert snapshot["c.s.t::email"].tags == {"pii": None}
-    assert snapshot["c"].tags == {CLAIM_KEY: ME}
 
 
-def test_enforce_skips_in_sync_objects_and_needs_no_claim_when_nothing_changes(db, uc, provider):
+def test_enforce_skips_in_sync_objects(db, uc, provider):
     uc.add("c.s.t", {"a": "1"})
     desired(db, "c.s.t", {"a": "1"}, apply_status="failed")
 
@@ -305,7 +297,7 @@ def test_enforce_skips_in_sync_objects_and_needs_no_claim_when_nothing_changes(d
 
 
 def test_a_failed_statement_records_the_error_and_drift(db, uc, provider):
-    uc.add("c", {CLAIM_KEY: ME})
+    uc.add("c")
     uc.add("c.s.t", {"stray": "1"})
     desired(db, "c.s.t", {"a": "1"})
     provider.statements.failures = {"UNSET TAGS": "PERMISSION_DENIED: no APPLY TAG"}
@@ -320,7 +312,7 @@ def test_a_failed_statement_records_the_error_and_drift(db, uc, provider):
 
 
 def test_a_desired_edit_during_the_run_keeps_its_own_state(db, uc, provider):
-    uc.add("c", {CLAIM_KEY: ME})
+    uc.add("c")
     uc.add("c.s.t")
     desired(db, "c.s.t", {"a": "1"})
 
@@ -368,24 +360,10 @@ def test_too_many_removals_trip_the_breaker_before_anything_runs(db, uc, provide
     assert len(alerts) == 1
 
 
-# --- run: claims, lifecycle, adoption -------------------------------------------------------
+# --- run: lifecycle, adoption ---------------------------------------------------------------
 
 
-def test_a_catalog_claimed_by_another_deployment_is_skipped(db, uc, provider):
-    uc.add("c", {CLAIM_KEY: "other-app"})
-    uc.add("c.s.t", {"stray": "1"})
-    desired(db, "c.s.t", {"a": "1"})
-
-    result = reconciler.run(db, trigger="manual", fqn_keys=["c.s.t"], provider=provider)
-
-    assert provider.statements.executed == [] and result.items == []
-    assert result.skipped_catalogs == ["c"] and result.objects_checked == 0
-    row = obj(db, "c.s.t")
-    assert row.last_apply_status == "skipped" and "other-app" in row.last_apply_error
-
-
-def test_with_claims_off_nothing_is_claimed(db, uc, provider, monkeypatch):
-    monkeypatch.setattr(settings, "METADATA_CLAIM_ENABLED", False)
+def test_a_targeted_run_reads_only_the_named_objects(db, uc, provider):
     uc.add("c.s.t")
     desired(db, "c.s.t", {"a": "1"})
 
@@ -396,7 +374,7 @@ def test_with_claims_off_nothing_is_claimed(db, uc, provider, monkeypatch):
 
 
 def test_a_pending_object_that_now_exists_becomes_exists_and_is_applied(db, uc, provider):
-    uc.add("c", {CLAIM_KEY: ME})
+    uc.add("c")
     uc.add("c.s.v", securable_type="view")
     desired(db, "c.s.v", {"a": "1"}, state="pending")
 
@@ -538,7 +516,7 @@ def test_a_sweep_reconciles_every_managed_object_and_purges_orphans(db, uc, prov
     monkeypatch.setattr(store, "purge_orphans", lambda db_, *, older_than_days: purged.append(older_than_days) or 0)
     uc.scope = ["c", "d"]
     uc.unreadable = {"d"}
-    uc.add("c", {CLAIM_KEY: ME})
+    uc.add("c")
     uc.add("c.s.a", {"stray": "1"})
     uc.add("c.s.b", {"b": "1"})
     desired(db, "c.s.a")
@@ -593,7 +571,7 @@ def test_drain_takes_due_rows_oldest_first_in_one_bulk_refresh(db, uc, provider,
     result = reconciler.drain_queue(db, provider=provider, limit=2)
 
     assert result.trigger == "queue"
-    assert uc.refreshed == [["c", "c.s.t0", "c.s.t1"]]
+    assert uc.refreshed == [["c.s.t0", "c.s.t1"]]
     assert sorted(queue(db)) == ["c.s.later", "c.s.t2", "c.s.t3", "c.s.t4"]
 
 
@@ -607,7 +585,7 @@ def test_nothing_due_returns_none(db, uc, provider):
 
 
 def test_failures_back_off_exponentially_and_converged_rows_leave(db, uc, provider):
-    uc.add("c", {CLAIM_KEY: ME})
+    uc.add("c")
     uc.add("c.s.bad")
     uc.add("c.s.good")
     desired(db, "c.s.bad", {"a": "1"})
@@ -634,7 +612,7 @@ def test_failures_back_off_exponentially_and_converged_rows_leave(db, uc, provid
 
 
 def test_a_row_re_enqueued_during_the_run_stays_queued(db, uc, provider):
-    uc.add("c", {CLAIM_KEY: ME})
+    uc.add("c")
     uc.add("c.s.t")
     desired(db, "c.s.t", {"a": "1"})
     provider.statements.failures = {"SET TAGS": "boom"}
@@ -653,7 +631,7 @@ def test_a_row_re_enqueued_during_the_run_stays_queued(db, uc, provider):
 
 
 def test_the_fifth_failure_alerts_governance_once(db, uc, provider, alerts):
-    uc.add("c", {CLAIM_KEY: ME})
+    uc.add("c")
     uc.add("c.s.t")
     desired(db, "c.s.t", {"a": "1"})
     provider.statements.failures = {"SET TAGS": "PERMISSION_DENIED"}
@@ -671,7 +649,7 @@ def test_the_fifth_failure_alerts_governance_once(db, uc, provider, alerts):
 
 def test_an_unreadable_catalog_is_retried(db, uc, provider):
     uc.unreadable = {"d"}
-    uc.add("c", {CLAIM_KEY: ME})
+    uc.add("c")
     uc.add("c.s.t")
     desired(db, "c.s.t", {"a": "1"})
     desired(db, "d.s.u", {"a": "1"})
@@ -767,7 +745,7 @@ def test_a_pass_drains_a_large_queue_in_batches(pass_env, monkeypatch):
     reconciler._reconcile_pass(budget_seconds=600)
 
     assert queue(pass_env.db) == {}
-    assert [len(r) - 1 for r in pass_env.uc.refreshed] == [200, 200, 50]
+    assert [len(r) for r in pass_env.uc.refreshed] == [200, 200, 50]
     assert pass_env.db.query(MetadataReconcileRunModel).filter_by(trigger="queue").count() == 3
 
 

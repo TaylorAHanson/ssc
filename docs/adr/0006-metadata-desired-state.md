@@ -113,7 +113,7 @@ trail can flow into Delta.
   unset tags UC has that the row doesn't, and set or clear the comment.
 - **Exempt keys:** `METADATA_EXEMPT_KEYS` (default `system.certification_status`) lists
   keys the reconciler never sets or removes and that edits can't touch. Without it,
-  enforcement would fight OmniGuard. The catalog claim key is always exempt.
+  enforcement would fight OmniGuard.
 - **Triggers:**
   - committing a change enqueues the affected objects; the poller drains the queue
     within one poll cycle;
@@ -137,10 +137,10 @@ trail can flow into Delta.
 - **Circuit breaker:** a run that would make more than `METADATA_MAX_REMOVALS_PER_RUN`
   tag removals applies nothing, records the run as `paused` and alerts governance.
 - **Single writer:** only the poller leader reconciles, under a Postgres advisory lock.
-  A per-catalog claim marker, the catalog tag `METADATA_CLAIM_TAG_KEY` whose value names
-  the owning instance (`METADATA_INSTANCE_ID`), stops two instances fighting over a
-  catalog: an instance enforces only catalogs it has claimed or that are unclaimed (and
-  then claims them).
+  Each deployment writes only to the catalogs in its `METADATA_RECONCILE_CATALOGS`, and
+  the lists of different deployments must not overlap. (Amended 2026-10-20: a per-catalog
+  claim tag naming the owning instance was dropped. Production is the only deployment
+  that enforces the governed catalogs, and the tag added a write to every catalog.)
 - **Statement builders** move out of `tag_plan.py` into `services/metadata/sql.py`. New
   forms cover table, view, materialized view, streaming table and column comments
   (`COMMENT ON TABLE`, `COMMENT ON COLUMN`), next to the existing catalog and schema
@@ -199,8 +199,8 @@ It is fast and works for objects that don't exist yet.
   only sensitive changes need approval) or `all` (every change needs approval).
 - **Lower-environment deployments** (dev and stage apps) run
   `METADATA_RECONCILE_MODE=plan`: real diffs against the metastore, no writes. Set
-  `METADATA_RECONCILE_CATALOGS` to a sandbox list to enforce only there; those catalogs'
-  claim markers keep prod away from them.
+  `METADATA_RECONCILE_CATALOGS` to a sandbox list to enforce only there, and keep those
+  catalogs out of production's list.
 
 ### D6. One change service for every surface
 

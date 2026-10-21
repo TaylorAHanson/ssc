@@ -1,65 +1,55 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Tags } from 'lucide-react';
+import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Settings2, Tags, X } from 'lucide-react';
 import { getConfig, getWhoAmI, listKeys } from '../../../services/metadataApi';
 import { useUserStore } from '../../../stores/userStore';
-import type { ChangeSet, ObjectDetail } from '../../../types/metadata';
+import type { ChangeSet } from '../../../types/metadata';
 import { ErrorBanner, Notice, Skeleton, Toast, type ToastMessage } from '../../../components/rbac/ui';
+import { cn } from '../../../lib/utils';
+import { AdminPage } from '../../../components/admin/metadata/AdminPage';
+import { BrowsePage } from '../../../components/admin/metadata/BrowsePage';
 import { ChangeSetDrawer } from '../../../components/admin/metadata/ChangeSetDrawer';
-import { ChangesTab } from '../../../components/admin/metadata/ChangesTab';
 import { MetadataContext, type MetadataContextValue } from '../../../components/admin/metadata/context';
-import { DriftTab } from '../../../components/admin/metadata/DriftTab';
 import { errorMessage } from '../../../components/admin/metadata/format';
+import { HistoryPage } from '../../../components/admin/metadata/HistoryPage';
 import { CircuitBreakerBanner } from '../../../components/admin/metadata/ModeBanner';
-import { ObjectDrawer } from '../../../components/admin/metadata/ObjectDrawer';
-import { ObjectsTab } from '../../../components/admin/metadata/ObjectsTab';
-import { PrincipalsTab } from '../../../components/admin/metadata/PrincipalsTab';
-import { PromoteDialog } from '../../../components/admin/metadata/PromoteDialog';
+import { ObjectPage } from '../../../components/admin/metadata/ObjectPage';
+import { METADATA_BASE, adminPath, historyPath, objectPath } from '../../../components/admin/metadata/paths';
 import { RevertDialog } from '../../../components/admin/metadata/RevertDialog';
 import { RunDrawer } from '../../../components/admin/metadata/RunDrawer';
-import { RunsTab } from '../../../components/admin/metadata/RunsTab';
-import { StagedTray } from '../../../components/admin/metadata/StagedTray';
+import { UnsavedBar } from '../../../components/admin/metadata/UnsavedBar';
 import { hasEdits, useStagingStore } from '../../../components/admin/metadata/staging';
 import { useAsync } from '../../../components/admin/metadata/useAsync';
 
-type Tab = 'objects' | 'changes' | 'drift' | 'runs' | 'principals';
+type Panel = { kind: 'changeset'; id: string } | { kind: 'run'; id: string } | { kind: 'revert'; changeSet: ChangeSet };
 
-const TAB_LABELS: Record<Tab, string> = {
-  objects: 'Objects',
-  changes: 'Changes',
-  drift: 'Drift',
-  runs: 'Reconciler runs',
-  principals: 'System principals',
-};
+const WELCOME_KEY = 'metadata-manager.welcome-dismissed';
 
-type Panel =
-  | { kind: 'object'; name: string; column: string | null }
-  | { kind: 'changeset'; id: string }
-  | { kind: 'run'; id: string }
-  | { kind: 'promote'; detail: ObjectDetail }
-  | { kind: 'revert'; changeSet: ChangeSet };
-
-/** Search, edit and audit table and column metadata declared here and applied to Unity Catalog. */
+/** Find a table, change its tags and description, and see what changed; admins also get sync health. */
 export function MetadataManager() {
-  const [params, setParams] = useSearchParams();
   const [refreshToken, setRefreshToken] = useState(0);
   const roleOverride = useUserStore((s) => s.activeRoleOverride);
-  const [panel, setPanel] = useState<Panel | null>(null);
+  const navigate = useNavigate();
+  const location = useLocation();
+  // A drawer belongs to the page it was opened on; following a link inside it closes it.
+  const [opened, setOpened] = useState<{ panel: Panel; at: string } | null>(null);
+  const panel = opened?.at === location.pathname ? opened.panel : null;
+  const setPanel = useCallback((p: Panel | null) => setOpened(p ? { panel: p, at: location.pathname } : null), [location.pathname]);
   const [toast, setToast] = useState<ToastMessage | null>(null);
 
   const load = useCallback(() => Promise.all([getWhoAmI(), getConfig(), listKeys({ limit: 500 })]), []);
   const { data, error, reload } = useAsync(load, { keepPrevious: true, token: `${refreshToken}:${roleOverride ?? ''}` });
-  const stagedCount = useStagingStore((s) => s.order.filter((k) => s.targets[k] && hasEdits(s.targets[k])).length);
+  const unsavedCount = useStagingStore((s) => s.order.filter((k) => s.targets[k] && hasEdits(s.targets[k])).length);
 
-  // Staged edits live only in this tab's memory; warn before a reload or close loses them.
+  // Unsaved changes live only in this tab's memory; warn before a reload or close loses them.
   useEffect(() => {
-    if (!stagedCount) return;
+    if (!unsavedCount) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault();
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [stagedCount]);
+  }, [unsavedCount]);
 
   const bumpRefresh = useCallback(() => setRefreshToken((t) => t + 1), []);
   const dismissToast = useCallback(() => setToast(null), []);
@@ -73,19 +63,14 @@ export function MetadataManager() {
       isAdmin: whoami.actor.is_admin,
       refreshToken,
       bumpRefresh,
-      openObject: (name, column) => setPanel({ kind: 'object', name, column: column ?? null }),
+      openObject: (name, column) => navigate(objectPath(name, column)),
       openChangeSet: (id) => setPanel({ kind: 'changeset', id }),
       openRun: (id) => setPanel({ kind: 'run', id }),
       notify: (text, opts) => setToast({ id: Date.now(), text, ...opts }),
     };
-  }, [data, refreshToken, bumpRefresh]);
+  }, [data, refreshToken, bumpRefresh, navigate, setPanel]);
 
-  const tabs: Tab[] = ctx?.isAdmin ? ['objects', 'changes', 'drift', 'runs', 'principals'] : ['objects', 'changes', 'drift', 'runs'];
-  const requested = params.get('tab') as Tab | null;
-  const active: Tab = requested && tabs.includes(requested) ? requested : 'objects';
-  const switchTab = (t: Tab) => setParams(t === 'objects' ? {} : { tab: t }, { replace: true });
-  const closePanel = () => setPanel(null);
-
+  const onAdmin = location.pathname.startsWith(adminPath);
   let body: ReactNode;
   if (error && !ctx) {
     body = <ErrorBanner message={errorMessage(error, 'Couldn’t load the Metadata Manager')} onRetry={reload} />;
@@ -100,82 +85,125 @@ export function MetadataManager() {
   } else {
     body = (
       <>
-        {ctx.isAdmin && active !== 'runs' && (
+        {ctx.isAdmin && !onAdmin && (
           <CircuitBreakerBanner
             action={
-              <button type="button" onClick={() => switchTab('runs')} className="font-medium underline">
-                Review on the Reconciler runs tab
-              </button>
+              <Link to={adminPath} className="font-medium underline">
+                Review it on the Admin page
+              </Link>
             }
           />
         )}
-        <div role="tablist" aria-label="Metadata Manager sections" className="flex flex-wrap gap-2 border-b border-gray-200">
-          {tabs.map((t) => (
-            <button
-              key={t}
-              type="button"
-              role="tab"
-              id={`metadata-tab-${t}`}
-              aria-selected={active === t}
-              aria-controls="metadata-tabpanel"
-              onClick={() => switchTab(t)}
-              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors ${active === t ? 'border-b-2 border-primary text-primary' : 'text-gray-600 hover:text-gray-900'}`}
-            >
-              {TAB_LABELS[t]}
-              {t === 'objects' && stagedCount > 0 && (
-                <span className="rounded-full bg-amber-100 px-2 text-xs text-amber-800">{stagedCount} staged</span>
-              )}
-            </button>
-          ))}
-        </div>
-        <div role="tabpanel" id="metadata-tabpanel" aria-labelledby={`metadata-tab-${active}`} className="space-y-4">
-          {active === 'objects' && <ObjectsTab />}
-          {active === 'changes' && <ChangesTab />}
-          {active === 'drift' && <DriftTab onShowRuns={() => switchTab('runs')} />}
-          {active === 'runs' && <RunsTab />}
-          {active === 'principals' && <PrincipalsTab />}
-          {(active === 'objects' || active === 'drift') && <StagedTray />}
-        </div>
+        <Routes>
+          <Route index element={<LegacyTabRedirect />} />
+          <Route path="browse/:catalog" element={<BrowsePage key={location.pathname} />} />
+          <Route path="browse/:catalog/:schema" element={<BrowsePage key={location.pathname} />} />
+          <Route path="browse/:catalog/:schema/:table" element={<ObjectPage />} />
+          <Route path="history" element={<HistoryPage />} />
+          <Route path="admin" element={ctx.isAdmin ? <AdminPage /> : <Navigate to={METADATA_BASE} replace />} />
+          <Route path="*" element={<Navigate to={METADATA_BASE} replace />} />
+        </Routes>
+        <UnsavedBar />
       </>
     );
   }
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="flex items-center gap-2 text-xl font-bold text-gray-900">
-          <Tags className="h-5 w-5" /> Metadata Manager
-        </h2>
-        <p className="mt-1 text-sm text-gray-500">
-          Find tables and columns, see who set each tag and description, and change them with approvals where needed. Changes saved here are applied to Unity
-          Catalog in the background.
-        </p>
+      <div className="flex flex-wrap items-end gap-4 border-b border-gray-200 pb-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-xl font-bold text-gray-900">
+            <Tags className="h-5 w-5" /> Metadata Manager
+          </h2>
+          <p className="mt-1 text-sm text-gray-500">Find a table, then change its description and tags.</p>
+        </div>
+        {ctx?.whoami.can_browse && (
+          <nav aria-label="Metadata Manager" className="ml-auto flex items-center gap-1">
+            <NavItem to={METADATA_BASE} end={false} matchBrowse>
+              Browse
+            </NavItem>
+            <NavItem to={historyPath}>History</NavItem>
+            {ctx.isAdmin && (
+              <NavItem to={adminPath}>
+                <Settings2 className="h-4 w-4" /> Admin
+              </NavItem>
+            )}
+          </nav>
+        )}
       </div>
-      {ctx ? <MetadataContext.Provider value={ctx}>{body}{renderPanel(panel, closePanel, setPanel)}</MetadataContext.Provider> : body}
+      {ctx?.whoami.can_browse && <Welcome />}
+      {ctx ? (
+        <MetadataContext.Provider value={ctx}>
+          {body}
+          {renderPanel(panel, () => setPanel(null), setPanel)}
+        </MetadataContext.Provider>
+      ) : (
+        body
+      )}
       {toast && <Toast toast={toast} onDismiss={dismissToast} />}
     </div>
+  );
+}
+
+function NavItem({ to, children, end = true, matchBrowse }: { to: string; children: ReactNode; end?: boolean; matchBrowse?: boolean }) {
+  const location = useLocation();
+  const browseActive = matchBrowse && (location.pathname === METADATA_BASE || location.pathname.startsWith(`${METADATA_BASE}/browse`));
+  return (
+    <NavLink
+      to={to}
+      end={end}
+      className={({ isActive }) =>
+        cn(
+          'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium',
+          (matchBrowse ? browseActive : isActive) ? 'bg-primary/10 text-primary' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900',
+        )
+      }
+    >
+      {children}
+    </NavLink>
+  );
+}
+
+/** The catalog list, or where an old `?tab=` link pointed. */
+function LegacyTabRedirect() {
+  const [params] = useSearchParams();
+  const tab = params.get('tab');
+  if (tab === 'changes') return <Navigate to={historyPath} replace />;
+  if (tab === 'drift' || tab === 'runs' || tab === 'principals') return <Navigate to={adminPath} replace />;
+  return <BrowsePage />;
+}
+
+function Welcome() {
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem(WELCOME_KEY) === '1');
+  if (dismissed) return null;
+  const close = () => {
+    localStorage.setItem(WELCOME_KEY, '1');
+    setDismissed(true);
+  };
+  return (
+    <section aria-label="How this works" className="relative rounded-lg border border-primary/20 bg-primary/5 p-4 pr-10 text-sm text-gray-700">
+      <button type="button" onClick={close} className="absolute right-3 top-3 text-gray-400 hover:text-gray-700" aria-label="Dismiss">
+        <X className="h-4 w-4" />
+      </button>
+      <p className="font-medium text-gray-900">How this works</p>
+      <ol className="mt-1 list-decimal space-y-0.5 pl-5">
+        <li>Click into a catalog and schema, or search, to find a table.</li>
+        <li>Change its description or tags right on the page. Nothing is saved yet.</li>
+        <li>
+          Click <span className="font-medium">Review and save</span> at the bottom. Some changes go to the owners for approval first.
+        </li>
+      </ol>
+    </section>
   );
 }
 
 function renderPanel(panel: Panel | null, close: () => void, open: (p: Panel) => void): ReactNode {
   if (!panel) return null;
   switch (panel.kind) {
-    case 'object':
-      return (
-        <ObjectDrawer
-          key={`${panel.name}::${panel.column ?? ''}`}
-          name={panel.name}
-          column={panel.column}
-          onClose={close}
-          onPromote={(detail) => open({ kind: 'promote', detail })}
-        />
-      );
     case 'changeset':
       return <ChangeSetDrawer key={panel.id} id={panel.id} onClose={close} onRevert={(changeSet) => open({ kind: 'revert', changeSet })} />;
     case 'run':
       return <RunDrawer key={panel.id} id={panel.id} onClose={close} />;
-    case 'promote':
-      return <PromoteDialog detail={panel.detail} onClose={close} />;
     case 'revert':
       return <RevertDialog changeSet={panel.changeSet} onClose={close} />;
   }

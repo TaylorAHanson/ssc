@@ -67,7 +67,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
   return (
     <ReviewDialog
       title="Import CSV or JSON"
-      subtitle="Declare tags and descriptions for many objects at once. You’ll see exactly what changes before anything is saved."
+      subtitle="Set tags and descriptions for many objects at once from a file. You’ll see exactly what changes before anything is saved."
       flow={flow}
       reason={reason}
       onReasonChange={setReason}

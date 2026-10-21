@@ -299,7 +299,7 @@ class MetadataReconcileItemModel(Base):
     object_id: Mapped[Optional[str]] = Column(String, nullable=True)
     fqn_key: Mapped[str] = Column(String, nullable=False)
     securable_type: Mapped[Optional[str]] = Column(String, nullable=True)
-    # set | unset | comment | claim
+    # set | unset | comment
     operation: Mapped[str] = Column(String, nullable=False)
     sql: Mapped[str] = Column(Text, nullable=False, default="")
     # Tags this statement removes (counted by the circuit breaker).

@@ -7,7 +7,7 @@ import { EmptyState, ErrorBanner, Modal, Notice, Pager, Skeleton } from '../../r
 import { RunStatusBadge } from './badges';
 import { useMetadata } from './context';
 import { errorMessage, formatTime, plural, relativeTime } from './format';
-import { CircuitBreakerBanner, ModeBanner } from './ModeBanner';
+import { CircuitBreakerBanner } from './ModeBanner';
 import { useAsync } from './useAsync';
 
 const PAGE_SIZE = 20;
@@ -20,7 +20,7 @@ const TRIGGER_LABELS: Record<string, string> = {
   notify: 'Asked to check',
 };
 
-/** Reconciler runs: what each checked, planned and applied; admins can start or resume runs. */
+/** Sync history: what each check read, planned and wrote; admins can start or resume one. */
 export function RunsTab() {
   const { isAdmin, refreshToken, bumpRefresh, notify, openRun } = useMetadata();
   const [page, setPage] = useState(1);
@@ -38,7 +38,7 @@ export function RunsTab() {
       bumpRefresh();
       openRun(result.run_id);
     } catch (e) {
-      notify(errorMessage(e, 'Couldn’t start the run'), { kind: 'error' });
+      notify(errorMessage(e, 'Couldn’t start the sync'), { kind: 'error' });
     } finally {
       setBusy(null);
       setConfirmResume(false);
@@ -47,7 +47,6 @@ export function RunsTab() {
 
   return (
     <div className="space-y-3">
-      <ModeBanner />
       <CircuitBreakerBanner
         action={
           isAdmin && (
@@ -60,20 +59,20 @@ export function RunsTab() {
       {isAdmin && (
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="outline" className="gap-1.5" disabled={!!busy} onClick={() => run({ kind: 'plan' }, 'plan')}>
-            <ScanSearch className="h-3.5 w-3.5" /> {busy === 'plan' ? 'Planning…' : 'Run a plan'}
+            <ScanSearch className="h-3.5 w-3.5" /> {busy === 'plan' ? 'Previewing…' : 'Preview a sync'}
           </Button>
           <Button size="sm" className="gap-1.5" disabled={!!busy} onClick={() => run({ kind: 'sweep' }, 'sweep')}>
-            <Play className="h-3.5 w-3.5" /> {busy === 'sweep' ? 'Running…' : 'Run a full check now'}
+            <Play className="h-3.5 w-3.5" /> {busy === 'sweep' ? 'Checking…' : 'Check and sync now'}
           </Button>
-          <span className="text-xs text-gray-500">A plan only reports what would change. A full check applies it (in enforce mode).</span>
+          <span className="text-xs text-gray-500">A preview only reports what would change. Check and sync writes it to Unity Catalog when syncing is on.</span>
         </div>
       )}
 
-      {error ? <ErrorBanner message={errorMessage(error, 'Couldn’t load runs')} onRetry={reload} /> : null}
+      {error ? <ErrorBanner message={errorMessage(error, 'Couldn’t load the sync history')} onRetry={reload} /> : null}
       {!data && loading ? (
         <Skeleton rows={6} />
       ) : data && data.items.length === 0 ? (
-        <EmptyState title="No runs yet">Runs appear here once the reconciler checks Unity Catalog.</EmptyState>
+        <EmptyState title="No syncs yet">They appear here once Unity Catalog has been checked.</EmptyState>
       ) : data ? (
         <div className={loading ? 'overflow-x-auto opacity-60' : 'overflow-x-auto'}>
           <table className="w-full rounded-lg border border-gray-200 bg-white text-left text-sm">
@@ -83,8 +82,8 @@ export function RunsTab() {
                 <th scope="col" className="px-3 py-2 font-medium">Why</th>
                 <th scope="col" className="px-3 py-2 font-medium">Status</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium">Checked</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">Drifted</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">Statements</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium">Out of sync</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium">Written</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium">Removals</th>
               </tr>
             </thead>
@@ -98,7 +97,7 @@ export function RunsTab() {
                   </td>
                   <td className="px-3 py-2 text-xs text-gray-600">
                     {TRIGGER_LABELS[r.trigger] ?? r.trigger}
-                    {r.mode === 'plan' && <span className="ml-1 text-gray-400">(plan only)</span>}
+                    {r.mode === 'plan' && <span className="ml-1 text-gray-400">(preview)</span>}
                     {r.actor && <span className="block text-gray-400">{r.actor}</span>}
                   </td>
                   <td className="px-3 py-2">
@@ -123,7 +122,7 @@ export function RunsTab() {
 
       {confirmResume && (
         <Modal
-          title="Resume the reconciler?"
+          title="Resume syncing?"
           onClose={() => setConfirmResume(false)}
           footer={
             <>
@@ -139,16 +138,16 @@ export function RunsTab() {
           <Notice kind="warn">
             {paused ? (
               <>
-                The paused run planned {plural(paused.removals_planned, 'removal')}.
+                The paused sync planned {plural(paused.removals_planned, 'removal')}.
                 {paused.paused_reason && <span className="mt-1 block">{paused.paused_reason}</span>}
               </>
             ) : (
-              'The last run planned more removals than the safety limit allows.'
+              'The last sync planned more removals than the safety limit allows.'
             )}
           </Notice>
           <p className="text-sm text-gray-700">
-            Resuming runs a full check that ignores the limit once, so every planned removal is written to Unity Catalog. Check the paused run’s statements
-            first; if the removals are wrong, fix the declared tags instead (for example by keeping Unity Catalog’s values on the Drift tab).
+            Resuming runs a check that ignores the limit once, so every planned removal is written to Unity Catalog. Look at the paused sync’s statements
+            first; if the removals are wrong, fix the tags saved here instead (for example with “Keep Unity Catalog’s values” under Out of sync).
           </p>
           {paused && (
             <Button
@@ -159,7 +158,7 @@ export function RunsTab() {
                 openRun(paused.run_id);
               }}
             >
-              Open the paused run
+              Open the paused sync
             </Button>
           )}
         </Modal>
@@ -169,7 +168,7 @@ export function RunsTab() {
 }
 
 function runMessage(r: ReconcileResult): string {
-  if (r.status === 'paused') return `The run paused: it would remove ${plural(r.removals_planned, 'tag')}, which is over the safety limit.`;
-  if (r.mode === 'plan') return `Plan finished: ${plural(r.statements_planned, 'statement')} would run.`;
-  return `Run finished: ${r.statements_applied} of ${plural(r.statements_planned, 'statement')} applied.`;
+  if (r.status === 'paused') return `The sync paused: it would remove ${plural(r.removals_planned, 'tag')}, which is over the safety limit.`;
+  if (r.mode === 'plan') return `Preview finished: ${plural(r.statements_planned, 'statement')} would run.`;
+  return `Sync finished: ${r.statements_applied} of ${plural(r.statements_planned, 'statement')} written.`;
 }

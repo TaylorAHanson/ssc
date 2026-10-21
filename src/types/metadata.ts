@@ -321,7 +321,7 @@ export interface VersionConflictItem {
 
 // --- Reconciler ----------------------------------------------------------------------
 
-export type PlanOperation = 'set' | 'unset' | 'comment' | 'claim';
+export type PlanOperation = 'set' | 'unset' | 'comment';
 export type PlanStatus = 'planned' | 'applied' | 'noop' | 'failed' | 'skipped';
 export type RunTrigger = 'queue' | 'sweep' | 'manual' | 'new_object' | 'notify';
 export type RunStatus = 'running' | 'completed' | 'partial' | 'failed' | 'paused' | 'skipped';
@@ -515,7 +515,6 @@ export interface MetadataConfig {
   reconcile_mode: ReconcileMode;
   owner_tag_key: string;
   exempt_keys: string[];
-  claim_tag_key?: string | null;
   key_mode: 'open' | 'known_only';
   key_policies: KeyPolicy[];
   environments: EnvironmentInfo[];

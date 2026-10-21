@@ -38,8 +38,6 @@ def baseline(monkeypatch):
     s(settings, "METADATA_KEY_MODE", "open")
     s(settings, "METADATA_KEY_POLICIES", [dict(p) for p in POLICIES])
     s(settings, "METADATA_EXEMPT_KEYS", ["system.certification_status"])
-    s(settings, "METADATA_CLAIM_ENABLED", True)
-    s(settings, "METADATA_CLAIM_TAG_KEY", "metadata_manager_instance")
     s(settings, "METADATA_CLASSIFICATION_KEY", "classification")
     s(settings, "METADATA_CLASSIFICATION_LEVELS", ["public", "internal", "confidential", "restricted"])
     s(settings, "METADATA_PII_KEYS", ["pii"])

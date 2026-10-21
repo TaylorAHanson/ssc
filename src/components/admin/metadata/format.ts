@@ -186,7 +186,7 @@ const ACTION_LABELS: Record<string, string> = {
   tag_unset: 'Removed tag',
   comment_set: 'Set description',
   comment_clear: 'Cleared description',
-  object_create: 'Declared object',
+  object_create: 'Prepared ahead of time',
   object_delete: 'Deleted object',
   object_restore: 'Restored object',
   object_state: 'Object state changed',
@@ -211,7 +211,7 @@ const SUMMARY_LABELS: Record<string, string> = {
   tags_set: 'tags set',
   tags_unset: 'tags removed',
   comments: 'descriptions changed',
-  created: 'objects declared',
+  created: 'objects prepared ahead of time',
   restored: 'objects restored',
 };
 

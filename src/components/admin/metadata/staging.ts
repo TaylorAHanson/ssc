@@ -148,9 +148,6 @@ interface StagingState {
   environments: string[];
   routing: ApprovalRouting;
   reason: string;
-  trayOpen: boolean;
-  setTrayOpen: (open: boolean) => void;
-  stage: (seeds: TargetSeed[]) => void;
   setTag: (keys: string[], tagKey: string, value: string | null, seeds?: TargetSeed[]) => void;
   unsetTag: (keys: string[], tagKey: string, seeds?: TargetSeed[]) => void;
   setComment: (keys: string[], value: string | null, seeds?: TargetSeed[]) => void;
@@ -188,9 +185,6 @@ export const useStagingStore = create<StagingState>((set) => ({
   environments: [],
   routing: 'request',
   reason: '',
-  trayOpen: false,
-  setTrayOpen: (trayOpen) => set({ trayOpen }),
-  stage: (seeds) => set((state) => ({ ...withTargets(state, seeds), trayOpen: true })),
   setTag: (keys, tagKey, value, seeds) =>
     set((state) => {
       const { targets, order } = withTargets(state, seeds);

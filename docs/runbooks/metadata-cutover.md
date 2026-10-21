@@ -49,11 +49,11 @@ deployments either stay in `plan` mode or enforce only their own catalogs (step 
 
 ## 3. Read Unity Catalog and adopt its current state
 
-1. Run a sweep without writing anything. On the **Reconciler runs** tab choose **Run a
-   plan**, or call `POST /api/v1/metadata/runs` with `{"kind": "plan"}`. The sweep fills
+1. Run a sweep without writing anything. On the Metadata Manager's **Admin** page, under **Sync history**, choose **Preview a
+   sync**, or call `POST /api/v1/metadata/runs` with `{"kind": "plan"}`. The sweep fills
    the snapshot (`metadata_observed`) from `information_schema`.
-2. Adopt what Unity Catalog holds today as the desired state, with **Adopt current
-   state** on the **Objects** tab or the API. A catalog or schema name adopts everything
+2. Adopt what Unity Catalog holds today as the desired state, with **Start managing
+   catalogs** on the **Admin** page or the API. A catalog or schema name adopts everything
    under it.
 
    ```http
@@ -74,7 +74,7 @@ deployments either stay in `plan` mode or enforce only their own catalogs (step 
 ## 4. Register system principals
 
 For each pipeline or external system that will call the API or MCP, add a row on the
-**System principals** tab: its application id, the name globs it may change (for
+**Admin → Automation access** section: its application id, the name globs it may change (for
 example `sales_*.bronze.*`), the keys and operations it may use, and its environments.
 Have the system call `GET /api/v1/metadata/whoami` once: it should report
 `recognized_as: service_principal`. If it reports `unregistered_service_principal`, the
@@ -86,7 +86,7 @@ Let the scheduled sweeps run for a few days.
 
 - **Drift** lists every managed object whose Unity Catalog state differs from its
   desired state. Right after adopt it should be empty apart from changes made since.
-- **Reconciler runs** shows each run's planned statements. Look in particular at
+- **Sync history** shows each run's planned statements. Look in particular at
   removals: every tag a statement removes is one that someone added outside the
   Metadata Manager, and enforcement will remove it.
 - For each unexpected difference, either add the tag to the desired state (edit the
@@ -97,7 +97,7 @@ Let the scheduled sweeps run for a few days.
 ## 6. Switch to enforce
 
 1. Set **Reconcile mode** to `enforce`.
-2. On **Reconciler runs**, choose **Run a full check now** and watch the run. It should
+2. Under **Sync history**, choose **Check and sync now** and watch the run. It should
    apply only the statements you reviewed. Changes saved while the mode was `plan` were
    only planned, so this run is what applies them.
 3. If a run is **paused** by the circuit breaker, it wanted to remove more tags or
@@ -119,18 +119,18 @@ because other workflows use them.
 
 Dev and stage deployments share the metastore with production, so they must never write
 to production's catalogs. **Catalogs to reconcile** is the boundary: a deployment never
-changes, claims or adopts tables in a catalog it doesn't list, and refuses edits to one.
+changes or adopts tables in a catalog it doesn't list, and refuses edits to one.
 
 - **Report only:** leave **Catalogs to reconcile** blank and **Reconcile mode** at `plan`.
   It shows real diffs against the metastore and writes nothing; enforce won't run
   without a list.
 - **Enforce its own catalogs:** list only that environment's catalogs (for example
-  `*_dev`), give the deployment its own **Instance id**, and set **Reconcile mode** to
-  `enforce`. Its claim tag on those catalogs keeps the production deployment away from
-  them, so leave them out of production's list too.
+  `*_dev`) and set **Reconcile mode** to `enforce`. Leave them out of production's list:
+  nothing else stops two deployments that list the same catalog from undoing each
+  other's changes.
 - **Add, don't remove, while you build trust:** set **Max removals per run** to `0`.
   Every run that would remove a tag or clear a description pauses for review on the
-  **Reconciler runs** tab, so the deployment only adds unless you choose **Apply anyway
+  **Sync history** section, so the deployment only adds unless you choose **Apply anyway
   and resume**.
 - **Least privilege:** grant the dev deployment's service principal `APPLY TAG` and
   `MANAGE` on its own catalogs only. That holds even if a setting is wrong.

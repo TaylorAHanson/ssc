@@ -6,15 +6,14 @@ import { EmptyState, ErrorBanner, Pager, Skeleton } from '../../rbac/ui';
 import { EnvBadge } from './badges';
 import { useMetadata } from './context';
 import { DRIFT_KIND_LABELS, errorMessage, formatTime, objectLabel, plural, relativeTime, summaryDrift } from './format';
-import { ModeBanner } from './ModeBanner';
 import { seedFromSummary, useStagingStore } from './staging';
 import { TagChip } from './TagChips';
 import { useAsync } from './useAsync';
 
 const PAGE_SIZE = 25;
 
-/** Objects whose Unity Catalog metadata differs from what's declared, key by key. */
-export function DriftTab({ onShowRuns }: { onShowRuns: () => void }) {
+/** Objects whose Unity Catalog tags or description differ from what's saved here, key by key. */
+export function DriftTab() {
   const { config, refreshToken } = useMetadata();
   const [catalog, setCatalog] = useState('');
   const [page, setPage] = useState(1);
@@ -24,7 +23,6 @@ export function DriftTab({ onShowRuns }: { onShowRuns: () => void }) {
 
   return (
     <div className="space-y-3">
-      <ModeBanner />
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-sm text-gray-700">
           Catalog
@@ -45,17 +43,14 @@ export function DriftTab({ onShowRuns }: { onShowRuns: () => void }) {
             {catalog && !catalogs.some((c) => c.value === catalog) && <option value={catalog}>{catalog}</option>}
           </select>
         </label>
-        {data && <span className="text-sm text-gray-500">{plural(data.total, 'object')} with drift</span>}
-        <Button size="sm" variant="ghost" onClick={onShowRuns} className="ml-auto">
-          See reconciler runs
-        </Button>
+        {data && <span className="text-sm text-gray-500">{plural(data.total, 'object')} out of sync</span>}
       </div>
 
-      {error ? <ErrorBanner message={errorMessage(error, 'Couldn’t load drift')} onRetry={reload} /> : null}
+      {error ? <ErrorBanner message={errorMessage(error, 'Couldn’t load this list')} onRetry={reload} /> : null}
       {!data && loading ? (
         <Skeleton rows={6} />
       ) : data && data.items.length === 0 ? (
-        <EmptyState title="No drift">Unity Catalog matches everything declared here{catalog ? ` in ${catalog}` : ''}.</EmptyState>
+        <EmptyState title="Everything matches">Unity Catalog matches everything saved here{catalog ? ` in ${catalog}` : ''}.</EmptyState>
       ) : data ? (
         <ul className={loading ? 'space-y-2 opacity-60' : 'space-y-2'}>
           {data.items.map((s) => (
@@ -70,22 +65,20 @@ export function DriftTab({ onShowRuns }: { onShowRuns: () => void }) {
 
 function DriftRow({ summary: s, entries }: { summary: ObjectSummary; entries: DriftEntry[] }) {
   const { openObject, config, notify } = useMetadata();
-  const stage = useStagingStore((st) => st.stage);
   const setTag = useStagingStore((st) => st.setTag);
   const unsetTag = useStagingStore((st) => st.unsetTag);
   const setComment = useStagingStore((st) => st.setComment);
   const fixable = entries.filter((e) => !e.exempt);
 
-  // Accepting Unity Catalog's values means declaring them, so the reconciler stops undoing them.
+  // Accepting Unity Catalog's values means saving them here, so syncing stops undoing them.
   const acceptObserved = () => {
     const seed = seedFromSummary(s);
-    stage([seed]);
     fixable.forEach((e) => {
-      if (e.field === 'comment') setComment([seed.key], e.observed ?? null);
-      else if (e.key && e.kind === 'missing') unsetTag([seed.key], e.key);
-      else if (e.key) setTag([seed.key], e.key, e.observed ?? null);
+      if (e.field === 'comment') setComment([seed.key], e.observed ?? null, [seed]);
+      else if (e.key && e.kind === 'missing') unsetTag([seed.key], e.key, [seed]);
+      else if (e.key) setTag([seed.key], e.key, e.observed ?? null, [seed]);
     });
-    notify('Staged Unity Catalog’s values as edits. Review and submit them from the staged edits tray.');
+    notify('Added Unity Catalog’s values to your unsaved changes. Use Review and save at the bottom of the page when you’re ready.');
   };
 
   return (
@@ -101,7 +94,7 @@ function DriftRow({ summary: s, entries }: { summary: ObjectSummary; entries: Dr
           </span>
         )}
         {fixable.length > 0 && (
-          <Button size="sm" variant="outline" className="ml-auto h-7 text-xs" onClick={acceptObserved} title="Declare what Unity Catalog has, so it’s kept">
+          <Button size="sm" variant="outline" className="ml-auto h-7 text-xs" onClick={acceptObserved} title="Save what Unity Catalog has here, so it’s kept">
             Keep Unity Catalog’s values
           </Button>
         )}
@@ -109,10 +102,10 @@ function DriftRow({ summary: s, entries }: { summary: ObjectSummary; entries: Dr
       <table className="mt-2 w-full text-left text-xs">
         <thead className="text-gray-500">
           <tr>
-            <th scope="col" className="py-1 pr-3 font-medium">Key</th>
-            <th scope="col" className="py-1 pr-3 font-medium">Declared here</th>
+            <th scope="col" className="py-1 pr-3 font-medium">Tag</th>
+            <th scope="col" className="py-1 pr-3 font-medium">Saved here</th>
             <th scope="col" className="py-1 pr-3 font-medium">In Unity Catalog</th>
-            <th scope="col" className="py-1 font-medium">What the reconciler does</th>
+            <th scope="col" className="py-1 font-medium">What syncing does</th>
           </tr>
         </thead>
         <tbody>
@@ -120,13 +113,13 @@ function DriftRow({ summary: s, entries }: { summary: ObjectSummary; entries: Dr
             <tr key={`${e.field}-${e.key ?? ''}`} className={e.exempt ? 'border-t border-gray-100 text-gray-400' : 'border-t border-gray-100'}>
               <td className="py-1 pr-3 font-mono">{e.field === 'comment' ? 'description' : e.key}</td>
               <td className="py-1 pr-3">
-                {e.kind === 'extra' ? <span className="text-gray-400">not declared</span> : e.field === 'tag' ? <TagChip tagKey={e.key ?? ''} value={e.desired} /> : <span>{e.desired}</span>}
+                {e.kind === 'extra' ? <span className="text-gray-400">not set here</span> : e.field === 'tag' ? <TagChip tagKey={e.key ?? ''} value={e.desired} /> : <span>{e.desired}</span>}
               </td>
               <td className="py-1 pr-3">
                 {e.kind === 'missing' ? <span className="text-gray-400">not set</span> : e.field === 'tag' ? <TagChip tagKey={e.key ?? ''} value={e.observed} tone="changed" /> : <span>{e.observed}</span>}
               </td>
               <td className="py-1">
-                {e.exempt ? 'Leaves it: managed elsewhere' : config.reconcile_mode === 'enforce' ? enforceText(e) : `${DRIFT_KIND_LABELS[e.kind]} (reported only)`}
+                {e.exempt ? 'Leaves it: another tool manages it' : config.reconcile_mode === 'enforce' ? enforceText(e) : `${DRIFT_KIND_LABELS[e.kind]} (reported only)`}
               </td>
             </tr>
           ))}
@@ -139,5 +132,5 @@ function DriftRow({ summary: s, entries }: { summary: ObjectSummary; entries: Dr
 function enforceText(e: DriftEntry): string {
   if (e.kind === 'extra') return e.field === 'comment' ? 'Clears the description' : 'Removes the tag';
   if (e.kind === 'missing') return e.field === 'comment' ? 'Writes the description' : 'Adds the tag';
-  return 'Puts the declared value back';
+  return 'Puts the value saved here back';
 }

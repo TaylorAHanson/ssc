@@ -19,7 +19,7 @@ export function RunDrawer({ id, onClose }: { id: string; onClose: () => void }) 
   const items = run ? run.items.filter((i) => !status || i.status === status) : [];
 
   return (
-    <Drawer title="Reconciler run" subtitle={run && <span className="font-mono text-xs">{run.run_id}</span>} onClose={onClose}>
+    <Drawer title="Sync" subtitle={run && <span className="font-mono text-xs">{run.run_id}</span>} onClose={onClose}>
       {error ? <ErrorBanner message={errorMessage(error, 'Couldn’t load this run')} onRetry={reload} /> : null}
       {!run && loading && <Skeleton rows={5} />}
       {run && (
@@ -41,7 +41,7 @@ export function RunDrawer({ id, onClose }: { id: string; onClose: () => void }) 
             )}
             <dt className="text-gray-500">Objects</dt>
             <dd>
-              {run.objects_checked.toLocaleString()} checked, {run.objects_drifted.toLocaleString()} drifted
+              {run.objects_checked.toLocaleString()} checked, {run.objects_drifted.toLocaleString()} out of sync
             </dd>
             <dt className="text-gray-500">Statements</dt>
             <dd>

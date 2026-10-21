@@ -499,7 +499,7 @@ class VersionConflictItem(BaseModel):
 
 # --- Reconciler ----------------------------------------------------------------------
 
-PlanOperation = Literal["set", "unset", "comment", "claim"]
+PlanOperation = Literal["set", "unset", "comment"]
 PlanStatus = Literal["planned", "applied", "noop", "failed", "skipped"]
 RunTrigger = Literal["queue", "sweep", "manual", "new_object", "notify"]
 RunStatus = Literal["running", "completed", "partial", "failed", "paused", "skipped"]
@@ -739,7 +739,6 @@ class MetadataConfig(BaseModel):
     reconcile_mode: ReconcileMode
     owner_tag_key: str
     exempt_keys: List[str]
-    claim_tag_key: Optional[str] = None
     key_mode: Literal["open", "known_only"] = "open"
     key_policies: List[KeyPolicy] = Field(default_factory=list)
     environments: List[EnvironmentInfo] = Field(default_factory=list)

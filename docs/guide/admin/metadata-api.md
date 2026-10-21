@@ -18,7 +18,7 @@ There are two ways in:
 
 - **A service principal** (most pipelines) uses its own machine-to-machine token. It
   needs **Can use** on the app, and a Platform Admin or Metadata Manager editor must
-  register it on the **System principals** tab.
+  register it under **Admin → Automation access** in the Metadata Manager.
 - **A person** (scripts, notebooks) uses their own token and gets exactly their own
   rights, as on the page.
 
@@ -40,7 +40,7 @@ GET {app_url}/api/v1/metadata/whoami
 
 ## What a system principal may do
 
-Each registered principal has a scope, set on the **System principals** tab:
+Each registered principal has a scope, set under **Admin → Automation access**:
 
 - **Names** it may change, as globs: `sales_*` (whole catalogs), `sales_dev.bronze` (one
   schema) or `*.bronze.*` (every bronze table). Nothing outside them, whatever the owner

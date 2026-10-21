@@ -27,8 +27,6 @@ def policy_settings(monkeypatch):
     monkeypatch.setattr(settings, "METADATA_KEY_POLICIES", [dict(p) for p in POLICIES])
     monkeypatch.setattr(settings, "METADATA_KEY_MODE", "open")
     monkeypatch.setattr(settings, "METADATA_EXEMPT_KEYS", ["System.Certification_Status"])
-    monkeypatch.setattr(settings, "METADATA_CLAIM_ENABLED", True)
-    monkeypatch.setattr(settings, "METADATA_CLAIM_TAG_KEY", "metadata_manager_instance")
     monkeypatch.setattr(settings, "METADATA_OWNER_TAG_KEY", "data_owner")
     monkeypatch.setattr(settings, "METADATA_CLASSIFICATION_KEY", "classification")
     monkeypatch.setattr(settings, "METADATA_CLASSIFICATION_LEVELS", ["public", "internal", "confidential", "restricted"])
@@ -75,16 +73,11 @@ def test_policy_for_matches_keys_case_insensitively():
     assert policy.policy_for("") is None
 
 
-def test_exempt_keys_always_include_the_claim_key(monkeypatch):
-    assert policy.exempt_keys() == ["system.certification_status", "metadata_manager_instance"]
+def test_exempt_keys_are_lowercased():
+    assert policy.exempt_keys() == ["system.certification_status"]
     assert policy.is_exempt("SYSTEM.certification_status")
-    assert policy.is_exempt("Metadata_Manager_Instance")
+    assert not policy.is_exempt("metadata_manager_instance")
     assert not policy.is_exempt("pii")
-
-    # Catalogs keep other deployments' claim markers when claims are turned off here.
-    monkeypatch.setattr(settings, "METADATA_CLAIM_ENABLED", False)
-
-    assert policy.exempt_keys() == ["system.certification_status", "metadata_manager_instance"]
 
 
 # --- check_item -----------------------------------------------------------------------
