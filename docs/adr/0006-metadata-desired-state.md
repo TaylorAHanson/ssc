@@ -171,8 +171,15 @@ It is fast and works for objects that don't exist yet.
 - **Unauthorized users** can file a request; it routes to the owner groups.
 - **Admins:** Platform Admins and the roles in `METADATA_EDITOR_ROLES` (default Governance
   Admin) edit everything; their sensitive changes still need approval.
-- **Browsing:** any signed-in user can search and view, like Discover;
-  `METADATA_BROWSE_ROLES` narrows that to listed roles.
+- **Browsing** is limited to governance (`authz.browse_scope`). Admins, the roles in
+  `METADATA_BROWSE_ROLES` (default Governance Admin; blank adds nobody), registered
+  principals and the system see every object. Any other user sees only the objects
+  they own under the owner rules above (owner tag on the object or above it, plus UC
+  owner when that counts), and nothing when they own nothing. Every read applies it in
+  SQL (search and its counts, keys, datasets, drift, change history); sync runs are
+  governance-only. Anyone may still submit a change, but the preview, result,
+  conflicts and change set they get back hide current values of objects outside
+  their scope; the filed request keeps the full preview for approvers.
 - **System principals:** `metadata_principals`, keyed by application ID, holds each
   machine caller's scope: name globs (`sales_*.bronze.*`), allowed keys and operations,
   environments, a per-change object cap, and whether it may skip approval. A principal

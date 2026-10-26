@@ -18,7 +18,7 @@ from app.db.metadata import (
     MetadataTagModel,
 )
 from app.services.metadata import authz, environments, observed, policy, search as search_mod
-from app.services.metadata.authz import EditableScope
+from app.services.metadata.authz import BrowseScope, EditableScope
 from app.services.metadata.search import editable_predicate, list_keys, search
 from app.services.metadata.types import Actor, KeyPolicy, ObjectKey, SearchQuery, TagFilter
 
@@ -38,6 +38,7 @@ def _env_of(catalog: Optional[str]) -> Optional[str]:
 class Fakes:
     def __init__(self):
         self.scope = EditableScope()
+        self.browse = BrowseScope(level="full")
         self.policies: List[KeyPolicy] = []
         self.exempt: set = set()
 
@@ -46,6 +47,7 @@ class Fakes:
 def fakes(monkeypatch) -> Fakes:
     f = Fakes()
     monkeypatch.setattr(authz, "editable_scope", lambda db, actor: f.scope)
+    monkeypatch.setattr(authz, "browse_scope", lambda db, actor, editable=None: f.browse)
     monkeypatch.setattr(environments, "environment_of", _env_of)
     monkeypatch.setattr(policy, "key_policies", lambda: list(f.policies))
     monkeypatch.setattr(policy, "is_exempt", lambda key: key in f.exempt)
@@ -656,3 +658,30 @@ def test_search_stays_fast_at_twenty_thousand_rows(db_session, fakes):
     assert totals[0] == 15_000
     assert totals[2] == 3_334 + 5_000
     assert totals[3] == 250
+
+
+# --- browse scope --------------------------------------------------------------------
+
+
+def test_an_owner_scope_limits_items_totals_facets_and_keys(world, fakes):
+    fakes.browse = BrowseScope(level="owned", owned=["sales_dev.bronze"], not_owned=["sales_dev.bronze.raw_events"])
+
+    keys = _keys(world)
+    assert keys == ["sales_dev.bronze", "sales_dev.bronze.old", "sales_dev.bronze.orders", "sales_dev.bronze.v_orders"]
+    with_columns = search(world, SearchQuery(page_size=500, include_columns=True), ALICE)
+    assert "sales_dev.bronze.orders::email" in [i.fqn_key for i in with_columns.items]
+    assert not any(i.fqn_key.startswith("sales_dev.bronze.raw_events") for i in with_columns.items)
+    facets = search(world, SearchQuery(page_size=1), ALICE).facets
+    assert sum(f.count for f in facets["catalog"]) == len(keys)
+    assert {f.value for f in facets["tag_key"]} <= {"classification", "pii"}
+    used = {k.key for k in list_keys(world, browse=fakes.browse) if k.count}
+    assert "flagged" not in used and "data_owner" not in used
+
+
+def test_no_scope_refuses_search(world, fakes):
+    from app.services.metadata.errors import Forbidden
+
+    fakes.browse = BrowseScope(level="none")
+
+    with pytest.raises(Forbidden, match="data owners"):
+        search(world, SearchQuery(), ALICE)

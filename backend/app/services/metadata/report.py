@@ -63,12 +63,14 @@ def _object(item: ChangeItem) -> str:
         notes.append(_cell(item.environment, 40))
     if item.copied_from:
         notes.append(f"copied from {_cell(item.copied_from, 40)}")
-    if item.object_state == "pending":
+    if item.object_state == "pending" and not item.before_hidden:
         notes.append("not created yet")
     return f"{text} ({', '.join(notes)})" if notes else text
 
 
 def _before(item: ChangeItem) -> str:
+    if item.before_hidden:
+        return "(hidden)"
     if not item.before_exists:
         return "(none)"
     if item.before is None:

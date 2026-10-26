@@ -9,7 +9,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -36,7 +36,28 @@ def _require_feature() -> None:
         raise HTTPException(status_code=404, detail="Context Catalog is not enabled")
 
 
+def _require_direct_editing() -> None:
+    from app.api.v1.context_catalog_git import require_direct_editing
+
+    require_direct_editing()
+
+
+def _record_git_change(db: Session, user: User, action: str, subject: str) -> None:
+    """Queue the save for a commit to this environment's Git branch (best-effort)."""
+    from app.services.context_catalog_git import record_change
+
+    record_change(db, user, action, subject)
+
+
 # --- Schemas ---
+
+def _validate_owner(value: Optional[str]) -> Optional[str]:
+    """Document owners are emails so reminders can @mention them in Teams."""
+    from app.providers.notifications.teams import is_email
+
+    if value is not None and value.strip() and not is_email(value):
+        raise ValueError("Owner must be an email address")
+    return value
 
 class DomainCreate(BaseModel):
     name: str = Field(..., description="Domain name")
@@ -67,6 +88,12 @@ class DocumentCreate(BaseModel):
     source_url: Optional[str] = Field(default=None, description="External URL for link-type docs")
     status: str = Field(default="published", description="draft or published")
     tags: Optional[List[str]] = None
+    owner: Optional[str] = Field(default=None, description="Owner email; defaults to the creator")
+
+    @field_validator("owner")
+    @classmethod
+    def _owner_is_email(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_owner(v)
 
 
 class DocumentUpdate(BaseModel):
@@ -76,6 +103,12 @@ class DocumentUpdate(BaseModel):
     tags: Optional[List[str]] = None
     source_url: Optional[str] = None
     domain_id: Optional[str] = None
+    owner: Optional[str] = Field(default=None, description="Owner email; empty clears it")
+
+    @field_validator("owner")
+    @classmethod
+    def _owner_is_email(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_owner(v)
 
 
 class SearchRequest(BaseModel):
@@ -112,6 +145,7 @@ def create_domain(
     body: DomainCreate,
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     _: None = Depends(_require_feature),
+    __: None = Depends(_require_direct_editing),
 ) -> Any:
     try:
         domain = ContextCatalogService.create_domain(
@@ -119,6 +153,7 @@ def create_domain(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _record_git_change(db, current_user, "Create", f'domain "{domain.name}"')
     return ContextCatalogService.domain_to_dict(db, domain)
 
 
@@ -146,11 +181,13 @@ def update_domain(
     body: DomainUpdate,
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     _: None = Depends(_require_feature),
+    __: None = Depends(_require_direct_editing),
 ) -> Any:
     try:
         domain = ContextCatalogService.update_domain(db, domain_id, **body.model_dump(exclude_unset=True))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _record_git_change(db, current_user, "Update", f'domain "{domain.name}"')
     return ContextCatalogService.domain_to_dict(db, domain)
 
 
@@ -161,11 +198,15 @@ def delete_domain(
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     _: None = Depends(_require_feature),
+    __: None = Depends(_require_direct_editing),
 ) -> Any:
+    existing = ContextCatalogService.get_domain(db, domain_id)
+    name = existing.name if existing else domain_id
     try:
         ContextCatalogService.delete_domain(db, domain_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    _record_git_change(db, current_user, "Delete", f'domain "{name}"')
     return {"success": True}
 
 
@@ -179,6 +220,7 @@ def create_document(
     body: DocumentCreate,
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     _: None = Depends(_require_feature),
+    __: None = Depends(_require_direct_editing),
 ) -> Any:
     try:
         document = ContextCatalogService.create_document(
@@ -191,9 +233,11 @@ def create_document(
             status=body.status,
             tags=body.tags,
             created_by=current_user.email,
+            owner=body.owner,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _record_git_change(db, current_user, "Create", f'document "{document.title}"')
     return ContextCatalogService.document_to_dict(document)
 
 
@@ -207,6 +251,7 @@ async def upload_document(
     status: str = Form(default="published"),
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     _: None = Depends(_require_feature),
+    __: None = Depends(_require_direct_editing),
 ) -> Any:
     if not ContextCatalogService.get_domain(db, domain_id):
         raise HTTPException(status_code=400, detail="Domain not found")
@@ -246,6 +291,7 @@ async def upload_document(
             db.commit()
             db.refresh(document)
 
+    _record_git_change(db, current_user, "Upload", f'document "{document.title}"')
     return ContextCatalogService.document_to_dict(document)
 
 
@@ -270,6 +316,7 @@ def update_document(
     body: DocumentUpdate,
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     _: None = Depends(_require_feature),
+    __: None = Depends(_require_direct_editing),
 ) -> Any:
     try:
         document = ContextCatalogService.update_document(
@@ -277,6 +324,8 @@ def update_document(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    action = "Move" if body.domain_id and set(body.model_fields_set) == {"domain_id"} else "Update"
+    _record_git_change(db, current_user, action, f'document "{document.title}"')
     return ContextCatalogService.document_to_dict(document)
 
 
@@ -287,13 +336,17 @@ def delete_document(
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     _: None = Depends(_require_feature),
+    __: None = Depends(_require_direct_editing),
 ) -> Any:
+    existing = ContextCatalogService.get_document(db, document_id)
+    title = existing.title if existing else document_id
     try:
         storage_path = ContextCatalogService.delete_document(db, document_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     if storage_path:
         ContextCatalogStorage().delete_original(storage_path)
+    _record_git_change(db, current_user, "Delete", f'document "{title}"')
     return {"success": True}
 
 
@@ -341,13 +394,16 @@ def import_context_bundle(
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
     _: None = Depends(_require_feature),
+    __: None = Depends(_require_direct_editing),
 ) -> Any:
     """Import a bundle into this environment (upsert domains by slug, documents by title)."""
     try:
-        return ContextCatalogService.import_bundle(
+        report = ContextCatalogService.import_bundle(
             db, body.bundle,
             doc_status=body.doc_status, overwrite=body.overwrite,
             created_by=current_user.email,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _record_git_change(db, current_user, "Import", "a context bundle")
+    return report

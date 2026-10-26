@@ -7,8 +7,7 @@ import logging
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
-from app.core.config import settings
-from app.providers.databricks import DatabricksProvider
+from app.core.workspaces import get_uc_provider
 from app.tools.mcp import tool
 from app.tools.sql_safety import SqlSafetyError, require_identifier
 
@@ -22,7 +21,7 @@ class CheckResourceAccessInput(BaseModel):
     )
     target_host: Optional[str] = Field(
         default=None,
-        description="The host URL of the target Databricks workspace (optional).",
+        description="Workspace host for context only. Unity Catalog is account-global, so grants are always read from the local workspace regardless of this value.",
     )
     principal: Optional[str] = Field(
         default=None,
@@ -52,14 +51,28 @@ async def check_resource_access(
     except SqlSafetyError as e:
         return {"success": False, "error": str(e)}
 
-    try:
-        provider = DatabricksProvider(
-            host=target_host or settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-            token=settings.DATABRICKS_TOKEN,
-            client_id=settings.DATABRICKS_CLIENT_ID,
-            client_secret=settings.DATABRICKS_CLIENT_SECRET,
-            config={"warehouse_id": settings.DATABRICKS_WAREHOUSE_ID},
+    # SHOW GRANTS must run as the signed-in user so the answer reflects what
+    # they may see; only true local dev may fall back to the app service principal.
+    from app.providers.databricks_mcp import sp_fallback_allowed
+
+    if not _obo_token and not sp_fallback_allowed():
+        logger.warning(
+            "check_resource_access refused for '%s': no user token was forwarded.",
+            resource_name,
         )
+        return {
+            "success": False,
+            "error": "missing_user_token",
+            "message": (
+                f"Could not check access on '{resource_name}': your sign-in token "
+                "wasn't passed along with this request, and grants are only read "
+                "as you, never as the app. Refresh the page or sign in again, "
+                "then retry."
+            ),
+        }
+
+    try:
+        provider = get_uc_provider()
 
         is_schema = "." in resource_name
         object_type = "SCHEMA" if is_schema else "CATALOG"
@@ -69,7 +82,7 @@ async def check_resource_access(
             query,
             timeout_seconds=30,
             obo_token=_obo_token,
-            require_obo=False,
+            require_obo=True,
         )
         rows = result.get("rows", [])
 

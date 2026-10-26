@@ -25,8 +25,12 @@ from app.db.context_catalog import (
     ContextDocumentModel,
     ContextDomainModel,
 )
+from app.services.context_catalog_staleness import freshness_fields, normalize_owner
 
 logger = logging.getLogger(__name__)
+
+# Document fields whose change counts as a content edit (restarts staleness).
+_CONTENT_FIELDS = ("title", "body_markdown", "source_url", "doc_type")
 
 # Portable bundle format tag (bumped if the export shape changes). Mirrors the
 # workflow bundle convention so domains/documents promote cleanly across envs.
@@ -206,10 +210,13 @@ class ContextCatalogService:
                         body_markdown: Optional[str] = None, doc_type: str = "markdown",
                         source_filename: Optional[str] = None, source_url: Optional[str] = None,
                         storage_path: Optional[str] = None, status: str = "published",
-                        tags: Optional[list] = None, created_by: Optional[str] = None) -> ContextDocumentModel:
+                        tags: Optional[list] = None, created_by: Optional[str] = None,
+                        owner: Optional[str] = None) -> ContextDocumentModel:
         if not ContextCatalogService.get_domain(db, domain_id):
             raise ValueError("Domain not found")
         document = ContextDocumentModel(
+            owner=normalize_owner(owner) or normalize_owner(created_by),
+            content_updated_at=datetime.utcnow(),
             id=str(uuid.uuid4()),
             domain_id=domain_id,
             title=title,
@@ -246,6 +253,14 @@ class ContextCatalogService:
         if not document:
             raise ValueError("Document not found")
         rebuild = False
+        if any(
+            k in fields and fields[k] is not None and fields[k] != getattr(document, k)
+            for k in _CONTENT_FIELDS
+        ):
+            document.content_updated_at = datetime.utcnow()
+            document.stale_notified_at = None
+        if "owner" in fields:
+            document.owner = normalize_owner(fields["owner"])
         for key in ("title", "body_markdown", "status", "tags", "source_url", "domain_id"):
             if key in fields and fields[key] is not None:
                 setattr(document, key, fields[key])
@@ -378,6 +393,8 @@ class ContextCatalogService:
                             ContextDocumentModel.retrieval_count + 1
                         ),
                         ContextDocumentModel.last_retrieved_at: now,
+                        # Without this, onupdate stamps updated_at on every retrieval.
+                        ContextDocumentModel.updated_at: ContextDocumentModel.updated_at,
                     },
                     synchronize_session=False,
                 )
@@ -448,6 +465,7 @@ class ContextCatalogService:
                         "source_filename": doc.source_filename,
                         "status": doc.status,
                         "tags": doc.tags or [],
+                        "owner": doc.owner,
                         "body_markdown": doc.body_markdown,
                     }
                     for doc in docs
@@ -585,6 +603,14 @@ class ContextCatalogService:
                     if not overwrite:
                         report["documents"]["skipped"].append(key)
                         continue
+                    if (existing_doc.body_markdown, existing_doc.source_url) != (
+                        doc.get("body_markdown"), doc.get("source_url")
+                    ):
+                        existing_doc.content_updated_at = datetime.utcnow()
+                        existing_doc.stale_notified_at = None
+                    # A bundle without an owner never clears the one set here.
+                    if normalize_owner(doc.get("owner")):
+                        existing_doc.owner = normalize_owner(doc.get("owner"))
                     existing_doc.body_markdown = doc.get("body_markdown")
                     existing_doc.doc_type = doc.get("doc_type") or "markdown"
                     existing_doc.source_url = doc.get("source_url")
@@ -607,6 +633,8 @@ class ContextCatalogService:
                         status=status,
                         tags=doc.get("tags") or [],
                         created_by=created_by,
+                        owner=normalize_owner(doc.get("owner")) or normalize_owner(created_by),
+                        content_updated_at=datetime.utcnow(),
                     )
                     db.add(new_doc)
                     db.flush()
@@ -673,6 +701,7 @@ class ContextCatalogService:
                 else None
             ),
         }
+        data.update(freshness_fields(document))
         if include_body:
             data["body_markdown"] = document.body_markdown
         else:

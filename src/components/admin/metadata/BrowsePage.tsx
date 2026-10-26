@@ -49,7 +49,7 @@ function impliedRow(catalog: string | undefined, value: string): ObjectSummary {
 /** All catalogs, one catalog's schemas, or one schema's tables, with search and filters scoped to where you are. */
 export function BrowsePage() {
   const { catalog, schema } = useParams<{ catalog?: string; schema?: string }>();
-  const { refreshToken, config, isAdmin } = useMetadata();
+  const { refreshToken, config, isAdmin, ownedOnly } = useMetadata();
   const filters = useBrowseFilters();
   const [text, setText] = useState('');
   const q = useDebounced(text, 300);
@@ -141,7 +141,13 @@ export function BrowsePage() {
           <Input
             value={text}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={scopeName ? `Search in ${scopeName}` : 'Search every catalog for a table, column or description'}
+            placeholder={
+              scopeName
+                ? `Search in ${scopeName}`
+                : ownedOnly
+                  ? 'Search the objects you own for a table, column or description'
+                  : 'Search every catalog for a table, column or description'
+            }
             aria-label="Search"
             className="pl-9 pr-8"
           />
@@ -210,10 +216,14 @@ export function BrowsePage() {
       ) : data && items.length === 0 ? (
         <EmptyState title={searching ? 'Nothing matches' : `No ${level}s here`}>
           {searching
-            ? 'Try fewer words, or clear the filters.'
-            : level === 'catalog'
-              ? 'No catalogs have been read from Unity Catalog yet. An admin can run a check from the Admin page.'
-              : `Unity Catalog hasn’t reported any ${level}s here yet.`}
+            ? ownedOnly
+              ? 'Only objects you own are searched. Try fewer words, or clear the filters.'
+              : 'Try fewer words, or clear the filters.'
+            : ownedOnly
+              ? `You don’t own any ${level}s here.`
+              : level === 'catalog'
+                ? 'No catalogs have been read from Unity Catalog yet. An admin can run a check from the Admin page.'
+                : `Unity Catalog hasn’t reported any ${level}s here yet.`}
         </EmptyState>
       ) : data ? (
         <div className={loading ? 'space-y-2 opacity-60' : 'space-y-2'}>

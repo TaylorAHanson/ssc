@@ -63,6 +63,7 @@ export function MetadataManager() {
       config,
       keys,
       isAdmin: whoami.actor.is_admin,
+      ownedOnly: whoami.browse_scope === 'owned',
       refreshToken,
       bumpRefresh,
       openObject: (name, column) => navigate(objectPath(name, column)),
@@ -95,6 +96,12 @@ export function MetadataManager() {
               </Link>
             }
           />
+        )}
+        {ctx.ownedOnly && (
+          <Notice kind="info" title={ctx.whoami.message ?? 'Showing only the objects you own.'}>
+            Catalogs, search, datasets and history list only objects whose owner tag names one of your groups, or that you own in Unity Catalog
+            when that counts. Governance sees everything.
+          </Notice>
         )}
         <Routes>
           <Route index element={<LegacyTabRedirect />} />

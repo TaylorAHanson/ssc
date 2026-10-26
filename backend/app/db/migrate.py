@@ -199,6 +199,36 @@ def _prune_orphaned_workflow_children(engine: Engine) -> None:
         )
 
 
+def _add_context_document_review_columns(engine: Engine) -> None:
+    """Context Catalog document owner + freshness-review columns.
+
+    Backfills run only in the boot that adds each column, so an owner an admin
+    later clears isn't re-filled. ``content_updated_at`` starts from
+    ``updated_at`` (retrieval bumps used to move it, so this is the best record
+    there is) and ``owner`` from ``created_by``.
+    """
+    table = "context_documents"
+    insp = inspect(engine)
+    if table not in set(insp.get_table_names()):
+        return
+    before = {c["name"] for c in insp.get_columns(table)}
+    _add_column(engine, table, "owner", "VARCHAR")
+    _add_column(engine, table, "content_updated_at", "TIMESTAMP")
+    _add_column(engine, table, "last_reviewed_at", "TIMESTAMP")
+    _add_column(engine, table, "last_reviewed_by", "VARCHAR")
+    _add_column(engine, table, "stale_notified_at", "TIMESTAMP")
+    with engine.begin() as conn:
+        if "content_updated_at" not in before:
+            conn.execute(text(
+                f"UPDATE {table} SET content_updated_at = updated_at WHERE content_updated_at IS NULL"
+            ))
+        if "owner" not in before:
+            conn.execute(text(
+                f"UPDATE {table} SET owner = created_by "
+                "WHERE owner IS NULL AND created_by IS NOT NULL AND created_by <> ''"
+            ))
+
+
 def run_startup_migrations(engine: Engine) -> None:
     """Apply in-place schema renames. Safe to call on every startup."""
     try:
@@ -223,6 +253,7 @@ def run_startup_migrations(engine: Engine) -> None:
         # Context Catalog retrieval-usage signal columns.
         _add_column(engine, "context_documents", "retrieval_count", "INTEGER DEFAULT 0")
         _add_column(engine, "context_documents", "last_retrieved_at", "TIMESTAMP")
+        _add_context_document_review_columns(engine)
         # Data Certification: full per-rule checklist cache on the data asset.
         # JSONB on Postgres (matches the model's JSONType) / TEXT on SQLite, which
         # stores the JSON string the JSONType serializes.
@@ -244,6 +275,8 @@ def run_startup_migrations(engine: Engine) -> None:
         _add_column(engine, "data_assets", "upstream_tables", _json_ddl)
         _add_column(engine, "data_assets", "downstream_dashboards", _json_ddl)
         _add_column(engine, "data_assets", "legacy_mappings", _json_ddl)
+        # Discover hide-by-tag: catalog/schema/column tag keys per asset.
+        _add_column(engine, "data_assets", "scope_tag_keys", _json_ddl)
         # Enforcement Sentinel: marks the scheduled run that emitted the daily
         # governance digest (anchored once-per-local-day dispatch).
         _add_column(engine, "requests", "digest_emitted_at", "TIMESTAMP")

@@ -155,6 +155,36 @@ def availability(db: Session, pins: List[UserPinModel]) -> Dict[str, Optional[bo
     }
 
 
+def hidden_pin_ids(db: Session, pins: List[UserPinModel]) -> set:
+    """Pinned asset ids that ``DISCOVER_HIDDEN_TAG_KEYS`` hides from Discover.
+
+    Catalog assets and legacy dashboards (via their metric view) use the synced
+    tags; dashboards, Genie spaces and apps their live workspace tags.
+    """
+    from app.services import discover_visibility as dv
+
+    if not pins or not dv.hidden_tag_keys():
+        return set()
+    vis = dv.load_visibility(db)
+    hidden = {
+        p.asset_id for p in pins
+        if p.asset_type not in EXTERNAL_TYPES and p.asset_type != LEGACY_DASHBOARD_TYPE
+        and vis.is_hidden_id(p.asset_id)
+    }
+    legacy_ids = [p.asset_id for p in pins if p.asset_type == LEGACY_DASHBOARD_TYPE]
+    if legacy_ids:
+        hidden.update(
+            m.id for m in db.query(LegacyDashboardMappingModel)
+            .filter(LegacyDashboardMappingModel.id.in_(legacy_ids)).all()
+            if vis.is_hidden_id(m.metric_view_id)
+        )
+    for discover_type in dv.WORKSPACE_ENTITY_TYPES:
+        ids = [p.asset_id for p in pins if p.asset_type == discover_type]
+        if ids:
+            hidden.update(dv.hidden_workspace_entities(discover_type, ids))
+    return hidden
+
+
 def to_dict(pin: UserPinModel, available: Optional[bool] = None) -> Dict[str, Any]:
     return {
         "asset_id": pin.asset_id,

@@ -10,10 +10,13 @@ from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.db.odps import OdpsModel
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_any_role
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Data product documents are shared governance records, so saving is admin-only.
+_GOVERNANCE_ROLES = ["Platform Admin", "Governance Admin"]
 
 class OdpsResponse(BaseModel):
     id: str
@@ -50,7 +53,11 @@ def get_odps_history(odps_id: str, db: Session = Depends(get_db)):
 
 @router.post("", response_model=OdpsResponse)
 @router.post("/", response_model=OdpsResponse)
-def save_odps(odps: OdpsCreate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+def save_odps(
+    odps: OdpsCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_any_role(_GOVERNANCE_ROLES)),
+):
     """Save a new version of an ODPS document."""
     # Validate YAML
     try:
@@ -90,7 +97,7 @@ def save_odps(odps: OdpsCreate, db: Session = Depends(get_db), current_user = De
 async def draft_odps(
     request: OdpsDraftRequest, 
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    current_user = Depends(require_any_role(_GOVERNANCE_ROLES))
 ):
     """Draft a new ODPS document using LLM based on existing Data Contracts and optional OpenAPI spec."""
     from app.tools.governance.draft_odps import draft_odps_document

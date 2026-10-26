@@ -95,6 +95,77 @@ approver.
   would, to check it finds the right passage.
 - **Export** and **Import** move the catalog between environments.
 
+### Keeping documents current
+
+Every document has an **owner**, the person responsible for keeping it
+accurate. It starts as whoever created the document; change it in the
+**Owner (email)** box in the document editor. A document with no owner falls
+back to its domain's primary owner for reminders.
+
+- The document list shows each document's owner and how long ago it was last
+  updated. Sort it by last updated, title or owner, filter it by owner (or
+  **No owner**), or tick **Stale only**.
+- A published document is marked **Stale** when nobody has edited it or marked
+  it reviewed within the stale threshold (90 days unless changed). Only
+  changes to the title, body, link or type count as an edit. The assistant
+  reading a document doesn't, and neither do changes to the status or owner.
+- If a stale document is still accurate, open it and select
+  **Mark reviewed**. That restarts its clock without changing the content.
+- Change the threshold under **Admin → Settings → Context Catalog**.
+
+### Teams reminders
+
+{{brand_name}} can post a weekly message to a Microsoft Teams channel that
+lists the stale published documents, grouped by owner. Each owner is
+@mentioned once, and each document links straight to its editor.
+
+1. Ask your platform administrator to connect a Teams channel (see
+   *Platform Administration*).
+2. Select **Reminders** at the top of the Context Catalog. The panel shows
+   whether a channel is connected, the schedule, the documents due a reminder,
+   and the last run. Select **Send test message** to check the channel works.
+3. Turn on **Send stale-document reminders** under **Admin → Settings →
+   Context Catalog**, where you also set the schedule, how often the same
+   document can be reminded about again, and how many documents to list per
+   owner.
+
+**Run now** in the panel sends reminders straight away, even with scheduled
+reminders turned off. A document isn't reminded about again until the
+re-notify interval passes, it's edited, or it's marked reviewed. For the
+links to work, **App base URL** must be set under **Admin → Settings →
+Notifications**.
+
+### Keeping the catalog in Git
+
+Your platform administrator can connect the catalog to a GitHub repository.
+Each environment then keeps its catalog in its own branch, so every change
+has a history and can be reviewed and promoted with pull requests. In the
+repository, each domain is a folder and each document is a Markdown file
+named after its title. Uploaded Word, PowerPoint and PDF files are stored as
+the text {{brand_name}} extracted from them.
+
+- **Saving in {{brand_name}}** commits the change to the environment's branch
+  within a few seconds, with you as the author. If GitHub can't be reached,
+  your save still goes through and is committed once the connection is back.
+- **Changes merged in Git** appear in {{brand_name}} on a schedule (every 15
+  minutes unless changed). Select **Sync from Git** in the **Git sync** bar
+  to bring them in straight away.
+- If the same document was changed in {{brand_name}} and in Git since the
+  last sync, the version saved in {{brand_name}} wins. The other version stays
+  in the branch's history, and the file is listed under **Recent conflicts**.
+- Expand the **Git sync** bar to see the branch, the last commit, the last
+  import, changes still waiting to be committed, any error, and files that
+  couldn't be imported (for example because of a typo in their front matter).
+
+Some environments only *read* a branch. Staging, for example, shows exactly
+what production's branch holds, so any change made in staging itself is
+replaced at the next sync.
+
+When **Allow editing in the app** is turned off under **Admin → Settings →
+Context Catalog**, the catalog becomes read-only in that environment. A banner
+links to the branch, and changes are made there through pull requests.
+**Sync from Git** keeps working.
+
 ## Training Studio
 
 **Training Studio** is where you author the learning tracks and courses people

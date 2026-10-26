@@ -45,6 +45,16 @@ def no_export_trigger(monkeypatch):
 
 
 @pytest.fixture
+def keep_duplicates(monkeypatch):
+    monkeypatch.setattr(settings, "RBAC_IMPORT_REMOVE_DUPLICATES", False)
+
+
+@pytest.fixture
+def remove_duplicates(monkeypatch):
+    monkeypatch.setattr(settings, "RBAC_IMPORT_REMOVE_DUPLICATES", True)
+
+
+@pytest.fixture
 def own_db():
     """A session that really commits and rolls back (db_session's outer transaction can't survive a rollback)."""
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
@@ -73,7 +83,11 @@ def _open_request(db, status="pending"):
 # --- Preview ------------------------------------------------------------------
 
 
-def test_preview_reports_sheets_skipped_tabs_and_findings(db_session):
+def test_duplicates_are_removed_by_default():
+    assert settings.RBAC_IMPORT_REMOVE_DUPLICATES is True
+
+
+def test_preview_reports_sheets_skipped_tabs_and_findings(db_session, keep_duplicates):
     data, sheets = build_workbook()
     preview = workbook_import.preview(db_session, data, "rbac.xlsx", actor=ACTOR)
 
@@ -83,6 +97,7 @@ def test_preview_reports_sheets_skipped_tabs_and_findings(db_session):
     assert preview.mode == "initial"
     assert preview.confirmation_phrase is None
     assert preview.existing_rules == 0
+    assert preview.duplicates_removed is False
     assert sum(s.rows for s in preview.sheets) == data_rows(sheets)
 
     by_name = {s.sheet: s for s in preview.sheets}
@@ -136,6 +151,94 @@ def test_workbook_without_managed_sheets_is_refused(db_session):
         workbook_import.preview(db_session, data, "scratch.xlsx", actor=ACTOR)
 
 
+def test_preview_removes_duplicates_and_says_so(db_session, remove_duplicates):
+    data, sheets = build_workbook()
+    preview = workbook_import.preview(db_session, data, "rbac.xlsx", actor=ACTOR)
+
+    assert preview.duplicates_removed is True
+    assert sum(s.rows for s in preview.sheets) == data_rows(sheets) - 1 == data_rows(sheets, remove_duplicates=True)
+    stg = next(s for s in preview.sheets if s.sheet == uc_sheet("Stg"))
+    assert stg.duplicates == 1 and stg.duplicates_removed is True
+    assert stg.rows == len(sheets[uc_sheet("Stg")].rows) - 2
+    assert stg.warnings == 1
+    assert not any(f.code == "duplicate_row" for f in preview.findings)
+    removed = [f for f in preview.findings if f.code == "duplicate_row_removed"]
+    assert len(removed) == 1
+    assert removed[0].sheet == uc_sheet("Stg") and removed[0].row_number == 3 and removed[0].severity == "warn"
+    assert removed[0].message == "Row 3 is identical to row 2 and was removed."
+    stored = db_session.get(RbacImportModel, preview.import_id)
+    assert stored.sheets[uc_sheet("Stg")]["duplicates_removed"] is True
+    assert any(f["code"] == "duplicate_row_removed" for f in stored.findings)
+
+
+def test_import_without_duplicates_keeps_workbook_order_and_row_numbers(db_session, remove_duplicates):
+    row = ["dev", "group", "grp_dev_engineers", "ws_dev", "workspace", "ws_dev", "USER"]
+    other = ["dev", "group", "grp_dev_admins", "ws_dev", "workspace", "ws_dev", "ADMIN"]
+    third = ["dev", "group", "grp_dev_analysts", "ws_dev", "workspace", "ws_dev", "USER"]
+    sheets = {ws_sheet("Dev"): SyntheticSheet(rows=[
+        list(WS_HEADERS), list(row), list(other), list(row), [None] * 7, list(other), list(third), list(row)])}
+    data = write_workbook(sheets)
+    preview, result = import_initial(db_session, data)
+
+    messages = [f.message for f in preview.findings if f.code == "duplicate_row_removed"]
+    # Excel numbering, blank row 5 included, each pointing at the first copy.
+    assert messages == [
+        "Row 4 is identical to row 2 and was removed.",
+        "Row 6 is identical to row 3 and was removed.",
+        "Row 8 is identical to row 2 and was removed.",
+    ]
+    assert result.created == 3 and result.duplicates_removed is True
+    assert result.sheets[0].rows == 3 and result.sheets[0].duplicates == 3
+    rules = _active(db_session, ws_sheet("Dev"))
+    assert [r.principal_name for r in rules] == ["grp_dev_engineers", "grp_dev_admins", "grp_dev_analysts"]
+    assert [r.position for r in rules] == [0, 1, 2]
+    assert len({r.row_hash for r in rules}) == 3
+    # Only the kept rows are in the change set and its history.
+    cs = db_session.get(RbacChangeSetModel, result.change_set_id)
+    assert cs.summary["created"] == 3 and cs.summary["duplicates_removed"] == 3
+    assert db_session.query(RbacRuleEventModel).filter(
+        RbacRuleEventModel.change_set_id == cs.id).count() == 3
+
+
+def test_import_keeps_duplicates_when_turned_off(db_session, keep_duplicates):
+    data, sheets = build_workbook(only=[uc_sheet("Stg")])
+    preview, result = import_initial(db_session, data)
+    assert preview.duplicates_removed is False and result.duplicates_removed is False
+    assert result.created == len(sheets[uc_sheet("Stg")].rows) - 1
+    rules = _active(db_session, uc_sheet("Stg"))
+    assert rules[0].row_hash == rules[1].row_hash
+    assert [r.position for r in rules] == list(range(len(rules)))
+    dup = next(f for f in preview.findings if f.code == "duplicate_row")
+    assert dup.message == "Row 3 is identical to row 2. Both are kept so the export matches the workbook."
+    cs = db_session.get(RbacChangeSetModel, result.change_set_id)
+    assert cs.summary["duplicates_removed"] == 0
+
+
+@pytest.mark.parametrize("previewed_with, imported_with", [(True, False), (False, True)])
+def test_run_refuses_when_the_duplicates_setting_changed(db_session, monkeypatch, previewed_with, imported_with):
+    monkeypatch.setattr(settings, "RBAC_IMPORT_REMOVE_DUPLICATES", previewed_with)
+    data, _ = build_workbook(only=[uc_sheet("Stg")])
+    preview = workbook_import.preview(db_session, data, "rbac.xlsx", actor=ACTOR)
+    monkeypatch.setattr(settings, "RBAC_IMPORT_REMOVE_DUPLICATES", imported_with)
+    with pytest.raises(ImportFailed, match="was changed after this preview"):
+        workbook_import.run(db_session, data, "rbac.xlsx", preview_id=preview.import_id, mode="initial",
+                            confirmation="", actor=ACTOR)
+    assert _active(db_session) == []
+    assert db_session.get(RbacImportModel, preview.import_id).status == "previewed"
+
+
+def test_a_preview_from_before_the_setting_counts_as_keeping_duplicates(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "RBAC_IMPORT_REMOVE_DUPLICATES", False)
+    data, sheets = build_workbook(only=[uc_sheet("Stg")])
+    preview = workbook_import.preview(db_session, data, "rbac.xlsx", actor=ACTOR)
+    stored = db_session.get(RbacImportModel, preview.import_id)
+    stored.sheets = {k: {f: v for f, v in s.items() if f != "duplicates_removed"} for k, s in stored.sheets.items()}
+    db_session.commit()
+    result = workbook_import.run(db_session, data, "rbac.xlsx", preview_id=preview.import_id, mode="initial",
+                                 confirmation="", actor=ACTOR)
+    assert result.created == len(sheets[uc_sheet("Stg")].rows) - 1
+
+
 def test_the_workbook_is_not_judged_against_the_access_policy(db_session):
     # Service principals on tst/stg/prd and in the metastore sheet, a user, a privilege outside
     # the allow list and a mistyped securable type: all of it is the source of truth as it stands.
@@ -145,10 +248,10 @@ def test_the_workbook_is_not_judged_against_the_access_policy(db_session):
     sheets[uc_sheet("Prd")].rows.append(
         ["prd", "catalog", "cat_prd", None, None, OWNER, "user", "someone@example.com", "ALL PRIVILEGES"])
     preview = workbook_import.preview(db_session, write_workbook(sheets), "rbac.xlsx", actor=ACTOR)
-    assert {f.code for f in preview.findings} == {"unknown_header", "duplicate_row"}
+    assert {f.code for f in preview.findings} == {"unknown_header", "duplicate_row_removed"}
 
 
-def test_row_numbers_count_blank_rows_like_excel(db_session):
+def test_row_numbers_count_blank_rows_like_excel(db_session, keep_duplicates):
     row = ["dev", "group", "grp_dev_engineers", "ws_dev", "workspace", "ws_dev", "USER"]
     sheets = {ws_sheet("Dev"): SyntheticSheet(rows=[list(WS_HEADERS), list(row), [None] * 7, list(row)])}
     preview = workbook_import.preview(db_session, write_workbook(sheets), "rbac.xlsx", actor=ACTOR)
@@ -174,7 +277,9 @@ def test_initial_import_inserts_rows_layouts_and_one_change_set(db_session):
     data, sheets = build_workbook()
     preview, result = import_initial(db_session, data)
 
-    total = data_rows(sheets)
+    # Removing duplicates is the default; the synthetic Stg sheet has one.
+    total = data_rows(sheets, remove_duplicates=True)
+    assert total == data_rows(sheets) - 1
     assert result.created == total and result.deleted == 0
     rules = _active(db_session)
     assert len(rules) == total

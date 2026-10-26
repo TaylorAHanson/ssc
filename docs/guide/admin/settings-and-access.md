@@ -48,8 +48,8 @@ you can show or hide the sidebar pages it owns.
 - New capabilities appear automatically under **Other**.
 
 For example, to hide this guide, switch off **Guide** under **Learn & Share**.
-That removes it from the sidebar and the account menu, and removes the help
-links that point to it from other pages.
+That removes it from the account menu and removes the help links that point to
+it from other pages.
 
 ## Roles & Access
 
@@ -87,7 +87,15 @@ visit most often:
 - **Data Catalog**: which Unity Catalog catalogs are governed, how often the
   catalog in Discover is refreshed, the most rows a **Data preview** shows
   (**Data preview rows**), and how many assets each person can pin
-  (**Pinned assets per user**).
+  (**Pinned assets per user**). **Hide from Discover tag keys** keeps assets
+  out of Discover and the assistant's catalog search: add a key such as
+  `hide_from_discover`, then put a tag with that key (any value) on a
+  catalog, schema, table, view, metric view or column in Unity Catalog, or on
+  a dashboard, Genie space, app or job in the workspace. Leave the list empty
+  to hide nothing. Changing the list applies straight away; a tag you add or
+  remove in Unity Catalog applies after the next catalog refresh, and on
+  dashboards, Genie spaces and apps within about ten minutes. Hiding isn't
+  access control: people with access can still open the asset in Databricks.
 - **Legacy Dashboards** (under **Discover & Analyze**): map dashboards people
   used before, for example in Tableau, to the metric views that replace them.
   People then find them in Discover under **Legacy Dashboards** and when they

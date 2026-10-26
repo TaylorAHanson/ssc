@@ -85,6 +85,25 @@ class ContextDocumentModel(Base):
     last_retrieved_at: Mapped[Optional[datetime]] = Column(
         DateTime, nullable=True, comment="When the agent last retrieved this document",
     )
+    # Ownership + freshness review. ``updated_at`` moves on any row write, so
+    # staleness is measured from ``content_updated_at`` (title/body/link edits
+    # only) or ``last_reviewed_at`` (an owner confirmed it is still accurate),
+    # whichever is later. See app/services/context_catalog_staleness.py.
+    owner: Mapped[Optional[str]] = Column(
+        String, nullable=True, comment="Email of the person accountable for keeping this document current",
+    )
+    content_updated_at: Mapped[Optional[datetime]] = Column(
+        DateTime, nullable=True, comment="When the title, body or link last changed",
+    )
+    last_reviewed_at: Mapped[Optional[datetime]] = Column(
+        DateTime, nullable=True, comment="When someone last marked the document reviewed without editing it",
+    )
+    last_reviewed_by: Mapped[Optional[str]] = Column(
+        String, nullable=True, comment="Email of whoever last marked the document reviewed",
+    )
+    stale_notified_at: Mapped[Optional[datetime]] = Column(
+        DateTime, nullable=True, comment="When a stale-document reminder last mentioned this document",
+    )
 
 
 class ContextChunkModel(Base):

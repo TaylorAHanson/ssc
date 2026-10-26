@@ -108,6 +108,107 @@ The Context Catalog is a curated, editable knowledge base the agent retrieves fr
 
 > Tip: when a tool is finicky (ordering matters, specific args required, must be gated), document it once in the guide. Both human authors and the agent will then get it right consistently.
 
+### Document owners, staleness and Teams reminders
+
+Each document has an `owner` (an email address; it defaults to the creator and is carried in bundle export/import). A **published** document is *stale* when the later of its last content edit (title, body, source link or type) and its last **Mark reviewed** is older than `CONTEXT_CATALOG_STALE_AFTER_DAYS` (default 90). Agent retrievals and status or owner changes don't reset the clock.
+
+A scheduled task (poller leader only) can post the stale documents to a Microsoft Teams channel as an Adaptive Card, grouped by owner with one @mention each. The owner is the document owner, else the domain's primary owner; an owner that isn't an email address, or a document with neither, is listed without a mention. Each document is linked to its editor, so set **App base URL** (`APP_BASE_URL`, *Admin → Settings → Notifications*) or the card has no links.
+
+**1. Create the Teams webhook.** In the target channel: **⋯ → Workflows →** *"Post to a channel when a webhook request is received"*, pick the team and channel, and copy the URL it shows. Mentions resolve against the email/UPN, so owners' emails must match their Entra ID sign-in. The legacy Office 365 *Incoming Webhook* connector (MessageCard) isn't supported: it can't mention people and Microsoft is retiring it.
+
+**2. Store the URL as a secret.** Anyone with the URL can post to the channel, so it's never stored in the DB or `databricks.yml`. Put it in the Control Tower secret scope (the one `databricks.yml` passes as `CONTEXT_CATALOG_TEAMS_WEBHOOK_SECRET_SCOPE`, i.e. `${var.controltower_secret_scope}`) under the key `context_catalog_teams_webhook_url`:
+
+```bash
+databricks secrets put-secret <controltower_secret_scope> context_catalog_teams_webhook_url \
+  --string-value 'https://...'
+```
+
+The app service principal needs `READ` on the scope (it already has it if it reads the other Control Tower secrets). The URL is read at runtime and cached for 10 minutes, so a rotated URL takes effect without a redeploy. The key name can be changed with `CONTEXT_CATALOG_TEAMS_WEBHOOK_SECRET_KEY`. For local dev, set `CONTEXT_CATALOG_TEAMS_WEBHOOK_URL` in `backend/.env` instead; it takes precedence over the secret.
+
+**3. Turn it on.** *Admin → Settings → Context Catalog* (shown when the `context_catalog` feature is on):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `CONTEXT_CATALOG_STALE_AFTER_DAYS` | `90` | Stale threshold. |
+| `CONTEXT_CATALOG_STALE_REMINDERS_ENABLED` | off | Post on the schedule. |
+| `CONTEXT_CATALOG_STALE_REMINDER_CRON` | `0 15 * * 1` (Mon 15:00 UTC) | Schedule; blank = Run now only. |
+| `CONTEXT_CATALOG_STALE_RENOTIFY_DAYS` | `7` | Minimum days before the same document is mentioned again. |
+| `CONTEXT_CATALOG_STALE_MAX_DOCS_PER_OWNER` | `15` | Documents listed per owner; the rest show as "…and N more". |
+
+**Reminders** in the Context Catalog header shows the webhook source, schedule, due documents and the last run (kept in memory, so it resets on restart), with **Send test message** and **Run now** (ignores the toggle, respects the re-notify interval). A document is marked notified only when its message was accepted (HTTP 2xx), so a failed post is retried on the next run. Large lists are split into several messages to stay under the Teams size limit.
+
+### Keeping the catalog in Git
+
+Each environment can sync its catalog with one branch of a GitHub repository (github.com or GitHub Enterprise Server), so catalog changes get history, review and PR-based promotion like code. Implementation: `backend/app/services/context_catalog_git.py` (GitHub REST git-data API; no `git` binary).
+
+**Repository layout** (under the base folder, default `context-catalog/`):
+
+```
+context-catalog/
+  gtm-operations/              # folder = domain slug; nesting = parent domain
+    _domain.yml                # name, description, domain_type, primary_owner,
+                               # secondary_owner, reviewers, categories
+    playbook.md                # one file per document, named from its title
+    ssa/
+      _domain.yml
+      onboarding.md
+```
+
+A document file is YAML front matter plus the Markdown body:
+
+```markdown
+---
+id: 6f1c…            # stable across environments; omit for a new file (it's added on import)
+title: Playbook
+status: published     # or draft
+doc_type: markdown    # docx/pptx/pdf uploads commit their extracted markdown only
+tags: [gtm]
+source_url: https://…
+owner: owner@corp.com
+---
+
+# Playbook
+…
+```
+
+Keys the app doesn't know are preserved on the round trip. A folder without `_domain.yml` becomes a domain named after the folder. Files at the base folder's root, and paths starting with `.`, are ignored, so a `README.md` there is safe. Inside a domain folder, every `.md` file is a document.
+
+**1. Create the repo and the branches.** Create the repository (it may be empty) and the `dev`, `test` and `prod` branches. A missing branch is created from the default branch on the first sync of an environment that pushes to it; a read-only environment reports an error instead. To start from an existing environment's catalog, turn sync on there first: its first sync commits the whole catalog. Then merge that into the other branches before turning sync on in their environments. On its first sync, an environment adopts what its branch already holds, matching documents by `id`, then by title within the domain. It deletes nothing, then commits whatever only it has.
+
+**2. Store the token as a secret.** Git sync needs a token with **Contents: read and write** on the repo: a fine-grained PAT, or a GitHub App installation token. A classic PAT needs the `repo` scope. With SAML SSO, authorize the token for the org. By default it reuses the GitHub PAT the app already has (`GIT_TOKEN_SECRET_SCOPE` / `GIT_TOKEN_SECRET_KEY`, i.e. `${var.github_pat_secret_key}` in `${var.controltower_secret_scope}`). To use a dedicated token, store it in the same scope and set the bundle variable `context_catalog_git_pat_secret_key` to its key. That variable is passed to the app as `CONTEXT_CATALOG_GIT_TOKEN_SECRET_KEY`:
+
+```bash
+databricks secrets put-secret <controltower_secret_scope> context-catalog-git-pat --string-value 'github_pat_…'
+# databricks.yml (per target or default): context_catalog_git_pat_secret_key: context-catalog-git-pat
+```
+
+Locally, set `CONTEXT_CATALOG_GIT_TOKEN` in `backend/.env`; it takes precedence. The token is never stored in the DB or shown in Admin → Settings, which shows only the secret key name. Commits are authored by the editor's name and email, and the committer is the bot identity (`GIT_USERNAME` / `GIT_EMAIL`, from the branding config). Other editors batched into the same commit are added as `Co-authored-by` trailers. The commits are unsigned, so a branch that requires signed commits may reject them.
+
+**3. Turn it on.** *Admin → Settings → Context Catalog → Git sync*:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `CONTEXT_CATALOG_GIT_ENABLED` | off | Sync this environment with its branch. |
+| `CONTEXT_CATALOG_GIT_REPO` | — | `owner/repo` or the repo URL. |
+| `CONTEXT_CATALOG_GIT_BRANCHES` | dev→`dev`, test→`test`, stage→`prod` (push off), prod→`prod` | Branch per environment, matched on `ENVIRONMENT` or an alias. **Push off** = read-only mirror. An environment with no row (including local `development`) doesn't sync. |
+| `CONTEXT_CATALOG_GIT_BASE_PATH` | `context-catalog` | Repo folder; blank = repo root. |
+| `CONTEXT_CATALOG_GIT_POLL_CRON` | `*/15 * * * *` | Pull schedule (UTC); blank = **Sync from Git** only. |
+| `CONTEXT_CATALOG_DIRECT_EDITING_ENABLED` | on | Off = the catalog's write API returns 403 (pointing at the branch) and the page hides its edit controls. Pull keeps working. |
+
+These are DB overrides, so each environment can be set independently. Changing the repo, branch or base folder resets the sync state, and the next sync is a first sync again.
+
+**How a sync works.** Each environment stores what it last agreed with its branch on (`context_catalog_git_state`). A file changed only in the app is committed; one changed only in Git is imported (create, update, delete). One changed in both is a **conflict**: the app's version is committed, the Git version stays in history, and the path is listed in the panel. Saves queue a pending change, and the poller (leader only) commits within one poll interval, batching saves into one commit. The commit fetches the branch head first and updates the ref fast-forward-only, so a concurrent push is retried (three attempts) instead of overwritten. An environment with push off never writes. It mirrors the branch, replacing local edits on the next sync. Imports rebuild search chunks, and a content change from Git restarts a document's staleness clock.
+
+**When GitHub is unreachable**, saves still succeed. The pending changes stay queued, the error shows in the **Git sync** panel, and the poller retries with backoff (15s, doubling, capped at 5 minutes). A failed pull leaves the database unchanged. A file that fails to parse is reported and skipped, never deleted. If a branch has no catalog files at all under the base folder, the sync refuses to delete the environment's catalog; this usually means the base folder setting is wrong.
+
+**Branch protection and the promotion flow.** Recommended:
+
+- `dev`: no PR required. The dev app pushes to it directly as people edit.
+- `test` and `prod`: protected, with changes arriving only by PR. Promote with a PR from `dev` → `test`, then `test` → `prod`; document ids are shared, so a promoted file updates the same document. If the test or prod app also pushes (push on), allow its token to bypass the PR rule. Otherwise set push off for that environment and turn off **Allow editing in the app** there, so the catalog is edited only through PRs.
+- `stage` reads `prod` with push off, so staging always shows exactly what production will serve. It can never commit to `prod`, whatever its token can do.
+
+To lock an environment so it is managed only from Git, turn off **Allow editing in the app** there (typically prod). Admins then see a banner linking to the branch, and all changes go through PRs. **Sync from Git** and the schedule still apply them.
+
 ---
 
 ## 7. Monitoring & Day-to-Day Operations

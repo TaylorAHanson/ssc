@@ -799,11 +799,24 @@ def list_change_sets(
     fqn_key: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
+    browse: Optional[authz.BrowseScope] = None,
 ) -> ChangeSetPage:
-    """Newest first, without events. ``fqn_key`` matches change sets touching the object or anything under it."""
+    """Newest first, without events. ``fqn_key`` matches change sets touching the object or anything under it.
+
+    With ``browse``, only change sets with at least one event on an object it sees.
+    """
     page = max(int(page or 1), 1)
     page_size = min(max(int(page_size or 50), 1), 500)
     query = db.query(MetadataChangeSetModel).populate_existing()
+    visible = authz.browse_clause(browse, fqn=_OBJECTS.c.fqn_key, name_parts=(
+        _OBJECTS.c.catalog, _OBJECTS.c.schema_name, _OBJECTS.c.object_name)) if browse is not None else None
+    if visible is not None:
+        query = query.filter(
+            select(MetadataEventModel.id)
+            .join(_OBJECTS, _OBJECTS.c.id == MetadataEventModel.object_id)
+            .where(MetadataEventModel.change_set_id == MetadataChangeSetModel.id, visible)
+            .exists()
+        )
     if (actor or "").strip():
         query = query.filter(func.lower(MetadataChangeSetModel.actor) == actor.strip().lower())
     if (source or "").strip():
@@ -827,7 +840,7 @@ def list_change_sets(
 
 
 def get_change_set(db: Session, change_set_id: str, *, include_events: bool = True) -> ChangeSet:
-    """Raises ``errors.NotFound``."""
+    """Raises ``errors.NotFound``. Callers showing it to a person apply ``visibility.visible_change_set``."""
     row = db.get(MetadataChangeSetModel, change_set_id, populate_existing=True) if change_set_id else None
     if row is None:
         raise errors.NotFound(f"Change set {change_set_id} doesn't exist.")

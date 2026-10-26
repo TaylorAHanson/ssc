@@ -13,6 +13,30 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.5.0 — 2026-10-26
+
+### Added
+
+- **Admins can keep chosen assets out of Discover with a tag.** Every synced table, view, metric view and dashboard used to be listed, including staging or internal ones nobody should browse. Add a tag key such as `hide_from_discover` under **Admin → Settings → Data Catalog → Hide from Discover tag keys**, then put that tag on a catalog, schema, table, view, metric view or column in Unity Catalog, or on a dashboard, Genie space, app or job. The asset then disappears from Discover search, browsing, domain counts, pins, lineage and the assistant's catalog search. This only hides the asset in Discover: anyone with access can still open it in Databricks. New tags take effect after the next catalog sync.
+- **The Context Catalog can be kept in a GitHub repository, one branch per environment.** Catalog changes used to have no history or review step, and moving them between environments meant exporting and importing bundles by hand. With Git sync on, each save is committed to the environment's branch under your name within seconds, and changes merged through pull requests appear on a schedule or when you select **Sync from Git**. Stage reads the prod branch but never writes to it. Turn it on under **Admin → Settings → Context Catalog**. Turning off **Allow editing in the app** makes an environment read-only, so its catalog changes only through Git.
+- **Context Catalog documents have owners, and stale documents are flagged.** Old guidance was hard to spot, and the assistant kept reading it. Each document now has an owner (its creator by default, changeable in the editor), and documents nobody has edited or marked reviewed in 90 days are marked **Stale**. Owners can select **Mark reviewed** to confirm a document is still accurate, and the list can be sorted and filtered by owner and last updated. Admins can also have a weekly Microsoft Teams message @mention each owner with links to their stale documents. It's off by default: connect a Teams channel webhook, then turn it on under **Admin → Settings → Context Catalog**.
+
+### Changed
+
+- **Duplicate rows are removed when you import the Access Rules workbook.** Exact copies of an earlier row on the same sheet used to be imported as separate rules, which cluttered the Rules tab and carried into every export. The preview now shows a **Duplicates removed** column and lists each removed row by its row number, and the confirmation says how many were removed. To keep duplicates so the export matches the workbook exactly, turn off **Remove duplicate rows on import** under **Admin → Settings → Access Rules** before you preview.
+- **The Guide now opens only from the account menu.** It was listed twice, in the account menu and in the Learn & Share sidebar section. Select your avatar at the bottom of the sidebar, then **Guide**.
+
+### Security
+
+- **Shared governance records can only be changed by admins.** Saving a data contract or a data product document, drafting a data product, syncing data contracts, and running a policy check from Data Certification are now limited to Platform Admins and Governance Admins. Before, anyone signed in could do these by calling the app directly, even though the pages were shown only to admins. Admins won't notice a difference, except that saved contract versions now record who saved them.
+- **Only Governance Admins can ask the assistant to draft a data contract, and only for scanned catalogs.** Before, any user could name any table and get back its columns, tags and lineage, even in catalogs outside the app's scope. Contract lineage, including on the Discover Lineage tab, now lists only tables in the scanned catalogs.
+- **The Metadata Manager is now limited to governance and data owners.** Before, every signed-in user could search and read the tags, descriptions and owners of every catalog, table and column in scope, and limiting the browse roles hid the page but not the assistant or connected MCP clients. Governance Admins and Platform Admins still see everything. Data owners see only the objects they own, with a note saying so, and anyone who owns nothing no longer sees the Metadata Manager link; the assistant gives the same answers. Admins can choose who else sees everything under **Admin → Settings → Metadata Manager → Browse roles**. Leaving that list blank no longer opens it to everyone.
+- **The assistant's access check always runs as you.** If your sign-in token didn't reach the app, the check of who has access to a catalog or schema used to run under the app's own identity, which could show grants you can't see yourself. If your token is missing, you'll now see a message asking you to refresh the page or sign in again.
+
+### Fixed
+
+- **The Discover details panel no longer shows a stray scrollbar next to its tabs.** The tab row was a pixel taller than its space, so the browser added a small vertical scrollbar beside **Lineage**. When you make the panel narrow, the tabs still scroll sideways, without a scrollbar in the way. The same fix applies to the tabs in the dataset certification drawer.
+
 ## 2.4.0 — 2026-10-21
 
 ### Added

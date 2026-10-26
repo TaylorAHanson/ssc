@@ -6,6 +6,8 @@ export interface MetadataContextValue {
   whoami: WhoAmI;
   config: MetadataConfig;
   isAdmin: boolean;
+  /** The caller sees only the objects it owns, not every catalog. */
+  ownedOnly: boolean;
   /** Tag keys in use or governed, for autocomplete. */
   keys: KeyInfo[];
   /** Bumped after anything is saved so lists reload. */

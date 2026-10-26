@@ -119,7 +119,6 @@ const navItems: NavItem[] = [
   { id: 'event_calendar', title: 'Event Calendar', icon: <Calendar className="w-5 h-5" />, path: '/community/events', group: 'Learn & Share' },
   { id: 'templates_assets', title: 'Templates & Assets', icon: <FileText className="w-5 h-5" />, path: '/community/assets', group: 'Learn & Share' },
   { id: 'community_links', title: 'Community Links', icon: <MessageSquare className="w-5 h-5" />, path: '/community/links', group: 'Learn & Share' },
-  { id: 'guide', title: 'Guide', icon: <BookOpen className="w-5 h-5" />, path: '/guide', group: 'Learn & Share' },
 
   // Governance - Restricted
   {
@@ -285,7 +284,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   }, [accessRulesTabOn, currentUser, activeRoleOverride]);
 
   // Data owners edit metadata without an admin role, so the link follows the
-  // backend's browse check (METADATA_BROWSE_ROLES) rather than the persona.
+  // backend's browse scope (governance, or owners of at least one object)
+  // rather than the persona.
   const metadataTabOn = uiTabs?.tag_management !== false;
   const metadataRole = activeRoleOverride ?? '';
   const [metadataBrowse, setMetadataBrowse] = useState<{ role: string; ok: boolean } | null>(null);
@@ -628,8 +628,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   ? false
                   : item.path === '/admin/dashboard'
                     ? location.pathname.startsWith('/admin')
-                    : item.id === 'guide'
-                      ? location.pathname.startsWith('/guide')
                     : item.id === 'home'
                       // The agent landing renders at both '/' and '/request'.
                       ? location.pathname === '/' || location.pathname === '/request'

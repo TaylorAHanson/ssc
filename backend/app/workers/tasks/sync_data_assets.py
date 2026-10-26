@@ -277,6 +277,75 @@ async def _fetch_downstream_dashboards(provider, fqns: list[str]) -> dict[str, l
     return out
 
 
+def _as_list(value) -> list:
+    """A ``collect_set`` result, which the SQL API sometimes returns as JSON text."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return [value]
+    return [v for v in (value or []) if isinstance(v, str) and v]
+
+
+async def _fetch_scope_tag_keys(provider, catalogs: list[str]) -> dict[str, dict | None]:
+    """Tag keys on catalogs, schemas and columns, for the Discover hide-by-tag filter.
+
+    Returns ``{"catalog": {cat: keys}, "schema": {(cat, sch): keys},
+    "column": {(cat, sch, tbl): keys}}``. A level whose query fails maps to None
+    so the caller keeps what the last sync stored rather than un-hiding assets.
+    """
+    from app.tools.sql_safety import quote_literal
+
+    def _where(col: str) -> str:
+        if catalogs:
+            return f"{col} IN ({', '.join(quote_literal(c) for c in catalogs)})"
+        return f"{col} NOT IN ('system', 'samples')"
+
+    queries = {
+        "catalog": (
+            "SELECT catalog_name, collect_set(tag_name) AS tag_names "
+            f"FROM system.information_schema.catalog_tags WHERE {_where('catalog_name')} GROUP BY 1",
+            ("catalog_name",),
+        ),
+        "schema": (
+            "SELECT catalog_name, schema_name, collect_set(tag_name) AS tag_names "
+            f"FROM system.information_schema.schema_tags WHERE {_where('catalog_name')} GROUP BY 1, 2",
+            ("catalog_name", "schema_name"),
+        ),
+        "column": (
+            "SELECT catalog_name, schema_name, table_name, collect_set(tag_name) AS tag_names "
+            f"FROM system.information_schema.column_tags WHERE {_where('catalog_name')} GROUP BY 1, 2, 3",
+            ("catalog_name", "schema_name", "table_name"),
+        ),
+    }
+
+    async def _one(level: str):
+        sql, cols = queries[level]
+        try:
+            result = await provider.execute_sql(sql, warehouse=settings.DATABRICKS_WAREHOUSE_ID)
+        except Exception as e:  # noqa: BLE001 - keep the previous keys; never fail the sync
+            logger.warning("Could not read %s tags from information_schema: %s", level, e)
+            return level, None
+        out = {}
+        for r in result.get("rows", []):
+            key = tuple(r.get(c) for c in cols)
+            out[key[0] if len(key) == 1 else key] = _as_list(r.get("tag_names"))
+        return level, out
+
+    return dict(await asyncio.gather(*(_one(level) for level in queries)))
+
+
+def merge_scope_tag_keys(previous, scope: dict, catalog: str, schema: str, table: str) -> dict:
+    """The ``scope_tag_keys`` to store for one asset; failed levels keep ``previous``."""
+    previous = previous if isinstance(previous, dict) else {}
+    lookups = {"catalog": catalog, "schema": (catalog, schema), "column": (catalog, schema, table)}
+    merged = {}
+    for level, key in lookups.items():
+        found = scope.get(level)
+        merged[level] = list(previous.get(level) or []) if found is None else found.get(key, [])
+    return merged
+
+
 # Track next sync time
 _next_sync_time = None
 # The first poll after boot syncs immediately unless the cache is this fresh —
@@ -452,6 +521,7 @@ async def sync_data_assets_task(force: bool = False):
             await _fetch_downstream_dashboards(provider, metric_view_fqns)
             if metric_view_fqns else {}
         )
+        scope_tags = await _fetch_scope_tag_keys(provider, _catalogs) if rows else {}
 
         if rows:
             db = get_lakebase_session()
@@ -494,6 +564,10 @@ async def sync_data_assets_task(force: bool = False):
                     asset.description = row.get("description")
                     asset.owner = row.get("owner")
                     asset.tags = tags
+                    asset.scope_tag_keys = merge_scope_tag_keys(
+                        asset.scope_tag_keys, scope_tags,
+                        row.get("catalog"), row.get("schema"), row.get("table_name"),
+                    )
                     asset.domain = domain
                     asset.subdomain = subdomain
 

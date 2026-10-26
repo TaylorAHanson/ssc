@@ -77,6 +77,16 @@ all fit, the rest appear under **+N**. Your pins follow you between browsers
 and devices. If a pinned asset is removed from the catalog, it's shown
 crossed out until you unpin it.
 
+## Assets you won't see here
+
+An admin can keep some assets out of Discover by tagging them in Databricks
+with a tag key they choose, such as `hide_from_discover`. A tagged table,
+view or metric view doesn't appear anywhere on this page, in search, in the
+domain counts, in your pins or in lineage, and the assistant won't suggest it
+when you ask what data exists. Tagging a catalog or schema hides everything
+in it. This only affects what {{brand_name}} lists: if you already have
+access to the asset, you can still open it in Databricks.
+
 ## Request access
 
 If you can't query an asset yet, select **Request Access** on it. This opens

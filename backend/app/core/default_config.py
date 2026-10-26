@@ -488,6 +488,26 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         ],
     },
 
+    # Context Catalog Git sync (Admin -> Settings -> Context Catalog). Each
+    # environment syncs with one branch; stage reads prod's branch with push
+    # off, so it can never commit to it. "development" / "production" (local
+    # dev and an unset ENVIRONMENT) are deliberately not aliases, so they stay
+    # unmapped. The token is a secret: CONTEXT_CATALOG_GIT_TOKEN locally, else
+    # the CONTEXT_CATALOG_GIT_TOKEN_SECRET_KEY secret (see databricks.yml).
+    "context_catalog_git": {
+        "enabled": False,
+        "repo": "",
+        "base_path": "context-catalog",
+        "poll_cron": "*/15 * * * *",
+        "direct_editing_enabled": True,
+        "branches": [
+            {"environment": "dev", "aliases": "", "branch": "dev", "push": True},
+            {"environment": "test", "aliases": "tst, qa", "branch": "test", "push": True},
+            {"environment": "stage", "aliases": "stg, staging", "branch": "prod", "push": False},
+            {"environment": "prod", "aliases": "prd", "branch": "prod", "push": True},
+        ],
+    },
+
     # Access Rules (Admin -> Settings -> Access Rules). The ledger replaces the
     # RBAC workbook; each managed sheet is exported as its own CSV, identical to
     # a manual "Save as CSV" from Excel, for the Terraform pipeline to read.
@@ -541,6 +561,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "viewer_roles": ["Governance Admin"],
         # Reset + re-import discards every change made since the seed import.
         "allow_reset": False,
+        # Identical rows after the first are dropped on import (each reported).
+        # Off keeps them, so the export matches the workbook byte for byte.
+        "import_remove_duplicates": True,
         "max_changes_per_commit": 200,
         "min_reason_length": 10,
         "min_justification_length": 20,
@@ -652,8 +675,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "uc_owner_is_authority": False,
         # Roles (besides Platform Admin) that may edit every object.
         "editor_roles": ["Governance Admin"],
-        # Roles that may browse. Blank = every signed-in user, like Discover.
-        "browse_roles": [],
+        # Roles that may browse every object, besides Platform Admin and editor_roles. Blank adds nobody.
+        # Everyone else sees only the objects they own (owner tag, or UC owner when that counts).
+        "browse_roles": ["Governance Admin"],
         # open = any key; known_only = only keys with a policy row below.
         "key_mode": "open",
         # Per-key rules. applies_to: comma-separated catalog, schema, table,

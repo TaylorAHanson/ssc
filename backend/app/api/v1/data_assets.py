@@ -12,6 +12,13 @@ from app.db.data_asset import DataAssetModel
 from app.workers.tasks.sync_data_assets import DEFAULT_SUBDOMAIN, is_metric_view
 from app.api.deps import get_current_user
 from app.services.data_asset_owner import resolve_data_asset_owner
+from app.services.discover_visibility import (
+    has_hidden_tag,
+    hidden_linked_dashboards,
+    hidden_workspace_entities,
+    load_visibility,
+    visible_dashboards,
+)
 from datetime import datetime
 import json
 
@@ -66,7 +73,10 @@ def list_data_assets(
     List cached data assets for discovery.
     """
     query = db.query(DataAssetModel)
-    
+    vis = load_visibility(db)
+    if vis.hidden_asset_ids:
+        query = query.filter(DataAssetModel.id.notin_(vis.hidden_asset_ids))
+
     if domain:
         query = query.filter(DataAssetModel.domain == domain)
         
@@ -91,8 +101,9 @@ def list_data_assets(
     if limit is not None:
         query = query.limit(limit)
         
-    assets = query.all()
-    
+    assets = vis.visible(query.all())
+    hidden_dashboards = hidden_linked_dashboards(assets)
+
     # Map 'schema' column to 'schema_name' for the Pydantic model since 'schema' is a reserved field name in BaseModel in pydantic sometimes,
     # actually let's just construct the response properly.
     result = []
@@ -114,8 +125,8 @@ def list_data_assets(
             "certification_violations": asset.certification_violations if isinstance(asset.certification_violations, list) else (json.loads(asset.certification_violations) if isinstance(asset.certification_violations, str) else None),
             "sla": asset.sla,
             "kpis": asset.kpis,
-            "upstream_tables": asset.upstream_tables,
-            "downstream_dashboards": asset.downstream_dashboards,
+            "upstream_tables": vis.visible_upstream(asset.upstream_tables),
+            "downstream_dashboards": visible_dashboards(asset.downstream_dashboards, hidden_dashboards),
             "legacy_mappings": asset.legacy_mappings,
             "created_at": asset.created_at,
             "last_synced_at": asset.last_synced_at
@@ -127,7 +138,8 @@ def list_data_assets(
 @router.get("/domains")
 def get_domains_hierarchy(db: Session = Depends(get_db)):
     """Return hierarchical summary of domains, subdomains, metric views, and headline KPIs."""
-    assets = db.query(DataAssetModel).all()
+    assets = load_visibility(db).visible(db.query(DataAssetModel).all())
+    hidden_dashboards = hidden_linked_dashboards(assets)
     domain_map: dict[str, dict] = {}
 
     domain_descriptions = {
@@ -176,7 +188,7 @@ def get_domains_hierarchy(db: Session = Depends(get_db)):
         if is_metric:
             dom_entry["metric_view_count"] += 1
             if a.downstream_dashboards:
-                dom_entry["dashboard_count"] += len(a.downstream_dashboards)
+                dom_entry["dashboard_count"] += len(visible_dashboards(a.downstream_dashboards, hidden_dashboards))
         else:
             dom_entry["table_count"] += 1
 
@@ -249,6 +261,9 @@ def list_metric_views(
     from sqlalchemy import or_
 
     q = db.query(DataAssetModel).filter(DataAssetModel.type == "METRIC_VIEW")
+    vis = load_visibility(db)
+    if vis.hidden_asset_ids:
+        q = q.filter(DataAssetModel.id.notin_(vis.hidden_asset_ids))
     if domain:
         q = q.filter(DataAssetModel.domain == domain)
     if subdomain:
@@ -265,7 +280,8 @@ def list_metric_views(
             )
         )
 
-    assets = q.all()
+    assets = vis.visible(q.all())
+    hidden_dashboards = hidden_linked_dashboards(assets)
     results = []
     for a in assets:
         results.append({
@@ -282,8 +298,8 @@ def list_metric_views(
             "certified": bool(a.certified),
             # None = not loaded: read as the user via /metric_views/definitions.
             "kpis": a.kpis,
-            "upstream_tables": a.upstream_tables,
-            "downstream_dashboards": a.downstream_dashboards or [],
+            "upstream_tables": vis.visible_upstream(a.upstream_tables),
+            "downstream_dashboards": visible_dashboards(a.downstream_dashboards or [], hidden_dashboards),
             "contract_url": a.contract_url,
             "created_at": a.created_at,
             "last_synced_at": a.last_synced_at,
@@ -428,7 +444,12 @@ async def load_metric_view_detail(asset: Optional[DataAssetModel], obo_token: Op
 async def get_metric_view_detail(asset_id: str, req: Request, db: Session = Depends(get_db)):
     """KPIs, source tables and current values of a metric view, read as the user."""
     asset = db.query(DataAssetModel).filter(DataAssetModel.id == asset_id).first()
-    return await load_metric_view_detail(asset, getattr(req.state, "token", None), _viewer_key(req))
+    vis = load_visibility(db)
+    if vis.is_hidden_asset(asset):
+        asset = None
+    detail = await load_metric_view_detail(asset, getattr(req.state, "token", None), _viewer_key(req))
+    detail["upstream_tables"] = vis.visible_upstream(detail.get("upstream_tables"))
+    return detail
 
 
 class MetricViewDefinitionsRequest(BaseModel):
@@ -444,13 +465,18 @@ async def get_metric_view_definitions(body: MetricViewDefinitionsRequest, req: R
     ``{"definitions": {asset_id: <definition>}}``; see ``load_metric_view_definition``.
     """
     ids = list(dict.fromkeys(body.asset_ids))[:_DEFINITION_BATCH_MAX]
-    assets = {a.id: a for a in db.query(DataAssetModel).filter(DataAssetModel.id.in_(ids)).all()} if ids else {}
+    vis = load_visibility(db)
+    assets = {
+        a.id: a for a in vis.visible(db.query(DataAssetModel).filter(DataAssetModel.id.in_(ids)).all())
+    } if ids else {}
     token, viewer = getattr(req.state, "token", None), _viewer_key(req)
     sem = asyncio.Semaphore(_DEFINITION_BATCH_CONCURRENCY)
 
     async def _one(asset_id: str):
         async with sem:
-            return asset_id, await load_metric_view_definition(assets.get(asset_id), token, viewer)
+            definition = await load_metric_view_definition(assets.get(asset_id), token, viewer)
+            definition["upstream_tables"] = vis.visible_upstream(definition.get("upstream_tables"))
+            return asset_id, definition
 
     return {"definitions": dict(await asyncio.gather(*(_one(i) for i in ids)))}
 
@@ -541,80 +567,13 @@ async def get_accessible_assets(
 
     # Map UC visibility back onto our asset IDs by fully-qualified name.
     accessible_ids: List[str] = []
-    for asset in db.query(DataAssetModel).all():
+    for asset in load_visibility(db).visible(db.query(DataAssetModel).all()):
         fqn = f"{asset.catalog}.{asset.schema}.{asset.table_name}".lower()
         if fqn in visible:
             accessible_ids.append(asset.id)
 
     return AccessibleAssetsResponse(available=True, mode="obo", accessible_ids=accessible_ids)
 
-
-@router.get("/databricks/catalogs")
-def get_databricks_catalogs():
-    """Fetch available catalogs from Databricks Unity Catalog."""
-    from app.providers.databricks import DatabricksProvider
-    from app.core.config import settings
-    from fastapi import HTTPException
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    try:
-        provider = DatabricksProvider(
-            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-            token=settings.DATABRICKS_TOKEN,
-            client_id=settings.DATABRICKS_CLIENT_ID,
-            client_secret=settings.DATABRICKS_CLIENT_SECRET
-        )
-        catalogs = provider.client.catalogs.list()
-        return [{"name": c.name, "comment": c.comment} for c in catalogs]
-    except Exception as e:
-        logger.error(f"Failed to fetch catalogs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/databricks/schemas")
-def get_databricks_schemas(catalog: str):
-    """Fetch available schemas for a given catalog from Databricks."""
-    from app.providers.databricks import DatabricksProvider
-    from app.core.config import settings
-    from fastapi import HTTPException
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    try:
-        provider = DatabricksProvider(
-            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-            token=settings.DATABRICKS_TOKEN,
-            client_id=settings.DATABRICKS_CLIENT_ID,
-            client_secret=settings.DATABRICKS_CLIENT_SECRET
-        )
-        schemas = provider.client.schemas.list(catalog_name=catalog)
-        return [{"name": s.name, "comment": s.comment} for s in schemas]
-    except Exception as e:
-        logger.error(f"Failed to fetch schemas for {catalog}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/databricks/tables")
-def get_databricks_tables(catalog: str, schema: str):
-    """Fetch available tables and views for a given catalog and schema from Databricks."""
-    from app.providers.databricks import DatabricksProvider
-    from app.core.config import settings
-    from fastapi import HTTPException
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    try:
-        provider = DatabricksProvider(
-            host=settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL,
-            token=settings.DATABRICKS_TOKEN,
-            client_id=settings.DATABRICKS_CLIENT_ID,
-            client_secret=settings.DATABRICKS_CLIENT_SECRET
-        )
-        tables = provider.client.tables.list(catalog_name=catalog, schema_name=schema)
-        # Filter for actual tables or views (type is often 'MANAGED', 'EXTERNAL', 'VIEW')
-        return [{"name": t.name, "type": t.table_type, "comment": t.comment} for t in tables]
-    except Exception as e:
-        logger.error(f"Failed to fetch tables for {catalog}.{schema}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/databricks/dashboards")
 def get_databricks_dashboards():
@@ -632,8 +591,12 @@ def get_databricks_dashboards():
             client_id=settings.DATABRICKS_CLIENT_ID,
             client_secret=settings.DATABRICKS_CLIENT_SECRET
         )
-        dashboards = provider.client.lakeview.list()
-        return [{"id": d.dashboard_id, "name": d.display_name, "type": "dashboard", "path": d.parent_path} for d in dashboards]
+        dashboards = list(provider.client.lakeview.list())
+        hidden = hidden_workspace_entities("dashboard", [d.dashboard_id for d in dashboards], provider.client)
+        return [
+            {"id": d.dashboard_id, "name": d.display_name, "type": "dashboard", "path": d.parent_path}
+            for d in dashboards if d.dashboard_id not in hidden
+        ]
     except Exception as e:
         logger.error(f"Failed to fetch dashboards: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -655,7 +618,10 @@ def get_databricks_jobs():
             client_secret=settings.DATABRICKS_CLIENT_SECRET
         )
         jobs = provider.client.jobs.list()
-        return [{"id": str(j.job_id), "name": j.settings.name, "type": "job", "creator": j.creator_user_name} for j in jobs]
+        return [
+            {"id": str(j.job_id), "name": j.settings.name, "type": "job", "creator": j.creator_user_name}
+            for j in jobs if not has_hidden_tag(getattr(j.settings, "tags", None))
+        ]
     except Exception as e:
         logger.error(f"Failed to fetch jobs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -687,6 +653,7 @@ def get_databricks_apps():
             page_token = resp.get("next_page_token")
             if not page_token:
                 break
+        hidden = hidden_workspace_entities("app", [a.get("name") for a in apps], provider.client)
         return [
             {
                 "id": a["name"],
@@ -699,7 +666,7 @@ def get_databricks_apps():
                 "updated_at": a.get("update_time"),
             }
             for a in apps
-            if a.get("name")
+            if a.get("name") and a["name"] not in hidden
         ]
     except Exception as e:
         logger.error(f"Failed to fetch apps: {e}")
@@ -738,8 +705,13 @@ def _classify_uc_error(message: str) -> str:
     return "error"
 
 
+def _hidden_table_error(table_name: str) -> dict:
+    """What a hidden asset's live endpoints return: indistinguishable from a missing table."""
+    return {"error": f"Table {table_name} was not found.", "error_kind": "not_found"}
+
+
 @router.get("/databricks/table")
-def get_databricks_table_details(table_name: str, req: Request):
+def get_databricks_table_details(table_name: str, req: Request, db: Session = Depends(get_db)):
     """Return full Unity Catalog metadata for a single table.
 
     Always returns HTTP 200 with a payload so frontend can inspect the
@@ -771,6 +743,9 @@ def get_databricks_table_details(table_name: str, req: Request):
         "error": None,
         "error_kind": None,
     }
+    vis = load_visibility(db)
+    if vis.is_hidden_id(table_name):
+        return {**base_response, **_hidden_table_error(table_name)}
 
     try:
         client = _user_uc_client(req)
@@ -812,6 +787,9 @@ def get_databricks_table_details(table_name: str, req: Request):
                     tags[t.tag_key] = getattr(t, "tag_value", None)
         except Exception:
             pass
+        # Live tags can be newer than the last sync.
+        if vis.active and has_hidden_tag(tags, vis.keys):
+            return {**base_response, **_hidden_table_error(table_name)}
 
         raw_owner = getattr(info, "owner", None)
         resolved_owner = resolve_data_asset_owner(raw_owner, tags)
@@ -857,7 +835,8 @@ def _preview_error_kind(message: str) -> str:
 
 
 @router.get("/databricks/table/preview")
-async def get_databricks_table_preview(table_name: str, req: Request, limit: Optional[int] = None):
+async def get_databricks_table_preview(table_name: str, req: Request, limit: Optional[int] = None,
+                                       db: Session = Depends(get_db)):
     """Sample rows of a table or view, read On-Behalf-Of the user on the SQL warehouse.
 
     Runs ``SELECT * FROM <fqn> LIMIT n`` as the user, so row filters, column
@@ -882,6 +861,8 @@ async def get_databricks_table_preview(table_name: str, req: Request, limit: Opt
     n = _preview_row_limit(limit)
     response = {"table_name": table_name, "columns": [], "rows": [], "row_count": 0,
                 "limit": n, "truncated": False, "error": None, "error_kind": None}
+    if load_visibility(db).is_hidden_id(table_name):
+        return {**response, **_hidden_table_error(table_name)}
 
     if not settings.DATABRICKS_WAREHOUSE_ID:
         return {**response, "error": "No SQL warehouse is configured for previews.",
@@ -916,7 +897,7 @@ async def get_databricks_table_preview(table_name: str, req: Request, limit: Opt
 
 
 @router.get("/databricks/lineage")
-def get_databricks_table_lineage(table_name: str, req: Request):
+def get_databricks_table_lineage(table_name: str, req: Request, db: Session = Depends(get_db)):
     """Return immediate (1-hop) upstream/downstream tables for a UC table.
 
     `table_name` must be a fully qualified name like ``catalog.schema.table``.
@@ -934,6 +915,11 @@ def get_databricks_table_lineage(table_name: str, req: Request):
             detail="table_name must be a fully qualified name (catalog.schema.table)",
         )
 
+    vis = load_visibility(db)
+    if vis.is_hidden_id(table_name):
+        return {"table_name": table_name, "upstreams": [], "downstreams": [],
+                **_hidden_table_error(table_name)}
+
     try:
         resp = _user_uc_client(req).api_client.do(
             "GET",
@@ -948,6 +934,9 @@ def get_databricks_table_lineage(table_name: str, req: Request):
                 info = entry.get("tableInfo") or {}
                 fqn = info.get("name")
                 if not fqn or fqn in seen:
+                    continue
+                parts = (info.get("catalog_name"), info.get("schema_name"), info.get("table_name"))
+                if vis.is_hidden_id(fqn) or (all(parts) and vis.is_hidden_id(".".join(parts))):
                     continue
                 seen.add(fqn)
                 results.append(
@@ -1023,7 +1012,8 @@ def get_databricks_genie_spaces():
             page_token = resp.next_page_token
             if not page_token:
                 break
-        return results
+        hidden = hidden_workspace_entities("genie_space", [r["id"] for r in results], provider.client)
+        return [r for r in results if r["id"] not in hidden]
     except Exception as e:
         logger.error(f"Failed to fetch genie spaces: {e}")
         return []

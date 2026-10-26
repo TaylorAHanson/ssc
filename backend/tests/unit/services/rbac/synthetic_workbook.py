@@ -154,7 +154,22 @@ def managed(sheets: Dict[str, SyntheticSheet]) -> Dict[str, SyntheticSheet]:
     return {k: v for k, v in sheets.items() if k != "Sheet1"}
 
 
-def data_rows(sheets: Dict[str, SyntheticSheet]) -> int:
+def without_duplicates(sheet: SyntheticSheet) -> SyntheticSheet:
+    """The sheet with every data row identical to an earlier one left out (header kept)."""
+    padded = sheet.padded()
+    seen: set = set()
+    kept = [padded[0]]
+    for row in padded[1:]:
+        key = tuple("" if v is None else str(v) for v in row)
+        if key not in seen:
+            seen.add(key)
+            kept.append(row)
+    return SyntheticSheet(rows=kept, hidden=sheet.hidden)
+
+
+def data_rows(sheets: Dict[str, SyntheticSheet], *, remove_duplicates: bool = False) -> int:
+    if remove_duplicates:
+        return sum(len(without_duplicates(s).rows) - 1 for s in managed(sheets).values())
     return sum(len(s.rows) - 1 for s in managed(sheets).values())
 
 

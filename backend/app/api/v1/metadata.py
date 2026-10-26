@@ -1,16 +1,17 @@
 """Metadata Manager API (``/api/v1/metadata``, ADR-0006): desired state for UC tags and descriptions.
 
 One change service behind every route (``services/metadata/changes.py``); this
-module only resolves the caller, checks browse/admin rights and maps errors.
-Registered service principals may call every route; their scope is enforced by
-the change service. Names travel as query parameters or in the body, never in
+module only resolves the caller, checks admin rights, applies the caller's browse
+scope (``authz.browse_scope``: every object, only owned ones, or none) to every
+read and every returned preview (``visibility``), and maps errors. Registered
+service principals may call every route; their scope is enforced by the change service. Names travel as query parameters or in the body, never in
 the path, since they contain dots. Every route is gated by ``features.metadata_v2``
 and runs its database work in a worker thread.
 """
 import asyncio
 import logging
 from contextlib import contextmanager
-from typing import Iterator, List, Optional
+from typing import Iterator, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.orm import Session
@@ -33,6 +34,7 @@ from app.services.metadata import (
     scope,
     search,
     store,
+    visibility,
 )
 from app.services.metadata.errors import ChangeBlocked, Forbidden, MetadataError, VersionConflict
 from app.services.metadata.types import (
@@ -97,10 +99,24 @@ def _actor(db: Session, user: User) -> Actor:
     return authz.actor_from_user(db, user)
 
 
-def _browse(db: Session, user: User) -> Actor:
+def _scoped(db: Session, user: User) -> Tuple[Actor, authz.BrowseScope]:
+    """The caller and what it may see; anyone may call, the scope may be ``none``."""
     actor = _actor(db, user)
-    if not authz.can_browse(actor):
-        raise Forbidden("Your role can't browse the Metadata Manager. Ask a Platform Admin for access.")
+    return actor, authz.browse_scope(db, actor)
+
+
+def _browse(db: Session, user: User) -> Tuple[Actor, authz.BrowseScope]:
+    """The caller and its browse scope; Forbidden when it sees nothing."""
+    actor, browse = _scoped(db, user)
+    if browse.level == "none":
+        raise Forbidden(authz.NO_BROWSE_MESSAGE)
+    return actor, browse
+
+
+def _browse_all(db: Session, user: User, what: str) -> Actor:
+    actor, browse = _browse(db, user)
+    if not browse.full:
+        raise Forbidden(f"{what} cover every object, so only governance can see them.")
     return actor
 
 
@@ -139,12 +155,13 @@ def _whoami(db: Session, request: Request) -> WhoAmI:
         return WhoAmI(
             actor=Actor(id=caller, actor_type="service_principal", display_name=caller),
             recognized_as="unregistered_service_principal", headers_seen=headers_seen, identifiers=ids,
-            can_browse=False, message=str(exc.detail),
+            can_browse=False, browse_scope="none", message=str(exc.detail),
         )
-    actor = _actor(db, user)
+    actor, browse = _scoped(db, user)
     recognized = "service_principal" if actor.actor_type == "service_principal" else "user"
+    message = {"owned": authz.OWNED_ONLY_MESSAGE, "none": authz.NO_BROWSE_MESSAGE}.get(browse.level)
     return WhoAmI(actor=actor, recognized_as=recognized, headers_seen=headers_seen, identifiers=ids,
-                  can_browse=authz.can_browse(actor))
+                  can_browse=browse.level != "none", browse_scope=browse.level, message=message)
 
 
 @router.get("/whoami", response_model=WhoAmI)
@@ -154,7 +171,7 @@ async def whoami(request: Request, db: Session = Depends(get_db)) -> WhoAmI:
 
 
 def _config(db: Session, user: User) -> MetadataConfig:
-    _browse(db, user)
+    _, browse = _browse(db, user)
     return MetadataConfig(
         reconcile_mode=reconciler.current_mode(),
         owner_tag_key=settings.METADATA_OWNER_TAG_KEY,
@@ -167,7 +184,7 @@ def _config(db: Session, user: User) -> MetadataConfig:
         min_justification_length=settings.METADATA_MIN_JUSTIFICATION_LENGTH,
         new_object_policy="ignore" if settings.METADATA_NEW_OBJECT_POLICY == "ignore" else "adopt",
         last_sweep_at=observed.last_sweep_at(db),
-        unread_catalogs=observed.unread_catalogs(db),
+        unread_catalogs=observed.unread_catalogs(db) if browse.full else [],
         circuit_breaker_tripped=reconciler.circuit_breaker_tripped(db),
         managed_catalogs=scope.patterns(),
         enforce_blocked_reason=scope.enforce_blocked_reason(),
@@ -230,7 +247,8 @@ async def search_objects(
             raise MetadataError(f"Invalid search: {exc}") from None
 
         def run() -> SearchResult:
-            return search.search(db, query, _browse(db, user))
+            actor, browse = _browse(db, user)
+            return search.search(db, query, actor, browse=browse)
 
         return await asyncio.to_thread(run)
 
@@ -243,7 +261,11 @@ async def get_object(
     user: User = Depends(deps.get_current_user_or_principal),
 ) -> ObjectDetail:
     with _http_errors():
-        return await asyncio.to_thread(lambda: detail.object_detail(db, _browse(db, user), name, column))
+        def run() -> ObjectDetail:
+            actor, browse = _browse(db, user)
+            return detail.object_detail(db, actor, name, column, browse=browse)
+
+        return await asyncio.to_thread(run)
 
 
 @router.get("/keys", response_model=List[KeyInfo])
@@ -255,8 +277,8 @@ async def list_keys(
 ) -> List[KeyInfo]:
     with _http_errors():
         def run() -> List[KeyInfo]:
-            _browse(db, user)
-            return search.list_keys(db, q=q, limit=limit)
+            _, browse = _browse(db, user)
+            return search.list_keys(db, q=q, limit=limit, browse=browse)
 
         return await asyncio.to_thread(run)
 
@@ -268,8 +290,8 @@ async def list_datasets(
     """Every dataset tag value with its tables; ``GET /objects?dataset=`` lists one dataset's tables."""
     with _http_errors():
         def run() -> List[DatasetSummary]:
-            _browse(db, user)
-            return search.list_datasets(db)
+            _, browse = _browse(db, user)
+            return search.list_datasets(db, browse=browse)
 
         return await asyncio.to_thread(run)
 
@@ -286,7 +308,12 @@ async def list_drift(
         query = SearchQuery(catalogs=[catalog] if catalog else [], drift=True, include_columns=True,
                             include_unmanaged=False, sort="drift_detected_at", order="desc", page=page,
                             page_size=page_size)
-        return await asyncio.to_thread(lambda: search.search(db, query, _browse(db, user)))
+
+        def run() -> SearchResult:
+            actor, browse = _browse(db, user)
+            return search.search(db, query, actor, browse=browse)
+
+        return await asyncio.to_thread(run)
 
 
 # --- Changes -----------------------------------------------------------------------------
@@ -297,7 +324,11 @@ async def preview_change(
     body: ChangeRequest, db: Session = Depends(get_db), user: User = Depends(deps.get_current_user_or_principal),
 ) -> ChangePreview:
     with _http_errors():
-        return await asyncio.to_thread(lambda: expand.preview(db, body, _browse(db, user)))
+        def run() -> ChangePreview:
+            actor, browse = _browse(db, user)
+            return expand.preview(db, body, actor, browse=browse)
+
+        return await asyncio.to_thread(run)
 
 
 @router.post("/changes", response_model=ChangeResult)
@@ -311,9 +342,9 @@ async def submit_change(
     """Commit what the caller may change directly; route the rest per ``on_approval_needed``."""
     with _http_errors():
         def run() -> ChangeResult:
-            actor = _actor(db, user)
+            actor, browse = _scoped(db, user)
             ask = body.model_copy(update={"idempotency_key": _with_key(body.idempotency_key, idempotency_key)})
-            result = expand.submit(db, ask, actor, source=_source(request, actor))
+            result = expand.submit(db, ask, actor, source=_source(request, actor), browse=browse)
             logger.info("Metadata: %s (%s) submitted %d op(s): %s", actor.id, actor.actor_type, len(body.ops),
                         result.status)
             return result
@@ -326,7 +357,12 @@ async def preview_promote(
     body: PromoteRequest, db: Session = Depends(get_db), user: User = Depends(deps.get_current_user_or_principal),
 ) -> ChangePreview:
     with _http_errors():
-        return await asyncio.to_thread(lambda: changes.preview_promote(db, body, _browse(db, user)))
+        def run() -> ChangePreview:
+            actor, browse = _browse(db, user)
+            pv = changes.preview_promote(db, body, actor, sees=None if browse.full else browse.predicate())
+            return visibility.redact_preview(pv, browse, reason=body.reason, title=changes.PROMOTE_TITLE)
+
+        return await asyncio.to_thread(run)
 
 
 @router.post("/changes/promote", response_model=ChangeResult)
@@ -339,9 +375,19 @@ async def promote(
 ) -> ChangeResult:
     with _http_errors():
         def run() -> ChangeResult:
-            actor = _actor(db, user)
+            actor, browse = _scoped(db, user)
             ask = body.model_copy(update={"idempotency_key": _with_key(body.idempotency_key, idempotency_key)})
-            return changes.promote(db, ask, actor, source=_source(request, actor))
+            try:
+                result = changes.promote(db, ask, actor, source=_source(request, actor),
+                                         sees=None if browse.full else browse.predicate())
+            except VersionConflict as exc:
+                exc.conflicts = visibility.redact_conflicts(exc.conflicts, browse)
+                raise
+            except ChangeBlocked as exc:
+                exc.preview = visibility.redact_preview(exc.preview, browse, reason=body.reason,
+                                                        title=changes.PROMOTE_TITLE)
+                raise
+            return visibility.redact_result(result, browse, reason=body.reason, title=changes.PROMOTE_TITLE)
 
         return await asyncio.to_thread(run)
 
@@ -359,7 +405,7 @@ async def list_changes(
 ) -> ChangeSetPage:
     with _http_errors():
         def run() -> ChangeSetPage:
-            _browse(db, user)
+            _, browse = _browse(db, user)
             fqn_key = None
             if name:
                 try:
@@ -367,7 +413,7 @@ async def list_changes(
                 except ValueError as exc:
                     raise MetadataError(str(exc)) from None
             return store.list_change_sets(db, actor=actor, source=source, fqn_key=fqn_key, page=page,
-                                          page_size=page_size)
+                                          page_size=page_size, browse=browse)
 
         return await asyncio.to_thread(run)
 
@@ -378,8 +424,8 @@ async def get_change(
 ) -> ChangeSet:
     with _http_errors():
         def run() -> ChangeSet:
-            _browse(db, user)
-            return store.get_change_set(db, change_set_id)
+            _, browse = _browse(db, user)
+            return visibility.visible_change_set(store.get_change_set(db, change_set_id), browse)
 
         return await asyncio.to_thread(run)
 
@@ -392,7 +438,12 @@ async def preview_revert(
     user: User = Depends(deps.get_current_user_or_principal),
 ) -> ChangePreview:
     with _http_errors():
-        return await asyncio.to_thread(lambda: changes.preview_revert(db, change_set_id, body, _browse(db, user)))
+        def run() -> ChangePreview:
+            actor, browse = _browse(db, user)
+            visibility.require_whole_change_set(store.get_change_set(db, change_set_id), browse)
+            return changes.preview_revert(db, change_set_id, body, actor)
+
+        return await asyncio.to_thread(run)
 
 
 @router.post("/changes/{change_set_id}/revert", response_model=ChangeResult)
@@ -404,7 +455,8 @@ async def revert(
 ) -> ChangeResult:
     with _http_errors():
         def run() -> ChangeResult:
-            actor = _actor(db, user)
+            actor, browse = _scoped(db, user)
+            visibility.require_whole_change_set(store.get_change_set(db, change_set_id), browse)
             return changes.revert(db, change_set_id, body, actor, source="revert")
 
         return await asyncio.to_thread(run)
@@ -414,7 +466,7 @@ async def revert(
 
 
 def _notify(db: Session, user: User, body: ReconcileNotify) -> ReconcileAccepted:
-    actor = _browse(db, user)
+    actor, _ = _browse(db, user)
     accepted: List[str] = []
     rejected = []
     for name in body.names:
@@ -456,7 +508,7 @@ async def list_runs(
 ) -> ReconcileRunPage:
     with _http_errors():
         def run() -> ReconcileRunPage:
-            _browse(db, user)
+            _browse_all(db, user, "Sync runs")
             return reconciler.list_runs(db, page=page, page_size=page_size)
 
         return await asyncio.to_thread(run)
@@ -468,7 +520,7 @@ async def get_run(
 ) -> ReconcileResult:
     with _http_errors():
         def run() -> ReconcileResult:
-            _browse(db, user)
+            _browse_all(db, user, "Sync runs")
             return reconciler.get_run(db, run_id)
 
         return await asyncio.to_thread(run)

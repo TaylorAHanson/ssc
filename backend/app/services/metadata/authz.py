@@ -16,15 +16,18 @@ An item's decision combines:
 ``allowed`` means "may be written now, without approval". Authority that only
 exists through an owner change in the same batch is never direct: the owner
 change needs approval, so everything relying on it does too.
+
+What an actor may *see* is its ``browse_scope``: everything (admins, editor and
+browse roles, registered principals), only the objects it owns, or nothing.
 """
 from __future__ import annotations
 
 import fnmatch
 import logging
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import and_, false, func, not_, or_, true
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -87,6 +90,58 @@ class EditableScope(BaseModel):
     globs: List[str] = Field(default_factory=list)
     # Environment keys (lowercased). Empty = every environment.
     environments: List[str] = Field(default_factory=list)
+
+
+BrowseLevel = Literal["full", "owned", "none"]
+
+
+class BrowseScope(BaseModel):
+    """What an actor may see in the Metadata Manager: every read route and tool applies it.
+
+    ``full`` sees everything. ``owned`` sees an object when the nearest object at
+    or above it listed in ``owned`` or ``not_owned`` (fqn_keys) is in ``owned``:
+    the owner-tag rule of ``editable_scope``, ignoring managed catalogs and
+    environments. ``none`` sees nothing.
+    """
+
+    level: BrowseLevel = "none"
+    owned: List[str] = Field(default_factory=list)
+    # Owner-tagged objects under an owned one that name someone else (they hide what's under them).
+    not_owned: List[str] = Field(default_factory=list)
+    # The editable scope it was built from, so callers needing both compute it once.
+    editable: Optional[EditableScope] = Field(default=None, exclude=True)
+
+    @property
+    def full(self) -> bool:
+        return self.level == "full"
+
+    def predicate(self) -> Callable[[str], bool]:
+        if self.level == "full":
+            return lambda fqn_key: True
+        owned, not_owned = set(self.owned), set(self.not_owned)
+
+        def sees(fqn_key: str) -> bool:
+            for node in chain_keys(fqn_key):
+                if node in owned:
+                    return True
+                if node in not_owned:
+                    return False
+            return False
+
+        return sees
+
+    def sees(self, fqn_key: str) -> bool:
+        return self.predicate()(fqn_key)
+
+
+def chain_keys(fqn_key: str) -> List[str]:
+    """``fqn_key`` and its ancestors' fqn_keys, nearest first: relation (for a column), schema, catalog."""
+    key = (fqn_key or "").strip().lower()
+    relation, sep, _ = key.partition(COLUMN_SEPARATOR)
+    parts = relation.split(".")
+    chain = [key, relation] if sep else [key]
+    chain += [".".join(parts[:i]) for i in range(len(parts) - 1, 0, -1)]
+    return chain
 
 
 # --- Actors ---------------------------------------------------------------------------
@@ -153,13 +208,18 @@ def system_actor() -> Actor:
     return Actor(id=SYSTEM_ACTOR, actor_type="system", display_name="System", is_admin=True)
 
 
-def can_browse(actor: Actor) -> bool:
-    """METADATA_BROWSE_ROLES blank = everyone; principals and the system always may."""
-    if actor.actor_type in ("service_principal", "system"):
+def has_full_browse(actor: Actor) -> bool:
+    """Admins (Platform Admin and METADATA_EDITOR_ROLES), METADATA_BROWSE_ROLES, registered principals and the system.
+
+    A blank METADATA_BROWSE_ROLES adds nobody: clearing the list can't open browsing to everyone.
+    """
+    if actor.actor_type == "system":
+        return True
+    if actor.actor_type == "service_principal":
+        return actor.principal is not None
+    if actor.is_admin:
         return True
     browse = set(normalize_roles(settings.METADATA_BROWSE_ROLES or []))
-    if not browse or actor.is_admin:
-        return True
     return bool(browse & set(normalize_roles(actor.roles)))
 
 
@@ -622,3 +682,64 @@ def is_editable(db: Session, actor: Actor, key: ObjectKey) -> Tuple[bool, List[s
     if environments.approval_rule(env) == "all" and not _skips_approval(actor):
         return False, reasons + [f"Every change in the {env} environment needs approval."]
     return True, reasons
+
+
+# --- Browse scope ---------------------------------------------------------------------
+
+NO_BROWSE_MESSAGE = (
+    "The Metadata Manager is limited to governance and data owners, and you don't own any objects in it. "
+    "Ask a Platform Admin to add one of your roles to the Metadata Manager's browse roles, or ask an object's "
+    "owners to add your group to its owner tag."
+)
+OWNED_ONLY_MESSAGE = "Showing only the objects you own."
+
+
+def browse_scope(db: Session, actor: Actor, *, editable: Optional[EditableScope] = None) -> BrowseScope:
+    """``full`` per ``has_full_browse``; otherwise a user sees what it owns (``owned``) or nothing (``none``).
+
+    ``editable`` reuses an ``editable_scope`` the caller already computed.
+    """
+    if has_full_browse(actor):
+        return BrowseScope(level="full", editable=editable)
+    if actor.actor_type != "user":
+        return BrowseScope(level="none")
+    editable = editable if editable is not None else editable_scope(db, actor)
+    owned = {k.strip().lower() for k in editable.owned if k and k.strip()}
+    if not owned:
+        return BrowseScope(level="none", editable=editable)
+    # Only an owner tag under an owned object can hide anything; the rest never decide visibility.
+    not_owned = {
+        n for n in (k.strip().lower() for k in editable.not_owned if k)
+        if n not in owned and any(a in owned for a in chain_keys(n)[1:])
+    }
+    return BrowseScope(level="owned", owned=sorted(owned), not_owned=sorted(not_owned), editable=editable)
+
+
+def browse_clause(browse: BrowseScope, *, fqn, name_parts: Sequence):
+    """``BrowseScope.sees`` as SQL over a table's fqn_key and (catalog, schema_name, object_name)
+    columns; None when everything is visible.
+
+    The ancestors' keys are rebuilt from the name columns (names can't contain
+    dots), so each level is an indexed-list IN rather than a LIKE per owned object.
+    """
+    if browse.full:
+        return None
+    if browse.level == "none" or not browse.owned:
+        return false()
+    catalog, schema_name, object_name = name_parts
+    cat = func.lower(catalog)
+    schema_key = cat + "." + func.lower(schema_name)
+    relation_key = schema_key + "." + func.lower(object_name)
+    owned, not_owned = list(browse.owned), list(browse.not_owned)
+
+    def is_owned(expr):
+        return expr.in_(owned)
+
+    def not_overridden(expr):
+        return not_(expr.in_(not_owned)) if not_owned else true()
+
+    # NULL-safe: a schema row has no relation key, and NOT IN over NULL would hide it.
+    visible = is_owned(cat)
+    for level in (func.coalesce(schema_key, ""), func.coalesce(relation_key, ""), fqn):
+        visible = or_(is_owned(level), and_(not_overridden(level), visible))
+    return visible

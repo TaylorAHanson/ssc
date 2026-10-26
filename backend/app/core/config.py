@@ -37,6 +37,7 @@ _app_code_review = _yaml_config.get("app_code_review", {}) or {}
 _duplicate_check = _yaml_config.get("duplicate_check", {}) or {}
 _rbac = _yaml_config.get("rbac", {}) or {}
 _metadata = _yaml_config.get("metadata", {}) or {}
+_context_catalog_git = _yaml_config.get("context_catalog_git", {}) or {}
 
 
 def _slugify_brand(value: str) -> str:
@@ -113,6 +114,41 @@ class Settings(BaseSettings):
     # Optional UC Volume path for storing uploaded originals (docx/pdf/pptx).
     # When empty, originals are not persisted (only the extracted text is kept).
     CONTEXT_CATALOG_VOLUME_PATH: str = os.getenv("CONTEXT_CATALOG_VOLUME_PATH", "")
+    # Document freshness review (app/services/context_catalog_staleness.py). A
+    # published document is stale once neither its content nor a "Mark reviewed"
+    # has moved in STALE_AFTER_DAYS. Reminders post to a Microsoft Teams channel
+    # (off by default); editable in Admin -> Settings -> Context Catalog.
+    CONTEXT_CATALOG_STALE_AFTER_DAYS: int = int(os.getenv("CONTEXT_CATALOG_STALE_AFTER_DAYS", "90"))
+    CONTEXT_CATALOG_STALE_REMINDERS_ENABLED: bool = (
+        os.getenv("CONTEXT_CATALOG_STALE_REMINDERS_ENABLED", "false").lower() == "true"
+    )
+    CONTEXT_CATALOG_STALE_REMINDER_CRON: str = os.getenv("CONTEXT_CATALOG_STALE_REMINDER_CRON", "0 15 * * 1")
+    CONTEXT_CATALOG_STALE_RENOTIFY_DAYS: int = int(os.getenv("CONTEXT_CATALOG_STALE_RENOTIFY_DAYS", "7"))
+    CONTEXT_CATALOG_STALE_MAX_DOCS_PER_OWNER: int = int(
+        os.getenv("CONTEXT_CATALOG_STALE_MAX_DOCS_PER_OWNER", "15")
+    )
+    # Teams Workflows webhook URL. Anyone holding it can post to the channel, so
+    # it is a secret: set CONTEXT_CATALOG_TEAMS_WEBHOOK_URL in .env locally, or
+    # store it in a Databricks secret scope (deployed) — scope via databricks.yml,
+    # key name by convention below. Never editable in Admin -> Settings.
+    CONTEXT_CATALOG_TEAMS_WEBHOOK_URL: str = ""  # SECRET: Set in .env
+    CONTEXT_CATALOG_TEAMS_WEBHOOK_SECRET_SCOPE: str = os.getenv("CONTEXT_CATALOG_TEAMS_WEBHOOK_SECRET_SCOPE", "")
+    CONTEXT_CATALOG_TEAMS_WEBHOOK_SECRET_KEY: str = os.getenv(
+        "CONTEXT_CATALOG_TEAMS_WEBHOOK_SECRET_KEY", "context_catalog_teams_webhook_url"
+    )
+    # Git sync (app/services/context_catalog_git.py). Defaults and their
+    # rationale live in default_config.py; editable in Admin -> Settings.
+    CONTEXT_CATALOG_GIT_ENABLED: bool = _context_catalog_git.get("enabled", False)
+    CONTEXT_CATALOG_GIT_REPO: str = _context_catalog_git.get("repo", "")
+    CONTEXT_CATALOG_GIT_BRANCHES: List[dict] = copy.deepcopy(_context_catalog_git.get("branches", []))
+    CONTEXT_CATALOG_GIT_BASE_PATH: str = _context_catalog_git.get("base_path", "context-catalog")
+    CONTEXT_CATALOG_GIT_POLL_CRON: str = _context_catalog_git.get("poll_cron", "*/15 * * * *")
+    CONTEXT_CATALOG_DIRECT_EDITING_ENABLED: bool = _context_catalog_git.get("direct_editing_enabled", True)
+    # Token with contents read/write on the repo. A secret, never editable:
+    # CONTEXT_CATALOG_GIT_TOKEN in .env locally; deployed, the key named here in
+    # GIT_TOKEN_SECRET_SCOPE. Blank = reuse the GitHub PAT (GIT_TOKEN_SECRET_KEY).
+    CONTEXT_CATALOG_GIT_TOKEN: str = ""  # SECRET: Set in .env
+    CONTEXT_CATALOG_GIT_TOKEN_SECRET_KEY: str = os.getenv("CONTEXT_CATALOG_GIT_TOKEN_SECRET_KEY", "")
 
     # Training / lightweight LMS
     # Admin-authored learning tracks + courses, with media/docs stored on a UC
@@ -509,6 +545,11 @@ class Settings(BaseSettings):
     DISCOVER_PREVIEW_ROW_LIMIT: int = int(os.getenv("DISCOVER_PREVIEW_ROW_LIMIT", "500"))
     # Most assets one user can pin in Discover. Editable in Admin -> Settings.
     DISCOVER_MAX_PINS: int = int(os.getenv("DISCOVER_MAX_PINS", "50"))
+    # Tag keys that hide an asset from Discover and the agent's catalog search
+    # when present (any value, case-insensitive) on its catalog, schema, the
+    # asset itself or any column. Empty = nothing hidden. Editable in Admin ->
+    # Settings; see app/services/discover_visibility.py.
+    DISCOVER_HIDDEN_TAG_KEYS: List[str] = Field(default_factory=list)
     # The data-asset sync also caches the account's workspace list
     # (system.access.workspaces_latest), read as the same governance SP, so
     # list_workspaces answers without a warehouse round trip. Older than the max
@@ -828,6 +869,7 @@ class Settings(BaseSettings):
     RBAC_WS_APPROVER_GROUP: str = _rbac.get("ws_approver_group", "")
     RBAC_VIEWER_ROLES: List[str] = list(_rbac.get("viewer_roles", []))
     RBAC_ALLOW_RESET: bool = _rbac.get("allow_reset", False)
+    RBAC_IMPORT_REMOVE_DUPLICATES: bool = _rbac.get("import_remove_duplicates", True)
     RBAC_MAX_CHANGES_PER_COMMIT: int = _rbac.get("max_changes_per_commit", 200)
     RBAC_MIN_REASON_LENGTH: int = _rbac.get("min_reason_length", 10)
     RBAC_MIN_JUSTIFICATION_LENGTH: int = _rbac.get("min_justification_length", 20)
@@ -851,7 +893,7 @@ class Settings(BaseSettings):
     METADATA_OWNER_TAG_KEY: str = _metadata.get("owner_tag_key", "data_owner")
     METADATA_UC_OWNER_IS_AUTHORITY: bool = _metadata.get("uc_owner_is_authority", False)
     METADATA_EDITOR_ROLES: List[str] = list(_metadata.get("editor_roles", ["Governance Admin"]))
-    METADATA_BROWSE_ROLES: List[str] = list(_metadata.get("browse_roles", []))
+    METADATA_BROWSE_ROLES: List[str] = list(_metadata.get("browse_roles", ["Governance Admin"]))
     METADATA_KEY_MODE: str = _metadata.get("key_mode", "open")
     METADATA_KEY_POLICIES: List[dict] = copy.deepcopy(_metadata.get("key_policies", []))
     METADATA_CLASSIFICATION_KEY: str = _metadata.get("classification_key", "classification")

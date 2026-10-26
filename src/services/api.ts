@@ -1580,6 +1580,8 @@ export interface LegacyMapping {
   subdomain: string | null;
   /** False when the mapped view is no longer in the catalog. */
   in_catalog: boolean;
+  /** Set when a hide-from-Discover tag key is configured; true = its metric view is hidden. */
+  hidden_from_discover?: boolean;
   updated_by: string | null;
   updated_at: string;
 }
@@ -1610,11 +1612,18 @@ export async function getDomainHierarchy(): Promise<DomainHierarchy[]> {
   return response.json();
 }
 
-export async function getLegacyMappings(params?: { domain?: string; subdomain?: string; status?: string }): Promise<LegacyMapping[]> {
+export async function getLegacyMappings(params?: {
+  domain?: string;
+  subdomain?: string;
+  status?: string;
+  /** Platform Admins only: also return mappings whose metric view is hidden from Discover. */
+  include_hidden?: boolean;
+}): Promise<LegacyMapping[]> {
   const url = new URL(`${API_BASE_URL}/legacy-dashboards`, window.location.origin);
   if (params?.domain) url.searchParams.append('domain', params.domain);
   if (params?.subdomain) url.searchParams.append('subdomain', params.subdomain);
   if (params?.status) url.searchParams.append('status', params.status);
+  if (params?.include_hidden) url.searchParams.append('include_hidden', 'true');
   const response = await fetch(url.toString(), {
     headers: getHeaders(),
   });
@@ -2298,6 +2307,58 @@ export interface ContextDocumentSummary {
   // document, and when it last did. Surfaced as a "Usage" indicator.
   retrieval_count?: number;
   last_retrieved_at?: string | null;
+  // Ownership + freshness. Staleness runs from last_activity_at, the later of
+  // content_updated_at (title/body/link edits only) and last_reviewed_at.
+  owner?: string | null;
+  content_updated_at?: string | null;
+  last_reviewed_at?: string | null;
+  last_reviewed_by?: string | null;
+  last_activity_at?: string | null;
+  stale_notified_at?: string | null;
+  is_stale?: boolean;
+  stale_after_days?: number;
+}
+
+export interface ContextStaleDocument {
+  id: string;
+  title: string;
+  domain_id: string;
+  domain_name: string;
+  owner: string | null;
+  owner_source: 'document' | 'domain' | null;
+  last_activity_at: string | null;
+  age_days: number;
+  url: string;
+  stale_notified_at: string | null;
+  recently_notified: boolean;
+}
+
+export interface ContextReminderRun {
+  trigger: string;
+  status: 'sent' | 'partial' | 'failed' | 'nothing_due' | 'not_configured' | 'busy';
+  stale_total: number;
+  due: number;
+  skipped_recently_notified: number;
+  notified_documents: number;
+  owners: number;
+  messages_sent: number;
+  messages_failed: number;
+  errors: string[];
+  ran_at: string;
+}
+
+export interface ContextStalenessStatus {
+  enabled: boolean;
+  cron: string;
+  stale_after_days: number;
+  renotify_days: number;
+  max_docs_per_owner: number;
+  webhook_configured: boolean;
+  webhook_source: string;
+  app_base_url_set: boolean;
+  next_run_at: string | null;
+  last_run: ContextReminderRun | null;
+  stale_documents: ContextStaleDocument[];
 }
 
 export interface ContextDocument extends ContextDocumentSummary {
@@ -2326,6 +2387,7 @@ export interface ContextDocumentInput {
   source_url?: string;
   status?: string;
   tags?: string[];
+  owner?: string;
 }
 
 export interface ContextCatalogBundle {
@@ -2540,6 +2602,106 @@ export async function importContextCatalogBundle(
     throw new Error(error.detail || `Failed to import catalog: ${response.statusText}`);
   }
   return response.json();
+}
+
+async function contextStalenessRequest<T>(path: string, method: 'GET' | 'POST', what: string): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}/context${path}`, { method, headers: getHeaders() });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(typeof error.detail === 'string' ? error.detail : `Failed to ${what}: ${response.status}`);
+  }
+  return response.json();
+}
+
+/** Confirm a document is still accurate without editing it (restarts its staleness clock). */
+export function markContextDocumentReviewed(documentId: string): Promise<ContextDocument> {
+  return contextStalenessRequest(`/documents/${documentId}/review`, 'POST', 'mark document reviewed');
+}
+
+/** Teams reminder configuration plus every stale published document. */
+export function getContextStaleness(): Promise<ContextStalenessStatus> {
+  return contextStalenessRequest('/staleness', 'GET', 'load stale documents');
+}
+
+/** Post stale-document reminders to Teams now (respects the re-notify interval). */
+export function runContextStaleReminders(): Promise<ContextReminderRun> {
+  return contextStalenessRequest('/staleness/run', 'POST', 'send reminders');
+}
+
+/** Post a test card to the configured Teams channel. */
+export function sendContextStaleTestMessage(): Promise<{ ok: boolean; status_code: number | null; error: string | null }> {
+  return contextStalenessRequest('/staleness/test', 'POST', 'send test message');
+}
+
+// --- Context Catalog Git sync ---
+
+export interface ContextGitPendingChange {
+  id: string;
+  action: string;
+  subject: string;
+  email: string | null;
+  name: string | null;
+  at: string;
+}
+
+export interface ContextGitSyncReport {
+  commit: string | null;
+  head: string;
+  pushed: string[];
+  pulled: {
+    domains: { created: string[]; updated: string[]; deleted: string[] };
+    documents: { created: string[]; updated: string[]; deleted: string[] };
+    errors: { path: string; error: string }[];
+  };
+  conflicts: string[];
+  trigger?: string;
+  actor?: string | null;
+}
+
+export interface ContextGitStatus {
+  /** False = create/edit/upload/import/delete are refused; changes come from Git. */
+  direct_editing_enabled: boolean;
+  direct_editing_message: string | null;
+  git: {
+    enabled: boolean;
+    /** Enabled, with a repo and a branch mapped to this environment. */
+    active: boolean;
+    problem: string | null;
+    environment: string;
+    repo: string | null;
+    repo_url: string | null;
+    branch: string | null;
+    branch_url: string | null;
+    /** False = read-only mirror of the branch (e.g. stage reading prod). */
+    push_enabled: boolean;
+    base_path: string;
+    poll_cron: string;
+    syncing: boolean;
+    last_synced_sha: string | null;
+    last_commit_sha: string | null;
+    last_commit_url: string | null;
+    last_commit_at: string | null;
+    last_pull_at: string | null;
+    last_sync_at: string | null;
+    last_sync_trigger: string | null;
+    last_error: string | null;
+    last_error_at: string | null;
+    last_report: ContextGitSyncReport | null;
+    conflicts: { path: string; at: string; resolution: string }[];
+    pending_count: number;
+    pending_since: string | null;
+    pending: ContextGitPendingChange[];
+  };
+}
+
+/** Git sync status for this environment, plus whether direct editing is allowed. */
+export function getContextCatalogGitStatus(): Promise<ContextGitStatus> {
+  return contextStalenessRequest('/git/status', 'GET', 'load Git sync status');
+}
+
+/** Pull the environment's branch into the catalog now (and push any queued saves). */
+export function syncContextCatalogFromGit(): Promise<ContextGitSyncReport & { ok: boolean }> {
+  return contextStalenessRequest('/git/sync', 'POST', 'sync from Git');
 }
 
 // --- Onboarding suggestions (pre-prompting) ---
@@ -4050,6 +4212,12 @@ export const api = {
   searchContextCatalog,
   exportContextCatalogBundle,
   importContextCatalogBundle,
+  markContextDocumentReviewed,
+  getContextStaleness,
+  runContextStaleReminders,
+  sendContextStaleTestMessage,
+  getContextCatalogGitStatus,
+  syncContextCatalogFromGit,
   getAgentSuggestions,
   warmUserContext,
   listChatSessions,

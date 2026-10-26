@@ -23,6 +23,8 @@ import {
   Tag,
   User,
   TrendingUp,
+  BellRing,
+  CheckCheck,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import type {
@@ -33,6 +35,8 @@ import type {
   ContextSearchResult,
 } from '../../services/api';
 import { ImportContextCatalogModal } from '../../components/admin/ImportContextCatalogModal';
+import { ContextStalenessPanel } from '../../components/admin/ContextStalenessPanel';
+import { ContextCatalogGitPanel } from '../../components/admin/ContextCatalogGitPanel';
 
 const inputClass =
   'w-full border border-gray-300 rounded-md h-10 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent';
@@ -66,6 +70,7 @@ interface DocFormState {
   title: string;
   status: string;
   body_markdown: string;
+  owner: string;
 }
 
 const emptyDocForm: DocFormState = {
@@ -73,7 +78,12 @@ const emptyDocForm: DocFormState = {
   title: '',
   status: 'published',
   body_markdown: '',
+  owner: '',
 };
+
+type DocSort = 'updated_desc' | 'updated_asc' | 'title' | 'owner';
+const UNOWNED = '__unowned__';
+const EMAIL_RE = /^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$/;
 
 const splitList = (value: string): string[] =>
   value
@@ -81,9 +91,13 @@ const splitList = (value: string): string[] =>
     .map((v) => v.trim())
     .filter(Boolean);
 
-// Documents older than this read as "stale" — a nudge to review/refresh them.
-const STALE_DAYS = 90;
 const DAY_MS = 86_400_000;
+// Only until the first document payload arrives; the backend owns the threshold
+// (Admin -> Settings -> Context Catalog) and computes is_stale itself.
+const DEFAULT_STALE_DAYS = 90;
+
+// When the document's content last changed (or, if later, it was marked reviewed).
+const docActivity = (d: ContextDocumentSummary) => d.last_activity_at ?? d.content_updated_at ?? d.updated_at;
 
 function relativeTime(iso: string | null): string {
   if (!iso) return '—';
@@ -97,13 +111,6 @@ function relativeTime(iso: string | null): string {
   if (days < 30) return `${days}d ago`;
   if (days < 365) return `${Math.floor(days / 30)}mo ago`;
   return `${Math.floor(days / 365)}y ago`;
-}
-
-function isStale(iso: string | null): boolean {
-  if (!iso) return false;
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return false;
-  return Date.now() - then > STALE_DAYS * DAY_MS;
 }
 
 interface QualityCheck {
@@ -163,6 +170,18 @@ export function ContextCatalog() {
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showImport, setShowImport] = useState(false);
+  const [showReminders, setShowReminders] = useState(false);
+  // False when this environment's catalog is managed in Git (Admin → Settings).
+  const [canEdit, setCanEdit] = useState(true);
+
+  // The document open in the editor, for its owner/freshness details.
+  const [docMeta, setDocMeta] = useState<ContextDocument | null>(null);
+  const [isMarkingReviewed, setIsMarkingReviewed] = useState(false);
+  const [docSort, setDocSort] = useState<DocSort>('updated_desc');
+  const [docOwnerFilter, setDocOwnerFilter] = useState('');
+  const [staleOnly, setStaleOnly] = useState(false);
+  // Deep link from a Teams reminder: ?domain=<id>&doc=<id> opens that document.
+  const pendingDocRef = useRef<string | null>(null);
 
   // The editor lives in the right pane, which is sticky on desktop and therefore
   // always in view. On narrow screens it stacks below the tree, so opening a
@@ -196,7 +215,10 @@ export function ContextCatalog() {
   };
 
   useEffect(() => {
-    loadDomains();
+    const params = new URLSearchParams(window.location.search);
+    const linkedDomain = params.get('domain');
+    pendingDocRef.current = params.get('doc');
+    loadDomains(linkedDomain ?? undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -258,9 +280,33 @@ export function ContextCatalog() {
     };
   }, [domains]);
 
+  const docs = useMemo(() => detail?.documents ?? [], [detail]);
+  const staleDays = docs[0]?.stale_after_days ?? DEFAULT_STALE_DAYS;
+  const docOwners = useMemo(
+    () => [...new Set(docs.map((d) => d.owner).filter((o): o is string => !!o))].sort(),
+    [docs]
+  );
+  const visibleDocs = useMemo(() => {
+    const time = (d: ContextDocumentSummary) => new Date(docActivity(d) ?? 0).getTime() || 0;
+    const filtered = docs.filter(
+      (d) =>
+        (!staleOnly || d.is_stale) &&
+        (!docOwnerFilter || (docOwnerFilter === UNOWNED ? !d.owner : d.owner === docOwnerFilter))
+    );
+    const sorters: Record<DocSort, (a: ContextDocumentSummary, b: ContextDocumentSummary) => number> = {
+      updated_desc: (a, b) => time(b) - time(a),
+      updated_asc: (a, b) => time(a) - time(b),
+      title: (a, b) => a.title.localeCompare(b.title),
+      // Unowned last, so the gaps are easy to find at the bottom.
+      owner: (a, b) =>
+        (a.owner ? 0 : 1) - (b.owner ? 0 : 1) || (a.owner || '').localeCompare(b.owner || '') || time(b) - time(a),
+    };
+    return [...filtered].sort(sorters[docSort]);
+  }, [docs, docSort, docOwnerFilter, staleOnly]);
+
   // ---------------------------------------------------------------- domain ops
 
-  const docSnapshot = (f: DocFormState) => JSON.stringify([f.title, f.status, f.body_markdown]);
+  const docSnapshot = (f: DocFormState) => JSON.stringify([f.title, f.status, f.body_markdown, f.owner]);
 
   const confirmDiscardDoc = () =>
     !docForm ||
@@ -275,6 +321,7 @@ export function ContextCatalog() {
     if (!confirmDiscardDoc()) return;
     setDocForm(null);
     setShowDomainForm(false);
+    setDocOwnerFilter('');
     setSelectedId(id);
   };
 
@@ -382,11 +429,12 @@ export function ContextCatalog() {
     if (!confirmDiscardDoc()) return;
     setShowDomainForm(false);
     setDocForm({ ...emptyDocForm });
+    setDocMeta(null);
     docBaselineRef.current = docSnapshot(emptyDocForm);
     setEditorTick((t) => t + 1);
   };
 
-  const openEditDoc = async (summary: ContextDocumentSummary) => {
+  const openEditDoc = async (summary: Pick<ContextDocumentSummary, 'id'>) => {
     if (!confirmDiscardDoc()) return;
     setShowDomainForm(false);
     try {
@@ -396,8 +444,10 @@ export function ContextCatalog() {
         title: full.title,
         status: full.status,
         body_markdown: full.body_markdown || '',
+        owner: full.owner || '',
       };
       setDocForm(form);
+      setDocMeta(full);
       docBaselineRef.current = docSnapshot(form);
       setEditorTick((t) => t + 1);
     } catch (e) {
@@ -405,10 +455,53 @@ export function ContextCatalog() {
     }
   };
 
+  useEffect(() => {
+    const docId = pendingDocRef.current;
+    if (!docId || !detail || detail.id !== selectedId) return;
+    pendingDocRef.current = null;
+    if (detail.documents.some((d) => d.id === docId)) openEditDoc({ id: docId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail]);
+
+  // From the reminders panel: jump to a document's domain and open it.
+  const openLinkedDoc = (domainId: string, documentId: string) => {
+    setShowReminders(false);
+    if (domainId === selectedId && detail) {
+      openEditDoc({ id: documentId });
+      return;
+    }
+    if (!confirmDiscardDoc()) return;
+    setDocForm(null);
+    setShowDomainForm(false);
+    setDocOwnerFilter('');
+    pendingDocRef.current = documentId;
+    setSelectedId(domainId);
+  };
+
+  const markReviewed = async () => {
+    if (!docForm?.id) return;
+    setIsMarkingReviewed(true);
+    try {
+      const updated = await api.markContextDocumentReviewed(docForm.id);
+      setDocMeta(updated);
+      setMessage({ type: 'success', text: `Marked "${updated.title}" reviewed` });
+      if (selectedId) setDetail(await api.getContextDomain(selectedId));
+    } catch (e) {
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to mark reviewed' });
+    } finally {
+      setIsMarkingReviewed(false);
+    }
+  };
+
   const saveDoc = async () => {
     if (!docForm || !detail) return;
     if (!docForm.title.trim()) {
       setMessage({ type: 'error', text: 'Document title is required' });
+      return;
+    }
+    const owner = docForm.owner.trim();
+    if (owner && !EMAIL_RE.test(owner)) {
+      setMessage({ type: 'error', text: 'Owner must be an email address, so reminders can mention them' });
       return;
     }
     setIsSavingDoc(true);
@@ -419,6 +512,7 @@ export function ContextCatalog() {
           title: docForm.title.trim(),
           status: docForm.status,
           body_markdown: docForm.body_markdown,
+          owner,
         });
         setMessage({ type: 'success', text: 'Document saved' });
       } else {
@@ -427,6 +521,7 @@ export function ContextCatalog() {
           status: docForm.status,
           body_markdown: docForm.body_markdown,
           doc_type: 'markdown',
+          ...(owner ? { owner } : {}),
         });
         setMessage({ type: 'success', text: 'Document created' });
       }
@@ -533,20 +628,30 @@ export function ContextCatalog() {
               <Button
                 variant="outline"
                 size="sm"
+                onClick={() => setShowReminders(true)}
+                title="Stale documents and their Microsoft Teams reminders"
+              >
+                <BellRing className="w-4 h-4 mr-1" /> Reminders
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => exportBundle()}
                 disabled={domains.length === 0}
                 title="Export the whole catalog as a portable bundle"
               >
                 <Download className="w-4 h-4 mr-1" /> Export
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowImport(true)}
-                title="Import a bundle from another environment"
-              >
-                <Upload className="w-4 h-4 mr-1" /> Import
-              </Button>
+              {canEdit && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowImport(true)}
+                  title="Import a bundle from another environment"
+                >
+                  <Upload className="w-4 h-4 mr-1" /> Import
+                </Button>
+              )}
             </div>
           </div>
         </CardHeader>
@@ -594,6 +699,13 @@ export function ContextCatalog() {
         </CardContent>
       </Card>
 
+      <ContextCatalogGitPanel
+        onStatusChange={(s) => setCanEdit(s.direct_editing_enabled)}
+        onSynced={() => {
+          (selectedId ? refreshDetail() : loadDomains()).catch(() => loadDomains(null));
+        }}
+      />
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard icon={<FolderTree className="w-4 h-4" />} label="Domains" value={stats.domainCount} />
         <StatCard icon={<FileText className="w-4 h-4" />} label="Documents" value={stats.totalDocs} />
@@ -634,9 +746,11 @@ export function ContextCatalog() {
                   <span className="text-xs font-normal text-gray-400">{domains.length}</span>
                 )}
               </CardTitle>
-              <Button size="sm" onClick={openCreateDomain}>
-                <Plus className="w-4 h-4 mr-1" /> Add
-              </Button>
+              {canEdit && (
+                <Button size="sm" onClick={openCreateDomain}>
+                  <Plus className="w-4 h-4 mr-1" /> Add
+                </Button>
+              )}
             </div>
           </CardHeader>
           <CardContent className="pt-0">
@@ -708,15 +822,17 @@ export function ContextCatalog() {
                               <div className="flex items-center justify-between gap-2">
                                 <MiniCompleteness detail={detail} />
                                 <div className="flex items-center gap-0.5 shrink-0">
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-7 w-7 p-0"
-                                    onClick={openEditDomain}
-                                    title="Edit this domain"
-                                  >
-                                    <Pencil className="w-3.5 h-3.5 text-gray-500" />
-                                  </Button>
+                                  {canEdit && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-7 w-7 p-0"
+                                      onClick={openEditDomain}
+                                      title="Edit this domain"
+                                    >
+                                      <Pencil className="w-3.5 h-3.5 text-gray-500" />
+                                    </Button>
+                                  )}
                                   <Button
                                     size="sm"
                                     variant="ghost"
@@ -726,15 +842,17 @@ export function ContextCatalog() {
                                   >
                                     <Download className="w-3.5 h-3.5 text-gray-500" />
                                   </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-7 w-7 p-0"
-                                    onClick={deleteDomain}
-                                    title="Delete this domain"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5 text-red-600" />
-                                  </Button>
+                                  {canEdit && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-7 w-7 p-0"
+                                      onClick={deleteDomain}
+                                      title="Delete this domain"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5 text-red-600" />
+                                    </Button>
+                                  )}
                                 </div>
                               </div>
 
@@ -743,6 +861,7 @@ export function ContextCatalog() {
                                   <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
                                     <FileText className="w-3 h-3" /> Documents ({detail.documents.length})
                                   </span>
+                                  {canEdit && (
                                   <div className="flex items-center gap-1">
                                     <Button
                                       size="sm"
@@ -772,15 +891,56 @@ export function ContextCatalog() {
                                       />
                                     </label>
                                   </div>
+                                  )}
                                 </div>
+
+                                {detail.documents.length > 1 && (
+                                  <div className="flex items-center gap-1.5 flex-wrap mb-1.5 text-[11px]">
+                                    <select
+                                      className="border border-gray-300 rounded h-6 px-1 bg-white"
+                                      value={docSort}
+                                      onChange={(e) => setDocSort(e.target.value as DocSort)}
+                                      aria-label="Sort documents"
+                                    >
+                                      <option value="updated_desc">Last updated: newest</option>
+                                      <option value="updated_asc">Last updated: oldest</option>
+                                      <option value="title">Title</option>
+                                      <option value="owner">Owner</option>
+                                    </select>
+                                    <select
+                                      className="border border-gray-300 rounded h-6 px-1 bg-white max-w-[10rem]"
+                                      value={docOwnerFilter}
+                                      onChange={(e) => setDocOwnerFilter(e.target.value)}
+                                      aria-label="Filter by owner"
+                                    >
+                                      <option value="">All owners</option>
+                                      {docOwners.map((o) => (
+                                        <option key={o} value={o}>
+                                          {o}
+                                        </option>
+                                      ))}
+                                      <option value={UNOWNED}>No owner</option>
+                                    </select>
+                                    <label className="inline-flex items-center gap-1 text-gray-500">
+                                      <input
+                                        type="checkbox"
+                                        checked={staleOnly}
+                                        onChange={(e) => setStaleOnly(e.target.checked)}
+                                      />
+                                      Stale only
+                                    </label>
+                                  </div>
+                                )}
 
                                 {detail.documents.length === 0 ? (
                                   <p className="text-xs text-gray-400 py-1">
                                     No documents yet — author one or upload a file.
                                   </p>
+                                ) : visibleDocs.length === 0 ? (
+                                  <p className="text-xs text-gray-400 py-1">No documents match these filters.</p>
                                 ) : (
                                   <div className="space-y-1">
-                                    {detail.documents.map((doc) => {
+                                    {visibleDocs.map((doc) => {
                                       const isEditing = docForm?.id === doc.id;
                                       return (
                                         <div
@@ -813,9 +973,9 @@ export function ContextCatalog() {
                                                   {doc.status}
                                                 </span>
                                               )}
-                                              {isStale(doc.updated_at) && (
+                                              {doc.is_stale && (
                                                 <span
-                                                  title={`Not updated in over ${STALE_DAYS} days`}
+                                                  title={`Not edited or marked reviewed in over ${staleDays} days`}
                                                   className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-orange-50 text-orange-600"
                                                 >
                                                   <AlertTriangle className="w-3 h-3" /> stale
@@ -833,8 +993,25 @@ export function ContextCatalog() {
                                               </p>
                                             )}
                                             <div className="flex items-center gap-2 flex-wrap mt-1 text-[11px] text-gray-400">
-                                              <span className="inline-flex items-center gap-1">
-                                                <Clock className="w-3 h-3" /> {relativeTime(doc.updated_at)}
+                                              <span
+                                                className="inline-flex items-center gap-1"
+                                                title={
+                                                  doc.last_reviewed_at
+                                                    ? `Content updated ${relativeTime(
+                                                        doc.content_updated_at ?? null
+                                                      )}; marked reviewed ${relativeTime(doc.last_reviewed_at)}`
+                                                    : 'Content last updated'
+                                                }
+                                              >
+                                                <Clock className="w-3 h-3" /> {relativeTime(docActivity(doc) ?? null)}
+                                              </span>
+                                              <span
+                                                className={`inline-flex items-center gap-1 truncate max-w-[12rem] ${
+                                                  doc.owner ? '' : 'text-amber-600'
+                                                }`}
+                                                title={doc.owner ? `Owner: ${doc.owner}` : 'No owner assigned'}
+                                              >
+                                                <User className="w-3 h-3" /> {doc.owner || 'no owner'}
                                               </span>
                                               <span
                                                 className="inline-flex items-center gap-1"
@@ -859,15 +1036,17 @@ export function ContextCatalog() {
                                               ))}
                                             </div>
                                           </button>
-                                          <Button
-                                            size="sm"
-                                            variant="ghost"
-                                            className="h-7 w-7 p-0 mt-1.5 mr-1 shrink-0"
-                                            onClick={() => deleteDoc(doc)}
-                                            title="Delete this document"
-                                          >
-                                            <Trash2 className="w-3.5 h-3.5 text-red-600" />
-                                          </Button>
+                                          {canEdit && (
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              className="h-7 w-7 p-0 mt-1.5 mr-1 shrink-0"
+                                              onClick={() => deleteDoc(doc)}
+                                              title="Delete this document"
+                                            >
+                                              <Trash2 className="w-3.5 h-3.5 text-red-600" />
+                                            </Button>
+                                          )}
                                         </div>
                                       );
                                     })}
@@ -992,7 +1171,7 @@ export function ContextCatalog() {
               <CardHeader className="pb-3">
                 <Crumbs items={['Domains', detail.name, docForm.id ? 'Document' : 'New document']} />
                 <CardTitle className="text-base">
-                  {docForm.id ? 'Edit Document' : 'New Document'}
+                  {docForm.id ? (canEdit ? 'Edit Document' : 'Document') : 'New Document'}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -1002,6 +1181,7 @@ export function ContextCatalog() {
                     <input
                       className={inputClass}
                       value={docForm.title}
+                      readOnly={!canEdit}
                       onChange={(e) => setDocForm({ ...docForm, title: e.target.value })}
                     />
                   </div>
@@ -1010,6 +1190,7 @@ export function ContextCatalog() {
                     <select
                       className={inputClass}
                       value={docForm.status}
+                      disabled={!canEdit}
                       onChange={(e) => setDocForm({ ...docForm, status: e.target.value })}
                     >
                       <option value="published">Published</option>
@@ -1017,27 +1198,76 @@ export function ContextCatalog() {
                     </select>
                   </div>
                 </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                  <div className="sm:col-span-2">
+                    <label className="text-xs font-medium text-gray-600">Owner (email)</label>
+                    <input
+                      className={inputClass}
+                      type="email"
+                      value={docForm.owner}
+                      readOnly={!canEdit}
+                      onChange={(e) => setDocForm({ ...docForm, owner: e.target.value })}
+                      placeholder={docForm.id ? 'Falls back to the domain’s primary owner' : 'Defaults to you'}
+                    />
+                  </div>
+                  {docForm.id && docMeta && (
+                    <Button
+                      variant="outline"
+                      onClick={markReviewed}
+                      disabled={isMarkingReviewed}
+                      title="Confirm this document is still accurate without editing it"
+                    >
+                      {isMarkingReviewed ? (
+                        <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                      ) : (
+                        <CheckCheck className="w-4 h-4 mr-1" />
+                      )}
+                      Mark reviewed
+                    </Button>
+                  )}
+                </div>
+                {docForm.id && docMeta && (
+                  <p className="text-xs text-gray-500 flex items-center gap-1.5 flex-wrap">
+                    <Clock className="w-3.5 h-3.5" />
+                    Content updated {relativeTime(docMeta.content_updated_at ?? null)}
+                    {docMeta.last_reviewed_at && (
+                      <>
+                        <span className="text-gray-300">·</span>
+                        Reviewed {relativeTime(docMeta.last_reviewed_at)}
+                        {docMeta.last_reviewed_by ? ` by ${docMeta.last_reviewed_by}` : ''}
+                      </>
+                    )}
+                    {docMeta.is_stale && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-orange-50 text-orange-600">
+                        <AlertTriangle className="w-3 h-3" /> Stale — over {docMeta.stale_after_days ?? staleDays} days
+                      </span>
+                    )}
+                  </p>
+                )}
                 <div>
                   <label className="text-xs font-medium text-gray-600">Markdown body</label>
                   <textarea
                     className={textareaClass}
                     rows={14}
                     value={docForm.body_markdown}
+                    readOnly={!canEdit}
                     onChange={(e) => setDocForm({ ...docForm, body_markdown: e.target.value })}
                     placeholder="# Heading&#10;&#10;Write the context the agent should know..."
                   />
                 </div>
                 <div className="flex gap-2">
-                  <Button onClick={saveDoc} disabled={isSavingDoc}>
-                    {isSavingDoc ? (
-                      <Loader2 className="w-4 h-4 animate-spin mr-1" />
-                    ) : (
-                      <Save className="w-4 h-4 mr-1" />
-                    )}
-                    Save
-                  </Button>
+                  {canEdit && (
+                    <Button onClick={saveDoc} disabled={isSavingDoc}>
+                      {isSavingDoc ? (
+                        <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                      ) : (
+                        <Save className="w-4 h-4 mr-1" />
+                      )}
+                      Save
+                    </Button>
+                  )}
                   <Button variant="outline" onClick={() => setDocForm(null)}>
-                    Cancel
+                    {canEdit ? 'Cancel' : 'Close'}
                   </Button>
                 </div>
               </CardContent>
@@ -1068,9 +1298,11 @@ export function ContextCatalog() {
                       <CardDescription className="mt-1">{detail.description}</CardDescription>
                     )}
                   </div>
-                  <Button size="sm" variant="outline" onClick={openEditDomain} className="shrink-0">
-                    <Pencil className="w-3.5 h-3.5 mr-1" /> Edit
-                  </Button>
+                  {canEdit && (
+                    <Button size="sm" variant="outline" onClick={openEditDomain} className="shrink-0">
+                      <Pencil className="w-3.5 h-3.5 mr-1" /> Edit
+                    </Button>
+                  )}
                 </div>
               </CardHeader>
               <CardContent className="pt-0">
@@ -1100,6 +1332,10 @@ export function ContextCatalog() {
           )}
         </div>
       </div>
+
+      {showReminders && (
+        <ContextStalenessPanel onClose={() => setShowReminders(false)} onOpenDocument={openLinkedDoc} />
+      )}
 
       {showImport && (
         <ImportContextCatalogModal
@@ -1197,7 +1433,7 @@ function QualityStrip({ detail }: { detail: ContextDomainDetail }) {
   const docs = detail.documents || [];
   const published = docs.filter((d) => d.status === 'published').length;
   const drafts = docs.length - published;
-  const stale = isStale(detail.updated_at);
+  const staleCount = docs.filter((d) => d.is_stale).length;
 
   return (
     <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
@@ -1226,9 +1462,12 @@ function QualityStrip({ detail }: { detail: ContextDomainDetail }) {
         <span className="text-gray-300">·</span>
         <span className="inline-flex items-center gap-1 text-gray-500">
           <Clock className="w-3.5 h-3.5" /> Updated {relativeTime(detail.updated_at)}
-          {stale && (
-            <span className="inline-flex items-center gap-1 ml-1 px-1.5 py-0.5 rounded bg-orange-50 text-orange-600">
-              <AlertTriangle className="w-3 h-3" /> stale
+          {staleCount > 0 && (
+            <span
+              className="inline-flex items-center gap-1 ml-1 px-1.5 py-0.5 rounded bg-orange-50 text-orange-600"
+              title="Published documents not edited or marked reviewed within the stale threshold"
+            >
+              <AlertTriangle className="w-3 h-3" /> {staleCount} stale
             </span>
           )}
         </span>

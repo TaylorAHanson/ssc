@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db.metadata import MetadataReconcileItemModel
 from app.services.metadata import authz, diff, environments, observed, policy, store
-from app.services.metadata.errors import MetadataError, NotFound
+from app.services.metadata.errors import Forbidden, MetadataError, NotFound
 from app.services.metadata.types import (
     COLUMN_SEPARATOR,
     Actor,
@@ -95,31 +95,45 @@ def _recent_plan(db: Session, key: ObjectKey) -> List[PlanOutcome]:
     return out
 
 
-def object_detail(db: Session, actor: Actor, name: str, column: Optional[str] = None) -> ObjectDetail:
-    """Raises ``errors.MetadataError`` for a bad name and ``errors.NotFound`` when nothing is known about it."""
+def object_detail(db: Session, actor: Actor, name: str, column: Optional[str] = None, *,
+                  browse: Optional[authz.BrowseScope] = None) -> ObjectDetail:
+    """Raises ``errors.MetadataError`` for a bad name and ``errors.NotFound`` when nothing is known about it.
+
+    An object outside the actor's browse scope (``browse``, else ``authz.browse_scope``)
+    gets the same NotFound as an unknown one; its columns, history and plan are
+    limited to what the scope sees. Forbidden when the scope sees nothing.
+    """
     try:
         key = ObjectKey.parse(name, column)
     except ValueError as exc:
         raise MetadataError(str(exc)) from None
+    browse = browse if browse is not None else authz.browse_scope(db, actor)
+    if browse.level == "none":
+        raise Forbidden(authz.NO_BROWSE_MESSAGE)
+    sees = browse.predicate()
+    unknown = (f"Nothing is known about '{key.display}': it has no desired state and hasn't been seen in "
+               "Unity Catalog. Declare tags for it to create a pending entry.")
+    if not sees(key.fqn_key):
+        raise NotFound(unknown)
     desired = store.get_object(db, key.fqn_key)
     seen = observed.get_observed(db, [key.fqn_key]).get(key.fqn_key)
     if desired is None and seen is None:
-        raise NotFound(f"Nothing is known about '{key.display}': it has no desired state and hasn't been seen in "
-                       "Unity Catalog. Declare tags for it to create a pending entry.")
+        raise NotFound(unknown)
     owners, owner_source = authz.owner_groups(db, key)
     editable, reasons = authz.is_editable(db, actor, key)
+    columns = _columns(db, key) if key.level == "relation" else []
     return ObjectDetail(
         key=key,
         fqn_key=key.fqn_key,
         desired=desired,
         observed=seen,
         drift=diff.drift_entries(desired, seen, exempt_keys=policy.exempt_keys()),
-        columns=_columns(db, key) if key.level == "relation" else [],
+        columns=[c for c in columns if sees(c.fqn_key)],
         owner_groups=owners,
         owner_source=owner_source,
         editable=editable,
         edit_reasons=reasons,
         counterparts={env: other.display for env, other in environments.counterparts(key).items()},
-        history=store.object_history(db, key.fqn_key),
-        recent_plan=_recent_plan(db, key),
+        history=[e for e in store.object_history(db, key.fqn_key) if sees(e.fqn_key)],
+        recent_plan=[p for p in _recent_plan(db, key) if sees(p.fqn_key)],
     )

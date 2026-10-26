@@ -272,7 +272,10 @@ class WhoAmI(BaseModel):
     # Names of the identity headers present on this request (never their values for tokens).
     headers_seen: List[str] = Field(default_factory=list)
     identifiers: Dict[str, Optional[str]] = Field(default_factory=dict)
+    # Whether the caller may open the Metadata Manager at all (browse_scope isn't none).
     can_browse: bool = True
+    # full = every object; owned = only objects the caller owns; none = nothing.
+    browse_scope: Literal["full", "owned", "none"] = "full"
     message: Optional[str] = None
 
 
@@ -384,6 +387,8 @@ class ChangeItem(BaseModel):
     unchanged_in_uc: bool = False
     # The environment this item was copied from, for a cross-environment copy or promote.
     copied_from: Optional[str] = None
+    # The caller can't browse this object, so ``before`` and its version were left out of what it got back.
+    before_hidden: bool = False
 
 
 class Finding(BaseModel):

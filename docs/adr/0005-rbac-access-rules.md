@@ -168,8 +168,10 @@ columns so the export round-trips), `status` (`active` | `deleted`), `version`
     the remaining privileges using the rule above.
   - A row left with no principals or no privileges is soft-deleted.
   - Each rule is deterministic, and `cells.py` tests cover every case.
-- Duplicate rows already in the workbook are kept, so the round-trip is exact, and
-  flagged as a data-quality finding.
+- Duplicate rows already in the workbook are flagged as a data-quality finding.
+  `RBAC_IMPORT_REMOVE_DUPLICATES` decides whether they're imported. It's on by
+  default, at the product owner's request, so only the first copy is imported. Off
+  keeps them, so the round-trip is exact (see Implementation notes).
 - An append-only `rbac_rule_events` table records every change: `before`, `after`,
   `action`, `actor`, `reason`, `source`, `source_ref` and `change_set_id`. It is the
   audit trail and the basis for history and revert.
@@ -617,6 +619,19 @@ Choices made while building, within the decisions above:
   sheet, an unrecognised column and an identical row. None blocks the import. Policy
   findings were dropped from the import after the first run against the real
   workbook reported over 3,000 warnings on access that was already approved.
+- **Duplicate rows** (product owner's request). With `RBAC_IMPORT_REMOVE_DUPLICATES`
+  on (the default), a row whose content hash (sheet, canonical cells, `extra`) matches
+  an earlier row on its sheet isn't imported. It gets a `duplicate_row_removed`
+  finding ("Row X is identical to row Y and was removed.") and still counts in the
+  sheet's `duplicates`. The rows kept are numbered `0..n-1` in workbook order. The
+  export is therefore the workbook without those rows, and **Compare with a manual
+  export** lists each one as only in the manual file. The change set summary records
+  `duplicates_removed`. With the setting off, every row is kept with a
+  `duplicate_row` finding, and the export matches the workbook exactly. The preview
+  stores the choice on each sheet, and the import refuses to run if the setting has
+  changed since, so the two always agree. The ledger doesn't depend on unique rows:
+  `row_hash` isn't unique, and a direct edit that creates a duplicate is only
+  warned.
 - **Export after every change** is detected on the replica running the poller; a
   change made on another replica goes out with the next scheduled run.
 - **Approver fallback.** With no group set for a type, the gate's `access_rule_type`

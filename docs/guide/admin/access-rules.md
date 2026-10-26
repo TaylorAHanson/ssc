@@ -203,6 +203,20 @@ tab.
    as it is. Rows aren't checked against the access rules: those rules apply to
    changes made after the import, so existing access is kept exactly.
 
+**Duplicate rows.** A row identical to an earlier row on the same sheet is
+removed by default. The preview's **Duplicates removed** column counts them
+per sheet, the **Rows** count leaves them out, and the findings list each
+one, for example "Row 7 is identical to row 3 and was removed." The import's
+confirmation says how many were removed too. The first copy is kept in its
+place, so the remaining rows stay in workbook order.
+
+To keep duplicates instead, turn off **Remove duplicate rows on import** in
+Settings, then preview the workbook again. The column then reads
+**Duplicates**, each one is listed as kept, and the export matches the
+workbook byte for byte. If the setting changes between the preview and the
+import, the import is refused and asks you to preview again, so what you
+import is always what the preview showed.
+
 **Reset and re-import** replaces every rule with a new workbook. It's off by
 default (**Allow reset and re-import** in Settings), needs a typed confirmation, and is blocked while access requests are
 open. A reset is recorded in History like any other change, so it can be
@@ -241,8 +255,8 @@ uses:
   `CREATE_CONNECTION`, `CREATE_SHARE`, `CREATE_RECIPIENT` and `CREATE_PROVIDER`.
 - **System groups** nobody may change, the **Default owner** and **Naming
   rules**.
-- **Header aliases**, for a renamed workbook column, and **Allow reset and
-  re-import**.
+- **Header aliases**, for a renamed workbook column, **Remove duplicate rows
+  on import** (on by default), and **Allow reset and re-import**.
 
 Export paths can be a Unity Catalog volume (`/Volumes/...`) or a workspace
 folder. {{brand_name}}'s service principal needs write access to each one.
@@ -259,7 +273,10 @@ group the workspace can't see shows as not found.
 3. Export, then use **Compare with a manual export** on every sheet against the
    last CSVs exported by hand. If a sheet differs only by byte-order mark or
    line endings, change that setting and export again, until every sheet is
-   byte-identical.
+   byte-identical. If duplicate rows were removed on import, each one shows as
+   a row only in the manual file. That difference is expected. To prove an
+   exact match instead, turn off **Remove duplicate rows on import** before
+   importing.
 4. Set the three approver groups. Check that a member sees and can approve a
    request of their type, that someone outside the group can't, and that a
    requester can't approve their own request.

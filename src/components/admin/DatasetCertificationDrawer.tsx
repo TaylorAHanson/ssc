@@ -761,14 +761,16 @@ export function DatasetCertificationDrawer({
               />
             </div>
 
-            <div className="flex items-center gap-1 border-b border-gray-200 overflow-x-auto" role="tablist">
+            {/* Baseline is an inset shadow so the active underline covers it; -mb-px tabs over a
+                border would overflow this scroll strip vertically. */}
+            <div className="flex items-center gap-1 overflow-x-auto overflow-y-hidden hide-scrollbar shadow-[inset_0_-1px_0_rgb(229,231,235)]" role="tablist">
               {tabs.map(({ id, label, icon: Icon, count }) => (
                 <button
                   key={id}
                   role="tab"
                   aria-selected={tab === id}
                   onClick={() => setTab(id)}
-                  className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium whitespace-nowrap border-b-2 -mb-px transition-colors ${
+                  className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
                     tab === id ? 'border-primary text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-900'
                   }`}
                 >

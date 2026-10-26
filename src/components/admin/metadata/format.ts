@@ -243,7 +243,7 @@ export function describeItem(item: ChangeItem): string {
   }
   if (item.action === 'unset') return `Remove ${item.key}${item.before_exists ? ` (was ${v(item.before)})` : ''}`;
   if (item.before_exists) return `${item.key}: ${v(item.before)} → ${v(item.after)}`;
-  return `Add ${item.key}${item.after ? `=${item.after}` : ' (key only)'}`;
+  return `${item.before_hidden ? 'Set' : 'Add'} ${item.key}${item.after ? `=${item.after}` : ' (key only)'}`;
 }
 
 /** Directly saved edits, leaving out values Unity Catalog already has. */

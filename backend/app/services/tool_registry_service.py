@@ -74,6 +74,17 @@ WORKFLOW_ONLY_TOOL_NAMES = frozenset({
     "publish_workflow",
 })
 
+# Tools that gained a ``required_role`` after deployments had already seeded them
+# with ``allowed_roles=[]`` (all roles). Seeding only applies the role on insert, so
+# for these the code role is re-applied on every sync while the row is empty. The
+# registry can't tell a seeded ``[]`` from an admin choosing "All roles", and for
+# these tools "All roles" is the exposure being closed, so an empty list always
+# loses; a non-empty admin choice is kept. Every other tool keeps "[] = all roles".
+ROLE_FLOOR_TOOL_NAMES = frozenset({
+    # Describes any table as the governance SP, which can BROWSE everything.
+    "draft_odcs_contract",
+})
+
 # Normalize the inconsistent role strings tools declare (e.g. "governance_admin")
 # to the canonical internal role names used by ``User.has_role``.
 _ROLE_ALIASES = {
@@ -176,6 +187,12 @@ class ToolRegistryService:
                     row.input_schema = schema
                 row.is_mutating = bool(getattr(tool, "is_mutating", False))
                 row.side_effect_class = getattr(tool, "side_effect_class", row.side_effect_class)
+                if role and name in ROLE_FLOOR_TOOL_NAMES and not row.allowed_roles:
+                    row.allowed_roles = [role]
+                    logger.warning(
+                        "ToolRegistry: %s was open to all roles; restricted to %s",
+                        name, role,
+                    )
                 # Keep origin in sync if a tool moved definition sites.
                 if row.origin != catalog_origin:
                     row.origin = catalog_origin

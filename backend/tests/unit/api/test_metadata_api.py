@@ -50,7 +50,7 @@ USERS = {u.email: u for u in (ADMIN, OWNER, NOBODY, PIPELINE)}
 
 ACTORS = {
     ADMIN.email: Actor(id=ADMIN.email, email=ADMIN.email, roles=ADMIN.roles, is_admin=True),
-    OWNER.email: Actor(id=OWNER.email, email=OWNER.email),
+    OWNER.email: Actor(id=OWNER.email, email=OWNER.email, groups=["crm-owners"]),
     NOBODY.email: Actor(id=NOBODY.email, email=NOBODY.email),
     APP_ID: Actor(id=APP_ID, actor_type="service_principal",
                   principal=PrincipalScope(application_id=APP_ID, scopes=["sales_*"])),
@@ -60,11 +60,24 @@ BODY = {"ops": [{"op": "set_tags", "name": "sales_dev.crm.customers", "tags": {"
         "reason": "Label the CRM tables"}
 
 
+REAL_BROWSE_SCOPE = authz.browse_scope
+
+
 @pytest.fixture(autouse=True)
 def _feature(monkeypatch):
     monkeypatch.setitem(_yaml_config.setdefault("features", {}), "metadata_v2", True)
     monkeypatch.setattr(authz, "actor_from_user", lambda db, user: ACTORS[user.id])
-    monkeypatch.setattr(authz, "can_browse", lambda actor: actor.id != NOBODY.email)
+    monkeypatch.setattr(authz, "browse_scope", lambda db, actor, editable=None: authz.BrowseScope(
+        level="none" if actor.id == NOBODY.email else "full"))
+
+
+@pytest.fixture
+def real_scope(monkeypatch):
+    """Browse scopes from the owner tags in the database instead of the stub."""
+    monkeypatch.setattr(authz, "browse_scope", REAL_BROWSE_SCOPE)
+    monkeypatch.setattr(settings, "METADATA_OWNER_TAG_KEY", "data_owner")
+    monkeypatch.setattr(settings, "METADATA_BROWSE_ROLES", ["Governance Admin"])
+    monkeypatch.setattr(settings, "METADATA_UC_OWNER_IS_AUTHORITY", False)
 
 
 @pytest.fixture
@@ -395,3 +408,171 @@ def test_a_bulk_change_round_trips_through_the_real_services(api, db):
 
     history = client.get(f"{BASE}/changes").json()
     assert history["items"][0]["id"] == result["change_set"]["id"]
+
+
+# --- Browse scope, real services -------------------------------------------------------------
+
+CUSTOMERS, ORDERS, STAFF = "sales_dev.crm.customers", "sales_dev.crm.orders", "hr_dev.people.staff"
+
+
+def _own(db, name, group):
+    """An owner tag on ``name``'s desired row (written directly: changing it through the API needs approval)."""
+    import uuid
+
+    from app.db.metadata import MetadataObjectModel, MetadataTagModel
+    from app.services.metadata.types import ObjectKey
+
+    key = ObjectKey.parse(name)
+    row = MetadataObjectModel(
+        id=uuid.uuid4().hex, fqn_key=key.fqn_key, securable_type="table", catalog=key.catalog,
+        schema_name=key.schema_name, object_name=key.object_name, parent_key=key.parent().fqn_key,
+        display_name=key.display, status="active", object_state="exists",
+    )
+    db.add(row)
+    db.flush()
+    db.add(MetadataTagModel(object_id=row.id, key="data_owner", value=group))
+    db.commit()
+
+
+@pytest.fixture
+def owned(api, db, real_scope):
+    """OWNER (crm-owners) owns customers only; orders and staff carry tags it mustn't see."""
+    _observe(db, CUSTOMERS, ORDERS, STAFF)
+    _own(db, CUSTOMERS, "crm-owners")
+    admin = api(ADMIN)
+    hr = admin.post(f"{BASE}/changes", json={
+        "ops": [{"op": "set_tags", "name": STAFF, "tags": {"domain": "people_secret"}},
+                {"op": "set_comment", "name": STAFF, "comment": "Salaries live here"}],
+        "reason": "Label staff"}).json()
+    crm = admin.post(f"{BASE}/changes", json={
+        "ops": [{"op": "set_tags", "match": "sales_dev.crm.*", "tags": {"dataset": "crm"}},
+                {"op": "set_tags", "name": ORDERS, "tags": {"tier": "gold_secret"}}],
+        "reason": "Label CRM"}).json()
+    assert hr["status"] == crm["status"] == "committed"
+    return SimpleNamespace(hr=hr["change_set"]["id"], crm=crm["change_set"]["id"])
+
+
+def test_an_owner_sees_only_its_objects_on_every_read(api, owned):
+    client = api(OWNER)
+
+    everything = client.get(f"{BASE}/objects", params={"page_size": 100}).json()
+    assert [i["name"] for i in everything["items"]] == [CUSTOMERS]
+    assert everything["total"] == 1
+    facets = everything["facets"]
+    assert facets["catalog"] == [{"value": "sales_dev", "count": 1}]
+    assert {f["value"] for f in facets["tag_key"]} == {"data_owner", "dataset"}
+    tagged = client.get(f"{BASE}/objects", params={"tag": "dataset=crm"}).json()
+    assert ([i["name"] for i in tagged["items"]], tagged["total"]) == ([CUSTOMERS], 1)
+    assert client.get(f"{BASE}/objects", params={"tag": "tier"}).json()["total"] == 0
+    assert client.get(f"{BASE}/objects", params={"q": "secret"}).json()["total"] == 0
+
+    keys = {k["key"] for k in client.get(f"{BASE}/keys").json()}
+    assert {"dataset", "data_owner"} <= keys and not keys & {"domain", "tier"}
+    datasets = client.get(f"{BASE}/datasets").json()
+    assert [(d["name"], d["table_count"]) for d in datasets] == [("crm", 1)]
+    drift = client.get(f"{BASE}/drift", params={"page_size": 100}).json()
+    assert {i["name"] for i in drift["items"]} <= {CUSTOMERS}
+    assert client.get(f"{BASE}/config").json()["unread_catalogs"] == []
+
+    # The governance view of the same data, for contrast.
+    assert api(ADMIN).get(f"{BASE}/objects", params={"page_size": 100}).json()["total"] == 3
+
+
+def test_a_hidden_object_looks_like_an_unknown_one(api, owned):
+    client = api(OWNER)
+
+    hidden = client.get(f"{BASE}/object", params={"name": ORDERS})
+    unknown = client.get(f"{BASE}/object", params={"name": "sales_dev.crm.nope"})
+
+    assert hidden.status_code == unknown.status_code == 404
+    assert hidden.json()["detail"].replace("orders", "X") == unknown.json()["detail"].replace("nope", "X")
+    assert client.get(f"{BASE}/object", params={"name": CUSTOMERS}).status_code == 200
+
+
+def test_an_owner_sees_only_its_part_of_the_change_history(api, owned):
+    client = api(OWNER)
+
+    history = client.get(f"{BASE}/changes").json()
+    assert [c["id"] for c in history["items"]] == [owned.crm]
+    assert history["total"] == 1
+    events = client.get(f"{BASE}/changes/{owned.crm}").json()["events"]
+    assert events and {e["fqn_key"] for e in events} == {CUSTOMERS}
+    assert client.get(f"{BASE}/changes/{owned.hr}").status_code == 404
+    # Reverting would restore values on objects it can't see.
+    assert client.post(f"{BASE}/changes/{owned.crm}/revert/preview", json={"reason": "undo"}).status_code == 403
+    assert client.get(f"{BASE}/runs").status_code == 403
+    assert len(api(ADMIN).get(f"{BASE}/changes/{owned.crm}").json()["events"]) > len(events)
+
+
+def test_patterns_match_only_what_the_owner_sees(api, owned):
+    body = {"ops": [{"op": "set_tags", "match": "sales_dev.crm.*", "tags": {"domain": "crm"}}], "reason": "x"}
+
+    preview = api(OWNER).post(f"{BASE}/changes/preview", json=body).json()
+
+    assert {d["item"]["fqn_key"] for d in preview["items"]} == {CUSTOMERS}
+
+
+def test_a_submit_outside_the_scope_hides_current_values_but_approvers_see_them(api, db, owned):
+    from app.services.metadata import requests
+
+    body = {"ops": [{"op": "set_tags", "name": STAFF, "tags": {"domain": "hr"}},
+                    {"op": "set_comment", "name": STAFF, "comment": "Staff"}],
+            "reason": "Rename the domain"}
+
+    preview = api(OWNER).post(f"{BASE}/changes/preview", json=body)
+    result = api(OWNER).post(f"{BASE}/changes", json=body)
+
+    for response in (preview, result):
+        assert response.status_code == 200
+        assert "people_secret" not in response.text and "Salaries" not in response.text
+    out = result.json()
+    assert out["status"] == "pending_approval"
+    items = [d["item"] for d in out["preview"]["items"]]
+    assert all(i["before_hidden"] and i["before"] is None and i["before_version"] == 0 for i in items)
+    prepared = requests.prepare(db, out["request_id"])
+    assert "people_secret" in prepared["report_markdown"]
+
+
+def test_stale_versions_on_a_hidden_object_reveal_nothing(api, owned):
+    body = {"ops": [{"op": "set_tags", "name": STAFF, "tags": {"domain": "hr"}, "expected_versions": {"domain": 0}}],
+            "reason": "Rename the domain"}
+
+    response = api(OWNER).post(f"{BASE}/changes", json=body)
+
+    assert response.status_code == 200
+    assert "people_secret" not in response.text
+    assert response.json()["preview"]["items"][0]["item"]["before_version"] == 0
+
+
+def test_promote_can_only_copy_what_the_owner_sees(api, owned):
+    body = {"name": STAFF, "to_environments": ["prd"], "reason": "Promote"}
+
+    response = api(OWNER).post(f"{BASE}/changes/promote/preview", json=body)
+
+    assert response.status_code == 404
+    assert "people_secret" not in response.text
+
+
+def test_whoami_reports_the_browse_scope(db, owned, monkeypatch):
+    def who(user):
+        monkeypatch.setattr(deps, "get_current_user_or_principal", lambda request, db, override: user)
+        return metadata_api._whoami(db, _request({"X-Forwarded-Email": user.email}))
+
+    owner, nobody, admin = who(OWNER), who(NOBODY), who(ADMIN)
+
+    assert (owner.browse_scope, owner.can_browse, owner.message) == ("owned", True, authz.OWNED_ONLY_MESSAGE)
+    assert (nobody.browse_scope, nobody.can_browse) == ("none", False)
+    assert "data owners" in nobody.message
+    assert (admin.browse_scope, admin.can_browse, admin.message) == ("full", True, None)
+
+
+def test_a_user_who_owns_nothing_gets_no_access(api, owned):
+    client = api(NOBODY)
+
+    for path in ("/objects", "/keys", "/datasets", "/drift", "/changes", "/config"):
+        assert client.get(f"{BASE}{path}").status_code == 403, path
+    assert client.get(f"{BASE}/object", params={"name": CUSTOMERS}).status_code == 403
+
+
+def test_a_registered_principal_still_sees_everything(api, owned):
+    assert api(PIPELINE).get(f"{BASE}/objects", params={"page_size": 100}).json()["total"] == 3

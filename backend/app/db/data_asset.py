@@ -55,6 +55,10 @@ class DataAssetModel(Base):
     downstream_dashboards = Column(JSONType, nullable=True) # e.g. [{"id": "...", "name": "...", "type": "dashboard"}]
     legacy_mappings = Column(JSONType, nullable=True) # e.g. [{"dashboard": "...", "status": "Active", "owner": "..."}]
     tags = Column(JSONType, default=list)
+    # Tag keys on the asset's catalog, schema and columns, stamped by the sync:
+    # {"catalog": [...], "schema": [...], "column": [...]}. Drives the Discover
+    # hide-by-tag filter (app/services/discover_visibility.py).
+    scope_tag_keys = Column(JSONType, nullable=True)
     certified = Column(Boolean, default=False)
     contract_url = Column(String, nullable=True)
     data_quality = Column(JSONType, nullable=True) # e.g. {"freshness": "99%", ...}

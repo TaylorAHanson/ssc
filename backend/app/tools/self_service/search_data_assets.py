@@ -15,6 +15,12 @@ from app.tools.mcp import tool
 from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
 from app.db.legacy_dashboard import LegacyDashboardMappingModel
+from app.services.discover_visibility import (
+    DiscoverVisibility,
+    hidden_linked_dashboards,
+    load_visibility,
+    visible_dashboards,
+)
 
 
 # Common filler words that would only add noise to a keyword scan.
@@ -31,7 +37,10 @@ def _tokenize(query: str) -> List[str]:
     return [t for t in raw if len(t) >= 2 and t not in _STOPWORDS]
 
 
-def _serialize(asset: DataAssetModel, legacy: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+def _serialize(asset: DataAssetModel, legacy: Optional[List[Dict[str, Any]]] = None,
+               vis: Optional[DiscoverVisibility] = None,
+               hidden_dashboards: Optional[set] = None) -> Dict[str, Any]:
+    vis = vis or DiscoverVisibility()
     return {
         "id": asset.id,
         "catalog": asset.catalog,
@@ -43,8 +52,8 @@ def _serialize(asset: DataAssetModel, legacy: Optional[List[Dict[str, Any]]] = N
         "domain": asset.domain,
         "subdomain": asset.subdomain,
         "kpis": asset.kpis or [],
-        "downstream_dashboards": asset.downstream_dashboards or [],
-        "upstream_tables": asset.upstream_tables or [],
+        "downstream_dashboards": visible_dashboards(asset.downstream_dashboards or [], hidden_dashboards or set()),
+        "upstream_tables": vis.visible_upstream(asset.upstream_tables or []),
         # Legacy (e.g. Tableau) dashboards this metric view replaces.
         "legacy_mappings": legacy or [],
         "tags": asset.tags or [],
@@ -126,6 +135,9 @@ def search_data_assets(
         ]
 
         q = db.query(DataAssetModel)
+        vis = load_visibility(db)
+        if vis.hidden_asset_ids:
+            q = q.filter(DataAssetModel.id.notin_(vis.hidden_asset_ids))
         if asset_type:
             q = q.filter(DataAssetModel.type.ilike(f"%{asset_type}%"))
         if domain:
@@ -155,7 +167,9 @@ def search_data_assets(
         # A user may only know the legacy (e.g. Tableau) dashboard name: pull in
         # the metric views mapped to any dashboard the query names.
         terms = tokens or [query.strip()]
-        legacy_rows = db.query(LegacyDashboardMappingModel).all()
+        legacy_rows = [
+            m for m in db.query(LegacyDashboardMappingModel).all() if not vis.is_hidden_id(m.metric_view_id)
+        ]
         legacy_by_mv: Dict[str, List[Dict[str, Any]]] = {}
         for m in legacy_rows:
             legacy_by_mv.setdefault(m.metric_view_id, []).append(
@@ -176,6 +190,7 @@ def search_data_assets(
             if certified_only:
                 extra = extra.filter(DataAssetModel.certified.is_(True))
             candidates.extend(extra.all())
+        candidates = vis.visible(candidates)
 
         def _score(asset: DataAssetModel) -> float:
             if not tokens:
@@ -222,7 +237,8 @@ def search_data_assets(
 
         candidates.sort(key=_score, reverse=True)
         top = candidates[:limit]
-        assets = [_serialize(a, legacy_by_mv.get(a.id)) for a in top]
+        hidden_dashboards = hidden_linked_dashboards(top)
+        assets = [_serialize(a, legacy_by_mv.get(a.id), vis, hidden_dashboards) for a in top]
 
         if assets:
             note = (

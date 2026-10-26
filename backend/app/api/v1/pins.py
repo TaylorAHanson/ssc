@@ -54,8 +54,14 @@ def list_pins(
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
-    """The caller's pins, newest first, flagged when the asset has left the catalog."""
+    """The caller's pins, newest first, flagged when the asset has left the catalog.
+
+    Pins of assets hidden from Discover by tag are left out (and come back if
+    the tag or setting is removed).
+    """
     rows = pins.list_pins(db, current_user.email)
+    hidden = pins.hidden_pin_ids(db, rows)
+    rows = [p for p in rows if p.asset_id not in hidden]
     available = pins.availability(db, rows)
     return {
         "pins": [pins.to_dict(p, available.get(p.asset_id)) for p in rows],
@@ -83,6 +89,8 @@ def pin_asset(
         )
     except pins.PinLimitError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if pin.asset_id in pins.hidden_pin_ids(db, [pin]):
+        return pins.to_dict(pin, False)
     available = pins.availability(db, [pin])
     return pins.to_dict(pin, available.get(pin.asset_id))
 

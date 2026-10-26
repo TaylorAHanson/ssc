@@ -12,6 +12,7 @@ from app.services.metadata.errors import ChangeBlocked, MetadataError
 from app.services.metadata.types import Actor, ChangeOp, ChangePreview, ChangeRequest, ChangeResult, ObjectKey
 
 ALICE = Actor(id="alice@example.com", email="alice@example.com", groups=["team_a"])
+STEWARD = Actor(id="steward@example.com", email="steward@example.com", roles=["Data Steward"])
 _ids = itertools.count(1)
 _LEVEL_TYPES = {"catalog": "catalog", "schema": "schema", "relation": "table", "column": "column"}
 
@@ -209,6 +210,7 @@ def test_patterns_cant_carry_expected_versions(world):
 
 
 def test_preview_and_submit_see_expanded_ops_and_carry_the_counts(world, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_BROWSE_ROLES", ["Data Steward"])
     seen = {}
 
     def fake_preview(db, request, actor):
@@ -223,23 +225,25 @@ def test_preview_and_submit_see_expanded_ops_and_carry_the_counts(world, monkeyp
     monkeypatch.setattr(changes, "submit", fake_submit)
     ask = ChangeRequest(ops=[ChangeOp(op="set_tags", match="sales_dev.silver.*", tags={"k": "v"})])
 
-    pv = expand.preview(world, ask, ALICE)
+    pv = expand.preview(world, ask, STEWARD)
     assert seen["preview"] == ["sales_dev.silver.customers"]
     assert pv.findings[0].message == "'sales_dev.silver.*' matched 1 object(s)."
 
-    result = expand.submit(world, ask, ALICE, source="ui")
+    result = expand.submit(world, ask, STEWARD, source="ui")
     assert seen["submit"] == (["sales_dev.silver.customers"], "ui")
     assert result.preview.findings[0].code == "pattern_matched"
 
 
 def test_blocked_submit_keeps_the_counts(world, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_BROWSE_ROLES", ["Data Steward"])
+
     def blocked(db, request, actor, *, source):
         raise ChangeBlocked(ChangePreview(blocked=True))
 
     monkeypatch.setattr(changes, "submit", blocked)
     ask = ChangeRequest(ops=[ChangeOp(op="set_tags", match="sales_dev.silver.*", tags={"k": "v"})])
     with pytest.raises(ChangeBlocked) as exc:
-        expand.submit(world, ask, ALICE, source="api")
+        expand.submit(world, ask, STEWARD, source="api")
     assert exc.value.preview.findings[0].code == "pattern_matched"
 
 

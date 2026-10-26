@@ -13,12 +13,16 @@ from app.db.session import get_db
 from app.db.data_contract import DataContractModel
 from app.db.data_asset import DataAssetModel
 from pydantic import BaseModel
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_any_role
 from app.services.certification_detail import DEFAULT_HISTORY_RUNS, build_certification_detail
-from app.services.odcs import contract_schema_objects, field_text
+from app.services.odcs import contract_schema_objects, field_text, scope_contract_lineage_yaml
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Contracts are shared governance documents, and sync / policy checks run as the
+# governance service principal, so writes and scans are admin-only.
+_GOVERNANCE_ROLES = ["Platform Admin", "Governance Admin"]
 
 # Guards the manual "Sync Data Contracts" job so repeated clicks can't stack up
 # multiple concurrent syncs (each of which drives the LLM + many Databricks SDK
@@ -411,7 +415,7 @@ def _empty_discovery_message(diagnostics: dict) -> str:
 async def sync_contracts(
     force: bool = False,
     dataset_id: Optional[str] = None,
-    current_user = Depends(get_current_user),
+    current_user = Depends(require_any_role(_GOVERNANCE_ROLES)),
     db: Session = Depends(get_db)
 ):
     try:
@@ -647,7 +651,7 @@ def list_contracts(db: Session = Depends(get_db)):
         contract_dict = {
             "id": c.id,
             "dataset_id": c.dataset_id,
-            "yaml_content": c.yaml_content,
+            "yaml_content": scope_contract_lineage_yaml(c.yaml_content),
             "version": c.version,
             "is_active": c.is_active,
             "created_at": c.created_at,
@@ -1018,7 +1022,7 @@ def get_contract_history(dataset_id: str, db: Session = Depends(get_db)):
         contract_dict = {
             "id": c.id,
             "dataset_id": c.dataset_id,
-            "yaml_content": c.yaml_content,
+            "yaml_content": scope_contract_lineage_yaml(c.yaml_content),
             "version": c.version,
             "is_active": c.is_active,
             "created_at": c.created_at,
@@ -1054,7 +1058,11 @@ def get_contract_history(dataset_id: str, db: Session = Depends(get_db)):
 
 @router.post("", response_model=DataContractResponse)
 @router.post("/", response_model=DataContractResponse)
-def create_contract(contract: DataContractCreate, db: Session = Depends(get_db)):
+def create_contract(
+    contract: DataContractCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_any_role(_GOVERNANCE_ROLES)),
+):
     """Create a new version of a data contract."""
     # Validate YAML
     try:
@@ -1080,8 +1088,8 @@ def create_contract(contract: DataContractCreate, db: Session = Depends(get_db))
         yaml_content=contract.yaml_content,
         version=new_version,
         is_active=True,
-        created_at=datetime.now(timezone.utc)
-        # created_by could be pulled from auth context if needed
+        created_at=datetime.now(timezone.utc),
+        created_by=current_user.email,
     )
 
     db.add(new_contract)
@@ -1127,7 +1135,7 @@ def create_contract(contract: DataContractCreate, db: Session = Depends(get_db))
 def check_policy(
     dataset_id: str,
     background_tasks: BackgroundTasks,
-    current_user = Depends(get_current_user),
+    current_user = Depends(require_any_role(_GOVERNANCE_ROLES)),
     db: Session = Depends(get_db)
 ):
     """Run a policy check for a specific dataset."""

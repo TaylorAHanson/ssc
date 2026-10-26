@@ -19,6 +19,7 @@ from .synthetic_workbook import (
     import_initial,
     managed,
     uc_sheet,
+    without_duplicates,
     write_workbook,
     ws_sheet,
 )
@@ -138,11 +139,32 @@ def fake_sdk(monkeypatch):
 
 
 @pytest.mark.parametrize("metastore_environment_column", [True, False])
-def test_import_then_export_reproduces_every_sheet(db_session, metastore_environment_column):
+def test_import_then_export_reproduces_every_sheet(db_session, monkeypatch, metastore_environment_column):
+    monkeypatch.setattr(settings, "RBAC_IMPORT_REMOVE_DUPLICATES", False)
     data, sheets = build_workbook(metastore_environment_column=metastore_environment_column)
     import_initial(db_session, data)
     for name, sheet in managed(sheets).items():
         assert csv_export.render_sheet(db_session, name) == excel_csv(sheet.padded()), name
+
+
+def test_export_after_removing_duplicates_is_the_workbook_without_them(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "RBAC_IMPORT_REMOVE_DUPLICATES", True)
+    data, sheets = build_workbook()
+    import_initial(db_session, data)
+    for name, sheet in managed(sheets).items():
+        assert csv_export.render_sheet(db_session, name) == excel_csv(without_duplicates(sheet).padded()), name
+    # The synthetic Stg sheet has one duplicate; every other sheet is unchanged.
+    assert without_duplicates(sheets[uc_sheet("Stg")]).rows != sheets[uc_sheet("Stg")].rows
+    # Positions stay contiguous, so a row appended later lands right after the last kept row.
+    positions = [r.position for r in db_session.query(RbacRuleModel)
+                 .filter(RbacRuleModel.sheet == uc_sheet("Stg")).order_by(RbacRuleModel.position)]
+    assert positions == list(range(len(positions)))
+    # Compare with a manual export names the removed row as only in the manual file.
+    manual = excel_csv(sheets[uc_sheet("Stg")].padded())
+    result = csv_export.compare(db_session, uc_sheet("Stg"), manual)
+    assert result.identical is False
+    assert result.only_in_ours == []
+    assert len(result.only_in_theirs) == 1
 
 
 def _tiny(db):
@@ -213,7 +235,7 @@ def test_export_writes_exactly_the_csvs_to_local_folders(db_session, imported, t
     assert [p.name for p in (tmp_path / "ms").iterdir()] == [f"{METASTORE_SHEET}.csv"]
     for sheet, folder in ((uc_sheet("Dev"), "dev"), (ws_sheet("Dev"), "dev"), (METASTORE_SHEET, "ms")):
         written = (tmp_path / folder / f"{sheet}.csv").read_bytes()
-        assert written == excel_csv(imported[sheet].padded())
+        assert written == excel_csv(without_duplicates(imported[sheet]).padded())
 
     by_sheet = {f.sheet: f for f in run.files}
     assert set(by_sheet) == set(ALL_SHEETS)
@@ -233,7 +255,9 @@ def test_export_writes_exactly_the_csvs_to_local_folders(db_session, imported, t
     manifest = run.change_summary["manifest"]
     assert manifest["export_id"] == run.id and manifest["watermark"] == run.watermark
     assert {f["sheet"]: f["sha256"] for f in manifest["files"]}[uc_sheet("Dev")] == dev.sha256
-    assert run.change_summary["created"] == sum(len(s.rows) - 1 for s in managed(imported).values())
+    # The fixture imports with duplicates removed (the default).
+    assert run.change_summary["created"] == sum(len(without_duplicates(s).rows) - 1
+                                                for s in managed(imported).values())
     assert run.watermark == audit.watermark(db_session)
 
 

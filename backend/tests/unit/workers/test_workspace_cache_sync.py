@@ -85,6 +85,13 @@ def _workspace_ids():
     return [r["workspace_id"] for r in rows]
 
 
+def _non_scope_tag_queries(provider):
+    """Queries run, minus the catalog/schema/column tag reads behind the Discover hide-by-tag filter."""
+    scope = ("catalog_tags", "schema_tags", "column_tags")
+    return [c.args[0] for c in provider.execute_sql.await_args_list
+            if not any(s in c.args[0] for s in scope)]
+
+
 def test_one_sync_run_writes_assets_and_workspaces(session_factory, monkeypatch):
     provider = _provider(monkeypatch)
 
@@ -92,7 +99,7 @@ def test_one_sync_run_writes_assets_and_workspaces(session_factory, monkeypatch)
 
     assert _assets(session_factory) == ["main.sales.orders"]
     assert _workspace_ids() == ["42"]
-    assert provider.execute_sql.await_count == 2
+    assert len(_non_scope_tag_queries(provider)) == 2
 
 
 def test_asset_sync_failure_still_refreshes_workspaces(session_factory, monkeypatch):
@@ -120,7 +127,7 @@ def test_switched_off_cache_is_not_refreshed(session_factory, monkeypatch):
     asyncio.run(sync_data_assets.sync_data_assets_task(force=True))
 
     assert _workspace_ids() == []
-    assert provider.execute_sql.await_count == 1
+    assert len(_non_scope_tag_queries(provider)) == 1
 
 
 def test_boot_with_fresh_assets_still_warms_an_empty_workspace_cache(session_factory, monkeypatch):

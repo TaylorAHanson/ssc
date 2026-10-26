@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from app.db.metadata import OBJECT_ACTIVE, MetadataObjectModel, MetadataObservedModel, MetadataTagModel
 from app.services.metadata import authz, environments, observed, policy
 from app.services.metadata import scope as managed
+from app.services.metadata.errors import Forbidden
 from app.services.metadata.types import (
     COLUMN_SEPARATOR,
     RELATION_TYPES,
@@ -72,6 +73,8 @@ class _Ctx:
     unmanaged: bool
     # Catalogs inside the scope's environments; None when the scope has no environment limit.
     scope_catalogs: Optional[List[str]] = None
+    # What the caller may see; None = everything.
+    browse: Optional["authz.BrowseScope"] = None
 
 
 # --- Pattern helpers ----------------------------------------------------------------
@@ -201,6 +204,9 @@ def _common_where(ctx: _Ctx, *, fqn, catalog_key, name_parts: Sequence, stype, c
     """``name_parts``: the branch's (catalog, schema_name, object_name) columns."""
     q = ctx.query
     where: List = []
+    visible = authz.browse_clause(ctx.browse, fqn=fqn, name_parts=name_parts) if ctx.browse else None
+    if visible is not None:
+        where.append(visible)
     term = (q.q or "").strip()
     if term:
         pattern = "%" + _escape_like(term) + "%"
@@ -517,8 +523,20 @@ def _summary(
     )
 
 
-def search(db: Session, query: SearchQuery, actor: Actor) -> SearchResult:
+def _visible(db: Session, actor: Actor, browse: Optional["authz.BrowseScope"]) -> "authz.BrowseScope":
+    """``browse`` or the actor's; Forbidden when it sees nothing."""
+    browse = browse if browse is not None else authz.browse_scope(db, actor)
+    if browse.level == "none":
+        raise Forbidden(authz.NO_BROWSE_MESSAGE)
+    return browse
+
+
+def search(db: Session, query: SearchQuery, actor: Actor, *,
+           browse: Optional["authz.BrowseScope"] = None) -> SearchResult:
     """One page of objects matching ``query``, with the total and facets over the whole filtered set.
+
+    Everything (items, total, facets) is limited to the actor's browse scope
+    (``browse``, else ``authz.browse_scope``); Forbidden when it sees nothing.
 
     * ``q``: case-insensitive substring of the fqn_key or the comment (desired or observed).
     * ``catalogs``: catalog names; ``schemas``: ``catalog.schema`` or a bare schema name.
@@ -534,7 +552,8 @@ def search(db: Session, query: SearchQuery, actor: Actor) -> SearchResult:
     """
     started = time.perf_counter()
     dialect = db.get_bind().dialect.name
-    scope = authz.editable_scope(db, actor)
+    scope = browse.editable if browse is not None and browse.editable is not None else authz.editable_scope(db, actor)
+    browse = _visible(db, actor, browse if browse is not None else authz.browse_scope(db, actor, editable=scope))
     unmanaged = bool(query.include_unmanaged) and query.drift is not True and not query.object_states
     ctx = _Ctx(
         query=query,
@@ -543,6 +562,7 @@ def search(db: Session, query: SearchQuery, actor: Actor) -> SearchResult:
         env_by_catalog=_snapshot_environments(db) if unmanaged else {},
         unmanaged=unmanaged,
         scope_catalogs=_scope_catalogs(db, scope) if query.editable_only else None,
+        browse=browse,
     )
 
     lean = _union(ctx, full=False)
@@ -581,18 +601,29 @@ def search(db: Session, query: SearchQuery, actor: Actor) -> SearchResult:
 # --- Keys ---------------------------------------------------------------------------
 
 
-def list_keys(db: Session, *, q: str = "", limit: int = 50) -> List[KeyInfo]:
+def _managed_visible(browse: Optional["authz.BrowseScope"]) -> List:
+    """The browse filter over ``metadata_objects`` as a where list (empty = everything)."""
+    if browse is None:
+        return []
+    clause = authz.browse_clause(browse, fqn=_O.c.fqn_key, name_parts=(_O.c.catalog, _O.c.schema_name,
+                                                                        _O.c.object_name))
+    return [] if clause is None else [clause]
+
+
+def list_keys(db: Session, *, q: str = "", limit: int = 50,
+              browse: Optional["authz.BrowseScope"] = None) -> List[KeyInfo]:
     """Known tag keys with usage counts and top values, merged with key policies.
 
     ``count`` is the number of active desired objects carrying the key; ``values``
     are its 10 most used values, with a key-only tag (no value) shown as ``""``.
     Keys that only have a policy appear with count 0. ``q`` is a case-insensitive
     substring of the key. Sorted by count, then key; at most ``limit`` entries.
+    Counts and values cover only the objects ``browse`` sees (None = every object).
     """
     limit = max(1, int(limit or 50))
     term = (q or "").strip()
     dialect = db.get_bind().dialect.name
-    active = _T.join(_O, and_(_O.c.id == _T.c.object_id, _O.c.status == OBJECT_ACTIVE))
+    active = _T.join(_O, and_(_O.c.id == _T.c.object_id, _O.c.status == OBJECT_ACTIVE, *_managed_visible(browse)))
     count = func.count()
 
     used = select(_T.c.key, count).select_from(active)
@@ -645,12 +676,18 @@ def list_keys(db: Session, *, q: str = "", limit: int = 50) -> List[KeyInfo]:
 # --- Datasets -----------------------------------------------------------------------
 
 
-def list_datasets(db: Session) -> List[DatasetSummary]:
+def list_datasets(db: Session, browse: Optional["authz.BrowseScope"] = None) -> List[DatasetSummary]:
     """Every value of a table's or view's ``dataset`` / ``data_set`` tag, sorted by name.
 
     Tags are read as search reads them: desired for managed objects, the snapshot's
     otherwise. A relation tagged with both spellings is counted once per value.
+    Only relations ``browse`` sees count (None = every relation).
     """
+    observed_visible = []
+    if browse is not None:
+        clause = authz.browse_clause(browse, fqn=_B.c.fqn_key, name_parts=(_B.c.catalog, _B.c.schema_name,
+                                                                            _B.c.object_name))
+        observed_visible = [] if clause is None else [clause]
     dialect = db.get_bind().dialect.name
     tables: Dict[str, set] = {}
     catalogs: Dict[str, set] = {}
@@ -668,7 +705,8 @@ def list_datasets(db: Session) -> List[DatasetSummary]:
     for fqn_key, catalog, drift_at, value in db.execute(
         select(_O.c.fqn_key, _O.c.catalog, _O.c.drift_detected_at, _T.c.value)
         .select_from(_T.join(_O, _O.c.id == _T.c.object_id))
-        .where(_O.c.status == OBJECT_ACTIVE, _O.c.securable_type.in_(RELATION_TYPES), _T.c.key.in_(DATASET_KEYS))
+        .where(_O.c.status == OBJECT_ACTIVE, _O.c.securable_type.in_(RELATION_TYPES), _T.c.key.in_(DATASET_KEYS),
+               *_managed_visible(browse))
     ):
         add(value, fqn_key, catalog, drift_at is not None)
 
@@ -676,7 +714,8 @@ def list_datasets(db: Session) -> List[DatasetSummary]:
     tagged = or_(*[_observed_tag_clause(TagFilter(key=k, op="exists"), dialect) for k in DATASET_KEYS])
     for fqn_key, catalog, raw in db.execute(
         select(_B.c.fqn_key, _B.c.catalog, _B.c.tags)
-        .where(_B.c.present.is_(True), ~desired, _B.c.securable_type.in_(RELATION_TYPES), tagged)
+        .where(_B.c.present.is_(True), ~desired, _B.c.securable_type.in_(RELATION_TYPES), tagged,
+               *observed_visible)
     ):
         tags = _json_tags(raw) or {}
         for key in DATASET_KEYS:

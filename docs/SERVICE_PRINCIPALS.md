@@ -128,6 +128,15 @@ GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<
 -- admin — workspace admin is NOT sufficient for arbitrary UC objects. Grant MANAGE
 -- at catalog (or schema) level so it inherits down:
 -- GRANT MANAGE ON CATALOG <catalog> TO `<cert-sp>`;
+-- Optional: downstream dashboards for metric views in Discover, read from
+-- system.access.table_lineage by the data-asset sync. Without these the sync
+-- continues and metric views show no dashboards. A metastore admin grants them.
+GRANT USE CATALOG ON CATALOG system TO `<cert-sp>`;
+GRANT USE SCHEMA ON SCHEMA system.access TO `<cert-sp>`;
+GRANT SELECT ON TABLE system.access.table_lineage TO `<cert-sp>`;
+-- Names and links for those dashboards also need the SP to list them in the
+-- home workspace: CAN VIEW on the dashboards (or their folder). Without it
+-- they're listed by id, with no link.
 ```
 
 > The App SP must have **READ** on `TARGET_WORKSPACE_SP_SECRET_SCOPE` or it can never load these SPs (it then silently falls back to itself and fails auth against the target — see the warnings in the run logs).
@@ -146,6 +155,10 @@ GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<
 | `ASSIGN` | each governed tag | ‡ | ✓†‖ | Set a governed tag (one with a Unity Catalog tag policy) |
 | `SELECT` | `DATA_QUALITY_ADOC_SCHEMA` | ‡ | ✓† | Read ADOC data-quality history |
 | `MANAGE` (RBAC check only) | catalog / schema (inherits) | ‡* | ✓*† | Read grants (`SHOW GRANTS`) for the access-controls check. Requires `MANAGE`, object ownership, or metastore admin — **workspace admin is not sufficient** for UC objects |
+| `USE CATALOG` | `system` catalog | ‡° | ✓†° | Metric-view dashboard lineage (Discover's downstream dashboards), read from `system.access.table_lineage` by the data-asset sync |
+| `USE SCHEMA` | `system.access` schema | ‡° | ✓†° | Same |
+| `SELECT` | `system.access.table_lineage` | ‡° | ✓†° | Same: which dashboards read each metric view over the last `DATA_ASSET_LINEAGE_LOOKBACK_DAYS` |
+| `CAN VIEW` (or workspace admin) | Lakeview dashboards in the home workspace | ‡° | ✓†° | Resolve those dashboard ids to names and links. A dashboard the SP can't list is shown by id, with no link |
 | `CAN USE` | SQL warehouse | ✓ | ✓ | Runs each SP's SQL. The cert SP needs `CAN USE` on the **home** warehouse too, since governance discovery runs there |
 | `CAN QUERY` | model-serving endpoint | ✓ | — | Assistant + ODCS drafting (app only) |
 | `READ` | target-SP secret scope | ✓ | — | App loads each target SP's credentials |
@@ -158,10 +171,13 @@ GRANT USE CATALOG, USE SCHEMA, SELECT ON SCHEMA <DATA_QUALITY_ADOC_SCHEMA> TO `<
 `✓†` = only the Sentinel SP for the data-certification workspace (`SENTINEL_DATA_CERT_WORKSPACE`) needs the Unity Catalog grants; SPs that only scan workspace resources don't.
 `✓§` = only for the export paths you configure, and only when Access Rules (`features.rbac`) is on.
 `✓¶` = only for targets with app telemetry export enabled (`telemetry_export_destinations` in `databricks.yml`).
+`°` = optional. Without the three system-table grants the data-asset sync logs a warning and carries on, and metric views show no downstream dashboards.
 `‖` = only on the deployment that enforces metadata (`METADATA_RECONCILE_MODE=enforce`), on the catalogs it reconciles. Deployments in `plan` mode only read.
 `‡` = the App SP needs these **only** when it is also the governance/certification identity — i.e. no dedicated certification-workspace SP is configured (`SENTINEL_DATA_CERT_WORKSPACE` blank), so discovery and certification fall back to the App SP. In the recommended setup they live on the cert SP instead.
 
 **Never needed:** `SELECT` (or ownership) on the governed data tables/views. Discovery is covered by `BROWSE`; certification is covered by `APPLY TAG`.
+
+What the metadata these grants let the SPs read means for users who have no grants of their own is covered field by field in [Data Visibility for Users](./DATA_VISIBILITY_FOR_USERS.md).
 
 ---
 

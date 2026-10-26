@@ -82,7 +82,7 @@ class Finding(BaseModel):
     # Stable machine code, e.g. privilege_not_allowed, principal_type_not_allowed,
     # system_group, naming_rule, deprecated_privilege, value_not_in_options,
     # self_service_disabled, write_privilege_disabled, justification_too_short,
-    # duplicate_row, unknown_header, inflight_overlap, broad_grant, mixed_planes.
+    # duplicate_row, duplicate_row_removed, unknown_header, inflight_overlap, broad_grant, mixed_planes.
     code: str
     message: str
     sheet: Optional[str] = None
@@ -344,7 +344,9 @@ class ImportSheetSummary(BaseModel):
     rows: int
     columns: List[SheetColumn]
     unknown_headers: List[str] = Field(default_factory=list)
+    # Rows identical to an earlier row; not in ``rows`` when ``duplicates_removed``.
     duplicates: int = 0
+    duplicates_removed: bool = False
     warnings: int = 0
 
 
@@ -366,6 +368,8 @@ class ImportPreview(BaseModel):
     in_flight_requests: int = 0
     # The exact text the admin must type to confirm a reset.
     confirmation_phrase: Optional[str] = None
+    # RBAC_IMPORT_REMOVE_DUPLICATES when previewed; the import refuses to run if it has changed.
+    duplicates_removed: bool = False
 
 
 class ImportRunIn(BaseModel):
@@ -380,6 +384,7 @@ class ImportResult(BaseModel):
     created: int = 0
     deleted: int = 0
     sheets: List[ImportSheetSummary] = Field(default_factory=list)
+    duplicates_removed: bool = False
 
 
 class ImportSummary(BaseModel):

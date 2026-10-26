@@ -107,6 +107,17 @@ body {
   background: transparent;
 }
 
+/* Scrollable but chrome-free — for tab strips that only scroll sideways
+   when their panel is narrow. A classic (always-visible) scrollbar would
+   otherwise sit under or beside the tabs. */
+.hide-scrollbar {
+  scrollbar-width: none;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Smooth animations */
 @keyframes fade-in {
   from {

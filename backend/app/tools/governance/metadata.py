@@ -4,12 +4,15 @@ Thin wrappers over the same change service as the REST API. The caller is rebuil
 from the identity the ToolExecutor injects, so a registered service principal
 calling over MCP gets its principal scope and a person gets their own rights.
 """
+import logging
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
 from app.services.metadata.types import ApprovalRouting, ChangeOp
 from app.tools.mcp import tool
+
+logger = logging.getLogger(__name__)
 
 _MAX_TOOL_PAGE_SIZE = 100
 
@@ -38,6 +41,13 @@ def _no_identity() -> Dict[str, Any]:
     return {"ok": False, "error": "I couldn't tell who is asking, so I can't read or change metadata for you."}
 
 
+def _no_browse() -> Dict[str, Any]:
+    return {"ok": False, "status": "forbidden", "status_code": 403,
+            "error": "You don't have access to the Metadata Manager: it is limited to governance and data owners, "
+                     "and you don't own any objects in it, so I can't search or read metadata for you. Ask a "
+                     "Platform Admin to add one of your roles to the Metadata Manager's browse roles."}
+
+
 def _error(exc: Exception) -> Dict[str, Any]:
     from app.services.metadata.errors import ChangeBlocked, MetadataError, VersionConflict
 
@@ -55,8 +65,13 @@ def _error(exc: Exception) -> Dict[str, Any]:
     raise exc
 
 
-def _with_session(kwargs: Dict[str, Any], work) -> Dict[str, Any]:
+def _with_session(kwargs: Dict[str, Any], work, *, browse: bool = False) -> Dict[str, Any]:
+    """Run ``work(db, actor, scope)`` with the caller's browse scope, which limits what it returns.
+
+    ``browse`` also refuses a caller whose scope sees nothing, as the REST reads do.
+    """
     from app.db.session import get_lakebase_session
+    from app.services.metadata import authz
     from app.services.metadata.errors import MetadataError
 
     db = get_lakebase_session()
@@ -64,8 +79,13 @@ def _with_session(kwargs: Dict[str, Any], work) -> Dict[str, Any]:
         actor = _actor(db, kwargs)
         if actor is None:
             return _no_identity()
+        scope = authz.browse_scope(db, actor)
+        if browse and scope.level == "none":
+            logger.info("Metadata: refused %s (%s) a %s call: nothing to browse",
+                        actor.id, actor.actor_type, _source(kwargs))
+            return _no_browse()
         try:
-            return work(db, actor)
+            return work(db, actor, scope)
         except MetadataError as exc:
             db.rollback()
             return _error(exc)
@@ -131,11 +151,11 @@ def search_metadata(**kwargs) -> Dict[str, Any]:
     except (ValidationError, ValueError) as exc:
         return {"ok": False, "error": f"Invalid search: {exc}"}
 
-    def work(db, actor) -> Dict[str, Any]:
-        result = search.search(db, query, actor)
+    def work(db, actor, scope) -> Dict[str, Any]:
+        result = search.search(db, query, actor, browse=scope)
         return {"ok": True, **result.model_dump(mode="json")}
 
-    return _with_session(kwargs, work)
+    return _with_session(kwargs, work, browse=True)
 
 
 # --- get_metadata ------------------------------------------------------------------------
@@ -166,11 +186,11 @@ class GetMetadataInput(BaseModel):
 def get_metadata(name: str, column: Optional[str] = None, **kwargs) -> Dict[str, Any]:
     from app.services.metadata import detail
 
-    def work(db, actor) -> Dict[str, Any]:
-        found = detail.object_detail(db, actor, name, column)
+    def work(db, actor, scope) -> Dict[str, Any]:
+        found = detail.object_detail(db, actor, name, column, browse=scope)
         return {"ok": True, **found.model_dump(mode="json")}
 
-    return _with_session(kwargs, work)
+    return _with_session(kwargs, work, browse=True)
 
 
 # --- preview / submit --------------------------------------------------------------------
@@ -261,11 +281,11 @@ def preview_metadata_change(**kwargs) -> Dict[str, Any]:
     except ValidationError as exc:
         return {"ok": False, "error": f"Invalid change: {exc.errors(include_url=False)}"}
 
-    def work(db, actor) -> Dict[str, Any]:
-        preview = expand.preview(db, ask, actor)
+    def work(db, actor, scope) -> Dict[str, Any]:
+        preview = expand.preview(db, ask, actor, browse=scope)
         return {"ok": not preview.blocked, **preview.model_dump(mode="json"), "next_step": _next_step(preview)}
 
-    return _with_session(kwargs, work)
+    return _with_session(kwargs, work, browse=True)
 
 
 @tool(
@@ -294,8 +314,8 @@ def submit_metadata_change(**kwargs) -> Dict[str, Any]:
     except ValidationError as exc:
         return {"ok": False, "error": f"Invalid change: {exc.errors(include_url=False)}"}
 
-    def work(db, actor) -> Dict[str, Any]:
-        result = expand.submit(db, ask, actor, source=_source(kwargs))
+    def work(db, actor, scope) -> Dict[str, Any]:
+        result = expand.submit(db, ask, actor, source=_source(kwargs), browse=scope)
         out = result.model_dump(mode="json", exclude={"preview"})
         out["report_markdown"] = result.preview.report_markdown
         return {"ok": result.status != "rejected", **out}

@@ -81,7 +81,7 @@ def test_section_layout():
         ("Learn & Share", ["Links & Embedded Apps", "Calendar", ss.TRAINING_GROUP]),
         ("Watch Tower", ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager",
                          "Access Rules"]),
-        ("Control Tower", ["Workflow Studio", "Preview Features"]),
+            ("Control Tower", ["Workflow Studio", "Context Catalog", "Preview Features"]),
         ("Platform", ["Infrastructure"]),
     ]
 

@@ -19,6 +19,9 @@ const loadImports = () => api.getRbacImports();
 const IMPORT_COLUMNS = ['started', 'file', 'mode', 'status', 'by', 'completed'];
 const PREVIEW_COLUMNS = ['sheet', 'type', 'environment', 'rows', 'headers', 'unknown', 'duplicates', 'warnings'];
 
+const removedDuplicates = (r: { duplicates_removed: boolean; sheets: { duplicates: number }[] }) =>
+  r.duplicates_removed ? r.sheets.reduce((n, s) => n + s.duplicates, 0) : 0;
+
 const IMPORT_STATUS: Record<string, Tone> = {
   completed: 'green',
   succeeded: 'green',
@@ -106,7 +109,11 @@ export function ImportTab({ permissions, notify, onOpenHistory }: {
             setResult(r);
             setPreview(null);
             imports.reload();
-            notify({ text: `Imported ${plural(r.created, 'row')}${r.deleted ? `, replacing ${plural(r.deleted, 'row')}` : ''}.` });
+            const removed = removedDuplicates(r);
+            notify({
+              text: `Imported ${plural(r.created, 'row')}${r.deleted ? `, replacing ${plural(r.deleted, 'row')}` : ''}`
+                + `${removed ? ` and removing ${plural(removed, 'duplicate row')}` : ''}.`,
+            });
           }}
         />
       )}
@@ -170,6 +177,12 @@ function ImportPreviewView({ preview, file, canReset, onImported }: {
   const [error, setError] = useState<string | null>(null);
   const { attachTable, ...widths } = useResizableColumns('import-preview', PREVIEW_COLUMNS);
   const totalRows = preview.sheets.reduce((n, s) => n + s.rows, 0);
+  const removed = removedDuplicates(preview);
+  const duplicatesLabel = preview.duplicates_removed ? 'Duplicates removed' : 'Duplicates';
+  const duplicatesTip = preview.duplicates_removed
+    ? 'Rows identical to an earlier row on the same sheet. They aren’t imported and aren’t counted in Rows. '
+      + 'To keep them, turn off “Remove duplicate rows on import” in Admin → Settings → Access Rules and preview again.'
+    : 'Rows identical to an earlier row on the same sheet. They’re kept and counted in Rows, so the export matches the workbook.';
   const reset = preview.mode === 'reset';
   const phrase = preview.confirmation_phrase ?? '';
   const resetBlocked = reset && (!canReset || !preview.reset_allowed || preview.in_flight_requests > 0);
@@ -197,7 +210,10 @@ function ImportPreviewView({ preview, file, canReset, onImported }: {
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600">
           <span className="font-semibold text-gray-900">Preview: {preview.filename || file.name}</span>
           <code className="text-xs text-gray-400" title={preview.file_sha256}>sha256 {preview.file_sha256.slice(0, 12)}…</code>
-          <span>{plural(totalRows, 'row')} in {plural(preview.sheets.length, 'sheet')}</span>
+          <span>
+            {plural(totalRows, 'row')} in {plural(preview.sheets.length, 'sheet')}
+            {removed > 0 && <>, after removing {plural(removed, 'duplicate row')}</>}
+          </span>
           <Badge tone={reset ? 'red' : 'blue'}>{reset ? 'Reset and re-import' : 'Initial import'}</Badge>
           {reset && <span>{plural(preview.existing_rules, 'rule')} in the app today</span>}
         </div>
@@ -217,7 +233,9 @@ function ImportPreviewView({ preview, file, canReset, onImported }: {
                   <ResizableTh columns={widths} id="rows" label="Rows" />
                   <ResizableTh columns={widths} id="headers" label="Headers as captured" />
                   <ResizableTh columns={widths} id="unknown" label="Unknown headers" />
-                  <ResizableTh columns={widths} id="duplicates" label="Duplicates" />
+                  <ResizableTh columns={widths} id="duplicates" label={duplicatesLabel}>
+                    <span title={duplicatesTip}>{duplicatesLabel}</span>
+                  </ResizableTh>
                   <ResizableTh columns={widths} id="warnings" label="Warnings" />
                 </tr>
               </thead>
@@ -246,7 +264,7 @@ function ImportPreviewView({ preview, file, canReset, onImported }: {
                       <td className={cn(CELL, 'break-words text-xs')}>
                         {s.unknown_headers.length ? <span className="line-clamp-2 text-amber-800" title={s.unknown_headers.join(', ')}>{s.unknown_headers.join(', ')}</span> : <span className="text-gray-400">—</span>}
                       </td>
-                      <td className={CELL}>{s.duplicates ? <Badge tone="amber">{s.duplicates}</Badge> : <span className="text-gray-400">0</span>}</td>
+                      <td className={CELL} title={s.duplicates ? duplicatesTip : undefined}>{s.duplicates ? <Badge tone="amber">{s.duplicates}</Badge> : <span className="text-gray-400">0</span>}</td>
                       <td className={CELL}>{s.warnings ? <Badge tone="amber">{s.warnings}</Badge> : <span className="text-gray-400">0</span>}</td>
                     </tr>
                   );
@@ -275,8 +293,12 @@ function ImportPreviewView({ preview, file, canReset, onImported }: {
           <div>
             <SectionTitle>Findings</SectionTitle>
             <p className="mb-2 text-xs text-gray-500">
-              Things the copy keeps from the workbook, such as an unrecognised column or an identical row. They
-              don’t stop the import, and the export reproduces them.
+              {preview.duplicates_removed
+                ? 'Things to know about the copy, such as an unrecognised column or an identical row. None of them '
+                  + 'stops the import. Identical rows are removed, so the export won’t have them; everything else is '
+                  + 'kept and the export reproduces it.'
+                : 'Things the copy keeps from the workbook, such as an unrecognised column or an identical row. They '
+                  + 'don’t stop the import, and the export reproduces them.'}
             </p>
             <FindingList findings={preview.findings} total={preview.findings_total} context={findingContext} />
           </div>
@@ -345,12 +367,14 @@ function ImportPreviewView({ preview, file, canReset, onImported }: {
 }
 
 function ImportResultView({ result, onOpenHistory }: { result: RbacImportResult; onOpenHistory: () => void }) {
+  const removed = removedDuplicates(result);
   return (
     <Notice kind="success" title="Import complete">
       <p>
         {plural(result.created, 'row')} loaded
         {result.deleted ? `, ${plural(result.deleted, 'previous row')} replaced` : ''} across{' '}
         {plural(result.sheets.length, 'sheet')}.
+        {removed > 0 && ` ${plural(removed, 'duplicate row was', 'duplicate rows were')} removed.`}
         {result.change_set_id && (
           <>
             {' '}
@@ -361,7 +385,10 @@ function ImportResultView({ result, onOpenHistory }: { result: RbacImportResult;
       {result.sheets.length > 0 && (
         <ul className="mt-1 flex flex-wrap gap-x-4 text-xs">
           {result.sheets.map((s) => (
-            <li key={s.sheet}><span className="font-mono">{s.sheet}</span>: {s.rows.toLocaleString()}</li>
+            <li key={s.sheet}>
+              <span className="font-mono">{s.sheet}</span>: {s.rows.toLocaleString()}
+              {s.duplicates_removed && s.duplicates > 0 && ` (${s.duplicates.toLocaleString()} removed)`}
+            </li>
           ))}
         </ul>
       )}

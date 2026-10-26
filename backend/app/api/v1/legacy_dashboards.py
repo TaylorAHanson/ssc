@@ -159,14 +159,29 @@ def list_legacy_dashboards(
     domain: Optional[str] = None,
     subdomain: Optional[str] = None,
     status: Optional[str] = None,
+    include_hidden: bool = False,
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> List[Dict[str, Any]]:
-    """All mappings, optionally scoped to the metric view's domain / subdomain."""
+    """All mappings, optionally scoped to the metric view's domain / subdomain.
+
+    Mappings to a metric view hidden from Discover by tag are left out, except
+    for a Platform Admin passing ``include_hidden`` (the admin editor), who sees
+    them flagged ``hidden_from_discover``.
+    """
+    from app.services.approval_scope import is_platform_admin
+    from app.services.discover_visibility import load_visibility
+
     q = db.query(LegacyDashboardMappingModel)
     if status:
         q = q.filter(LegacyDashboardMappingModel.status == _canonical_status(status))
     rows = _serialize_all(db, q.order_by(LegacyDashboardMappingModel.dashboard).all())
+    vis = load_visibility(db)
+    if vis.active:
+        keep_hidden = include_hidden and is_platform_admin(getattr(current_user, "roles", None))
+        for r in rows:
+            r["hidden_from_discover"] = vis.is_hidden_id(r["metric_view_id"])
+        rows = [r for r in rows if keep_hidden or not r["hidden_from_discover"]]
     if domain:
         rows = [r for r in rows if r["domain"] == domain]
     if subdomain:

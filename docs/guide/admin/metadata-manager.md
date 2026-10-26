@@ -5,9 +5,12 @@ catalogs, schemas, tables, views and columns correct. Classification, ownership,
 domain and data-product membership all ride on tags, and certification checks
 them, so this is where they're maintained.
 
-Everyone can open it by default, so data owners can edit their own objects
-without an admin role. A Platform Admin can limit it to the **Browse roles**
-setting.
+Governance sees every object: Platform Admins, the editor roles and the
+**Browse roles** (Governance Admin by default). Data owners can open it too,
+without an admin role, but see only the objects they own: search, counts,
+datasets and history leave everything else out, and the page says *Showing only
+the objects you own*. Anyone who owns nothing can't open it, and the sidebar
+link is hidden for them.
 
 ## How it works
 
@@ -177,7 +180,8 @@ existing catalogs under management before turning syncing on:
 - **Admins.** Platform Admins, and any roles an admin adds as editors, can edit
   everything.
 - **Everyone else** can propose a change. It goes to the object's owners, or to
-  the governance approver group when nobody owns it.
+  the governance approver group when nobody owns it. The preview they get back
+  doesn't show the current values of objects they can't browse.
 
 ## What needs approval
 
@@ -234,7 +238,9 @@ Metadata Manager**:
   list only that environment's catalogs. The governance service principal needs
   BROWSE on each catalog to see all of it; Unity Catalog hides the tables it
   has no privilege on, so they're missing from the list.
-- **Browse roles**: who can open the page. Blank = everyone.
+- **Browse roles**: who sees every object, besides Platform Admins and the
+  editor roles. Everyone else sees only what they own. Blank = admins and
+  editor roles only; clearing it never opens the page to everyone.
 - **Owner tag key**, **Editor roles** and **Governance approver group**: who
   can edit and who approves. With no governance approver group, only Platform
   Admins approve sensitive changes and changes to objects nobody owns.

@@ -28,6 +28,10 @@ router.include_router(legacy_dashboards.router, prefix="/legacy-dashboards", tag
 router.include_router(data_contracts.router, prefix="/data-contracts", tags=["data-contracts"])
 router.include_router(odps.router, prefix="/odps", tags=["odps"])
 router.include_router(context_catalog.router, prefix="/context", tags=["context-catalog"])
+from app.api.v1 import context_catalog_staleness  # noqa: E402
+router.include_router(context_catalog_staleness.router, prefix="/context", tags=["context-catalog"])
+from app.api.v1 import context_catalog_git  # noqa: E402
+router.include_router(context_catalog_git.router, prefix="/context/git", tags=["context-catalog"])
 router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 router.include_router(workflows.router, prefix="/workflows", tags=["workflows"])
 router.include_router(tool_registry.router, prefix="/tool-registry", tags=["tool-registry"])

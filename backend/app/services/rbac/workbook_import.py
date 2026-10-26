@@ -5,7 +5,9 @@ export does) and records the sheet's header text and order in ``rbac_sheets``
 so the export reproduces it. The workbook is the source of truth, so rows are
 copied as they are and never checked against the access policy; the only
 findings are about the copy itself (empty sheets, unrecognised columns,
-identical rows).
+identical rows). With RBAC_IMPORT_REMOVE_DUPLICATES on, a row identical to an
+earlier row on its sheet is left out (and reported); the rows kept are
+numbered 0..n-1 in workbook order, so the export is the workbook without them.
 """
 from __future__ import annotations
 
@@ -79,6 +81,7 @@ class _Sheet:
     unknown_headers: List[str]
     rows: List[_Row] = field(default_factory=list)
     duplicates: int = 0
+    duplicates_removed: bool = False
     warnings: int = 0
 
 
@@ -125,7 +128,7 @@ def _cell_text(value: Any) -> str:
     return str(value)
 
 
-def _read_sheet(ws: Any, spec: layout.SheetSpec) -> Tuple[_Sheet, List[Finding]]:
+def _read_sheet(ws: Any, spec: layout.SheetSpec, *, remove_duplicates: bool) -> Tuple[_Sheet, List[Finding]]:
     findings: List[Finding] = []
     width = ws.max_column or 0
     max_row = ws.max_row or 0
@@ -133,7 +136,8 @@ def _read_sheet(ws: Any, spec: layout.SheetSpec) -> Tuple[_Sheet, List[Finding]]
     headers = [_cell_text(v) for v in first]
 
     if max_row <= 1 and not any(headers):
-        sheet = _Sheet(spec=spec, title=ws.title, columns=layout.default_columns(spec.plane), unknown_headers=[])
+        sheet = _Sheet(spec=spec, title=ws.title, columns=layout.default_columns(spec.plane), unknown_headers=[],
+                       duplicates_removed=remove_duplicates)
         findings.append(Finding(
             severity="warn", code="empty_sheet", sheet=spec.name,
             message="The sheet is empty. Its export will have the default headers and no rows.",
@@ -143,7 +147,8 @@ def _read_sheet(ws: Any, spec: layout.SheetSpec) -> Tuple[_Sheet, List[Finding]]
     fields = [f if f in _CANONICAL else None for f in layout.map_headers(headers)]
     columns = [{"header": h, "field": f} for h, f in zip(headers, fields)]
     unknown = [h for h, f in zip(headers, fields) if f is None and h.strip()]
-    sheet = _Sheet(spec=spec, title=ws.title, columns=columns, unknown_headers=unknown)
+    sheet = _Sheet(spec=spec, title=ws.title, columns=columns, unknown_headers=unknown,
+                   duplicates_removed=remove_duplicates)
     for header in unknown:
         findings.append(Finding(
             severity="warn", code="unknown_header", sheet=spec.name,
@@ -170,11 +175,15 @@ def _read_sheet(ws: Any, spec: layout.SheetSpec) -> Tuple[_Sheet, List[Finding]]
         environment = spec.environment
         if spec.plane == PLANE_METASTORE:
             environment = layout.resolve_environment(cells["environment_value"])
-        position = len(sheet.rows)
         row_hash = audit.compute_row_hash(spec.name, cells, extra)
-        sheet.rows.append(_Row(position=position, cells=cells, extra=extra, environment=environment, row_hash=row_hash))
         if row_hash in first_seen:
             sheet.duplicates += 1
+            if remove_duplicates:
+                findings.append(Finding(
+                    severity="warn", code="duplicate_row_removed", sheet=spec.name, row_number=excel_row,
+                    message=f"Row {excel_row} is identical to row {first_seen[row_hash]} and was removed.",
+                ))
+                continue
             findings.append(Finding(
                 severity="warn", code="duplicate_row", sheet=spec.name, row_number=excel_row,
                 message=(f"Row {excel_row} is identical to row {first_seen[row_hash]}. "
@@ -182,10 +191,12 @@ def _read_sheet(ws: Any, spec: layout.SheetSpec) -> Tuple[_Sheet, List[Finding]]
             ))
         else:
             first_seen[row_hash] = excel_row
+        position = len(sheet.rows)
+        sheet.rows.append(_Row(position=position, cells=cells, extra=extra, environment=environment, row_hash=row_hash))
     return sheet, findings
 
 
-def _parse(data: bytes) -> _Workbook:
+def _parse(data: bytes, *, remove_duplicates: bool) -> _Workbook:
     try:
         import openpyxl
         from openpyxl.worksheet.worksheet import Worksheet
@@ -208,7 +219,7 @@ def _parse(data: bytes) -> _Workbook:
                 skipped.append(title)
                 continue
             seen.add(spec.name)
-            sheet, found = _read_sheet(ws, spec)
+            sheet, found = _read_sheet(ws, spec, remove_duplicates=remove_duplicates)
             sheets.append(sheet)
             sheet_findings[spec.name] = found
     except Exception as exc:  # noqa: BLE001
@@ -240,8 +251,18 @@ def _summary(sheet: _Sheet) -> ImportSheetSummary:
         columns=[SheetColumn(**c) for c in sheet.columns],
         unknown_headers=sheet.unknown_headers,
         duplicates=sheet.duplicates,
+        duplicates_removed=sheet.duplicates_removed,
         warnings=sheet.warnings,
     )
+
+
+def _remove_duplicates() -> bool:
+    return bool(settings.RBAC_IMPORT_REMOVE_DUPLICATES)
+
+
+def _previewed_with_removal(imp: RbacImportModel) -> bool:
+    """Whether the preview removed duplicates (stored per sheet; previews from before the setting kept them)."""
+    return any(bool((s or {}).get("duplicates_removed")) for s in (imp.sheets or {}).values())
 
 
 def _active_rule_count(db: Session) -> int:
@@ -254,7 +275,8 @@ def _sha256(data: bytes) -> str:
 
 def preview(db: Session, data: bytes, filename: Optional[str], *, actor: str) -> ImportPreview:
     """Parse the workbook, store an ``rbac_imports`` row (status ``previewed``) and report what an import would do."""
-    parsed = _parse(data)
+    remove_duplicates = _remove_duplicates()
+    parsed = _parse(data, remove_duplicates=remove_duplicates)
     existing = _active_rule_count(db)
     mode = MODE_INITIAL if existing == 0 else MODE_RESET
     summaries = [_summary(s) for s in parsed.sheets]
@@ -276,8 +298,10 @@ def preview(db: Session, data: bytes, filename: Optional[str], *, actor: str) ->
     db.add(imp)
     in_flight = inflight.count_open(db)
     db.commit()
-    logger.info("Previewed workbook import %s (%s): %d sheets, %d rows, %d findings, mode %s",
-                imp.id, filename, len(summaries), sum(s.rows for s in summaries), len(parsed.findings), mode)
+    logger.info("Previewed workbook import %s (%s): %d sheets, %d rows, %d duplicates (%s), %d findings, mode %s",
+                imp.id, filename, len(summaries), sum(s.rows for s in summaries),
+                sum(s.duplicates for s in summaries), "removed" if remove_duplicates else "kept",
+                len(parsed.findings), mode)
     return ImportPreview(
         import_id=imp.id,
         filename=filename,
@@ -292,6 +316,7 @@ def preview(db: Session, data: bytes, filename: Optional[str], *, actor: str) ->
         reset_allowed=bool(settings.RBAC_ALLOW_RESET),
         in_flight_requests=in_flight,
         confirmation_phrase=CONFIRMATION_PHRASE if mode == MODE_RESET else None,
+        duplicates_removed=remove_duplicates,
     )
 
 
@@ -302,6 +327,9 @@ def _check_run(db: Session, imp: Optional[RbacImportModel], data: bytes, mode: s
         raise ImportFailed("The uploaded file isn't the one that was previewed. Preview it again before importing.")
     if mode not in (MODE_INITIAL, MODE_RESET):
         raise ImportFailed(f'Unknown import mode "{mode}".')
+    if _previewed_with_removal(imp) != _remove_duplicates():
+        raise ImportFailed('"Remove duplicate rows on import" was changed after this preview. '
+                           "Preview the workbook again.")
     current = MODE_INITIAL if _active_rule_count(db) == 0 else MODE_RESET
     if mode != current:
         if current == MODE_RESET:
@@ -382,9 +410,10 @@ def _write(db: Session, imp: RbacImportModel, parsed: _Workbook, mode: str,
         recorded.source_import_id = imp.id
         recorded.updated_at = now
 
+    removed = sum(s.duplicates for s in parsed.sheets if s.duplicates_removed)
     audit.finalize_change_set(cs, created=len(rules), updated=0, deleted=deleted,
                               sheets=list(touched_sheets), planes=list(touched_planes),
-                              import_id=imp.id, mode=mode)
+                              import_id=imp.id, mode=mode, duplicates_removed=removed)
     imp.status = STATUS_COMPLETED
     imp.mode = mode
     imp.change_set_id = cs.id
@@ -419,6 +448,9 @@ def run(
 ) -> ImportResult:
     """Import the previewed workbook (the upload's sha256 must match the preview's).
 
+    Duplicates are removed or kept as the preview did; if RBAC_IMPORT_REMOVE_DUPLICATES
+    has changed since, the run is refused so the admin previews again.
+
     ``initial`` requires an empty ledger. ``reset`` requires RBAC_ALLOW_RESET,
     ``confirmation == CONFIRMATION_PHRASE`` and no open rbac_access_change
     request; it soft-deletes every active rule and inserts the workbook's rows
@@ -431,7 +463,8 @@ def run(
         .one_or_none()
     )
     _check_run(db, imp, data, mode, confirmation)
-    parsed = _parse(data)
+    remove_duplicates = _previewed_with_removal(imp)
+    parsed = _parse(data, remove_duplicates=remove_duplicates)
     name = filename or imp.filename or "workbook"
 
     try:
@@ -443,8 +476,9 @@ def run(
         _mark_failed(db, preview_id, f"{exc.__class__.__name__}: {exc}")
         raise ImportFailed("The import failed and nothing was changed. The error is recorded on the import.") from exc
 
-    logger.info("Workbook %s %s by %s: %d rows created, %d deleted (change set %s)",
-                mode, preview_id, actor, created, deleted, change_set_id)
+    logger.info("Workbook %s %s by %s: %d rows created, %d deleted, %d duplicates %s (change set %s)",
+                mode, preview_id, actor, created, deleted, sum(s.duplicates for s in parsed.sheets),
+                "removed" if remove_duplicates else "kept", change_set_id)
     try:
         from app.services.rbac.csv_export import request_export_soon
 
@@ -458,6 +492,7 @@ def run(
         created=created,
         deleted=deleted,
         sheets=[_summary(s) for s in parsed.sheets],
+        duplicates_removed=remove_duplicates,
     )
 
 

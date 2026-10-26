@@ -5,11 +5,52 @@ import yaml
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.model_serving.agent_llm import AgentLLMClient
-from app.core.config import settings
+from app.core.config import get_scan_catalogs, settings
 from app.core.exceptions import RetryableError
-from app.services.odcs import contract_schema_objects, field_text
+from app.services.odcs import (
+    UNGOVERNED_CATALOGS,
+    contract_schema_objects,
+    field_text,
+    scope_contract_lineage,
+    scope_contract_lineage_yaml,
+    table_in_scope,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _lineage_names(entries: Any) -> List[str]:
+    """In-scope table names from a lineage-tracking ``upstreams``/``downstreams`` list."""
+    names = []
+    for entry in entries or []:
+        info = entry.get("tableInfo") if isinstance(entry, dict) else None
+        name = info.get("name") if isinstance(info, dict) else None
+        if not name:
+            continue
+        catalog = info.get("catalog_name")
+        if catalog and "." not in name and info.get("schema_name"):
+            name = f"{catalog}.{info['schema_name']}.{name}"
+        if table_in_scope(name, catalog):
+            names.append(name)
+    return names
+
+
+def _out_of_scope_refusal(dataset_ids: List[str]) -> Optional[str]:
+    """A refusal naming the requested tables outside the governed catalogs, or None."""
+    refused = [d for d in dataset_ids if not table_in_scope(d)]
+    if not refused:
+        return None
+    allowlist = get_scan_catalogs()
+    scope = (
+        f"the scanned catalogs ({', '.join(allowlist)})"
+        if allowlist
+        else f"catalogs other than {', '.join(sorted(UNGOVERNED_CATALOGS))}"
+    )
+    return (
+        f"Refused: a data contract can only be drafted for tables in {scope}, named as "
+        f"catalog.schema.table. Not drafted: {', '.join(refused)}. An administrator can "
+        "change the scanned catalogs under Admin -> Settings."
+    )
 
 
 def _extract_odcs_yaml(content: str) -> str:
@@ -57,6 +98,19 @@ async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]
     from app.core.workspaces import get_governance_uc_provider
     from app.providers.databricks.uc_metadata import fetch_uc_metadata
 
+    # Contract metadata is shown to every user, so it never describes a table
+    # outside the governed catalogs, whoever asked.
+    out_of_scope = [d for d in dataset_ids if not table_in_scope(d)]
+    if out_of_scope:
+        logger.warning(
+            "Contract metadata fetch: skipping %d table(s) outside the governed catalogs "
+            "(SCAN_CATALOGS=%s): %s", len(out_of_scope), get_scan_catalogs() or "(blank)",
+            ", ".join(out_of_scope[:10]),
+        )
+        dataset_ids = [d for d in dataset_ids if d not in out_of_scope]
+    if not dataset_ids:
+        return []
+
     provider = get_governance_uc_provider()
 
     metadata_batch = fetch_uc_metadata(provider.client, dataset_ids, settings.DATABRICKS_WAREHOUSE_ID)
@@ -95,7 +149,8 @@ async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]
             for col in table_meta.columns
         ]
 
-        # 2. Fetch Lineage
+        # 2. Fetch Lineage. Only in-scope neighbours are kept: the names end up in
+        # the contract, which every user sees.
         upstream_tables = set()
         downstream_tables = set()
         try:
@@ -104,15 +159,8 @@ async def fetch_datasets_metadata(dataset_ids: List[str]) -> List[Dict[str, Any]
                 f"/api/2.0/lineage-tracking/table-lineage?table_name={dataset_id}&include_entity_lineage=true"
             )
             if lineage_resp:
-                for u in lineage_resp.get("upstreams", []):
-                    table_info = u.get("tableInfo")
-                    if table_info and "name" in table_info:
-                        upstream_tables.add(table_info["name"])
-                        
-                for d in lineage_resp.get("downstreams", []):
-                    table_info = d.get("tableInfo")
-                    if table_info and "name" in table_info:
-                        downstream_tables.add(table_info["name"])
+                upstream_tables.update(_lineage_names(lineage_resp.get("upstreams")))
+                downstream_tables.update(_lineage_names(lineage_resp.get("downstreams")))
         except Exception as e:
             logger.warning(f"Failed to fetch lineage for {dataset_id}: {e}")
         
@@ -161,8 +209,10 @@ class DraftOdcsInput(BaseModel):
 
 @tool(
     name="draft_odcs_contract",
-    description="Draft an Open Data Contract Standard (ODCS) v3 YAML document for Unity Catalog datasets by fetching table schemas and generating contract structure.",
-    args_schema=DraftOdcsInput
+    description="Draft an Open Data Contract Standard (ODCS) v3 YAML document for Unity Catalog datasets by fetching table schemas and generating contract structure. Only tables in the governed (scanned) catalogs can be drafted.",
+    args_schema=DraftOdcsInput,
+    # Reads metadata as the governance service principal, not as the caller.
+    required_role="governance_admin",
 )
 async def draft_odcs_contract(
     dataset_ids: List[str], 
@@ -190,7 +240,15 @@ async def draft_odcs_contract(
     try:
         datasets_metadata = pre_fetched_metadata
         if not datasets_metadata:
+            refusal = _out_of_scope_refusal(dataset_ids)
+            if refusal:
+                logger.warning("draft_odcs_contract refused out-of-scope table(s): %s", dataset_ids)
+                return refusal
             datasets_metadata = await fetch_datasets_metadata(dataset_ids)
+
+        # Earlier contracts may still name out-of-scope lineage, and the model is
+        # told to preserve existing custom properties.
+        existing_odcs_yaml = scope_contract_lineage_yaml(existing_odcs_yaml)
             
         # 2. Call LLM to draft ODCS
         client = AgentLLMClient()
@@ -417,12 +475,13 @@ slaProperties:
                                     logger.info(f"Post-LLM Pruning: Removing invalid/hallucinated table {full_name} from final YAML.")
 
                             final_yaml["schema"] = filtered_schema
+                            scope_contract_lineage(final_yaml)
                             # Dump with sort_keys=False to preserve order, and default_flow_style=False for block format
                             content = yaml.dump(final_yaml, sort_keys=False, default_flow_style=False)
-                        return content
+                        return scope_contract_lineage_yaml(content)
                     except Exception as e:
                         logger.warning(f"Failed to post-prune LLM YAML: {e}")
-                        return content
+                        return scope_contract_lineage_yaml(content)
 
                 # Markers missing — the model returned prose or a wrong shape.
                 # Re-prompt with explicit feedback instead of silently re-calling

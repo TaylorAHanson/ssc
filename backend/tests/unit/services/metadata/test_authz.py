@@ -2,7 +2,7 @@
 import uuid
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, select
 
 from app.core.config import settings
 from app.db.metadata import MetadataObjectModel, MetadataObservedModel, MetadataTagModel
@@ -194,16 +194,24 @@ def test_system_actor():
     assert actor.id == SYSTEM_ACTOR and actor.actor_type == "system" and actor.is_admin is True
 
 
-def test_can_browse(monkeypatch):
-    assert authz.can_browse(user()) is True
+def test_full_browse_is_governance_only(monkeypatch):
+    # Blank adds nobody, so clearing the setting can't open browsing to everyone.
+    assert authz.has_full_browse(user()) is False
+    assert authz.has_full_browse(user(admin=True)) is True
+    assert authz.has_full_browse(principal()) is True
+    assert authz.has_full_browse(Actor(id="ghost", actor_type="service_principal")) is False
+    assert authz.has_full_browse(authz.system_actor()) is True
 
     monkeypatch.setattr(settings, "METADATA_BROWSE_ROLES", ["Data Steward"])
 
-    assert authz.can_browse(user()) is False
-    assert authz.can_browse(user(roles=["data_steward"])) is True
-    assert authz.can_browse(user(admin=True)) is True
-    assert authz.can_browse(principal()) is True
-    assert authz.can_browse(authz.system_actor()) is True
+    assert authz.has_full_browse(user()) is False
+    assert authz.has_full_browse(user(roles=["data_steward"])) is True
+
+
+def test_the_default_browse_role_is_governance_admin():
+    from app.core import default_config
+
+    assert default_config.DEFAULT_CONFIG["metadata"]["browse_roles"] == ["Governance Admin"]
 
 
 # --- owner groups ---------------------------------------------------------------------
@@ -684,6 +692,89 @@ def test_editable_scope_adds_uc_owned_relations_when_they_count(tree, monkeypatc
     # The relation's columns follow its UC owner, so their own owner tag no longer excludes them.
     assert "sales_dev.bronze.customers::email" not in scope.not_owned
     assert "sales_dev.bronze" in scope.not_owned
+
+
+# --- browse scope ---------------------------------------------------------------------
+
+
+def _visible_in_sql(db, browse):
+    o = MetadataObjectModel.__table__
+    clause = authz.browse_clause(browse, fqn=o.c.fqn_key, name_parts=(o.c.catalog, o.c.schema_name, o.c.object_name))
+    query = select(o.c.fqn_key).where(o.c.status == "active")
+    if clause is not None:
+        query = query.where(clause)
+    return sorted(db.execute(query).scalars())
+
+
+def _all_keys(db):
+    return sorted(db.execute(select(MetadataObjectModel.fqn_key).where(MetadataObjectModel.status == "active"))
+                  .scalars())
+
+
+def test_admins_principals_and_browse_roles_see_everything(tree, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_BROWSE_ROLES", ["Governance Admin"])
+    for actor in (user(admin=True), user(roles=["Governance Admin"]), principal(), authz.system_actor()):
+        browse = authz.browse_scope(tree, actor)
+        assert browse.level == "full"
+        assert _visible_in_sql(tree, browse) == _all_keys(tree)
+
+
+def test_an_owner_sees_only_what_it_owns(tree):
+    browse = authz.browse_scope(tree, user("crm"))
+
+    assert browse.level == "owned"
+    # customers is crm's; its email column names privacy instead, so it's hidden.
+    assert _visible_in_sql(tree, browse) == ["sales_dev.bronze.customers"]
+    assert browse.sees("sales_dev.bronze.customers") is True
+    assert browse.sees("sales_dev.bronze.customers::email") is False
+    assert browse.sees("sales_dev.bronze.customers::phone") is True
+    assert browse.sees("sales_dev.bronze.orders") is False
+    assert browse.sees("sales_dev") is False
+
+
+def test_ownership_is_inherited_down_to_the_next_owner_tag(tree):
+    browse = authz.browse_scope(tree, user("sales_admins"))
+
+    assert browse.level == "owned"
+    assert browse.not_owned == ["sales_dev.bronze", "sales_dev.bronze.customers",
+                                "sales_dev.bronze.customers::email"]
+    assert _visible_in_sql(tree, browse) == ["sales_dev", "sales_prd"]
+    assert browse.sees("sales_dev.silver.t::c") is True
+    assert browse.sees("sales_dev.bronze.orders") is False
+
+    bronze = authz.browse_scope(tree, user("bronze_team"))
+    assert _visible_in_sql(tree, bronze) == [
+        "sales_dev.bronze", "sales_dev.bronze.orders", "sales_dev.bronze.orders::id",
+    ]
+
+
+def test_the_sql_clause_matches_the_predicate(tree):
+    add(tree, "sales_dev.silver")
+    add(tree, "sales_dev.silver.t", tags={"data_owner": "crm"})
+    add(tree, "sales_dev.silver.t", "c")
+    for groups in (("crm",), ("sales_admins",), ("bronze_team",), ("privacy",), ("sales_admins", "privacy")):
+        browse = authz.browse_scope(tree, user(*groups))
+        assert _visible_in_sql(tree, browse) == [k for k in _all_keys(tree) if browse.sees(k)], groups
+
+
+def test_nothing_owned_means_no_access(tree):
+    browse = authz.browse_scope(tree, user("nobody"))
+
+    assert browse.level == "none"
+    assert _visible_in_sql(tree, browse) == []
+    assert browse.sees("sales_dev") is False
+    assert authz.browse_scope(tree, Actor(id="ghost", actor_type="service_principal")).level == "none"
+
+
+def test_the_uc_owner_browses_its_relations_when_that_counts(tree, monkeypatch):
+    observe(tree, "hr_dev.gold.staff", owner=EMAIL)
+    assert authz.browse_scope(tree, user()).level == "none"
+
+    monkeypatch.setattr(settings, "METADATA_UC_OWNER_IS_AUTHORITY", True)
+    browse = authz.browse_scope(tree, user())
+
+    assert browse.level == "owned"
+    assert _visible_in_sql(tree, browse) == ["hr_dev.gold.staff"]
 
 
 # --- is_editable ----------------------------------------------------------------------

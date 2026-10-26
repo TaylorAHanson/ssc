@@ -146,6 +146,8 @@ export interface WhoAmI {
   headers_seen: string[];
   identifiers: Record<string, string | null>;
   can_browse: boolean;
+  /** full = every object; owned = only objects the caller owns; none = no access. */
+  browse_scope?: 'full' | 'owned' | 'none';
   message?: string | null;
 }
 
@@ -218,6 +220,8 @@ export interface ChangeItem {
   object_state: ObjectState;
   /** The change starts managing an existing object, and Unity Catalog already has this value. */
   unchanged_in_uc?: boolean;
+  /** The caller can't browse this object, so `before` is withheld. */
+  before_hidden?: boolean;
   copied_from?: string | null;
 }
 

@@ -359,6 +359,23 @@ async def start_poller():
 
                 _spawn_background(safe_rbac_export())
 
+            if _yaml_config.get("features", {}).get("context_catalog", False):
+                # Cron- and toggle-gated inside the task; overlapping runs are skipped there.
+                from app.workers.tasks.context_catalog_reminders import context_catalog_reminders_task
+
+                _spawn_background(context_catalog_reminders_task())
+
+                async def safe_context_catalog_git_sync():
+                    # Toggle- and cron-gated inside; a running sync makes it a no-op.
+                    try:
+                        from app.services.context_catalog_git import git_sync_task
+
+                        await git_sync_task()
+                    except Exception as e:
+                        logger.error(f"Error in background Context Catalog Git sync: {e}", exc_info=True)
+
+                _spawn_background(safe_context_catalog_git_sync())
+
             if _metadata_reconcile_enabled():
                 _spawn_background(_safe_metadata_reconcile(metadata_reconcile_semaphore))
 

@@ -1,7 +1,7 @@
 """
 Unit tests for Terramate workflow and conversational tools, and check_resource_access (ADR-0004).
 """
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.tools.check_resource_access import check_resource_access
@@ -333,7 +333,8 @@ async def test_check_provisioning_status_conversational_tool():
 
 @pytest.mark.asyncio
 async def test_check_resource_access_direct_uc():
-    with patch("app.providers.databricks.DatabricksProvider.execute_sql", new_callable=AsyncMock) as mock_sql:
+    with patch("app.providers.databricks.DatabricksProvider.execute_sql", new_callable=AsyncMock) as mock_sql, \
+            patch("app.providers.databricks_mcp.sp_fallback_allowed", return_value=True):
         mock_sql.return_value = {
             "rows": [
                 {"Principal": "data_engineers", "ActionType": "USE_SCHEMA"},
@@ -357,6 +358,39 @@ async def test_check_resource_access_direct_uc():
         assert res_principal["has_grants"] is True
         assert "USE_SCHEMA" in res_principal["principal_privileges"]
         assert "SELECT" in res_principal["principal_privileges"]
+
+
+@pytest.mark.asyncio
+async def test_check_resource_access_refuses_without_user_token_when_deployed():
+    with patch("app.providers.databricks.DatabricksProvider.execute_sql", new_callable=AsyncMock) as mock_sql, \
+            patch("app.providers.databricks_mcp.sp_fallback_allowed", return_value=False):
+        res = await check_resource_access.execute(resource_name="main.finance")
+
+    assert res["success"] is False
+    assert res["error"] == "missing_user_token"
+    assert "sign" in res["message"].lower()
+    mock_sql.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_check_resource_access_runs_as_user_on_home_workspace():
+    provider = MagicMock()
+    provider.execute_sql = AsyncMock(return_value={"rows": [{"Principal": "analysts", "ActionType": "SELECT"}]})
+    with patch("app.tools.check_resource_access.get_uc_provider", return_value=provider) as uc_provider, \
+            patch("app.providers.databricks_mcp.sp_fallback_allowed", return_value=False):
+        res = await check_resource_access.execute(
+            resource_name="main",
+            target_host="https://remote.example.com",
+            _obo_token="user-token",
+        )
+
+    assert res["success"] is True
+    uc_provider.assert_called_once_with()
+    mock_sql = provider.execute_sql
+    kwargs = mock_sql.call_args.kwargs
+    assert kwargs["obo_token"] == "user-token"
+    assert kwargs["require_obo"] is True
+    assert mock_sql.call_args.args[0] == "SHOW GRANTS ON CATALOG main"
 
 
 @pytest.mark.asyncio

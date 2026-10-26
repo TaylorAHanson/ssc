@@ -11,7 +11,7 @@ Admin screens appear in two sidebar sections, depending on your role:
 | Section | Pages | Who sees it |
 | --- | --- | --- |
 | Watch Tower | **Data Certification (ODCS)**, **Data Products (ODPS)**, **Allowlist**, **OmniGuard** | Platform admins and governance admins |
-| Watch Tower | **Metadata Manager** | Everyone, unless a Platform Admin limits it to the **Browse roles** setting. Data owners edit their own objects there. |
+| Watch Tower | **Metadata Manager** | Platform admins, governance admins and the **Browse roles** see every object. Data owners see and edit only the objects they own. |
 | Watch Tower | **Access Rules** | Platform admins, viewer roles and members of the access rule approver groups |
 | Control Tower | **Admin** | Platform admins |
 | Control Tower | **Context Catalog**, **Workflow Studio**, **Tool Registry**, **Preview Features**, **Training Studio** | Platform admins and governance admins |

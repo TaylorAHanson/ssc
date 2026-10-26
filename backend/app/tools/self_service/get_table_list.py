@@ -1,14 +1,79 @@
 """
 Tool to list tables.
 """
-from typing import Dict, Any, Optional
+from typing import Callable, Dict, Any, Optional
 import asyncio
 from pydantic import BaseModel, Field
 from app.tools.mcp import tool
 from app.tools.sql_safety import quote_literal
 from app.core.exceptions import RetryableError
 from app.services.data_asset_owner import resolve_data_asset_owner
+from app.services import discover_visibility as dv
 import fnmatch
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _cached_visibility():
+    from app.db.session import get_lakebase_session
+
+    db = get_lakebase_session()
+    try:
+        return dv.load_visibility(db)
+    finally:
+        db.close()
+
+
+async def _hidden_table_check(provider, obo_token, catalog_name: str, schema_name: str,
+                              table_tag_keys: Dict[str, set]) -> Callable[[str], bool]:
+    """Whether a table in this schema is hidden from discovery by ``DISCOVER_HIDDEN_TAG_KEYS``.
+
+    Checks the synced cache plus live catalog / schema / table / column tags,
+    read as the user, so tables outside the cache are covered too.
+    """
+    keys = dv.hidden_tag_keys()
+    try:
+        vis = _cached_visibility()
+    except Exception as e:  # noqa: BLE001 - fall back to the live tags below
+        logger.warning("Could not load cached Discover visibility: %s", e)
+        vis = dv.DiscoverVisibility(keys=keys)
+    if vis.is_hidden_id(f"{catalog_name}.{schema_name}.*"):
+        return lambda _name: True
+
+    scope: Dict[str, set] = {"catalog": set(), "schema": set()}
+    column_keys: Dict[str, set] = {}
+    cat, sch = quote_literal(catalog_name), quote_literal(schema_name)
+    query = f"""
+    SELECT 'catalog' AS level, NULL AS table_name, tag_name
+    FROM system.information_schema.catalog_tags WHERE catalog_name = {cat}
+    UNION ALL
+    SELECT 'schema', NULL, tag_name
+    FROM system.information_schema.schema_tags WHERE catalog_name = {cat} AND schema_name = {sch}
+    UNION ALL
+    SELECT 'column', table_name, tag_name
+    FROM system.information_schema.column_tags WHERE catalog_name = {cat} AND schema_name = {sch}
+    """
+    try:
+        result = await provider.execute_sql(query, obo_token=obo_token)
+        for row in result.get("rows", []):
+            key = dv.tag_key(row.get("tag_name"))
+            if not key:
+                continue
+            if row.get("level") == "column":
+                column_keys.setdefault(row.get("table_name"), set()).add(key)
+            else:
+                scope.setdefault(row.get("level"), set()).add(key)
+    except Exception as e:  # noqa: BLE001 - the cache still covers synced tables
+        logger.warning("Could not read catalog/schema/column tags for %s.%s: %s", catalog_name, schema_name, e)
+    if not keys.isdisjoint(scope["catalog"] | scope["schema"]):
+        return lambda _name: True
+
+    def _is_hidden(name: str) -> bool:
+        live = table_tag_keys.get(name, set()) | column_keys.get(name, set())
+        return not keys.isdisjoint(live) or vis.is_hidden_id(f"{catalog_name}.{schema_name}.{name}")
+
+    return _is_hidden
 
 class GetTableListInput(BaseModel):
     target_host: str = Field(..., description="Workspace host for context only. Unity Catalog is account-global, so tables are always read from the local workspace regardless of this value.")
@@ -43,6 +108,8 @@ async def get_table_list(target_host: str, catalog_name: str, schema_name: str, 
         
         # Fetch tags for all tables in this schema in one query
         tags_by_table = {}
+        # Every tag key per table, valueless ones included, for the hide-by-tag check.
+        tag_keys_by_table: Dict[str, set] = {}
         try:
             query = f"""
             SELECT table_name, tag_name, tag_value 
@@ -56,6 +123,8 @@ async def get_table_list(target_host: str, catalog_name: str, schema_name: str, 
                     t_name = row.get("table_name")
                     tag_name = row.get("tag_name")
                     tag_value = row.get("tag_value")
+                    if t_name and dv.tag_key(tag_name):
+                        tag_keys_by_table.setdefault(t_name, set()).add(dv.tag_key(tag_name))
                     if t_name and tag_name and tag_value is not None:
                         if t_name not in tags_by_table:
                             tags_by_table[t_name] = {}
@@ -63,10 +132,17 @@ async def get_table_list(target_host: str, catalog_name: str, schema_name: str, 
         except Exception as tag_err:
             # Non-fatal if tags fail
             pass
-        
+
+        is_hidden = (
+            await _hidden_table_check(provider, _obo_token, catalog_name, schema_name, tag_keys_by_table)
+            if dv.hidden_tag_keys() else (lambda _name: False)
+        )
+
         table_list = []
         for table in tables:
             if name_pattern and not fnmatch.fnmatch(table.name.lower(), name_pattern.lower()):
+                continue
+            if is_hidden(table.name):
                 continue
                 
             table_tags = tags_by_table.get(table.name, {})

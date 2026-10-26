@@ -247,6 +247,17 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "Most tables, views, metric views and dashboards one person can pin to the top of the "
              "catalog page. Existing pins over a lowered limit are kept; the user just can't add "
              "more until they unpin some. Applies immediately."},
+    {"group": "Data Catalog", "key": "DISCOVER_HIDDEN_TAG_KEYS",
+     "label": "Hide from Discover tag keys", "type": "string_list", "add_label": "Add tag key",
+     "requires": ["features.data_discovery"],
+     "help": "Tag keys that keep an asset out of the catalog page and the agent's catalog search, e.g. "
+             "'hide_from_discover'. An asset is hidden when one of these keys is on its catalog, its schema, "
+             "the table, view or metric view itself, or any of its columns; dashboards, Genie spaces and "
+             "apps are checked against their own workspace tags, and jobs against their job tags. Only the "
+             "key matters (any value, any case). Hidden assets leave browse, search, domain counts, pins "
+             "and lineage. Hiding isn't access control: anyone with access can still open the asset in "
+             "Databricks. Empty = nothing hidden. Changing this list applies immediately; tags added or "
+             "removed in Unity Catalog apply after the next data asset sync."},
     {"group": "Data Catalog", "key": "DATA_ASSET_SYNC_CRON", "label": "Data asset sync cron",
      "type": "cron", "requires": ["features.data_discovery"],
      "help": "How often the local data-asset cache (and the cached workspace list, if on) is refreshed "
@@ -563,8 +574,10 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Metadata Manager", "section": "Permissions", "key": "METADATA_BROWSE_ROLES",
      "label": "Browse roles", "type": "string_list", "add_label": "Add role",
      "requires": ["features.metadata_v2"],
-     "help": "App roles that may search and view tags and descriptions. Blank = every signed-in user, like the "
-             "data catalog."},
+     "help": "App roles that may search and view every object's tags and descriptions. Platform Admins and "
+             "editor roles always can. Anyone else sees only the objects they own (by owner tag, or Unity Catalog "
+             "owner when that counts); with nothing owned, they can't open it. Blank = admins and editor roles "
+             "only."},
     {"group": "Metadata Manager", "section": "Permissions", "key": "METADATA_GOVERNANCE_APPROVER_GROUP",
      "label": "Governance approver group", "type": "string", "requires": ["features.metadata_v2"],
      "help": "Exact display name of the Databricks group that approves sensitive changes and changes to objects "
@@ -680,6 +693,66 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "label": "Block publish on failing tests", "type": "bool",
      "help": "On = a workflow with a failing or never-run enabled case cannot be published. Off (default) = the "
              "publish confirmation warns instead, since the judge is non-deterministic."},
+
+    # --- Context Catalog: document freshness ------------------------------
+    {"group": "Context Catalog", "section": "Document freshness", "key": "CONTEXT_CATALOG_STALE_AFTER_DAYS",
+     "label": "Stale after (days)", "type": "int", "min": 1,
+     "help": "A published document is marked Stale when it hasn't been edited or marked reviewed for this many "
+             "days. Drives the Stale badge in the Context Catalog and the Teams reminders. Applies immediately."},
+    {"group": "Context Catalog", "section": "Teams reminders", "key": "CONTEXT_CATALOG_STALE_REMINDERS_ENABLED",
+     "label": "Send stale-document reminders", "type": "bool",
+     "help": "On = on the schedule below, post the stale published documents to a Microsoft Teams channel, "
+             "mentioning each owner (the document owner, else the domain's primary owner). Needs the Teams "
+             "webhook secret — see Platform Administration. Off (default) = nothing is posted."},
+    {"group": "Context Catalog", "section": "Teams reminders", "key": "CONTEXT_CATALOG_STALE_REMINDER_CRON",
+     "label": "Reminder schedule", "type": "cron",
+     "help": "When reminders are posted (5-field cron, UTC). Default: Mondays 15:00 UTC. Leave BLANK to post only "
+             "with Run now in the Context Catalog."},
+    {"group": "Context Catalog", "section": "Teams reminders", "key": "CONTEXT_CATALOG_STALE_RENOTIFY_DAYS",
+     "label": "Re-remind after (days)", "type": "int", "min": 1,
+     "help": "A document that was in a reminder isn't mentioned again until this many days have passed, so a "
+             "schedule more frequent than this doesn't repeat itself. Editing or marking it reviewed resets it."},
+    {"group": "Context Catalog", "section": "Teams reminders", "key": "CONTEXT_CATALOG_STALE_MAX_DOCS_PER_OWNER",
+     "label": "Documents listed per owner", "type": "int", "min": 1, "max": 50,
+     "help": "Longer lists end with '…and N more'; the unlisted documents are listed first next time."},
+
+    # --- Context Catalog: Git sync (app/services/context_catalog_git.py) --
+    {"group": "Context Catalog", "section": "Git sync", "key": "CONTEXT_CATALOG_GIT_ENABLED",
+     "label": "Sync with Git", "type": "bool",
+     "help": "On = this environment's catalog syncs with its branch below: saves are committed by the editor "
+             "within seconds, and changes merged in Git are imported on the schedule or with Sync from Git. "
+             "Needs a GitHub token with contents read/write on the repo (see Platform Administration). "
+             "Off (default) = the catalog lives only in this environment's database."},
+    {"group": "Context Catalog", "section": "Git sync", "key": "CONTEXT_CATALOG_GIT_REPO",
+     "label": "Repository", "type": "string", "placeholder": "my-org/context-catalog",
+     "help": "owner/repo, or the repo's https URL (GitHub Enterprise Server hosts work too)."},
+    {"group": "Context Catalog", "section": "Git sync", "key": "CONTEXT_CATALOG_GIT_BRANCHES",
+     "label": "Branch per environment", "type": "collection", "unique": "environment",
+     "add_label": "Add environment",
+     "help": "Which branch each environment syncs with. Environment is the deployment's ENVIRONMENT value; "
+             "aliases are other spellings of it, comma-separated. Push on = saves in that environment are "
+             "committed to the branch. Push off = it only reads the branch and mirrors it, discarding edits "
+             "made in the app (stage reads prod this way, so it can never commit to prod). An environment "
+             "with no row doesn't sync.",
+     "columns": [
+         {"key": "environment", "label": "Environment", "type": "string", "required": True, "placeholder": "dev"},
+         {"key": "aliases", "label": "Aliases", "type": "string", "placeholder": "development"},
+         {"key": "branch", "label": "Branch", "type": "string", "required": True, "placeholder": "dev"},
+         {"key": "push", "label": "Push", "type": "bool"},
+     ]},
+    {"group": "Context Catalog", "section": "Git sync", "key": "CONTEXT_CATALOG_GIT_BASE_PATH",
+     "label": "Folder in the repo", "type": "string", "placeholder": "context-catalog",
+     "help": "Repo folder holding the catalog: one sub-folder per domain, one markdown file per document. "
+             "Blank = the repo root. Changing it (or the repo or branch) starts a fresh first sync."},
+    {"group": "Context Catalog", "section": "Git sync", "key": "CONTEXT_CATALOG_GIT_POLL_CRON",
+     "label": "Pull schedule", "type": "cron",
+     "help": "How often the branch is checked for changes merged in Git (5-field cron, UTC). Saves in the app "
+             "are pushed within seconds regardless. Leave BLANK to pull only with Sync from Git."},
+    {"group": "Context Catalog", "section": "Git sync", "key": "CONTEXT_CATALOG_DIRECT_EDITING_ENABLED",
+     "label": "Allow editing in the app", "type": "bool",
+     "help": "Off = documents and domains can't be created, edited, uploaded, imported or deleted in this "
+             "environment; admins see a link to the branch and make changes through pull requests instead. "
+             "Sync from Git keeps working. On (default) = edit in the app as usual."},
 
     # --- Preview Features -----------------------------------------------
     {"group": "Preview Features", "key": "PREVIEW_FEATURE_SYNC_CRON", "label": "Sync cron",
@@ -849,6 +922,12 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
                       "workspace_name", "owner", "principal_type", "principal_name", "privilege"]},
          {"key": "header", "label": "Header text", "type": "string", "required": True},
      ]},
+    {"group": "Access Rules", "section": "Import", "key": "RBAC_IMPORT_REMOVE_DUPLICATES",
+     "label": "Remove duplicate rows on import", "type": "bool",
+     "help": "On (default) = a row identical to an earlier row on the same sheet isn't imported; the preview "
+             "lists each one removed. Off = identical rows are kept, so the export matches the workbook byte for "
+             "byte (Compare with a manual export otherwise shows each removed row as only in the manual file). "
+             "Applies to the next preview."},
     {"group": "Access Rules", "section": "Import", "key": "RBAC_ALLOW_RESET",
      "label": "Allow reset and re-import", "type": "bool",
      "help": "On = a Platform Admin can replace every rule with a fresh workbook import. That discards every "
@@ -918,6 +997,7 @@ GROUP_REQUIRES: Dict[str, List[str]] = {
     "Workflow Studio": ["features.workflow_authoring"],
     "Preview Features": ["features.preview_features"],
     "Access Rules": ["features.rbac"],
+    "Context Catalog": ["features.context_catalog"],
     # Mappings are only shown in Discover and the agent's data-asset search.
     "Legacy Dashboards": ["features.data_discovery"],
 }
@@ -951,6 +1031,17 @@ READONLY_FIELDS: List[Dict[str, Any]] = [
              "before giving up. 0 = SDK default."},
     {"group": "Identity & Email", "key": "IDENTITY_PROVIDER", "label": "Identity provider"},
     {"group": "Identity & Email", "key": "NOTIFICATION_EMAIL_SES_SECRET_SCOPE", "label": "SES IAM secret scope"},
+    {"group": "Context Catalog", "key": "CONTEXT_CATALOG_TEAMS_WEBHOOK_SECRET_SCOPE",
+     "label": "Teams webhook secret scope",
+     "help": "Secret scope holding the Teams Workflows webhook URL for stale-document reminders. "
+             "CONTEXT_CATALOG_TEAMS_WEBHOOK_URL in the environment takes precedence (local dev)."},
+    {"group": "Context Catalog", "key": "CONTEXT_CATALOG_TEAMS_WEBHOOK_SECRET_KEY",
+     "label": "Teams webhook secret key", "help": "Key NAME within the scope above — not the URL."},
+    {"group": "Context Catalog", "key": "CONTEXT_CATALOG_GIT_TOKEN_SECRET_KEY",
+     "label": "Git sync token secret key",
+     "help": "Key NAME, in the GitHub PAT's secret scope (GIT_TOKEN_SECRET_SCOPE), of the token Git sync uses. "
+             "Blank = the shared GitHub PAT. CONTEXT_CATALOG_GIT_TOKEN in the environment takes precedence "
+             "(local dev)."},
     {"group": "GitOps", "key": "GITOPS_MODE", "label": "GitOps mode"},
     {"group": "GitOps", "key": "INFRA_REPO_URL", "label": "Infra repo URL"},
     {"group": "GitOps", "key": "INFRA_REPO_BRANCH", "label": "Infra repo branch"},
@@ -1010,7 +1101,7 @@ SECTIONS: List[Dict[str, Any]] = [
     {"title": "Learn & Share", "groups": ["Links & Embedded Apps", "Calendar", TRAINING_GROUP]},
     {"title": "Watch Tower", "groups": ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager",
                                         "Access Rules"]},
-    {"title": "Control Tower", "groups": ["Workflow Studio", "Preview Features"]},
+    {"title": "Control Tower", "groups": ["Workflow Studio", "Context Catalog", "Preview Features"]},
     {"title": "Platform", "groups": ["Infrastructure"]},
 ]
 
@@ -1064,6 +1155,11 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "descriptions, can only be changed in local mode."
     ),
     "Workflow Studio": "Whether workflows can be edited in place, the authoring assistant's budget, and how workflow test cases run.",
+    "Context Catalog": (
+        "When a published document counts as stale, and the Microsoft Teams reminders that ask each "
+        "document's owner to update it or mark it reviewed. Git sync keeps each environment's catalog in "
+        "a branch of a GitHub repository, so changes can be reviewed and promoted with pull requests."
+    ),
     "Preview Features": (
         "How often Databricks Beta and Public Preview features are re-read from your target workspaces, "
         "where announcements and docs links come from, and who is emailed for workspace-level vs "
@@ -1148,8 +1244,8 @@ CAPABILITIES: List[Dict[str, Any]] = [
      "tabs": ["community_links"],
      "description": "The Community Links page. Its content is edited under Links & Embedded Apps."},
     {"id": "guide", "section": "Learn & Share", "label": "Guide", "tabs": ["guide"],
-     "description": "The in-app user guide. Hiding it removes its sidebar link, the Guide link in the "
-                    "account menu and the help links on other pages; the page stays reachable at /guide."},
+     "description": "The in-app user guide, opened from the account menu. Hiding it removes the Guide link "
+                    "in the account menu and the help links on other pages; the page stays reachable at /guide."},
 
     # --- Watch Tower ----------------------------------------------------
     {"id": "governance", "section": "Watch Tower", "label": "Data governance", "feature": "governance",
@@ -1565,6 +1661,8 @@ _CRON_SCHEDULE_TARGETS: Dict[str, tuple] = {
     "RBAC_EXPORT_CRON": ("app.services.rbac.csv_export", "_next_export_time"),
     "METADATA_RECONCILE_CRON": ("app.services.metadata.reconciler", "_next_sweep_time"),
     "TRAINING_ACADEMY_SYNC_CRON": ("app.services.training_catalog", "_next_sync_time"),
+    "CONTEXT_CATALOG_STALE_REMINDER_CRON": ("app.workers.tasks.context_catalog_reminders", "_next_reminder_time"),
+    "CONTEXT_CATALOG_GIT_POLL_CRON": ("app.services.context_catalog_git", "_next_poll_time"),
 }
 
 

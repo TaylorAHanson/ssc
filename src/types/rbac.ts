@@ -188,7 +188,9 @@ export interface RbacImportSheetSummary {
   rows: number;
   columns: RbacSheetColumn[];
   unknown_headers: string[];
+  /** Rows identical to an earlier row; not counted in `rows` when `duplicates_removed`. */
   duplicates: number;
+  duplicates_removed: boolean;
   warnings: number;
 }
 
@@ -206,6 +208,7 @@ export interface RbacImportPreview {
   reset_allowed: boolean;
   in_flight_requests: number;
   confirmation_phrase: string | null;
+  duplicates_removed: boolean;
 }
 
 export interface RbacImportResult {
@@ -214,6 +217,7 @@ export interface RbacImportResult {
   created: number;
   deleted: number;
   sheets: RbacImportSheetSummary[];
+  duplicates_removed: boolean;
 }
 
 export interface RbacImportSummary {

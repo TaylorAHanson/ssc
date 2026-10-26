@@ -100,8 +100,9 @@ def _require_admin(actor: Actor, what: str) -> None:
 
 def items_digest(items: Sequence[ChangeItem]) -> str:
     """sha256 over the resolved items, so a record step can refuse a change that moved since preview."""
-    # unchanged_in_uc follows the snapshot, which may refresh between preview and submit.
-    payload = [i.model_dump(mode="json", exclude={"unchanged_in_uc"}) for i in items]
+    # unchanged_in_uc follows the snapshot, which may refresh between preview and submit;
+    # before_hidden is only ever set on a copy returned to a caller.
+    payload = [i.model_dump(mode="json", exclude={"unchanged_in_uc", "before_hidden"}) for i in items]
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -658,14 +659,16 @@ def submit(db: Session, request: ChangeRequest, actor: Actor, *, source: ChangeS
 # --- Promote ---------------------------------------------------------------------
 
 
-def _promote_targets(db: Session, request: PromoteRequest) -> Tuple[List[_Target], List[Finding]]:
+def _promote_targets(db: Session, request: PromoteRequest,
+                     sees: Optional[Callable[[str], bool]] = None) -> Tuple[List[_Target], List[Finding]]:
+    """``sees`` limits the copied objects to what the caller may browse: their values become the "after" values."""
     key = _parse(request.name, request.column)
-    source = store.get_object(db, key.fqn_key)
+    source = store.get_object(db, key.fqn_key) if sees is None or sees(key.fqn_key) else None
     if source is None:
         raise errors.NotFound(f"{key.display} has no desired tags or description to promote.")
     sources = [source]
     if request.include_columns and key.level == "relation":
-        sources.extend(store.get_columns(db, key.fqn_key))
+        sources.extend(c for c in store.get_columns(db, key.fqn_key) if sees is None or sees(c.fqn_key))
     findings: List[Finding] = []
     envs = _environment_keys(request.to_environments, findings)
     source_env = environments.environment_of(key.catalog)
@@ -701,22 +704,28 @@ def _promote_targets(db: Session, request: PromoteRequest) -> Tuple[List[_Target
     return targets, findings
 
 
-def _promote_preview(db: Session, request: PromoteRequest, actor: Actor) -> Tuple[ChangePreview, List[_Target]]:
-    targets, findings = _promote_targets(db, request)
+PROMOTE_TITLE = "Promote metadata"
+
+
+def _promote_preview(db: Session, request: PromoteRequest, actor: Actor,
+                     sees: Optional[Callable[[str], bool]] = None) -> Tuple[ChangePreview, List[_Target]]:
+    targets, findings = _promote_targets(db, request, sees)
     resolved = _resolve_targets(db, targets, actor, reason=request.reason, findings=findings)
-    return _preview(db, actor, resolved, reason=request.reason, title="Promote metadata"), targets
+    return _preview(db, actor, resolved, reason=request.reason, title=PROMOTE_TITLE), targets
 
 
-def preview_promote(db: Session, request: PromoteRequest, actor: Actor) -> ChangePreview:
-    return _promote_preview(db, request, actor)[0]
+def preview_promote(db: Session, request: PromoteRequest, actor: Actor, *,
+                    sees: Optional[Callable[[str], bool]] = None) -> ChangePreview:
+    return _promote_preview(db, request, actor, sees)[0]
 
 
-def promote(db: Session, request: PromoteRequest, actor: Actor, *, source: ChangeSource) -> ChangeResult:
+def promote(db: Session, request: PromoteRequest, actor: Actor, *, source: ChangeSource,
+            sees: Optional[Callable[[str], bool]] = None) -> ChangeResult:
     key = _clean_key(request.idempotency_key)
     replayed = _replay(db, actor, key)
     if replayed is not None:
         return replayed
-    pv, targets = _promote_preview(db, request, actor)
+    pv, targets = _promote_preview(db, request, actor, sees)
     return _route(
         db, pv, actor=actor, source=source, reason=request.reason, routing=request.on_approval_needed,
         filed_request=lambda: ChangeRequest(ops=[t.op for t in targets], reason=request.reason,

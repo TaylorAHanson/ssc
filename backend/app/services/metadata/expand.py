@@ -25,9 +25,9 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.metadata import MetadataObjectModel, MetadataObservedModel
-from app.services.metadata import environments
+from app.services.metadata import authz, environments, visibility
 from app.services.metadata import scope as managed
-from app.services.metadata.errors import ChangeBlocked, MetadataError
+from app.services.metadata.errors import ChangeBlocked, MetadataError, VersionConflict
 from app.services.metadata.types import (
     RELATION_TYPES,
     Actor,
@@ -136,8 +136,12 @@ def match_objects(
     column: Optional[str] = None,
     types: Sequence[str] = (),
     limit: int = MAX_MATCHES,
+    browse: Optional[authz.BrowseScope] = None,
 ) -> List[Match]:
-    """Known objects matching ``pattern`` (and ``column``, a column-name glob), sorted by fqn_key."""
+    """Known objects matching ``pattern`` (and ``column``, a column-name glob), sorted by fqn_key.
+
+    With ``browse``, only objects it sees, so a pattern can't list what the caller can't browse.
+    """
     parts = _parts(pattern)
     column_glob = (column or "").strip().lower() or None
     if column_glob is not None:
@@ -178,6 +182,11 @@ def match_objects(
             for i, (col, g) in enumerate(zip(names, globs))
         ]
         where = [table.c.securable_type.in_(wanted), *extra, *clauses]
+        if browse is not None:
+            visible = authz.browse_clause(browse, fqn=table.c.fqn_key,
+                                          name_parts=(table.c.catalog, table.c.schema_name, table.c.object_name))
+            if visible is not None:
+                where.append(visible)
         rows = db.execute(
             select(table.c.fqn_key, table.c.securable_type, table.c.catalog, table.c.schema_name,
                    table.c.object_name, table.c.column_name)
@@ -207,10 +216,11 @@ def match_objects(
     return matches
 
 
-def expand_request(db: Session, request: ChangeRequest) -> Expansion:
+def expand_request(db: Session, request: ChangeRequest, *, browse: Optional[authz.BrowseScope] = None) -> Expansion:
     """``request`` with every pattern op replaced by one named op per match.
 
-    Raises ``MetadataError`` for a malformed pattern, an op that combines a pattern
+    Patterns match only objects ``browse`` sees (None = every object). Raises
+    ``MetadataError`` for a malformed pattern, an op that combines a pattern
     with expected versions, or a change whose patterns match nothing at all.
     """
     if not has_patterns(request):
@@ -226,7 +236,7 @@ def expand_request(db: Session, request: ChangeRequest) -> Expansion:
         if op.expected_versions or op.expected_comment_version is not None:
             raise MetadataError("A pattern can't carry expected versions; name each object to use them.")
         label = _label(op)
-        found = match_objects(db, op.match, column=op.column, types=op.match_types)
+        found = match_objects(db, op.match, column=op.column, types=op.match_types, browse=browse)
         outside = managed.outside(managed.catalog_of(m.fqn_key) for m in found)
         if outside:
             kept = [m for m in found if managed.manages(managed.catalog_of(m.fqn_key))]
@@ -295,25 +305,44 @@ def _with_findings(preview: Optional[ChangePreview], findings: List[Finding]) ->
         preview.findings = _collapse_unmanaged([*findings, *preview.findings])
 
 
-def preview(db: Session, request: ChangeRequest, actor: Actor) -> ChangePreview:
-    """``changes.preview`` after expanding patterns; the preview says what each pattern matched."""
+def preview(db: Session, request: ChangeRequest, actor: Actor, *,
+            browse: Optional[authz.BrowseScope] = None) -> ChangePreview:
+    """``changes.preview`` after expanding patterns; the preview says what each pattern matched.
+
+    Limited to the actor's browse scope (``browse``, else ``authz.browse_scope``):
+    patterns match only visible objects and current values of the others are hidden.
+    """
     from app.services.metadata import changes
 
-    expansion = expand_request(db, request)
-    result = changes.preview(db, expansion.request, actor)
+    browse = browse if browse is not None else authz.browse_scope(db, actor)
+    expansion = expand_request(db, request, browse=browse)
+    result = visibility.redact_preview(changes.preview(db, expansion.request, actor), browse,
+                                       reason=request.reason)
     _with_findings(result, expansion.findings)
     return result
 
 
-def submit(db: Session, request: ChangeRequest, actor: Actor, *, source: ChangeSource) -> ChangeResult:
-    """``changes.submit`` after expanding patterns. Raises what ``changes.submit`` raises."""
+def submit(db: Session, request: ChangeRequest, actor: Actor, *, source: ChangeSource,
+           browse: Optional[authz.BrowseScope] = None) -> ChangeResult:
+    """``changes.submit`` after expanding patterns. Raises what ``changes.submit`` raises.
+
+    Anyone may submit (what they can't change directly is routed for approval),
+    but patterns, the returned preview, change set and conflicts are limited to
+    the actor's browse scope as in ``preview``. The filed request keeps the full preview.
+    """
     from app.services.metadata import changes
 
-    expansion = expand_request(db, request)
+    browse = browse if browse is not None else authz.browse_scope(db, actor)
+    expansion = expand_request(db, request, browse=browse)
     try:
         result = changes.submit(db, expansion.request, actor, source=source)
     except ChangeBlocked as exc:
+        exc.preview = visibility.redact_preview(exc.preview, browse, reason=request.reason)
         _with_findings(exc.preview, expansion.findings)
         raise
+    except VersionConflict as exc:
+        exc.conflicts = visibility.redact_conflicts(exc.conflicts, browse)
+        raise
+    result = visibility.redact_result(result, browse, reason=request.reason)
     _with_findings(result.preview, expansion.findings)
     return result

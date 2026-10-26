@@ -126,7 +126,7 @@ export function LegacyDashboards() {
   const load = async () => {
     setIsLoading(true);
     try {
-      setMappings(await getLegacyMappings());
+      setMappings(await getLegacyMappings({ include_hidden: true }));
       setLoadError(null);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Failed to load mappings');
@@ -541,6 +541,11 @@ export function LegacyDashboards() {
                       ) : (
                         <div className="text-xs text-amber-700 inline-flex items-center gap-1" title={m.metric_view_id}>
                           <AlertTriangle className="w-3 h-3" /> No longer in the catalog — hidden in Discover
+                        </div>
+                      )}
+                      {m.in_catalog && m.hidden_from_discover && (
+                        <div className="text-xs text-amber-700 inline-flex items-center gap-1" title={m.metric_view_id}>
+                          <AlertTriangle className="w-3 h-3" /> Metric view has a hide-from-Discover tag — hidden in Discover
                         </div>
                       )}
                     </td>
