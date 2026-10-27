@@ -433,3 +433,148 @@ def test_without_a_token_the_synthetic_user_has_no_groups(monkeypatch):
     asyncio.run(runner.run_cases([_case()], tools_for_role=lambda _r: [], agent=agent, judge_fn=_judge()))
     assert seen["entitlements"] == []
     assert original("me@example.com", None) == []
+
+
+# ------------------------------------------------- a caller's token that lapses mid-run
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_the_profile_token_is_minted_once_and_renewed_as_it_ages():
+    from app.agents.eval.__main__ import ProfileToken
+
+    minted = []
+    clock = _Clock()
+
+    def fetch():
+        minted.append(f"tok-{len(minted) + 1}")
+        return minted[-1]
+
+    source = ProfileToken("p", max_age=100, fetch=fetch, clock=clock)
+    assert (source(), source()) == ("tok-1", "tok-1")
+    clock.now = 99
+    assert source() == "tok-1"
+    clock.now = 100
+    assert source() == "tok-2"
+    # An explicit renewal replaces it now and restarts the clock.
+    assert source.renew() == "tok-3"
+    clock.now = 150
+    assert source() == "tok-3"
+
+
+def test_only_a_tool_result_can_show_the_callers_token_was_rejected():
+    tool = lambda text: {"role": "tool", "name": "get_catalog_list", "content": text}  # noqa: E731
+    assert runner.is_auth_failure([tool("GET /catalogs < 403 Forbidden < Invalid Token")])
+    assert runner.is_auth_failure([tool("Failed to contact Genie: unhandled errors in a TaskGroup (1 sub-exception)")])
+    assert not runner.is_auth_failure([tool("2 tables found")])
+    # What the assistant or the user says about tokens is not evidence of one failing.
+    assert not runner.is_auth_failure([{"role": "assistant", "content": "an invalid token would explain it"}])
+    assert not runner.is_auth_failure([{"role": "user", "content": "Invalid Token?"}])
+    assert not runner.is_auth_failure([])
+
+
+def _lapsing_agent(tokens_seen, fails_for):
+    """An agent whose tools fail for every token in ``fails_for``."""
+
+    async def agent(case, **kw):
+        tokens_seen.append(kw["obo_token"])
+        bad = kw["obo_token"] in fails_for
+        return {
+            "answer": "I couldn't check." if bad else "done",
+            "tool_calls": [],
+            "transcript": [{"role": "tool", "name": "run_sql", "content": "< 403 Forbidden < Invalid Token" if bad else "ok"}],
+        }
+
+    return agent
+
+
+def test_a_rejected_token_is_renewed_and_the_case_run_again():
+    seen = []
+    renewed = []
+
+    def renew():
+        renewed.append(1)
+        return "fresh"
+
+    res = _run(
+        _case(),
+        obo_token="stale",
+        renew_token=renew,
+        agent=_lapsing_agent(seen, {"stale"}),
+        judge_fn=_judge(),
+    )
+    assert seen == ["stale", "fresh"] and renewed == [1]
+    assert res["status"] == "pass" and res["attempts"] == 2
+
+
+def test_a_token_that_keeps_being_rejected_is_an_error_never_graded():
+    async def judge(*_a, **_k):
+        raise AssertionError("a run with no valid identity must not be graded")
+
+    seen = []
+    res = _run(
+        _case(),
+        obo_token="stale",
+        retries=1,
+        renew_token=lambda: "still-stale",
+        agent=_lapsing_agent(seen, {"stale", "still-stale"}),
+        judge_fn=judge,
+    )
+    assert res["status"] == "error" and res["attempts"] == 2 and len(seen) == 2
+    assert "token was rejected" in res["error"] and "not a verdict" in res["error"]
+
+
+def test_without_an_identity_an_invalid_token_message_is_just_evidence():
+    seen = []
+    res = _run(_case(), agent=_lapsing_agent(seen, {None}), judge_fn=_judge())
+    assert len(seen) == 1 and res["status"] != "error"
+
+
+def test_a_token_source_is_asked_again_for_every_case(monkeypatch):
+    monkeypatch.setattr(runner, "resolve_entitlements", lambda email, token: [])
+    handed = []
+
+    class Source:
+        calls = 0
+
+        def __call__(self):
+            Source.calls += 1
+            return f"tok-{Source.calls}"
+
+        def renew(self):
+            return "renewed"
+
+    async def agent(case, **kw):
+        handed.append(kw["obo_token"])
+        return {"answer": "ok", "tool_calls": [], "transcript": []}
+
+    asyncio.run(
+        runner.run_cases(
+            [_case(id="a"), _case(id="b"), _case(id="c")],
+            tools_for_role=lambda _r: [], agent=agent, judge_fn=_judge(),
+            obo_token=Source(), with_user_context=False, concurrency=1,
+        )
+    )
+    # One to start the run (groups), then a current one per case: none is reused.
+    assert sorted(handed) == ["tok-2", "tok-3", "tok-4"]
+
+
+def test_a_plain_token_string_still_works(monkeypatch):
+    monkeypatch.setattr(runner, "resolve_entitlements", lambda email, token: [])
+    handed = []
+
+    async def agent(case, **kw):
+        handed.append(kw["obo_token"])
+        return {"answer": "ok", "tool_calls": [], "transcript": []}
+
+    asyncio.run(
+        runner.run_cases(
+            [_case()], tools_for_role=lambda _r: [], agent=agent, judge_fn=_judge(),
+            obo_token="plain", with_user_context=False,
+        )
+    )
+    assert handed == ["plain"]

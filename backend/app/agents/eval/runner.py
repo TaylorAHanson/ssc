@@ -29,7 +29,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import AbstractSet, Any, Awaitable, Callable, Dict, List, Optional, Sequence
+from typing import AbstractSet, Any, Awaitable, Callable, Dict, List, Optional, Sequence, Union
 
 from app.agents.eval.checks import evaluate_checks, failed_checks
 from app.agents.eval.library import EvalCase
@@ -511,6 +511,28 @@ def is_infrastructure_failure(answer: str) -> bool:
     return any(marker in text for marker in _INFRASTRUCTURE_FAILURES)
 
 
+# What tools return when the caller's Databricks token has lapsed. The assistant then
+# reports, correctly, that it could not check anything, which reads like a bad answer;
+# but the failure is the run's, so it is retried with a fresh token and never graded.
+# Genie surfaces the same lapse as an opaque transport error rather than a 403.
+_AUTH_FAILURES = (
+    "invalid token",
+    "invalid access token",
+    "unhandled errors in a taskgroup",
+)
+
+
+def is_auth_failure(transcript: Sequence[Dict[str, Any]]) -> bool:
+    """True when any tool result in ``transcript`` shows the caller's token was rejected."""
+    for message in transcript or []:
+        if message.get("role") != "tool":
+            continue
+        text = str(message.get("content") or "").lower()
+        if any(marker in text for marker in _AUTH_FAILURES):
+            return True
+    return False
+
+
 async def build_user_context_block(
     email: str, role: str, entitlements: Sequence[str] = ()
 ) -> Optional[str]:
@@ -572,12 +594,14 @@ async def run_case(
     retry_backoff: float = RETRY_BACKOFF_SECONDS,
     agent: Optional[AgentFn] = None,
     judge_fn: Optional[JudgeFn] = None,
+    renew_token: Optional[Callable[[], str]] = None,
 ) -> Dict[str, Any]:
     """Run one case end to end and return a JSON-serializable result.
 
     If the model could not be reached (a rate limit, say) the case is retried after
     a pause, and reported as ``error`` rather than graded if it still fails: the
-    assistant did not give a bad answer, it gave none.
+    assistant did not give a bad answer, it gave none. The same goes for a caller's
+    token that was rejected mid-case; ``renew_token`` mints a new one for the retry.
 
     ``agent`` and ``judge_fn`` exist so the plumbing can be tested without a model.
     """
@@ -611,6 +635,7 @@ async def run_case(
 
     started = time.monotonic()
     attempt = 0
+    auth_failed = False
     while True:
         attempt += 1
         try:
@@ -634,8 +659,18 @@ async def run_case(
             logger.error("Eval case %s: agent run failed: %s", case.id, e, exc_info=True)
             result.update(status="error", attempts=attempt, error=f"The agent run failed: {e}")
             return result
-        if not is_infrastructure_failure(outcome["answer"]) or attempt > retries:
+        auth_failed = bool(obo_token) and is_auth_failure(outcome.get("transcript") or [])
+        if not (is_infrastructure_failure(outcome["answer"]) or auth_failed) or attempt > retries:
             break
+        if auth_failed:
+            # A fresh token will not take a rate limit's pause, so go straight back in.
+            logger.warning(
+                "Eval case %s: the caller's token was rejected (attempt %d of %d); retrying%s",
+                case.id, attempt, retries + 1, " with a new token" if renew_token else "",
+            )
+            if renew_token:
+                obo_token = await asyncio.to_thread(renew_token)
+            continue
         logger.warning(
             "Eval case %s: model unreachable (attempt %d of %d); retrying in %ss",
             case.id, attempt, retries + 1, retry_backoff * attempt,
@@ -652,6 +687,18 @@ async def run_case(
         transcript=outcome["transcript"],
         checks=checks,
     )
+
+    if auth_failed:
+        result.update(
+            status="error",
+            error=(
+                f"The caller's Databricks token was rejected in {attempt} attempts, so tools that act as "
+                "the user failed; this is not a verdict on the assistant. Run `databricks auth login` "
+                "for the profile and re-run."
+            ),
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+        return result
 
     if is_infrastructure_failure(answer):
         result.update(
@@ -695,7 +742,7 @@ async def run_cases(
     cases: Sequence[EvalCase],
     *,
     email: str = DEFAULT_EMAIL,
-    obo_token: Optional[str] = None,
+    obo_token: Union[str, Callable[[], str], None] = None,
     use_judge: bool = True,
     concurrency: int = DEFAULT_CONCURRENCY,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
@@ -708,7 +755,16 @@ async def run_cases(
     agent: Optional[AgentFn] = None,
     judge_fn: Optional[JudgeFn] = None,
 ) -> List[Dict[str, Any]]:
-    """Run ``cases`` with bounded concurrency and return results in library order."""
+    """Run ``cases`` with bounded concurrency and return results in library order.
+
+    ``obo_token`` is the caller's Databricks token, or a callable that returns a current
+    one (and may have a ``renew`` method). A run of many cases outlasts a token that was
+    fetched once at the start, so a callable is asked again for every case.
+    """
+    token_source: Optional[Callable[[], str]] = obo_token if callable(obo_token) else None
+    first_token: Optional[str] = (
+        await asyncio.to_thread(token_source) if token_source else obo_token  # type: ignore[assignment]
+    )
     resolver = tools_for_role or (lambda role: resolve_tools(role, email))
     role_tools: Dict[str, Sequence[Any]] = {}
     for case in cases:
@@ -716,9 +772,9 @@ async def run_cases(
             role_tools[case.role] = resolver(case.role)
 
     # The live chat knows who is asking; only a real identity has anything to know.
-    entitlements = await asyncio.to_thread(resolve_entitlements, email, obo_token) if obo_token else []
+    entitlements = await asyncio.to_thread(resolve_entitlements, email, first_token) if first_token else []
     context_blocks: Dict[str, Optional[str]] = {}
-    if (with_user_context if with_user_context is not None else bool(obo_token)):
+    if (with_user_context if with_user_context is not None else bool(first_token)):
         for role in role_tools:
             context_blocks[role] = await build_user_context_block(email, role, entitlements)
 
@@ -736,11 +792,14 @@ async def run_cases(
     async def _one(case: EvalCase, run: int) -> None:
         nonlocal done
         async with semaphore:
+            # Resolved when the case starts, not when the run did: this one may be minutes in.
+            token = await asyncio.to_thread(token_source) if token_source else first_token
             res = await run_case(
                 case,
                 tools=role_tools[case.role],
                 email=email,
-                obo_token=obo_token,
+                obo_token=token,
+                renew_token=getattr(token_source, "renew", None),
                 use_judge=use_judge,
                 timeout=timeout,
                 user_context_block=context_blocks.get(case.role),

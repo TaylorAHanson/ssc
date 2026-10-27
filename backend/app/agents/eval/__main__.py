@@ -20,6 +20,8 @@ import json
 import logging
 import subprocess
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -60,6 +62,60 @@ def _cli_json(*args: str) -> Dict[str, Any]:
         # Never echo stdout: for `auth token` it is the credential.
         raise SystemExit(f"`databricks {' '.join(args[:2])}` failed: {proc.stderr.strip()[:200]}")
     return json.loads(proc.stdout)
+
+
+# A token lasts about an hour. Renewing at half of that keeps even a long run inside it.
+TOKEN_MAX_AGE_SECONDS = 30 * 60
+
+
+class ProfileToken:
+    """The caller's Databricks token for a CLI profile, minted fresh and renewed during a run.
+
+    The CLI hands back whatever it has cached until that is about to expire, so a token
+    fetched once at the start of a ten-minute run can lapse partway through, and every case
+    after that runs as an expired user: queries and Genie fail, and the assistant honestly
+    says so. ``--force-refresh`` gives a full lifetime, and renewing as it ages keeps a long
+    run inside it. Calling the object returns a usable token; ``renew`` replaces it now.
+    """
+
+    def __init__(
+        self,
+        profile: str,
+        *,
+        max_age: float = TOKEN_MAX_AGE_SECONDS,
+        fetch: Optional[Any] = None,
+        clock: Any = time.monotonic,
+    ) -> None:
+        self.profile = profile
+        self._max_age = max_age
+        self._fetch = fetch or self._fetch_from_cli
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._token: Optional[str] = None
+        self._minted = 0.0
+
+    def _fetch_from_cli(self) -> str:
+        token = _cli_json("auth", "token", "-p", self.profile, "--force-refresh", "-o", "json").get("access_token")
+        if not token:
+            raise SystemExit(
+                f"No access token for profile {self.profile!r}; run `databricks auth login -p {self.profile}`."
+            )
+        return token
+
+    def __call__(self) -> str:
+        with self._lock:
+            if self._token is None or self._clock() - self._minted >= self._max_age:
+                self._renew_locked()
+            return self._token  # type: ignore[return-value]
+
+    def renew(self) -> str:
+        with self._lock:
+            self._renew_locked()
+            return self._token  # type: ignore[return-value]
+
+    def _renew_locked(self) -> None:
+        self._token = self._fetch()
+        self._minted = self._clock()
 
 
 def _identity_from_profile(profile: str, email: Optional[str]) -> tuple[str, str]:
@@ -139,10 +195,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not cases:
         raise SystemExit("No cases selected.")
 
-    token: Optional[str] = None
+    token: Optional[ProfileToken] = None
     email = args.email or runner.DEFAULT_EMAIL
     if args.obo_profile:
-        token, email = _identity_from_profile(args.obo_profile, args.email)
+        token = ProfileToken(args.obo_profile)
+        token()  # mint now: a bad profile should stop the run here, not partway through
+        if not args.email:
+            email = _cli_json("current-user", "me", "-p", args.obo_profile, "-o", "json").get("userName")
+            if not email:
+                raise SystemExit("Could not work out the profile's email; pass --email.")
         _out(f"Running identity-dependent cases as {email} (profile {args.obo_profile}).")
 
     role_tools = {c.role: runner.resolve_tools(c.role, email) for c in cases}

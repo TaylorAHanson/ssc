@@ -24,7 +24,10 @@ first** — it is the source of truth for how the pieces fit together.
   `python -m app.agents.eval run --repeat 3 --label before`, make the change, run again
   with `--label after`, then `python -m app.agents.eval compare before after` (the model
   is non-deterministic, so repeat and compare per-case pass fractions). Cases marked
-  `needs_identity` act as a real user and need `--obo-profile <databricks-cli-profile>`;
+  `needs_identity` act as a real user and need `--obo-profile <databricks-cli-profile>`
+  (the run mints a fresh token with `--force-refresh` and renews it as it goes; a case
+  whose tools show the token was rejected is retried, then reported as `error`, never
+  graded, so an expired login can't masquerade as a regression);
   cases with `requires_workflows` or `requires_tools` are skipped where that workflow
   isn't published or an admin has switched that tool off for the role (turn "Ask your
   data" on locally with `update tool_registry set enabled=1 where tool_name='ask_your_data'`).
