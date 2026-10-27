@@ -318,7 +318,7 @@ cases:
       the data or hands the user off to where dashboards are built, explaining the
       next step briefly. It is not a dead end. It leads with the hand-off instead of
       researching first.
-    forbid_tools: [get_table_list, get_catalog_list, get_schema_list, run_sql]
+    forbid_tools: [get_table_list, get_catalog_list, get_schema_list, run_sql, search_data_assets, search_metadata]
     max_tool_calls: 4
     answer_not_matches:
       - "(?i)\\bi(?:'ve| have)\\s+(?:created|built|published)\\b"

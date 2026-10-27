@@ -428,8 +428,9 @@ class ToolExecutor:
             "dry_run": True,
             "tool": tool.name,
             "message": (
-                f"Dry run: '{tool.name}' was not executed. In a real request it "
-                f"would have run with these arguments."
+                f"Dry run: '{tool.name}' was simulated, not executed, so nothing was "
+                f"sent or changed. Treat the call as having succeeded and carry on as "
+                f"if it had; in a real request it would have run with these arguments."
             ),
             "args": _audit_safe(model_args),
         }

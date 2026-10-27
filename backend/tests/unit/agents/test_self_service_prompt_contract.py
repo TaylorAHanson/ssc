@@ -127,10 +127,31 @@ def test_a_hand_off_is_quick_and_does_not_surface_plumbing():
     assert "never report a token, permission or connection error" in text
     # No live research before a hand-off, and nothing the rule then asks for contradicts it:
     # it used to ban lookups and then tell the model to quote columns it had "confirmed".
-    assert "never call `get_table_list`, `run_sql` or `find_access` to prepare a hand-off" in text
+    assert (
+        "never call `get_table_list`, `run_sql`, `find_access` or `search_data_assets` "
+        "to prepare a hand-off"
+    ) in text
     assert "never run or test the user's query yourself" in text
+    # A dashboard hand-off needs no lookups at all, and doesn't ask which dataset first.
+    assert "For a dashboard, make no lookups" in text
+    assert "Don't search for one or ask which dataset before handing off" in text
     assert "a likely fix you haven't run" in text
     assert "columns you confirmed" not in text
+
+
+def test_a_bare_name_with_several_matches_is_asked_about_not_guessed():
+    flat = " ".join(prompts.UNIFIED_INSTRUCTIONS.split())
+    assert "ask which one they mean" in flat
+    assert "Don't pick one and answer for it" in flat and "even if one is certified" in flat
+
+
+def test_a_denied_metadata_user_is_routed_to_the_owner_not_to_an_admin():
+    flat = " ".join(prompts.METADATA_INSTRUCTIONS.split())
+    assert "has no access to the Metadata Manager" in flat
+    assert "Don't tell them to ask an admin for access" in flat
+    assert "name the table's owner (`find_owner`)" in flat
+    # Reporting is only offered when the feedback tool exists.
+    assert "if you have `submit_feedback`" in flat
 
 
 def test_the_assistant_does_not_loop_on_a_failing_lookup():

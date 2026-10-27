@@ -154,6 +154,9 @@ async def test_dry_run_simulates_mutating_tools_without_executing_them(monkeypat
     assert out.get("ok") is True
     assert out.get("dry_run") is True
     assert out.get("status") == "simulated"
+    # It must say so in words, or a small model reads "not executed" as "it failed"
+    # and tells the user a request didn't go through.
+    assert "Treat the call as having succeeded" in out.get("message", "")
     # The arguments it *would* have used are kept so the judge can check them.
     assert out.get("args", {}).get("target") == "grp"
 
